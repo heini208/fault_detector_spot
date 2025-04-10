@@ -28,7 +28,8 @@ setup(
             'sim_tests = fault_detector_spot.sim_tests:main',
             'print_apriltags = fault_detector_spot.print_apriltags:main',
             'sync_image_camera = fault_detector_spot.sync_image_camera:main',
-            'wasd_arm = fault_detector_spot.wasd_arm:main'
+            'wasd_arm = fault_detector_spot.wasd_arm:main',
+            'arm_goal_navigator = fault_detector_spot.arm_goal_navigator:main'
         ],
     },
 )

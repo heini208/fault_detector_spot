@@ -16,9 +16,7 @@ from synchros2.utilities import namespace_with
 import synchros2.scope as ros_scope
 import synchros2.process as ros_process
 
-from spot_msgs.action import RobotCommand  # type: ignore
-
-# Adjusted import for another package
+from spot_msgs.action import RobotCommand 
 from spot_examples.simple_spot_commander import SimpleSpotCommander
 
 robot_command_client: Optional[ActionClientWrapper] = None
