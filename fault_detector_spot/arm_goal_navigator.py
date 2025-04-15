@@ -40,7 +40,8 @@ class ArmNavigatorNode(Node):
         self.odom_frame_name = namespace_with(robot_name, ODOM_FRAME_NAME)
         self.grav_aligned_body_frame_name = namespace_with(robot_name, GRAV_ALIGNED_BODY_FRAME_NAME)
         self.robot_command_client = ActionClientWrapper(RobotCommand, namespace_with(robot_name, "robot_command"), node)
-        #self.logger.info(robot_name, "initialized on frames: ", self.odom_frame_name, ", ", self.grav_aligned_body_frame_name)
+        self.logger.info("{} initialized on frames: {}, {}".format(robot_name, self.odom_frame_name,
+                                                                   self.grav_aligned_body_frame_name))
 
     def __init__(self):
         super().__init__('arm_navigator_node')
@@ -61,10 +62,9 @@ class ArmNavigatorNode(Node):
         odom = self.odom_in_flat_body_frame(body_frame_pose)
         action_goal = self.create_arm_command_as_message(odom, 2)
 
-        self.logger.info(f"Sending arm command to x={goal_pose.pose.position.x:.2f}, y={goal_pose.pose.position.y:.2f}, z={goal_pose.pose.position.z:.2f}")
+        self.logger().info(
+            f"Sending arm command to x={goal_pose.pose.position.x:.2f}, y={goal_pose.pose.position.y:.2f}, z={goal_pose.pose.position.z:.2f}")
         self.robot_command_client.send_goal_and_wait("move_to_goal", action_goal)
-
-        self.get_logger().info('move_to_goal() called, implement logic here.')
 
     def hand_pose_in_flat_body_frame(self, pose: PoseStamped.pose):
         x_pos = pose.position.x
@@ -119,7 +119,6 @@ def main() -> None:
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
-
 
 
 if __name__ == '__main__':

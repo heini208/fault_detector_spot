@@ -29,7 +29,9 @@ setup(
             'print_apriltags = fault_detector_spot.print_apriltags:main',
             'sync_image_camera = fault_detector_spot.sync_image_camera:main',
             'wasd_arm = fault_detector_spot.wasd_arm:main',
-            'arm_goal_navigator = fault_detector_spot.arm_goal_navigator:main'
+            'arm_goal_navigator = fault_detector_spot.arm_goal_navigator:main',
+            'tag_follower = fault_detector_spot.tag_follower:main',
+            'move_to_tag = fault_detector_spot.move_to_tag:main',
         ],
     },
 )

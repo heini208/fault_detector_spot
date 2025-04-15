@@ -143,7 +143,7 @@ def cli() -> argparse.ArgumentParser:
 
 @ros_process.main(cli())
 def main(args: argparse.Namespace) -> None:
-    hello_arm(args.robot)
+    tag_follower(args.robot)
 
 
 if __name__ == "__main__":
