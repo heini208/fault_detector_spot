@@ -32,6 +32,7 @@ setup(
             'arm_goal_navigator = fault_detector_spot.arm_goal_navigator:main',
             'tag_follower = fault_detector_spot.tag_follower:main',
             'move_to_tag = fault_detector_spot.move_to_tag:main',
+            'keyboard_check = fault_detector_spot.keyboard_check:main',
         ],
     },
 )
