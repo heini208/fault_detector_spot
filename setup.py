@@ -34,6 +34,7 @@ setup(
             'move_to_tag = fault_detector_spot.move_to_tag:main',
             'keyboard_check = fault_detector_spot.keyboard_check:main',
             'depth_at_tag = fault_detector_spot.depth_at_tag:main',
+            'spot_keyboard = fault_detector_spot.spot_keyboard:main',
         ],
     },
 )
