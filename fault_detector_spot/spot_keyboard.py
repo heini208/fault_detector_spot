@@ -7,6 +7,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from typing import Optional
+import math
 
 from bosdyn.api import geometry_pb2
 from bosdyn.client import math_helpers
@@ -34,6 +35,9 @@ class KeyboardTeleopNode(Node):
         self.grav_aligned_body_frame_name = None
 
         self.x, self.y, self.z = 0.75, 0.0, 0.25
+
+        self.yaw_angle = 0.0
+        self.yaw_step = math.radians(10)
         self.step = 0.05
 
         self.VELOCITY_BASE_SPEED = 0.3
@@ -69,7 +73,10 @@ class KeyboardTeleopNode(Node):
 
     def send_arm_command(self, x, y, z):
         flat_body_pos = geometry_pb2.Vec3(x=x, y=y, z=z)
-        flat_body_rot = geometry_pb2.Quaternion(w=1, x=0, y=0, z=0)
+        cr = math.cos(self.yaw_angle * 0.5)
+        sr = math.sin(self.yaw_angle * 0.5)
+        flat_body_rot = geometry_pb2.Quaternion(w=cr, x=sr, y=0, z=0)
+
         flat_body_T_hand = geometry_pb2.SE3Pose(position=flat_body_pos, rotation=flat_body_rot)
 
         odom_T_flat_body = self.tf_listener.lookup_a_tform_b(self.odom_frame_name, self.grav_aligned_body_frame_name)
@@ -91,8 +98,7 @@ class KeyboardTeleopNode(Node):
             odom_T_hand.rot.w, odom_T_hand.rot.x, odom_T_hand.rot.y, odom_T_hand.rot.z,
             ODOM_FRAME_NAME, 1.0,
         )
-        gripper_command = RobotCommandBuilder.claw_gripper_open_fraction_command(1.0)
-        command = RobotCommandBuilder.build_synchro_command(gripper_command, arm_command)
+        command = RobotCommandBuilder.build_synchro_command(arm_command)
 
         action_goal = RobotCommand.Goal()
         convert(command, action_goal.command)
@@ -110,11 +116,30 @@ class KeyboardTeleopNode(Node):
             self.cmd_vel_pub.publish(twist)
             time.sleep(0.01)
         self.cmd_vel_pub.publish(Twist())
-        time.sleep(0.5)
+        time.sleep(0.3)
         self.send_arm_command(self.x, self.y, self.z)
 
     def start_scan(self):
-        pass
+        global y , x, z
+        self.y = (0.15)
+        self.send_arm_command(self.x, self.y, self.z)
+        for i in range(6):
+            self.y -= 0.05
+            self.send_arm_command(self.x, self.y, self.z)
+        self.y = 0
+        self.send_arm_command(self.x, self.y, self.z)
+
+    def start_full_scan(self):
+        global y, x, z
+        self.z = 0.07
+        self.send_arm_command(self.x, self.y, self.z)
+        self.y += (0.15)
+        self.send_arm_command(self.x, self.y, self.z)
+        for i in range(6):
+            self.y -= 0.05
+            self.send_arm_command(self.x, self.y, self.z)
+        self.y = 0
+        self.send_arm_command(self.x, self.y, self.z)
 
 def curses_main(stdscr, node):
     stdscr.nodelay(True)
@@ -147,8 +172,10 @@ def curses_main(stdscr, node):
         elif key == ord('6'):
             #right strafe
             node._velocity_cmd_helper(v_y=-node.VELOCITY_BASE_SPEED)
-        elif key == curses.KEY_ENTER:
+        elif key == ord('x'):
             node.start_scan()
+        elif key == ord('v'):
+            node.start_full_scan()
         elif key == ord('7'):
             #turn left
             node._velocity_cmd_helper(v_rot=node.VELOCITY_BASE_ANGULAR)
@@ -157,22 +184,39 @@ def curses_main(stdscr, node):
             node._velocity_cmd_helper(v_rot=-node.VELOCITY_BASE_ANGULAR)
         elif key == ord('a'):
             node.y += node.step
+            node.send_arm_command(node.x, node.y, node.z)
         elif key == ord('d'):
             node.y -= node.step
+            node.send_arm_command(node.x, node.y, node.z)
         elif key == ord('g'):
             node.x -= node.step
+            node.send_arm_command(node.x, node.y, node.z)
         elif key == ord('f'):
             node.x += node.step
+            node.send_arm_command(node.x, node.y, node.z)
         elif key == ord('w'):
             node.z += node.step
+            node.send_arm_command(node.x, node.y, node.z)
         elif key == ord('s'):
             node.z -= node.step
+            node.send_arm_command(node.x, node.y, node.z)
+        elif key == ord('q'):
+            node.yaw_angle += node.yaw_step
+            node.send_arm_command(node.x, node.y, node.z)
+        elif key == ord('e'):
+            node.yaw_angle -= node.yaw_step
+            node.send_arm_command(node.x, node.y, node.z)
+        elif key == ord('+'):
+            node.step += 0.01
+            node.get_logger().info(f"speed now: {node.step}")
+        elif key == ord('-'):
+            node.step -= 0.01
+            node.get_logger().info(f"speed now: {node.step}")
         elif key == 27:  # ESC
             break
         else:
             node.get_logger().info(f"Unknown key: {key}")
 
-        node.send_arm_command(node.x, node.y, node.z)
         time.sleep(0.05)
 def cli():
     parser = argparse.ArgumentParser()
