@@ -176,6 +176,8 @@ def curses_main(stdscr, node):
             node.start_scan()
         elif key == ord('v'):
             node.start_full_scan()
+        elif key == ord(' '):
+            node.start_full_scan()
         elif key == ord('7'):
             #turn left
             node._velocity_cmd_helper(v_rot=node.VELOCITY_BASE_ANGULAR)
