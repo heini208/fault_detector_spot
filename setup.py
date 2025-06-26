@@ -38,6 +38,8 @@ setup(
             'move_to_tag_ui = fault_detector_spot.modules.move_to_tag_ui:main',
             'spot_tag_to_arm_goal = fault_detector_spot.modules.spot_tag_to_arm_goal:main',
             'spot_tag_to_arm_goal_ui = fault_detector_spot.modules.spot_tag_to_arm_goal_ui:main',
+            'arm_controller = fault_detector_spot.modules.arm_controller:main',
+
         ],
     },
 )
