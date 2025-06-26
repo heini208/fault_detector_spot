@@ -62,7 +62,7 @@ class ArmNavigatorNode(Node):
         odom = self.odom_in_flat_body_frame(body_frame_pose)
         action_goal = self.create_arm_command_as_message(odom, 2)
 
-        self.logger().info(
+        self.logger.info(
             f"Sending arm command to x={goal_pose.pose.position.x:.2f}, y={goal_pose.pose.position.y:.2f}, z={goal_pose.pose.position.z:.2f}")
         self.robot_command_client.send_goal_and_wait("move_to_goal", action_goal)
 
