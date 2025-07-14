@@ -24,7 +24,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'object_scanner = fault_detector_spot.object_scanner:main',
             'sim_tests = fault_detector_spot.sim_tests:main',
             'print_apriltags = fault_detector_spot.print_apriltags:main',
             'sync_image_camera = fault_detector_spot.sync_image_camera:main',
@@ -35,7 +34,6 @@ setup(
             'keyboard_check = fault_detector_spot.keyboard_check:main',
             'depth_at_tag = fault_detector_spot.depth_at_tag:main',
             'spot_keyboard = fault_detector_spot.spot_keyboard:main',
-            'move_to_tag_ui = fault_detector_spot.modules.move_to_tag_ui:main',
             'spot_tag_to_arm_goal = fault_detector_spot.modules.spot_tag_to_arm_goal:main',
             'spot_tag_to_arm_goal_ui = fault_detector_spot.modules.spot_tag_to_arm_goal_ui:main',
             'arm_controller = fault_detector_spot.modules.arm_controller:main',

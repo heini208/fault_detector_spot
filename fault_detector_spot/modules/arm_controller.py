@@ -19,7 +19,7 @@ from bosdyn.client import math_helpers
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME
 
 
-class ArmNavigatorNode(Node):
+class Arm_Controller(Node):
     robot_command_client: Optional[ActionClientWrapper] = None
     tf_listener: Optional[TFListenerWrapper] = None
     logger = None
@@ -115,7 +115,7 @@ class ArmNavigatorNode(Node):
 
 @ros_process.main()
 def main() -> None:
-    node = ArmNavigatorNode()
+    node = Arm_Controller()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
