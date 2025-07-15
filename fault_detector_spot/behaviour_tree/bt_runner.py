@@ -7,18 +7,42 @@ import sys
 from rclpy.node import Node
 
 from fault_detector_spot.behaviour_tree.nodes.detect_visible_tags import DetectVisibleTags
-
+from fault_detector_spot.behaviour_tree.nodes.manipulator_get_goal_tag import ManipulatorGetGoalTag
+from fault_detector_spot.behaviour_tree.nodes.manipulator_move_arm_action import ManipulatorMoveArmAction
+from fault_detector_spot.behaviour_tree.nodes.manipulator_command_subscriber import ManipulatorCommandSubscriber
 def create_root() -> py_trees.behaviour.Behaviour:
-    root = py_trees.composites.Sequence(
+    root = create_behavior_tree()
+    return root
+
+def create_behavior_tree():
+    root = py_trees.composites.Parallel(
         name="FaultDetectorSpot",
-        memory=True,
+        policy=py_trees.common.ParallelPolicy.SuccessOnAll(),
         children=[
-            # In your bt_runner.py:
-            DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)"),
-            py_trees.behaviours.Success(name="Placeholder Action")
+            # Detect tags and listen for UI commands in parallel
+            py_trees.composites.Parallel(
+                name="Sensing",
+                policy=py_trees.common.ParallelPolicy.SuccessOnAll(),
+                children=[
+                    DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)"),
+                    ManipulatorCommandSubscriber(name="UI Command Listener"),
+                ]
+            ),
+
+            # Execute manipulation sequence when tags and commands are available
+            py_trees.composites.Sequence(
+                name="Manipulation",
+                memory=True,
+                children=[
+                    # Your manipulation nodes here
+                    ManipulatorGetGoalTag(name="Get Goal Tag"),
+                    ManipulatorMoveArmAction(name="Move Arm")
+                ]
+            )
         ]
     )
     return root
+
 
 def main(args=None):
     rclpy.init(args=args)
