@@ -20,6 +20,10 @@
   <exec_depend>spot_msgs</exec_depend>
   <exec_depend>spot_wrapper</exec_depend>
   <exec_depend>spot_common</exec_depend>
+  <exec_depend>fault_detector_msgs</exec_depend>
+  <exec_depend>py_trees</exec_depend>
+  <exec_depend>py_trees_ros</exec_depend>
+  <exec_depend>py_trees_ros_interfaces</exec_depend>
 
 
 
