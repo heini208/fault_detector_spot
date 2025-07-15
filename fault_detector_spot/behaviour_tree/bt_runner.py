@@ -1,4 +1,4 @@
-# In fault_detector_spot/bt_runner.py
+# In fault_detector_spot/behaviour_tree/bt_runner.py
 
 import rclpy
 import py_trees
@@ -6,12 +6,16 @@ import py_trees_ros
 import sys
 from rclpy.node import Node
 
+from fault_detector_spot.behaviour_tree.nodes.detect_visible_tags import DetectVisibleTags
+
 def create_root() -> py_trees.behaviour.Behaviour:
     root = py_trees.composites.Sequence(
         name="FaultDetectorSpot",
         memory=True,
         children=[
-            py_trees.behaviours.Success(name="Always Succeed")
+            # In your bt_runner.py:
+            DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)"),
+            py_trees.behaviours.Success(name="Placeholder Action")
         ]
     )
     return root
@@ -22,7 +26,7 @@ def main(args=None):
     root = create_root()
     tree = py_trees_ros.trees.BehaviourTree(
         root=root,
-        unicode_tree_debug=True  # Prints the tree state to the console
+        unicode_tree_debug=True
     )
 
     try:
@@ -33,6 +37,7 @@ def main(args=None):
         rclpy.shutdown()
         sys.exit(1)
 
+    # Tick the tree at 10 Hz
     tree.tick_tock(period_ms=100.0)
 
     try:
