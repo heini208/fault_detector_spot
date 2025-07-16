@@ -15,33 +15,48 @@ def create_root() -> py_trees.behaviour.Behaviour:
     return root
 
 def create_behavior_tree():
-    root = py_trees.composites.Parallel(
-        name="FaultDetectorSpot",
-        policy=py_trees.common.ParallelPolicy.SuccessOnAll(),
-        children=[
-            # Detect tags and listen for UI commands in parallel
-            py_trees.composites.Parallel(
-                name="Sensing",
-                policy=py_trees.common.ParallelPolicy.SuccessOnAll(),
-                children=[
-                    DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)"),
-                    ManipulatorCommandSubscriber(name="UI Command Listener"),
-                ]
-            ),
+    node = rclpy.create_node("bt_driver")
 
-            # Execute manipulation sequence when tags and commands are available
-            py_trees.composites.Sequence(
-                name="Manipulation",
-                memory=True,
-                children=[
-                    # Your manipulation nodes here
-                    ManipulatorGetGoalTag(name="Get Goal Tag"),
-                    ManipulatorMoveArmAction(name="Move Arm")
-                ]
-            )
-        ]
-    )
+    root = py_trees.composites.Parallel(
+            "FaultDetectorSpot",
+            policy=py_trees.common.ParallelPolicy.SuccessOnAll()
+        )
+
+    root.add_children([
+        build_sensing_tree(node),
+        build_manipulator_goal_tree(node)
+    ])
     return root
+
+def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    sensing_seq = py_trees.composites.Parallel("Sensing", policy=py_trees.common.ParallelPolicy.SuccessOnAll())
+
+    detect = DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)")
+    detect.setup(node=node)
+
+    cmd_sub = ManipulatorCommandSubscriber(name="UI Command Listener")
+    cmd_sub.setup(node=node)
+
+
+    sensing_seq.add_children([detect, cmd_sub])
+    return sensing_seq
+
+def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    manipulation = py_trees.composites.Sequence("ManipulationSequence", memory=True)
+    check = py_trees.behaviours.CheckBlackboardVariableExists(
+        name="CheckGoalPose",
+        variable_name="goal_tag_pose"
+    )
+
+    get_goal = ManipulatorGetGoalTag(name="GetGoalTag")
+    get_goal.setup(node=node)
+
+    move_arm = ManipulatorMoveArmAction(name="MoveArm")
+    move_arm.setup(node=node)
+
+    manipulation.add_children([check, get_goal, move_arm])
+
+    return manipulation
 
 
 def main(args=None):

@@ -19,7 +19,7 @@ class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
             key="visible_tags", access=py_trees.common.Access.READ
         )
         self.blackboard.register_key(
-            key="goal_tag_id", access=py_trees.common.Access.READ
+            key="goal_tag_id", access=py_trees.common.Access.WRITE
         )
         self.blackboard.register_key(
             key="goal_tag_pose", access=py_trees.common.Access.WRITE
@@ -51,4 +51,6 @@ class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
         # Tag is visible, store its pose for the arm controller
         self.blackboard.goal_tag_pose = visible_tags[goal_id].pose
         self.feedback_message = f"Found goal tag {goal_id}"
+        if self.blackboard.exists("goal_tag_id"):
+            self.blackboard.goal_tag_id = None
         return py_trees.common.Status.SUCCESS

@@ -1,121 +1,125 @@
-import py_trees
-from geometry_msgs.msg import PoseStamped
+from typing import Optional
+import argparse
+
+
 import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import PoseStamped
+
 from spot_msgs.action import RobotCommand
 from synchros2.action_client import ActionClientWrapper
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 from synchros2.utilities import namespace_with
+import synchros2.scope as ros_scope
+import synchros2.process as ros_process
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_msgs.conversions import convert
 from bosdyn.api import geometry_pb2
 from bosdyn.client import math_helpers
-import synchros2.scope as ros_scope
+from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME
 
-class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
-    """
-    Executes a Spot arm movement to the blackboard's goal_tag_pose via RobotCommand action.
-    """
 
-    def __init__(self, name: str = "ManipulatorMoveArmAction"):
-        super().__init__(name)
-        self.blackboard = self.attach_blackboard_client()
-        self.robot_command_client: ActionClientWrapper = None
-        self.tf_listener: TFListenerWrapper = None
-        self.odom_frame_name: str = None
-        self.grav_body_frame: str = None
-        self.sent = False
+class ArmNavigatorNode(Node):
+    robot_command_client: Optional[ActionClientWrapper] = None
+    tf_listener: Optional[TFListenerWrapper] = None
+    logger = None
+    odom_frame_name = None
+    grav_aligned_body_frame_name = None
+    robot_name = None
 
-    def setup(self, **kwargs):
-        # Grab the ROS node and set up the Spot command client & TF listener
-        node = kwargs.get('node') or ros_scope.node()
+    def init_spot_arm(self):
+        global robot_command_client, tf_listener, logger, odom_frame_name, grav_aligned_body_frame_name
+        robot_name = ""
+        node = ros_scope.node()
         if node is None:
-            raise RuntimeError("No ROS node provided to ManipulatorMoveArmAction")
+            raise ValueError("no ROS 2 node available (did you use synchros2.process.main?)")
         self.logger = node.get_logger()
 
-        # Action client on ~/robot_command
-        robot_ns = ""  # fill in if using a namespace
-        self.robot_command_client = ActionClientWrapper(
-            RobotCommand,
-            namespace_with(robot_ns, "robot_command"),
-            node
+        self.robot_command_client = ActionClientWrapper(RobotCommand, namespace_with(robot_name, "robot_command"), node)
+        self.tf_listener = TFListenerWrapper(node)
+        self.odom_frame_name = namespace_with(robot_name, ODOM_FRAME_NAME)
+        self.grav_aligned_body_frame_name = namespace_with(robot_name, GRAV_ALIGNED_BODY_FRAME_NAME)
+        self.robot_command_client = ActionClientWrapper(RobotCommand, namespace_with(robot_name, "robot_command"), node)
+        self.logger.info("{} initialized on frames: {}, {}".format(robot_name, self.odom_frame_name,
+                                                                   self.grav_aligned_body_frame_name))
+
+    def __init__(self):
+        super().__init__('arm_navigator_node')
+        self.init_spot_arm()
+        self.subscription = self.create_subscription(
+            PoseStamped,
+            'arm_goal',
+            self.goal_callback,
+            10
         )
 
-        # TF listener to get transforms
-        self.tf_listener = TFListenerWrapper(node)
-        self.odom_frame_name = namespace_with(robot_ns, ros_scope.ODOM_FRAME_NAME)
-        self.grav_body_frame = namespace_with(robot_ns, ros_scope.GRAV_ALIGNED_BODY_FRAME_NAME)
+    def goal_callback(self, msg: PoseStamped):
+        self.get_logger().info('Received goal pose, passing to move_to_goal()')
+        self.move_to_goal(msg)
 
-        # Blackboard key
-        self.blackboard.register_key(key="goal_tag_pose", access=py_trees.common.Access.READ)
+    def move_to_goal(self, goal_pose: PoseStamped):
+        body_frame_pose = self.hand_pose_in_flat_body_frame(goal_pose.pose)
+        odom = self.odom_in_flat_body_frame(body_frame_pose)
+        action_goal = self.create_arm_command_as_message(odom, 2)
 
-    def update(self) -> py_trees.common.Status:
-        # Check we have a PoseStamped on the blackboard
-        if not self.blackboard.exists("goal_tag_pose") or self.blackboard.goal_tag_pose is None:
-            self.feedback_message = "No goal_tag_pose on blackboard"
-            return py_trees.common.Status.FAILURE
+        self.logger().info(
+            f"Sending arm command to x={goal_pose.pose.position.x:.2f}, y={goal_pose.pose.position.y:.2f}, z={goal_pose.pose.position.z:.2f}")
+        self.robot_command_client.send_goal_and_wait("move_to_goal", action_goal)
 
-        if not self.sent:
-            # Transform the PoseStamped into Spot's odom frame
-            ps: PoseStamped = self.blackboard.goal_tag_pose
-            # Build a flat-body SE3Pose
-            hand = geometry_pb2.SE3Pose(
-                position=geometry_pb2.Vec3(
-                    x=ps.pose.position.x,
-                    y=ps.pose.position.y,
-                    z=ps.pose.position.z
-                ),
-                rotation=geometry_pb2.Quaternion(
-                    w=ps.pose.orientation.w,
-                    x=ps.pose.orientation.x,
-                    y=ps.pose.orientation.y,
-                    z=ps.pose.orientation.z
-                )
-            )
-            # Lookup odom_T_flat_body, convert to math_helpers.SE3Pose
-            tf = self.tf_listener.lookup_a_tform_b(self.odom_frame_name, self.grav_body_frame)
-            odom_flat = math_helpers.SE3Pose(
-                tf.transform.translation.x,
-                tf.transform.translation.y,
-                tf.transform.translation.z,
-                math_helpers.Quat(
-                    tf.transform.rotation.w,
-                    tf.transform.rotation.x,
-                    tf.transform.rotation.y,
-                    tf.transform.rotation.z,
-                )
-            )
-            odom_goal = odom_flat * math_helpers.SE3Pose.from_obj(hand)
+    def hand_pose_in_flat_body_frame(self, pose: PoseStamped.pose):
+        x_pos = pose.position.x
+        y_pos = pose.position.y
+        z_pos = pose.position.z
+        hand_ewrt_flat_body = geometry_pb2.Vec3(x=x_pos, y=y_pos, z=z_pos)
 
-            # Create the RobotCommand goal
-            arm_cmd = RobotCommandBuilder.arm_pose_command(
-                odom_goal.x,
-                odom_goal.y,
-                odom_goal.z,
-                odom_goal.rot.w,
-                odom_goal.rot.x,
-                odom_goal.rot.y,
-                odom_goal.rot.z,
-                self.odom_frame_name,
-                2.0  # seconds
-            )
-            goal_msg = RobotCommand.Goal()
-            convert(arm_cmd, goal_msg.command)
+        x_orient = pose.orientation.x
+        y_orient = pose.orientation.y
+        z_orient = pose.orientation.z
+        w_orient = pose.orientation.w
 
-            # Send and wait
-            self.logger.info(f"Sending Spot arm goal to x={ps.pose.position.x:.2f}, "
-                             f"y={ps.pose.position.y:.2f}, z={ps.pose.position.z:.2f}")
-            result = self.robot_command_client.send_goal_and_wait("move_to_goal", goal_msg)
-            if result.status != result.STATUS_SUCCEEDED:
-                self.feedback_message = f"Spot arm action failed: {result.status}"
-                return py_trees.common.Status.FAILURE
+        flat_body_q_hand = geometry_pb2.Quaternion(w=w_orient, x=x_orient, y=y_orient, z=z_orient)
+        flat_body_t_hand = geometry_pb2.SE3Pose(position=hand_ewrt_flat_body, rotation=flat_body_q_hand)
+        return flat_body_t_hand
 
-            self.sent = True
-            self.feedback_message = "Spot arm moved successfully"
-            return py_trees.common.Status.SUCCESS
+    def odom_in_flat_body_frame(self, body_frame_pose: geometry_pb2.SE3Pose):
+        odom_T_flat_body = self.tf_listener.lookup_a_tform_b(self.odom_frame_name, self.grav_aligned_body_frame_name)
+        odom_T_flat_body_se3 = math_helpers.SE3Pose(
+            odom_T_flat_body.transform.translation.x,
+            odom_T_flat_body.transform.translation.y,
+            odom_T_flat_body.transform.translation.z,
+            math_helpers.Quat(
+                odom_T_flat_body.transform.rotation.w,
+                odom_T_flat_body.transform.rotation.x,
+                odom_T_flat_body.transform.rotation.y,
+                odom_T_flat_body.transform.rotation.z,
+            ),
+        )
 
-        # If we've already sent a command, report success
-        return py_trees.common.Status.SUCCESS
+        return odom_T_flat_body_se3 * math_helpers.SE3Pose.from_obj(body_frame_pose)
 
-    def terminate(self, new_status: py_trees.common.Status):
-        # Nothing special needed on terminate
-        pass
+    def create_arm_command_as_message(self, odom, seconds=2):
+        arm_command = RobotCommandBuilder.arm_pose_command(
+            odom.x,
+            odom.y,
+            odom.z,
+            odom.rot.w,
+            odom.rot.x,
+            odom.rot.y,
+            odom.rot.z,
+            ODOM_FRAME_NAME,
+            seconds,
+        )
+        action_goal = RobotCommand.Goal()
+        convert(arm_command, action_goal.command)
+        return action_goal
+
+@ros_process.main()
+def main() -> None:
+    node = ArmNavigatorNode()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

@@ -10,139 +10,153 @@ from bosdyn_msgs.conversions import convert
 from bosdyn.api import geometry_pb2
 from bosdyn.client import math_helpers
 import synchros2.scope as ros_scope
+from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME
+
 
 
 class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
     """
-    Executes a Spot arm movement to the blackboard's goal_tag_pose via RobotCommand action.
+    Executes a Spot arm movement to the blackboard's goal_tag_pose via RobotCommand action,
+    then clears the goal variables from the blackboard.
     """
 
-    def __init__(self, name: str = "ManipulatorMoveArmAction"):
+    def __init__(self, name: str = "ManipulatorMoveArmAction", robot_name: str = ""):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client()
         self.robot_command_client: ActionClientWrapper = None
         self.tf_listener: TFListenerWrapper = None
-        self.odom_frame_name: str = None
-        self.grav_body_frame: str = None
-        self.sent = False
+        self.robot_name = robot_name
+        self.odom_frame_name = namespace_with(robot_name, ODOM_FRAME_NAME)
+        self.grav_aligned_body_frame_name = namespace_with(robot_name, GRAV_ALIGNED_BODY_FRAME_NAME)
+        self.send_goal_future = None
+        self.goal_handle       = None
+        self.get_result_future = None
+        self.sent              = False
         self.initialized = False
         self.node = None
 
     def setup(self, **kwargs):
-        # Just store the node for later use
+        # Store the ROS node
         self.node = kwargs.get('node') or ros_scope.node()
         if self.node is None:
             raise RuntimeError("No ROS node provided to ManipulatorMoveArmAction")
 
-        # Register blackboard key
-        self.blackboard.register_key(key="goal_tag_pose", access=py_trees.common.Access.READ)
+        # Allow reading and deleting the pose & id on the blackboard
+        self.blackboard.register_key(key="goal_tag_pose", access=py_trees.common.Access.WRITE)
+        self.blackboard.register_key(key="goal_tag_id",   access=py_trees.common.Access.WRITE)
 
     def initialize(self):
-        """Lazy initialization of ROS clients"""
+        """Lazy initialization of action client and TF listener."""
         try:
-            # Set up logger
             self.logger = self.node.get_logger()
 
-            # Action client on ~/robot_command
-            robot_ns = ""  # fill in if using a namespace
             self.robot_command_client = ActionClientWrapper(
                 RobotCommand,
-                namespace_with(robot_ns, "robot_command"),
+                namespace_with(self.robot_name, "robot_command"),
                 self.node
             )
 
-            # TF listener to get transforms
             self.tf_listener = TFListenerWrapper(self.node)
-            self.odom_frame_name = namespace_with(robot_ns, ros_scope.ODOM_FRAME_NAME)
-            self.grav_body_frame = namespace_with(robot_ns, ros_scope.GRAV_ALIGNED_BODY_FRAME_NAME)
-
             self.initialized = True
             return True
         except Exception as e:
             if hasattr(self, 'logger'):
-                self.logger.error(f"Failed to initialize: {e}")
+                self.logger.error(f"Initialization failed: {e}")
             return False
 
     def update(self) -> py_trees.common.Status:
-        # Lazy initialization on first update
+        # First-call lazy setup
         if not self.initialized:
             if not self.initialize():
-                self.feedback_message = "Failed to initialize action clients"
-                return py_trees.common.Status.RUNNING  # Keep trying
+                self.feedback_message = "Waiting to initialize action client..."
+                return py_trees.common.Status.RUNNING
 
-        # Check we have a PoseStamped on the blackboard
-        if not self.blackboard.exists("goal_tag_pose") or self.blackboard.goal_tag_pose is None:
+        if self.sent:
+            return py_trees.common.Status.SUCCESS
+
+        if not self.check_goal_exists():
             self.feedback_message = "No goal_tag_pose on blackboard"
             return py_trees.common.Status.FAILURE
 
-        if not self.sent:
-            try:
-                # Transform the PoseStamped into Spot's odom frame
-                ps: PoseStamped = self.blackboard.goal_tag_pose
-                # Build a flat-body SE3Pose
-                hand = geometry_pb2.SE3Pose(
-                    position=geometry_pb2.Vec3(
-                        x=ps.pose.position.x,
-                        y=ps.pose.position.y,
-                        z=ps.pose.position.z
-                    ),
-                    rotation=geometry_pb2.Quaternion(
-                        w=ps.pose.orientation.w,
-                        x=ps.pose.orientation.x,
-                        y=ps.pose.orientation.y,
-                        z=ps.pose.orientation.z
-                    )
-                )
-                # Lookup odom_T_flat_body, convert to math_helpers.SE3Pose
-                tf = self.tf_listener.lookup_a_tform_b(self.odom_frame_name, self.grav_body_frame)
-                odom_flat = math_helpers.SE3Pose(
-                    tf.transform.translation.x,
-                    tf.transform.translation.y,
-                    tf.transform.translation.z,
-                    math_helpers.Quat(
-                        tf.transform.rotation.w,
-                        tf.transform.rotation.x,
-                        tf.transform.rotation.y,
-                        tf.transform.rotation.z,
-                    )
-                )
-                odom_goal = odom_flat * math_helpers.SE3Pose.from_obj(hand)
+        try:
+            if self.send_goal_future is None:
+                self.send_async_goal()
+                return py_trees.common.Status.RUNNING
 
-                # Create the RobotCommand goal
-                arm_cmd = RobotCommandBuilder.arm_pose_command(
-                    odom_goal.x,
-                    odom_goal.y,
-                    odom_goal.z,
-                    odom_goal.rot.w,
-                    odom_goal.rot.x,
-                    odom_goal.rot.y,
-                    odom_goal.rot.z,
-                    self.odom_frame_name,
-                    2.0  # seconds
-                )
-                goal_msg = RobotCommand.Goal()
-                convert(arm_cmd, goal_msg.command)
+            if self.goal_handle is None and self.send_goal_future.done():
+                return self.check_goal_accepted()
 
-                # Send and wait
-                self.logger.info(f"Sending Spot arm goal to x={ps.pose.position.x:.2f}, "
-                                 f"y={ps.pose.position.y:.2f}, z={ps.pose.position.z:.2f}")
-                result = self.robot_command_client.send_goal_and_wait("move_to_goal", goal_msg)
-                if result.status != result.STATUS_SUCCEEDED:
-                    self.feedback_message = f"Spot arm action failed: {result.status}"
-                    return py_trees.common.Status.FAILURE
+            if not self.get_result_future.done():
+                return py_trees.common.Status.RUNNING
 
-                self.sent = True
-                self.feedback_message = "Spot arm moved successfully"
-                return py_trees.common.Status.SUCCESS
+            return self.check_action_result()
 
-            except Exception as e:
-                self.feedback_message = f"Error executing arm command: {e}"
-                return py_trees.common.Status.FAILURE
+        except Exception as e:
+            self.feedback_message = f"Error during arm move: {e}"
+            return py_trees.common.Status.FAILURE
 
-        # If we've already sent a command, report success
         return py_trees.common.Status.SUCCESS
 
+    def send_async_goal(self):
+            ps = self.blackboard.goal_tag_pose
+            goal_msg = self.create_arm_command_as_message(ps, 2.0)
+            self.send_goal_future = self.robot_command_client.send_goal_async(
+                goal_msg
+            )
+            self.feedback_message = "Goal sent, waiting for acceptance"
+
+    def check_goal_accepted(self):
+        self.goal_handle = self.send_goal_future.result()
+        if not self.goal_handle.accepted:
+            self.feedback_message = "Goal rejected"
+            return py_trees.common.Status.FAILURE
+        self.get_result_future = self.goal_handle.get_result_async()
+        # clear the BB now that the goal is safely with the server
+        self.clear_blackboard()
+        self.feedback_message = "Goal accepted; waiting for result"
+        return py_trees.common.Status.RUNNING
+
+    def check_action_result(self):
+        result = self.get_result_future.result().result
+        if result.success:  # or wrapper-specific status check
+            self.feedback_message = "Arm move succeeded"
+            self.sent = True
+            return py_trees.common.Status.SUCCESS
+        else:
+            self.feedback_message = f"Arm failed: {result}"
+            return py_trees.common.Status.FAILURE
+
+    def create_arm_command_as_message(self, ps, seconds=2):
+        arm_command = RobotCommandBuilder.arm_pose_command(
+                ps.pose.position.x,
+                ps.pose.position.y,
+                ps.pose.position.z,
+                ps.pose.orientation.w,
+                ps.pose.orientation.x,
+                ps.pose.orientation.y,
+                ps.pose.orientation.z,
+                namespace_with(self.robot_name, GRAV_ALIGNED_BODY_FRAME_NAME),
+                seconds,
+            )
+        action_goal = RobotCommand.Goal()
+        convert(arm_command, action_goal.command)
+        return action_goal
+
+
+    def check_goal_exists(self):
+        return self.blackboard.exists("goal_tag_pose") or self.blackboard.goal_tag_pose is not None
+
+    def clear_blackboard(self):
+        if self.blackboard.exists("goal_tag_pose"):
+            self.blackboard.goal_tag_pose = None
+        if self.blackboard.exists("goal_tag_id"):
+            self.blackboard.goal_tag_id = None
+
+
     def terminate(self, new_status: py_trees.common.Status):
-        # Reset sent flag if we're being invalidated
-        if new_status == py_trees.common.Status.INVALID:
-            self.sent = False
+        if new_status == py_trees.common.Status.INVALID and self.goal_handle:
+            self.robot_command_client.cancel_goal_async(self.goal_handle)
+        self.send_goal_future = None
+        self.goal_handle = None
+        self.get_result_future = None
+        self.sent = False

@@ -20,6 +20,7 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
         self.topic = topic
         self.blackboard = self.attach_blackboard_client()
         self.last_command_id = None
+        self.last_command_stamp = None
 
     def setup(self, **kwargs):
         try:
@@ -47,17 +48,25 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
 
     def _command_callback(self, msg: TagElement):
         """Process incoming command from UI"""
+        if self.is_last_command(msg):
+            return
+
         try:
-            # Store tag ID
             self.blackboard.goal_tag_id = msg.id
-
-            # Store the PoseStamped message
             self.blackboard.goal_tag_pose = msg.pose
-
             self.last_command_id = msg.id
+            self.last_command_stamp = msg.pose.header.stamp
+
             self.logger.info(f"Received command for tag {msg.id}")
         except Exception as e:
             self.logger.error(f"Error processing command: {e}")
+
+    def is_last_command(self, msg) -> bool:
+        if self.last_command_stamp is None:
+            return False
+        stamp = msg.pose.header.stamp
+        return stamp.sec == self.last_command_stamp.sec and \
+            stamp.nanosec == self.last_command_stamp.nanosec
 
     def update(self) -> py_trees.common.Status:
         """Always returns SUCCESS to allow parallel execution"""
