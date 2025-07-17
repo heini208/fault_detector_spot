@@ -14,6 +14,7 @@ from fault_detector_spot.behaviour_tree.nodes.manipulator_get_goal_tag import Ma
 from fault_detector_spot.behaviour_tree.nodes.manipulator_move_arm_action import ManipulatorMoveArmAction
 from fault_detector_spot.behaviour_tree.nodes.manipulator_command_subscriber import ManipulatorCommandSubscriber
 from fault_detector_spot.behaviour_tree.nodes.new_command_guard import NewCommandGuard
+from fault_detector_spot.behaviour_tree.nodes.stow_arm_action import StowArmAction
 
 def create_root() -> py_trees.behaviour.Behaviour:
     root = create_behavior_tree()
@@ -53,11 +54,12 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         memory=True
     )
 
-    move_tag_seq = py_trees.composites.Sequence("MoveToTagSequence", memory=True)
-    move_to_tag_behavior = build_manipulator_goal_tree(node)
-    move_tag_check = match_command_checker("move_to_tag")
-    move_tag_seq.add_children([move_tag_check, move_to_tag_behavior])
-    command_selector.add_child(move_tag_seq)
+    stow_arm_sequence = stow_arm_command_sequence(node)
+    command_selector.add_child(stow_arm_sequence)
+
+    move_to_tag_sequence = move_to_tag_command_sequence(node)
+    command_selector.add_child(move_to_tag_sequence)
+
 
     guard = NewCommandGuard(name="NewCommandGuard")
     guard.setup(node=node)
@@ -68,6 +70,22 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
     guarded_sequence.add_children([guard, command_selector])
     return guarded_sequence
+
+def move_to_tag_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    move_tag_seq = py_trees.composites.Sequence("MoveToTagSequence", memory=True)
+    move_to_tag_behavior = build_manipulator_goal_tree(node)
+    move_tag_check = match_command_checker("move_to_tag")
+    move_tag_seq.add_children([move_tag_check, move_to_tag_behavior])
+    return move_tag_seq
+
+def stow_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    stow_arm_seq = py_trees.composites.Sequence("StowArmSequence", memory=True)
+    stow_arm_check = match_command_checker("stow_arm")
+    stow_arm_action = StowArmAction(name="StowArmAction")
+    stow_arm_action.setup(node=node)
+
+    stow_arm_seq.add_children([stow_arm_check, stow_arm_action])
+    return stow_arm_seq
 
 def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
     return py_trees.behaviours.CheckBlackboardVariableValue(
@@ -82,11 +100,11 @@ def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
 def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     manipulation = py_trees.composites.Sequence("ManipulationSequence", memory=True)
     check = py_trees.behaviours.CheckBlackboardVariableExists(
-        name="CheckGoalPose",
+        name="CheckGoalPoseExists",
         variable_name="goal_tag_pose"
     )
 
-    get_goal = ManipulatorGetGoalTag(name="GetGoalTag")
+    get_goal = ManipulatorGetGoalTag(name="GetGoalTagPosition")
     get_goal.setup(node=node)
 
     move_arm = ManipulatorMoveArmAction(name="MoveArm")
