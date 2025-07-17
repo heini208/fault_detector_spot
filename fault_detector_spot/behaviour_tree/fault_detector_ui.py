@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QLineEdit, QMessageBox, QApplication)
 from PyQt5.QtCore import QTimer
 from fault_detector_msgs.msg import TagElement, TagElementArray
+from std_msgs.msg import Header
 
 
 class Fault_Detector_UI(QWidget):
@@ -41,6 +42,17 @@ class Fault_Detector_UI(QWidget):
         input_layout = self.create_tag_input_section()
         layout.addLayout(input_layout)
 
+        stow_cancel_layout = self.create_stow_arm_section()
+        layout.addLayout(stow_cancel_layout)
+
+
+    def create_stow_arm_section(self):
+        stow_cancel_layout = QHBoxLayout()
+        self.stow_button = QPushButton('Stow Arm/Cancel Action')
+        self.stow_button.clicked.connect(self.handle_stow)
+        stow_cancel_layout.addWidget(self.stow_button)
+        return stow_cancel_layout
+
     def create_tag_input_section(self):
         input_layout = QHBoxLayout()
 
@@ -64,6 +76,9 @@ class Fault_Detector_UI(QWidget):
     def init_publishers(self):
         self.move_to_tag_publisher = self.node.create_publisher(
             TagElement, "fault_detector/commands/move_to_tag", 10)
+
+        self.stow_arm_publisher = self.node.create_publisher(
+            Header, "fault_detector/commands/stow_arm", 10)
 
     def init_subscribers(self):
         self.visible_tags_subscriber = self.node.create_subscription(
@@ -100,6 +115,16 @@ class Fault_Detector_UI(QWidget):
             self.status_label.setText(f"Command sent: Move to tag {tag_id}")
         else:
             self.status_label.setText(f"Move to tag {tag_id} cancelled.")
+
+    def handle_stow(self):
+        """Publish a Header-stamped stow/cancel command."""
+        if not hasattr(self, 'stow_arm_publisher'):
+            return
+        hdr = Header()
+        hdr.stamp = self.node.get_clock().now().to_msg()
+        hdr.frame_id = ""
+        self.stow_arm_publisher.publish(hdr)
+        self.status_label.setText("Command sent: Stow/Cancel Arm")
 
     def get_tag_position(self, tag_id):
         tag_element = self.visible_tags[tag_id]

@@ -3,6 +3,7 @@
 import py_trees
 import rclpy
 from fault_detector_msgs.msg import TagElement
+from std_msgs.msg import Header
 from typing import Optional
 
 
@@ -13,65 +14,30 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
     """
 
     def __init__(self, name: str = "ManipulatorCommandSubscriber",
-                 topic: str = "fault_detector/commands/move_to_tag"):
+                 move_topic: str = "fault_detector/commands/move_to_tag",
+                 stow_topic: str = "fault_detector/commands/stow_arm"):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
         self.subscription = None
-        self.topic = topic
+        self.move_to_tag_topic = move_topic
+        self.stow_topic = stow_topic
+
         self.blackboard = self.attach_blackboard_client()
-        self.last_command_id = None
-        self.last_command_stamp = None
+
 
     def setup(self, **kwargs):
         try:
             self.node = kwargs['node']
 
-            # Subscribe to UI commands
-            self.subscription = self.node.create_subscription(
-                TagElement,
-                self.topic,
-                self._command_callback,
-                10
-            )
-
-            # Register blackboard keys
-            self.blackboard.register_key(
-                key="goal_tag_id", access=py_trees.common.Access.WRITE
-            )
-            self.blackboard.register_key(
-                key="goal_tag_pose", access=py_trees.common.Access.WRITE
-            )
-
-            self.logger.info(f"Listening for tag commands on {self.topic}")
+            self._create_ui_subscribers()
+            self._register_blackboard_keys()
         except KeyError as e:
             self.logger.error(f"Could not retrieve node from kwargs: {e}")
 
-    def _command_callback(self, msg: TagElement):
-        """Process incoming command from UI"""
-        if self.is_last_command(msg):
-            return
-
-        try:
-            self.blackboard.goal_tag_id = msg.id
-            self.blackboard.goal_tag_pose = msg.pose
-            self.last_command_id = msg.id
-            self.last_command_stamp = msg.pose.header.stamp
-
-            self.logger.info(f"Received command for tag {msg.id}")
-        except Exception as e:
-            self.logger.error(f"Error processing command: {e}")
-
-    def is_last_command(self, msg) -> bool:
-        if self.last_command_stamp is None:
-            return False
-        stamp = msg.pose.header.stamp
-        return stamp.sec == self.last_command_stamp.sec and \
-            stamp.nanosec == self.last_command_stamp.nanosec
-
     def update(self) -> py_trees.common.Status:
-        """Always returns SUCCESS to allow parallel execution"""
-        if self.last_command_id is not None:
-            self.feedback_message = f"Last command: tag {self.last_command_id}"
+        """only for updating feedback message"""
+        if self.blackboard.last_command_id is not None:
+            self.feedback_message = f"Last command: tag {self.blackboard.last_command_id}"
         else:
             self.feedback_message = "No commands received yet"
 
@@ -79,3 +45,80 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
 
     def terminate(self, new_status):
         self.logger.debug(f"Terminating with status {new_status}")
+
+    def _create_ui_subscribers(self):
+        self.subscription = self.node.create_subscription(
+            TagElement,
+            self.move_to_tag_topic,
+            self._tag_command_callback,
+            10
+        )
+
+        self.subscription = self.node.create_subscription(
+            Header,
+            self.stow_topic,
+            self._stow_arm_command_callback,
+            10
+        )
+
+    def _register_blackboard_keys(self):
+        self.blackboard.register_key(
+            key="goal_tag_id", access=py_trees.common.Access.WRITE
+        )
+        self.blackboard.register_key(
+            key="goal_tag_pose", access=py_trees.common.Access.WRITE
+        )
+        self.blackboard.register_key(
+            key="last_command_id", access=py_trees.common.Access.WRITE
+        )
+        self.blackboard.register_key(
+            key="last_command_stamp", access=py_trees.common.Access.WRITE
+        )
+
+        self.blackboard.last_command_id = None
+        self.blackboard.last_command_stamp = None
+        self.blackboard.goal_tag_id = None
+        self.blackboard.goal_tag_pose = None
+
+    def _tag_command_callback(self, msg: TagElement):
+        """Process incoming command from UI"""
+        if self.is_last_command(msg):
+            return
+
+        try:
+            self.blackboard.goal_tag_id = msg.id
+            self.blackboard.goal_tag_pose = msg.pose
+            self.blackboard.last_command_id = "move_to_tag"
+            self.blackboard.last_command_stamp = msg.pose.header.stamp
+
+            self.logger.info(f"Received command for tag {msg.id}")
+        except Exception as e:
+            self.logger.error(f"Error processing command: {e}")
+
+    def _stow_arm_command_callback(self, msg: Header):
+        if self.is_last_command(msg):
+            return
+        self.blackboard.last_command_id = "stow_arm"
+        self.blackboard.last_command_stamp = msg.stamp
+        self.logger.info("Received stow arm command")
+
+    def is_last_command(self, msg) -> bool:
+        if self.blackboard.last_command_stamp is None:
+            return False
+
+        stamp = self._extract_timestamp(msg)
+        if stamp is None:
+            self.logger.warning(f"Could not extract timestamp from message of type {type(msg).__name__}")
+            return False
+
+        last_stamp = self.blackboard.last_command_stamp
+        return stamp.sec == last_stamp.sec and stamp.nanosec == last_stamp.nanosec
+
+    def _extract_timestamp(self, msg):
+        """Extract timestamp from various message types"""
+        if hasattr(msg, 'header'):
+            return msg.header.stamp
+        elif hasattr(msg, 'pose') and hasattr(msg.pose, 'header'):
+            return msg.pose.header.stamp
+        elif hasattr(msg, 'stamp'):
+            return msg.stamp

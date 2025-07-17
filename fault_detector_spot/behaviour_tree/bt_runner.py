@@ -4,12 +4,17 @@ import rclpy
 import py_trees
 import py_trees_ros
 import sys
+import operator
+
+from py_trees.behaviours import CheckBlackboardVariableValue
 from rclpy.node import Node
 
 from fault_detector_spot.behaviour_tree.nodes.detect_visible_tags import DetectVisibleTags
 from fault_detector_spot.behaviour_tree.nodes.manipulator_get_goal_tag import ManipulatorGetGoalTag
 from fault_detector_spot.behaviour_tree.nodes.manipulator_move_arm_action import ManipulatorMoveArmAction
 from fault_detector_spot.behaviour_tree.nodes.manipulator_command_subscriber import ManipulatorCommandSubscriber
+from fault_detector_spot.behaviour_tree.nodes.new_command_guard import NewCommandGuard
+
 def create_root() -> py_trees.behaviour.Behaviour:
     root = create_behavior_tree()
     return root
@@ -24,7 +29,7 @@ def create_behavior_tree():
 
     root.add_children([
         build_sensing_tree(node),
-        build_manipulator_goal_tree(node)
+        build_command_tree(node)
     ])
     return root
 
@@ -40,6 +45,39 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
     sensing_seq.add_children([detect, cmd_sub])
     return sensing_seq
+
+def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+
+    command_selector = py_trees.composites.Selector(
+        name="CommandSelector",
+        memory=True
+    )
+
+    move_tag_seq = py_trees.composites.Sequence("MoveToTagSequence", memory=True)
+    move_to_tag_behavior = build_manipulator_goal_tree(node)
+    move_tag_check = match_command_checker("move_to_tag")
+    move_tag_seq.add_children([move_tag_check, move_to_tag_behavior])
+    command_selector.add_child(move_tag_seq)
+
+    guard = NewCommandGuard(name="NewCommandGuard")
+    guard.setup(node=node)
+    guarded_sequence = py_trees.composites.Sequence(
+        name = "GuardedCommands",
+        memory = True
+    )
+
+    guarded_sequence.add_children([guard, command_selector])
+    return guarded_sequence
+
+def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
+    return py_trees.behaviours.CheckBlackboardVariableValue(
+    name=f"Check_{command_id}",
+    check=py_trees.common.ComparisonExpression(
+        variable="last_command_id",
+        value=command_id,
+        operator=operator.eq
+    )
+)
 
 def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     manipulation = py_trees.composites.Sequence("ManipulationSequence", memory=True)
