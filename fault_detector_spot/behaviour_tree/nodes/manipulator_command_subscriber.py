@@ -15,12 +15,14 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
 
     def __init__(self, name: str = "ManipulatorCommandSubscriber",
                  move_topic: str = "fault_detector/commands/move_to_tag",
-                 stow_topic: str = "fault_detector/commands/stow_arm"):
+                 stow_topic: str = "fault_detector/commands/stow_arm",
+                 stand_topic: str = "fault_detector/commands/stand_up"):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
         self.subscription = None
         self.move_to_tag_topic = move_topic
         self.stow_topic = stow_topic
+        self.stand_topic = stand_topic
 
         self.blackboard = self.attach_blackboard_client()
 
@@ -58,6 +60,13 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
             Header,
             self.stow_topic,
             self._stow_arm_command_callback,
+            10
+        )
+
+        self.subscription = self.node.create_subscription(
+            Header,
+            self.stand_topic,
+            self._stand_up_command_callback,
             10
         )
 
@@ -101,6 +110,13 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.last_command_id = "stow_arm"
         self.blackboard.last_command_stamp = msg.stamp
         self.logger.info("Received stow arm command")
+
+    def _stand_up_command_callback(self, msg: Header):
+        if self.is_last_command(msg):
+            return
+        self.blackboard.last_command_id = "stand_up"
+        self.blackboard.last_command_stamp = msg.stamp
+        self.logger.info("Received stand up command")
 
     def is_last_command(self, msg) -> bool:
         if self.blackboard.last_command_stamp is None:

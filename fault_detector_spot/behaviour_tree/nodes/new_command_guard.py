@@ -10,7 +10,6 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
     def __init__(self, name: str = "NewCommandGuard"):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client()
-        self.current = None
 
     def setup(self, **kwargs):
         # Register read/write keys
@@ -29,19 +28,18 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
             self.feedback_message = "No command received yet"
             return py_trees.common.Status.FAILURE
 
-        self.current = self.blackboard.last_command_stamp
-
-        if not self.is_first_stamp():
+        if self.is_first_stamp():
             self.feedback_message = "First command – processing"
             return py_trees.common.Status.SUCCESS
 
         # 3) Compare timestamps
-        if self.same_time_stamp(self.current, self.blackboard.last_processed_command_stamp):
-            self.feedback_message = "Duplicate command – skipping"
-            return py_trees.common.Status.FAILURE
-        else:
+        if self.has_newer_stamp():
             self.feedback_message = "New command – processing"
             return py_trees.common.Status.SUCCESS
+        else:
+            self.feedback_message = "Duplicate command – skipping"
+            return py_trees.common.Status.FAILURE
+
 
     def stamp_exists(self):
         if not self.blackboard.exists("last_command_stamp") or \
@@ -50,20 +48,23 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
         return True
 
     def is_first_stamp(self):
-        if self.current is None:
+        if self.blackboard.last_command_stamp is None:
             return False
         if not self.blackboard.exists("last_processed_command_stamp") or \
            self.blackboard.last_processed_command_stamp is None:
-            self.blackboard.last_processed_command_stamp = self.current
+            self.blackboard.last_processed_command_stamp = self.blackboard.last_command_stamp
             return True
+        return False
 
-    def same_time_stamp(self, current: Time, previous: Time) -> bool:
+    def has_newer_stamp(self) -> bool:
         """
         Compare two timestamps for equality.
         """
-        if (current.sec != previous.sec) or (current.nanosec != previous.nanosec):
-            self.blackboard.last_processed_command_stamp = current
-            return False
-        else:
+        previous = self.blackboard.last_processed_command_stamp
+        current = self.blackboard.last_command_stamp
+        if (current.sec, current.nanosec) > (previous.sec, previous.nanosec):
+            self.blackboard.last_processed_command_stamp = self.blackboard.last_command_stamp
             return True
+        else:
+            return False
 
