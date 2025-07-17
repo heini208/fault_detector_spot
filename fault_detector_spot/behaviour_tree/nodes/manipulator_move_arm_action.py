@@ -44,6 +44,7 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
         # Allow reading and deleting the pose & id on the blackboard
         self.blackboard.register_key(key="goal_tag_pose", access=py_trees.common.Access.WRITE)
         self.blackboard.register_key(key="goal_tag_id",   access=py_trees.common.Access.WRITE)
+        self.blackboard.register_key(key="last_command_id", access=py_trees.common.Access.READ)
 
     def initialize(self):
         """Lazy initialization of action client and TF listener."""
@@ -73,6 +74,11 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
 
         if self.sent:
             return py_trees.common.Status.SUCCESS
+
+        if self.blackboard.last_command_id != "move_to_tag":
+            self._cancel_inflight()
+            self.feedback_message = "Cancelled by new command"
+            return py_trees.common.Status.FAILURE
 
         if not self.check_goal_exists():
             self.feedback_message = "No goal_tag_pose on blackboard"
@@ -152,10 +158,17 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
         if self.blackboard.exists("goal_tag_id"):
             self.blackboard.goal_tag_id = None
 
+    def _cancel_inflight(self):
+        if self.goal_handle:
+            self.robot_command_client._cancel_goal_async(self.goal_handle)
+        self.send_goal_future = None
+        self.goal_handle = None
+        self.get_result_future = None
+        self.sent = False
 
     def terminate(self, new_status: py_trees.common.Status):
         if new_status == py_trees.common.Status.INVALID and self.goal_handle:
-            self.robot_command_client.cancel_goal_async(self.goal_handle)
+            self.robot_command_client._cancel_goal_async(self.goal_handle)
         self.send_goal_future = None
         self.goal_handle = None
         self.get_result_future = None
