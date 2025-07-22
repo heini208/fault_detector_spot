@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
+import signal
 import sys
 import rclpy
-import signal
+from rclpy.node import Node
+from std_msgs.msg import Header
+from geometry_msgs.msg import PoseStamped
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QMessageBox, QApplication
 )
 from PyQt5.QtCore import QTimer
-from fault_detector_msgs.msg import TagElement, TagElementArray, basic_command
+from fault_detector_msgs.msg import TagElement, TagElementArray, BasicCommand
 from std_msgs.msg import Header
 
 
@@ -56,18 +59,14 @@ class Fault_Detector_UI(QWidget):
         Single row containing Stand Up, Ready Arm, and Stow/Cancel buttons.
         """
         row = QHBoxLayout()
-
-        # Stand Up
         self.stand_button = QPushButton("Stand Up")
         self.stand_button.clicked.connect(self.handle_stand)
         row.addWidget(self.stand_button)
 
-        # Ready Arm
         self.ready_button = QPushButton("Ready Arm")
         self.ready_button.clicked.connect(self.handle_ready)
         row.addWidget(self.ready_button)
 
-        # Stow/Cancel
         self.stow_button = QPushButton("Stow Arm / Cancel")
         self.stow_button.clicked.connect(self.handle_stow)
         row.addWidget(self.stow_button)
@@ -75,32 +74,22 @@ class Fault_Detector_UI(QWidget):
         return row
 
     def init_ros_communication(self):
-        # Publishers
         self.move_to_tag_publisher = self.node.create_publisher(
             TagElement, "fault_detector/commands/move_to_tag", 10
         )
-        self.stow_arm_publisher = self.node.create_publisher(
-            Header, "fault_detector/commands/stow_arm", 10
-        )
-        self.stand_up_publisher = self.node.create_publisher(
-            Header, "fault_detector/commands/stand_up", 10
-        )
-        self.ready_arm_publisher = self.node.create_publisher(
-            Header, "fault_detector/commands/ready_arm", 10
-        )
 
-        # Subscriber
+        self.command_pub = self.node.create_publisher(
+            BasicCommand, "fault_detector/commands/basic_command", 10)
+
         self.visible_tags_sub = self.node.create_subscription(
             TagElementArray,
             "fault_detector/state/visible_tags",
             self._process_visible_tags,
             10
         )
-
         self.status_label.setText("Status: Connected to ROS2")
 
     def _spin_and_refresh(self):
-        """Called by QTimer: spin ROS once and update UI labels."""
         if self.node:
             rclpy.spin_once(self.node, timeout_sec=0.01)
         self.visible_label.setText(f"Visible tags: {sorted(self.visible_tags.keys())}")
@@ -131,29 +120,29 @@ class Fault_Detector_UI(QWidget):
         else:
             self.status_label.setText(f"Move to tag {tag_id} canceled")
 
-    def handle_stow(self):
-        """Publish a stamped Header on stow_arm topic."""
-        hdr = Header()
-        hdr.stamp = self.node.get_clock().now().to_msg()
-        hdr.frame_id = ""
-        self.stow_arm_publisher.publish(hdr)
-        self.status_label.setText("Command sent: Stow/Cancel Arm")
-
     def handle_stand(self):
-        """Publish a stamped Header on stand_up topic."""
-        hdr = Header()
-        hdr.stamp = self.node.get_clock().now().to_msg()
-        hdr.frame_id = ""
-        self.stand_up_publisher.publish(hdr)
+        cmd = BasicCommand()
+        cmd.header = Header()
+        cmd.header.stamp = self.node.get_clock().now().to_msg()
+        cmd.command_id = "stand_up"
+        self.command_pub.publish(cmd)
         self.status_label.setText("Command sent: Stand Up")
 
     def handle_ready(self):
-        """Publish a stamped Header on ready_arm topic."""
-        hdr = Header()
-        hdr.stamp = self.node.get_clock().now().to_msg()
-        hdr.frame_id = ""
-        self.ready_arm_publisher.publish(hdr)
+        cmd = BasicCommand()
+        cmd.header = Header()
+        cmd.header.stamp = self.node.get_clock().now().to_msg()
+        cmd.command_id = "ready_arm"
+        self.command_pub.publish(cmd)
         self.status_label.setText("Command sent: Ready Arm")
+
+    def handle_stow(self):
+        cmd = BasicCommand()
+        cmd.header = Header()
+        cmd.header.stamp = self.node.get_clock().now().to_msg()
+        cmd.command_id = "stow_arm"
+        self.command_pub.publish(cmd)
+        self.status_label.setText("Command sent: Stow Arm / Cancel")
 
     def closeEvent(self, event):
         self.timer.stop()

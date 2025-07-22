@@ -2,7 +2,7 @@ import py_trees
 import py_trees_ros
 import rclpy
 import re
-from fault_detector_msgs.msg import TagElement, TagElementArray, basic_command
+from fault_detector_msgs.msg import TagElement, TagElementArray, BasicCommand
 import tf2_ros
 from typing import Dict, Optional
 

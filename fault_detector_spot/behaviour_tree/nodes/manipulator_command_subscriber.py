@@ -2,7 +2,7 @@
 
 import py_trees
 import rclpy
-from fault_detector_msgs.msg import TagElement
+from fault_detector_msgs.msg import TagElement, BasicCommand
 from std_msgs.msg import Header
 from typing import Optional
 
@@ -16,15 +16,11 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
     def __init__(self,
                  name: str = "ManipulatorCommandSubscriber",
                  move_topic: str = "fault_detector/commands/move_to_tag",
-                 stow_topic: str = "fault_detector/commands/stow_arm",
-                 stand_topic: str = "fault_detector/commands/stand_up",
-                 ready_topic: str = "fault_detector/commands/ready_arm"):
+                 command_topic: str = "fault_detector/commands/basic_command"):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
         self.move_to_tag_topic = move_topic
-        self.stow_topic        = stow_topic
-        self.stand_topic       = stand_topic
-        self.ready_topic       = ready_topic
+        self.command_topic        = command_topic
         self.blackboard = self.attach_blackboard_client()
 
     def setup(self, **kwargs):
@@ -54,27 +50,8 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
             self._tag_command_callback,
             10
         )
-        # Stow arm / cancel
         self.node.create_subscription(
-            Header,
-            self.stow_topic,
-            self._stow_arm_command_callback,
-            10
-        )
-        # Stand up
-        self.node.create_subscription(
-            Header,
-            self.stand_topic,
-            self._stand_up_command_callback,
-            10
-        )
-        # Ready arm
-        self.node.create_subscription(
-            Header,
-            self.ready_topic,
-            self._ready_arm_command_callback,
-            10
-        )
+            BasicCommand, self.command_topic, self._basic_command_callback, 10)
 
     def _register_blackboard_keys(self):
         self.blackboard.register_key(
@@ -110,26 +87,12 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
         except Exception as e:
             self.logger.error(f"Error processing command: {e}")
 
-    def _stow_arm_command_callback(self, msg: Header):
+    def _basic_command_callback(self, msg: BasicCommand):
         if self.is_last_command(msg):
             return
-        self.blackboard.last_command_id = "stow_arm"
-        self.blackboard.last_command_stamp = msg.stamp
-        self.logger.info("Received stow_arm command")
-
-    def _ready_arm_command_callback(self, msg: Header):
-        if self.is_last_command(msg.stamp):
-            return
-        self.blackboard.last_command_id = "ready_arm"
-        self.blackboard.last_command_stamp = msg.stamp
-        self.logger.info("Received ready_arm command")
-
-    def _stand_up_command_callback(self, msg: Header):
-        if self.is_last_command(msg):
-            return
-        self.blackboard.last_command_id = "stand_up"
-        self.blackboard.last_command_stamp = msg.stamp
-        self.logger.info("Received stand_up command")
+        self.blackboard.last_command_id = msg.command_id
+        self.blackboard.last_command_stamp = msg.header.stamp
+        self.logger.info(f"Received {msg.command_id} command")
 
     def is_last_command(self, msg) -> bool:
         if self.blackboard.last_command_stamp is None:
