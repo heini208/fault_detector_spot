@@ -61,6 +61,9 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
             key="goal_tag_pose", access=py_trees.common.Access.WRITE
         )
         self.blackboard.register_key(
+            key="goal_tag_offset", access=py_trees.common.Access.WRITE
+        )
+        self.blackboard.register_key(
             key="last_command_id", access=py_trees.common.Access.WRITE
         )
         self.blackboard.register_key(
@@ -71,6 +74,8 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.last_command_stamp = None
         self.blackboard.goal_tag_id = None
         self.blackboard.goal_tag_pose = None
+        self.blackboard.goal_tag_offset = None
+
 
     def _tag_command_callback(self, msg: TagElement):
         """Process incoming command from UI"""
@@ -80,6 +85,7 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
         try:
             self.blackboard.goal_tag_id = msg.id
             self.blackboard.goal_tag_pose = msg.pose
+            self.blackboard.goal_tag_offset = msg.offset
             self.blackboard.last_command_id = "move_to_tag"
             self.blackboard.last_command_stamp = msg.pose.header.stamp
 

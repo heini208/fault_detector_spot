@@ -43,6 +43,7 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
 
         # Allow reading and deleting the pose & id on the blackboard
         self.blackboard.register_key(key="goal_tag_pose", access=py_trees.common.Access.WRITE)
+        self.blackboard.register_key(key="goal_tag_offset", access=py_trees.common.Access.READ)
         self.blackboard.register_key(key="goal_tag_id",   access=py_trees.common.Access.WRITE)
         self.blackboard.register_key(key="last_command_id", access=py_trees.common.Access.READ)
 
@@ -104,12 +105,25 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
     def send_async_goal(self):
-            ps = self.blackboard.goal_tag_pose
-            goal_msg = self.create_arm_command_as_message(ps, 2.0)
+            base_goal = self.blackboard.goal_tag_pose
+            goal_with_offset = self.add_offset(base_goal)
+
+            goal_msg = self.create_arm_command_as_message(goal_with_offset, 2.0)
             self.send_goal_future = self.robot_command_client.send_goal_async(
                 goal_msg
             )
             self.feedback_message = "Goal sent, waiting for acceptance"
+
+    def add_offset(self, base_goal):
+        goal_with_offset = PoseStamped()
+        goal_with_offset.header = base_goal.header
+        goal_with_offset.pose = base_goal.pose
+        if self.blackboard.exists("goal_tag_offset") and self.blackboard.goal_tag_offset is not None:
+            offset: PoseStamped = self.blackboard.goal_tag_offset
+            goal_with_offset.pose.position.x += offset.pose.position.x
+            goal_with_offset.pose.position.y += offset.pose.position.y
+            goal_with_offset.pose.position.z += offset.pose.position.z
+        return goal_with_offset
 
     def check_goal_accepted(self):
         self.goal_handle = self.send_goal_future.result()
