@@ -9,28 +9,27 @@ from typing import Optional
 
 class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
     """
-    Subscribes to tag commands from the UI and updates the blackboard
-    for use by manipulator control nodes.
+    Subscribes to UI commands
+    and updates the blackboard for use by manipulator control nodes.
     """
 
-    def __init__(self, name: str = "ManipulatorCommandSubscriber",
+    def __init__(self,
+                 name: str = "ManipulatorCommandSubscriber",
                  move_topic: str = "fault_detector/commands/move_to_tag",
                  stow_topic: str = "fault_detector/commands/stow_arm",
-                 stand_topic: str = "fault_detector/commands/stand_up"):
+                 stand_topic: str = "fault_detector/commands/stand_up",
+                 ready_topic: str = "fault_detector/commands/ready_arm"):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
-        self.subscription = None
         self.move_to_tag_topic = move_topic
-        self.stow_topic = stow_topic
-        self.stand_topic = stand_topic
-
+        self.stow_topic        = stow_topic
+        self.stand_topic       = stand_topic
+        self.ready_topic       = ready_topic
         self.blackboard = self.attach_blackboard_client()
-
 
     def setup(self, **kwargs):
         try:
             self.node = kwargs['node']
-
             self._create_ui_subscribers()
             self._register_blackboard_keys()
         except KeyError as e:
@@ -42,31 +41,38 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
             self.feedback_message = f"Last command: tag {self.blackboard.last_command_id}"
         else:
             self.feedback_message = "No commands received yet"
-
         return py_trees.common.Status.SUCCESS
 
     def terminate(self, new_status):
         self.logger.debug(f"Terminating with status {new_status}")
 
     def _create_ui_subscribers(self):
-        self.subscription = self.node.create_subscription(
+        # Move-to-tag command
+        self.node.create_subscription(
             TagElement,
             self.move_to_tag_topic,
             self._tag_command_callback,
             10
         )
-
-        self.subscription = self.node.create_subscription(
+        # Stow arm / cancel
+        self.node.create_subscription(
             Header,
             self.stow_topic,
             self._stow_arm_command_callback,
             10
         )
-
-        self.subscription = self.node.create_subscription(
+        # Stand up
+        self.node.create_subscription(
             Header,
             self.stand_topic,
             self._stand_up_command_callback,
+            10
+        )
+        # Ready arm
+        self.node.create_subscription(
+            Header,
+            self.ready_topic,
+            self._ready_arm_command_callback,
             10
         )
 
@@ -109,14 +115,21 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
             return
         self.blackboard.last_command_id = "stow_arm"
         self.blackboard.last_command_stamp = msg.stamp
-        self.logger.info("Received stow arm command")
+        self.logger.info("Received stow_arm command")
+
+    def _ready_arm_command_callback(self, msg: Header):
+        if self.is_last_command(msg.stamp):
+            return
+        self.blackboard.last_command_id = "ready_arm"
+        self.blackboard.last_command_stamp = msg.stamp
+        self.logger.info("Received ready_arm command")
 
     def _stand_up_command_callback(self, msg: Header):
         if self.is_last_command(msg):
             return
         self.blackboard.last_command_id = "stand_up"
         self.blackboard.last_command_stamp = msg.stamp
-        self.logger.info("Received stand up command")
+        self.logger.info("Received stand_up command")
 
     def is_last_command(self, msg) -> bool:
         if self.blackboard.last_command_stamp is None:

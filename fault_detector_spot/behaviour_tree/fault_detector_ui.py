@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLineEdit, QMessageBox, QApplication
 )
 from PyQt5.QtCore import QTimer
-from fault_detector_msgs.msg import TagElement, TagElementArray
+from fault_detector_msgs.msg import TagElement, TagElementArray, basic_command
 from std_msgs.msg import Header
 
 
@@ -39,7 +39,7 @@ class Fault_Detector_UI(QWidget):
         layout.addWidget(self.visible_label)
 
         layout.addLayout(self._make_tag_input_row())
-        layout.addLayout(self._make_stow_stand_row())
+        layout.addLayout(self._make_control_row())
 
     def _make_tag_input_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -51,16 +51,27 @@ class Fault_Detector_UI(QWidget):
         row.addWidget(self.submit_button)
         return row
 
-    def _make_stow_stand_row(self) -> QHBoxLayout:
+    def _make_control_row(self) -> QHBoxLayout:
+        """
+        Single row containing Stand Up, Ready Arm, and Stow/Cancel buttons.
+        """
         row = QHBoxLayout()
+
         # Stand Up
         self.stand_button = QPushButton("Stand Up")
         self.stand_button.clicked.connect(self.handle_stand)
         row.addWidget(self.stand_button)
+
+        # Ready Arm
+        self.ready_button = QPushButton("Ready Arm")
+        self.ready_button.clicked.connect(self.handle_ready)
+        row.addWidget(self.ready_button)
+
         # Stow/Cancel
         self.stow_button = QPushButton("Stow Arm / Cancel")
         self.stow_button.clicked.connect(self.handle_stow)
         row.addWidget(self.stow_button)
+
         return row
 
     def init_ros_communication(self):
@@ -74,6 +85,10 @@ class Fault_Detector_UI(QWidget):
         self.stand_up_publisher = self.node.create_publisher(
             Header, "fault_detector/commands/stand_up", 10
         )
+        self.ready_arm_publisher = self.node.create_publisher(
+            Header, "fault_detector/commands/ready_arm", 10
+        )
+
         # Subscriber
         self.visible_tags_sub = self.node.create_subscription(
             TagElementArray,
@@ -81,6 +96,7 @@ class Fault_Detector_UI(QWidget):
             self._process_visible_tags,
             10
         )
+
         self.status_label.setText("Status: Connected to ROS2")
 
     def _spin_and_refresh(self):
@@ -130,6 +146,14 @@ class Fault_Detector_UI(QWidget):
         hdr.frame_id = ""
         self.stand_up_publisher.publish(hdr)
         self.status_label.setText("Command sent: Stand Up")
+
+    def handle_ready(self):
+        """Publish a stamped Header on ready_arm topic."""
+        hdr = Header()
+        hdr.stamp = self.node.get_clock().now().to_msg()
+        hdr.frame_id = ""
+        self.ready_arm_publisher.publish(hdr)
+        self.status_label.setText("Command sent: Ready Arm")
 
     def closeEvent(self, event):
         self.timer.stop()

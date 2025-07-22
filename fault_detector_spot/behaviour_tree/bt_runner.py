@@ -6,6 +6,7 @@ import py_trees_ros
 import sys
 import operator
 
+from fault_detector_spot.behaviour_tree.nodes.ready_arm_action import ReadyArmAction
 from py_trees.behaviours import CheckBlackboardVariableValue
 from rclpy.node import Node
 
@@ -16,6 +17,7 @@ from fault_detector_spot.behaviour_tree.nodes.manipulator_command_subscriber imp
 from fault_detector_spot.behaviour_tree.nodes.new_command_guard import NewCommandGuard
 from fault_detector_spot.behaviour_tree.nodes.stow_arm_action import StowArmAction
 from fault_detector_spot.behaviour_tree.nodes.stand_up_action import StandUpAction
+from fault_detector_spot.behaviour_tree.nodes.ready_arm_action import ReadyArmAction
 
 def create_root() -> py_trees.behaviour.Behaviour:
     root = create_behavior_tree()
@@ -58,6 +60,9 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     stow_arm_sequence = stow_arm_command_sequence(node)
     command_selector.add_child(stow_arm_sequence)
 
+    ready_arm_sequence = ready_arm_command_sequence(node)
+    command_selector.add_child(ready_arm_sequence)
+
     move_to_tag_sequence = move_to_tag_command_sequence(node)
     command_selector.add_child(move_to_tag_sequence)
 
@@ -89,6 +94,15 @@ def stow_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behav
 
     stow_arm_seq.add_children([stow_arm_check, stow_arm_action])
     return stow_arm_seq
+
+def ready_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    ready_arm_seq = py_trees.composites.Sequence("ReadyArmSequence", memory=True)
+    ready_arm_check = match_command_checker("ready_arm")
+    ready_arm_action = ReadyArmAction(name="ReadyArmAction")
+    ready_arm_action.setup(node=node)
+
+    ready_arm_seq.add_children([ready_arm_check, ready_arm_action])
+    return ready_arm_seq
 
 def stand_up_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     stand_up_seq = py_trees.composites.Sequence("StandUpSequence", memory=True)
