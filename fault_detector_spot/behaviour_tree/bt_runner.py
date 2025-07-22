@@ -125,18 +125,13 @@ def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
 
 def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     manipulation = py_trees.composites.Sequence("ManipulationSequence", memory=True)
-    check = py_trees.behaviours.CheckBlackboardVariableExists(
-        name="CheckGoalPoseExists",
-        variable_name="goal_tag_pose"
-    )
-
     get_goal = ManipulatorGetGoalTag(name="GetGoalTagPosition")
     get_goal.setup(node=node)
 
     move_arm = ManipulatorMoveArmAction(name="MoveArm")
     move_arm.setup(node=node)
 
-    manipulation.add_children([check, get_goal, move_arm])
+    manipulation.add_children([get_goal, move_arm])
 
     return manipulation
 

@@ -3,6 +3,7 @@
 import py_trees
 import rclpy
 from fault_detector_msgs.msg import TagElement, BasicCommand
+from fault_detector_spot.behaviour_tree.Tag_Command import TagCommand
 from std_msgs.msg import Header
 from typing import Optional
 
@@ -55,26 +56,18 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
 
     def _register_blackboard_keys(self):
         self.blackboard.register_key(
-            key="goal_tag_id", access=py_trees.common.Access.WRITE
-        )
-        self.blackboard.register_key(
-            key="goal_tag_pose", access=py_trees.common.Access.WRITE
-        )
-        self.blackboard.register_key(
-            key="goal_tag_offset", access=py_trees.common.Access.WRITE
-        )
-        self.blackboard.register_key(
             key="last_command_id", access=py_trees.common.Access.WRITE
         )
         self.blackboard.register_key(
             key="last_command_stamp", access=py_trees.common.Access.WRITE
         )
+        self.blackboard.register_key(
+            key="goal_tag_command", access=py_trees.common.Access.WRITE
+        )
 
         self.blackboard.last_command_id = None
         self.blackboard.last_command_stamp = None
-        self.blackboard.goal_tag_id = None
-        self.blackboard.goal_tag_pose = None
-        self.blackboard.goal_tag_offset = None
+        self.blackboard.goal_tag_command = None
 
 
     def _tag_command_callback(self, msg: TagElement):
@@ -83,9 +76,8 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
             return
 
         try:
-            self.blackboard.goal_tag_id = msg.id
-            self.blackboard.goal_tag_pose = msg.pose
-            self.blackboard.goal_tag_offset = msg.offset
+            tag_command = TagCommand(msg.id, msg.pose, msg.offset, msg.orientation_mode)
+            self.blackboard.goal_tag_command = tag_command
             self.blackboard.last_command_id = "move_to_tag"
             self.blackboard.last_command_stamp = msg.pose.header.stamp
 

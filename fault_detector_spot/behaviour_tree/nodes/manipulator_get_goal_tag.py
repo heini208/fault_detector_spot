@@ -3,6 +3,7 @@ from geometry_msgs.msg import PoseStamped
 from typing import Optional
 
 
+
 class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
     """
     Checks if a goal tag ID has been set by the UI and if the tag is currently visible.
@@ -19,10 +20,7 @@ class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
             key="visible_tags", access=py_trees.common.Access.READ
         )
         self.blackboard.register_key(
-            key="goal_tag_id", access=py_trees.common.Access.WRITE
-        )
-        self.blackboard.register_key(
-            key="goal_tag_pose", access=py_trees.common.Access.WRITE
+            key="goal_tag_command", access=py_trees.common.Access.WRITE
         )
 
     def update(self) -> py_trees.common.Status:
@@ -31,11 +29,11 @@ class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
         Returns SUCCESS if tag is found, FAILURE otherwise.
         """
         # Check if goal_tag_id is set
-        if not self.blackboard.exists("goal_tag_id") or self.blackboard.goal_tag_id is None:
+        if not self.blackboard.exists("goal_tag_command") or self.blackboard.goal_tag_command is None:
             self.feedback_message = "No goal tag ID set"
             return py_trees.common.Status.FAILURE
 
-        goal_id = self.blackboard.goal_tag_id
+        goal_id = self.blackboard.goal_tag_command.id
 
         # Check if the tag is visible
         if not self.blackboard.exists("visible_tags") or not self.blackboard.visible_tags:
@@ -49,8 +47,6 @@ class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
         # Tag is visible, store its pose for the arm controller
-        self.blackboard.goal_tag_pose = visible_tags[goal_id].pose
+        self.blackboard.goal_tag_command.pose = visible_tags[goal_id].pose
         self.feedback_message = f"Found goal tag {goal_id}"
-        if self.blackboard.exists("goal_tag_id"):
-            self.blackboard.goal_tag_id = None
         return py_trees.common.Status.SUCCESS

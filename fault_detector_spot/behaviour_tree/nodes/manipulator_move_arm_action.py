@@ -17,7 +17,6 @@ from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME
 class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
     """
     Executes a Spot arm movement to the blackboard's goal_tag_pose via RobotCommand action,
-    then clears the goal variables from the blackboard.
     """
 
     def __init__(self, name: str = "ManipulatorMoveArmAction", robot_name: str = ""):
@@ -41,10 +40,7 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
         if self.node is None:
             raise RuntimeError("No ROS node provided to ManipulatorMoveArmAction")
 
-        # Allow reading and deleting the pose & id on the blackboard
-        self.blackboard.register_key(key="goal_tag_pose", access=py_trees.common.Access.WRITE)
-        self.blackboard.register_key(key="goal_tag_offset", access=py_trees.common.Access.READ)
-        self.blackboard.register_key(key="goal_tag_id",   access=py_trees.common.Access.WRITE)
+        self.blackboard.register_key(key="goal_tag_command", access=py_trees.common.Access.WRITE)
         self.blackboard.register_key(key="last_command_id", access=py_trees.common.Access.READ)
 
     def initialize(self):
@@ -105,8 +101,7 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
     def send_async_goal(self):
-            base_goal = self.blackboard.goal_tag_pose
-            goal_with_offset = self.add_offset(base_goal)
+            goal_with_offset = self.blackboard.goal_tag_command.get_offset_pose()
 
             goal_msg = self.create_arm_command_as_message(goal_with_offset, 2.0)
             self.send_goal_future = self.robot_command_client.send_goal_async(
@@ -114,25 +109,12 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
             )
             self.feedback_message = "Goal sent, waiting for acceptance"
 
-    def add_offset(self, base_goal):
-        goal_with_offset = PoseStamped()
-        goal_with_offset.header = base_goal.header
-        goal_with_offset.pose = base_goal.pose
-        if self.blackboard.exists("goal_tag_offset") and self.blackboard.goal_tag_offset is not None:
-            offset: PoseStamped = self.blackboard.goal_tag_offset
-            goal_with_offset.pose.position.x += offset.pose.position.x
-            goal_with_offset.pose.position.y += offset.pose.position.y
-            goal_with_offset.pose.position.z += offset.pose.position.z
-        return goal_with_offset
-
     def check_goal_accepted(self):
         self.goal_handle = self.send_goal_future.result()
         if not self.goal_handle.accepted:
             self.feedback_message = "Goal rejected"
             return py_trees.common.Status.FAILURE
         self.get_result_future = self.goal_handle.get_result_async()
-        # clear the BB now that the goal is safely with the server
-        self.clear_blackboard()
         self.feedback_message = "Goal accepted; waiting for result"
         return py_trees.common.Status.RUNNING
 
@@ -164,13 +146,7 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
 
 
     def check_goal_exists(self):
-        return self.blackboard.exists("goal_tag_pose") or self.blackboard.goal_tag_pose is not None
-
-    def clear_blackboard(self):
-        if self.blackboard.exists("goal_tag_pose"):
-            self.blackboard.goal_tag_pose = None
-        if self.blackboard.exists("goal_tag_id"):
-            self.blackboard.goal_tag_id = None
+        return self.blackboard.exists("goal_tag_command") or self.blackboard.goal_tag_command is not None
 
     def _cancel_inflight(self):
         if self.goal_handle:
