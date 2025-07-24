@@ -6,6 +6,7 @@ from fault_detector_msgs.msg import TagElement, BasicCommand
 from fault_detector_spot.behaviour_tree.Tag_Command import TagCommand
 from std_msgs.msg import Header
 from typing import Optional
+from fault_detector_spot.behaviour_tree.command_ids import CommandID
 
 
 class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
@@ -78,7 +79,7 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
         try:
             tag_command = TagCommand(msg.id, msg.pose, msg.offset, msg.orientation_mode)
             self.blackboard.goal_tag_command = tag_command
-            self.blackboard.last_command_id = "move_to_tag"
+            self.blackboard.last_command_id = CommandID.MOVE_TO_TAG
             self.blackboard.last_command_stamp = msg.pose.header.stamp
 
             self.logger.info(f"Received command for tag {msg.id}")

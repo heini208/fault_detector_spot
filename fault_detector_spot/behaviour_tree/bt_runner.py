@@ -8,6 +8,7 @@ import operator
 
 from py_trees.behaviours import CheckBlackboardVariableValue
 from rclpy.node import Node
+from fault_detector_spot.behaviour_tree.command_ids import CommandID
 
 from fault_detector_spot.behaviour_tree import (
     DetectVisibleTags,
@@ -95,13 +96,13 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 def move_to_tag_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     move_tag_seq = py_trees.composites.Sequence("MoveToTagSequence", memory=True)
     move_to_tag_behavior = build_manipulator_goal_tree(node)
-    move_tag_check = match_command_checker("move_to_tag")
+    move_tag_check = match_command_checker(CommandID.MOVE_TO_TAG)
     move_tag_seq.add_children([move_tag_check, move_to_tag_behavior])
     return move_tag_seq
 
 def stow_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     stow_arm_seq = py_trees.composites.Sequence("StowArmSequence", memory=True)
-    stow_arm_check = match_command_checker("stow_arm")
+    stow_arm_check = match_command_checker(CommandID.STOW_ARM)
     stow_arm_action = StowArmAction(name="StowArmAction")
     stow_arm_action.setup(node=node)
 
@@ -110,7 +111,7 @@ def stow_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behav
 
 def ready_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     ready_arm_seq = py_trees.composites.Sequence("ReadyArmSequence", memory=True)
-    ready_arm_check = match_command_checker("ready_arm")
+    ready_arm_check = match_command_checker(CommandID.READY_ARM)
     ready_arm_action = ReadyArmAction(name="ReadyArmAction")
     ready_arm_action.setup(node=node)
 
@@ -119,7 +120,7 @@ def ready_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Beha
 
 def stand_up_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     stand_up_seq = py_trees.composites.Sequence("StandUpSequence", memory=True)
-    stand_up_check = match_command_checker("stand_up")
+    stand_up_check = match_command_checker(CommandID.STAND_UP)
     stand_up_action = StandUpAction(name="StandUpAction")
     stand_up_action.setup(node=node)
 

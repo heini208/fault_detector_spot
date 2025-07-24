@@ -11,6 +11,7 @@ from bosdyn.api import geometry_pb2
 from bosdyn.client import math_helpers
 import synchros2.scope as ros_scope
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME
+from fault_detector_spot.behaviour_tree.command_ids import CommandID
 
 
 
@@ -72,7 +73,7 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
         if self.sent:
             return py_trees.common.Status.SUCCESS
 
-        if self.blackboard.last_command_id != "move_to_tag":
+        if self.blackboard.last_command_id == CommandID.EMERGENCY_CANCEL:
             self._cancel_inflight()
             self.feedback_message = "Cancelled by new command"
             return py_trees.common.Status.FAILURE

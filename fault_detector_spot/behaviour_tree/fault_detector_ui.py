@@ -10,6 +10,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QTimer, Qt
 from fault_detector_msgs.msg import TagElement, TagElementArray, BasicCommand
+from fault_detector_spot.behaviour_tree.command_ids import CommandID
+
 
 class Fault_Detector_UI(QWidget):
     def __init__(self, node: Node = None):
@@ -112,15 +114,15 @@ class Fault_Detector_UI(QWidget):
     def _make_control_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         self.stand_button = QPushButton("Stand Up")
-        self.stand_button.clicked.connect(self.handle_stand)
+        self.stand_button.clicked.connect(self.handle_simple_command(CommandID.STAND_UP))
         row.addWidget(self.stand_button)
 
         self.ready_button = QPushButton("Ready Arm")
-        self.ready_button.clicked.connect(self.handle_ready)
+        self.ready_button.clicked.connect(self.handle_simple_command(CommandID.READY_ARM))
         row.addWidget(self.ready_button)
 
         self.stow_button = QPushButton("Stow Arm / Cancel")
-        self.stow_button.clicked.connect(self.handle_stow)
+        self.stow_button.clicked.connect(self.handle_simple_command(CommandID.STOW_ARM))
         row.addWidget(self.stow_button)
 
         return row
@@ -207,29 +209,13 @@ class Fault_Detector_UI(QWidget):
         else:
             self.status_label.setText(f"Move to tag {tag_id} canceled")
 
-    def handle_stand(self):
+    def handle_simple_command(self, command_id: str):
         cmd = BasicCommand()
         cmd.header = Header()
         cmd.header.stamp = self.node.get_clock().now().to_msg()
-        cmd.command_id = "stand_up"
+        cmd.command_id = command_id
         self.command_pub.publish(cmd)
-        self.status_label.setText("Command sent: Stand Up")
-
-    def handle_ready(self):
-        cmd = BasicCommand()
-        cmd.header = Header()
-        cmd.header.stamp = self.node.get_clock().now().to_msg()
-        cmd.command_id = "ready_arm"
-        self.command_pub.publish(cmd)
-        self.status_label.setText("Command sent: Ready Arm")
-
-    def handle_stow(self):
-        cmd = BasicCommand()
-        cmd.header = Header()
-        cmd.header.stamp = self.node.get_clock().now().to_msg()
-        cmd.command_id = "stow_arm"
-        self.command_pub.publish(cmd)
-        self.status_label.setText("Command sent: Stow Arm / Cancel")
+        self.status_label.setText(f"Command sent: {command_id}")
 
     def closeEvent(self, event):
         self.timer.stop()
