@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QMessageBox, QApplication, QComboBox
 )
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, Qt
 from fault_detector_msgs.msg import TagElement, TagElementArray, BasicCommand
 
 class Fault_Detector_UI(QWidget):
@@ -19,6 +19,8 @@ class Fault_Detector_UI(QWidget):
         self.resize(600, 500)
 
         self.visible_tags = {}
+        self.reachable_tags = {}
+
         self.create_user_interface()
 
         if self.node:
@@ -35,7 +37,9 @@ class Fault_Detector_UI(QWidget):
         self.status_label = QLabel("Status: Waiting for connection")
         layout.addWidget(self.status_label)
 
-        self.visible_label = QLabel("Visible tags: []")
+        self.visible_label = QLabel()
+        self.visible_label.setTextFormat(Qt.RichText)
+        self.visible_label.setText("Visible tags: []")
         layout.addWidget(self.visible_label)
 
         layout.addLayout(self._make_tag_input_row())
@@ -135,15 +139,32 @@ class Fault_Detector_UI(QWidget):
             self._process_visible_tags,
             10
         )
+
+        self.reachable_tags_sub = self.node.create_subscription(
+            TagElementArray,
+            "fault_detector/state/reachable_tags",
+            self._process_reachable_tags,
+            10
+        )
         self.status_label.setText("Status: Connected to ROS2")
 
     def _spin_and_refresh(self):
         if self.node:
             rclpy.spin_once(self.node, timeout_sec=0.01)
-        self.visible_label.setText(f"Visible tags: {sorted(self.visible_tags.keys())}")
+        parts = []
+        for tid in sorted(self.visible_tags.keys()):
+            if tid in self.reachable_tags:
+                parts.append(f'<span style="color:green">{tid}</span>')
+            else:
+                parts.append(f'<span style="color:red">{tid}</span>')
+        html = "Visible tags: [" + ", ".join(parts) + "]"
+        self.visible_label.setText(html)
 
     def _process_visible_tags(self, msg: TagElementArray):
         self.visible_tags = {tag.id: tag for tag in msg.elements}
+
+    def _process_reachable_tags(self, msg: TagElementArray):
+        self.reachable_tags = {tag.id: tag for tag in msg.elements}
 
     def _get_offset(self, axis: str) -> float:
         try:

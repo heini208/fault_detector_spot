@@ -18,6 +18,7 @@ from fault_detector_spot.behaviour_tree import (
     StowArmAction,
     StandUpAction,
     ReadyArmAction,
+    CheckTagReachability
 )
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -41,14 +42,25 @@ def create_behavior_tree():
 def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sensing_seq = py_trees.composites.Parallel("Sensing", policy=py_trees.common.ParallelPolicy.SuccessOnAll())
 
-    detect = DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)")
-    detect.setup(node=node)
+
 
     cmd_sub = ManipulatorCommandSubscriber(name="UI Command Listener")
     cmd_sub.setup(node=node)
 
+    tag_scan_sequence = py_trees.composites.Sequence(
+        name="ScanForTags",
+        memory=True
+    )
 
-    sensing_seq.add_children([detect, cmd_sub])
+    detect = DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)")
+    detect.setup(node=node)
+
+    in_range_checker = CheckTagReachability(name="CheckTagReachability")
+    detect.setup(node=node)
+
+    tag_scan_sequence.add_children([detect, in_range_checker])
+
+    sensing_seq.add_children([tag_scan_sequence, cmd_sub])
     return sensing_seq
 
 def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
