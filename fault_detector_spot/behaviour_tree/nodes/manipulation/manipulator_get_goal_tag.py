@@ -17,7 +17,7 @@ class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
     def setup(self, **kwargs):
         """Register necessary blackboard variables."""
         self.blackboard.register_key(
-            key="visible_tags", access=py_trees.common.Access.READ
+            key="reachable_tags", access=py_trees.common.Access.READ
         )
         self.blackboard.register_key(
             key="goal_tag_command", access=py_trees.common.Access.WRITE
@@ -36,17 +36,17 @@ class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
         goal_id = self.blackboard.goal_tag_command.id
 
         # Check if the tag is visible
-        if not self.blackboard.exists("visible_tags") or not self.blackboard.visible_tags:
-            self.feedback_message = "No visible tags available"
+        if not self.blackboard.exists("reachable_tags") or not self.blackboard.reachable_tags:
+            self.feedback_message = "No reachable tags available"
             return py_trees.common.Status.FAILURE
 
-        visible_tags = self.blackboard.visible_tags
+        reachable_tags = self.blackboard.reachable_tags
 
-        if goal_id not in visible_tags:
+        if goal_id not in reachable_tags:
             self.feedback_message = f"Goal tag {goal_id} is not currently visible"
             return py_trees.common.Status.FAILURE
 
         # Tag is visible, store its pose for the arm controller
-        self.blackboard.goal_tag_command.pose = visible_tags[goal_id].pose
+        self.blackboard.manipulator_goal_pose = self.blackboard.goal_tag_command.get_offset_pose()
         self.feedback_message = f"Found goal tag {goal_id}"
         return py_trees.common.Status.SUCCESS

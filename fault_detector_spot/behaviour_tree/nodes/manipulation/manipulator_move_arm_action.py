@@ -40,7 +40,7 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
         if self.node is None:
             raise RuntimeError("No ROS node provided to ManipulatorMoveArmAction")
 
-        self.blackboard.register_key(key="goal_tag_command", access=py_trees.common.Access.WRITE)
+        self.blackboard.register_key(key="manipulator_goal_pose", access=py_trees.common.Access.READ)
         self.blackboard.register_key(key="last_command_id", access=py_trees.common.Access.READ)
 
     def initialize(self):
@@ -101,9 +101,8 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
     def send_async_goal(self):
-            goal_with_offset = self.blackboard.goal_tag_command.get_offset_pose()
-
-            goal_msg = self.create_arm_command_as_message(goal_with_offset, 2.0)
+            goal_pose = self.blackboard.manipulator_goal_pose
+            goal_msg = self.create_arm_command_as_message(goal_pose, 2.0)
             self.send_goal_future = self.robot_command_client.send_goal_async(
                 goal_msg
             )
@@ -146,7 +145,7 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
 
 
     def check_goal_exists(self):
-        return self.blackboard.exists("goal_tag_command") or self.blackboard.goal_tag_command is not None
+        return self.blackboard.exists("manipulator_goal_pose") or self.blackboard.manipulator_goal_pose is not None
 
     def _cancel_inflight(self):
         if self.goal_handle:
