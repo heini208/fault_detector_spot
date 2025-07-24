@@ -1,4 +1,4 @@
-# fault_detector_spot/behaviour_tree/nodes/manipulator_command_subscriber.py
+# fault_detector_spot/behaviour_tree/nodes/command_subscriber.py
 
 import py_trees
 import rclpy
@@ -7,16 +7,17 @@ from fault_detector_spot.behaviour_tree.Tag_Command import TagCommand
 from std_msgs.msg import Header
 from typing import Optional
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
+from fault_detector_spot.behaviour_tree.simple_command import SimpleCommand
 
 
-class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
+class CommandSubscriber(py_trees.behaviour.Behaviour):
     """
     Subscribes to UI commands
     and updates the blackboard for use by manipulator control nodes.
     """
 
     def __init__(self,
-                 name: str = "ManipulatorCommandSubscriber",
+                 name: str = "CommandSubscriber",
                  move_topic: str = "fault_detector/commands/move_to_tag",
                  command_topic: str = "fault_detector/commands/basic_command"):
         super().__init__(name)
@@ -35,8 +36,8 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
 
     def update(self) -> py_trees.common.Status:
         """only for updating feedback message"""
-        if self.blackboard.last_command_id is not None:
-            self.feedback_message = f"Last command: tag {self.blackboard.last_command_id}"
+        if self.blackboard.last_command is not None:
+            self.feedback_message = f"Last command: tag {self.blackboard.last_command.id}"
         else:
             self.feedback_message = "No commands received yet"
         return py_trees.common.Status.SUCCESS
@@ -57,19 +58,13 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
 
     def _register_blackboard_keys(self):
         self.blackboard.register_key(
-            key="last_command_id", access=py_trees.common.Access.WRITE
-        )
-        self.blackboard.register_key(
-            key="last_command_stamp", access=py_trees.common.Access.WRITE
+            key="last_command", access=py_trees.common.Access.WRITE
         )
         self.blackboard.register_key(
             key="goal_tag_command", access=py_trees.common.Access.WRITE
         )
-
-        self.blackboard.last_command_id = None
-        self.blackboard.last_command_stamp = None
+        self.blackboard.last_command = None
         self.blackboard.goal_tag_command = None
-
 
     def _tag_command_callback(self, msg: TagElement):
         """Process incoming command from UI"""
@@ -79,9 +74,8 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
         try:
             tag_command = TagCommand(msg.id, msg.pose, msg.offset, msg.orientation_mode)
             self.blackboard.goal_tag_command = tag_command
-            self.blackboard.last_command_id = CommandID.MOVE_TO_TAG
-            self.blackboard.last_command_stamp = msg.pose.header.stamp
-
+            last_command = SimpleCommand( CommandID.MOVE_TO_TAG, msg.pose.header.stamp)
+            self.blackboard.last_command = last_command
             self.logger.info(f"Received command for tag {msg.id}")
         except Exception as e:
             self.logger.error(f"Error processing command: {e}")
@@ -89,12 +83,14 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
     def _basic_command_callback(self, msg: BasicCommand):
         if self.is_last_command(msg):
             return
-        self.blackboard.last_command_id = msg.command_id
-        self.blackboard.last_command_stamp = msg.header.stamp
+
+        last_command = SimpleCommand(msg.command_id, msg.header.stamp)
+        self.blackboard.last_command = last_command
+
         self.logger.info(f"Received {msg.command_id} command")
 
     def is_last_command(self, msg) -> bool:
-        if self.blackboard.last_command_stamp is None:
+        if self.blackboard.last_command is None:
             return False
 
         stamp = self._extract_timestamp(msg)
@@ -102,7 +98,7 @@ class ManipulatorCommandSubscriber(py_trees.behaviour.Behaviour):
             self.logger.warning(f"Could not extract timestamp from message of type {type(msg).__name__}")
             return False
 
-        last_stamp = self.blackboard.last_command_stamp
+        last_stamp = self.blackboard.last_command.stamp
         return stamp.sec == last_stamp.sec and stamp.nanosec == last_stamp.nanosec
 
     def _extract_timestamp(self, msg):

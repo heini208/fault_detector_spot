@@ -7,6 +7,7 @@ import sys
 import operator
 
 from py_trees.behaviours import CheckBlackboardVariableValue
+from py_trees.common import ComparisonExpression
 from rclpy.node import Node
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
 
@@ -14,7 +15,7 @@ from fault_detector_spot.behaviour_tree import (
     DetectVisibleTags,
     ManipulatorGetGoalTag,
     ManipulatorMoveArmAction,
-    ManipulatorCommandSubscriber,
+    CommandSubscriber,
     NewCommandGuard,
     StowArmAction,
     StandUpAction,
@@ -45,7 +46,7 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
 
 
-    cmd_sub = ManipulatorCommandSubscriber(name="UI Command Listener")
+    cmd_sub = CommandSubscriber(name="UI Command Listener")
     cmd_sub.setup(node=node)
 
     tag_scan_sequence = py_trees.composites.Sequence(
@@ -128,13 +129,14 @@ def stand_up_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behav
     return stand_up_seq
 
 def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
-    return py_trees.behaviours.CheckBlackboardVariableValue(
-    name=f"Check_{command_id}",
-    check=py_trees.common.ComparisonExpression(
-        variable="last_command_id",
-        value=command_id,
-        operator=operator.eq
-    )
+    return CheckBlackboardVariableValue(
+        name=f"Check_{command_id}",
+        check=ComparisonExpression(
+            variable="last_command",
+            value=command_id,
+            operator=lambda cmd, cid:
+            (cmd is not None and cmd.id == cid)
+        )
 )
 
 def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:

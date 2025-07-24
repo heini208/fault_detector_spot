@@ -3,6 +3,7 @@ import signal
 import sys
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Header
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -16,18 +17,22 @@ from fault_detector_spot.behaviour_tree.command_ids import CommandID
 class Fault_Detector_UI(QWidget):
     def __init__(self, node: Node = None):
         super().__init__()
+        self.reachable_tags_sub = None
+        self.visible_tags_sub = None
+        self.command_pub = None
+        self.move_to_tag_publisher = None
         self.node = node
         self.setWindowTitle("Fault Detector Spot")
         self.resize(600, 500)
+        self.status_label = QLabel("Status: Waiting for connection")
 
         self.visible_tags = {}
         self.reachable_tags = {}
-
-        self.create_user_interface()
-
         if self.node:
             self.init_ros_communication()
 
+
+        self.create_user_interface()
         # periodically spin ROS and refresh UI
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._spin_and_refresh)
@@ -35,8 +40,6 @@ class Fault_Detector_UI(QWidget):
 
     def create_user_interface(self):
         layout = QVBoxLayout(self)
-
-        self.status_label = QLabel("Status: Waiting for connection")
         layout.addWidget(self.status_label)
 
         self.visible_label = QLabel()
@@ -114,26 +117,38 @@ class Fault_Detector_UI(QWidget):
     def _make_control_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         self.stand_button = QPushButton("Stand Up")
-        self.stand_button.clicked.connect(self.handle_simple_command(CommandID.STAND_UP))
+        self.stand_button.clicked.connect(
+            lambda _, cid=CommandID.STAND_UP: self.handle_simple_command(cid)
+        )
         row.addWidget(self.stand_button)
 
         self.ready_button = QPushButton("Ready Arm")
-        self.ready_button.clicked.connect(self.handle_simple_command(CommandID.READY_ARM))
+        self.ready_button.clicked.connect(
+            lambda _, cid=CommandID.READY_ARM: self.handle_simple_command(cid)
+        )
         row.addWidget(self.ready_button)
 
         self.stow_button = QPushButton("Stow Arm / Cancel")
-        self.stow_button.clicked.connect(self.handle_simple_command(CommandID.STOW_ARM))
+        self.stow_button.clicked.connect(
+            lambda _, cid=CommandID.STOW_ARM: self.handle_simple_command(cid)
+        )
         row.addWidget(self.stow_button)
 
         return row
 
     def init_ros_communication(self):
+        qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+
         self.move_to_tag_publisher = self.node.create_publisher(
-            TagElement, "fault_detector/commands/move_to_tag", 10
+            TagElement, "fault_detector/commands/move_to_tag", qos
         )
 
         self.command_pub = self.node.create_publisher(
-            BasicCommand, "fault_detector/commands/basic_command", 10)
+            BasicCommand, "fault_detector/commands/basic_command", qos)
 
         self.visible_tags_sub = self.node.create_subscription(
             TagElementArray,

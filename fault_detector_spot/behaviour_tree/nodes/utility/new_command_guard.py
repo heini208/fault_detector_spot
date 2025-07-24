@@ -14,7 +14,7 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
     def setup(self, **kwargs):
         # Register read/write keys
         self.blackboard.register_key(
-            key="last_command_stamp", access=py_trees.common.Access.READ
+            key="last_command", access=py_trees.common.Access.READ
         )
         self.blackboard.register_key(
             key="last_processed_command_stamp", access=py_trees.common.Access.WRITE
@@ -42,17 +42,17 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
 
 
     def stamp_exists(self):
-        if not self.blackboard.exists("last_command_stamp") or \
-           self.blackboard.last_command_stamp is None:
+        if not self.blackboard.exists("last_command") or \
+           self.blackboard.last_command is None:
             return False
         return True
 
     def is_first_stamp(self):
-        if self.blackboard.last_command_stamp is None:
+        if self.blackboard.last_command is None:
             return False
         if not self.blackboard.exists("last_processed_command_stamp") or \
            self.blackboard.last_processed_command_stamp is None:
-            self.blackboard.last_processed_command_stamp = self.blackboard.last_command_stamp
+            self.blackboard.last_processed_command_stamp = self.blackboard.last_command.stamp
             return True
         return False
 
@@ -61,9 +61,9 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
         Compare two timestamps for equality.
         """
         previous = self.blackboard.last_processed_command_stamp
-        current = self.blackboard.last_command_stamp
+        current = self.blackboard.last_command.stamp
         if (current.sec, current.nanosec) > (previous.sec, previous.nanosec):
-            self.blackboard.last_processed_command_stamp = self.blackboard.last_command_stamp
+            self.blackboard.last_processed_command_stamp = self.blackboard.last_command.stamp
             return True
         else:
             return False

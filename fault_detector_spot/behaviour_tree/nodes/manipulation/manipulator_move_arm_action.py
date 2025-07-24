@@ -42,7 +42,7 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
             raise RuntimeError("No ROS node provided to ManipulatorMoveArmAction")
 
         self.blackboard.register_key(key="manipulator_goal_pose", access=py_trees.common.Access.READ)
-        self.blackboard.register_key(key="last_command_id", access=py_trees.common.Access.READ)
+        self.blackboard.register_key(key="last_command", access=py_trees.common.Access.READ)
 
     def initialize(self):
         """Lazy initialization of action client and TF listener."""
@@ -73,7 +73,7 @@ class ManipulatorMoveArmAction(py_trees.behaviour.Behaviour):
         if self.sent:
             return py_trees.common.Status.SUCCESS
 
-        if self.blackboard.last_command_id == CommandID.EMERGENCY_CANCEL:
+        if self.blackboard.last_command.id == CommandID.EMERGENCY_CANCEL:
             self._cancel_inflight()
             self.feedback_message = "Cancelled by new command"
             return py_trees.common.Status.FAILURE

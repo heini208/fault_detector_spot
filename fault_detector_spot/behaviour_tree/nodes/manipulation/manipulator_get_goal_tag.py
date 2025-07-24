@@ -22,6 +22,10 @@ class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
         self.blackboard.register_key(
             key="goal_tag_command", access=py_trees.common.Access.WRITE
         )
+        self.blackboard.register_key(
+            key="manipulator_goal_pose", access=py_trees.common.Access.WRITE
+        )
+        self.blackboard.manipulator_goal_pose = None
 
     def update(self) -> py_trees.common.Status:
         """

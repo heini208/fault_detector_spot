@@ -1,6 +1,6 @@
 # nodes/__init__.py
 from .nodes.sensing.detect_visible_tags            import DetectVisibleTags
-from .nodes.sensing.manipulator_command_subscriber import ManipulatorCommandSubscriber
+from .nodes.sensing.command_subscriber import CommandSubscriber
 from .nodes.sensing.check_tag_reachability         import CheckTagReachability
 from .nodes.manipulation.manipulator_get_goal_tag  import ManipulatorGetGoalTag
 from .nodes.manipulation.manipulator_move_arm_action import ManipulatorMoveArmAction
@@ -11,7 +11,7 @@ from .nodes.navigation.stand_up_action             import StandUpAction
 
 __all__ = [
   "DetectVisibleTags",
-  "ManipulatorCommandSubscriber",
+  "CommandSubscriber",
   "ManipulatorGetGoalTag",
   "ManipulatorMoveArmAction",
   "ReadyArmAction",
