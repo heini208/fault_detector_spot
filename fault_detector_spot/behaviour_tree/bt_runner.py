@@ -6,18 +6,19 @@ import py_trees_ros
 import sys
 import operator
 
-from fault_detector_spot.behaviour_tree.nodes.ready_arm_action import ReadyArmAction
 from py_trees.behaviours import CheckBlackboardVariableValue
 from rclpy.node import Node
 
-from fault_detector_spot.behaviour_tree.nodes.detect_visible_tags import DetectVisibleTags
-from fault_detector_spot.behaviour_tree.nodes.manipulator_get_goal_tag import ManipulatorGetGoalTag
-from fault_detector_spot.behaviour_tree.nodes.manipulator_move_arm_action import ManipulatorMoveArmAction
-from fault_detector_spot.behaviour_tree.nodes.manipulator_command_subscriber import ManipulatorCommandSubscriber
-from fault_detector_spot.behaviour_tree.nodes.new_command_guard import NewCommandGuard
-from fault_detector_spot.behaviour_tree.nodes.stow_arm_action import StowArmAction
-from fault_detector_spot.behaviour_tree.nodes.stand_up_action import StandUpAction
-from fault_detector_spot.behaviour_tree.nodes.ready_arm_action import ReadyArmAction
+from fault_detector_spot.behaviour_tree import (
+    DetectVisibleTags,
+    ManipulatorGetGoalTag,
+    ManipulatorMoveArmAction,
+    ManipulatorCommandSubscriber,
+    NewCommandGuard,
+    StowArmAction,
+    StandUpAction,
+    ReadyArmAction,
+)
 
 def create_root() -> py_trees.behaviour.Behaviour:
     root = create_behavior_tree()

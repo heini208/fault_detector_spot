@@ -11,7 +11,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QTimer
 from fault_detector_msgs.msg import TagElement, TagElementArray, BasicCommand
 
-
 class Fault_Detector_UI(QWidget):
     def __init__(self, node: Node = None):
         super().__init__()
