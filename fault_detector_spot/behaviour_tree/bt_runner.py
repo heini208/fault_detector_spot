@@ -1,15 +1,14 @@
 # In fault_detector_spot/behaviour_tree/bt_runner.py
+from typing import Callable
 
 import rclpy
 import py_trees
 import py_trees_ros
 import sys
-import operator
 
 from py_trees.behaviours import CheckBlackboardVariableValue
 from py_trees.common import ComparisonExpression
 from py_trees.decorators import StatusToBlackboard, FailureIsSuccess, EternalGuard
-from rclpy.node import Node
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
 
 from fault_detector_spot.behaviour_tree import (
@@ -72,10 +71,15 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         memory=True
     )
 
-    command_selector.add_child(stow_arm_command_sequence(node))
-    command_selector.add_child(ready_arm_command_sequence(node))
-    command_selector.add_child(move_to_tag_command_sequence(node))
-    command_selector.add_child(stand_up_command_sequence(node))
+    specs = [
+        (CommandID.STOW_ARM, lambda n: StowArmActionSimple(name="StowArmAction")),
+        (CommandID.READY_ARM, lambda n: ReadyArmActionSimple(name="ReadyArmAction")),
+        (CommandID.MOVE_TO_TAG, build_manipulator_goal_tree),
+        (CommandID.STAND_UP, lambda n: StandUpActionSimple(name="StandUpAction")),
+    ]
+
+    for cmd_id, ctor in specs:
+        command_selector.add_child(make_simple_command_sequence(node, cmd_id, ctor))
 
     #Wrap in StatusToBlackboard to get a flag on the blackboard status
     command_tree_with_flag = StatusToBlackboard(
@@ -126,40 +130,27 @@ def build_repeat_guarded_cancelable_command_tree(node: rclpy.node.Node) -> py_tr
     guarded_sequence.add_children([guard, cancelable_command_tree])
     return guarded_sequence
 
+def make_simple_command_sequence(
+    node: rclpy.node.Node,
+    command_id: CommandID,
+    behaviour_ctor: Callable[[rclpy.node.Node], py_trees.behaviour.Behaviour]
+) -> py_trees.composites.Sequence:
+    seq_name = f"{command_id.name.title().replace('_', '')}Sequence"
+    seq = py_trees.composites.Sequence(seq_name, memory=True)
 
-def move_to_tag_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
-    move_tag_seq = py_trees.composites.Sequence("MoveToTagSequence", memory=True)
-    move_to_tag_behavior = build_manipulator_goal_tree(node)
-    move_tag_check = match_command_checker(CommandID.MOVE_TO_TAG)
-    move_tag_seq.add_children([move_tag_check, move_to_tag_behavior])
-    return move_tag_seq
-
-def stow_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
-    stow_arm_seq = py_trees.composites.Sequence("StowArmSequence", memory=True)
-    stow_arm_check = match_command_checker(CommandID.STOW_ARM)
-    stow_arm_action = StowArmActionSimple(name="StowArmAction")
-    stow_arm_action.setup(node=node)
-
-    stow_arm_seq.add_children([stow_arm_check, stow_arm_action])
-    return stow_arm_seq
-
-def ready_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
-    ready_arm_seq = py_trees.composites.Sequence("ReadyArmSequence", memory=True)
-    ready_arm_check = match_command_checker(CommandID.READY_ARM)
-    ready_arm_action = ReadyArmActionSimple(name="ReadyArmAction")
-    ready_arm_action.setup(node=node)
-
-    ready_arm_seq.add_children([ready_arm_check, ready_arm_action])
-    return ready_arm_seq
-
-def stand_up_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
-    stand_up_seq = py_trees.composites.Sequence("StandUpSequence", memory=True)
-    stand_up_check = match_command_checker(CommandID.STAND_UP)
-    stand_up_action = StandUpActionSimple(name="StandUpAction")
-    stand_up_action.setup(node=node)
-
-    stand_up_seq.add_children([stand_up_check, stand_up_action])
-    return stand_up_seq
+    check = CheckBlackboardVariableValue(
+        name=f"Check_{command_id.name}",
+        check=ComparisonExpression(
+            variable="last_command",
+            value=command_id,
+            operator=lambda cmd, cid: cmd is not None and cmd.id == cid
+        )
+    )
+    child = behaviour_ctor(node)
+    if hasattr(child, "setup"):
+        child.setup(node=node)
+    seq.add_children([check, child])
+    return seq
 
 def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
     return CheckBlackboardVariableValue(
