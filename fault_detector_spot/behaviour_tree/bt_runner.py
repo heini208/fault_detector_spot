@@ -8,6 +8,7 @@ import operator
 
 from py_trees.behaviours import CheckBlackboardVariableValue
 from py_trees.common import ComparisonExpression
+from py_trees.decorators import StatusToBlackboard
 from rclpy.node import Node
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
 
@@ -72,17 +73,10 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         memory=True
     )
 
-    stow_arm_sequence = stow_arm_command_sequence(node)
-    command_selector.add_child(stow_arm_sequence)
-
-    ready_arm_sequence = ready_arm_command_sequence(node)
-    command_selector.add_child(ready_arm_sequence)
-
-    move_to_tag_sequence = move_to_tag_command_sequence(node)
-    command_selector.add_child(move_to_tag_sequence)
-
-    stand_up_sequence = stand_up_command_sequence(node)
-    command_selector.add_child(stand_up_sequence)
+    command_selector.add_child(stow_arm_command_sequence(node))
+    command_selector.add_child(ready_arm_command_sequence(node))
+    command_selector.add_child(move_to_tag_command_sequence(node))
+    command_selector.add_child(stand_up_command_sequence(node))
 
     guard = NewCommandGuard(name="NewCommandGuard")
     guard.setup(node=node)
@@ -92,7 +86,14 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     )
 
     guarded_sequence.add_children([guard, command_selector])
-    return guarded_sequence
+
+    #Wrap in StatusToBlackboard to get a flag on the blackboard status
+    command_tree_with_flag = StatusToBlackboard(
+        name="CommandTree→BB",
+        child=guarded_sequence,
+        variable_name="command_tree_status"
+    )
+    return command_tree_with_flag
 
 def move_to_tag_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     move_tag_seq = py_trees.composites.Sequence("MoveToTagSequence", memory=True)
