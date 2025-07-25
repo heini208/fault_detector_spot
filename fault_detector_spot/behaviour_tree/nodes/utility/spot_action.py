@@ -36,7 +36,6 @@ class ActionClientBehaviour(py_trees.behaviour.Behaviour):
     def update(self) -> Status:
         # Execute each lifecycle phase in sequence
         for phase in (
-            self._phase_emergency_cancel,
             self._phase_initialize,
             self._phase_send_goal,
             self._phase_wait_for_acceptance,
@@ -46,15 +45,6 @@ class ActionClientBehaviour(py_trees.behaviour.Behaviour):
             if result is not None:
                 return result
         return Status.RUNNING
-
-    def _phase_emergency_cancel(self) -> Status | None:
-        last_cmd = self.blackboard.last_command
-        if last_cmd is not None and last_cmd.id == CommandID.EMERGENCY_CANCEL:
-            if self.goal_handle:
-                self._cancel_goal(self.goal_handle)
-            self.feedback_message = "Cancelled by emergency command"
-            return Status.FAILURE
-        return None
 
     def _phase_initialize(self) -> Status | None:
         if not self.initialized:

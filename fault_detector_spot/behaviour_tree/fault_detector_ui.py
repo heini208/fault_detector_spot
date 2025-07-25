@@ -128,11 +128,17 @@ class Fault_Detector_UI(QWidget):
         )
         row.addWidget(self.ready_button)
 
-        self.stow_button = QPushButton("Stow Arm / Cancel")
+        self.stow_button = QPushButton("Stow Arm")
         self.stow_button.clicked.connect(
             lambda _, cid=CommandID.STOW_ARM: self.handle_simple_command(cid)
         )
         row.addWidget(self.stow_button)
+
+        self.cancel_button = QPushButton("Cancel All")
+        self.cancel_button.clicked.connect(
+            lambda _, cid=CommandID.EMERGENCY_CANCEL: self.handle_simple_command(cid)
+        )
+        row.addWidget(self.cancel_button)
 
         return row
 

@@ -20,7 +20,3 @@ class StowArmActionSimple(SimpleSpotAction):
         goal = RobotCommand.Goal()
         convert(stow_cmd, goal.command)
         return goal
-
-    #this is the cancel action so it should not be able to cancel itself
-    def _phase_emergency_cancel(self):
-        pass

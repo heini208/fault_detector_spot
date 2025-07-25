@@ -7,4 +7,4 @@ class CommandID(str, Enum):
     READY_ARM        = "ready_arm"
     MOVE_TO_TAG      = "move_to_tag"
     STAND_UP         = "stand_up"
-    EMERGENCY_CANCEL = "stow_arm"
+    EMERGENCY_CANCEL = "cancel_all"

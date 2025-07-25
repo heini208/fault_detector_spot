@@ -9,6 +9,7 @@ from .nodes.manipulation.stow_arm_action           import StowArmActionSimple
 from .nodes.utility.new_command_guard              import NewCommandGuard
 from .nodes.utility.spot_action                    import SimpleSpotAction
 from .nodes.navigation.stand_up_action             import StandUpActionSimple
+from .nodes.navigation.cancel_movement import PublishZeroVel
 
 __all__ = [
   "DetectVisibleTags",
@@ -20,4 +21,5 @@ __all__ = [
   "NewCommandGuard",
   "StandUpActionSimple",
   "CheckTagReachability",
+  "PublishZeroVel",
 ]
