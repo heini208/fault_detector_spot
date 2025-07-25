@@ -23,7 +23,6 @@ from fault_detector_spot.behaviour_tree import (
     CheckTagReachability,
     PublishZeroVel,
     CommandManager,
-    ResetCommandTreeStatus
 )
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -72,11 +71,18 @@ def build_buffered_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
         policy=py_trees.common.ParallelPolicy.SuccessOnAll()
     )
     command_tree = build_repeat_guarded_cancelable_command_tree(node)
+    # Wrap in StatusToBlackboard to get a flag on the blackboard status
+    command_tree_with_flag = StatusToBlackboard(
+        name="CommandTree→BB",
+        child=command_tree,
+        variable_name="command_tree_status"
+    )
+
     buffer = CommandManager(name="CommandManager")
     buffer.setup()
     buffered_command_tree.add_children([
         buffer,
-        command_tree
+        command_tree_with_flag
     ])
     return buffered_command_tree
 
@@ -97,14 +103,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     for cmd_id, ctor in specs:
         command_selector.add_child(make_simple_command_sequence(node, cmd_id, ctor))
 
-    #Wrap in StatusToBlackboard to get a flag on the blackboard status
-    command_tree_with_flag = StatusToBlackboard(
-        name="CommandTree→BB",
-        child=command_selector,
-        variable_name="command_tree_status"
-    )
-
-    return command_tree_with_flag
+    return command_selector
 
 def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     cancel_check = match_command_checker(CommandID.EMERGENCY_CANCEL)
@@ -113,11 +112,9 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
     stow_cancel  = StowArmActionSimple(name="StowArmCancel")
     stop_base.setup(node=node)
     stow_cancel.setup(node=node)
-    reset_status = ResetCommandTreeStatus(name="ResetCommandTreeStatus")
-    reset_status.setup(node=node)
 
     cancel_seq = py_trees.composites.Sequence("CancelSequence", memory=True)
-    cancel_seq.add_children([cancel_check, stop_base, stow_cancel, reset_status])
+    cancel_seq.add_children([cancel_check, stop_base, stow_cancel])
 
     normal_tree = build_command_tree(node)
 
