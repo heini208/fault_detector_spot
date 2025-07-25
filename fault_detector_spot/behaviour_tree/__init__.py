@@ -10,6 +10,8 @@ from .nodes.utility.new_command_guard              import NewCommandGuard
 from .nodes.utility.spot_action                    import SimpleSpotAction
 from .nodes.navigation.stand_up_action             import StandUpActionSimple
 from .nodes.navigation.cancel_movement import PublishZeroVel
+from .nodes.utility.command_manager import CommandManager
+from .nodes.utility.reset_command_tree_status import ResetCommandTreeStatus
 
 __all__ = [
   "DetectVisibleTags",
@@ -22,4 +24,6 @@ __all__ = [
   "StandUpActionSimple",
   "CheckTagReachability",
   "PublishZeroVel",
+  "CommandManager",
+  "ResetCommandTreeStatus"
 ]

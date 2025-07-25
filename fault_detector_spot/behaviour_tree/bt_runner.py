@@ -22,6 +22,8 @@ from fault_detector_spot.behaviour_tree import (
     ReadyArmActionSimple,
     CheckTagReachability,
     PublishZeroVel,
+    CommandManager,
+    ResetCommandTreeStatus
 )
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -38,7 +40,7 @@ def create_behavior_tree():
 
     root.add_children([
         build_sensing_tree(node),
-        build_repeat_guarded_cancelable_command_tree(node)
+        build_buffered_command_tree(node)
     ])
     return root
 
@@ -63,6 +65,20 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
     sensing_seq.add_children([tag_scan_sequence, cmd_sub])
     return sensing_seq
+
+def build_buffered_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    buffered_command_tree = py_trees.composites.Parallel(
+        "BufferedCommandTree",
+        policy=py_trees.common.ParallelPolicy.SuccessOnAll()
+    )
+    command_tree = build_repeat_guarded_cancelable_command_tree(node)
+    buffer = CommandManager(name="CommandManager")
+    buffer.setup()
+    buffered_command_tree.add_children([
+        buffer,
+        command_tree
+    ])
+    return buffered_command_tree
 
 def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
@@ -97,21 +113,23 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
     stow_cancel  = StowArmActionSimple(name="StowArmCancel")
     stop_base.setup(node=node)
     stow_cancel.setup(node=node)
+    reset_status = ResetCommandTreeStatus(name="ResetCommandTreeStatus")
+    reset_status.setup(node=node)
 
     cancel_seq = py_trees.composites.Sequence("CancelSequence", memory=True)
-    cancel_seq.add_children([cancel_check, stop_base, stow_cancel])
+    cancel_seq.add_children([cancel_check, stop_base, stow_cancel, reset_status])
 
     normal_tree = build_command_tree(node)
 
     def not_emergency(blackboard):
-        cmd = getattr(blackboard, 'last_command', None)
+        cmd = getattr(blackboard, 'last_command_received', None)
         return not (cmd is not None and cmd.id == CommandID.EMERGENCY_CANCEL)
 
     emergency_guard = EternalGuard(
         name="EmergencyGuard",
         child=normal_tree,
         condition=not_emergency,
-        blackboard_keys={"last_command"}  # watch this key
+        blackboard_keys={"last_command_received"}  # watch this key
     )
 
     root = py_trees.composites.Selector("CancelableCommandSelector", memory=True)
