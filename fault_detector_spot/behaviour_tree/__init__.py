@@ -4,19 +4,20 @@ from .nodes.sensing.command_subscriber import CommandSubscriber
 from .nodes.sensing.check_tag_reachability         import CheckTagReachability
 from .nodes.manipulation.manipulator_get_goal_tag  import ManipulatorGetGoalTag
 from .nodes.manipulation.manipulator_move_arm_action import ManipulatorMoveArmAction
-from .nodes.manipulation.ready_arm_action          import ReadyArmAction
-from .nodes.manipulation.stow_arm_action           import StowArmAction
+from .nodes.manipulation.ready_arm_action          import ReadyArmActionSimple
+from .nodes.manipulation.stow_arm_action           import StowArmActionSimple
 from .nodes.utility.new_command_guard              import NewCommandGuard
-from .nodes.navigation.stand_up_action             import StandUpAction
+from .nodes.utility.spot_action                    import SimpleSpotAction
+from .nodes.navigation.stand_up_action             import StandUpActionSimple
 
 __all__ = [
   "DetectVisibleTags",
   "CommandSubscriber",
   "ManipulatorGetGoalTag",
   "ManipulatorMoveArmAction",
-  "ReadyArmAction",
-  "StowArmAction",
+  "ReadyArmActionSimple",
+  "StowArmActionSimple",
   "NewCommandGuard",
-  "StandUpAction",
+  "StandUpActionSimple",
   "CheckTagReachability",
 ]

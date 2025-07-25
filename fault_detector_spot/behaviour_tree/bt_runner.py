@@ -18,9 +18,9 @@ from fault_detector_spot.behaviour_tree import (
     ManipulatorMoveArmAction,
     CommandSubscriber,
     NewCommandGuard,
-    StowArmAction,
-    StandUpAction,
-    ReadyArmAction,
+    StowArmActionSimple,
+    StandUpActionSimple,
+    ReadyArmActionSimple,
     CheckTagReachability
 )
 
@@ -105,7 +105,7 @@ def move_to_tag_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Be
 def stow_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     stow_arm_seq = py_trees.composites.Sequence("StowArmSequence", memory=True)
     stow_arm_check = match_command_checker(CommandID.STOW_ARM)
-    stow_arm_action = StowArmAction(name="StowArmAction")
+    stow_arm_action = StowArmActionSimple(name="StowArmAction")
     stow_arm_action.setup(node=node)
 
     stow_arm_seq.add_children([stow_arm_check, stow_arm_action])
@@ -114,7 +114,7 @@ def stow_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behav
 def ready_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     ready_arm_seq = py_trees.composites.Sequence("ReadyArmSequence", memory=True)
     ready_arm_check = match_command_checker(CommandID.READY_ARM)
-    ready_arm_action = ReadyArmAction(name="ReadyArmAction")
+    ready_arm_action = ReadyArmActionSimple(name="ReadyArmAction")
     ready_arm_action.setup(node=node)
 
     ready_arm_seq.add_children([ready_arm_check, ready_arm_action])
@@ -123,7 +123,7 @@ def ready_arm_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Beha
 def stand_up_command_sequence(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     stand_up_seq = py_trees.composites.Sequence("StandUpSequence", memory=True)
     stand_up_check = match_command_checker(CommandID.STAND_UP)
-    stand_up_action = StandUpAction(name="StandUpAction")
+    stand_up_action = StandUpActionSimple(name="StandUpAction")
     stand_up_action.setup(node=node)
 
     stand_up_seq.add_children([stand_up_check, stand_up_action])
