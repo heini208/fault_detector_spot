@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from std_msgs.msg import Header
+from builtin_interfaces.msg import Time
 
 class SimpleCommand:
     """
@@ -11,7 +11,7 @@ class SimpleCommand:
     Usage:
       cmd = SimpleCommand("stow_arm", node.get_clock().now().to_msg())
     """
-    def __init__(self, command_id: str, stamp: Header):
+    def __init__(self, command_id: str, stamp: Time):
         self.id = command_id
         self.stamp = stamp
 

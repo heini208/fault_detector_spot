@@ -12,6 +12,7 @@ from .nodes.navigation.stand_up_action             import StandUpActionSimple
 from .nodes.navigation.cancel_movement import PublishZeroVel
 from .nodes.utility.command_manager import CommandManager
 from .nodes.utility.reset_estop_flag import ResetEstopFlag
+from .nodes.utility.wait_for_duration import WaitForDuration
 
 __all__ = [
   "DetectVisibleTags",
@@ -25,5 +26,6 @@ __all__ = [
   "CheckTagReachability",
   "PublishZeroVel",
   "CommandManager",
-  "ResetEstopFlag"
+  "ResetEstopFlag",
+  "WaitForDuration"
 ]

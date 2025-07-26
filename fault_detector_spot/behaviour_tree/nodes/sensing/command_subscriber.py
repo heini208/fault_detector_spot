@@ -6,6 +6,7 @@ from std_msgs.msg import Header
 from typing import Optional
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.simple_command import SimpleCommand
+from fault_detector_spot.behaviour_tree.timer_command import TimerCommand
 
 
 class CommandSubscriber(py_trees.behaviour.Behaviour):
@@ -82,6 +83,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             self.received_command = SimpleCommand(CommandID.MOVE_TO_TAG, msg.pose.header.stamp)
             self.blackboard.command_buffer.append(self.received_command)
             self.logger.info(f"Received command for tag {msg.id}")
+
+            if msg.duration != 0.0:
+                timer_command = TimerCommand(CommandID.WAIT_TIME, msg.pose.header.stamp, msg.duration)
+                self.blackboard.command_buffer.append(timer_command)
+
         except Exception as e:
             self.logger.error(f"Error processing command: {e}")
 

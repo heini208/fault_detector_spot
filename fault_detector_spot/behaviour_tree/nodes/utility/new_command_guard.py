@@ -17,10 +17,10 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
             key="last_command", access=py_trees.common.Access.READ
         )
         self.blackboard.register_key(
-            key="last_processed_command_stamp", access=py_trees.common.Access.WRITE
+            key="last_processed_command", access=py_trees.common.Access.WRITE
         )
 
-        self.blackboard.last_processed_command_stamp = None
+        self.blackboard.last_processed_command = None
 
 
     def update(self) -> py_trees.common.Status:
@@ -33,7 +33,7 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.SUCCESS
 
         # 3) Compare timestamps
-        if self.has_newer_stamp():
+        if self.has_newer_stamp() or self.blackboard.last_processed_command.id != self.blackboard.last_command.id:
             self.feedback_message = "New command – processing"
             return py_trees.common.Status.SUCCESS
         else:
@@ -50,9 +50,10 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
     def is_first_stamp(self):
         if self.blackboard.last_command is None:
             return False
-        if not self.blackboard.exists("last_processed_command_stamp") or \
-           self.blackboard.last_processed_command_stamp is None:
-            self.blackboard.last_processed_command_stamp = self.blackboard.last_command.stamp
+        if self.blackboard.last_processed_command is None or \
+           self.blackboard.last_processed_command.stamp is None:
+
+            self.blackboard.last_processed_command = self.blackboard.last_command
             return True
         return False
 
@@ -60,10 +61,10 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
         """
         Compare two timestamps for equality.
         """
-        previous = self.blackboard.last_processed_command_stamp
+        previous = self.blackboard.last_processed_command.stamp
         current = self.blackboard.last_command.stamp
         if (current.sec, current.nanosec) > (previous.sec, previous.nanosec):
-            self.blackboard.last_processed_command_stamp = self.blackboard.last_command.stamp
+            self.blackboard.last_processed_command.stamp = self.blackboard.last_command.stamp
             return True
         else:
             return False

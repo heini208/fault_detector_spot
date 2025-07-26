@@ -7,7 +7,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Header
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QLineEdit, QMessageBox, QApplication, QComboBox
+    QPushButton, QLineEdit, QMessageBox, QApplication, QComboBox, QDoubleSpinBox
 )
 from PyQt5.QtCore import QTimer, Qt
 from fault_detector_msgs.msg import TagElement, TagElementArray, BasicCommand
@@ -59,6 +59,17 @@ class Fault_Detector_UI(QWidget):
         self.submit_button.clicked.connect(self.handle_tag_selection)
         row.addWidget(self.input_field)
         row.addWidget(self.submit_button)
+
+        row.addWidget(QLabel("Wait (s):"))
+        self.duration_input = QDoubleSpinBox()
+        self.duration_input.setRange(0.0, 60.0)
+        self.duration_input.setSingleStep(1.0)
+        self.duration_input.setValue(1.0)
+        row.addWidget(self.duration_input)
+
+        self.move_wait_button = QPushButton("Move & Wait")
+        self.move_wait_button.clicked.connect(self.handle_move_and_wait)
+        row.addWidget(self.move_wait_button)
         return row
 
     def _make_offset_row(self) -> QHBoxLayout:
@@ -196,6 +207,52 @@ class Fault_Detector_UI(QWidget):
             return 0.0
 
     def handle_tag_selection(self):
+        tag_element = self.build_basic_tag_element()
+        if tag_element is None:
+            return
+        pos = tag_element.pose.pose.position
+        offset = tag_element.offset.pose.position
+
+        reply = QMessageBox.question(
+            self, "Confirm Move",
+            (f"Move to tag {tag_element.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
+             f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
+             f"Orientation: {tag_element.orientation_mode}"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            self.status_label.setText(f"Move & Wait to tag {tag_element.id} canceled")
+            return
+
+        self.move_to_tag_publisher.publish(tag_element)
+        self.status_label.setText(f"Command sent: Move to tag {tag_element.id}")
+
+    def handle_move_and_wait(self):
+        tag_element = self.build_basic_tag_element()
+        if tag_element is None:
+            return
+        pos = tag_element.pose.pose.position
+        offset = tag_element.offset.pose.position
+        tag_element.duration = self.duration_input.value()
+        reply = QMessageBox.question(
+            self, "Confirm Move & Wait",
+            (f"Move to tag {tag_element.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
+             f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
+             f"Orientation: {tag_element.orientation_mode}\n"
+             f"Then wait {tag_element.duration:.1f}s"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            self.status_label.setText(f"Move & Wait to tag {tag_element.id} canceled")
+            return
+
+
+        self.move_to_tag_publisher.publish(tag_element)
+        self.status_label.setText(
+            f"Command sent: Move & Wait to tag {tag_element.id} for {tag_element.duration:.1f}s"
+        )
+    def build_basic_tag_element(self):
         text = self.input_field.text().strip()
         if not text.isdigit():
             QMessageBox.warning(self, "Invalid Input", "Please enter a numeric tag ID.")
@@ -206,29 +263,19 @@ class Fault_Detector_UI(QWidget):
             return
 
         original = self.visible_tags[tag_id]
-        pos = original.pose.pose.position
-        ox, oy, oz = (self._get_offset(a) for a in ("X","Y","Z"))
+        ox, oy, oz = (self._get_offset(a) for a in ("X", "Y", "Z"))
         omode = self.orientation_combo.currentText()
-        reply = QMessageBox.question(
-            self, "Confirm Move",
-            (f"Move to tag {tag_id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
-             f"Offsets (X,Y,Z): {ox:.2f}, {oy:.2f}, {oz:.2f}\n"
-             f"Orientation: {omode}"),
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            msg = TagElement()
-            msg.id = tag_id
-            msg.pose = original.pose
-            msg.offset.header = original.pose.header
-            msg.offset.pose.position.x = ox
-            msg.offset.pose.position.y = oy
-            msg.offset.pose.position.z = oz
-            msg.orientation_mode = omode
-            self.move_to_tag_publisher.publish(msg)
-            self.status_label.setText(f"Command sent: Move to tag {tag_id}")
-        else:
-            self.status_label.setText(f"Move to tag {tag_id} canceled")
+        msg = TagElement()
+        msg.id = tag_id
+        msg.pose = original.pose
+        msg.offset.header = original.pose.header
+        msg.offset.pose.position.x = ox
+        msg.offset.pose.position.y = oy
+        msg.offset.pose.position.z = oz
+        msg.orientation_mode = omode
+
+        return msg
+
 
     def handle_simple_command(self, command_id: str):
         cmd = BasicCommand()

@@ -23,7 +23,8 @@ from fault_detector_spot.behaviour_tree import (
     CheckTagReachability,
     PublishZeroVel,
     CommandManager,
-    ResetEstopFlag
+    ResetEstopFlag,
+    WaitForDuration,
 )
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -99,6 +100,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.READY_ARM, lambda n: ReadyArmActionSimple(name="ReadyArmAction")),
         (CommandID.MOVE_TO_TAG, build_manipulator_goal_tree),
         (CommandID.STAND_UP, lambda n: StandUpActionSimple(name="StandUpAction")),
+        (CommandID.WAIT_TIME, lambda n: WaitForDuration(name="WaitForDuration")),
     ]
 
     for cmd_id, ctor in specs:
