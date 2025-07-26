@@ -2,6 +2,7 @@
 from .nodes.sensing.detect_visible_tags            import DetectVisibleTags
 from .nodes.sensing.command_subscriber import CommandSubscriber
 from .nodes.sensing.check_tag_reachability         import CheckTagReachability
+from .nodes.sensing.buffer_and_status_publisher import BufferStatusPublisher
 from .nodes.manipulation.manipulator_get_goal_tag  import ManipulatorGetGoalTag
 from .nodes.manipulation.manipulator_move_arm_action import ManipulatorMoveArmAction
 from .nodes.manipulation.ready_arm_action          import ReadyArmActionSimple
@@ -27,5 +28,6 @@ __all__ = [
   "PublishZeroVel",
   "CommandManager",
   "ResetEstopFlag",
-  "WaitForDuration"
+  "WaitForDuration",
+  "BufferStatusPublisher"
 ]

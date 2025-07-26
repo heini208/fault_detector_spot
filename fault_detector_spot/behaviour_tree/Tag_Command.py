@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from math import sin, cos, pi
 from geometry_msgs.msg import PoseStamped, Quaternion
+
 _YAW_90_SIN = sin(pi / 4)  # sin(45°)
 _YAW_90_COS = cos(pi / 4)  # cos(45°)
 _PITCH_45_SIN = sin(pi / 8)  # sin(22.5°)

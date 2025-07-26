@@ -25,6 +25,7 @@ from fault_detector_spot.behaviour_tree import (
     CommandManager,
     ResetEstopFlag,
     WaitForDuration,
+    BufferStatusPublisher
 )
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -41,7 +42,8 @@ def create_behavior_tree():
 
     root.add_children([
         build_sensing_tree(node),
-        build_buffered_command_tree(node)
+        build_buffered_command_tree(node),
+        build_publisher_tree(node)
     ])
     return root
 
@@ -73,18 +75,12 @@ def build_buffered_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
         policy=py_trees.common.ParallelPolicy.SuccessOnAll()
     )
     command_tree = build_repeat_guarded_cancelable_command_tree(node)
-    # Wrap in StatusToBlackboard to get a flag on the blackboard status
-    command_tree_with_flag = StatusToBlackboard(
-        name="CommandTree→BB",
-        child=command_tree,
-        variable_name="command_tree_status"
-    )
 
     buffer = CommandManager(name="CommandManager")
     buffer.setup()
     buffered_command_tree.add_children([
         buffer,
-        command_tree_with_flag
+        command_tree
     ])
     return buffered_command_tree
 
@@ -135,7 +131,20 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
 
     root = py_trees.composites.Selector("CancelableCommandSelector", memory=True)
     root.add_children([cancel_seq, emergency_guard])
-    return root
+
+    # Wrap in StatusToBlackboard to get a flag on the blackboard status
+    command_tree_with_flag = StatusToBlackboard(
+        name="CommandTree→BB",
+        child=root,
+        variable_name="command_tree_status"
+    )
+    return command_tree_with_flag
+
+def build_publisher_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    cmd_pub = BufferStatusPublisher(name="CommandStatusPublisher")
+    cmd_pub.setup(node=node)
+    return cmd_pub
+
 
 def build_repeat_guarded_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     guard = NewCommandGuard(name="NewCommandGuard")
@@ -212,8 +221,7 @@ def main(args=None):
         rclpy.shutdown()
         sys.exit(1)
 
-    # Tick the tree at 10 Hz
-    tree.tick_tock(period_ms=100.0)
+    tree.tick_tock(period_ms=50.0)
 
     try:
         rclpy.spin(tree.node)

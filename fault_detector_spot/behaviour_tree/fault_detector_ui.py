@@ -4,7 +4,7 @@ import sys
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QMessageBox, QApplication, QComboBox, QDoubleSpinBox
@@ -17,6 +17,10 @@ from fault_detector_spot.behaviour_tree.command_ids import CommandID
 class Fault_Detector_UI(QWidget):
     def __init__(self, node: Node = None):
         super().__init__()
+        self.cmd_status_sub = None
+        self.buffer_sub = None
+        self.visible_label = None
+        self.orientation_combo = None
         self.reachable_tags_sub = None
         self.visible_tags_sub = None
         self.command_pub = None
@@ -24,23 +28,27 @@ class Fault_Detector_UI(QWidget):
         self.node = node
         self.setWindowTitle("Fault Detector Spot")
         self.resize(600, 500)
+
         self.status_label = QLabel("Status: Waiting for connection")
+        self.buffer_label = QLabel("Buffer: []")
+        self.command_status_label = QLabel("Command Status: IDLE")
 
         self.visible_tags = {}
         self.reachable_tags = {}
         if self.node:
             self.init_ros_communication()
 
-
         self.create_user_interface()
         # periodically spin ROS and refresh UI
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._spin_and_refresh)
-        self.timer.start(100)
+        self.timer.start(10)
 
     def create_user_interface(self):
         layout = QVBoxLayout(self)
         layout.addWidget(self.status_label)
+        layout.addWidget(self.buffer_label)
+        layout.addWidget(self.command_status_label)
 
         self.visible_label = QLabel()
         self.visible_label.setTextFormat(Qt.RichText)
@@ -180,17 +188,29 @@ class Fault_Detector_UI(QWidget):
             self._process_reachable_tags,
             10
         )
+
+        self.buffer_sub = self.node.create_subscription(
+            String,
+            "fault_detector/command_buffer",
+            self._process_buffer,
+            10
+        )
+        self.cmd_status_sub = self.node.create_subscription(
+            String,
+            "fault_detector/command_tree_status",
+            self._process_command_status,
+            10
+        )
         self.status_label.setText("Status: Connected to ROS2")
 
     def _spin_and_refresh(self):
         if self.node:
-            rclpy.spin_once(self.node, timeout_sec=0.01)
+            rclpy.spin_once(self.node, timeout_sec=0.001)
         parts = []
         for tid in sorted(self.visible_tags.keys()):
-            if tid in self.reachable_tags:
-                parts.append(f'<span style="color:green">{tid}</span>')
-            else:
-                parts.append(f'<span style="color:red">{tid}</span>')
+            color = "green" if tid in self.reachable_tags else "red"
+            parts.append(f'<span style="color:{color}">{tid}</span>')
+            
         html = "Visible tags: [" + ", ".join(parts) + "]"
         self.visible_label.setText(html)
 
@@ -199,6 +219,12 @@ class Fault_Detector_UI(QWidget):
 
     def _process_reachable_tags(self, msg: TagElementArray):
         self.reachable_tags = {tag.id: tag for tag in msg.elements}
+
+    def _process_buffer(self, msg: String):
+        self.buffer_label.setText(f"Buffer: {msg.data}")
+
+    def _process_command_status(self, msg: String):
+        self.command_status_label.setText(f"Command Status: {msg.data}")
 
     def _get_offset(self, axis: str) -> float:
         try:
@@ -247,11 +273,11 @@ class Fault_Detector_UI(QWidget):
             self.status_label.setText(f"Move & Wait to tag {tag_element.id} canceled")
             return
 
-
         self.move_to_tag_publisher.publish(tag_element)
         self.status_label.setText(
             f"Command sent: Move & Wait to tag {tag_element.id} for {tag_element.duration:.1f}s"
         )
+
     def build_basic_tag_element(self):
         text = self.input_field.text().strip()
         if not text.isdigit():
@@ -275,7 +301,6 @@ class Fault_Detector_UI(QWidget):
         msg.orientation_mode = omode
 
         return msg
-
 
     def handle_simple_command(self, command_id: str):
         cmd = BasicCommand()

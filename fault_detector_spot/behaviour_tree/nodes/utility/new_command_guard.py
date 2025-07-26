@@ -33,7 +33,7 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.SUCCESS
 
         # 3) Compare timestamps
-        if self.has_newer_stamp() or self.blackboard.last_processed_command.id != self.blackboard.last_command.id:
+        if self.has_newer_stamp():
             self.feedback_message = "New command – processing"
             return py_trees.common.Status.SUCCESS
         else:
@@ -64,7 +64,7 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
         previous = self.blackboard.last_processed_command.stamp
         current = self.blackboard.last_command.stamp
         if (current.sec, current.nanosec) > (previous.sec, previous.nanosec):
-            self.blackboard.last_processed_command.stamp = self.blackboard.last_command.stamp
+            self.blackboard.last_processed_command = self.blackboard.last_command
             return True
         else:
             return False

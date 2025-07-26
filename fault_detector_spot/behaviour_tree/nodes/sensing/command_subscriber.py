@@ -80,12 +80,12 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         try:
             tag_command = TagCommand(msg.id, msg.pose, msg.offset, msg.orientation_mode)
             self.blackboard.goal_tag_command = tag_command
-            self.received_command = SimpleCommand(CommandID.MOVE_TO_TAG, msg.pose.header.stamp)
+            self.received_command = SimpleCommand(CommandID.MOVE_TO_TAG, self.node.get_clock().now().to_msg())
             self.blackboard.command_buffer.append(self.received_command)
             self.logger.info(f"Received command for tag {msg.id}")
 
             if msg.duration != 0.0:
-                timer_command = TimerCommand(CommandID.WAIT_TIME, msg.pose.header.stamp, msg.duration)
+                timer_command = TimerCommand(CommandID.WAIT_TIME, self.node.get_clock().now().to_msg(), msg.duration)
                 self.blackboard.command_buffer.append(timer_command)
 
         except Exception as e:
