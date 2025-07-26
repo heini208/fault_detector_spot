@@ -23,6 +23,7 @@ from fault_detector_spot.behaviour_tree import (
     CheckTagReachability,
     PublishZeroVel,
     CommandManager,
+    ResetEstopFlag
 )
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -110,23 +111,24 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
 
     stop_base    = PublishZeroVel(name="StopBase")
     stow_cancel  = StowArmActionSimple(name="StowArmCancel")
+    reset_estop = ResetEstopFlag(name="ResetEStopFlag")
     stop_base.setup(node=node)
     stow_cancel.setup(node=node)
+    reset_estop.setup(node=node)
 
     cancel_seq = py_trees.composites.Sequence("CancelSequence", memory=True)
-    cancel_seq.add_children([cancel_check, stop_base, stow_cancel])
+    cancel_seq.add_children([cancel_check, stop_base, stow_cancel,reset_estop])
 
     normal_tree = build_command_tree(node)
 
     def not_emergency(blackboard):
-        cmd = getattr(blackboard, 'last_command_received', None)
-        return not (cmd is not None and cmd.id == CommandID.EMERGENCY_CANCEL)
+        return not blackboard.estop_flag
 
     emergency_guard = EternalGuard(
         name="EmergencyGuard",
         child=normal_tree,
         condition=not_emergency,
-        blackboard_keys={"last_command_received"}  # watch this key
+        blackboard_keys={"estop_flag"}  # now triggers as soon as estop_flag==True
     )
 
     root = py_trees.composites.Selector("CancelableCommandSelector", memory=True)
