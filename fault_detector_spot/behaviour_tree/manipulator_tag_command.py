@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 from math import sin, cos, pi
+
+from fault_detector_spot.behaviour_tree.command_ids import CommandID
+from fault_detector_spot.behaviour_tree.manipulator_move_command import ManipulatorMoveCommand
 from geometry_msgs.msg import PoseStamped, Quaternion
+from builtin_interfaces.msg import Time
+
 
 _YAW_90_SIN = sin(pi / 4)  # sin(45°)
 _YAW_90_COS = cos(pi / 4)  # cos(45°)
 _PITCH_45_SIN = sin(pi / 8)  # sin(22.5°)
 _PITCH_45_COS = cos(pi / 8)  # cos(22.5°)
 
-class TagCommand:
+class ManipulatorTagCommand(ManipulatorMoveCommand):
     """
     Encapsulates a tag-based goal for the manipulator:
     - id: numeric tag identifier
@@ -21,13 +26,16 @@ class TagCommand:
 
     def __init__(
         self,
-        tag_id: int,
+        command_id: str,
+        stamp : Time,
         goal_pose: PoseStamped,
+        tag_id: int,
         offset: PoseStamped = None,
         orientation_mode: str = "tag_orientation"
     ):
-        self.id = tag_id
-        self.goal_pose = goal_pose
+        super().__init__(command_id, stamp, goal_pose)
+
+        self.tag_id = tag_id
         if offset is None:
             self.offset = PoseStamped()
             self.offset.header = goal_pose.header
@@ -116,3 +124,13 @@ class TagCommand:
 
 
         return result
+
+    def get_as_manipulator_move_command_with_offset(self) -> ManipulatorMoveCommand:
+        """
+        Returns a ManipulatorMoveCommand with the same goal pose and offset.
+        """
+        return ManipulatorMoveCommand(
+            command_id=self.id,
+            stamp=self.stamp,
+            goal_pose=self.get_offset_pose()
+        )

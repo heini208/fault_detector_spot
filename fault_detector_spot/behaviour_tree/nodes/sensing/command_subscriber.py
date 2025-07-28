@@ -1,7 +1,7 @@
 import py_trees
 import rclpy
 from fault_detector_msgs.msg import TagElement, BasicCommand
-from fault_detector_spot.behaviour_tree.Tag_Command import TagCommand
+from fault_detector_spot.behaviour_tree.manipulator_tag_command import ManipulatorTagCommand
 from std_msgs.msg import Header
 from typing import Optional
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
@@ -65,22 +65,16 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             key="command_buffer", access=py_trees.common.Access.WRITE
         )
         self.blackboard.register_key(
-            key="goal_tag_command", access=py_trees.common.Access.WRITE
-        )
-        self.blackboard.register_key(
             key="estop_flag", access=py_trees.common.Access.WRITE
         )
         self.blackboard.command_buffer = []
-        self.blackboard.goal_tag_command = None
         self.blackboard.estop_flag = False
 
     def _tag_command_callback(self, msg: TagElement):
         if self.is_last_command(msg):
             return
         try:
-            tag_command = TagCommand(msg.id, msg.pose, msg.offset, msg.orientation_mode)
-            self.blackboard.goal_tag_command = tag_command
-            self.received_command = SimpleCommand(CommandID.MOVE_TO_TAG, self.node.get_clock().now().to_msg())
+            self.received_command = ManipulatorTagCommand(CommandID.MOVE_TO_TAG, self.node.get_clock().now().to_msg(), msg.pose, msg.id, msg.offset, msg.orientation_mode)
             self.blackboard.command_buffer.append(self.received_command)
             self.logger.info(f"Received command for tag {msg.id}")
 
@@ -110,7 +104,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.command_buffer.clear()
         self.blackboard.estop_flag = True
         self.blackboard.command_buffer.append(self.received_command)
-        self.blackboard.goal_tag_command = None
         self.logger.info("Emergency stop command received, clearing command buffer")
 
     def is_last_command(self, msg) -> bool:
