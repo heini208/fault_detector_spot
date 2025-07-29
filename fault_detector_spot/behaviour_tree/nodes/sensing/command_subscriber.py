@@ -1,6 +1,6 @@
 import py_trees
 import rclpy
-from fault_detector_msgs.msg import TagElement, BasicCommand
+from fault_detector_msgs.msg import ComplexCommand, BasicCommand
 from fault_detector_spot.behaviour_tree.manipulator_tag_command import ManipulatorTagCommand
 from std_msgs.msg import Header
 from typing import Optional
@@ -17,12 +17,12 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def __init__(
         self,
         name: str = "CommandSubscriber",
-        move_topic: str = "fault_detector/commands/move_to_tag",
+        complex_command_topic: str = "fault_detector/commands/complex_command",
         command_topic: str = "fault_detector/commands/basic_command"
     ):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
-        self.move_to_tag_topic = move_topic
+        self.complex_command_topic = complex_command_topic
         self.command_topic = command_topic
         self.blackboard = None
         self.received_command: Optional[SimpleCommand] = None
@@ -48,9 +48,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
 
     def _create_ui_subscribers(self):
         self.node.create_subscription(
-            TagElement,
-            self.move_to_tag_topic,
-            self._tag_command_callback,
+            ComplexCommand,
+            self.complex_command_topic,
+            self._complex_command_callback,
             10
         )
         self.node.create_subscription(
@@ -70,16 +70,16 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.command_buffer = []
         self.blackboard.estop_flag = False
 
-    def _tag_command_callback(self, msg: TagElement):
+    def _complex_command_callback(self, msg: ComplexCommand):
         if self.is_last_command(msg):
             return
         try:
-            self.received_command = ManipulatorTagCommand(CommandID.MOVE_TO_TAG, self.node.get_clock().now().to_msg(), msg.pose, msg.id, msg.offset, msg.orientation_mode)
+            self.received_command = ManipulatorTagCommand(CommandID.MOVE_TO_TAG, self.node.get_clock().now().to_msg(), msg.tag.pose, msg.tag.id, msg.offset, msg.orientation_mode)
             self.blackboard.command_buffer.append(self.received_command)
-            self.logger.info(f"Received command for tag {msg.id}")
+            self.logger.info(f"Received command for tag {msg.tag.id}")
 
-            if msg.duration != 0.0:
-                timer_command = TimerCommand(CommandID.WAIT_TIME, self.node.get_clock().now().to_msg(), msg.duration)
+            if msg.wait_time != 0.0:
+                timer_command = TimerCommand(CommandID.WAIT_TIME, self.node.get_clock().now().to_msg(), msg.wait_time)
                 self.blackboard.command_buffer.append(timer_command)
 
         except Exception as e:

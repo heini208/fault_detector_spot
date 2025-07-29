@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLineEdit, QMessageBox, QApplication, QComboBox, QDoubleSpinBox
 )
 from PyQt5.QtCore import QTimer, Qt
-from fault_detector_msgs.msg import TagElement, TagElementArray, BasicCommand
+from fault_detector_msgs.msg import ComplexCommand, BasicCommand, TagElement, TagElementArray
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
 
 
@@ -24,7 +24,7 @@ class Fault_Detector_UI(QWidget):
         self.reachable_tags_sub = None
         self.visible_tags_sub = None
         self.command_pub = None
-        self.move_to_tag_publisher = None
+        self.complex_command_publisher = None
         self.node = node
         self.setWindowTitle("Fault Detector Spot")
         self.resize(600, 500)
@@ -168,8 +168,8 @@ class Fault_Detector_UI(QWidget):
             durability=DurabilityPolicy.TRANSIENT_LOCAL
         )
 
-        self.move_to_tag_publisher = self.node.create_publisher(
-            TagElement, "fault_detector/commands/move_to_tag", qos
+        self.complex_command_publisher = self.node.create_publisher(
+            ComplexCommand, "fault_detector/commands/complex_command", qos
         )
 
         self.command_pub = self.node.create_publisher(
@@ -233,80 +233,102 @@ class Fault_Detector_UI(QWidget):
             return 0.0
 
     def handle_tag_selection(self):
-        tag_element = self.build_basic_tag_element()
-        if tag_element is None:
+        try:
+            complex_command = self.build_move_to_tag_command()
+        except TagNotFound:
             return
-        pos = tag_element.pose.pose.position
-        offset = tag_element.offset.pose.position
+
+        pos = complex_command.tag.pose.pose.position
+        offset = complex_command.offset.pose.position
 
         reply = QMessageBox.question(
             self, "Confirm Move",
-            (f"Move to tag {tag_element.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
+            (f"Move to tag {complex_command.tag.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
              f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
-             f"Orientation: {tag_element.orientation_mode}"),
+             f"Orientation: {complex_command.orientation_mode}"),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
 
         if reply != QMessageBox.Yes:
-            self.status_label.setText(f"Move & Wait to tag {tag_element.id} canceled")
+            self.status_label.setText(f"Move & Wait to tag {complex_command.id} canceled")
             return
 
-        self.move_to_tag_publisher.publish(tag_element)
-        self.status_label.setText(f"Command sent: Move to tag {tag_element.id}")
+        self.complex_command_publisher.publish(complex_command)
+        self.status_label.setText(f"Command sent: Move to tag {complex_command.tag.id}")
 
     def handle_move_and_wait(self):
-        tag_element = self.build_basic_tag_element()
-        if tag_element is None:
+        try:
+            complex_command = self.build_move_to_tag_command()
+        except TagNotFound:
             return
-        pos = tag_element.pose.pose.position
-        offset = tag_element.offset.pose.position
-        tag_element.duration = self.duration_input.value()
+        complex_command.command.command_id = CommandID.MOVE_TO_TAG_AND_WAIT
+        complex_command.wait_time = self.duration_input.value()
+
+        pos = complex_command.tag.pose.pose.position
+        offset = complex_command.offset.pose.position
+
         reply = QMessageBox.question(
             self, "Confirm Move & Wait",
-            (f"Move to tag {tag_element.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
+            (f"Move to tag {complex_command.tag.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
              f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
-             f"Orientation: {tag_element.orientation_mode}\n"
-             f"Then wait {tag_element.duration:.1f}s"),
+             f"Orientation: {complex_command.orientation_mode}\n"
+             f"Then wait {complex_command.wait_time:.1f}s"),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply != QMessageBox.Yes:
-            self.status_label.setText(f"Move & Wait to tag {tag_element.id} canceled")
+            self.status_label.setText(f"Move & Wait to tag {complex_command.tag.id} canceled")
             return
 
-        self.move_to_tag_publisher.publish(tag_element)
+        self.complex_command_publisher.publish(complex_command)
         self.status_label.setText(
-            f"Command sent: Move & Wait to tag {tag_element.id} for {tag_element.duration:.1f}s"
+            f"Command sent: Move & Wait to tag {complex_command.tag.id} for {complex_command.wait_time:.1f}s"
         )
 
-    def build_basic_tag_element(self):
-        text = self.input_field.text().strip()
-        if not text.isdigit():
-            QMessageBox.warning(self, "Invalid Input", "Please enter a numeric tag ID.")
-            return
-        tag_id = int(text)
-        if tag_id not in self.visible_tags:
-            QMessageBox.information(self, "Not Found", f"Tag {tag_id} not visible.")
-            return
-
-        original = self.visible_tags[tag_id]
-        ox, oy, oz = (self._get_offset(a) for a in ("X", "Y", "Z"))
-        omode = self.orientation_combo.currentText()
-        msg = TagElement()
-        msg.id = tag_id
-        msg.pose = original.pose
-        msg.offset.header = original.pose.header
-        msg.offset.pose.position.x = ox
-        msg.offset.pose.position.y = oy
-        msg.offset.pose.position.z = oz
-        msg.orientation_mode = omode
-
-        return msg
-
-    def handle_simple_command(self, command_id: str):
+    def build_basic_command(self, command_id: str) -> BasicCommand:
         cmd = BasicCommand()
         cmd.header = Header()
         cmd.header.stamp = self.node.get_clock().now().to_msg()
         cmd.command_id = command_id
+        return cmd
+
+    def build_move_to_tag_command(self) -> ComplexCommand:
+        complex_command = ComplexCommand()
+        complex_command.command = self.build_basic_command(CommandID.MOVE_TO_TAG)
+        complex_command = self.add_tag_info_to_command(complex_command)
+        return complex_command
+
+    def add_tag_info_to_command(self, command: ComplexCommand):
+        command = self.add_tag_element_to_command(command)
+
+        ox, oy, oz = (self._get_offset(a) for a in ("X", "Y", "Z"))
+        omode = self.orientation_combo.currentText()
+
+        command.offset.header = command.tag.pose.header
+        command.offset.pose.position.x = ox
+        command.offset.pose.position.y = oy
+        command.offset.pose.position.z = oz
+        command.orientation_mode = omode
+        return command
+
+    def add_tag_element_to_command(self, command: ComplexCommand):
+        text = self.input_field.text().strip()
+        if not text.isdigit():
+            QMessageBox.warning(self, "Invalid Input", "Please enter a numeric tag ID.")
+            raise TagNotFound
+        tag_id = int(text)
+        if tag_id not in self.visible_tags:
+            QMessageBox.information(self, "Not Found", f"Tag {tag_id} not visible.")
+            raise TagNotFound
+        original = self.visible_tags[tag_id]
+
+        tag_element = TagElement()
+        tag_element.id = tag_id
+        tag_element.pose = original.pose
+        command.tag = tag_element
+        return command
+
+    def handle_simple_command(self, command_id: str):
+        cmd = self.build_basic_command(command_id)
         self.command_pub.publish(cmd)
         self.status_label.setText(f"Command sent: {command_id}")
 
@@ -328,3 +350,7 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+
+class TagNotFound(Exception):
+    """Raised when the requested tag ID isn’t visible."""
+    pass

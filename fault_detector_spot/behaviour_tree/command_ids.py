@@ -10,3 +10,4 @@ class CommandID(str, Enum):
     STAND_UP = "stand_up"
     WAIT_TIME = "wait_time"
     EMERGENCY_CANCEL = "cancel_all"
+    MOVE_TO_TAG_AND_WAIT = "move_tag_and_wait"
