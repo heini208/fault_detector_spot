@@ -49,8 +49,9 @@ class ActionClientBehaviour(py_trees.behaviour.Behaviour):
     def _phase_initialize(self) -> Status | None:
         if not self.initialized:
             ok = self._init_client()
-            self.feedback_message = "Client initialized" if ok else "Initializing client..."
-            return Status.RUNNING
+            if not ok:
+                return Status.FAILURE
+            self.feedback_message = "Client initialized"
         return None
 
     def _phase_send_goal(self) -> Status | None:
@@ -132,7 +133,10 @@ class SimpleSpotAction(ActionClientBehaviour):
     def _init_client(self) -> bool:
         try:
             action_ns = namespace_with(self.robot_name, "robot_command")
-            self._client = ActionClientWrapper(RobotCommand, action_ns, self.node)
+            self._client = ActionClientWrapper(RobotCommand, action_ns, self.node, wait_for_server=False)
+            if not self._client.wait_for_server(timeout_sec=0.0):
+                self.feedback_message = f"Action server '{action_ns}' unavailable"
+                return False
             self.initialized = True
             return True
         except Exception as e:
