@@ -78,6 +78,13 @@ class Fault_Detector_UI(QWidget):
         self.move_wait_button = QPushButton("Move & Wait")
         self.move_wait_button.clicked.connect(self.handle_move_and_wait)
         row.addWidget(self.move_wait_button)
+
+        self.scan_all_button = QPushButton("Scan all in range")
+        self.scan_all_button.clicked.connect(
+            lambda _, cid=CommandID.SCAN_ALL_IN_RANGE: self.handle_scan_all_in_range(cid))
+        row.addWidget(self.scan_all_button)
+
+
         return row
 
     def _make_offset_row(self) -> QHBoxLayout:
@@ -89,6 +96,11 @@ class Fault_Detector_UI(QWidget):
         return row
 
     def _add_offset_controls(self, row: QHBoxLayout):
+        default_offsets = {
+            "X": -0.10,
+            "Y": 0.00,
+            "Z": 0.05,
+        }
         self.offset_fields = {}
         for axis, dec_txt, inc_txt, dec_delta, inc_delta in [
             ("X", "backward", "forward", -0.05, +0.05),
@@ -98,7 +110,7 @@ class Fault_Detector_UI(QWidget):
             dec = QPushButton(dec_txt)
             fld = QLineEdit()
             fld.setFixedWidth(50)
-            fld.setPlaceholderText("0.0")
+            fld.setText(f"{default_offsets[axis]:.2f}")
             inc = QPushButton(inc_txt)
 
             dec.clicked.connect(lambda _, a=axis, d=dec_delta: self._change_offset(a, d))
@@ -250,7 +262,7 @@ class Fault_Detector_UI(QWidget):
         )
 
         if reply != QMessageBox.Yes:
-            self.status_label.setText(f"Move & Wait to tag {complex_command.id} canceled")
+            self.status_label.setText(f"Move & Wait to tag {complex_command.tag.id} canceled")
             return
 
         self.complex_command_publisher.publish(complex_command)
@@ -284,6 +296,25 @@ class Fault_Detector_UI(QWidget):
             f"Command sent: Move & Wait to tag {complex_command.tag.id} for {complex_command.wait_time:.1f}s"
         )
 
+    def handle_scan_all_in_range(self, command_id: str):
+        complex_command = ComplexCommand()
+        complex_command.command = self.build_basic_command(command_id)
+        complex_command.wait_time = self.duration_input.value()
+        complex_command = self.add_offset_to_command(complex_command)
+
+        reply = QMessageBox.question(
+            self, "Confirm Scan",
+            f"Scan all reachable tags for {complex_command.wait_time:.1f}s?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            self.status_label.setText("Scan canceled")
+            return
+
+        self.complex_command_publisher.publish(complex_command)
+        self.status_label.setText(f"Command sent: Scan all reachable tags for {complex_command.wait_time:.1f}s")
+
+
     def build_basic_command(self, command_id: str) -> BasicCommand:
         cmd = BasicCommand()
         cmd.header = Header()
@@ -299,16 +330,20 @@ class Fault_Detector_UI(QWidget):
 
     def add_tag_info_to_command(self, command: ComplexCommand):
         command = self.add_tag_element_to_command(command)
+        return self.add_offset_to_command(command)
 
+        return command
+    def add_offset_to_command(self, command: ComplexCommand):
         ox, oy, oz = (self._get_offset(a) for a in ("X", "Y", "Z"))
         omode = self.orientation_combo.currentText()
-
         command.offset.header = command.tag.pose.header
         command.offset.pose.position.x = ox
         command.offset.pose.position.y = oy
         command.offset.pose.position.z = oz
         command.orientation_mode = omode
         return command
+
+
 
     def add_tag_element_to_command(self, command: ComplexCommand):
         text = self.input_field.text().strip()

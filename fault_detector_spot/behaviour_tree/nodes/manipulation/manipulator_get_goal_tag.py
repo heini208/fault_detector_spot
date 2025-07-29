@@ -52,6 +52,7 @@ class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
             self.feedback_message = f"Goal tag {goal_id} is not currently visible"
             return py_trees.common.Status.FAILURE
 
+        self.blackboard.last_command.goal_pose = reachable_tags[goal_id].pose
         # Tag is visible, convert to manipulator goal command for action
         self.blackboard.last_command = self.blackboard.last_command.get_as_manipulator_move_command_with_offset()
         self.feedback_message = f"Found goal tag {goal_id}"

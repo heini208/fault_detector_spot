@@ -3,7 +3,7 @@ import rclpy
 from fault_detector_msgs.msg import ComplexCommand, BasicCommand
 from fault_detector_spot.behaviour_tree.manipulator_tag_command import ManipulatorTagCommand
 from std_msgs.msg import Header
-from typing import Optional
+from typing import Optional, List
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.simple_command import SimpleCommand
 from fault_detector_spot.behaviour_tree.timer_command import TimerCommand
@@ -26,6 +26,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.command_topic = command_topic
         self.blackboard = None
         self.received_command: Optional[SimpleCommand] = None
+        self._combination_command_builders = {
+            CommandID.SCAN_ALL_IN_RANGE: self._scan_all_in_range,
+            CommandID.MOVE_TO_TAG: self._move_to_tag,
+            CommandID.MOVE_TO_TAG_AND_WAIT: self._move_to_tag_and_wait,
+        }
 
     def setup(self, **kwargs):
         try:
@@ -50,13 +55,13 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.node.create_subscription(
             ComplexCommand,
             self.complex_command_topic,
-            self._complex_command_callback,
+            self.append_command_to_buffer,
             10
         )
         self.node.create_subscription(
             BasicCommand,
             self.command_topic,
-            self._basic_command_callback,
+            self.append_command_to_buffer,
             10
         )
 
@@ -67,35 +72,42 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.register_key(
             key="estop_flag", access=py_trees.common.Access.WRITE
         )
+        self.blackboard.register_key(
+            key="reachable_tags", access=py_trees.common.Access.READ
+        )
         self.blackboard.command_buffer = []
         self.blackboard.estop_flag = False
 
-    def _complex_command_callback(self, msg: ComplexCommand):
+    def append_command_to_buffer(self, msg: [ComplexCommand, BasicCommand]):
         if self.is_last_command(msg):
             return
-        try:
-            self.received_command = ManipulatorTagCommand(CommandID.MOVE_TO_TAG, self.node.get_clock().now().to_msg(), msg.tag.pose, msg.tag.id, msg.offset, msg.orientation_mode)
-            self.blackboard.command_buffer.append(self.received_command)
-            self.logger.info(f"Received command for tag {msg.tag.id}")
-
-            if msg.wait_time != 0.0:
-                timer_command = TimerCommand(CommandID.WAIT_TIME, self.node.get_clock().now().to_msg(), msg.wait_time)
-                self.blackboard.command_buffer.append(timer_command)
-
-        except Exception as e:
-            self.logger.error(f"Error processing command: {e}")
-
-    def _basic_command_callback(self, msg: BasicCommand):
-        if self.is_last_command(msg):
+        if isinstance(msg, BasicCommand):
+            self.received_command = SimpleCommand(msg.command_id, msg.header.stamp)
+            self.fire_basic_command(msg)
+        elif isinstance(msg, ComplexCommand):
+            self.received_command = SimpleCommand(msg.command.command_id, msg.command.header.stamp)
+            self.fire_complex_command_sequence(msg)
+        else:
+            self.logger.error(f"Unknown message type: {type(msg)}")
             return
-        self.received_command = SimpleCommand(msg.command_id, msg.header.stamp)
 
-        if self.is_estop_command(self.received_command):
+    def fire_basic_command(self, msg: BasicCommand):
+        if msg.command_id == CommandID.EMERGENCY_CANCEL:
             self.trigger_estop()
             return
-
         self.blackboard.command_buffer.append(self.received_command)
         self.logger.info(f"Received {msg.command_id} command")
+
+    def fire_complex_command_sequence(self, msg: ComplexCommand) -> List[SimpleCommand]:
+        command_id = msg.command.command_id
+        if command_id in self._combination_command_builders:
+            command_sequence = self._combination_command_builders.get(command_id)(msg)
+            self.blackboard.command_buffer.extend(command_sequence)
+        else:
+            basic_msg = BasicCommand()
+            basic_msg.command_id = msg.command_id
+            basic_msg.header = msg.header
+            self.fire_basic_command(basic_msg)
 
     def is_estop_command(self, command) -> bool:
         return command.id == CommandID.EMERGENCY_CANCEL
@@ -119,10 +131,53 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         return stamp.sec == last_stamp.sec and stamp.nanosec == last_stamp.nanosec
 
     def _extract_timestamp(self, msg):
-        if hasattr(msg, 'header'):
+        if hasattr(msg, 'command'):
+            return msg.command.header.stamp
+        elif hasattr(msg, 'header'):
             return msg.header.stamp
         elif hasattr(msg, 'pose') and hasattr(msg.pose, 'header'):
             return msg.pose.header.stamp
         elif hasattr(msg, 'stamp'):
             return msg.stamp
         return None
+
+    def _create_command_stamp(self):
+        return self.node.get_clock().now().to_msg()
+
+
+    ### Command builders for complex commands ###
+
+    def _move_to_tag(self, msg: ComplexCommand) -> List[SimpleCommand]:
+        command = ManipulatorTagCommand(CommandID.MOVE_TO_TAG, self._create_command_stamp(), msg.tag.pose,
+                                        msg.tag.id, msg.offset, msg.orientation_mode)
+        return [command]
+
+    def _move_to_tag_and_wait(self, msg: ComplexCommand) -> List[SimpleCommand]:
+        command = self._move_to_tag(msg)
+        if msg.wait_time <= 0.0:
+            return command
+        command.append(TimerCommand(CommandID.WAIT_TIME, self._create_command_stamp(), msg.wait_time))
+        return command
+
+    def _scan_all_in_range(self, msg: ComplexCommand) -> List[SimpleCommand]:
+        """
+        For each tag in blackboard.reachable_tags (id→TagElement),
+        emit MOVE_TO_TAG, WAIT_TIME, STOW_ARM.
+        """
+        tags = self.blackboard.reachable_tags
+        if not tags:
+            return []
+
+        commands: List[SimpleCommand] = []
+        for tag_id, tag in sorted(tags.items()):
+            msg.tag = tag
+            commands.extend(self._move_to_tag_and_wait(msg))
+            commands.append(SimpleCommand(
+                CommandID.STOW_ARM, self._create_command_stamp()
+            ))
+            commands.append(TimerCommand(
+                CommandID.WAIT_TIME, self._create_command_stamp(), 0.2
+            ))
+
+        return commands
+

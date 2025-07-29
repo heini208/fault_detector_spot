@@ -11,3 +11,5 @@ class CommandID(str, Enum):
     WAIT_TIME = "wait_time"
     EMERGENCY_CANCEL = "cancel_all"
     MOVE_TO_TAG_AND_WAIT = "move_tag_and_wait"
+    SCAN_ALL_IN_RANGE = "scan_all_in_range"
+
