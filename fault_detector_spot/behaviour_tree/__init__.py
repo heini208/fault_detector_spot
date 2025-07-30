@@ -7,6 +7,7 @@ from .nodes.manipulation.manipulator_get_goal_tag  import ManipulatorGetGoalTag
 from .nodes.manipulation.manipulator_move_arm_action import ManipulatorMoveArmAction
 from .nodes.manipulation.ready_arm_action          import ReadyArmActionSimple
 from .nodes.manipulation.stow_arm_action           import StowArmActionSimple
+from .nodes.manipulation.toggle_gripper_action import ToggleGripperAction
 from .nodes.utility.new_command_guard              import NewCommandGuard
 from .nodes.utility.spot_action                    import SimpleSpotAction
 from .nodes.navigation.stand_up_action             import StandUpActionSimple
@@ -36,5 +37,6 @@ __all__ = [
   "BufferStatusPublisher",
   "ManipulatorMoveRelativeAction",
   "HandCameraTagDetection",
-  "PublishTagStates"
+  "PublishTagStates",
+  "ToggleGripperAction",
 ]

@@ -28,7 +28,8 @@ from fault_detector_spot.behaviour_tree import (
     ResetEstopFlag,
     WaitForDuration,
     BufferStatusPublisher,
-    ManipulatorMoveRelativeAction
+    ManipulatorMoveRelativeAction,
+    ToggleGripperAction,
 )
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -103,6 +104,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     specs = [
         (CommandID.STOW_ARM, lambda n: StowArmActionSimple(name="StowArmAction")),
         (CommandID.READY_ARM, lambda n: ReadyArmActionSimple(name="ReadyArmAction")),
+        (CommandID.TOGGLE_GRIPPER, lambda n: ToggleGripperAction(name="ToggleGripperAction")),
         (CommandID.MOVE_ARM_TO_TAG, build_manipulator_goal_tree),
         (CommandID.MOVE_ARM_RELATIVE, lambda n: ManipulatorMoveRelativeAction(name="MoveArmRelativeAction")),
         (CommandID.STAND_UP, lambda n: StandUpActionSimple(name="StandUpAction")),
