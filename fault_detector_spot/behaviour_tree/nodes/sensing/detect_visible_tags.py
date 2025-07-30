@@ -10,7 +10,7 @@ from typing import Dict, Optional
 class DetectVisibleTags(py_trees.behaviour.Behaviour):
     """
     Monitors the TF tree for AprilTag frames, updates the blackboard with
-    visible tags and their poses, and publishes this information.
+    visible tags and their poses.
     """
 
     def __init__(self, name: str = "DetectVisibleTags", frame_pattern: str = r"tag_(\d+)"):
@@ -18,21 +18,17 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         self.node: Optional[rclpy.node.Node] = None
         self.tf_buffer: Optional[tf2_ros.Buffer] = None
         self.tf_listener: Optional[tf2_ros.TransformListener] = None
-        self.tag_publisher: Optional[rclpy.publisher.Publisher] = None
         self.blackboard = self.attach_blackboard_client()
         self.frame_pattern = re.compile(frame_pattern)
 
     def setup(self, **kwargs):
         """
-        Initialise ROS-specific components: the node, TF listener, and publisher.
+        Initialise ROS-specific components: the node, TF listener.
         """
         try:
             self.node = kwargs['node']
             self.tf_buffer = tf2_ros.Buffer()
             self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self.node)
-            self.tag_publisher = self.node.create_publisher(
-                TagElementArray, "fault_detector/state/visible_tags", 10
-            )
             self.blackboard.register_key(
                 key="visible_tags", access=py_trees.common.Access.WRITE
             )
@@ -42,14 +38,12 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
 
     def update(self) -> py_trees.common.Status:
         """
-        Periodically called to check for tags, update the blackboard, and publish.
+        Periodically called to check for tags, update the blackboard.
         This behaviour always returns SUCCESS.
         """
         visible_tags = self._get_visible_tags_from_tf()
 
         self.blackboard.visible_tags = visible_tags
-        self._publish_visible_tags(visible_tags)
-
         self.feedback_message = f"Visible tags: {sorted(visible_tags.keys())}"
         return py_trees.common.Status.SUCCESS
 
@@ -99,15 +93,6 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         tag_element.pose.pose.position.z = transform.transform.translation.z
         tag_element.pose.pose.orientation = transform.transform.rotation
         return tag_element
-
-    def _publish_visible_tags(self, visible_tags: Dict[int, TagElement]):
-        """Publishes the list of visible tags as a TagElementArray message."""
-        if not self.tag_publisher:
-            return
-
-        tag_array_msg = TagElementArray()
-        tag_array_msg.elements = list(visible_tags.values())
-        self.tag_publisher.publish(tag_array_msg)
 
     def terminate(self, new_status: py_trees.common.Status):
         """Logs the termination status."""

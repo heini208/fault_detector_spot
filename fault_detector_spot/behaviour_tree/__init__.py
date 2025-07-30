@@ -15,6 +15,9 @@ from .nodes.utility.command_manager import CommandManager
 from .nodes.utility.reset_estop_flag import ResetEstopFlag
 from .nodes.utility.wait_for_duration import WaitForDuration
 from .nodes.manipulation.manipulator_move_relative_action import ManipulatorMoveRelativeAction
+from .nodes.sensing.hand_camera_tag_detection import HandCameraTagDetection
+from .nodes.sensing.visible_tag_publisher import PublishTagStates
+
 
 __all__ = [
   "DetectVisibleTags",
@@ -31,5 +34,7 @@ __all__ = [
   "ResetEstopFlag",
   "WaitForDuration",
   "BufferStatusPublisher",
-  "ManipulatorMoveRelativeAction"
+  "ManipulatorMoveRelativeAction",
+  "HandCameraTagDetection",
+  "PublishTagStates"
 ]

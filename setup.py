@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'config'), ['config/my_tags.yaml']),
+        ('share/fault_detector_spot/launch', glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

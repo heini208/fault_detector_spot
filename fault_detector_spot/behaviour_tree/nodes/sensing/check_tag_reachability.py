@@ -11,7 +11,6 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
     """
     Filters visible_tags by whether they lie within the robot arm's reach.
     Uses a static transform from 'body' -> 'arm_link_sh0' (looked up once in setup)
-    Publishes a dict of reachable TagElement in blackboard.reachable_tags.
     """
     def __init__(self,
                  name: str = "CheckTagReachability",
@@ -28,8 +27,6 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
         self.tf_listener: Optional[tf2_ros.TransformListener] = None
         self.arm_base_offset = None
         self.blackboard = self.attach_blackboard_client()
-        self.reachable_tag_publisher: Optional[rclpy.publisher.Publisher] = None
-
 
     def setup(self, **kwargs):
         self.node = kwargs.get("node")
@@ -51,11 +48,6 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
         # initialize
         reachable: Dict[int, TagElement] = {}
         self.blackboard.reachable_tags = reachable
-
-        self.reachable_tag_publisher = self.node.create_publisher(
-            TagElementArray, "fault_detector/state/reachable_tags", 10
-        )
-
     def _check_transform_exists(self) -> bool:
         try:
             # target_frame='body', source_frame='arm_link_sh0'
@@ -79,7 +71,6 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
             visible = self.blackboard.visible_tags
         else:
             self.blackboard.reachable_tags = reachable
-            self._publish_reachable_tags(self.blackboard.reachable_tags)
             self.feedback_message = f"No tags visible"
             return py_trees.common.Status.SUCCESS
 
@@ -100,18 +91,9 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
             f"Reachable: {sorted(reachable.keys())} "
             f"(max {self.maximum_reach:.2f}m)"
         )
-        self._publish_reachable_tags(self.blackboard.reachable_tags)
         self.feedback_message = f"Offset = {self.arm_base_offset}, Reachable tags: {sorted(self.blackboard.reachable_tags.keys())}"
         return py_trees.common.Status.SUCCESS
 
-    def _publish_reachable_tags(self, reachable_tags: Dict[int, TagElement]):
-        """Publishes the list of reachable tags as a TagElementArray message."""
-        if not self.reachable_tag_publisher:
-            return
-
-        tag_array_msg = TagElementArray()
-        tag_array_msg.elements = list(reachable_tags.values())
-        self.reachable_tag_publisher.publish(tag_array_msg)
 
     def terminate(self, new_status: py_trees.common.Status):
         pass

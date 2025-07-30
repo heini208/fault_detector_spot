@@ -13,6 +13,8 @@ from fault_detector_spot.behaviour_tree.command_ids import CommandID
 
 from fault_detector_spot.behaviour_tree import (
     DetectVisibleTags,
+    HandCameraTagDetection,
+    PublishTagStates,
     ManipulatorGetGoalTag,
     ManipulatorMoveArmAction,
     CommandSubscriber,
@@ -62,10 +64,16 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     detect = DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)")
     detect.setup(node=node)
 
+    hand_detect = HandCameraTagDetection(name="HandCameraTagDetection")
+    detect.setup(node=node)
+
     in_range_checker = CheckTagReachability(name="CheckTagReachability")
     detect.setup(node=node)
 
-    tag_scan_sequence.add_children([detect, in_range_checker])
+    tag_publisher = PublishTagStates(name="TagPublisher")
+    detect.setup(node=node)
+
+    tag_scan_sequence.add_children([detect, hand_detect, in_range_checker, tag_publisher])
 
     sensing_seq.add_children([tag_scan_sequence, cmd_sub])
     return sensing_seq
