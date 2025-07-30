@@ -14,6 +14,7 @@ from .nodes.navigation.cancel_movement import PublishZeroVel
 from .nodes.utility.command_manager import CommandManager
 from .nodes.utility.reset_estop_flag import ResetEstopFlag
 from .nodes.utility.wait_for_duration import WaitForDuration
+from .nodes.manipulation.manipulator_move_relative_action import ManipulatorMoveRelativeAction
 
 __all__ = [
   "DetectVisibleTags",
@@ -29,5 +30,6 @@ __all__ = [
   "CommandManager",
   "ResetEstopFlag",
   "WaitForDuration",
-  "BufferStatusPublisher"
+  "BufferStatusPublisher",
+  "ManipulatorMoveRelativeAction"
 ]

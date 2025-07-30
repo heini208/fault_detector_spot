@@ -1,6 +1,7 @@
 import py_trees
 import rclpy
 from fault_detector_msgs.msg import ComplexCommand, BasicCommand
+from fault_detector_spot.behaviour_tree.manipulator_move_command import ManipulatorMoveCommand
 from fault_detector_spot.behaviour_tree.manipulator_tag_command import ManipulatorTagCommand
 from std_msgs.msg import Header
 from typing import Optional, List
@@ -28,8 +29,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.received_command: Optional[SimpleCommand] = None
         self._combination_command_builders = {
             CommandID.SCAN_ALL_IN_RANGE: self._scan_all_in_range,
-            CommandID.MOVE_TO_TAG: self._move_to_tag,
-            CommandID.MOVE_TO_TAG_AND_WAIT: self._move_to_tag_and_wait,
+            CommandID.MOVE_ARM_TO_TAG: self._move_to_tag,
+            CommandID.MOVE_ARM_TO_TAG_AND_WAIT: self._move_to_tag_and_wait,
+            CommandID.MOVE_ARM_RELATIVE: self._move_arm_command_with_offset
         }
 
     def setup(self, **kwargs):
@@ -144,13 +146,18 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def _create_command_stamp(self):
         return self.node.get_clock().now().to_msg()
 
-
     ### Command builders for complex commands ###
 
+    def _move_arm_command_with_offset(self, msg: ComplexCommand):
+        command = ManipulatorMoveCommand(msg.command.command_id, self._create_command_stamp(), msg.offset)
+        return [command]
+
     def _move_to_tag(self, msg: ComplexCommand) -> List[SimpleCommand]:
-        command = ManipulatorTagCommand(CommandID.MOVE_TO_TAG, self._create_command_stamp(), msg.tag.pose,
+        command = ManipulatorTagCommand(CommandID.MOVE_ARM_TO_TAG, self._create_command_stamp(), msg.tag.pose,
                                         msg.tag.id, msg.offset, msg.orientation_mode)
         return [command]
+
+    ### Command builders for combination commands ###
 
     def _move_to_tag_and_wait(self, msg: ComplexCommand) -> List[SimpleCommand]:
         command = self._move_to_tag(msg)
@@ -162,7 +169,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def _scan_all_in_range(self, msg: ComplexCommand) -> List[SimpleCommand]:
         """
         For each tag in blackboard.reachable_tags (id→TagElement),
-        emit MOVE_TO_TAG, WAIT_TIME, STOW_ARM.
+        MOVE_ARM_TO_TAG, WAIT_TIME, STOW_ARM.
         """
         tags = self.blackboard.reachable_tags
         if not tags:

@@ -56,9 +56,11 @@ class ActionClientBehaviour(py_trees.behaviour.Behaviour):
 
     def _phase_send_goal(self) -> Status | None:
         if self.send_goal_future is None:
-            goal = self._build_goal()
+            maybe_goal = self._build_goal()
+            if isinstance(maybe_goal, Status) or maybe_goal is None:
+                return maybe_goal or Status.FAILURE
             self.logger.info(f"[{self.name}] Sending goal")
-            self.send_goal_future = self._send_goal(goal)
+            self.send_goal_future = self._send_goal(maybe_goal)
             self.feedback_message = "Goal sent"
             return Status.RUNNING
         return None

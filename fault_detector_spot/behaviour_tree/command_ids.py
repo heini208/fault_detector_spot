@@ -6,10 +6,11 @@ from enum import Enum
 class CommandID(str, Enum):
     STOW_ARM = "stow_arm"
     READY_ARM = "ready_arm"
-    MOVE_TO_TAG = "move_to_tag"
+    MOVE_ARM_TO_TAG = "move_to_tag"
+    MOVE_ARM_TO_TAG_AND_WAIT = "move_tag_and_wait"
+    MOVE_ARM_RELATIVE = "move_arm_relative"
     STAND_UP = "stand_up"
     WAIT_TIME = "wait_time"
     EMERGENCY_CANCEL = "cancel_all"
-    MOVE_TO_TAG_AND_WAIT = "move_tag_and_wait"
     SCAN_ALL_IN_RANGE = "scan_all_in_range"
 
