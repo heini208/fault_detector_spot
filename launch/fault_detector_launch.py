@@ -17,6 +17,12 @@ def generate_launch_description():
             output='screen'
         ),
         Node(
+            package='fault_detector_spot',
+            executable='record_manager',
+            name='record_manager',
+            output='screen'
+        ),
+        Node(
             package='apriltag_ros',
             executable='apriltag_node',
             name='apriltag_node',
