@@ -11,9 +11,10 @@ from PyQt5.QtWidgets import (
     QPushButton, QLineEdit, QMessageBox, QApplication, QComboBox, QDoubleSpinBox
 )
 from PyQt5.QtCore import QTimer, Qt
-from fault_detector_msgs.msg import ComplexCommand, BasicCommand, TagElement, TagElementArray, RecordingList, CommandRecordControl
+from fault_detector_msgs.msg import ComplexCommand, BasicCommand, TagElement, TagElementArray, RecordingList, \
+    CommandRecordControl
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
-from ament_index_python.packages import get_package_share_directory
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
 
 
 class Fault_Detector_UI(QWidget):
@@ -46,7 +47,7 @@ class Fault_Detector_UI(QWidget):
         self.timer.timeout.connect(self._spin_and_refresh)
         self.timer.start(10)
 
-#------ build UI
+    # ------ build UI
 
     def create_user_interface(self):
         layout = QVBoxLayout(self)
@@ -229,26 +230,19 @@ class Fault_Detector_UI(QWidget):
     # ---- ros communication
 
     def init_ros_communication(self):
-        qos = QoSProfile(
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_ALL,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
-
         self.complex_command_publisher = self.node.create_publisher(
-            ComplexCommand, "fault_detector/commands/complex_command", qos
+            ComplexCommand, "fault_detector/commands/complex_command", COMMAND_QOS
         )
 
         self.command_pub = self.node.create_publisher(
-            BasicCommand, "fault_detector/commands/basic_command", qos)
+            BasicCommand, "fault_detector/commands/basic_command", COMMAND_QOS)
 
         self.record_control_pub = self.node.create_publisher(
             CommandRecordControl, "fault_detector/record_control", 10
         )
 
         self.recordings_list_sub = self.node.create_subscription(
-            RecordingList, "fault_detector/recordings_list", self.update_recordings_dropdown, 10
+            RecordingList, "fault_detector/recordings_list", self.update_recordings_dropdown, LATCHED_QOS
         )
 
         self.visible_tags_sub = self.node.create_subscription(
@@ -309,7 +303,7 @@ class Fault_Detector_UI(QWidget):
         except Exception:
             return 0.0
 
-# ---- command builders
+    # ---- command builders
 
     def build_basic_command(self, command_id: str) -> BasicCommand:
         cmd = BasicCommand()
@@ -357,7 +351,7 @@ class Fault_Detector_UI(QWidget):
         command.tag = tag_element
         return command
 
-# ---- Button Handlers
+    # ---- Button Handlers
 
     def handle_simple_command(self, command_id: str):
         cmd = self.build_basic_command(command_id)
@@ -450,8 +444,7 @@ class Fault_Detector_UI(QWidget):
         self.complex_command_publisher.publish(complex_command)
         self.status_label.setText(f"Command sent: Scan all reachable tags for {complex_command.wait_time:.1f}s")
 
-
-# ---- Recording Control
+    # ---- Recording Control
 
     def toggle_recording(self):
         name = self.record_name_field.text().strip()

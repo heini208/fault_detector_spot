@@ -4,8 +4,7 @@ from fault_detector_msgs.msg import ComplexCommand, BasicCommand
 from fault_detector_spot.behaviour_tree.manipulator_move_command import ManipulatorMoveCommand
 from fault_detector_spot.behaviour_tree.manipulator_tag_command import ManipulatorTagCommand
 from fault_detector_spot.behaviour_tree.generic_complex_command import GenericCommand
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
-from std_msgs.msg import Header
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
 from typing import Optional, List
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.simple_command import SimpleCommand
@@ -68,24 +67,17 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.logger.debug(f"Terminating with status {new_status}")
 
     def _create_ui_subscribers(self):
-        qos = QoSProfile(
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_ALL,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
-
         self.node.create_subscription(
             ComplexCommand,
             self.complex_command_topic,
             self.append_command_to_buffer,
-            qos
+            COMMAND_QOS
         )
         self.node.create_subscription(
             BasicCommand,
             self.command_topic,
             self.append_command_to_buffer,
-            qos
+            COMMAND_QOS
         )
 
     def _register_blackboard_keys(self):
