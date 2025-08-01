@@ -6,11 +6,11 @@ from fault_detector_spot.behaviour_tree.manipulator_move_command import Manipula
 from geometry_msgs.msg import PoseStamped, Quaternion
 from builtin_interfaces.msg import Time
 
-
 _YAW_90_SIN = sin(pi / 4)  # sin(45°)
 _YAW_90_COS = cos(pi / 4)  # cos(45°)
 _PITCH_45_SIN = sin(pi / 8)  # sin(22.5°)
 _PITCH_45_COS = cos(pi / 8)  # cos(22.5°)
+
 
 class ManipulatorTagCommand(ManipulatorMoveCommand):
     """
@@ -25,13 +25,13 @@ class ManipulatorTagCommand(ManipulatorMoveCommand):
     """
 
     def __init__(
-        self,
-        command_id: str,
-        stamp : Time,
-        goal_pose: PoseStamped,
-        tag_id: int,
-        offset: PoseStamped = None,
-        orientation_mode: str = "tag_orientation"
+            self,
+            command_id: str,
+            stamp: Time,
+            goal_pose: PoseStamped,
+            tag_id: int,
+            offset: PoseStamped = None,
+            orientation_mode: str = "tag_orientation"
     ):
         super().__init__(command_id, stamp, goal_pose)
 
@@ -59,7 +59,6 @@ class ManipulatorTagCommand(ManipulatorMoveCommand):
         result = self._add_orientation_offset(result)
 
         return result
-
 
     def _add_position_offset(self, pose: PoseStamped) -> PoseStamped:
         """
@@ -121,7 +120,6 @@ class ManipulatorTagCommand(ManipulatorMoveCommand):
             )
         else:
             result.pose.orientation = pose.pose.orientation
-
 
         return result
 

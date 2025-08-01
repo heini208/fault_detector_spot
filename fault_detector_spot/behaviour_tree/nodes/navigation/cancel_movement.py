@@ -5,12 +5,12 @@ import rclpy
 
 
 class PublishZeroVel(py_trees.behaviour.Behaviour):
-    def __init__(self, name = "Stop_Base"):
+    def __init__(self, name="Stop_Base"):
         super().__init__(name)
         self.cmd_vel_pub = None
         self.node = None
 
-    def setup(self, node: rclpy.node.Node) :
+    def setup(self, node: rclpy.node.Node):
         # create a latched publisher (or normal) to /cmd_vel
         self.node = node
         self.cmd_vel_pub = self.node.create_publisher(Twist, 'cmd_vel', 10)

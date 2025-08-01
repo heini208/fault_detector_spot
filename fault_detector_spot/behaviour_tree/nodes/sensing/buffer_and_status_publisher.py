@@ -73,4 +73,3 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         else:
             name.data = stat.name
         return name
-

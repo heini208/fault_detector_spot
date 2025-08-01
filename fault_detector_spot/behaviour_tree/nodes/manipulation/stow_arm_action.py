@@ -6,6 +6,7 @@ from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_msgs.conversions import convert
 from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import SimpleSpotAction
 
+
 class StowArmActionSimple(SimpleSpotAction):
     """
     Sends a Spot arm_stow command via RobotCommand action asynchronously.

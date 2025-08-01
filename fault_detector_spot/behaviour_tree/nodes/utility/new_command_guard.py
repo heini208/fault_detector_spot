@@ -1,6 +1,7 @@
 import py_trees
 from rclpy.time import Time
 
+
 class NewCommandGuard(py_trees.behaviour.Behaviour):
     """
     Leaf behaviour that succeeds exactly once per new command_stamp,
@@ -22,7 +23,6 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
 
         self.blackboard.last_processed_command = None
 
-
     def update(self) -> py_trees.common.Status:
         if not self.stamp_exists():
             self.feedback_message = "No command received yet"
@@ -40,10 +40,9 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
             self.feedback_message = "Duplicate command – skipping"
             return py_trees.common.Status.FAILURE
 
-
     def stamp_exists(self):
         if not self.blackboard.exists("last_command") or \
-           self.blackboard.last_command is None:
+                self.blackboard.last_command is None:
             return False
         return True
 
@@ -51,8 +50,7 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
         if self.blackboard.last_command is None:
             return False
         if self.blackboard.last_processed_command is None or \
-           self.blackboard.last_processed_command.stamp is None:
-
+                self.blackboard.last_processed_command.stamp is None:
             self.blackboard.last_processed_command = self.blackboard.last_command
             return True
         return False
@@ -68,4 +66,3 @@ class NewCommandGuard(py_trees.behaviour.Behaviour):
             return True
         else:
             return False
-

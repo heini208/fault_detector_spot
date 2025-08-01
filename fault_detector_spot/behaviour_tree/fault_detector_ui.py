@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-import os
 import signal
 import sys
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-from std_msgs.msg import Header, String
+
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QMessageBox, QApplication, QComboBox, QDoubleSpinBox
 )
-from PyQt5.QtCore import QTimer, Qt
+
+import rclpy
 from fault_detector_msgs.msg import ComplexCommand, BasicCommand, TagElement, TagElementArray, RecordingList, \
     CommandRecordControl
-from fault_detector_spot.behaviour_tree.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
+from fault_detector_spot.behaviour_tree.command_ids import CommandID
+from rclpy.node import Node
+from std_msgs.msg import Header, String
 
 
 class Fault_Detector_UI(QWidget):

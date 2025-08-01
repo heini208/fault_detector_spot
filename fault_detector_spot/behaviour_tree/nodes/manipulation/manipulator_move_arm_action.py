@@ -13,11 +13,13 @@ from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import ActionClientBehaviour
 
+
 class ManipulatorMoveArmAction(ActionClientBehaviour):
     """
     Executes a Spot arm movement to the blackboard's goal_tag_pose via RobotCommand action.
     Uses ActionClientBehaviour for all lifecycle phases, customizing only client init and goal build.
     """
+
     def __init__(self,
                  name: str = "ManipulatorMoveArmAction",
                  robot_name: str = "",
@@ -28,7 +30,7 @@ class ManipulatorMoveArmAction(ActionClientBehaviour):
         self.tf_listener: TFListenerWrapper = None
         # register blackboard keys
         self.blackboard = self.attach_blackboard_client()
-        self.blackboard.register_key(key="last_command",          access=Access.READ)
+        self.blackboard.register_key(key="last_command", access=Access.READ)
 
     def setup(self, **kwargs):
         super().setup(**kwargs)
@@ -48,7 +50,8 @@ class ManipulatorMoveArmAction(ActionClientBehaviour):
     def _build_goal(self) -> RobotCommand.Goal:
         # Fetch and validate desired pose
         if not isinstance(self.blackboard.last_command, ManipulatorMoveCommand):
-            raise RuntimeError(f"Expected ManipulatorMoveCommand on blackboard.last_command, got {type(self.blackboard.last_command).__name__}")
+            raise RuntimeError(
+                f"Expected ManipulatorMoveCommand on blackboard.last_command, got {type(self.blackboard.last_command).__name__}")
 
         target: PoseStamped = self.blackboard.last_command.goal_pose
         cmd = RobotCommandBuilder.arm_pose_command(

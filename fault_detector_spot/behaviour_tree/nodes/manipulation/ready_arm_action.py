@@ -5,6 +5,7 @@ from bosdyn_msgs.conversions import convert
 from spot_msgs.action import RobotCommand
 from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import SimpleSpotAction
 
+
 class ReadyArmActionSimple(SimpleSpotAction):
     def __init__(self, name="ReadyArmAction", robot_name=""):
         super().__init__(name, robot_name)

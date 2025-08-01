@@ -7,11 +7,13 @@ import tf2_ros
 from fault_detector_msgs.msg import TagElement, TagElementArray
 from typing import Dict, Optional
 
+
 class CheckTagReachability(py_trees.behaviour.Behaviour):
     """
     Filters visible_tags by whether they lie within the robot arm's reach.
     Uses a static transform from 'body' -> 'arm_link_sh0' (looked up once in setup)
     """
+
     def __init__(self,
                  name: str = "CheckTagReachability",
                  body_frame: str = "body",
@@ -19,8 +21,8 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
                  arm_reach: float = 0.984,
                  tolerance: float = 0.15):
         super().__init__(name)
-        self.body_frame       = body_frame
-        self.arm_base_frame   = arm_base_frame
+        self.body_frame = body_frame
+        self.arm_base_frame = arm_base_frame
         self.maximum_reach = arm_reach - tolerance
         self.node: Optional[rclpy.node.Node] = None
         self.tf_buffer: Optional[tf2_ros.Buffer] = None
@@ -33,9 +35,8 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
         if not self.node:
             raise RuntimeError(f"{self.name}: no ROS node provided")
 
-        self.tf_buffer   = tf2_ros.Buffer()
+        self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self.node)
-
 
         self._check_transform_exists()
         # register output BB key
@@ -48,6 +49,7 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
         # initialize
         reachable: Dict[int, TagElement] = {}
         self.blackboard.reachable_tags = reachable
+
     def _check_transform_exists(self) -> bool:
         try:
             # target_frame='body', source_frame='arm_link_sh0'
@@ -82,7 +84,7 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
             dx = p.x - x_offset
             dy = p.y - y_offset
             dz = p.z - z_offset
-            dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+            dist = math.sqrt(dx * dx + dy * dy + dz * dz)
             if dist <= self.maximum_reach:
                 reachable[tag_id] = tag
 
@@ -93,7 +95,6 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
         )
         self.feedback_message = f"Offset = {self.arm_base_offset}, Reachable tags: {sorted(self.blackboard.reachable_tags.keys())}"
         return py_trees.common.Status.SUCCESS
-
 
     def terminate(self, new_status: py_trees.common.Status):
         pass

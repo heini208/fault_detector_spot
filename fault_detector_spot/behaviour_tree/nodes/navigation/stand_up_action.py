@@ -4,6 +4,7 @@ from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_msgs.conversions import convert
 from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import SimpleSpotAction
 
+
 class StandUpActionSimple(SimpleSpotAction):
     """
     Sends a Spot stand command via RobotCommand action asynchronously.

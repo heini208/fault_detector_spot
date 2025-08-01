@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-import os
 import json
+import os
 import time
 from typing import List
-from ament_index_python.packages import get_package_share_directory
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-from rosidl_runtime_py import message_to_ordereddict
-from rosidl_runtime_py import set_message_fields
-from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
 
 import rclpy
-from rclpy.node import Node
-from std_msgs.msg import Bool
+from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import ComplexCommand, BasicCommand, CommandRecordControl, RecordingList
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
+from rclpy.node import Node
+from rosidl_runtime_py import message_to_ordereddict
+from rosidl_runtime_py import set_message_fields
+from std_msgs.msg import Bool
 
 
 class RecordManager(Node):

@@ -3,6 +3,7 @@ from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseStamped, Quaternion
 from fault_detector_spot.behaviour_tree.simple_command import SimpleCommand
 
+
 class GenericCommand(SimpleCommand):
     """
     A generic super command that contains every possible field
@@ -10,14 +11,14 @@ class GenericCommand(SimpleCommand):
     """
 
     def __init__(
-        self,
-        command_id: str,
-        stamp: Time,
-        duration: float = None,
-        goal_pose: PoseStamped = None,
-        tag_id: int = None,
-        offset: PoseStamped = None,
-        orientation_mode: str = None
+            self,
+            command_id: str,
+            stamp: Time,
+            duration: float = None,
+            goal_pose: PoseStamped = None,
+            tag_id: int = None,
+            offset: PoseStamped = None,
+            orientation_mode: str = None
     ):
         super().__init__(command_id, stamp)
         self.duration = duration

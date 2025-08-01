@@ -4,6 +4,7 @@ import time
 import py_trees
 from py_trees.common import Status
 
+
 class WaitForDuration(py_trees.behaviour.Behaviour):
     """
     Waits for `duration` seconds, where duration is read from

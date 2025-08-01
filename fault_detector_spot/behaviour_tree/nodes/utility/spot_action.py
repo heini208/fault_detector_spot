@@ -6,6 +6,7 @@ from synchros2.utilities import namespace_with
 import synchros2.scope as ros_scope
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
 
+
 class ActionClientBehaviour(py_trees.behaviour.Behaviour):
     """
     Minimal base for any ROS action client behaviour.
@@ -16,6 +17,7 @@ class ActionClientBehaviour(py_trees.behaviour.Behaviour):
       - _build_goal(): Goal
     The default _cancel_goal cancels via _client and resets state.
     """
+
     def __init__(self, name: str):
         super().__init__(name)
         self.initialized = False
@@ -36,10 +38,10 @@ class ActionClientBehaviour(py_trees.behaviour.Behaviour):
     def update(self) -> Status:
         # Execute each lifecycle phase in sequence
         for phase in (
-            self._phase_initialize,
-            self._phase_send_goal,
-            self._phase_wait_for_acceptance,
-            self._phase_wait_for_result
+                self._phase_initialize,
+                self._phase_send_goal,
+                self._phase_wait_for_acceptance,
+                self._phase_wait_for_result
         ):
             result = phase()
             if result is not None:
@@ -123,11 +125,13 @@ class ActionClientBehaviour(py_trees.behaviour.Behaviour):
     def _build_goal(self):
         raise NotImplementedError
 
+
 class SimpleSpotAction(ActionClientBehaviour):
     """
     Base for any RobotCommand action on Spot.
     Implements _init_client and _send_goal using ActionClientWrapper.
     """
+
     def __init__(self, name: str, robot_name: str = ""):
         super().__init__(name)
         self.robot_name = robot_name

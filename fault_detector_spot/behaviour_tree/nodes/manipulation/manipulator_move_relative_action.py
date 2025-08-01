@@ -25,6 +25,7 @@ class ManipulatorMoveRelativeAction(ActionClientBehaviour):
     Moves the arm by a relative offset stored in last_command.goal_pose.pose.position
     (interpreted in the body frame).  The orientation remains unchanged.
     """
+
     def __init__(self,
                  name: str = "ManipulatorMoveRelativeAction",
                  robot_name: str = "",
@@ -83,4 +84,3 @@ class ManipulatorMoveRelativeAction(ActionClientBehaviour):
             self.duration
         )
         return arm_cmd
-

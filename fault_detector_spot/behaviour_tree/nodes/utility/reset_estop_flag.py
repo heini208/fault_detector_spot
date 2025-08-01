@@ -3,6 +3,7 @@
 import py_trees
 from py_trees.common import Status
 
+
 class ResetEstopFlag(py_trees.behaviour.Behaviour):
 
     def setup(self, **kwargs):

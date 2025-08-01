@@ -3,6 +3,7 @@
 from builtin_interfaces.msg import Time
 from fault_detector_spot.behaviour_tree.simple_command import SimpleCommand
 
+
 class TimerCommand(SimpleCommand):
     """
     A SimpleCommand with an extra `duration` field (in seconds).

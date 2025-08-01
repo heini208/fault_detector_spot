@@ -2,6 +2,7 @@
 
 from builtin_interfaces.msg import Time
 
+
 class SimpleCommand:
     """
     A tiny container for a single command:
@@ -11,6 +12,7 @@ class SimpleCommand:
     Usage:
       cmd = SimpleCommand("stow_arm", node.get_clock().now().to_msg())
     """
+
     def __init__(self, command_id: str, stamp: Time):
         self.command_id = command_id
         self.stamp = stamp

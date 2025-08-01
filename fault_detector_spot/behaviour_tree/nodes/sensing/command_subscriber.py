@@ -1,12 +1,13 @@
+from typing import Optional, List
+
 import py_trees
 import rclpy
 from fault_detector_msgs.msg import ComplexCommand, BasicCommand
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS
+from fault_detector_spot.behaviour_tree.command_ids import CommandID
+from fault_detector_spot.behaviour_tree.generic_complex_command import GenericCommand
 from fault_detector_spot.behaviour_tree.manipulator_move_command import ManipulatorMoveCommand
 from fault_detector_spot.behaviour_tree.manipulator_tag_command import ManipulatorTagCommand
-from fault_detector_spot.behaviour_tree.generic_complex_command import GenericCommand
-from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
-from typing import Optional, List
-from fault_detector_spot.behaviour_tree.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.simple_command import SimpleCommand
 from fault_detector_spot.behaviour_tree.timer_command import TimerCommand
 

@@ -5,7 +5,6 @@ from geometry_msgs.msg import PoseStamped
 from typing import Optional
 
 
-
 class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
     """
     Checks if a goal tag ID has been set by the UI and if the tag is currently visible.
