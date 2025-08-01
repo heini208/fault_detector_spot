@@ -3,6 +3,7 @@ import rclpy
 from fault_detector_msgs.msg import ComplexCommand, BasicCommand
 from fault_detector_spot.behaviour_tree.manipulator_move_command import ManipulatorMoveCommand
 from fault_detector_spot.behaviour_tree.manipulator_tag_command import ManipulatorTagCommand
+from fault_detector_spot.behaviour_tree.generic_complex_command import GenericCommand
 from std_msgs.msg import Header
 from typing import Optional, List
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
@@ -45,7 +46,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
 
     def update(self) -> py_trees.common.Status:
         if self.received_command is not None:
-            self.feedback_message = f"Last received command: {self.received_command.id}"
+            self.feedback_message = f"Last received command: {self.received_command.command_id}"
         else:
             self.feedback_message = "No commands received yet"
         return py_trees.common.Status.SUCCESS
@@ -106,13 +107,23 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             command_sequence = self._combination_command_builders.get(command_id)(msg)
             self.blackboard.command_buffer.extend(command_sequence)
         else:
-            basic_msg = BasicCommand()
-            basic_msg.command_id = msg.command_id
-            basic_msg.header = msg.header
-            self.fire_basic_command(basic_msg)
+            generic_command = self.complex_message_to_generic_command(msg)
+            self.blackboard.command_buffer.append(generic_command)
+
+    def complex_message_to_generic_command(self, msg: ComplexCommand) -> GenericCommand:
+        generic_command = GenericCommand(command_id= msg.command.command_id, stamp= msg.command.header.stamp)
+        generic_command.duration = msg.wait_time
+        if msg.tag is not None:
+            generic_command.tag_id = msg.tag.id
+            generic_command.goal_pose = msg.tag.pose
+        else:
+            generic_command.goal_pose = msg.offset
+        generic_command.orientation_mode = msg.orientation_mode
+        generic_command.offset = msg.offset
+        return generic_command
 
     def is_estop_command(self, command) -> bool:
-        return command.id == CommandID.EMERGENCY_CANCEL
+        return command.command_id == CommandID.EMERGENCY_CANCEL
 
     def trigger_estop(self):
         self.blackboard.command_buffer.clear()

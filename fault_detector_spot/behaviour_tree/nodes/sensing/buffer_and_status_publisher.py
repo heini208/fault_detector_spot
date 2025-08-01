@@ -49,7 +49,7 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             buffer_list = self.blackboard.command_buffer
 
         # publish buffer as a list of IDs
-        ids = [cmd.id for cmd in buffer_list]
+        ids = [cmd.command_id for cmd in buffer_list]
         buf_msg = String()
         buf_msg.data = f"[{','.join(ids)}]"
         self.buffer_pub.publish(buf_msg)
@@ -69,7 +69,7 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         if stat is None:
             name.data = "IDLE"
         elif stat == Status.RUNNING:
-            name.data = f"Running: {self.blackboard.last_command.id}"
+            name.data = f"Running: {self.blackboard.last_command.command_id}"
         else:
             name.data = stat.name
         return name

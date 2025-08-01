@@ -47,7 +47,7 @@ class CommandManager(py_trees.behaviour.Behaviour):
 
         # if any buffered emergency cancel, fire it now
         for buffered_cmd in list(self.blackboard.command_buffer):
-            if buffered_cmd.id == CommandID.EMERGENCY_CANCEL:
+            if buffered_cmd.command_id == CommandID.EMERGENCY_CANCEL:
                 self.blackboard.command_buffer.clear()
                 self.blackboard.last_command = buffered_cmd
                 return Status.SUCCESS

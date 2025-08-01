@@ -81,6 +81,11 @@ class Fault_Detector_UI(QWidget):
         self.duration_input.setValue(1.0)
         row.addWidget(self.duration_input)
 
+        self.wait_time_button = QPushButton("Wait")
+        self.wait_time_button.clicked.connect(
+            lambda _, cid=CommandID.WAIT_TIME: self.handle_full_message(cid))
+        row.addWidget(self.wait_time_button)
+
         self.move_wait_button = QPushButton("Move & Wait")
         self.move_wait_button.clicked.connect(self.handle_move_and_wait)
         row.addWidget(self.move_wait_button)
@@ -363,6 +368,7 @@ class Fault_Detector_UI(QWidget):
         except TagNotFound:
             pass
         complex_command = self.add_offset_to_command(complex_command)
+        complex_command.wait_time = self.duration_input.value()
 
         self.complex_command_publisher.publish(complex_command)
         self.status_label.setText(f"Command sent: {command_id}")

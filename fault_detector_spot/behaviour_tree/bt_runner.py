@@ -183,7 +183,7 @@ def make_simple_command_sequence(
         check=ComparisonExpression(
             variable="last_command",
             value=command_id,
-            operator=lambda cmd, cid: cmd is not None and cmd.id == cid
+            operator=lambda cmd, cid: cmd is not None and cmd.command_id == cid
         )
     )
     child = behaviour_ctor(node)
@@ -199,7 +199,7 @@ def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
             variable="last_command",
             value=command_id,
             operator=lambda cmd, cid:
-            (cmd is not None and cmd.id == cid)
+            (cmd is not None and cmd.command_id == cid)
         )
 )
 

@@ -20,6 +20,6 @@ class ManipulatorMoveCommand(SimpleCommand):
         # if you also want orientation:
         # o = self.goal_pose.pose.orientation
         return (
-            f"<PoseCommand id={self.id!r} at={ts} "
+            f"<PoseCommand id={self.command_id!r} at={ts} "
             f"pose=({p.x:.2f}, {p.y:.2f}, {p.z:.2f})>"
         )

@@ -17,6 +17,6 @@ class TimerCommand(SimpleCommand):
     def __repr__(self):
         ts = f"{self.stamp.sec}.{self.stamp.nanosec:09d}"
         return (
-            f"<TimerCommand id={self.id!r} at={ts}"
+            f"<TimerCommand id={self.command_id!r} at={ts}"
             f" duration={self.duration}s>"
         )
