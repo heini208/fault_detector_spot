@@ -14,6 +14,7 @@ class CommandManager(py_trees.behaviour.Behaviour):
         super().__init__(name)
 
     def setup(self, **kwargs):
+        self.node = kwargs.get("node")
         self.blackboard = self.attach_blackboard_client()
         self.blackboard.register_key(
             key="command_buffer", access=py_trees.common.Access.WRITE
@@ -43,8 +44,6 @@ class CommandManager(py_trees.behaviour.Behaviour):
         if not self.blackboard.command_buffer:
             return Status.SUCCESS
 
-        last_cmd = self.blackboard.last_command
-
         # if any buffered emergency cancel, fire it now
         for buffered_cmd in list(self.blackboard.command_buffer):
             if buffered_cmd.command_id == CommandID.EMERGENCY_CANCEL:
@@ -56,6 +55,7 @@ class CommandManager(py_trees.behaviour.Behaviour):
         tree_status = self.blackboard.command_tree_status
         if self.blackboard.command_buffer and tree_status != Status.RUNNING:
             next_cmd = self.blackboard.command_buffer.pop(0)
+            next_cmd.stamp = self.node.get_clock().now().to_msg()
             self.blackboard.last_command = next_cmd
             return Status.SUCCESS
 

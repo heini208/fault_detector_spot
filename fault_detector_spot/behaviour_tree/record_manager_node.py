@@ -4,7 +4,7 @@ import json
 import time
 from typing import List
 from ament_index_python.packages import get_package_share_directory
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from rosidl_runtime_py import message_to_ordereddict
 from rosidl_runtime_py import set_message_fields
 
@@ -29,11 +29,13 @@ class RecordManager(Node):
         self.current_name = None
         self.start_time = None
         self.temp_data: List[dict] = []
+        self.delay = 0.1
 
         qos = QoSProfile(
-            depth=1,
+            depth=10,
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
+            history=HistoryPolicy.KEEP_ALL,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
 
         # Publishers
@@ -69,6 +71,7 @@ class RecordManager(Node):
         if not name:
             self.get_logger().warn("Recording name is empty, ignoring.")
             return
+        self.delete_recording(name)
         self.recording = True
         self.current_name = name
         self.temp_data.clear()
@@ -122,6 +125,8 @@ class RecordManager(Node):
                 self.deserialize_ros_message(entry["data"], msg)
                 msg.header.stamp = self.get_clock().now().to_msg()
                 self.basic_pub.publish(msg)
+            #small delay
+            time.sleep(self.delay)
 
         self.playback_state_pub.publish(Bool(data=False))
         self.get_logger().info("Playback finished.")

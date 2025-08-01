@@ -4,7 +4,7 @@ import signal
 import sys
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from std_msgs.msg import Header, String
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -230,9 +230,10 @@ class Fault_Detector_UI(QWidget):
 
     def init_ros_communication(self):
         qos = QoSProfile(
-            depth=1,
+            depth=10,
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
+            history=HistoryPolicy.KEEP_ALL,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
 
         self.complex_command_publisher = self.node.create_publisher(

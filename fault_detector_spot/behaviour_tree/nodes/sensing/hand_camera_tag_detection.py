@@ -75,7 +75,7 @@ class HandCameraTagDetection(py_trees.behaviour.Behaviour):
 
     def update(self) -> py_trees.common.Status:
         if self.depth_image is None or self.camera_info is None or self.latest_detections is None:
-            return py_trees.common.Status.RUNNING
+            return py_trees.common.Status.SUCCESS
 
         visible_tags: Dict[int, TagElement] = getattr(self.blackboard, "visible_tags", {})
         new_elements = []

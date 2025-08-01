@@ -4,6 +4,7 @@ from fault_detector_msgs.msg import ComplexCommand, BasicCommand
 from fault_detector_spot.behaviour_tree.manipulator_move_command import ManipulatorMoveCommand
 from fault_detector_spot.behaviour_tree.manipulator_tag_command import ManipulatorTagCommand
 from fault_detector_spot.behaviour_tree.generic_complex_command import GenericCommand
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from std_msgs.msg import Header
 from typing import Optional, List
 from fault_detector_spot.behaviour_tree.command_ids import CommandID
@@ -35,6 +36,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.MOVE_ARM_RELATIVE: self._move_arm_command_with_offset,
             CommandID.ESTOP_STATE: self._return_to_estop_state,
         }
+        self.pending_msgs = []
+        self.last_received_time = None
+        self.process_delay_sec = 0.05
 
     def setup(self, **kwargs):
         try:
@@ -46,27 +50,42 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             self.logger.error(f"Could not retrieve node from kwargs: {e}")
 
     def update(self) -> py_trees.common.Status:
-        if self.received_command is not None:
-            self.feedback_message = f"Last received command: {self.received_command.command_id}"
-        else:
+        if not self.pending_msgs:
             self.feedback_message = "No commands received yet"
+            return py_trees.common.Status.SUCCESS
+
+            # Sort by timestamp
+        self.pending_msgs.sort(key=lambda x: (x[0].sec, x[0].nanosec))
+
+        for stamp, msg in self.pending_msgs:
+            self.fire_command(msg)
+
+        self.pending_msgs.clear()
+        self.feedback_message = f"Processed {len(self.pending_msgs)} commands"
         return py_trees.common.Status.SUCCESS
 
     def terminate(self, new_status):
         self.logger.debug(f"Terminating with status {new_status}")
 
     def _create_ui_subscribers(self):
+        qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_ALL,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+
         self.node.create_subscription(
             ComplexCommand,
             self.complex_command_topic,
             self.append_command_to_buffer,
-            10
+            qos
         )
         self.node.create_subscription(
             BasicCommand,
             self.command_topic,
             self.append_command_to_buffer,
-            10
+            qos
         )
 
     def _register_blackboard_keys(self):
@@ -82,7 +101,19 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.command_buffer = []
         self.blackboard.estop_flag = False
 
-    def append_command_to_buffer(self, msg: [ComplexCommand, BasicCommand]):
+    def append_command_to_buffer(self, msg):
+        if isinstance(msg, BasicCommand):
+            if msg.command_id == CommandID.EMERGENCY_CANCEL:
+                self.trigger_estop()
+                self.logger.warning("ESTOP triggered imediately.")
+                return
+        stamp = self._extract_timestamp(msg)
+        if stamp is None:
+            self.logger.warning("Command without timestamp ignored.")
+            return
+        self.pending_msgs.append((stamp, msg))
+
+    def fire_command(self, msg: [ComplexCommand, BasicCommand]):
         if self.is_last_command(msg):
             return
         if isinstance(msg, BasicCommand):
@@ -133,8 +164,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
 
     def trigger_estop(self):
         self.blackboard.command_buffer.clear()
+        self.pending_msgs = []
         self.blackboard.estop_flag = True
-        self.blackboard.command_buffer.append(self.received_command)
+        self.blackboard.command_buffer.append(
+            SimpleCommand(command_id=CommandID.EMERGENCY_CANCEL, stamp=self._create_command_stamp()))
         self.logger.info("Emergency stop command received, clearing command buffer")
 
     def is_last_command(self, msg) -> bool:
