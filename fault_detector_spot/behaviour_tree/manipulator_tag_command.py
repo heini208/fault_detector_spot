@@ -130,7 +130,7 @@ class ManipulatorTagCommand(ManipulatorMoveCommand):
         Returns a ManipulatorMoveCommand with the same goal pose and offset.
         """
         return ManipulatorMoveCommand(
-            command_id=self.id,
+            command_id=self.command_id,
             stamp=self.stamp,
             goal_pose=self.get_offset_pose()
         )

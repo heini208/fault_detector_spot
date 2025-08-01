@@ -17,10 +17,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     """
 
     def __init__(
-        self,
-        name: str = "CommandSubscriber",
-        complex_command_topic: str = "fault_detector/commands/complex_command",
-        command_topic: str = "fault_detector/commands/basic_command"
+            self,
+            name: str = "CommandSubscriber",
+            complex_command_topic: str = "fault_detector/commands/complex_command",
+            command_topic: str = "fault_detector/commands/basic_command"
     ):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
@@ -32,7 +32,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.SCAN_ALL_IN_RANGE: self._scan_all_in_range,
             CommandID.MOVE_ARM_TO_TAG: self._move_to_tag,
             CommandID.MOVE_ARM_TO_TAG_AND_WAIT: self._move_to_tag_and_wait,
-            CommandID.MOVE_ARM_RELATIVE: self._move_arm_command_with_offset
+            CommandID.MOVE_ARM_RELATIVE: self._move_arm_command_with_offset,
+            CommandID.ESTOP_STATE: self._return_to_estop_state,
         }
 
     def setup(self, **kwargs):
@@ -98,7 +99,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         if msg.command_id == CommandID.EMERGENCY_CANCEL:
             self.trigger_estop()
             return
-        self.blackboard.command_buffer.append(self.received_command)
+        if msg.command_id in self._combination_command_builders:
+            command_sequence = self._combination_command_builders.get(msg.command_id)(msg)
+            self.blackboard.command_buffer.extend(command_sequence)
+        else:
+            self.blackboard.command_buffer.append(self.received_command)
         self.logger.info(f"Received {msg.command_id} command")
 
     def fire_complex_command_sequence(self, msg: ComplexCommand) -> List[SimpleCommand]:
@@ -109,9 +114,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         else:
             generic_command = self.complex_message_to_generic_command(msg)
             self.blackboard.command_buffer.append(generic_command)
+        self.logger.info(f"Received {command_id} command")
 
     def complex_message_to_generic_command(self, msg: ComplexCommand) -> GenericCommand:
-        generic_command = GenericCommand(command_id= msg.command.command_id, stamp= msg.command.header.stamp)
+        generic_command = GenericCommand(command_id=msg.command.command_id, stamp=msg.command.header.stamp)
         generic_command.duration = msg.wait_time
         if msg.tag is not None:
             generic_command.tag_id = msg.tag.id
@@ -199,3 +205,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
 
         return commands
 
+    def _return_to_estop_state(self, msg: ComplexCommand) -> List[SimpleCommand]:
+        commands: List[SimpleCommand] = []
+        commands.append(SimpleCommand(CommandID.STOP_BASE, self._create_command_stamp()))
+        commands.append(SimpleCommand(CommandID.STOW_ARM, self._create_command_stamp()))
+        commands.append(SimpleCommand(CommandID.CLOSE_GRIPPER, self._create_command_stamp()))
+        return commands

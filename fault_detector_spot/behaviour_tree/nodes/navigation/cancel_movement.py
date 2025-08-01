@@ -5,7 +5,7 @@ import rclpy
 
 
 class PublishZeroVel(py_trees.behaviour.Behaviour):
-    def __init__(self, name: str):
+    def __init__(self, name = "Stop_Base"):
         super().__init__(name)
         self.cmd_vel_pub = None
         self.node = None

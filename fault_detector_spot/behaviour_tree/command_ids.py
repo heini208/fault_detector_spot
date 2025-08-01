@@ -14,4 +14,6 @@ class CommandID(str, Enum):
     EMERGENCY_CANCEL = "cancel_all"
     SCAN_ALL_IN_RANGE = "scan_all_in_range"
     TOGGLE_GRIPPER = "toggle_gripper"
-
+    CLOSE_GRIPPER = "close_gripper"
+    ESTOP_STATE = "estop_state"
+    STOP_BASE = "stop_base"

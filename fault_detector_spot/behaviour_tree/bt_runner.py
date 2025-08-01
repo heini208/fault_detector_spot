@@ -29,20 +29,22 @@ from fault_detector_spot.behaviour_tree import (
     WaitForDuration,
     BufferStatusPublisher,
     ManipulatorMoveRelativeAction,
-    ToggleGripperAction,
+    ToggleGripperAction, CloseGripperAction,
 )
+
 
 def create_root() -> py_trees.behaviour.Behaviour:
     root = create_behavior_tree()
     return root
 
+
 def create_behavior_tree():
     node = rclpy.create_node("bt_driver")
 
     root = py_trees.composites.Parallel(
-            "FaultDetectorSpot",
-            policy=py_trees.common.ParallelPolicy.SuccessOnAll()
-        )
+        "FaultDetectorSpot",
+        policy=py_trees.common.ParallelPolicy.SuccessOnAll()
+    )
 
     root.add_children([
         build_sensing_tree(node),
@@ -50,6 +52,7 @@ def create_behavior_tree():
         build_publisher_tree(node)
     ])
     return root
+
 
 def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sensing_seq = py_trees.composites.Parallel("Sensing", policy=py_trees.common.ParallelPolicy.SuccessOnAll())
@@ -79,6 +82,7 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sensing_seq.add_children([tag_scan_sequence, cmd_sub])
     return sensing_seq
 
+
 def build_buffered_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     buffered_command_tree = py_trees.composites.Parallel(
         "BufferedCommandTree",
@@ -94,8 +98,8 @@ def build_buffered_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
     ])
     return buffered_command_tree
 
-def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
+def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     command_selector = py_trees.composites.Selector(
         name="CommandSelector",
         memory=True
@@ -109,6 +113,8 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.MOVE_ARM_RELATIVE, lambda n: ManipulatorMoveRelativeAction(name="MoveArmRelativeAction")),
         (CommandID.STAND_UP, lambda n: StandUpActionSimple(name="StandUpAction")),
         (CommandID.WAIT_TIME, lambda n: WaitForDuration(name="WaitForDuration")),
+        (CommandID.CLOSE_GRIPPER, lambda n: CloseGripperAction()),
+        (CommandID.STOP_BASE, lambda n: PublishZeroVel()),
     ]
 
     for cmd_id, ctor in specs:
@@ -116,18 +122,21 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
     return command_selector
 
+
 def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     cancel_check = match_command_checker(CommandID.EMERGENCY_CANCEL)
 
-    stop_base    = PublishZeroVel(name="StopBase")
-    stow_cancel  = StowArmActionSimple(name="StowArmCancel")
+    stop_base = PublishZeroVel(name="StopBase")
+    stow_cancel = StowArmActionSimple(name="StowArmCancel")
+    close_gripper = CloseGripperAction(name="CloseGripperAction")
     reset_estop = ResetEstopFlag(name="ResetEStopFlag")
     stop_base.setup(node=node)
     stow_cancel.setup(node=node)
+    close_gripper.setup(node=node)
     reset_estop.setup(node=node)
 
     cancel_seq = py_trees.composites.Sequence("CancelSequence", memory=True)
-    cancel_seq.add_children([cancel_check, stop_base, stow_cancel,reset_estop])
+    cancel_seq.add_children([cancel_check, stop_base, stow_cancel, close_gripper, reset_estop])
 
     normal_tree = build_command_tree(node)
 
@@ -152,6 +161,7 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
     )
     return command_tree_with_flag
 
+
 def build_publisher_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     cmd_pub = BufferStatusPublisher(name="CommandStatusPublisher")
     cmd_pub.setup(node=node)
@@ -170,10 +180,11 @@ def build_repeat_guarded_cancelable_command_tree(node: rclpy.node.Node) -> py_tr
     guarded_sequence.add_children([guard, cancelable_command_tree])
     return guarded_sequence
 
+
 def make_simple_command_sequence(
-    node: rclpy.node.Node,
-    command_id: CommandID,
-    behaviour_ctor: Callable[[rclpy.node.Node], py_trees.behaviour.Behaviour]
+        node: rclpy.node.Node,
+        command_id: CommandID,
+        behaviour_ctor: Callable[[rclpy.node.Node], py_trees.behaviour.Behaviour]
 ) -> py_trees.composites.Sequence:
     seq_name = f"{command_id.name.title().replace('_', '')}Sequence"
     seq = py_trees.composites.Sequence(seq_name, memory=True)
@@ -192,6 +203,7 @@ def make_simple_command_sequence(
     seq.add_children([check, child])
     return seq
 
+
 def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
     return CheckBlackboardVariableValue(
         name=f"Check_{command_id}",
@@ -201,7 +213,8 @@ def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
             operator=lambda cmd, cid:
             (cmd is not None and cmd.command_id == cid)
         )
-)
+    )
+
 
 def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     manipulation = py_trees.composites.Sequence("ManipulationSequence", memory=True)
@@ -242,6 +255,7 @@ def main(args=None):
 
     tree.shutdown()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

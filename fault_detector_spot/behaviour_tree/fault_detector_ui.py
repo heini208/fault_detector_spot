@@ -186,7 +186,13 @@ class Fault_Detector_UI(QWidget):
         )
         row.addWidget(self.toggle_gripper_button)
 
-        self.cancel_button = QPushButton("Cancel All")
+        self.estop_state_button = QPushButton("Reset State")
+        self.estop_state_button.clicked.connect(
+            lambda _, cid=CommandID.ESTOP_STATE: self.handle_simple_command(cid)
+        )
+        row.addWidget(self.estop_state_button)
+
+        self.cancel_button = QPushButton("ESTOP")
         self.cancel_button.clicked.connect(
             lambda _, cid=CommandID.EMERGENCY_CANCEL: self.handle_simple_command(cid)
         )

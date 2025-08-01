@@ -18,6 +18,7 @@ from .nodes.utility.wait_for_duration import WaitForDuration
 from .nodes.manipulation.manipulator_move_relative_action import ManipulatorMoveRelativeAction
 from .nodes.sensing.hand_camera_tag_detection import HandCameraTagDetection
 from .nodes.sensing.visible_tag_publisher import PublishTagStates
+from .nodes.manipulation.close_gripper_action import CloseGripperAction
 
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
   "HandCameraTagDetection",
   "PublishTagStates",
   "ToggleGripperAction",
+  "CloseGripperAction"
 ]
