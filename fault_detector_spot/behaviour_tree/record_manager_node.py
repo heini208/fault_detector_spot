@@ -4,6 +4,7 @@ import json
 import time
 from typing import List
 from ament_index_python.packages import get_package_share_directory
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rosidl_runtime_py import message_to_ordereddict
 from rosidl_runtime_py import set_message_fields
 
@@ -29,11 +30,17 @@ class RecordManager(Node):
         self.start_time = None
         self.temp_data: List[dict] = []
 
+        qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+
         # Publishers
         self.list_pub = self.create_publisher(RecordingList, 'fault_detector/recordings_list', 10)
         self.playback_state_pub = self.create_publisher(Bool, 'fault_detector/playback_state', 10)
-        self.complex_pub = self.create_publisher(ComplexCommand, 'fault_detector/commands/complex_command', 10)
-        self.basic_pub = self.create_publisher(BasicCommand, 'fault_detector/commands/basic_command', 10)
+        self.complex_pub = self.create_publisher(ComplexCommand, 'fault_detector/commands/complex_command', qos)
+        self.basic_pub = self.create_publisher(BasicCommand, 'fault_detector/commands/basic_command', qos)
 
         # Subscribers
         self.create_subscription(CommandRecordControl, 'fault_detector/record_control', self.handle_control, 10)
@@ -104,19 +111,16 @@ class RecordManager(Node):
         with open(file_path, 'r') as f:
             data = json.load(f)
 
-        start_time = time.time()
         for entry in data:
-            delay = entry["timestamp"] - (time.time() - start_time)
-            if delay > 0:
-                time.sleep(delay)
-
             if entry["topic"] == "complex":
                 msg = ComplexCommand()
                 self.deserialize_ros_message(entry["data"], msg)
+                msg.command.header.stamp = self.get_clock().now().to_msg()
                 self.complex_pub.publish(msg)
             else:
                 msg = BasicCommand()
                 self.deserialize_ros_message(entry["data"], msg)
+                msg.header.stamp = self.get_clock().now().to_msg()
                 self.basic_pub.publish(msg)
 
         self.playback_state_pub.publish(Bool(data=False))
