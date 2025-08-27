@@ -41,7 +41,7 @@ setup(
             'fault_detector_ui = fault_detector_spot.behaviour_tree.fault_detector_ui:main',
             'bt_runner = fault_detector_spot.behaviour_tree.bt_runner:main',
             'record_manager = fault_detector_spot.behaviour_tree.record_manager_node:main',
-
+            'pointcloud_merger = fault_detector_spot.behaviour_tree.nodes.mapping.pointcloud_merger:main',
         ],
     },
 )
