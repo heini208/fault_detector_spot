@@ -18,8 +18,8 @@ def generate_launch_description():
         'odom_frame_id': 'odom',
         'subscribe_odom': True,
         'subscribe_scan_cloud': True,
+        'subscribe_depth': False,
         'subscribe_rgb': False,
-        'approx_sync': True,
         'sync_queue_size': 10,
         'Reg/Strategy': '1',
         'Icp/Iterations': '30',
@@ -29,9 +29,11 @@ def generate_launch_description():
     }
 
     remappings = [
-        ('scan_cloud', '/merged_cloud'),  # <-- your merged cloud
-        ('rgb/image', '/dummy_rgb'),       # optional dummy topic
-        ('rgb/camera_info', '/dummy_info'),
+        ('scan_cloud', '/merged_cloud'),
+        ('rgb/image', '/dummy_rgb'),
+        ('rgb/camera_info', '/merged_camera_info'),
+        ('odom', '/Spot/odometry'),
+
     ]
 
     return LaunchDescription([
