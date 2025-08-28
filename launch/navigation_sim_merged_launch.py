@@ -40,8 +40,8 @@ def generate_launch_description():
         # Launch merged cloud publisher
         Node(
             package='fault_detector_spot',
-            executable='pointcloud_republisher',
-            name='pointcloud_republisher',
+            executable='pointcloud_merger',
+            name='pointcloud_merger',
             parameters=[{
                 'input_topics': [
                     '/Spot/left_flank_depth/point_cloud',
@@ -51,6 +51,7 @@ def generate_launch_description():
                     '/Spot/right_head_depth/point_cloud',
                 ],
                 'output_topic': '/merged_cloud',
+                'base_frame': 'odom',
                 'remove_underscores': True,
             }],
             output='screen',
