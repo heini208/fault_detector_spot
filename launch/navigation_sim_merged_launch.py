@@ -51,7 +51,7 @@ def generate_launch_description():
                     '/Spot/right_head_depth/point_cloud',
                 ],
                 'output_topic': '/merged_cloud',
-                'base_frame': 'odom',
+                'base_frame': 'base_link',
                 'remove_underscores': True,
             }],
             output='screen',
@@ -97,4 +97,6 @@ def generate_launch_description():
             arguments=['-d', config_rviz],
             output='screen',
         ),
+
+
     ])
