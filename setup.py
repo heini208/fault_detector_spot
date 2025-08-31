@@ -3,7 +3,6 @@ import os
 from glob import glob
 
 package_name = 'fault_detector_spot'
-
 setup(
     name=package_name,
     version='0.0.0',
@@ -13,7 +12,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
-        (os.path.join('share', package_name, 'config'), ['config/my_tags.yaml']),
+        ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/fault_detector_spot/launch', glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
@@ -38,8 +37,9 @@ setup(
             'spot_tag_to_arm_goal = fault_detector_spot.modules.spot_tag_to_arm_goal:main',
             'spot_tag_to_arm_goal_ui = fault_detector_spot.modules.spot_tag_to_arm_goal_ui:main',
             'arm_controller = fault_detector_spot.modules.arm_controller:main',
-            'fault_detector_ui = fault_detector_spot.behaviour_tree.fault_detector_ui:main',
+            'fault_detector_ui = fault_detector_spot.behaviour_tree.ui_classes.fault_detector_ui:main',
             'bt_runner = fault_detector_spot.behaviour_tree.bt_runner:main',
+            'sim_bt_runner = fault_detector_spot.behaviour_tree.simulation.sim_bt_runner:main',
             'record_manager = fault_detector_spot.behaviour_tree.record_manager_node:main',
             'pointcloud_merger = fault_detector_spot.behaviour_tree.nodes.mapping.pointcloud_merger:main',
             'pointcloud_republisher = fault_detector_spot.behaviour_tree.nodes.mapping.pointcloud_republisher:main',
