@@ -130,7 +130,6 @@ class ManipulationControls(UIControlHelper):
             ("Stow Arm", CommandID.STOW_ARM),
             ("Gripper Toggle", CommandID.TOGGLE_GRIPPER),
             ("Reset State", CommandID.ESTOP_STATE),
-            ("ESTOP", CommandID.EMERGENCY_CANCEL)
         ]
         for label, cmd_id in buttons:
             btn = QPushButton(label)

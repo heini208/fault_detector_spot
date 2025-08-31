@@ -3,9 +3,10 @@ import signal
 import sys
 
 from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QLineEdit, QMessageBox, QApplication, QComboBox, QDoubleSpinBox
+    QPushButton, QLineEdit, QMessageBox, QApplication, QComboBox, QDoubleSpinBox, QTabWidget
 )
 
 import rclpy
@@ -24,52 +25,106 @@ from .recording_controls import RecordingControls
 class Fault_Detector_UI(QWidget):
     def __init__(self, node: Node = None):
         super().__init__()
-        self.cmd_status_sub = None
-        self.buffer_sub = None
-        self.visible_label = None
-        self.reachable_tags_sub = None
-        self.visible_tags_sub = None
-        self.command_pub = None
-        self.complex_command_publisher = None
         self.node = node
         self.setWindowTitle("Fault Detector Spot")
-        self.resize(600, 500)
+        self.resize(700, 600)
 
         self.status_label = QLabel("Status: Waiting for connection")
         self.buffer_label = QLabel("Buffer: []")
         self.command_status_label = QLabel("Command Status: IDLE")
+        self.visible_label = QLabel("Visible tags: []")
+        self.visible_label.setTextFormat(Qt.RichText)
 
         self.visible_tags = {}
         self.reachable_tags = {}
+
         if self.node:
             self.init_ros_communication()
 
+        # Initialize control objects
         self.manipulation_controls = ManipulationControls(self)
         self.recording_controls = RecordingControls(self)
+
         self.create_user_interface()
+
         # periodically spin ROS and refresh UI
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._spin_and_refresh)
         self.timer.start(10)
 
 
-    # ------ build UI
 
+    # ------ build UI
     def create_user_interface(self):
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.status_label)
-        layout.addWidget(self.buffer_label)
-        layout.addWidget(self.command_status_label)
+        main_layout = QVBoxLayout(self)
+        top_row = QHBoxLayout()
+        status_col = QVBoxLayout()
+        status_col.addWidget(self.status_label)
+        status_col.addWidget(self.buffer_label)
+        status_col.addWidget(self.command_status_label)
 
         self.visible_label = QLabel()
         self.visible_label.setTextFormat(Qt.RichText)
         self.visible_label.setText("Visible tags: []")
-        layout.addWidget(self.visible_label)
+        status_col.addWidget(self.visible_label)
 
-        self.manipulation_controls.add_rows(layout)
-        self.recording_controls.add_rows(layout)
+        top_row.addLayout(status_col)
+        top_row.addStretch()  # push estop to right
+        top_row.addLayout(self._make_estop_row())  # 🔴 estop at top-right
 
+        main_layout.addLayout(top_row)
 
+        # Tabs
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
+        self.add_manipulator_control_tab()
+        self.add_navigation_control_tab()
+
+        self.recording_controls.add_rows(main_layout)
+
+    def _make_estop_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        self.estop_button = QPushButton("EMERGENCY STOP")
+
+        self.estop_button.setStyleSheet("""
+            QPushButton {
+                background-color: #C62828;   /* deep red */
+                color: white;
+                font-weight: bold;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #B71C1C;
+            }
+            QPushButton:pressed {
+                background-color: #8E0000;
+            }
+        """)
+
+        font = QFont()
+        font.setPointSize(14)
+        font.setBold(True)
+        self.estop_button.setFont(font)
+
+        self.estop_button.clicked.connect(
+            lambda _, cid=CommandID.EMERGENCY_CANCEL: self.handle_simple_command(cid)
+        )
+
+        row.addWidget(self.estop_button, alignment=Qt.AlignRight)
+        return row
+
+    def add_manipulator_control_tab(self):
+        manip_tab = QWidget()
+        manip_layout = QVBoxLayout(manip_tab)
+        self.manipulation_controls.add_rows(manip_layout)
+        self.tabs.addTab(manip_tab, "Manipulation Control")
+
+    def add_navigation_control_tab(self):
+        nav_tab = QWidget()
+        nav_layout = QVBoxLayout(nav_tab)
+        self.tabs.addTab(nav_tab, "Navigation Control")
 
     # ---- feedback information
 
