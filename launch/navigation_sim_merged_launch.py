@@ -78,7 +78,7 @@ def generate_launch_description():
         ),
 
         # Optional visualization
-        DeclareLaunchArgument('rtabmap_viz', default_value='true'),
+        DeclareLaunchArgument('rtabmap_viz', default_value='false'),
         Node(
             package='rtabmap_viz',
             executable='rtabmap_viz',

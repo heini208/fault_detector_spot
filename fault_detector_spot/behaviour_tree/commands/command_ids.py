@@ -17,3 +17,4 @@ class CommandID(str, Enum):
     CLOSE_GRIPPER = "close_gripper"
     ESTOP_STATE = "estop_state"
     STOP_BASE = "stop_base"
+    START_SLAM = "start_slam"

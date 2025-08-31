@@ -21,10 +21,13 @@ class HandCameraTagDetection(py_trees.behaviour.Behaviour):
     Positions are transformed to GRAV_ALIGNED_BODY_FRAME_NAME.
     """
 
-    def __init__(self, name: str = "HandCameraTagDetection"):
+    def __init__(self, name: str = "HandCameraTagDetection", hand_camera_topic: str = "/depth_registered/hand/image", hand_camera_info_topic: str = "/depth_registered/hand/camera_info", target_frame: str = GRAV_ALIGNED_BODY_FRAME_NAME, source_frame: str = ""):
         super().__init__(name)
         self.node: Optional[Node] = None
         self.blackboard = self.attach_blackboard_client()
+
+        self.hand_camera_info_topic = hand_camera_info_topic
+        self.hand_camera_topic = hand_camera_topic
 
         self.depth_image: Optional[Image] = None
         self.camera_info: Optional[CameraInfo] = None
@@ -32,7 +35,8 @@ class HandCameraTagDetection(py_trees.behaviour.Behaviour):
         self.tf_listener: Optional[TFListenerWrapper] = None
 
         self.camera_frame: Optional[str] = None
-        self.target_frame: str = GRAV_ALIGNED_BODY_FRAME_NAME
+        self.target_frame: str = target_frame
+        self.camera_frame: str = source_frame
 
     def setup(self, **kwargs):
         try:
@@ -40,13 +44,13 @@ class HandCameraTagDetection(py_trees.behaviour.Behaviour):
 
             self.node.create_subscription(
                 Image,
-                "/depth_registered/hand/image",
+                self.hand_camera_topic,
                 self._depth_cb,
                 10
             )
             self.node.create_subscription(
                 CameraInfo,
-                "/depth_registered/hand/camera_info",
+                self.hand_camera_info_topic,
                 self._camera_info_cb,
                 10
             )
@@ -65,7 +69,8 @@ class HandCameraTagDetection(py_trees.behaviour.Behaviour):
 
     def _depth_cb(self, msg: Image):
         self.depth_image = msg
-        self.camera_frame = msg.header.frame_id
+        if not self.camera_frame:
+            self.camera_frame = msg.header.frame_id
 
     def _camera_info_cb(self, msg: CameraInfo):
         self.camera_info = msg
