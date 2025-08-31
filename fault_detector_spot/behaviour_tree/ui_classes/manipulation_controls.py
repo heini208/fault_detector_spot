@@ -1,23 +1,22 @@
 from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QMessageBox
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_msgs.msg import ComplexCommand, TagElement
+from .UIControlHelper import UIControlHelper
+
 
 class TagNotFound(Exception):
     """Raised when the requested tag ID isn’t visible."""
     pass
 
-class ManipulationControls:
+
+class ManipulationControls(UIControlHelper):
     def __init__(self, parent_ui: "Fault_Detector_UI"):
-        self.ui  = parent_ui  # reference to main UI
         self.offset_fields = {}
         self.orientation_combo = None
-        self.complex_command_publisher = self.ui.complex_command_publisher
-        self.status_label = self.ui.status_label
+        super().__init__(parent_ui)
 
-    # --- UI rows
-    def add_rows(self, layout: QHBoxLayout):
-        for row in self.make_rows():
-            layout.addLayout(row)
+    def init_ros_communication(self):
+        self.complex_command_publisher = self.ui.complex_command_publisher
 
     def make_rows(self) -> list:
         rows = [
@@ -125,42 +124,18 @@ class ManipulationControls:
 
     def _make_control_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self.stand_button = QPushButton("Stand Up")
-        self.stand_button.clicked.connect(
-            lambda _, cid=CommandID.STAND_UP: self.ui.handle_simple_command(cid)
-        )
-        row.addWidget(self.stand_button)
-
-        self.ready_button = QPushButton("Ready Arm")
-        self.ready_button.clicked.connect(
-            lambda _, cid=CommandID.READY_ARM: self.ui.handle_simple_command(cid)
-        )
-        row.addWidget(self.ready_button)
-
-        self.stow_button = QPushButton("Stow Arm")
-        self.stow_button.clicked.connect(
-            lambda _, cid=CommandID.STOW_ARM: self.ui.handle_simple_command(cid)
-        )
-        row.addWidget(self.stow_button)
-
-        self.toggle_gripper_button = QPushButton("Gripper Toggle")
-        self.toggle_gripper_button.clicked.connect(
-            lambda _, cid=CommandID.TOGGLE_GRIPPER: self.ui.handle_simple_command(cid)
-        )
-        row.addWidget(self.toggle_gripper_button)
-
-        self.estop_state_button = QPushButton("Reset State")
-        self.estop_state_button.clicked.connect(
-            lambda _, cid=CommandID.ESTOP_STATE: self.ui.handle_simple_command(cid)
-        )
-        row.addWidget(self.estop_state_button)
-
-        self.cancel_button = QPushButton("ESTOP")
-        self.cancel_button.clicked.connect(
-            lambda _, cid=CommandID.EMERGENCY_CANCEL: self.ui.handle_simple_command(cid)
-        )
-        row.addWidget(self.cancel_button)
-
+        buttons = [
+            ("Stand Up", CommandID.STAND_UP),
+            ("Ready Arm", CommandID.READY_ARM),
+            ("Stow Arm", CommandID.STOW_ARM),
+            ("Gripper Toggle", CommandID.TOGGLE_GRIPPER),
+            ("Reset State", CommandID.ESTOP_STATE),
+            ("ESTOP", CommandID.EMERGENCY_CANCEL)
+        ]
+        for label, cmd_id in buttons:
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _, cid=cmd_id: self.ui.handle_simple_command(cid))
+            row.addWidget(btn)
         return row
 
     def build_move_to_tag_command(self) -> ComplexCommand:
@@ -193,12 +168,12 @@ class ManipulationControls:
         text = self.input_field.text().strip()
         if not text.isdigit():
             if not suppress_warnings:
-                QMessageBox.warning(self.ui, "Invalid Input", "Please enter a numeric tag ID.")
+                self.show_warning("Invalid Input", "Please enter a numeric tag ID.")
             raise TagNotFound
         tag_id = int(text)
         if tag_id not in self.ui.visible_tags:
             if not suppress_warnings:
-                QMessageBox.information(self.ui, "Not Found", f"Tag {tag_id} not visible.")
+                self.show_info("Not Found", f"Tag {tag_id} not visible.")
             raise TagNotFound
         original = self.ui.visible_tags[tag_id]
 
@@ -207,7 +182,6 @@ class ManipulationControls:
         tag_element.pose = original.pose
         command.tag = tag_element
         return command
-
 
     def handle_full_message(self, command_id: str):
         '''
@@ -231,10 +205,9 @@ class ManipulationControls:
         complex_command.wait_time = self.duration_input.value()
         complex_command = self.add_offset_to_command(complex_command)
 
-        reply = QMessageBox.question(
-            self.ui, "Confirm Scan",
-            f"Scan all reachable tags for {complex_command.wait_time:.1f}s?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        reply = self.ask_question(
+        "Confirm Scan",
+        f"Scan all reachable tags for {complex_command.wait_time:.1f}s?"
         )
         if reply != QMessageBox.Yes:
             self.status_label.setText("Scan canceled")
@@ -254,14 +227,14 @@ class ManipulationControls:
         pos = complex_command.tag.pose.pose.position
         offset = complex_command.offset.pose.position
 
-        reply = QMessageBox.question(
-            self.ui, "Confirm Move & Wait",
-            (f"Move to tag {complex_command.tag.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
-             f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
-             f"Orientation: {complex_command.orientation_mode}\n"
-             f"Then wait {complex_command.wait_time:.1f}s"),
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        message = (
+            f"Move to tag {complex_command.tag.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
+            f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
+            f"Orientation: {complex_command.orientation_mode}\n"
+            f"Then wait {complex_command.wait_time:.1f}s"
         )
+
+        reply = self.ask_question("Confirm Move & Wait", message)
         if reply != QMessageBox.Yes:
             self.status_label.setText(f"Move & Wait to tag {complex_command.tag.id} canceled")
             return
@@ -280,13 +253,12 @@ class ManipulationControls:
         pos = complex_command.tag.pose.pose.position
         offset = complex_command.offset.pose.position
 
-        reply = QMessageBox.question(
-            self.ui, "Confirm Move",
-            (f"Move to tag {complex_command.tag.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
-             f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
-             f"Orientation: {complex_command.orientation_mode}"),
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        message = (
+            f"Move to tag {complex_command.tag.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
+            f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
+            f"Orientation: {complex_command.orientation_mode}"
         )
+        reply = self.ask_question("Confirm Move", message)
 
         if reply != QMessageBox.Yes:
             self.status_label.setText(f"Move & Wait to tag {complex_command.tag.id} canceled")
@@ -294,5 +266,3 @@ class ManipulationControls:
 
         self.complex_command_publisher.publish(complex_command)
         self.status_label.setText(f"Command sent: Move to tag {complex_command.tag.id}")
-
-

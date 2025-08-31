@@ -1,17 +1,16 @@
-from PyQt5.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QComboBox, QMessageBox, QVBoxLayout
+from PyQt5.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QComboBox
+
 from fault_detector_msgs.msg import CommandRecordControl
-from fault_detector_msgs.msg import ComplexCommand, BasicCommand, TagElement, TagElementArray, RecordingList
-from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
+from fault_detector_msgs.msg import RecordingList
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
+from .UIControlHelper import UIControlHelper
 
 
-class RecordingControls:
+class RecordingControls(UIControlHelper):
     def __init__(self, parent_ui):
-        self.ui = parent_ui
-        self.node = self.ui.node
-        self.init_ros_communication()
+        super().__init__(parent_ui)
 
     def init_ros_communication(self):
-
         self.recordings_list_sub = self.node.create_subscription(
             RecordingList, "fault_detector/recordings_list", self.update_recordings_dropdown, LATCHED_QOS
         )
@@ -19,8 +18,11 @@ class RecordingControls:
             CommandRecordControl, "fault_detector/record_control", 10
         )
 
-    def add_rows(self, layout: QVBoxLayout):
-        layout.addLayout(self._make_recording_row())
+    def make_rows(self):
+        rows = [
+            self._make_recording_row()
+        ]
+        return rows
 
     def _make_recording_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -53,7 +55,7 @@ class RecordingControls:
 
         # Prevent starting without a name
         if self.record_button.text() == "Start Recording" and not name:
-            QMessageBox.warning(self.ui, "Missing name", "Please enter a recording name before starting.")
+            self.show_warning("Missing name", "Please enter a recording name before starting.")
             return
 
         # Check for overwrite if starting
@@ -62,15 +64,11 @@ class RecordingControls:
             existing_names = [self.recordings_dropdown.itemText(i)
                               for i in range(self.recordings_dropdown.count())]
             if name in existing_names:
-                reply = QMessageBox.question(
-                    self.ui,
-                    "Overwrite Recording?",
-                    f"A recording named '{name}' already exists.\nDo you want to overwrite it?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
-                )
-                if reply != QMessageBox.Yes:
-                    return  # Cancel if user says No
+                if not self.ask_question(
+                        "Overwrite Recording?",
+                        f"A recording named '{name}' already exists.\nDo you want to overwrite it?"
+                ):
+                    return
 
         msg = CommandRecordControl()
         msg.name = name
@@ -99,18 +97,13 @@ class RecordingControls:
     def delete_selected_recording(self):
         current = self.recordings_dropdown.currentText()
         if current == "No recordings available":
-            QMessageBox.information(self.ui, "No recordings", "There are no recordings to delete.")
+            self.show_info("No recordings", "There are no recordings to delete.")
             return
 
-        confirm = QMessageBox.question(
-            self.ui,
+        if not self.ask_question(
             "Delete Recording",
-            f"Are you sure you want to delete '{current}'?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-
-        if confirm != QMessageBox.Yes:
+            f"Are you sure you want to delete '{current}'?"
+        ):
             return
 
         msg = CommandRecordControl()
