@@ -19,6 +19,7 @@ from rclpy.node import Node
 from std_msgs.msg import Header, String
 from .manipulation_controls import ManipulationControls
 from .recording_controls import RecordingControls
+from .navigation_controls import NavigationControls
 
 
 
@@ -44,6 +45,7 @@ class Fault_Detector_UI(QWidget):
         # Initialize control objects
         self.manipulation_controls = ManipulationControls(self)
         self.recording_controls = RecordingControls(self)
+        self.navigation_controls = NavigationControls(self)
 
         self.create_user_interface()
 
@@ -124,6 +126,7 @@ class Fault_Detector_UI(QWidget):
     def add_navigation_control_tab(self):
         nav_tab = QWidget()
         nav_layout = QVBoxLayout(nav_tab)
+        self.navigation_controls.add_rows(nav_layout)
         self.tabs.addTab(nav_tab, "Navigation Control")
 
     # ---- feedback information
