@@ -1,5 +1,4 @@
 import py_trees
-from rclpy.time import Time
 
 
 class NewCommandGuard(py_trees.behaviour.Behaviour):

@@ -9,7 +9,7 @@ import sys
 from py_trees.behaviours import CheckBlackboardVariableValue
 from py_trees.common import ComparisonExpression
 from py_trees.decorators import StatusToBlackboard, FailureIsSuccess, EternalGuard
-from fault_detector_spot.behaviour_tree.command_ids import CommandID
+from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 
 from fault_detector_spot.behaviour_tree import (
     DetectVisibleTags,
@@ -115,7 +115,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.WAIT_TIME, lambda n: WaitForDuration(name="WaitForDuration")),
         (CommandID.CLOSE_GRIPPER, lambda n: CloseGripperAction()),
         (CommandID.STOP_BASE, lambda n: PublishZeroVel()),
-        (CommandID.START_SLAM, lambda n: EnableSLAM(launch_file="navigation_sim_merged_launch.py")),
+        (CommandID.START_SLAM, lambda n: EnableSLAM(launch_file="slam_sim_merged_launch.py")),
     ]
 
     for cmd_id, ctor in specs:

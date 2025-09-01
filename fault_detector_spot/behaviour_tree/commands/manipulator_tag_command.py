@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 from math import sin, cos, pi
 
-from fault_detector_spot.behaviour_tree.command_ids import CommandID
-from fault_detector_spot.behaviour_tree.manipulator_move_command import ManipulatorMoveCommand
+from .manipulator_move_command import ManipulatorMoveCommand
 from geometry_msgs.msg import PoseStamped, Quaternion
 from builtin_interfaces.msg import Time
 

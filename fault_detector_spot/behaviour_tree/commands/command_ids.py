@@ -17,4 +17,9 @@ class CommandID(str, Enum):
     CLOSE_GRIPPER = "close_gripper"
     ESTOP_STATE = "estop_state"
     STOP_BASE = "stop_base"
+    #mapping
     START_SLAM = "start_slam"
+    CREATE_MAP = "create_map"
+    SAVE_TO_CURRENT_MAP = "save_to_current_map"
+    LOAD_MAP = "load_map"
+    DELETE_MAP = "delete_map"

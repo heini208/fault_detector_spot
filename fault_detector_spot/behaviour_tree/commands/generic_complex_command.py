@@ -1,7 +1,7 @@
 # fault_detector_spot/behaviour_tree/generic_command.py
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseStamped, Quaternion
-from fault_detector_spot.behaviour_tree.simple_command import SimpleCommand
+from .simple_command import SimpleCommand
 
 
 class GenericCommand(SimpleCommand):
@@ -18,7 +18,9 @@ class GenericCommand(SimpleCommand):
             goal_pose: PoseStamped = None,
             tag_id: int = None,
             offset: PoseStamped = None,
-            orientation_mode: str = None
+            orientation_mode: str = None,
+            map_name: str = None,
+            landmark_name: str = None,
     ):
         super().__init__(command_id, stamp)
         self.duration = duration
@@ -26,6 +28,8 @@ class GenericCommand(SimpleCommand):
         self.tag_id = tag_id
         self.offset = offset
         self.orientation_mode = orientation_mode
+        self.map_name = map_name
+        self.landmark_name = landmark_name
 
     def __repr__(self):
         ts = f"{self.stamp.sec}.{self.stamp.nanosec:09d}"

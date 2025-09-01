@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QComboBox
 
 from fault_detector_msgs.msg import CommandRecordControl
-from fault_detector_msgs.msg import RecordingList
+from fault_detector_msgs.msg import StringArray
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
 from .UIControlHelper import UIControlHelper
 
@@ -12,7 +12,7 @@ class RecordingControls(UIControlHelper):
 
     def init_ros_communication(self):
         self.recordings_list_sub = self.node.create_subscription(
-            RecordingList, "fault_detector/recordings_list", self.update_recordings_dropdown, LATCHED_QOS
+            StringArray, "fault_detector/recordings_list", self.update_recordings_dropdown, LATCHED_QOS
         )
         self.record_control_pub = self.node.create_publisher(
             CommandRecordControl, "fault_detector/record_control", 10

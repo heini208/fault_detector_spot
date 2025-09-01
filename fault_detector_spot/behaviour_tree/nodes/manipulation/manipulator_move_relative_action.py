@@ -16,7 +16,7 @@ import synchros2.scope as ros_scope
 import rclpy
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, HAND_FRAME_NAME
 
-from fault_detector_spot.behaviour_tree.manipulator_move_command import ManipulatorMoveCommand
+from fault_detector_spot.behaviour_tree.commands.manipulator_move_command import ManipulatorMoveCommand
 from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import ActionClientBehaviour
 
 

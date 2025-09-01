@@ -6,7 +6,7 @@ from typing import List
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
-from fault_detector_msgs.msg import ComplexCommand, BasicCommand, CommandRecordControl, RecordingList
+from fault_detector_msgs.msg import ComplexCommand, BasicCommand, CommandRecordControl, StringArray
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
 from rclpy.node import Node
 from rosidl_runtime_py import message_to_ordereddict
@@ -33,7 +33,7 @@ class RecordManager(Node):
         self.delay = 0.1
 
         # Publishers
-        self.list_pub = self.create_publisher(RecordingList, 'fault_detector/recordings_list', LATCHED_QOS)
+        self.list_pub = self.create_publisher(StringArray, 'fault_detector/recordings_list', LATCHED_QOS)
         self.playback_state_pub = self.create_publisher(Bool, 'fault_detector/playback_state', LATCHED_QOS)
         self.complex_pub = self.create_publisher(ComplexCommand, 'fault_detector/commands/complex_command', COMMAND_QOS)
         self.basic_pub = self.create_publisher(BasicCommand, 'fault_detector/commands/basic_command', COMMAND_QOS)
@@ -136,7 +136,7 @@ class RecordManager(Node):
     # ----- Recordings list -----
     def publish_recordings_list(self):
         files = [f[:-5] for f in os.listdir(self.recordings_dir) if f.endswith(".json")]
-        self.list_pub.publish(RecordingList(names=sorted(files)))
+        self.list_pub.publish(StringArray(names=sorted(files)))
 
     # ----- Serialization helpers -----
     def serialize_ros_message(self, msg):

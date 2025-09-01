@@ -1,16 +1,10 @@
 # In fault_detector_spot/behaviour_tree/bt_runner.py
+import sys
 from typing import Callable
 
-import rclpy
 import py_trees
 import py_trees_ros
-import sys
-
-from py_trees.behaviours import CheckBlackboardVariableValue
-from py_trees.common import ComparisonExpression
-from py_trees.decorators import StatusToBlackboard, FailureIsSuccess, EternalGuard
-from fault_detector_spot.behaviour_tree.command_ids import CommandID
-
+import rclpy
 from fault_detector_spot.behaviour_tree import (
     DetectVisibleTags,
     HandCameraTagDetection,
@@ -31,6 +25,10 @@ from fault_detector_spot.behaviour_tree import (
     ManipulatorMoveRelativeAction,
     ToggleGripperAction, CloseGripperAction,
 )
+from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
+from py_trees.behaviours import CheckBlackboardVariableValue
+from py_trees.common import ComparisonExpression
+from py_trees.decorators import StatusToBlackboard, EternalGuard
 
 
 def create_root() -> py_trees.behaviour.Behaviour:

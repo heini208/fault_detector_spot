@@ -2,7 +2,7 @@ import py_trees
 import subprocess
 
 class EnableSLAM(py_trees.behaviour.Behaviour):
-    def __init__(self, name: str = "EnableSLAM", launch_file: str = "navigation_merged_launch.py"):
+    def __init__(self, name: str = "EnableSLAM", launch_file: str = "slam_merged_launch.py"):
         super(EnableSLAM, self).__init__(name)
         self.launch_file = launch_file
 

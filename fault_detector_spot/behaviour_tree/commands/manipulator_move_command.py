@@ -1,7 +1,7 @@
 # In fault_detector_spot/behaviour_tree/simple_timer_command.py
 
 from builtin_interfaces.msg import Time
-from fault_detector_spot.behaviour_tree.simple_command import SimpleCommand
+from .simple_command import SimpleCommand
 from geometry_msgs.msg import PoseStamped, Quaternion
 
 

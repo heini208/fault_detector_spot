@@ -1,8 +1,5 @@
 import py_trees
-from fault_detector_spot.behaviour_tree.manipulator_move_command import ManipulatorMoveCommand
-from fault_detector_spot.behaviour_tree.manipulator_tag_command import ManipulatorTagCommand
-from geometry_msgs.msg import PoseStamped
-from typing import Optional
+from fault_detector_spot.behaviour_tree.commands.manipulator_tag_command import ManipulatorTagCommand
 
 
 class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):

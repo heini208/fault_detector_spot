@@ -1,6 +1,5 @@
 # In fault_detector_spot/behaviour_tree/nodes/command_status_publisher.py
 
-import json
 import py_trees
 from py_trees.common import Status
 from std_msgs.msg import String

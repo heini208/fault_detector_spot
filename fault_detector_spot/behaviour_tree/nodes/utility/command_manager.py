@@ -1,6 +1,6 @@
 import py_trees
 from py_trees.common import Status
-from fault_detector_spot.behaviour_tree.command_ids import CommandID
+from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 
 
 class CommandManager(py_trees.behaviour.Behaviour):

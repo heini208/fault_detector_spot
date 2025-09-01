@@ -1,7 +1,11 @@
 import os
 import json
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QComboBox, QRadioButton, QButtonGroup, QLineEdit
+
+from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QComboBox, QRadioButton, QButtonGroup, QLineEdit, \
+    QSizePolicy
 from ament_index_python.packages import get_package_share_directory
+from std_msgs.msg import String
 from .UIControlHelper import UIControlHelper
 
 
@@ -12,17 +16,23 @@ class NavigationControls(UIControlHelper):
             "maps"
         )
         self.landmark_name_field = None
+        self.current_map = None
         super().__init__(parent_ui)
 
 
 
     def init_ros_communication(self):
-        # Currently no ROS pubs/subs, but leave for future use
-        pass
+        # Subscriber to current_map string topic
+        self.node.create_subscription(
+            String,
+            '/current_map',
+            self.current_map_callback,
+            10
+        )
 
     def make_rows(self):
         rows = [
-            self._make_map_row(),
+            self._load_map_row(),
             self._make_create_map_row(),
             self._make_mode_row(),
             self._make_landmark_row(),
@@ -31,20 +41,39 @@ class NavigationControls(UIControlHelper):
         return rows
 
     # --- Rows ---
-    def _make_map_row(self) -> QHBoxLayout:
+    def _load_map_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(5)
+
         row.addWidget(QLabel("Select Map:"))
 
         self.map_dropdown = QComboBox()
-        self.update_map_dropdown()
         row.addWidget(self.map_dropdown)
 
-        # Confirm button
         self.confirm_map_button = QPushButton("Load Map")
-        self.confirm_map_button.clicked.connect(self.handle_map_confirmed)
+        self.confirm_map_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         row.addWidget(self.confirm_map_button)
 
+        self.delete_map_button = QPushButton("Delete Map")
+        self.delete_map_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        row.addWidget(self.delete_map_button)
+
+        self.current_map_label = QLabel("Current Map: None")
+        self.current_map_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.current_map_label.setWordWrap(False)
+        row.addWidget(self.current_map_label)
+
+        row.addStretch(1)
+
         return row
+
+    def current_map_callback(self, msg: String):
+        self.current_map = msg.data
+        # Update the label
+        if self.current_map_label is not None:
+            self.current_map_label.setText(f"Current Map: {self.current_map}")
+
 
     def _make_create_map_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -65,16 +94,22 @@ class NavigationControls(UIControlHelper):
         row = QHBoxLayout()
         row.addWidget(QLabel("Mode:"))
 
+        self.mode_none = QRadioButton("None")
+        self.mode_none.setChecked(True)
+
         self.mode_mapping = QRadioButton("Mapping")
         self.mode_localization = QRadioButton("Localization")
 
         self.mode_group = QButtonGroup()
+        self.mode_group.addButton(self.mode_none)
         self.mode_group.addButton(self.mode_mapping)
         self.mode_group.addButton(self.mode_localization)
 
+        self.mode_none.toggled.connect(self.handle_mode_none)
         self.mode_mapping.toggled.connect(self.handle_mode_mapping)
         self.mode_localization.toggled.connect(self.handle_mode_localization)
 
+        row.addWidget(self.mode_none)
         row.addWidget(self.mode_mapping)
         row.addWidget(self.mode_localization)
 
@@ -167,15 +202,28 @@ class NavigationControls(UIControlHelper):
 
         self.update_landmark_dropdown()
 
+    def handle_mode_none(self, checked: bool):
+        if checked:
+            pass
+
     def handle_mode_mapping(self, checked: bool):
         if checked:
+            if not self._check_current_map_selected():
+                return
             # TODO: implement mapping mode logic
-            pass
 
     def handle_mode_localization(self, checked: bool):
         if checked:
+            if not self._check_current_map_selected():
+                return
             # TODO: implement localization mode logic
-            pass
+
+    def _check_current_map_selected(self) -> bool:
+        if self.current_map is None or self.current_map == "":
+            self.show_warning("No Map Selected", "Please load a map first.")
+            self.mode_none.setChecked(True)  # switch to default
+            return False
+        return True
 
     def handle_add_landmark(self):
         name = self.landmark_name_field.text().strip()
@@ -249,4 +297,9 @@ class NavigationControls(UIControlHelper):
 
         self.show_info("Map Created", f"Created empty map '{name}'")
         self.update_map_dropdown()
+
+    def handle_delete_map(self):
+        """Callback for Delete Map button (currently empty)"""
+        #TODO important when deleting current publish current map none
+        pass
 

@@ -1,10 +1,10 @@
+import synchros2.scope as ros_scope
+from synchros2.action_client import ActionClientWrapper
+from synchros2.utilities import namespace_with
+
 import py_trees
 from py_trees.common import Status, Access
 from spot_msgs.action import RobotCommand
-from synchros2.action_client import ActionClientWrapper
-from synchros2.utilities import namespace_with
-import synchros2.scope as ros_scope
-from fault_detector_spot.behaviour_tree.command_ids import CommandID
 
 
 class ActionClientBehaviour(py_trees.behaviour.Behaviour):
