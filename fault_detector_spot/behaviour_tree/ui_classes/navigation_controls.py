@@ -5,8 +5,11 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QComboBox, QRadioButton, QButtonGroup, QLineEdit, \
     QSizePolicy
 from ament_index_python.packages import get_package_share_directory
+from fault_detector_msgs.msg import StringArray, ComplexCommand
 from std_msgs.msg import String
 from .UIControlHelper import UIControlHelper
+from ..QOS_PROFILES import LATCHED_QOS
+from ..commands.command_ids import CommandID
 
 
 class NavigationControls(UIControlHelper):
@@ -23,11 +26,19 @@ class NavigationControls(UIControlHelper):
 
     def init_ros_communication(self):
         # Subscriber to current_map string topic
+        self.complex_command_publisher = self.ui.complex_command_publisher
+
         self.node.create_subscription(
             String,
             '/current_map',
             self.current_map_callback,
-            10
+            LATCHED_QOS
+        )
+        self.node.create_subscription(
+            StringArray,
+            '/map_list',
+            self.map_list_callback,
+            LATCHED_QOS
         )
 
     def make_rows(self):
@@ -53,10 +64,12 @@ class NavigationControls(UIControlHelper):
 
         self.confirm_map_button = QPushButton("Load Map")
         self.confirm_map_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.confirm_map_button.clicked.connect(self.handle_map_confirmed)
         row.addWidget(self.confirm_map_button)
 
         self.delete_map_button = QPushButton("Delete Map")
         self.delete_map_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.delete_map_button.clicked.connect(self.handle_delete_map)
         row.addWidget(self.delete_map_button)
 
         self.current_map_label = QLabel("Current Map: None")
@@ -74,6 +87,20 @@ class NavigationControls(UIControlHelper):
         if self.current_map_label is not None:
             self.current_map_label.setText(f"Current Map: {self.current_map}")
 
+    def map_list_callback(self, msg: StringArray):
+        """
+        Update the map dropdown with the names received from the map_list topic.
+        """
+        self.map_dropdown.clear()
+
+        if not msg.names:
+            self.map_dropdown.addItem("no maps saved")
+            self.current_map = None
+            self.current_map_label.setText("Current Map: None")
+            self.mode_none.setChecked(True)
+        else:
+            for map_name in msg.names:
+                self.map_dropdown.addItem(map_name)
 
     def _make_create_map_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -277,29 +304,28 @@ class NavigationControls(UIControlHelper):
         if not name:
             self.show_warning("Missing Name", "Please enter a map name.")
             return
-
-        # Check if name already exists in dropdown
         existing_maps = [self.map_dropdown.itemText(i) for i in range(self.map_dropdown.count())]
         if name in existing_maps:
-            self.show_warning("Map Exists", f"A map named '{name}' already exists.")
+            self.show_warning("Map Name Already Taken", "Please enter a map name.")
             return
 
-        # TODO replace this with command
-        os.makedirs(self.recordings_dir, exist_ok=True)
-
-        db_path = os.path.join(self.recordings_dir, f"{name}.db")
-        json_path = os.path.join(self.recordings_dir, f"{name}.json")
-
-        # create empty files
-        open(db_path, "a").close()
-        with open(json_path, "w") as f:
-            f.write("{}")  # empty JSON
-
-        self.show_info("Map Created", f"Created empty map '{name}'")
-        self.update_map_dropdown()
+        complex_command = ComplexCommand()
+        complex_command.command = self.ui.build_basic_command(CommandID.CREATE_MAP)
+        complex_command.map_name = name
+        self.complex_command_publisher.publish(complex_command)
 
     def handle_delete_map(self):
-        """Callback for Delete Map button (currently empty)"""
-        #TODO important when deleting current publish current map none
-        pass
+        current_map = self.map_dropdown.currentText()
+        if not current_map or current_map == "no maps saved":
+            self.show_warning("No Map Selected", "Please select a map to delete.")
+            return
+
+        complex_command = ComplexCommand()
+        complex_command.command = self.ui.build_basic_command(CommandID.DELETE_MAP)
+        complex_command.map_name = current_map
+        self.complex_command_publisher.publish(complex_command)
+
+        self.current_map = None
+        self.current_map_label.setText("Current Map: None")
+        self.mode_none.setChecked(True)
 

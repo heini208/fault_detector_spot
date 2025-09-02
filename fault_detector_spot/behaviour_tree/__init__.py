@@ -20,6 +20,8 @@ from .nodes.sensing.hand_camera_tag_detection import HandCameraTagDetection
 from .nodes.sensing.visible_tag_publisher import PublishTagStates
 from .nodes.manipulation.close_gripper_action import CloseGripperAction
 from .nodes.mapping.enable_slam import EnableSLAM
+from .nodes.mapping.create_empty_map import CreateEmptyMap
+from .nodes.mapping.delete_map import DeleteMap
 
 
 __all__ = [
@@ -42,5 +44,7 @@ __all__ = [
   "PublishTagStates",
   "ToggleGripperAction",
   "CloseGripperAction",
-  "EnableSLAM"
+  "EnableSLAM",
+  "CreateEmptyMap",
+  "DeleteMap"
 ]

@@ -20,17 +20,6 @@ def generate_launch_description():
             output='screen'
         ),
         Node(
-            package='apriltag_ros',
-            executable='apriltag_node',
-            name='apriltag_node',
-            output='screen',
-            remappings=[
-                ('image_rect', '/Spot/right_head_camera/image_color'),
-                ('camera_info', '/Spot/right_head_camera/camera_info'),
-            ],
-            parameters=[config_file]
-        ),
-        Node(
             package='fault_detector_spot',
             executable='record_manager',
             name='record_manager',

@@ -1,4 +1,5 @@
 # In fault_detector_spot/behaviour_tree/bt_runner.py
+import os
 from typing import Callable
 
 import rclpy
@@ -6,6 +7,9 @@ import py_trees
 import py_trees_ros
 import sys
 
+from fault_detector_msgs.msg import StringArray
+from fault_detector_spot.behaviour_tree.nodes.utility.publish_initial_ui_info_once import PublishInitialUIInfoOnce
+from fault_detector_spot.behaviour_tree.nodes.utility.run_once import RunOnce
 from py_trees.behaviours import CheckBlackboardVariableValue
 from py_trees.common import ComparisonExpression
 from py_trees.decorators import StatusToBlackboard, FailureIsSuccess, EternalGuard
@@ -30,7 +34,8 @@ from fault_detector_spot.behaviour_tree import (
     BufferStatusPublisher,
     ManipulatorMoveRelativeAction,
     ToggleGripperAction, CloseGripperAction, EnableSLAM,
-)
+DeleteMap,
+CreateEmptyMap,)
 
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -116,6 +121,8 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.CLOSE_GRIPPER, lambda n: CloseGripperAction()),
         (CommandID.STOP_BASE, lambda n: PublishZeroVel()),
         (CommandID.START_SLAM, lambda n: EnableSLAM(launch_file="slam_sim_merged_launch.py")),
+        (CommandID.CREATE_MAP, lambda n: CreateEmptyMap()),
+        (CommandID.DELETE_MAP, lambda n: DeleteMap()),
     ]
 
     for cmd_id, ctor in specs:
@@ -163,9 +170,21 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
 
 
 def build_publisher_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    initial_ui_info = PublishInitialUIInfoOnce(name="PublishInitialUIInfoOnce")
+    initial_ui_info.setup(node=node)
+
+    # Other publishers
     cmd_pub = BufferStatusPublisher(name="CommandStatusPublisher")
     cmd_pub.setup(node=node)
-    return cmd_pub
+
+    # Parallel so both can exist simultaneously
+    publisher_tree = py_trees.composites.Parallel(
+        "PublisherTree",
+        policy=py_trees.common.ParallelPolicy.SuccessOnAll()
+    )
+    publisher_tree.add_children([initial_ui_info, cmd_pub])
+
+    return publisher_tree
 
 
 def build_repeat_guarded_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
@@ -227,6 +246,31 @@ def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
     manipulation.add_children([get_goal, move_arm])
 
     return manipulation
+
+def init_ui(self):
+    """
+    Initialize the UI with default states and publish the initial map list.
+    This should be called once after ROS communication is set up.
+    """
+    # Update map dropdown locally (in case map_list topic hasn't published yet)
+    self.update_map_dropdown()
+
+    # Set current map to None initially
+    self.current_map = None
+    self.current_map_label.setText("Current Map: None")
+    self.mode_none.setChecked(True)
+
+    # Publish initial map list to ROS so other nodes/UI can subscribe
+    map_files = []
+    if os.path.isdir(self.recordings_dir):
+        for f in sorted(os.listdir(self.recordings_dir)):
+            if f.endswith(".db"):
+                map_files.append(f[:-3])
+
+    msg = StringArray()
+    msg.names = map_files
+    self.complex_command_publisher.publish(msg)
+
 
 
 def main(args=None):
