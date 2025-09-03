@@ -19,7 +19,9 @@ class CommandID(str, Enum):
     STOP_BASE = "stop_base"
     #mapping
     START_SLAM = "start_slam"
+    START_LOCALIZATION = "start_localization"
+    STOP_MAPPING = "stop_mapping"
     CREATE_MAP = "create_map"
     SAVE_TO_CURRENT_MAP = "save_to_current_map"
-    LOAD_MAP = "load_map"
+    SWAP_MAP = "swap_map"
     DELETE_MAP = "delete_map"

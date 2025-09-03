@@ -30,7 +30,7 @@ class NavigationControls(UIControlHelper):
 
         self.node.create_subscription(
             String,
-            '/current_map',
+            '/active_map',
             self.current_map_callback,
             LATCHED_QOS
         )
@@ -111,7 +111,7 @@ class NavigationControls(UIControlHelper):
         row.addWidget(self.new_map_name_field)
 
         # Button to create empty map
-        self.create_map_button = QPushButton("Create Empty Map")
+        self.create_map_button = QPushButton("Initialize Empty Map")
         self.create_map_button.clicked.connect(self.handle_create_empty_map)
         row.addWidget(self.create_map_button)
 
@@ -175,20 +175,6 @@ class NavigationControls(UIControlHelper):
         return row
 
     # --- Dropdown updates ---
-    def update_map_dropdown(self):
-        """Populate the map dropdown with available .db files."""
-        self.map_dropdown.clear()
-
-        maps_found = False
-        if os.path.isdir(self.recordings_dir):
-            for f in sorted(os.listdir(self.recordings_dir)):
-                if f.endswith(".db"):
-                    self.map_dropdown.addItem(f[:-3])  # strip ".db"
-                    maps_found = True
-
-        if not maps_found:
-            self.map_dropdown.addItem("no maps saved")
-
     def update_landmark_dropdown(self):
         """Load landmarks from JSON next to the selected map and populate dropdown with names."""
         self.landmark_dropdown.clear()
@@ -222,28 +208,32 @@ class NavigationControls(UIControlHelper):
 
     # --- Handlers (currently empty stubs) ---
     def handle_map_confirmed(self):
-        current_map = self.map_dropdown.currentText()
-        if not current_map:
+        selected_map = self.map_dropdown.currentText()
+        if not selected_map or selected_map == "no maps saved":
             self.show_warning("No Map Selected", "Please select a map before confirming.")
             return
 
-        self.update_landmark_dropdown()
+        complex_command = ComplexCommand()
+        complex_command.command = self.ui.build_basic_command(CommandID.SWAP_MAP)
+        complex_command.map_name = selected_map
+        self.complex_command_publisher.publish(complex_command)
 
     def handle_mode_none(self, checked: bool):
         if checked:
+            self.ui.handle_simple_command(CommandID.STOP_MAPPING)
             pass
 
     def handle_mode_mapping(self, checked: bool):
         if checked:
             if not self._check_current_map_selected():
                 return
-            # TODO: implement mapping mode logic
+            self.ui.handle_simple_command(CommandID.START_SLAM)
 
     def handle_mode_localization(self, checked: bool):
         if checked:
             if not self._check_current_map_selected():
                 return
-            # TODO: implement localization mode logic
+            self.ui.handle_simple_command(CommandID.START_LOCALIZATION)
 
     def _check_current_map_selected(self) -> bool:
         if self.current_map is None or self.current_map == "":
@@ -304,15 +294,22 @@ class NavigationControls(UIControlHelper):
         if not name:
             self.show_warning("Missing Name", "Please enter a map name.")
             return
+
         existing_maps = [self.map_dropdown.itemText(i) for i in range(self.map_dropdown.count())]
         if name in existing_maps:
             self.show_warning("Map Name Already Taken", "Please enter a map name.")
             return
 
+        # Send the CREATE_MAP command
         complex_command = ComplexCommand()
         complex_command.command = self.ui.build_basic_command(CommandID.CREATE_MAP)
         complex_command.map_name = name
         self.complex_command_publisher.publish(complex_command)
+
+        # Switch mode to Mapping in the UI **without triggering the mapping handler**
+        self.mode_mapping.blockSignals(True)
+        self.mode_mapping.setChecked(True)
+        self.mode_mapping.blockSignals(False)
 
     def handle_delete_map(self):
         current_map = self.map_dropdown.currentText()

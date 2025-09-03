@@ -8,6 +8,7 @@ import py_trees_ros
 import sys
 
 from fault_detector_msgs.msg import StringArray
+from fault_detector_spot.behaviour_tree.nodes.mapping.monitor_slam_process import MonitorSLAMProcess
 from fault_detector_spot.behaviour_tree.nodes.utility.publish_initial_ui_info_once import PublishInitialUIInfoOnce
 from fault_detector_spot.behaviour_tree.nodes.utility.run_once import RunOnce
 from py_trees.behaviours import CheckBlackboardVariableValue
@@ -34,8 +35,8 @@ from fault_detector_spot.behaviour_tree import (
     BufferStatusPublisher,
     ManipulatorMoveRelativeAction,
     ToggleGripperAction, CloseGripperAction, EnableSLAM,
-DeleteMap,
-CreateEmptyMap,)
+    DeleteMap,
+    InitializeEmptyMap, SwapMap, EnableLocalization, StopMapping, )
 
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -54,7 +55,7 @@ def create_behavior_tree():
     root.add_children([
         build_sensing_tree(node),
         build_buffered_command_tree(node),
-        build_publisher_tree(node)
+        build_publisher_tree(node),
     ])
     return root
 
@@ -121,8 +122,11 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.CLOSE_GRIPPER, lambda n: CloseGripperAction()),
         (CommandID.STOP_BASE, lambda n: PublishZeroVel()),
         (CommandID.START_SLAM, lambda n: EnableSLAM(launch_file="slam_sim_merged_launch.py")),
-        (CommandID.CREATE_MAP, lambda n: CreateEmptyMap()),
+        (CommandID.START_LOCALIZATION, lambda n: EnableLocalization(launch_file="localization_sim_merged_launch.py")),
+        (CommandID.CREATE_MAP, lambda n: InitializeEmptyMap(launch_file="slam_sim_merged_launch.py")),
         (CommandID.DELETE_MAP, lambda n: DeleteMap()),
+        (CommandID.SWAP_MAP, lambda n: SwapMap(slam_launch="slam_sim_merged_launch.py", localization_launch="localization_sim_merged_launch.py")),
+        (CommandID.STOP_MAPPING, lambda n: StopMapping()),
     ]
 
     for cmd_id, ctor in specs:
@@ -296,9 +300,14 @@ def main(args=None):
         rclpy.spin(tree.node)
     except KeyboardInterrupt:
         pass
+    finally:
+        # Create and tick StopMapping **once** before full shutdown
+        stop_mapping = StopMapping(name="StopMappingOnShutdown")
+        stop_mapping.setup(node=tree.node)
+        stop_mapping.tick_once()
 
-    tree.shutdown()
-    rclpy.shutdown()
+        tree.shutdown()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
