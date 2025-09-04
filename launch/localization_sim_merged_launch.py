@@ -1,20 +1,27 @@
 from launch import LaunchDescription
-from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 from launch.conditions import IfCondition
 import os
 from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
+    # RViz config
     config_rviz = os.path.join(
         get_package_share_directory('rtabmap_demos'),
-        'config',
-        'demo_robot_mapping.rviz'
+        'config/demo_robot_mapping.rviz'
     )
 
-    # Params for Localization
+    # Launch argument for database_path
+    declare_db_path = DeclareLaunchArgument(
+        'database_path',
+        default_value=os.path.expanduser('~/.ros/rtabmap.db'),
+        description='Path to the RTAB-Map database (.db)'
+    )
+
+    # Localization params (note the differences vs SLAM)
     rtabmap_params = {
         'frame_id': 'base_link',
         'odom_frame_id': 'odom',
@@ -28,9 +35,11 @@ def generate_launch_description():
         'RGBD/LinearUpdate': '0.01',
         'RGBD/AngularUpdate': '0.01',
         'Rtabmap/TimeThr': '700',
-        'Mem/IncrementalMemory': 'false',  # <- don't create new map
-        'Mem/InitWMWithAllNodes': 'true',
-        'localization': 'true',           # <- localization mode
+        'Mem/IncrementalMemory': 'false',   # don't grow map
+        'Mem/InitWMWithAllNodes': 'true',   # preload map nodes
+        'localization': 'true',             # enable localization mode
+        # set database path
+        'database_path': LaunchConfiguration('database_path'),
     }
 
     remappings = [
@@ -41,8 +50,7 @@ def generate_launch_description():
     ]
 
     return LaunchDescription([
-        DeclareLaunchArgument('rtabmap_viz', default_value='false'),
-        DeclareLaunchArgument('rviz', default_value='true'),
+        declare_db_path,
 
         Node(
             package='fault_detector_spot',
@@ -81,6 +89,7 @@ def generate_launch_description():
             output='screen',
         ),
 
+        DeclareLaunchArgument('rtabmap_viz', default_value='false'),
         Node(
             package='rtabmap_viz',
             executable='rtabmap_viz',
@@ -91,6 +100,7 @@ def generate_launch_description():
             output='screen',
         ),
 
+        DeclareLaunchArgument('rviz', default_value='true'),
         Node(
             package='rviz2',
             executable='rviz2',
