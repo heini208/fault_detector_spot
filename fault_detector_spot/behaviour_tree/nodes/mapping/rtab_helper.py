@@ -7,6 +7,7 @@ from std_msgs.msg import String
 from ament_index_python.packages import get_package_share_directory
 import py_trees
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
+import rclpy
 
 
 class RTABHelper:
@@ -94,11 +95,45 @@ class RTABHelper:
         proc = getattr(self.bb, "mapping_launch_process", None)
         if proc:
             try:
+                if self._get_running_mode() == "mapping":
+                    self._call_service("pause")
+                    self._call_service("publish_map")
+
                 os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+                proc.wait(timeout=1)
+
             except Exception as e:
                 print(f"Failed to stop RTAB-Map process: {e}")
             finally:
                 self.bb.mapping_launch_process = None
+
+    def _call_service(self, service_name: str, srv_type=None, request=None, timeout_sec=2.0):
+        """
+        Call a ROS2 service and wait for it to complete.
+        - service_name: full service name, e.g., "/rtabmap/pause"
+        - srv_type: service type, e.g., std_srvs.srv.Empty (optional if Empty service)
+        - request: optional request object
+        - timeout_sec: max time to wait for service response
+        """
+        if srv_type is None:
+            from std_srvs.srv import Empty
+            srv_type = Empty
+
+        client = self.node.create_client(srv_type, service_name)
+        if not client.wait_for_service(timeout_sec=timeout_sec):
+            print(f"Service {service_name} not available")
+            return False
+
+        if request is None:
+            request = srv_type.Request()
+
+        future = client.call_async(request)
+
+        # Wait for response
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=timeout_sec)
+        if future.done():
+            return future.result()
+        return False
 
     def restart_mapping(self, map_name: str, launch_file="slam_merged_launch.py"):
         self.start_mapping(map_name, launch_file)
@@ -151,16 +186,12 @@ class RTABHelper:
         return proc
 
     def set_mode_localization(self):
-        subprocess.run(
-            ["ros2", "param", "set", "/rtabmap", "localization", "true"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        """Switch RTAB-Map to localization mode via service."""
+        self._call_service("/rtabmap/set_mode_localization")
 
     def set_mode_mapping(self):
-        subprocess.run(
-            ["ros2", "param", "set", "/rtabmap", "localization", "false"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        """Switch RTAB-Map to mapping mode via service."""
+        self._call_service("/rtabmap/set_mode_mapping")
 
     def is_rtabmap_running(self) -> bool:
         proc = getattr(self.bb, "mapping_launch_process", None)

@@ -30,12 +30,16 @@ def generate_launch_description():
         'sync_queue_size': 10,
         'Reg/Strategy': '1',
         'Icp/Iterations': '30',
-        'RGBD/LinearUpdate': '0.01',
-        'RGBD/AngularUpdate': '0.01',
+        'RGBD/LinearUpdate': '0.05',
+        'RGBD/AngularUpdate': '0.05',
         'Rtabmap/TimeThr': '700',
+        'Rtabmap/DetectionRate': '1.0',
+        'Vis/MinInliers': '10',
+        'Vis/CorType': '1',
+        'Reg/Force3DoF': 'true',
+        'Optimizer/Slam2D': 'true',
         'Mem/IncrementalMemory': 'true',
         'Mem/InitWMWithAllNodes': 'false',
-        # Add database_path here using LaunchConfiguration
         'database_path': LaunchConfiguration('database_path'),
     }
 
