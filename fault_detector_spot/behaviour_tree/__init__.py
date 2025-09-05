@@ -25,6 +25,9 @@ from .nodes.mapping.delete_map import DeleteMap
 from .nodes.mapping.swap_map import SwapMap
 from .nodes.mapping.enable_localization import EnableLocalization
 from .nodes.mapping.stop_mapping import StopMapping
+from .nodes.mapping.add_goal_pose_as_waypoint import AddGoalPoseAsWaypoint
+from .nodes.mapping.save_current_pose_as_goal import SaveCurrentPoseAsGoal
+from .nodes.mapping.delete_waypoint import DeleteWaypoint
 
 
 __all__ = [
@@ -52,5 +55,8 @@ __all__ = [
   "DeleteMap",
   "SwapMap",
   "EnableLocalization",
-  "StopMapping"
+  "StopMapping",
+  "AddGoalPoseAsWaypoint",
+  "SaveCurrentPoseAsGoal",
+  "DeleteWaypoint"
 ]

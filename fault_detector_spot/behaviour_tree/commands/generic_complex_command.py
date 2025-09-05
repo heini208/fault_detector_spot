@@ -20,7 +20,7 @@ class GenericCommand(SimpleCommand):
             offset: PoseStamped = None,
             orientation_mode: str = None,
             map_name: str = None,
-            landmark_name: str = None,
+            waypoint_name: str = None,
     ):
         super().__init__(command_id, stamp)
         self.duration = duration
@@ -29,7 +29,7 @@ class GenericCommand(SimpleCommand):
         self.offset = offset
         self.orientation_mode = orientation_mode
         self.map_name = map_name
-        self.landmark_name = landmark_name
+        self.waypoint_name = waypoint_name
 
     def __repr__(self):
         ts = f"{self.stamp.sec}.{self.stamp.nanosec:09d}"

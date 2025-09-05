@@ -1,8 +1,10 @@
+import json
 import os
 import signal
 import subprocess
 
 from fault_detector_msgs.msg import StringArray
+from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 from ament_index_python.packages import get_package_share_directory
 import py_trees
@@ -33,6 +35,7 @@ class RTABHelper:
         # ROS publishers
         self.active_map_pub = self.node.create_publisher(String, "active_map", LATCHED_QOS)
         self.map_list_pub = self.node.create_publisher(StringArray, "map_list", LATCHED_QOS)
+        self.waypoint_list_pub = self.node.create_publisher(StringArray, "waypoint_list", LATCHED_QOS)
 
         # Initialize map list from recordings directory
         self.update_map_list()
@@ -45,6 +48,7 @@ class RTABHelper:
             msg = String()
             msg.data = self.bb.active_map_name
             self.active_map_pub.publish(msg)
+            self.publish_waypoint_list()
 
     def update_map_list(self, extra_map: str = None):
         maps = [f[:-3] for f in os.listdir(self.recordings_dir) if f.endswith(".db")]
@@ -143,7 +147,7 @@ class RTABHelper:
 
     def initialize_mapping(self, map_name: str = None, launch_file="slam_merged_launch.py"):
         """
-        Creates a new empty RTAB-Map database and corresponding JSON for landmarks,
+        Creates a new empty RTAB-Map database and corresponding JSON for waypoints,
         then starts SLAM with it.
         """
         # If map_name not given, try to get it from last_command on blackboard
@@ -155,11 +159,11 @@ class RTABHelper:
         db_path = os.path.join(self.recordings_dir, f"{map_name}.db")
         json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
 
-        # Create empty JSON for landmarks if it does not exist
+        # Create empty JSON for waypoints if it does not exist
         if not os.path.exists(json_path):
             import json
             with open(json_path, "w") as f:
-                json.dump({"landmarks": []}, f, indent=4)
+                json.dump({"waypoints": []}, f, indent=4)
 
         # Stop any currently running SLAM/localization
         self.stop_current_process()
@@ -245,3 +249,129 @@ class RTABHelper:
 
         self.feedback_message = f"Changed to map '{map_name}' in {current_mode} mode"
         return True
+
+    def publish_waypoint_list(self, map_name: str = None):
+        if map_name is None:
+            map_name = self.bb.active_map_name
+        if map_name is None:
+            print("No active map set, cannot publish waypoint list")
+            return
+
+        json_path = os.path.join(self.recordings_dir, f"{self.bb.active_map_name}.json")
+        if not os.path.exists(json_path):
+            print(f"No waypoint file found for map '{self.bb.active_map_name}'")
+            return
+
+        with open(json_path, "r") as f:
+            data = json.load(f)
+
+        waypoints = data.get("waypoints", [])
+        waypoint_names = [wp.get("name", "") for wp in waypoints]
+
+        msg = StringArray()
+        msg.names = waypoint_names
+        self.waypoint_list_pub.publish(msg)
+
+    def add_pose_as_waypoint(self, waypoint_name: str, map_name: str = None, pose: PoseStamped = None):
+        """
+        Add or update a waypoint in the JSON file for the given map.
+        """
+        if map_name is None:
+            map_name = self.bb.active_map_name
+        if map_name is None:
+            raise ValueError("No map_name provided and no active map set")
+        if waypoint_name is None:
+            raise ValueError("waypoint_name must be provided")
+        if pose is None:
+            raise ValueError("pose must be provided")
+
+        json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
+
+        # Load or create JSON structure
+        if os.path.exists(json_path):
+            with open(json_path, "r") as f:
+                data = json.load(f)
+        else:
+            data = {"waypoints": []}
+
+        # Pose to dictionary
+        pose_dict = {
+            "position": {
+                "x": pose.pose.position.x,
+                "y": pose.pose.position.y,
+                "z": pose.pose.position.z,
+            },
+            "orientation": {
+                "x": pose.pose.orientation.x,
+                "y": pose.pose.orientation.y,
+                "z": pose.pose.orientation.z,
+                "w": pose.pose.orientation.w,
+            },
+        }
+
+        # Update existing waypoint if found
+        updated = False
+        for wp in data.get("waypoints", []):
+            if wp.get("name") == waypoint_name:
+                wp["pose"] = pose_dict
+                updated = True
+                break
+
+        # Otherwise add new waypoint
+        if not updated:
+            data["waypoints"].append({
+                "name": waypoint_name,
+                "pose": pose_dict,
+            })
+
+        # Ensure directory exists
+        os.makedirs(self.recordings_dir, exist_ok=True)
+
+        # Write back to file
+        with open(json_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+        # Update waypoint list publisher
+        if map_name == self.bb.active_map_name:
+            self.publish_waypoint_list(map_name)
+
+        return json_path
+
+    def delete_waypoint(self, waypoint_name: str, map_name: str = None):
+        """
+        Delete a waypoint by name from the JSON file for the given map.
+        """
+        if map_name is None:
+            map_name = self.bb.active_map_name
+        if map_name is None:
+            raise ValueError("No map_name provided and no active map set")
+        if waypoint_name is None:
+            raise ValueError("waypoint_name must be provided")
+
+        json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
+
+        if not os.path.exists(json_path):
+            print(f"No waypoint file found for map '{map_name}'")
+            return False
+
+        with open(json_path, "r") as f:
+            data = json.load(f)
+
+        waypoints = data.get("waypoints", [])
+        new_waypoints = [wp for wp in waypoints if wp.get("name") != waypoint_name]
+
+        if len(new_waypoints) == len(waypoints):
+            print(f"Waypoint '{waypoint_name}' not found in map '{map_name}'")
+            return False
+
+        data["waypoints"] = new_waypoints
+
+        with open(json_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+        if map_name == self.bb.active_map_name:
+            self.publish_waypoint_list(map_name)
+
+        return True
+
+

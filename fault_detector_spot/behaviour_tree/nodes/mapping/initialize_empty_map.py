@@ -15,7 +15,7 @@ from std_msgs.msg import String
 
 class InitializeEmptyMap(py_trees.behaviour.Behaviour):
     """
-    Initializes a new RTAB-Map database and corresponding JSON file for landmarks,
+    Initializes a new RTAB-Map database and corresponding JSON file for waypoints,
     then starts SLAM.
     """
 

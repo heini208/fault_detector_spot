@@ -36,7 +36,8 @@ from fault_detector_spot.behaviour_tree import (
     ManipulatorMoveRelativeAction,
     ToggleGripperAction, CloseGripperAction, EnableSLAM,
     DeleteMap,
-    InitializeEmptyMap, SwapMap, EnableLocalization, StopMapping, )
+    InitializeEmptyMap, SwapMap, EnableLocalization, StopMapping, AddGoalPoseAsWaypoint, SaveCurrentPoseAsGoal,
+    DeleteWaypoint)
 
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -127,6 +128,8 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.DELETE_MAP, lambda n: DeleteMap()),
         (CommandID.SWAP_MAP, lambda n: SwapMap(slam_launch="slam_sim_merged_launch.py", localization_launch="localization_sim_merged_launch.py")),
         (CommandID.STOP_MAPPING, lambda n: StopMapping()),
+        (CommandID.ADD_CURRENT_POSITION_WAYPOINT, build_current_pose_as_landmark_tree),
+        (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint()),
     ]
 
     for cmd_id, ctor in specs:
@@ -250,6 +253,16 @@ def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
     manipulation.add_children([get_goal, move_arm])
 
     return manipulation
+
+def build_current_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
+    get_goal = SaveCurrentPoseAsGoal(name="SaveCurrentPoseAsGoal")
+    get_goal.setup(node=node)
+
+    add_waypoint = AddGoalPoseAsWaypoint(name="AddGoalPoseAsWaypoint")
+    add_waypoint.setup(node=node)
+    sequence.add_children([get_goal, add_waypoint])
+    return sequence
 
 def init_ui(self):
     """

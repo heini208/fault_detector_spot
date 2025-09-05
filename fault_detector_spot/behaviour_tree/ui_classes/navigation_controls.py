@@ -18,7 +18,7 @@ class NavigationControls(UIControlHelper):
             get_package_share_directory("fault_detector_spot"),
             "maps"
         )
-        self.landmark_name_field = None
+        self.waypoint_name_field = None
         self.current_map = None
         super().__init__(parent_ui)
 
@@ -40,14 +40,20 @@ class NavigationControls(UIControlHelper):
             self.map_list_callback,
             LATCHED_QOS
         )
+        self.node.create_subscription(
+            StringArray,
+            '/waypoint_list',
+            self.waypoint_list_callback,
+            LATCHED_QOS
+        )
 
     def make_rows(self):
         rows = [
             self._load_map_row(),
             self._make_create_map_row(),
             self._make_mode_row(),
-            self._make_landmark_row(),
-            self._make_add_landmark_row()
+            self._make_waypoint_row(),
+            self._make_add_waypoint_row()
         ]
         return rows
 
@@ -102,6 +108,18 @@ class NavigationControls(UIControlHelper):
             for map_name in msg.names:
                 self.map_dropdown.addItem(map_name)
 
+    def waypoint_list_callback(self, msg: StringArray):
+        """
+        Update the waypoint dropdown with the names received from the waypoint_list topic.
+        """
+        self.waypoint_dropdown.clear()
+
+        if not msg.names:
+            self.waypoint_dropdown.addItem("no waypoints saved")
+        else:
+            for waypoint_name in msg.names:
+                self.waypoint_dropdown.addItem(waypoint_name)
+
     def _make_create_map_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
 
@@ -142,69 +160,52 @@ class NavigationControls(UIControlHelper):
 
         return row
 
-    def _make_landmark_row(self) -> QHBoxLayout:
+    def _make_waypoint_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        row.addWidget(QLabel("Landmarks:"))
+        row.addWidget(QLabel("Waypoints:"))
 
-        # Dropdown for landmarks
-        self.landmark_dropdown = QComboBox()
-        self.update_landmark_dropdown()
-        row.addWidget(self.landmark_dropdown)
+        # Dropdown for waypoints
+        self.waypoint_dropdown = QComboBox()
+        self.update_waypoint_dropdown()
+        row.addWidget(self.waypoint_dropdown)
 
-        # Button to move to selected landmark
-        self.move_to_landmark_button = QPushButton("Move to Landmark")
-        self.move_to_landmark_button.clicked.connect(self.handle_move_to_landmark)
-        row.addWidget(self.move_to_landmark_button)
+        self.delete_waypoint_button = QPushButton("Delete Waypoint")
+        self.delete_waypoint_button.clicked.connect(self.handle_delete_waypoint)
+        row.addWidget(self.delete_waypoint_button)
+
+        # Button to move to selected waypoint
+        self.move_to_waypoint_button = QPushButton("Move to Waypoint")
+        self.move_to_waypoint_button.clicked.connect(self.handle_move_to_waypoint)
+        row.addWidget(self.move_to_waypoint_button)
 
         return row
 
-    def _make_add_landmark_row(self) -> QHBoxLayout:
+    def _make_add_waypoint_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
 
-        # Text field for entering landmark name
-        self.landmark_name_field = QLineEdit()
-        self.landmark_name_field.setPlaceholderText("Enter landmark name")
-        self.landmark_name_field.setFixedWidth(200)
-        row.addWidget(self.landmark_name_field)
+        # Text field for entering waypoint name
+        self.waypoint_name_field = QLineEdit()
+        self.waypoint_name_field.setPlaceholderText("Enter waypoint name")
+        self.waypoint_name_field.setFixedWidth(200)
+        row.addWidget(self.waypoint_name_field)
 
-        # Button to add current pose as landmark
-        self.add_landmark_button = QPushButton("Add current pose as landmark")
-        self.add_landmark_button.clicked.connect(self.handle_add_landmark)
-        row.addWidget(self.add_landmark_button)
+        # Button to add current pose as waypoint
+        self.add_waypoint_button = QPushButton("Add current pose as Waypoint")
+        self.add_waypoint_button.clicked.connect(self.handle_add_waypoint)
+        row.addWidget(self.add_waypoint_button)
 
         return row
 
     # --- Dropdown updates ---
-    def update_landmark_dropdown(self):
-        """Load landmarks from JSON next to the selected map and populate dropdown with names."""
-        self.landmark_dropdown.clear()
+    def update_waypoint_dropdown(self):
+        """Load waypoints from JSON next to the selected map and populate dropdown with names."""
+        self.waypoint_dropdown.clear()
 
         current_map = self.map_dropdown.currentText()
         if not current_map:
-            self.landmark_dropdown.addItem("no landmarks saved")
+            self.waypoint_dropdown.addItem("no waypoints saved")
             return
 
-        landmark_file = os.path.join(
-            self.recordings_dir, f"{current_map}.json"
-        )
-        if not os.path.exists(landmark_file):
-            self.landmark_dropdown.addItem("no landmarks saved")
-            return
-
-        try:
-            with open(landmark_file, "r") as f:
-                landmarks = json.load(f).get("landmarks", [])
-        except Exception as e:
-            print(f"Failed to load landmarks: {e}")
-            landmarks = []
-
-        if not landmarks:
-            self.landmark_dropdown.addItem("no landmarks saved")
-        else:
-            for lm in landmarks:
-                name = lm.get("name", f"landmark_{lm.get('id', '?')}")
-                # Store full landmark as userdata on the item
-                self.landmark_dropdown.addItem(name, userData=lm)
 
     # --- Handlers (currently empty stubs) ---
     def handle_map_confirmed(self):
@@ -236,57 +237,38 @@ class NavigationControls(UIControlHelper):
             self.ui.handle_simple_command(CommandID.START_LOCALIZATION)
 
     def _check_current_map_selected(self) -> bool:
-        if self.current_map is None or self.current_map == "":
+        if self.current_map is None:
             self.show_warning("No Map Selected", "Please load a map first.")
             self.mode_none.setChecked(True)  # switch to default
             return False
         return True
 
-    def handle_add_landmark(self):
-        name = self.landmark_name_field.text().strip()
+    def handle_add_waypoint(self):
+        name = self.waypoint_name_field.text().strip()
         if not name:
-            self.show_warning("Missing Name", "Please enter a landmark name.")
+            self.show_warning("Missing Name", "Please enter a waypoint name.")
             return
 
-        current_map = self.map_dropdown.currentText()
-        if not current_map or current_map == "no maps saved":
+        if not self.current_map:
             self.show_warning("No Map Selected", "Please select a map first.")
             return
 
-        # Check if landmark already exists in dropdown
-        existing_landmarks = [self.landmark_dropdown.itemText(i) for i in range(self.landmark_dropdown.count())]
-        if name in existing_landmarks:
-            self.show_warning("Landmark Exists", f"A landmark named '{name}' already exists in this map.")
+        # Check if waypoint already exists in dropdown
+        existing_waypoints = [self.waypoint_dropdown.itemText(i) for i in range(self.waypoint_dropdown.count())]
+        if name in existing_waypoints:
+            self.show_warning("Waypoint Exists", f"A waypoint named '{name}' already exists in this map.")
             return
 
-        #TODO replace this with command
-        json_path = os.path.join(self.recordings_dir, f"{current_map}.json")
-        if os.path.exists(json_path):
-            try:
-                with open(json_path, "r") as f:
-                    data = json.load(f)
-            except Exception:
-                data = {}
-        else:
-            data = {}
+        complex_command = ComplexCommand()
+        complex_command.command = self.ui.build_basic_command(CommandID.ADD_CURRENT_POSITION_WAYPOINT)
+        complex_command.map_name = self.current_map
+        complex_command.waypoint_name = name
+        self.complex_command_publisher.publish(complex_command)
 
-        if "landmarks" not in data:
-            data["landmarks"] = []
 
-        # Add a testing landmark
-        landmark_entry = {"name": name, "pose": {}}  # empty pose for now
-        data["landmarks"].append(landmark_entry)
-
-        # Save back to JSON
-        with open(json_path, "w") as f:
-            json.dump(data, f, indent=4)
-
-        self.show_info("Landmark Added", f"Added landmark '{name}' to map '{current_map}'")
-        self.update_landmark_dropdown()
-
-    def handle_move_to_landmark(self):
-        selected = self.landmark_dropdown.currentText()
-        # TODO: implement add landmark logic
+    def handle_move_to_waypoint(self):
+        selected = self.waypoint_dropdown.currentText()
+        # TODO: implement add logic
         pass
 
     def handle_create_empty_map(self):
@@ -325,4 +307,12 @@ class NavigationControls(UIControlHelper):
         self.current_map = None
         self.current_map_label.setText("Current Map: None")
         self.mode_none.setChecked(True)
+
+    def handle_delete_waypoint(self):
+        selected = self.waypoint_dropdown.currentText()
+        complex_command = ComplexCommand()
+        complex_command.command = self.ui.build_basic_command(CommandID.DELETE_WAYPOINT)
+        complex_command.map_name = self.current_map
+        complex_command.waypoint_name = selected
+        self.complex_command_publisher.publish(complex_command)
 

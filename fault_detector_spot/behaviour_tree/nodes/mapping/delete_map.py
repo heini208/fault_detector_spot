@@ -8,7 +8,7 @@ from fault_detector_spot.behaviour_tree.commands.generic_complex_command import 
 
 class DeleteMap(py_trees.behaviour.Behaviour):
     """
-    Deletes a .db file and its corresponding JSON file for landmarks.
+    Deletes a .db file and its corresponding JSON file for waypoints.
     The map name is expected in blackboard.last_command.map_name (GenericCommand).
     """
 

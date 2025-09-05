@@ -22,6 +22,7 @@ class CommandID(str, Enum):
     START_LOCALIZATION = "start_localization"
     STOP_MAPPING = "stop_mapping"
     CREATE_MAP = "create_map"
-    SAVE_TO_CURRENT_MAP = "save_to_current_map"
     SWAP_MAP = "swap_map"
     DELETE_MAP = "delete_map"
+    ADD_CURRENT_POSITION_WAYPOINT = "add_current_position_waypoint"
+    DELETE_WAYPOINT = "delete_waypoint"
