@@ -268,7 +268,11 @@ class NavigationControls(UIControlHelper):
 
     def handle_move_to_waypoint(self):
         selected = self.waypoint_dropdown.currentText()
-        # TODO: implement add logic
+        complex_command = ComplexCommand()
+        complex_command.command = self.ui.build_basic_command(CommandID.MOVE_TO_WAYPOINT)
+        complex_command.map_name = self.current_map
+        complex_command.waypoint_name = selected
+        self.complex_command_publisher.publish(complex_command)
         pass
 
     def handle_create_empty_map(self):

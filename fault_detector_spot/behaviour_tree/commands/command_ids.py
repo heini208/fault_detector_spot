@@ -26,3 +26,4 @@ class CommandID(str, Enum):
     DELETE_MAP = "delete_map"
     ADD_CURRENT_POSITION_WAYPOINT = "add_current_position_waypoint"
     DELETE_WAYPOINT = "delete_waypoint"
+    MOVE_TO_WAYPOINT = "move_to_waypoint"

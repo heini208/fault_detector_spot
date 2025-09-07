@@ -4,6 +4,7 @@ import signal
 import subprocess
 
 from fault_detector_msgs.msg import StringArray
+from fault_detector_spot.behaviour_tree.nodes.navigation.nav2_helper import Nav2Helper
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 from ament_index_python.packages import get_package_share_directory
@@ -18,27 +19,41 @@ class RTABHelper:
     Integrates with py_trees Blackboard and ROS2 Node for publishing map state.
     """
 
-    def __init__(self, node, blackboard):
+    def __init__(self, node, blackboard, nav2_launch_file="nav2_sim_launch.py", nav2_params_file=None):
         self.node = node
         self.bb = blackboard
         self.recordings_dir = os.path.join(get_package_share_directory("fault_detector_spot"), "maps")
 
         # Ensure blackboard keys exist
+        self.init_blackboard_keys()
+        self.init_ros_publishers()
+
+        self.nav2_helper = Nav2Helper(
+            node=self.node,
+            blackboard=self.bb,
+            launch_file=nav2_launch_file,
+            params_file=nav2_params_file
+        )
+        # Initialize map list from recordings directory
+        self.update_map_list()
+
+    def init_blackboard_keys(self):
         self.bb.register_key("active_map_name", access=py_trees.common.Access.WRITE)
         self.bb.register_key("mapping_launch_process", access=py_trees.common.Access.WRITE)
+        self.bb.register_key("nav2_launch_process", access=py_trees.common.Access.WRITE)
 
         if not self.bb.exists("active_map_name"):
             self.bb.active_map_name = None
         if not self.bb.exists("mapping_launch_process"):
             self.bb.mapping_launch_process = None
+        if not self.bb.exists("nav2_launch_process"):
+            self.bb.nav2_launch_process = None
 
+    def init_ros_publishers(self):
         # ROS publishers
         self.active_map_pub = self.node.create_publisher(String, "active_map", LATCHED_QOS)
         self.map_list_pub = self.node.create_publisher(StringArray, "map_list", LATCHED_QOS)
         self.waypoint_list_pub = self.node.create_publisher(StringArray, "waypoint_list", LATCHED_QOS)
-
-        # Initialize map list from recordings directory
-        self.update_map_list()
 
     def _db_path(self, map_name: str):
         return os.path.join(self.recordings_dir, f"{map_name}.db")
@@ -93,10 +108,16 @@ class RTABHelper:
         self.bb.active_map_name = map_name
         self.set_mode_localization()
         self._publish_active_map()
+
+        if not self.nav2_helper.is_running():
+            self.nav2_helper.start()
         return proc
 
     def stop_current_process(self):
         proc = getattr(self.bb, "mapping_launch_process", None)
+        if self.nav2_helper.is_running():
+            self.nav2_helper.stop()
+
         if proc:
             try:
                 if self._get_running_mode() == "mapping":
@@ -105,6 +126,7 @@ class RTABHelper:
 
                 os.killpg(os.getpgid(proc.pid), signal.SIGINT)
                 proc.wait(timeout=1)
+
 
             except Exception as e:
                 print(f"Failed to stop RTAB-Map process: {e}")
@@ -138,12 +160,6 @@ class RTABHelper:
         if future.done():
             return future.result()
         return False
-
-    def restart_mapping(self, map_name: str, launch_file="slam_merged_launch.py"):
-        self.start_mapping(map_name, launch_file)
-
-    def restart_localization(self, map_name: str, launch_file="localization_merged_launch.py"):
-        self.start_localization(map_name, launch_file)
 
     def initialize_mapping(self, map_name: str = None, launch_file="slam_merged_launch.py"):
         """
@@ -373,5 +389,3 @@ class RTABHelper:
             self.publish_waypoint_list(map_name)
 
         return True
-
-

@@ -75,6 +75,30 @@ def generate_launch_description():
         ),
 
         Node(
+            package='pointcloud_to_laserscan',
+            executable='pointcloud_to_laserscan_node',
+            name='pointcloud_to_laserscan',
+            parameters=[{
+                'target_frame': 'base_link',
+                'transform_tolerance': 0.1,
+                'min_height': -0.3,
+                'max_height': 0.3,
+                'angle_min': -3.14,
+                'angle_max': 3.14,
+                'angle_increment': 0.0174533,  # 1 degree
+                'scan_time': 0.1,
+                'range_min': 0.05,
+                'range_max': 10.0,
+            }],
+            remappings=[
+                ('cloud_in', '/merged_cloud'),
+                ('scan', '/merged_scan'),
+            ],
+            output='screen',
+        ),
+
+
+    Node(
             package='rtabmap_sync',
             executable='rgbd_sync',
             name='rgbd_sync',

@@ -28,6 +28,8 @@ from .nodes.mapping.stop_mapping import StopMapping
 from .nodes.mapping.add_goal_pose_as_waypoint import AddGoalPoseAsWaypoint
 from .nodes.mapping.save_current_pose_as_goal import SaveCurrentPoseAsGoal
 from .nodes.mapping.delete_waypoint import DeleteWaypoint
+from .nodes.navigation.set_waypoint_as_goal import SetWaypointAsGoal
+from .nodes.navigation.navigate_to_goal_pose import NavigateToGoalPose
 
 
 __all__ = [
@@ -58,5 +60,7 @@ __all__ = [
   "StopMapping",
   "AddGoalPoseAsWaypoint",
   "SaveCurrentPoseAsGoal",
-  "DeleteWaypoint"
+  "DeleteWaypoint",
+  "SetWaypointAsGoal",
+  "NavigateToGoalPose",
 ]

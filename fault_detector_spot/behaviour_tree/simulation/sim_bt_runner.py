@@ -37,7 +37,7 @@ from fault_detector_spot.behaviour_tree import (
     ToggleGripperAction, CloseGripperAction, EnableSLAM,
     DeleteMap,
     InitializeEmptyMap, SwapMap, EnableLocalization, StopMapping, AddGoalPoseAsWaypoint, SaveCurrentPoseAsGoal,
-    DeleteWaypoint)
+    DeleteWaypoint, SetWaypointAsGoal, NavigateToGoalPose)
 
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -75,8 +75,8 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     detect = DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)")
     detect.setup(node=node)
 
-    #hand_detect = HandCameraTagDetection(name="HandCameraTagDetection", hand_camera_topic="/Spot/right_head_depth/image", hand_camera_info_topic="/Spot/right_head_depth/camera_info", target_frame="base_link", source_frame="right head depth")
-    #detect.setup(node=node)
+    # hand_detect = HandCameraTagDetection(name="HandCameraTagDetection", hand_camera_topic="/Spot/right_head_depth/image", hand_camera_info_topic="/Spot/right_head_depth/camera_info", target_frame="base_link", source_frame="right head depth")
+    # detect.setup(node=node)
 
     in_range_checker = CheckTagReachability(name="CheckTagReachability")
     detect.setup(node=node)
@@ -126,16 +126,19 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.START_LOCALIZATION, lambda n: EnableLocalization(launch_file="localization_sim_merged_launch.py")),
         (CommandID.CREATE_MAP, lambda n: InitializeEmptyMap(launch_file="slam_sim_merged_launch.py")),
         (CommandID.DELETE_MAP, lambda n: DeleteMap()),
-        (CommandID.SWAP_MAP, lambda n: SwapMap(slam_launch="slam_sim_merged_launch.py", localization_launch="localization_sim_merged_launch.py")),
+        (CommandID.SWAP_MAP, lambda n: SwapMap(slam_launch="slam_sim_merged_launch.py",
+                                               localization_launch="localization_sim_merged_launch.py")),
         (CommandID.STOP_MAPPING, lambda n: StopMapping()),
         (CommandID.ADD_CURRENT_POSITION_WAYPOINT, build_current_pose_as_landmark_tree),
         (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint()),
+        (CommandID.MOVE_TO_WAYPOINT, build_navigate_to_goal_pose_tree),
     ]
 
     for cmd_id, ctor in specs:
         command_selector.add_child(make_simple_command_sequence(node, cmd_id, ctor))
 
     return command_selector
+
 
 def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     cancel_check = match_command_checker(CommandID.EMERGENCY_CANCEL)
@@ -254,6 +257,7 @@ def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
 
     return manipulation
 
+
 def build_current_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
     get_goal = SaveCurrentPoseAsGoal(name="SaveCurrentPoseAsGoal")
@@ -263,6 +267,19 @@ def build_current_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behav
     add_waypoint.setup(node=node)
     sequence.add_children([get_goal, add_waypoint])
     return sequence
+
+
+def build_navigate_to_goal_pose_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    sequence = py_trees.composites.Sequence("NavigateToWaypoint", memory=True)
+    set_goal = SetWaypointAsGoal(name="SetWaypointAsGoal")
+    set_goal.setup(node=node)
+
+    navigate = NavigateToGoalPose(name="NavigateToGoalPose")
+    navigate.setup(node=node)
+    sequence.add_children([set_goal, navigate])
+
+    return sequence
+
 
 def init_ui(self):
     """
@@ -289,14 +306,13 @@ def init_ui(self):
     self.complex_command_publisher.publish(msg)
 
 
-
 def main(args=None):
     rclpy.init(args=args)
 
     root = create_root()
     tree = py_trees_ros.trees.BehaviourTree(
         root=root,
-        unicode_tree_debug=True
+        unicode_tree_debug=False
     )
 
     try:

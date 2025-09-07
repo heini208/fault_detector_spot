@@ -1,0 +1,87 @@
+amcl:
+  ros__parameters:
+    use_sim_time: true
+    enabled: false  # Disable AMCL; RTAB-Map provides localization
+
+map_server:
+  ros__parameters:
+    use_sim_time: true
+    yaml_filename: ""  # not needed if using RTAB-Map TF
+
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_plugins: ["FollowPath"]
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      xy_goal_tolerance: 0.05
+      yaw_goal_tolerance: 0.05
+      max_vel_x: 0.5
+      min_vel_x: 0.0
+      max_vel_theta: 1.0
+      min_vel_theta: -1.0
+      acc_lim_x: 1.0
+      acc_lim_theta: 1.0
+      sim_time: 1.0
+      sim_granularity: 0.025
+      path_distance_bias: 32.0
+      goal_distance_bias: 24.0
+      occdist_scale: 0.01
+      critics: ["GoalDistCritic","PathDistCritic","GoalAlignCritic","OscillationCritic"]
+      GoalDistCritic:
+        scale: 32.0
+      PathDistCritic:
+        scale: 24.0
+      GoalAlignCritic:
+        scale: 2.0
+      OscillationCritic:
+        scale: 0.05
+    transform_tolerance: 0.2        # allow some TF timing slack
+    tf_buffer_duration: 10.0        # increase TF buffer to handle old transforms
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+
+global_costmap:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: map
+    robot_base_frame: base_link
+    update_frequency: 5.0
+    static_map: false  # RTAB-Map provides TF
+    plugins: ["obstacle_layer"]
+    obstacle_layer:
+      plugin: "nav2_costmap_2d::ObstacleLayer"
+      topic: "/merged_scan"
+      observation_sources: "scan"
+      scan:
+        data_type: LaserScan
+        topic: "/merged_scan"
+        marking: true
+        clearing: true
+
+local_costmap:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: odom
+    robot_base_frame: base_link
+    update_frequency: 5.0
+    plugins: ["obstacle_layer"]
+    obstacle_layer:
+      plugin: "nav2_costmap_2d::ObstacleLayer"
+      topic: "/merged_scan"
+      observation_sources: "scan"
+      scan:
+        data_type: LaserScan
+        topic: "/merged_scan"
+        marking: true
+        clearing: true
