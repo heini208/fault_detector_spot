@@ -1,6 +1,7 @@
 import py_trees
 
 from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
+from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
 
 
 class EnableLocalization(py_trees.behaviour.Behaviour):
@@ -10,7 +11,7 @@ class EnableLocalization(py_trees.behaviour.Behaviour):
         self.blackboard = self.attach_blackboard_client(name=name)
 
     def setup(self, **kwargs):
-        self.rtab_helper = RTABHelper(kwargs.get("node"), self.blackboard)
+        self.slam_helper = SlamToolboxHelper(kwargs.get("node"), self.blackboard)
         pass
 
     def update(self) -> py_trees.common.Status:
@@ -18,16 +19,11 @@ class EnableLocalization(py_trees.behaviour.Behaviour):
             self.feedback_message = "No active map set, cannot enable Localization"
             return py_trees.common.Status.FAILURE
 
-        if self.rtab_helper.is_rtabmap_running():
-            self.feedback_message = "RTAB-Map detected, switching to Localization mode"
-            self.rtab_helper.set_mode_localization()
+        self.feedback_message = f"Launching {self.launch_file} for Localization"
+        proc = self.slam_helper.start_localization(launch_file=self.launch_file)
+        if proc:
+            self.blackboard.mapping_launch_process = proc
             return py_trees.common.Status.SUCCESS
         else:
-            self.feedback_message = f"Launching {self.launch_file} for Localization"
-            proc = self.rtab_helper.start_localization(launch_file=self.launch_file)
-            if proc:
-                self.blackboard.mapping_launch_process = proc
-                return py_trees.common.Status.SUCCESS
-            else:
-                return py_trees.common.Status.FAILURE
+            return py_trees.common.Status.FAILURE
 

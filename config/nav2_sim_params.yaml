@@ -61,7 +61,7 @@ global_costmap:
     plugins: ["obstacle_layer"]
     obstacle_layer:
       plugin: "nav2_costmap_2d::ObstacleLayer"
-      topic: "/merged_scan"
+      topic: "/scan"
       observation_sources: "scan"
       scan:
         data_type: LaserScan

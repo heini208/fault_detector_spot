@@ -36,9 +36,10 @@ class PublishInitialUIInfoOnce(py_trees.behaviour.Behaviour):
         map_files = []
         if os.path.isdir(self.recordings_dir):
             for f in sorted(os.listdir(self.recordings_dir)):
-                if f.endswith(".db"):
-                    map_files.append(f[:-3])
+                if f.endswith(".posegraph"):
+                    map_files.append(f[:-10])
 
         msg = StringArray()
         msg.names = map_files
         self.publisher.publish(msg)
+

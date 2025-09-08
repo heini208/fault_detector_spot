@@ -1,29 +1,37 @@
 import typing
-
 import py_trees
-import signal
-import os
-
-from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
-from py_trees.blackboard import Blackboard
+from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
 
 
 class StopMapping(py_trees.behaviour.Behaviour):
     """
-    Stops the currently running mapping/localization process if one is active.
+    Stops the currently running mapping/localization process and waits
+    until it is fully terminated.
     """
 
-    def __init__(self, name="StopMapping"):
+    def __init__(self, name="StopMapping", with_save: bool = True):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client(name=name)
+        self._stop_called = False
+        self.helper: SlamToolboxHelper | None = None
+        self.with_save = with_save
 
     def setup(self, **kwargs: typing.Any) -> None:
-        self.helper = RTABHelper(kwargs.get("node"), self.blackboard)
+        self.helper = SlamToolboxHelper(kwargs.get("node"), self.blackboard)
 
     def update(self) -> py_trees.common.Status:
-        try:
+        if self.with_save:
             self.helper.stop_current_process()
+
+        # Only attempt to stop once
+        elif not self._stop_called:
+            self.helper.stop_current_process()
+            self._stop_called = True
+            self.feedback_message = "Stop requested, waiting for Slam Toolbox to terminate"
+
+        # Check if Slam Toolbox is still running
+        if self.helper.is_slam_running():
+            return py_trees.common.Status.RUNNING  # Keep behaviour running
+        else:
+            self.feedback_message = "Slam Toolbox stopped successfully"
             return py_trees.common.Status.SUCCESS
-        except Exception as e:
-            self.feedback_message = f"Failed to stop mapping: {e}"
-            return py_trees.common.Status.FAILURE

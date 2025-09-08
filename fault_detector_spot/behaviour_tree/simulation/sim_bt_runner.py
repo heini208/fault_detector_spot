@@ -1,5 +1,7 @@
 # In fault_detector_spot/behaviour_tree/bt_runner.py
 import os
+import signal
+import time
 from typing import Callable
 
 import rclpy
@@ -126,8 +128,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.START_LOCALIZATION, lambda n: EnableLocalization(launch_file="localization_sim_merged_launch.py")),
         (CommandID.CREATE_MAP, lambda n: InitializeEmptyMap(launch_file="slam_sim_merged_launch.py")),
         (CommandID.DELETE_MAP, lambda n: DeleteMap()),
-        (CommandID.SWAP_MAP, lambda n: SwapMap(slam_launch="slam_sim_merged_launch.py",
-                                               localization_launch="localization_sim_merged_launch.py")),
+        (CommandID.SWAP_MAP, lambda n: SwapMap(slam_launch="slam_sim_merged_launch.py")),
         (CommandID.STOP_MAPPING, lambda n: StopMapping()),
         (CommandID.ADD_CURRENT_POSITION_WAYPOINT, build_current_pose_as_landmark_tree),
         (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint()),
@@ -306,38 +307,51 @@ def init_ui(self):
     self.complex_command_publisher.publish(msg)
 
 
+def ctrl_c_handler(sig, frame):
+    """
+    Trigger StopMapping behaviour until Slam Toolbox terminates.
+    """
+    global stop_mapping_behavior, stop_mapping_tree
+
+    if stop_mapping_behavior is None or stop_mapping_tree is None:
+        return
+
+    node = stop_mapping_behavior.helper.node
+    node.get_logger().info("Ctrl-C received, running StopMapping behaviour...")
+
+    # Tick StopMapping until it returns SUCCESS
+    while stop_mapping_behavior.update() != py_trees.common.Status.SUCCESS:
+        time.sleep(0.1)  # 100ms between ticks
+
+    node.get_logger().info("StopMapping completed, exiting...")
+    # then allow main finally block to run
+
+
 def main(args=None):
     rclpy.init(args=args)
 
     root = create_root()
-    tree = py_trees_ros.trees.BehaviourTree(
-        root=root,
-        unicode_tree_debug=False
-    )
-
-    try:
-        tree.setup(timeout=15.0)
-    except py_trees_ros.exceptions.TimedOutError as e:
-        print(f"Failed to setup the tree: {e}")
-        tree.shutdown()
-        rclpy.shutdown()
-        sys.exit(1)
-
+    tree = py_trees_ros.trees.BehaviourTree(root=root, unicode_tree_debug=False)
+    tree.setup(timeout=15.0)
     tree.tick_tock(period_ms=50.0)
 
+    # Create StopMapping behaviour instance
+    global stop_mapping_behavior, stop_mapping_tree
+    stop_mapping_behavior = StopMapping(with_save=True)
+    stop_mapping_behavior.setup(node=tree.node)
+    stop_mapping_tree = tree
+
+    # Register Ctrl-C handler
+    signal.signal(signal.SIGINT, ctrl_c_handler)
+
+    # Normal spinning
     try:
         rclpy.spin(tree.node)
-    except KeyboardInterrupt:
-        pass
     finally:
-        # Create and tick StopMapping **once** before full shutdown
-        stop_mapping = StopMapping(name="StopMappingOnShutdown")
-        stop_mapping.setup(node=tree.node)
-        stop_mapping.tick_once()
-
         tree.shutdown()
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

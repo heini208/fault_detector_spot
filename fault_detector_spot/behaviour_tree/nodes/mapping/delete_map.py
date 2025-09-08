@@ -6,9 +6,10 @@ from fault_detector_msgs.msg import StringArray
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
 from fault_detector_spot.behaviour_tree.commands.generic_complex_command import GenericCommand
 
+
 class DeleteMap(py_trees.behaviour.Behaviour):
     """
-    Deletes a .db file and its corresponding JSON file for waypoints.
+    Deletes a .posegraph and its corresponding .data and JSON file for waypoints.
     The map name is expected in blackboard.last_command.map_name (GenericCommand).
     """
 
@@ -19,6 +20,7 @@ class DeleteMap(py_trees.behaviour.Behaviour):
             get_package_share_directory("fault_detector_spot"),
             "maps"
         )
+        self.publisher = None
 
     def setup(self, **kwargs):
         self.blackboard.register_key(
@@ -42,12 +44,12 @@ class DeleteMap(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
     def delete_map_files(self, map_name: str):
-        db_path = os.path.join(self.recordings_dir, f"{map_name}.db")
+        posegraph_path = os.path.join(self.recordings_dir, f"{map_name}.posegraph")
+        data_path = os.path.join(self.recordings_dir, f"{map_name}.data")
         json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
 
-        # Delete files if they exist
         deleted_any = False
-        for path in [db_path, json_path]:
+        for path in [posegraph_path, data_path, json_path]:
             if os.path.exists(path):
                 os.remove(path)
                 deleted_any = True
@@ -73,15 +75,15 @@ class DeleteMap(py_trees.behaviour.Behaviour):
         return True
 
     def publish_map_list(self):
-        """Collect all .db filenames in the recordings folder and publish as StringArray."""
+        """Collect all .posegraph filenames in the recordings folder and publish as StringArray."""
         if self.publisher is None:
             return
 
         map_files = []
         if os.path.isdir(self.recordings_dir):
             for f in sorted(os.listdir(self.recordings_dir)):
-                if f.endswith(".db"):
-                    map_files.append(f[:-3])
+                if f.endswith(".posegraph"):
+                    map_files.append(f[:-10])  # remove ".posegraph"
 
         msg = StringArray()
         msg.names = map_files

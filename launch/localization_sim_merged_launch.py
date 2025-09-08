@@ -17,7 +17,7 @@ def generate_launch_description():
     # Launch argument for database_path
     declare_db_path = DeclareLaunchArgument(
         'database_path',
-        default_value=os.path.expanduser('~/.ros/rtabmap.db'),
+        default_value=os.path.expanduser('~/.ros/slam_map.db'),
         description='Path to the RTAB-Map database (.db)'
     )
 

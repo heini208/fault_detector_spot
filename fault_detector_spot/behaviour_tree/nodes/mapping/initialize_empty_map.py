@@ -1,16 +1,8 @@
-import os
-import json
-import subprocess
 import py_trees
-from ament_index_python.packages import get_package_share_directory
-from fault_detector_msgs.msg import StringArray
-from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
 from fault_detector_spot.behaviour_tree.commands.generic_complex_command import GenericCommand
-import signal
 
-from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
+from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
 from py_trees.behaviours import Success
-from std_msgs.msg import String
 
 
 class InitializeEmptyMap(py_trees.behaviour.Behaviour):
@@ -29,7 +21,8 @@ class InitializeEmptyMap(py_trees.behaviour.Behaviour):
         self.node = kwargs.get("node")
         if self.node is None:
             raise RuntimeError("Node must be passed to setup() for ROS publishing")
-        self.rtab_helper = RTABHelper(self.node, self.blackboard)
+
+        self.slam_helper = SlamToolboxHelper(self.node, self.blackboard)
 
     def update(self) -> py_trees.common.Status:
         if not self.is_command_valid():
@@ -37,7 +30,7 @@ class InitializeEmptyMap(py_trees.behaviour.Behaviour):
 
         cmd = self.blackboard.last_command
         map_name = cmd.map_name.strip()
-        self.rtab_helper.initialize_mapping(map_name, self.launch_file)
+        self.slam_helper.start_mapping(map_name, self.launch_file)
 
         return Success
 
