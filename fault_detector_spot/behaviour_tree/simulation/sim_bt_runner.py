@@ -125,7 +125,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.CLOSE_GRIPPER, lambda n: CloseGripperAction()),
         (CommandID.STOP_BASE, lambda n: PublishZeroVel()),
         (CommandID.START_SLAM, lambda n: EnableSLAM(launch_file="slam_sim_merged_launch.py")),
-        (CommandID.START_LOCALIZATION, lambda n: EnableLocalization(launch_file="localization_sim_merged_launch.py")),
+        (CommandID.START_LOCALIZATION, lambda n: EnableLocalization(launch_file="slam_sim_merged_launch.py")),
         (CommandID.CREATE_MAP, lambda n: InitializeEmptyMap(launch_file="slam_sim_merged_launch.py")),
         (CommandID.DELETE_MAP, lambda n: DeleteMap()),
         (CommandID.SWAP_MAP, lambda n: SwapMap(slam_launch="slam_sim_merged_launch.py")),
@@ -337,7 +337,7 @@ def main(args=None):
 
     # Create StopMapping behaviour instance
     global stop_mapping_behavior, stop_mapping_tree
-    stop_mapping_behavior = StopMapping(with_save=True)
+    stop_mapping_behavior = StopMapping(with_save=False)
     stop_mapping_behavior.setup(node=tree.node)
     stop_mapping_tree = tree
 

@@ -22,7 +22,7 @@ class InitializeEmptyMap(py_trees.behaviour.Behaviour):
         if self.node is None:
             raise RuntimeError("Node must be passed to setup() for ROS publishing")
 
-        self.slam_helper = SlamToolboxHelper(self.node, self.blackboard)
+        self.slam_helper = SlamToolboxHelper(self.node, self.blackboard, self.launch_file)
 
     def update(self) -> py_trees.common.Status:
         if not self.is_command_valid():
@@ -30,7 +30,7 @@ class InitializeEmptyMap(py_trees.behaviour.Behaviour):
 
         cmd = self.blackboard.last_command
         map_name = cmd.map_name.strip()
-        self.slam_helper.start_mapping(map_name, self.launch_file)
+        self.slam_helper.start_mapping_from_scratch(map_name)
 
         return Success
 

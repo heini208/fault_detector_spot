@@ -1,7 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
@@ -28,11 +28,22 @@ def generate_launch_description():
         default_value='true',
         description='Launch RViz2'
     )
+    map_start_pose_arg = DeclareLaunchArgument(
+        'map_start_pose',
+        default_value='0.0,0.0,0.0',
+        description='Starting pose for localization: x,y,z,qx,qy,qz,qw'
+    )
 
+    map_start_pose_array = PythonExpression([
+        "[", LaunchConfiguration('map_start_pose'), "]"
+    ])
+
+    # Launch configurations
     map_db_path = LaunchConfiguration('map_db_path')
     mode = LaunchConfiguration('mode')
     use_sim_time = LaunchConfiguration('use_sim_time')
     launch_rviz = LaunchConfiguration('launch_rviz')
+    map_start_pose = LaunchConfiguration('map_start_pose')
 
     # Merge PointClouds
     merger_node = Node(
@@ -89,9 +100,10 @@ def generate_launch_description():
             'odom_frame': 'odom',
             'base_frame': 'base_link',
             'map_frame': 'map',
-            'enable_interactive_mode': True,  # allows manual graph corrections
+            'enable_interactive_mode': True,
             'scan_queue_size': 1,
-            'map_update_interval': 1.0
+            'map_update_interval': 1.0,
+            'map_start_pose': map_start_pose_array
         }],
         output='screen'
     )
@@ -115,6 +127,7 @@ def generate_launch_description():
         mode_arg,
         use_sim_time_arg,
         launch_rviz_arg,
+        map_start_pose_arg,
         merger_node,
         pcl_to_scan_node,
         slam_node,

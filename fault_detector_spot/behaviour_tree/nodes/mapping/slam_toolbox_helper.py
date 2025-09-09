@@ -1,3 +1,4 @@
+import math
 import os
 import signal
 import subprocess
@@ -5,8 +6,11 @@ import json
 
 import py_trees
 import rclpy
+import tf2_ros
+from rclpy import Future
+from slam_toolbox.srv import DeserializePoseGraph, SaveMap
 from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Pose
 from fault_detector_msgs.msg import StringArray
 from fault_detector_spot.behaviour_tree.nodes.navigation.nav2_helper import Nav2Helper
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
@@ -19,8 +23,9 @@ class SlamToolboxHelper:
     Uses .posegraph for map storage instead of RTAB-Map .db.
     """
 
-    def __init__(self, node, blackboard, nav2_launch_file="nav2_sim_launch.py", nav2_params_file=None):
+    def __init__(self, node, blackboard, nav2_launch_file="nav2_sim_launch.py", nav2_params_file=None, launch_file="slam_sim_merged_launch.py"):
         self.node = node
+        self.slam_launch_file = launch_file
         self.bb = blackboard
         self.recordings_dir = os.path.join(
             get_package_share_directory("fault_detector_spot"), "maps"
@@ -36,6 +41,9 @@ class SlamToolboxHelper:
             launch_file=nav2_launch_file,
             params_file=nav2_params_file
         )
+
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self.node)
 
         # Load available maps
         self.update_map_list()
@@ -58,6 +66,9 @@ class SlamToolboxHelper:
         self.waypoint_list_pub = self.node.create_publisher(StringArray, "waypoint_list", LATCHED_QOS)
 
     def _posegraph_path(self, map_name: str):
+        return os.path.join(self.recordings_dir, f"{map_name}.posegraph")
+
+    def _posegraph_without_ext(self, map_name: str):
         return os.path.join(self.recordings_dir, f"{map_name}")
 
     def _json_path(self, map_name: str):
@@ -84,12 +95,18 @@ class SlamToolboxHelper:
         if proc:
             try:
                 # Determine if we are in mapping mode
-                if getattr(self.bb, "active_map_name", None):
                     # Serialize current map before stopping
-                    posegraph_path = self._posegraph_path(self.bb.active_map_name)
-                    self.node.get_logger().info(f"Serializing posegraph: {posegraph_path}")
-                    os.system(
-                        f"ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph '{{filename: \"{posegraph_path}\"}}'")
+                posegraph_path = self._posegraph_without_ext(self.bb.active_map_name)
+                self.node.get_logger().info(f"Serializing posegraph: {posegraph_path}")
+                os.system(
+                    f"ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph '{{filename: \"{posegraph_path}\"}}'")
+
+                self.node.get_logger().info(f"Saving Nav2 map: {posegraph_path}")
+                subprocess.run([
+                    "ros2", "run", "nav2_map_server", "map_saver_cli",
+                    "-f", posegraph_path,
+                    "--ros-args", "-p", "map_subscribe_transient_local:=true"
+                ], check=True)
 
                 os.killpg(os.getpgid(proc.pid), signal.SIGINT)
                 proc.wait(timeout=1)
@@ -116,78 +133,100 @@ class SlamToolboxHelper:
         if self.nav2_helper.is_running():
             self.nav2_helper.stop()
 
-    def start_mapping(self, map_name: str =  None, launch_file="slam_toolbox_launch.py", initial_pose: PoseStamped = None):
-        """Start mapping, optionally continue on existing posegraph."""
-        self.stop_current_process()
-        if map_name is None:
-            map_name = self.bb.active_map_name
-            if map_name is None:
-                raise RuntimeError("No active map set to start mapping")
 
-        os.makedirs(self.recordings_dir, exist_ok=True)
-        posegraph_path = self._posegraph_path(map_name)
-        json_path = self._json_path(map_name)
+    def get_odom_pose(self) -> list[float] | None:
+        """
+        Returns the current odom pose as [x, y, theta] for Slam Toolbox localization.
+        """
+        try:
+            trans = self.tf_buffer.lookup_transform('odom', 'base_link', rclpy.time.Time())
+        except Exception as e:
+            self.node.get_logger().warn(f"Failed to get odom -> base_link transform: {e}")
+            return None
 
-        # Ensure waypoint file exists
-        if not os.path.exists(json_path):
-            with open(json_path, "w") as f:
-                json.dump({"waypoints": []}, f, indent=2)
+        x = trans.transform.translation.x
+        y = trans.transform.translation.y
 
-        # Deserialize map if exists
-        if os.path.exists(posegraph_path):
-            self.node.get_logger().info(f"Continuing existing map: {map_name}")
-            os.system(
-                f"ros2 service call /slam_toolbox/deserialize_map slam_toolbox/srv/DeserializePoseGraph '{{filename: \"{posegraph_path}\"}}'")
+        # Convert quaternion to yaw (theta)
+        q = trans.transform.rotation
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        theta = math.atan2(siny_cosp, cosy_cosp)
 
-        # Set initial pose for AMCL if provided
-        if initial_pose:
-            self.node.get_logger().info(f"Setting initial pose for mapping from localization")
-            self.node.get_logger().info(f"{initial_pose}")
-            # Publish to /initialpose topic so slam_toolbox continues correctly
-            pub = self.node.create_publisher(PoseStamped, '/initialpose', 1)
-            pub.publish(initial_pose)
+        return [x, y, theta]
 
+    def _launch_slam_toolbox(self, map_name: str, mode: str = "mapping"):
+        """Launch Slam Toolbox with specified map and mode."""
+        map_start_pose = self.get_odom_pose()  # [x, y, theta]
+        if map_start_pose is None:
+            map_start_pose = [0.0, 0.0, 0.0]
+
+        # Convert to string for launch argument
+        pose_str = ",".join([f"{v:.6f}" for v in map_start_pose])
+
+        path = self._posegraph_without_ext(map_name)
         args = [
-            "ros2", "launch", "fault_detector_spot", launch_file,
-            f"map_db_path:={posegraph_path}",
-            "mode:=mapping",
-            "launch_rviz:=true"
+            "ros2", "launch", "fault_detector_spot", self.slam_launch_file,
+            f"map_db_path:={path}",
+            f"mode:={mode}",
+            "launch_rviz:=true",
+            f"map_start_pose:={pose_str}"
         ]
         proc = subprocess.Popen(args, preexec_fn=os.setsid)
         self.bb.slam_launch_process = proc
         self.bb.active_map_name = map_name
         self._publish_active_map()
+        return proc
+
+    def _deserialize_map(self, map_name: str):
+        """Call Slam Toolbox service to load a saved posegraph."""
+        cli = self.node.create_client(DeserializePoseGraph, '/slam_toolbox/deserialize_map')
+        while not cli.wait_for_service(timeout_sec=1.0):
+            self.node.get_logger().info("Waiting for /slam_toolbox/deserialize_map service...")
+        req = DeserializePoseGraph.Request()
+        req.filename = self._posegraph_path(map_name)
+        future = cli.call_async(req)
+        rclpy.spin_until_future_complete(self.node, future)
+        self.node.get_logger().info(f"Deserialized map: {map_name}")
+
+    def start_mapping_from_scratch(self, map_name: str = None):
+        """Start a brand-new map from scratch."""
+        self.stop_current_process()
         self.update_map_list(map_name)
-        return proc
+        json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
 
-    def start_localization(self, map_name: str = None, launch_file="slam_toolbox_launch.py"):
-        """Switch to localization mode, start Nav2."""
-        self.stop_current_process()
+        # Create empty JSON for waypoints if it does not exist
+        if not os.path.exists(json_path):
+            import json
+            with open(json_path, "w") as f:
+                json.dump({"waypoints": []}, f, indent=4)
+
+        return self._launch_slam_toolbox(map_name, mode="mapping")
+
+    def start_mapping_from_existing(self, map_name: str = None):
+        """Start mapping, continuing from a previously saved posegraph."""
         if map_name is None:
             map_name = self.bb.active_map_name
-            if map_name is None:
-                raise RuntimeError("No active map set to start localization")
+        self.stop_current_process()
+        proc = self._launch_slam_toolbox(map_name, mode="mapping")
+        #self._deserialize_map(map_name)
+        return proc
 
-        posegraph_path = self._posegraph_path(map_name)
-
-        if not os.path.exists(posegraph_path):
-            raise RuntimeError(f"No posegraph file found for map '{map_name}'")
-
-        args = [
-            "ros2", "launch", "fault_detector_spot", launch_file,
-            f"map_db_path:={posegraph_path}",
-            "mode:=localization",
-            "launch_rviz:=true"
-        ]
-        proc = subprocess.Popen(args, preexec_fn=os.setsid)
-        self.bb.slam_launch_process = proc
-        self.bb.active_map_name = map_name
-        self._publish_active_map()
-
-        if not self.nav2_helper.is_running():
-            self.nav2_helper.start()
+    def start_localization(self, map_name: str = None, slam_launch="slam_toolbox_launch.py"):
+        """
+        Start Slam Toolbox in localization mode using a previously saved serialized map.
+        Uses the current odom pose as map_start_pose.
+        """
+        if map_name is None:
+            map_name = self.bb.active_map_name
+        self.stop_current_process()
+        # Map path WITHOUT extension for localization
+        map_path_no_ext = self._posegraph_without_ext(map_name)
+        # Prepare launch arguments
+        proc = self._launch_slam_toolbox(map_name, mode="localization")
 
         return proc
+
 
     def is_slam_running(self) -> bool:
         """Check if Slam Toolbox is currently running."""
@@ -212,7 +251,7 @@ class SlamToolboxHelper:
         except Exception:
             return "mapping"
 
-    def change_map(self, map_name: str, slam_launch="slam_toolbox_launch.py"):
+    def change_map(self, map_name: str):
         """
         Change the active map. If Slam Toolbox is running, restart in current mode
         with the new map. If not running, just update active_map_name.
@@ -233,9 +272,9 @@ class SlamToolboxHelper:
         self.stop_current_process()
         current_mode = self._get_slam_mode()
         if current_mode == "mapping":
-            self.start_mapping(map_name, slam_launch)
+            self.start_mapping(map_name)
         elif current_mode == "localization":
-            self.start_localization(map_name, slam_launch)
+            self.start_localization(map_name)
         else:
             raise RuntimeError(f"Unknown current mode '{current_mode}'")
 

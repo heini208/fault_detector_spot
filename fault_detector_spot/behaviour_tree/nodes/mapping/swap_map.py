@@ -33,7 +33,7 @@ class SwapMap(py_trees.behaviour.Behaviour):
         self.node = node
 
         self.blackboard.register_key("last_command", access=py_trees.common.Access.READ)
-        self.slam_helper = SlamToolboxHelper(self.node, self.blackboard)
+        self.slam_helper = SlamToolboxHelper(self.node, self.blackboard, launch_file=self.slam_launch)
         return True
 
     def _validate_last_command(self):
@@ -53,5 +53,5 @@ class SwapMap(py_trees.behaviour.Behaviour):
             self.feedback_message = f"Map '{requested_map}' already active"
             return py_trees.common.Status.SUCCESS
 
-        self.slam_helper.change_map(requested_map, self.slam_launch)
+        self.slam_helper.change_map(requested_map)
 

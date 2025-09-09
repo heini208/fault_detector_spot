@@ -20,8 +20,8 @@ class StopMapping(py_trees.behaviour.Behaviour):
         self.helper = SlamToolboxHelper(kwargs.get("node"), self.blackboard)
 
     def update(self) -> py_trees.common.Status:
-        if self.with_save:
-            self.helper.stop_current_process()
+        if not self.with_save:
+            self.helper.stop_without_save()
 
         # Only attempt to stop once
         elif not self._stop_called:

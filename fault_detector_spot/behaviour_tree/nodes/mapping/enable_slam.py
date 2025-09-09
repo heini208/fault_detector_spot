@@ -15,7 +15,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
         self.blackboard = self.attach_blackboard_client(name=name)
 
     def setup(self, **kwargs):
-        self.slam_helper = SlamToolboxHelper(kwargs.get("node"), self.blackboard)
+        self.slam_helper = SlamToolboxHelper(kwargs.get("node"), self.blackboard, launch_file=self.launch_file)
         pass
 
     def update(self) -> py_trees.common.Status:
@@ -24,7 +24,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
         self.feedback_message = f"Launching {self.launch_file} for SLAM"
-        proc = self.slam_helper.start_mapping(launch_file=self.launch_file)
+        self.slam_helper.start_mapping_from_existing()
         if self.slam_helper.is_slam_running():
             return py_trees.common.Status.SUCCESS
         else:
