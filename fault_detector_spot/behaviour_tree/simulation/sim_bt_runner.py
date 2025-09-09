@@ -10,7 +10,6 @@ import py_trees_ros
 import sys
 
 from fault_detector_msgs.msg import StringArray
-from fault_detector_spot.behaviour_tree.nodes.mapping.monitor_slam_process import MonitorSLAMProcess
 from fault_detector_spot.behaviour_tree.nodes.utility.publish_initial_ui_info_once import PublishInitialUIInfoOnce
 from fault_detector_spot.behaviour_tree.nodes.utility.run_once import RunOnce
 from py_trees.behaviours import CheckBlackboardVariableValue

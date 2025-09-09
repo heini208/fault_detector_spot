@@ -89,6 +89,40 @@ class SlamToolboxHelper:
         msg.names = maps
         self.map_list_pub.publish(msg)
 
+    import os
+    import subprocess
+
+    def save_static_map(self, path: str) -> bool:
+        """
+        Save the static occupancy grid map using `map_saver_cli`.
+
+        Args:
+            path: Full path (without extension) where map should be saved.
+
+        Returns:
+            True if the map was successfully saved, False otherwise.
+        """
+        # Make sure the directory exists
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        # Build the command
+        cmd = [
+            "ros2", "run", "nav2_map_server", "map_saver_cli",
+            "-f", path,
+            "--ros-args", "-p", "map_subscribe_transient_local:=true"
+        ]
+
+        try:
+            # Run the command and wait for it to finish
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            self.node.get_logger().info(f"Map successfully saved to {path}.yaml")
+            return True
+        except subprocess.CalledProcessError as e:
+            self.node.get_logger().error(
+                f"Failed to save map: {e.stderr.strip()}"
+            )
+            return False
+
     def stop_current_process(self):
         """Stop Slam Toolbox and Nav2 safely, serialize map if in mapping mode."""
         proc = getattr(self.bb, "slam_launch_process", None)
@@ -101,12 +135,7 @@ class SlamToolboxHelper:
                 os.system(
                     f"ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph '{{filename: \"{posegraph_path}\"}}'")
 
-                self.node.get_logger().info(f"Saving Nav2 map: {posegraph_path}")
-                subprocess.run([
-                    "ros2", "run", "nav2_map_server", "map_saver_cli",
-                    "-f", posegraph_path,
-                    "--ros-args", "-p", "map_subscribe_transient_local:=true"
-                ], check=True)
+                self.save_static_map(posegraph_path)
 
                 os.killpg(os.getpgid(proc.pid), signal.SIGINT)
                 proc.wait(timeout=1)

@@ -1,3 +1,4 @@
+import glob
 import os
 import json
 import py_trees
@@ -44,12 +45,10 @@ class DeleteMap(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
     def delete_map_files(self, map_name: str):
-        posegraph_path = os.path.join(self.recordings_dir, f"{map_name}.posegraph")
-        data_path = os.path.join(self.recordings_dir, f"{map_name}.data")
-        json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
-
+        map_files = glob.glob(os.path.join(self.recordings_dir, f"{map_name}.*"))
         deleted_any = False
-        for path in [posegraph_path, data_path, json_path]:
+
+        for path in map_files:
             if os.path.exists(path):
                 os.remove(path)
                 deleted_any = True

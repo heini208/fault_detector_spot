@@ -34,4 +34,5 @@ class StopMapping(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.RUNNING  # Keep behaviour running
         else:
             self.feedback_message = "Slam Toolbox stopped successfully"
+            self._stop_called = False
             return py_trees.common.Status.SUCCESS
