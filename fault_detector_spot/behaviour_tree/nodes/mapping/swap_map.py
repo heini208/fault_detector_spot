@@ -54,4 +54,6 @@ class SwapMap(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.SUCCESS
 
         self.slam_helper.change_map(requested_map)
+        return py_trees.common.Status.SUCCESS
+
 

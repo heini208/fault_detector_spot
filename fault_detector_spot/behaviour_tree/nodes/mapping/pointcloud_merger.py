@@ -54,7 +54,6 @@ class PointCloudMerger(Node):
         self.output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
         self.base_frame = self.get_parameter('base_frame').get_parameter_value().string_value
         self.remove_underscores = self.get_parameter('remove_underscores').get_parameter_value().bool_value
-        self.use_sim_time = self.get_parameter('use_sim_time').get_parameter_value().bool_value  # store
 
     def _init_subscribers(self):
         self.subscribers = []

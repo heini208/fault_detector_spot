@@ -249,10 +249,8 @@ class SlamToolboxHelper:
         if map_name is None:
             map_name = self.bb.active_map_name
         self.stop_current_process()
-        # Map path WITHOUT extension for localization
         map_path_no_ext = self._posegraph_without_ext(map_name)
-        # Prepare launch arguments
-        proc = self._launch_slam_toolbox(map_name, mode="localization")
+        proc = self.nav2_helper.start(map_file=map_path_no_ext + ".yaml", initial_pose=self.get_odom_pose())
 
         return proc
 
@@ -263,22 +261,13 @@ class SlamToolboxHelper:
         return proc is not None and proc.poll() is None
 
     def _get_slam_mode(self) -> str:
-        """
-        Returns current Slam Toolbox mode: "mapping" or "localization".
-        Defaults to "mapping" if unable to detect.
-        """
-        try:
-            result = subprocess.run(
-                ["ros2", "param", "get", "/slam_toolbox", "mode"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-            if "localization" in result.stdout.lower():
-                return "localization"
+        if self.is_slam_running():
             return "mapping"
-        except Exception:
-            return "mapping"
+        elif self.nav2_helper.is_running():
+            return "localization"
+        else:
+            return "none"
+
 
     def change_map(self, map_name: str):
         """
@@ -288,26 +277,20 @@ class SlamToolboxHelper:
         if not map_name:
             raise RuntimeError("No map name provided for change_map")
 
-        self.bb.active_map_name = map_name
-        self._publish_active_map()  # always update active_map_name and topics
-
-        if not self.is_slam_running():
-            # Slam Toolbox is off, no need to start anything
+        # always update active_map_name and topics
+        mode = self._get_slam_mode()
+        if mode == "none":
             self.node.get_logger().info(f"Slam Toolbox not running; active map set to '{map_name}'")
             self.update_map_list(map_name)
             return True
-
-        # Slam Toolbox is running, restart it with new map in current mode
-        self.stop_current_process()
-        current_mode = self._get_slam_mode()
-        if current_mode == "mapping":
-            self.start_mapping(map_name)
-        elif current_mode == "localization":
+        elif mode == "mapping":
+            self.start_mapping_from_existing(map_name)
+        elif mode == "localization":
             self.start_localization(map_name)
         else:
-            raise RuntimeError(f"Unknown current mode '{current_mode}'")
+            raise RuntimeError(f"Unknown current mode '{mode}'")
 
-        self.node.get_logger().info(f"Changed to map '{map_name}' in {current_mode} mode")
+        self.node.get_logger().info(f"Changed to map '{map_name}' in {mode} mode")
         self.update_map_list(map_name)
         return True
 

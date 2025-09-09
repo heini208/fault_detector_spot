@@ -105,7 +105,7 @@ def generate_launch_description():
             'base_frame': 'base_link',
             'map_frame': 'map',
             'enable_interactive_mode': True,
-            'scan_queue_size': 1,
+            'scan_queue_size': 3,
             'map_update_interval': 1.0,
             'map_start_pose': map_start_pose_array
         }],
