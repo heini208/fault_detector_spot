@@ -20,9 +20,10 @@ class NavigationControls(UIControlHelper):
         )
         self.waypoint_name_field = None
         self.current_map = None
+        self._cached_map_list = None
+        self._cached_waypoint_list = None
+
         super().__init__(parent_ui)
-
-
 
     def init_ros_communication(self):
         # Subscriber to current_map string topic
@@ -55,6 +56,10 @@ class NavigationControls(UIControlHelper):
             self._make_waypoint_row(),
             self._make_add_waypoint_row()
         ]
+
+        self._apply_map_list()
+        self._apply_waypoint_list()
+
         return rows
 
     # --- Rows ---
@@ -93,32 +98,33 @@ class NavigationControls(UIControlHelper):
         if self.current_map_label is not None:
             self.current_map_label.setText(f"Current Map: {self.current_map}")
 
-    def map_list_callback(self, msg: StringArray):
-        """
-        Update the map dropdown with the names received from the map_list topic.
-        """
+    def _apply_map_list(self):
         self.map_dropdown.clear()
-
-        if not msg.names:
+        if not self._cached_map_list:
             self.map_dropdown.addItem("no maps saved")
             self.current_map = None
             self.current_map_label.setText("Current Map: None")
             self.mode_none.setChecked(True)
         else:
-            for map_name in msg.names:
+            for map_name in self._cached_map_list:
                 self.map_dropdown.addItem(map_name)
 
-    def waypoint_list_callback(self, msg: StringArray):
-        """
-        Update the waypoint dropdown with the names received from the waypoint_list topic.
-        """
+    def _apply_waypoint_list(self):
         self.waypoint_dropdown.clear()
-
-        if not msg.names:
+        if not self._cached_waypoint_list:
             self.waypoint_dropdown.addItem("no waypoints saved")
         else:
-            for waypoint_name in msg.names:
-                self.waypoint_dropdown.addItem(waypoint_name)
+            for wp_name in self._cached_waypoint_list:
+                self.waypoint_dropdown.addItem(wp_name)
+
+    def map_list_callback(self, msg: StringArray):
+        # Cache the latest map list
+        self._cached_map_list = msg.names
+        self._apply_map_list()
+
+    def waypoint_list_callback(self, msg: StringArray):
+        self._cached_waypoint_list = msg.names
+        self._apply_waypoint_list()
 
     def _make_create_map_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -206,7 +212,6 @@ class NavigationControls(UIControlHelper):
             self.waypoint_dropdown.addItem("no waypoints saved")
             return
 
-
     # --- Handlers (currently empty stubs) ---
     def handle_map_confirmed(self):
         selected_map = self.map_dropdown.currentText()
@@ -249,8 +254,11 @@ class NavigationControls(UIControlHelper):
             self.show_warning("Missing Name", "Please enter a waypoint name.")
             return
 
-        if not self.current_map:
-            self.show_warning("No Map Selected", "Please select a map first.")
+        if not self.mode_localization.isChecked():
+            self.show_warning(
+                "Not in Localization Mode",
+                "Waypoints can only be saved while in localization mode (AMCL active)."
+            )
             return
 
         # Check if waypoint already exists in dropdown
@@ -264,7 +272,6 @@ class NavigationControls(UIControlHelper):
         complex_command.map_name = self.current_map
         complex_command.waypoint_name = name
         self.complex_command_publisher.publish(complex_command)
-
 
     def handle_move_to_waypoint(self):
         selected = self.waypoint_dropdown.currentText()
@@ -319,4 +326,3 @@ class NavigationControls(UIControlHelper):
         complex_command.map_name = self.current_map
         complex_command.waypoint_name = selected
         self.complex_command_publisher.publish(complex_command)
-

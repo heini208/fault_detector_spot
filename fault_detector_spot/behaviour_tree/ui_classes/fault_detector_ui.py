@@ -75,11 +75,17 @@ class Fault_Detector_UI(QWidget):
 
         # Tabs
         self.tabs = QTabWidget()
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         main_layout.addWidget(self.tabs)
         self.add_manipulator_control_tab()
         self.add_navigation_control_tab()
 
         self.recording_controls.add_rows(main_layout)
+
+    def _on_tab_changed(self, index):
+        if self.tabs.tabText(index) == "Navigation Control":
+            self.navigation_controls._apply_map_list()
+            self.navigation_controls._apply_waypoint_list()
 
     def _make_estop_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
