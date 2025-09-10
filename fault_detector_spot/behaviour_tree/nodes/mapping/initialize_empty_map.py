@@ -11,18 +11,11 @@ class InitializeEmptyMap(py_trees.behaviour.Behaviour):
     then starts SLAM.
     """
 
-    def __init__(self, name: str = "InitializeEmptyMap", launch_file: str = "slam_merged_launch.py"):
+    def __init__(self, slam_helper: SlamToolboxHelper, name: str = "InitializeEmptyMap"):
         super().__init__(name)
-        self.launch_file = launch_file
         self.blackboard = self.attach_blackboard_client(name=name)
         self.blackboard.register_key("last_command", access=py_trees.common.Access.READ)
-
-    def setup(self, **kwargs):
-        self.node = kwargs.get("node")
-        if self.node is None:
-            raise RuntimeError("Node must be passed to setup() for ROS publishing")
-
-        self.slam_helper = SlamToolboxHelper(self.node, self.blackboard, self.launch_file)
+        self.slam_helper = slam_helper
 
     def update(self) -> py_trees.common.Status:
         if not self.is_command_valid():

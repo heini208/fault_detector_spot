@@ -20,8 +20,8 @@ class NavigationControls(UIControlHelper):
         )
         self.waypoint_name_field = None
         self.current_map = None
-        self._cached_map_list = None
-        self._cached_waypoint_list = None
+        self._cached_map_list = []
+        self._cached_waypoint_list = []
 
         super().__init__(parent_ui)
 

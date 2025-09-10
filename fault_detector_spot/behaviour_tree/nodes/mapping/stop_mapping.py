@@ -9,15 +9,11 @@ class StopMapping(py_trees.behaviour.Behaviour):
     until it is fully terminated.
     """
 
-    def __init__(self, name="StopMapping", with_save: bool = True):
+    def __init__(self, helper: SlamToolboxHelper, name="StopMapping", with_save: bool = True):
         super().__init__(name)
-        self.blackboard = self.attach_blackboard_client(name=name)
         self._stop_called = False
-        self.helper: SlamToolboxHelper | None = None
+        self.helper = helper
         self.with_save = with_save
-
-    def setup(self, **kwargs: typing.Any) -> None:
-        self.helper = SlamToolboxHelper(kwargs.get("node"), self.blackboard)
 
     def update(self) -> py_trees.common.Status:
         if not self.with_save:

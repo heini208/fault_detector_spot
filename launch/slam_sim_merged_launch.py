@@ -67,7 +67,7 @@ def generate_launch_description():
             'remove_underscores': True,
             'use_sim_time': use_sim_time,
         }],
-        output='screen'
+        output='log'
     )
 
     # Convert merged PointCloud to LaserScan

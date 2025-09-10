@@ -4,22 +4,12 @@ import signal
 import time
 from typing import Callable
 
-import rclpy
 import py_trees
 import py_trees_ros
-import sys
-
+import rclpy
 from fault_detector_msgs.msg import StringArray
-from fault_detector_spot.behaviour_tree.nodes.utility.publish_initial_ui_info_once import PublishInitialUIInfoOnce
-from fault_detector_spot.behaviour_tree.nodes.utility.run_once import RunOnce
-from py_trees.behaviours import CheckBlackboardVariableValue
-from py_trees.common import ComparisonExpression
-from py_trees.decorators import StatusToBlackboard, FailureIsSuccess, EternalGuard
-from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
-
 from fault_detector_spot.behaviour_tree import (
     DetectVisibleTags,
-    HandCameraTagDetection,
     PublishTagStates,
     ManipulatorGetGoalTag,
     ManipulatorMoveArmAction,
@@ -39,6 +29,14 @@ from fault_detector_spot.behaviour_tree import (
     DeleteMap,
     InitializeEmptyMap, SwapMap, EnableLocalization, StopMapping, AddGoalPoseAsWaypoint, SaveCurrentPoseAsGoal,
     DeleteWaypoint, SetWaypointAsGoal, NavigateToGoalPose)
+from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
+from fault_detector_spot.behaviour_tree.nodes.utility.helper_initializer import HelperInitializer
+from fault_detector_spot.behaviour_tree.nodes.utility.publish_initial_ui_info_once import PublishInitialUIInfoOnce
+from py_trees.behaviours import CheckBlackboardVariableValue
+from py_trees.common import ComparisonExpression
+from py_trees.decorators import StatusToBlackboard, EternalGuard
+
+helper_initializer: HelperInitializer = None
 
 
 def create_root() -> py_trees.behaviour.Behaviour:
@@ -113,6 +111,9 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         memory=True
     )
 
+    helper_initializer = get_helper_container(node)
+    slam_helper = helper_initializer.slam_helper
+
     specs = [
         (CommandID.STOW_ARM, lambda n: StowArmActionSimple(name="StowArmAction")),
         (CommandID.READY_ARM, lambda n: ReadyArmActionSimple(name="ReadyArmAction")),
@@ -123,12 +124,13 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.WAIT_TIME, lambda n: WaitForDuration(name="WaitForDuration")),
         (CommandID.CLOSE_GRIPPER, lambda n: CloseGripperAction()),
         (CommandID.STOP_BASE, lambda n: PublishZeroVel()),
-        (CommandID.START_SLAM, lambda n: EnableSLAM(launch_file="slam_sim_merged_launch.py")),
-        (CommandID.START_LOCALIZATION, lambda n: EnableLocalization(launch_file="slam_sim_merged_launch.py")),
-        (CommandID.CREATE_MAP, lambda n: InitializeEmptyMap(launch_file="slam_sim_merged_launch.py")),
+        # Mapping commands
+        (CommandID.START_SLAM, lambda n: EnableSLAM(slam_helper)),
+        (CommandID.START_LOCALIZATION, lambda n: EnableLocalization(slam_helper)),
+        (CommandID.CREATE_MAP, lambda n: InitializeEmptyMap(slam_helper)),
         (CommandID.DELETE_MAP, lambda n: DeleteMap()),
-        (CommandID.SWAP_MAP, lambda n: SwapMap(slam_launch="slam_sim_merged_launch.py")),
-        (CommandID.STOP_MAPPING, lambda n: StopMapping()),
+        (CommandID.SWAP_MAP, lambda n: SwapMap(slam_helper)),
+        (CommandID.STOP_MAPPING, lambda n: StopMapping(slam_helper)),
         (CommandID.ADD_CURRENT_POSITION_WAYPOINT, build_current_pose_as_landmark_tree),
         (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint()),
         (CommandID.MOVE_TO_WAYPOINT, build_navigate_to_goal_pose_tree),
@@ -139,6 +141,13 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
     return command_selector
 
+def get_helper_container(node: rclpy.node.Node):
+    global helper_initializer
+    if helper_initializer is None:
+        helper_initializer = HelperInitializer(name="InitHelpers", node=node)
+        helper_initializer.setup(timeout=10)
+        helper_initializer.tick_once()
+    return helper_initializer
 
 def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     cancel_check = match_command_checker(CommandID.EMERGENCY_CANCEL)
@@ -260,7 +269,7 @@ def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
 
 def build_current_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
-    get_goal = SaveCurrentPoseAsGoal(name="SaveCurrentPoseAsGoal")
+    get_goal = SaveCurrentPoseAsGoal(get_helper_container(node),name="SaveCurrentPoseAsGoal")
     get_goal.setup(node=node)
 
     add_waypoint = AddGoalPoseAsWaypoint(name="AddGoalPoseAsWaypoint")
@@ -327,6 +336,8 @@ def ctrl_c_handler(sig, frame):
 
 
 def main(args=None):
+    global stop_mapping_behavior, stop_mapping_tree
+
     rclpy.init(args=args)
 
     root = create_root()
@@ -335,8 +346,8 @@ def main(args=None):
     tree.tick_tock(period_ms=50.0)
 
     # Create StopMapping behaviour instance
-    global stop_mapping_behavior, stop_mapping_tree
-    stop_mapping_behavior = StopMapping(with_save=False)
+    slam_helper = get_helper_container(tree.node).slam_helper
+    stop_mapping_behavior = StopMapping(slam_helper, with_save=False)
     stop_mapping_behavior.setup(node=tree.node)
     stop_mapping_tree = tree
 

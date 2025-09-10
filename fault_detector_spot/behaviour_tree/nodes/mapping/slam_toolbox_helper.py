@@ -8,22 +8,25 @@ import py_trees
 import rclpy
 import tf2_ros
 from rclpy import Future
+from rclpy.time import Time
 from slam_toolbox.srv import DeserializePoseGraph, SaveMap
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Pose
 from fault_detector_msgs.msg import StringArray
 from fault_detector_spot.behaviour_tree.nodes.navigation.nav2_helper import Nav2Helper
-from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS, INITIALPOSE_QOS
 from ament_index_python.packages import get_package_share_directory
+from tf_transformations import quaternion_from_euler
 
 
-class SlamToolboxHelper:
+class SlamToolboxHelper():
     """
     Helper class for managing Slam Toolbox mapping/localization and Nav2 processes.
     Uses .posegraph for map storage instead of RTAB-Map .db.
     """
 
-    def __init__(self, node, blackboard, nav2_launch_file="nav2_sim_launch.py", nav2_params_file=None, launch_file="slam_sim_merged_launch.py"):
+    def __init__(self, node, blackboard, nav2_launch_file="nav2_sim_launch.py", nav2_params_file=None,
+                 launch_file="slam_sim_merged_launch.py"):
         self.node = node
         self.slam_launch_file = launch_file
         self.bb = blackboard
@@ -34,6 +37,7 @@ class SlamToolboxHelper:
         # Blackboard setup
         self.init_blackboard_keys()
         self.init_ros_publishers()
+        self.init_pose_subscriber()
 
         self.nav2_helper = Nav2Helper(
             node=self.node,
@@ -47,6 +51,34 @@ class SlamToolboxHelper:
 
         # Load available maps
         self.update_map_list()
+
+    def init_pose_subscriber(self):
+        """
+        Subscribe to Slam Toolbox's /pose topic for current localization.
+        """
+        self.slam_pose = None
+        self.slam_pose_sub = self.node.create_subscription(
+            PoseWithCovarianceStamped,
+            "/pose",  # Slam Toolbox publishes PoseStamped here
+            self._slam_pose_callback,
+            10
+        )
+
+    def _slam_pose_callback(self, msg: PoseWithCovarianceStamped):
+        self.slam_pose = msg
+
+    def get_slam_pose_as_pose_stamped(self) -> PoseStamped | None:
+        """
+        Returns a copy of the last Slam Toolbox localization pose as PoseStamped.
+        If no pose has been received yet, returns None.
+        """
+        if self.slam_pose is None or self.slam_pose.pose is None:
+            return None
+
+        pose_copy = PoseStamped()
+        pose_copy.header = self.slam_pose.header
+        pose_copy.pose = self.slam_pose.pose.pose
+        return pose_copy
 
     def init_blackboard_keys(self):
         self.bb.register_key("active_map_name", access=py_trees.common.Access.WRITE)
@@ -89,9 +121,6 @@ class SlamToolboxHelper:
         msg.names = maps
         self.map_list_pub.publish(msg)
 
-    import os
-    import subprocess
-
     def save_static_map(self, path: str) -> bool:
         """
         Save the static occupancy grid map using `map_saver_cli`.
@@ -129,7 +158,7 @@ class SlamToolboxHelper:
         if proc:
             try:
                 # Determine if we are in mapping mode
-                    # Serialize current map before stopping
+                # Serialize current map before stopping
                 posegraph_path = self._posegraph_without_ext(self.bb.active_map_name)
                 self.node.get_logger().info(f"Serializing posegraph: {posegraph_path}")
                 os.system(
@@ -162,10 +191,29 @@ class SlamToolboxHelper:
         if self.nav2_helper.is_running():
             self.nav2_helper.stop()
 
-
-    def get_odom_pose(self) -> list[float] | None:
+    def get_last_localization_pose_xytheta(self) -> list[float]:
         """
-        Returns the current odom pose as [x, y, theta] for Slam Toolbox localization.
+        Get the last localization pose as [x, y, theta].
+        Defaults to [0, 0, 0] if no pose is available.
+        """
+        pose_stamped: PoseStamped | None = self.get_last_localization_pose()
+        if pose_stamped is None:
+            return [0.0, 0.0, 0.0]
+
+        x = pose_stamped.pose.position.x
+        y = pose_stamped.pose.position.y
+
+        q = pose_stamped.pose.orientation
+        # Convert quaternion to yaw
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        theta = math.atan2(siny_cosp, cosy_cosp)
+
+        return [x, y, theta]
+
+    def get_odom_pose_stamped(self) -> PoseStamped | None:
+        """
+        Returns the current odom pose as a PoseStamped (map frame 'odom').
         """
         try:
             trans = self.tf_buffer.lookup_transform('odom', 'base_link', rclpy.time.Time())
@@ -173,20 +221,49 @@ class SlamToolboxHelper:
             self.node.get_logger().warn(f"Failed to get odom -> base_link transform: {e}")
             return None
 
-        x = trans.transform.translation.x
-        y = trans.transform.translation.y
+        pose_stamped = PoseStamped()
+        pose_stamped.header.stamp = self.node.get_clock().now().to_msg()
+        pose_stamped.header.frame_id = 'odom'
 
-        # Convert quaternion to yaw (theta)
-        q = trans.transform.rotation
-        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-        theta = math.atan2(siny_cosp, cosy_cosp)
+        pose_stamped.pose.position.x = trans.transform.translation.x
+        pose_stamped.pose.position.y = trans.transform.translation.y
+        pose_stamped.pose.position.z = trans.transform.translation.z
 
-        return [x, y, theta]
+        # Convert quaternion from transform
+        pose_stamped.pose.orientation = trans.transform.rotation
+
+        return pose_stamped
+
+    def get_last_localization_pose(self, tolerance_sec: float = 0.1) -> PoseStamped | None:
+        """
+        Return the most recent localization pose.
+        Prioritize AMCL if it is newer than Slam Toolbox pose within a tolerance.
+        """
+        amcl_pose = self.nav2_helper.get_last_amcl_pose_as_pose_stamped()
+        slam_pose = self.get_slam_pose_as_pose_stamped()
+
+        # If both are available, compare timestamps
+        if amcl_pose is not None and slam_pose is not None:
+            amcl_time = Time.from_msg(amcl_pose.header.stamp)
+            slam_time = Time.from_msg(slam_pose.header.stamp)
+
+            if (amcl_time - slam_time).nanoseconds / 1e9 >= -tolerance_sec:
+                # AMCL is newer or within tolerance
+                return amcl_pose
+            else:
+                # Slam Toolbox pose is newer
+                return slam_pose
+
+        # If only one is available
+        if amcl_pose is not None:
+            return amcl_pose
+        if slam_pose is not None:
+            return slam_pose
+        return None
 
     def _launch_slam_toolbox(self, map_name: str, mode: str = "mapping"):
         """Launch Slam Toolbox with specified map and mode."""
-        map_start_pose = self.get_odom_pose()  # [x, y, theta]
+        map_start_pose = self.get_last_localization_pose_xytheta()  # [x, y, theta]
         if map_start_pose is None:
             map_start_pose = [0.0, 0.0, 0.0]
 
@@ -238,10 +315,10 @@ class SlamToolboxHelper:
             map_name = self.bb.active_map_name
         self.stop_current_process()
         proc = self._launch_slam_toolbox(map_name, mode="mapping")
-        #self._deserialize_map(map_name)
+        # self._deserialize_map(map_name)
         return proc
 
-    def start_localization(self, map_name: str = None, slam_launch="slam_toolbox_launch.py"):
+    def start_localization(self, map_name: str = None):
         """
         Start Slam Toolbox in localization mode using a previously saved serialized map.
         Uses the current odom pose as map_start_pose.
@@ -250,10 +327,9 @@ class SlamToolboxHelper:
             map_name = self.bb.active_map_name
         self.stop_current_process()
         map_path_no_ext = self._posegraph_without_ext(map_name)
-        proc = self.nav2_helper.start(map_file=map_path_no_ext + ".yaml", initial_pose=self.get_odom_pose())
+        proc = self.nav2_helper.start(map_file=map_path_no_ext + ".yaml", initial_pose = self.get_last_localization_pose_xytheta())
 
         return proc
-
 
     def is_slam_running(self) -> bool:
         """Check if Slam Toolbox is currently running."""
@@ -268,20 +344,23 @@ class SlamToolboxHelper:
         else:
             return "none"
 
-
     def change_map(self, map_name: str):
         """
         Change the active map. If Slam Toolbox is running, restart in current mode
         with the new map. If not running, just update active_map_name.
         """
+
         if not map_name:
             raise RuntimeError("No map name provided for change_map")
-
+        if map_name == self.bb.active_map_name:
+            self.node.get_logger().info(f"Map '{map_name}' already active")
+            return True
         # always update active_map_name and topics
         mode = self._get_slam_mode()
         if mode == "none":
             self.node.get_logger().info(f"Slam Toolbox not running; active map set to '{map_name}'")
-            self.update_map_list(map_name)
+            self.bb.active_map_name = map_name
+            self._publish_active_map()
             return True
         elif mode == "mapping":
             self.start_mapping_from_existing(map_name)
@@ -291,7 +370,6 @@ class SlamToolboxHelper:
             raise RuntimeError(f"Unknown current mode '{mode}'")
 
         self.node.get_logger().info(f"Changed to map '{map_name}' in {mode} mode")
-        self.update_map_list(map_name)
         return True
 
     # --- Waypoint Management ---

@@ -1,10 +1,9 @@
 import py_trees
-from .rtab_helper import RTABHelper  # adjust import path
 
 
 class DeleteWaypoint(py_trees.behaviour.Behaviour):
     """
-    Deletes a waypoint from the active map using RTABHelper.delete_waypoint().
+    Deletes a waypoint from the active map using slam_helper.delete_waypoint().
     Expects last_command.waypoint_name and last_command.map_name on the blackboard.
     """
 
@@ -15,7 +14,6 @@ class DeleteWaypoint(py_trees.behaviour.Behaviour):
     def setup(self, **kwargs):
         """Register required blackboard keys."""
         self.bb.register_key("last_command", access=py_trees.common.Access.READ)
-        self.helper = RTABHelper(kwargs.get("node"), self.bb)
 
     def update(self) -> py_trees.common.Status:
         """Try to delete the waypoint specified in last_command."""

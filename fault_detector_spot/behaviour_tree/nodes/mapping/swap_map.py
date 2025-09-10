@@ -1,39 +1,21 @@
-import os
-import signal
-import subprocess
 import py_trees
-from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
-from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
-from std_msgs.msg import String
-from ament_index_python.packages import get_package_share_directory
 
 
 class SwapMap(py_trees.behaviour.Behaviour):
     """
     Swap/load a map in RTAB-Map by restarting SLAM or localization with the new database.
     If RTAB-Map is not running, just set the active map and publish it.
-    Uses different launch files depending on actual running mode.
     Updates blackboard variable `active_map_name`.
     """
 
-    def __init__(self, name="SwapMap",
-                 slam_launch="slam_merged_launch.py"):
+    def __init__(self,slam_helper: SlamToolboxHelper, name="SwapMap"):
         super().__init__(name)
-        self.slam_launch = slam_launch
         self.blackboard = self.attach_blackboard_client()
-        self.recordings_dir = os.path.join(
-            get_package_share_directory("fault_detector_spot"), "maps"
-        )
+        self.slam_helper = slam_helper
 
     def setup(self, **kwargs):
-        node = kwargs.get("node")
-        if node is None:
-            raise RuntimeError("Node must be passed to setup() for ROS publishing")
-        self.node = node
-
         self.blackboard.register_key("last_command", access=py_trees.common.Access.READ)
-        self.slam_helper = SlamToolboxHelper(self.node, self.blackboard, launch_file=self.slam_launch)
         return True
 
     def _validate_last_command(self):

@@ -17,3 +17,9 @@ POINT_CLOUD_QOS = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=10
 )
+
+INITIALPOSE_QOS = QoSProfile(
+    depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.VOLATILE,  # <-- not TRANSIENT_LOCAL
+)

@@ -1,12 +1,10 @@
 import py_trees
 from geometry_msgs.msg import PoseStamped
-from .rtab_helper import RTABHelper
 
 
 class AddGoalPoseAsWaypoint(py_trees.behaviour.Behaviour):
     """
     Saves the last_command.goal_pose as a waypoint in the map's JSON file
-    using RTABHelper.add_pose_as_waypoint().
     """
 
     def __init__(self, name: str = "AddGoalPoseAsWaypoint"):
@@ -16,7 +14,6 @@ class AddGoalPoseAsWaypoint(py_trees.behaviour.Behaviour):
     def setup(self, **kwargs):
         """Register required blackboard keys."""
         self.bb.register_key("last_command", access=py_trees.common.Access.READ)
-        self.helper = RTABHelper(kwargs.get("node"), self.bb)
 
     def update(self) -> py_trees.common.Status:
         """Try to save last_command.goal_pose into the waypoint JSON file."""
