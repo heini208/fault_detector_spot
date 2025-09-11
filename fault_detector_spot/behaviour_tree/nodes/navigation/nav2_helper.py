@@ -4,7 +4,7 @@ import subprocess
 import time
 
 import py_trees
-from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped
 
 
 class Nav2Helper:
@@ -26,8 +26,6 @@ class Nav2Helper:
         if not self.bb.exists("nav2_launch_process"):
             self.bb.nav2_launch_process = None
 
-        self.init_ros()
-
     def set_launch_file(self, launch_file: str):
         """
         Set the launch file to use for starting Nav2.
@@ -40,30 +38,8 @@ class Nav2Helper:
         """
         self.params_file = params_file
 
-    def init_ros(self):
-        self.subscriber = self.node.create_subscription(
-            PoseWithCovarianceStamped,
-            "/amcl_pose",
-            self.pose_callback,
-            10
-        )
-
     def pose_callback(self, msg: PoseWithCovarianceStamped):
         self.amcl_pose = msg
-
-    def get_last_amcl_pose_as_pose_stamped(self) -> PoseStamped:
-        """
-        Return the last AMCL pose as a PoseStamped, including the header.
-        """
-        pose_stamped = PoseStamped()
-
-        if not hasattr(self, 'amcl_pose') or self.amcl_pose is None or self.amcl_pose.pose is None:
-            return None
-
-        # Copy header and pose from AMCL
-        pose_stamped.header = self.amcl_pose.header
-        pose_stamped.pose = self.amcl_pose.pose.pose
-        return pose_stamped
 
     def start(self, map_file: str = None, initial_pose=[0, 0, 0], extra_args: list = None, ) -> subprocess.Popen:
         """

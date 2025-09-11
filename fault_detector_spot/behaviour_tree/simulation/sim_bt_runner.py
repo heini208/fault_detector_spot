@@ -30,6 +30,7 @@ from fault_detector_spot.behaviour_tree import (
     InitializeEmptyMap, SwapMap, EnableLocalization, StopMapping, AddGoalPoseAsWaypoint, SaveCurrentPoseAsGoal,
     DeleteWaypoint, SetWaypointAsGoal, NavigateToGoalPose)
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
+from fault_detector_spot.behaviour_tree.nodes.sensing.last_localization_pose import LastLocalizationPose
 from fault_detector_spot.behaviour_tree.nodes.utility.helper_initializer import HelperInitializer
 from fault_detector_spot.behaviour_tree.nodes.utility.publish_initial_ui_info_once import PublishInitialUIInfoOnce
 from py_trees.behaviours import CheckBlackboardVariableValue
@@ -66,6 +67,9 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     cmd_sub = CommandSubscriber(name="UI Command Listener")
     cmd_sub.setup(node=node)
 
+    pose_sub = LastLocalizationPose(name="LastLocalizationPose")
+    pose_sub.setup(node=node)
+
     tag_scan_sequence = py_trees.composites.Sequence(
         name="ScanForTags",
         memory=True
@@ -85,7 +89,7 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
     tag_scan_sequence.add_children([detect, in_range_checker, tag_publisher])
 
-    sensing_seq.add_children([tag_scan_sequence, cmd_sub])
+    sensing_seq.add_children([tag_scan_sequence, cmd_sub, pose_sub])
     return sensing_seq
 
 
@@ -132,7 +136,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.SWAP_MAP, lambda n: SwapMap(slam_helper)),
         (CommandID.STOP_MAPPING, lambda n: StopMapping(slam_helper)),
         (CommandID.ADD_CURRENT_POSITION_WAYPOINT, build_current_pose_as_landmark_tree),
-        (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint()),
+        (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint(slam_helper)),
         (CommandID.MOVE_TO_WAYPOINT, build_navigate_to_goal_pose_tree),
     ]
 
@@ -269,10 +273,11 @@ def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
 
 def build_current_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
-    get_goal = SaveCurrentPoseAsGoal(get_helper_container(node),name="SaveCurrentPoseAsGoal")
+    get_goal = SaveCurrentPoseAsGoal(name="SaveCurrentPoseAsGoal")
     get_goal.setup(node=node)
 
-    add_waypoint = AddGoalPoseAsWaypoint(name="AddGoalPoseAsWaypoint")
+
+    add_waypoint = AddGoalPoseAsWaypoint(get_helper_container(node).slam_helper, name="AddGoalPoseAsWaypoint")
     add_waypoint.setup(node=node)
     sequence.add_children([get_goal, add_waypoint])
     return sequence

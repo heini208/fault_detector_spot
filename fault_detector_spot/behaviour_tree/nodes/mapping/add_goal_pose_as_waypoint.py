@@ -1,4 +1,5 @@
 import py_trees
+from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
 from geometry_msgs.msg import PoseStamped
 
 
@@ -7,9 +8,10 @@ class AddGoalPoseAsWaypoint(py_trees.behaviour.Behaviour):
     Saves the last_command.goal_pose as a waypoint in the map's JSON file
     """
 
-    def __init__(self, name: str = "AddGoalPoseAsWaypoint"):
+    def __init__(self,slam_helper:SlamToolboxHelper , name: str = "AddGoalPoseAsWaypoint"):
         super(AddGoalPoseAsWaypoint, self).__init__(name)
         self.bb = self.attach_blackboard_client()
+        self.helper = slam_helper
 
     def setup(self, **kwargs):
         """Register required blackboard keys."""

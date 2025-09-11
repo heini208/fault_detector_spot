@@ -34,8 +34,6 @@ class RTABHelper:
             launch_file=nav2_launch_file,
             params_file=nav2_params_file
         )
-        # Initialize map list from recordings directory
-        self.update_map_list()
 
     def init_blackboard_keys(self):
         self.bb.register_key("active_map_name", access=py_trees.common.Access.WRITE)
@@ -109,8 +107,8 @@ class RTABHelper:
         self.set_mode_localization()
         self._publish_active_map()
 
-        if not self.nav2_helper.is_running():
-            self.nav2_helper.start()
+        #if not self.nav2_helper.is_running():
+            #self.nav2_helper.start()
         return proc
 
     def stop_current_process(self):

@@ -84,6 +84,7 @@ class SlamToolboxHelper():
         self.bb.register_key("active_map_name", access=py_trees.common.Access.WRITE)
         self.bb.register_key("slam_launch_process", access=py_trees.common.Access.WRITE)
         self.bb.register_key("nav2_launch_process", access=py_trees.common.Access.WRITE)
+        self.bb.register_key("last_pose_estimation", access=py_trees.common.Access.READ)
 
         if not self.bb.exists("active_map_name"):
             self.bb.active_map_name = None
@@ -239,27 +240,12 @@ class SlamToolboxHelper():
         Return the most recent localization pose.
         Prioritize AMCL if it is newer than Slam Toolbox pose within a tolerance.
         """
-        amcl_pose = self.nav2_helper.get_last_amcl_pose_as_pose_stamped()
-        slam_pose = self.get_slam_pose_as_pose_stamped()
+        pose = PoseStamped()
+        last_pose = self.bb.last_pose_estimation
+        pose.header = last_pose.header
+        pose.pose = last_pose.pose.pose
 
-        # If both are available, compare timestamps
-        if amcl_pose is not None and slam_pose is not None:
-            amcl_time = Time.from_msg(amcl_pose.header.stamp)
-            slam_time = Time.from_msg(slam_pose.header.stamp)
-
-            if (amcl_time - slam_time).nanoseconds / 1e9 >= -tolerance_sec:
-                # AMCL is newer or within tolerance
-                return amcl_pose
-            else:
-                # Slam Toolbox pose is newer
-                return slam_pose
-
-        # If only one is available
-        if amcl_pose is not None:
-            return amcl_pose
-        if slam_pose is not None:
-            return slam_pose
-        return None
+        return pose
 
     def _launch_slam_toolbox(self, map_name: str, mode: str = "mapping"):
         """Launch Slam Toolbox with specified map and mode."""
