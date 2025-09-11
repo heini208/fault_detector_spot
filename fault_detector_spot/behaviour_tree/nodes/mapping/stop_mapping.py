@@ -16,19 +16,18 @@ class StopMapping(py_trees.behaviour.Behaviour):
         self.with_save = with_save
 
     def update(self) -> py_trees.common.Status:
-        if not self.with_save:
-            self.helper.stop_without_save()
-
-        # Only attempt to stop once
-        elif not self._stop_called:
-            self.helper.stop_current_process()
-            self._stop_called = True
-            self.feedback_message = "Stop requested, waiting for Slam Toolbox to terminate"
-
-        # Check if Slam Toolbox is still running
-        if self.helper.is_slam_running():
-            return py_trees.common.Status.RUNNING  # Keep behaviour running
-        else:
+        if not (self.helper.is_slam_running() or self.helper.nav2_helper.is_running()):
             self.feedback_message = "Slam Toolbox stopped successfully"
             self._stop_called = False
             return py_trees.common.Status.SUCCESS
+        elif not self._stop_called:
+            if not self.with_save:
+                self.helper.stop_without_save()
+            else:
+                self.helper.stop_current_process()
+            self._stop_called = True
+            self.feedback_message = "Stop requested, waiting for Slam Toolbox to terminate"
+
+        return py_trees.common.Status.RUNNING  # Keep behaviour running
+
+

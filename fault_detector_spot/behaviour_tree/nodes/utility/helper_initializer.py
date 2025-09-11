@@ -34,8 +34,8 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
                 node=self.node,
                 blackboard=self.bb_client,
                 launch_file="slam_merged_launch.py",
-                nav2_launch_file="nav2_robot_launch.py",
-                nav2_params_file="nav2_robot_params.yaml"
+                nav2_launch_file="nav2_spot_launch.py",
+                nav2_params_file="nav2_spot_params.yaml"
             )
 
         self.nav2_helper = self.slam_helper.nav2_helper

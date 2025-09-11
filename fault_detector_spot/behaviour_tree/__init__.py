@@ -30,6 +30,7 @@ from .nodes.mapping.save_current_pose_as_goal import SaveCurrentPoseAsGoal
 from .nodes.mapping.delete_waypoint import DeleteWaypoint
 from .nodes.navigation.set_waypoint_as_goal import SetWaypointAsGoal
 from .nodes.navigation.navigate_to_goal_pose import NavigateToGoalPose
+from .nodes.utility.helper_initializer import HelperInitializer
 
 
 __all__ = [
@@ -63,4 +64,5 @@ __all__ = [
   "DeleteWaypoint",
   "SetWaypointAsGoal",
   "NavigateToGoalPose",
+  "HelperInitializer"
 ]

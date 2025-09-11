@@ -294,32 +294,6 @@ def build_navigate_to_goal_pose_tree(node: rclpy.node.Node) -> py_trees.behaviou
 
     return sequence
 
-
-def init_ui(self):
-    """
-    Initialize the UI with default states and publish the initial map list.
-    This should be called once after ROS communication is set up.
-    """
-    # Update map dropdown locally (in case map_list topic hasn't published yet)
-    self.update_map_dropdown()
-
-    # Set current map to None initially
-    self.current_map = None
-    self.current_map_label.setText("Current Map: None")
-    self.mode_none.setChecked(True)
-
-    # Publish initial map list to ROS so other nodes/UI can subscribe
-    map_files = []
-    if os.path.isdir(self.recordings_dir):
-        for f in sorted(os.listdir(self.recordings_dir)):
-            if f.endswith(".db"):
-                map_files.append(f[:-3])
-
-    msg = StringArray()
-    msg.names = map_files
-    self.complex_command_publisher.publish(msg)
-
-
 def ctrl_c_handler(sig, frame):
     """
     Trigger StopMapping behaviour until Slam Toolbox terminates.
