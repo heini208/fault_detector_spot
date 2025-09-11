@@ -29,7 +29,7 @@ def generate_launch_description():
     )
     launch_rviz_arg = DeclareLaunchArgument(
         'launch_rviz',
-        default_value='false',
+        default_value='true',
         description='Launch RViz2'
     )
     map_start_pose_arg = DeclareLaunchArgument(
@@ -59,7 +59,6 @@ def generate_launch_description():
                 '/depth_registered/back/points',
                 '/depth_registered/frontleft/points',
                 '/depth_registered/frontright/points',
-                '/depth_registered/hand/points',
                 '/depth_registered/left/points',
                 '/depth_registered/right/points',
             ],
@@ -68,7 +67,7 @@ def generate_launch_description():
             'remove_underscores': False,
             'use_sim_time': use_sim_time,
         }],
-        output='log'
+        output='screen'
     )
 
     # Convert merged PointCloud to LaserScan

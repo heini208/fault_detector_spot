@@ -77,8 +77,8 @@ def generate_launch_description():
     # PointCloud merger
     merger_node = Node(
         package='fault_detector_spot',
-        executable='pointcloud_republisher',
-        name='pointcloud_republisher',
+        executable='pointcloud_merger',
+        name='pointcloud_merger',
         parameters=[{
             'input_topics': [
                 '/depth_registered/back/points',

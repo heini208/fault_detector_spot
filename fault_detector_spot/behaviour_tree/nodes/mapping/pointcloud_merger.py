@@ -109,7 +109,12 @@ class PointCloudMerger(Node):
         point_list = []
         for msg in self.topic_cloud_map.values():
             if msg is not None:
-                transform = self._transform_cloud_msg_to_base(msg)
+                if not self.remove_underscores: # only do this if not in simulation
+                    points_only_msg = point_cloud2.create_cloud_xyz32(msg.header,
+                                                                  list(point_cloud2.read_points(msg, field_names=(
+                                                                  "x", "y", "z"), skip_nans=True)))
+
+                transform = self._transform_cloud_msg_to_base(points_only_msg)
                 if not transform: continue
                 points_structured_array = np.array(
                     list(point_cloud2.read_points(transform, field_names=("x", "y", "z"), skip_nans=True))
