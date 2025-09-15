@@ -116,6 +116,7 @@ def get_helper_container(node: rclpy.node.Node):
         helper_initializer.tick_once()
     return helper_initializer
 
+
 def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     command_selector = py_trees.composites.Selector(
         name="CommandSelector",
@@ -135,7 +136,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.WAIT_TIME, lambda n: WaitForDuration(name="WaitForDuration")),
         (CommandID.CLOSE_GRIPPER, lambda n: CloseGripperAction()),
         (CommandID.STOP_BASE, lambda n: PublishZeroVel()),
-        #Mapping commands
+        # Mapping commands
         (CommandID.START_SLAM, lambda n: EnableSLAM(slam_helper)),
         (CommandID.START_LOCALIZATION, lambda n: EnableLocalization(slam_helper)),
         (CommandID.CREATE_MAP, lambda n: InitializeEmptyMap(slam_helper)),
@@ -158,16 +159,18 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
     cancel_check = match_command_checker(CommandID.EMERGENCY_CANCEL)
 
     stop_base = PublishZeroVel(name="StopBase")
+    stop_mapping = StopMapping(get_helper_container(node).slam_helper, with_save=False, name="ESTOP MAPPING")
     stow_cancel = StowArmActionSimple(name="StowArmCancel")
     close_gripper = CloseGripperAction(name="CloseGripperAction")
     reset_estop = ResetEstopFlag(name="ResetEStopFlag")
     stop_base.setup(node=node)
+    stop_mapping.setup(node=node)
     stow_cancel.setup(node=node)
     close_gripper.setup(node=node)
     reset_estop.setup(node=node)
 
     cancel_seq = py_trees.composites.Sequence("CancelSequence", memory=True)
-    cancel_seq.add_children([cancel_check, stop_base, stow_cancel, close_gripper, reset_estop])
+    cancel_seq.add_children([cancel_check, stop_base, stop_mapping, stow_cancel, close_gripper, reset_estop])
 
     normal_tree = build_command_tree(node)
 
@@ -271,16 +274,17 @@ def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
 
     return manipulation
 
+
 def build_current_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
     get_goal = SaveCurrentPoseAsGoal(name="SaveCurrentPoseAsGoal")
     get_goal.setup(node=node)
 
-
     add_waypoint = AddGoalPoseAsWaypoint(get_helper_container(node).slam_helper, name="AddGoalPoseAsWaypoint")
     add_waypoint.setup(node=node)
     sequence.add_children([get_goal, add_waypoint])
     return sequence
+
 
 def build_navigate_to_goal_pose_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("NavigateToWaypoint", memory=True)
@@ -292,6 +296,7 @@ def build_navigate_to_goal_pose_tree(node: rclpy.node.Node) -> py_trees.behaviou
     sequence.add_children([set_goal, navigate])
 
     return sequence
+
 
 def ctrl_c_handler(sig, frame):
     """
@@ -341,7 +346,6 @@ def main(args=None):
 
     # Register Ctrl-C handler
     signal.signal(signal.SIGINT, ctrl_c_handler)
-
 
     try:
         rclpy.spin(tree.node)
