@@ -1,5 +1,3 @@
-from numpy.f2py.crackfortran import usepattern
-
 import py_trees
 from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
 
@@ -34,7 +32,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
                 node=self.node,
                 blackboard=self.bb_client,
                 launch_file="slam_merged_launch.py",
-                nav2_launch_file="nav2_spot_launch.py",
+                nav2_launch_file="nav2_spot_parallel_launch.py",
                 nav2_params_file="nav2_spot_params.yaml"
             )
 
