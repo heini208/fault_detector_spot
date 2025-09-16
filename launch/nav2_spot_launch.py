@@ -1,10 +1,11 @@
-from launch import LaunchDescription, conditions
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from ament_index_python.packages import get_package_share_directory
-import os
 
 pkg = get_package_share_directory('fault_detector_spot')
 
@@ -74,68 +75,55 @@ def generate_launch_description():
         ],
     )
 
-    # PointCloud merger
-    merger_node = Node(
-        package='fault_detector_spot',
-        executable='pointcloud_merger',
-        name='pointcloud_merger',
-        parameters=[{
-            'input_topics': [
-                '/depth_registered/back/points',
-                '/depth_registered/frontleft/points',
-                '/depth_registered/frontright/points',
-                '/depth_registered/hand/points',
-                '/depth_registered/left/points',
-                '/depth_registered/right/points',
-            ],
-            'output_topic': '/merged_cloud',
-            'base_frame': 'base_link',
-            'remove_underscores': False,
-            'use_sim_time': use_sim_time,
-        }],
-        output='log'
-    )
+    cameras = [
+        '/depth_registered/back/points',
+        '/depth_registered/frontleft/points',
+        '/depth_registered/frontright/points',
+        '/depth_registered/left/points',
+        '/depth_registered/right/points'
+    ]
 
-    # PointCloud → LaserScan
-    pcl_to_scan_node = Node(
-        package='pointcloud_to_laserscan',
-        executable='pointcloud_to_laserscan_node',
-        name='pcl_to_scan',
-        remappings=[('cloud_in', '/merged_cloud'), ('scan', '/scan')],
-        parameters=[{
-            'target_frame': 'base_link',
-            'transform_tolerance': 0.2,
-            'min_height': -0.3,
-            'max_height': 0.5,
-            'angle_min': -3.14,
-            'angle_max': 3.14,
-            'angle_increment': 0.01,
-            'range_min': 0.05,
-            'range_max': 50.0,
-            'use_sim_time': use_sim_time
-        }],
-        output='screen'
-    )
-
+    pcl_to_scan_nodes = []
+    for i, cam_topic in enumerate(cameras):
+        pcl_to_scan_nodes.append(
+            Node(
+                package='pointcloud_to_laserscan',
+                executable='pointcloud_to_laserscan_node',
+                name=f'pcl_to_scan_{i}',
+                remappings=[('cloud_in', cam_topic), ('scan', '/scan')],
+                parameters=[{
+                    'target_frame': 'base_link',
+                    'transform_tolerance': 0.2,
+                    'min_height': -0.1,
+                    'max_height': 0.3,
+                    'angle_min': -3.14,
+                    'angle_max': 3.14,
+                    'angle_increment': 0.034,
+                    'range_min': 0.3,
+                    'range_max': 8.0,
+                    'use_sim_time': use_sim_time
+                }],
+                output='screen'
+            )
+        )
     # RViz
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
         name="rviz2",
         arguments=["-d", rviz_config],
+        parameters=[{'use_sim_time': use_sim_time}],
         output="log"
     )
 
     return LaunchDescription([
-        use_sim_time_arg,
-        map_name_arg,
-        initial_pose_x_arg,
-        initial_pose_y_arg,
-        initial_pose_z_arg,
-        initial_pose_theta_arg,
-        set_initial_pose_arg,
-        nav2,
-        merger_node,
-        pcl_to_scan_node,
-        rviz_node
-    ])
+                                 use_sim_time_arg,
+                                 map_name_arg,
+                                 initial_pose_x_arg,
+                                 initial_pose_y_arg,
+                                 initial_pose_z_arg,
+                                 initial_pose_theta_arg,
+                                 set_initial_pose_arg,
+                                 nav2,
+                                 rviz_node
+                             ] + pcl_to_scan_nodes)
