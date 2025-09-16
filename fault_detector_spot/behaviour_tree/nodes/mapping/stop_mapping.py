@@ -23,6 +23,7 @@ class StopMapping(py_trees.behaviour.Behaviour):
         elif not self._stop_called:
             if not self.with_save:
                 self.helper.stop_without_save()
+                return py_trees.common.Status.SUCCESS #dont wait when not saving
             else:
                 self.helper.stop_current_process()
             self._stop_called = True
