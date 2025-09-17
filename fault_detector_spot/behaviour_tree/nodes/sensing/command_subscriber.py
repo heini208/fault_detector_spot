@@ -64,9 +64,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.feedback_message = f"Processed {len(self.pending_msgs)} commands"
         return py_trees.common.Status.SUCCESS
 
-    def terminate(self, new_status):
-        self.logger.debug(f"Terminating with status {new_status}")
-
     def _create_ui_subscribers(self):
         self.node.create_subscription(
             ComplexCommand,

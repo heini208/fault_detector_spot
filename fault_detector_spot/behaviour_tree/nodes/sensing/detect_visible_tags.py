@@ -1,10 +1,10 @@
-import py_trees
-import py_trees_ros
-import rclpy
 import re
-from fault_detector_msgs.msg import TagElement, TagElementArray
-import tf2_ros
 from typing import Dict, Optional
+
+import py_trees
+import rclpy
+import tf2_ros
+from fault_detector_msgs.msg import TagElement
 
 
 class DetectVisibleTags(py_trees.behaviour.Behaviour):
@@ -93,7 +93,3 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         tag_element.pose.pose.position.z = transform.transform.translation.z
         tag_element.pose.pose.orientation = transform.transform.rotation
         return tag_element
-
-    def terminate(self, new_status: py_trees.common.Status):
-        """Logs the termination status."""
-        self.logger.info(f"Terminating with status {new_status}")

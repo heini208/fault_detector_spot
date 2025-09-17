@@ -1,9 +1,10 @@
+from typing import Optional
+
 import py_trees
 import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from typing import Optional
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 # QoS Profiles
 LATCHED_QOS = QoSProfile(
@@ -113,6 +114,3 @@ class LastLocalizationPose(py_trees.behaviour.Behaviour):
         self.blackboard.last_pose_estimation = selected_pose
         self.feedback_message = f"Using pose from {source}"
         return py_trees.common.Status.SUCCESS
-
-    def terminate(self, new_status: py_trees.common.Status):
-        self.logger.info(f"Terminating LastLocalizationPose with status {new_status}")

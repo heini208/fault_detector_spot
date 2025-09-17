@@ -1,17 +1,14 @@
-import py_trees
-import py_trees_ros
-import rclpy
-from rclpy.node import Node
 from typing import Dict, Optional
+
 import numpy as np
-
-from apriltag_msgs.msg import AprilTagDetectionArray
-from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import PoseStamped
-from fault_detector_msgs.msg import TagElement, TagElementArray
-
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
 from bosdyn.client.math_helpers import SE3Pose, Quat
+
+import py_trees
+from apriltag_msgs.msg import AprilTagDetectionArray
+from fault_detector_msgs.msg import TagElement
+from rclpy.node import Node
+from sensor_msgs.msg import Image, CameraInfo
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 
 
@@ -157,6 +154,3 @@ class HandCameraTagDetection(py_trees.behaviour.Behaviour):
         x = (u - cx) * z / fx
         y = (v - cy) * z / fy
         return x, y
-
-    def terminate(self, new_status: py_trees.common.Status):
-        self.logger.info(f"DetectNewTagsWithDepth terminated with status {new_status}")

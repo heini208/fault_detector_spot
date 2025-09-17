@@ -1,8 +1,9 @@
+from typing import Dict, Optional
+
 import py_trees
 import rclpy
-from rclpy.node import Node
-from typing import Dict, Optional
 from fault_detector_msgs.msg import TagElement, TagElementArray
+from rclpy.node import Node
 
 
 class PublishTagStates(py_trees.behaviour.Behaviour):
@@ -60,6 +61,3 @@ class PublishTagStates(py_trees.behaviour.Behaviour):
             f"Published {len(visible_tags)} visible and {len(reachable_tags)} reachable tag(s)"
         )
         return py_trees.common.Status.SUCCESS
-
-    def terminate(self, new_status: py_trees.common.Status):
-        self.logger.info(f"{self.name} terminated with status {new_status}")
