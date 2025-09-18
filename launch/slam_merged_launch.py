@@ -1,13 +1,11 @@
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition, LaunchConfigurationEquals
-from launch.substitutions import LaunchConfiguration, PythonExpression
-from launch_ros.actions import Node, LifecycleNode
-from ament_index_python.packages import get_package_share_directory
 import os
 
-from launch_ros.events.lifecycle import ChangeState
-from lifecycle_msgs.msg import Transition
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -79,13 +77,13 @@ def generate_launch_description():
         parameters=[{
             'target_frame': 'base_link',
             'transform_tolerance': 0.2,
-            'min_height': -0.3,
-            'max_height': 0.5,
+            'min_height': -0.2,
+            'max_height': 0.4,
             'angle_min': -3.14,
             'angle_max': 3.14,
-            'angle_increment': 0.01,
-            'range_min': 0.05,
-            'range_max': 50.0,
+            'angle_increment': 0.017,
+            'range_min': 0.3,
+            'range_max': 8.0,
             'use_sim_time': use_sim_time
         }],
         output='screen'

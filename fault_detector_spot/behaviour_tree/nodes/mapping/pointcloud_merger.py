@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-import ctypes
-import struct
+
+import numpy as np
 
 import rclpy
+import tf2_ros
+import tf2_sensor_msgs.tf2_sensor_msgs
 from rclpy.duration import Duration
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import PointCloud2
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-from synchros2.tf_listener_wrapper import TFListenerWrapper
-import tf2_sensor_msgs.tf2_sensor_msgs
 from sensor_msgs_py import point_cloud2
-import numpy as np
-import tf2_ros
-
 from std_msgs.msg import Header
+from synchros2.tf_listener_wrapper import TFListenerWrapper
 
 # QoS profile for point clouds
 POINT_CLOUD_QOS = QoSProfile(
@@ -36,7 +35,7 @@ class PointCloudMerger(Node):
         self.pub = self.create_publisher(PointCloud2, self.output_topic, POINT_CLOUD_QOS)
         self.topic_cloud_map = {topic: None for topic in self.input_topics}
 
-        self.timer_period = 0.5  # seconds (2 Hz) – adjust as needed
+        self.timer_period = 0.1  # seconds (2 Hz) – adjust as needed
         self.timer = self.create_timer(self.timer_period, self._timer_callback)
         self.min_dist = 0.02
 
@@ -91,7 +90,7 @@ class PointCloudMerger(Node):
             )
 
     def _timer_callback(self):
-        if not all(self.topic_ready.values()):
+        if not any(self.topic_ready.values()):
             return
 
         all_points = self._create_list_from_msgs()
@@ -99,7 +98,8 @@ class PointCloudMerger(Node):
             return
 
         merged_points = np.vstack(all_points)  # concatenate all
-        unique_points = self._remove_close_points(merged_points)
+        unique_points = merged_points
+        # unique_points = self._remove_close_points(merged_points)
         self._create_point_cloud_and_publish(unique_points)
         self.get_logger().info(
             f"Published merged cloud with {len(unique_points)} points from {len(unique_points)} inputs."
@@ -126,14 +126,19 @@ class PointCloudMerger(Node):
 
         return point_list
 
-    def _create_point_cloud_and_publish(self, points: np.ndarray) -> PointCloud2:
+    def _create_point_cloud_and_publish(self, points: np.ndarray):
+        valid_clouds = [pc for pc in self.topic_cloud_map.values() if pc is not None]
+        if not valid_clouds:
+            return
+
+        latest_stamp = max(Time.from_msg(pc.header.stamp) for pc in valid_clouds)
         header = Header()
-        latest_stamp = max((Time.from_msg(pc.header.stamp) for pc in self.topic_cloud_map.values()))
         header.stamp = latest_stamp.to_msg()
         header.frame_id = self.base_frame
-        merged_msg = point_cloud2.create_cloud_xyz32(header, points.tolist())
 
+        merged_msg = point_cloud2.create_cloud_xyz32(header, points.tolist())
         self.pub.publish(merged_msg)
+
         self.topic_ready = {topic: False for topic in self.input_topics}
 
     def _remove_close_points(self, points: np.ndarray) -> np.ndarray:
@@ -153,9 +158,10 @@ class PointCloudMerger(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = PointCloudMerger()
-
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
