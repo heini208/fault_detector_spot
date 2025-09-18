@@ -1,9 +1,9 @@
 import os
-import json
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QComboBox, QRadioButton, QButtonGroup, QLineEdit, \
     QSizePolicy
+
 from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import StringArray, ComplexCommand
 from std_msgs.msg import String
@@ -18,7 +18,7 @@ class NavigationControls(UIControlHelper):
             get_package_share_directory("fault_detector_spot"),
             "maps"
         )
-        self.waypoint_name_field = None
+        self.poi_name_field = None
         self.current_map = None
         self._cached_map_list = []
         self._cached_waypoint_list = []
@@ -47,6 +47,12 @@ class NavigationControls(UIControlHelper):
             self.waypoint_list_callback,
             LATCHED_QOS
         )
+        self.node.create_subscription(
+            StringArray,
+            '/landmark_list',
+            self.landmark_list_callback,
+            LATCHED_QOS
+        )
 
     def make_rows(self):
         rows = [
@@ -54,7 +60,8 @@ class NavigationControls(UIControlHelper):
             self._make_create_map_row(),
             self._make_mode_row(),
             self._make_waypoint_row(),
-            self._make_add_waypoint_row()
+            self._make_add_waypoint_row(),
+            self._make_landmark_row()
         ]
 
         self._apply_map_list()
@@ -87,9 +94,6 @@ class NavigationControls(UIControlHelper):
         self.current_map_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.current_map_label.setWordWrap(False)
         row.addWidget(self.current_map_label)
-
-        row.addStretch(1)
-
         return row
 
     def current_map_callback(self, msg: String):
@@ -117,6 +121,27 @@ class NavigationControls(UIControlHelper):
             for wp_name in self._cached_waypoint_list:
                 self.waypoint_dropdown.addItem(wp_name)
 
+    def _apply_landmark_list(self):
+        if not self._cached_landmark_list:
+            self.landmark_label.setText("no landmarks saved")
+            self.landmark_label.setStyleSheet("")  # default color
+            return
+
+        # Build text string, color visible tags green
+        text_parts = []
+        for lm_name in self._cached_landmark_list:
+            if lm_name.startswith("Tag_"):
+                tag_id = int(lm_name.split("_")[1])
+                if tag_id in self.ui.visible_tags:
+                    # Wrap visible tags in green HTML span
+                    text_parts.append(f'<span style="color: green;">{lm_name}</span>')
+                else:
+                    text_parts.append(f'<span style="color: red;">{lm_name}</span>')
+            else:
+                text_parts.append(lm_name)
+
+        self.landmark_label.setText(", ".join(text_parts))
+
     def map_list_callback(self, msg: StringArray):
         # Cache the latest map list
         self._cached_map_list = msg.names
@@ -125,6 +150,10 @@ class NavigationControls(UIControlHelper):
     def waypoint_list_callback(self, msg: StringArray):
         self._cached_waypoint_list = msg.names
         self._apply_waypoint_list()
+
+    def landmark_list_callback(self, msg: StringArray):
+        self._cached_landmark_list = msg.names
+        self._apply_landmark_list()
 
     def _make_create_map_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -190,16 +219,32 @@ class NavigationControls(UIControlHelper):
         row = QHBoxLayout()
 
         # Text field for entering waypoint name
-        self.waypoint_name_field = QLineEdit()
-        self.waypoint_name_field.setPlaceholderText("Enter waypoint name")
-        self.waypoint_name_field.setFixedWidth(200)
-        row.addWidget(self.waypoint_name_field)
+        self.poi_name_field = QLineEdit()
+        self.poi_name_field.setPlaceholderText("Enter waypoint name or tag ID")
+        self.poi_name_field.setFixedWidth(200)
+        row.addWidget(self.poi_name_field)
 
         # Button to add current pose as waypoint
         self.add_waypoint_button = QPushButton("Add current pose as Waypoint")
         self.add_waypoint_button.clicked.connect(self.handle_add_waypoint)
         row.addWidget(self.add_waypoint_button)
 
+        self.add_landmark_button = QPushButton("Add Tag ID as Landmark")
+        self.add_landmark_button.clicked.connect(self.handle_add_landmark)
+        row.addWidget(self.add_landmark_button)
+
+        return row
+
+    def _make_landmark_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Landmarks:"))
+
+        self.landmark_label = QLabel("no landmarks saved")
+        self.landmark_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.landmark_label.setTextFormat(Qt.RichText)
+        row.addWidget(self.landmark_label)
+
+        row.addStretch(1)
         return row
 
     # --- Dropdown updates ---
@@ -249,7 +294,7 @@ class NavigationControls(UIControlHelper):
         return True
 
     def handle_add_waypoint(self):
-        name = self.waypoint_name_field.text().strip()
+        name = self.poi_name_field.text().strip()
         if not name:
             self.show_warning("Missing Name", "Please enter a waypoint name.")
             return
@@ -272,6 +317,42 @@ class NavigationControls(UIControlHelper):
         complex_command.map_name = self.current_map
         complex_command.waypoint_name = name
         self.complex_command_publisher.publish(complex_command)
+
+    def handle_add_landmark(self):
+        name = self.poi_name_field.text().strip()
+        if not name:
+            self.show_warning("Missing ID", "Please enter a valid tag ID")
+            return
+
+        if not self.mode_localization.isChecked():
+            self.show_warning(
+                "Not in Localization Mode",
+                "Waypoints or landmarks can only be saved while in localization mode (AMCL active)."
+            )
+            return
+
+        if not name.isdigit():
+            self.show_warning("Invalid Input", "Tag ID must be numeric.")
+            return
+
+        tag_id = int(name)
+        if tag_id not in self.ui.visible_tags:
+            self.show_warning("Tag Not Found", f"Tag {tag_id} is not currently visible.")
+            return
+
+        tag_element = self.ui.visible_tags[tag_id]
+
+        complex_command = ComplexCommand()
+        complex_command.command = self.ui.build_basic_command(CommandID.ADD_TAG_AS_LANDMARK)
+        complex_command.map_name = self.current_map
+        complex_command.waypoint_name = f"Tag_{tag_id}"
+        complex_command.tag = tag_element
+
+        self.complex_command_publisher.publish(complex_command)
+        self.show_info(
+            "Landmark Added",
+            f"Saved visible tag {tag_id} as landmark '{complex_command.waypoint_name}' in map '{self.current_map}'."
+        )
 
     def handle_move_to_waypoint(self):
         selected = self.waypoint_dropdown.currentText()

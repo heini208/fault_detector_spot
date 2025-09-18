@@ -25,5 +25,6 @@ class CommandID(str, Enum):
     SWAP_MAP = "swap_map"
     DELETE_MAP = "delete_map"
     ADD_CURRENT_POSITION_WAYPOINT = "add_current_position_waypoint"
+    ADD_TAG_AS_LANDMARK = "add_tag_as_landmark"
     DELETE_WAYPOINT = "delete_waypoint"
     MOVE_TO_WAYPOINT = "move_to_waypoint"

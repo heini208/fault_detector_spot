@@ -1,5 +1,4 @@
 # In fault_detector_spot/behaviour_tree/bt_runner.py
-import os
 import signal
 import time
 from typing import Callable
@@ -7,7 +6,6 @@ from typing import Callable
 import py_trees
 import py_trees_ros
 import rclpy
-from fault_detector_msgs.msg import StringArray
 from fault_detector_spot.behaviour_tree import (
     DetectVisibleTags,
     PublishTagStates,
@@ -135,7 +133,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.DELETE_MAP, lambda n: DeleteMap()),
         (CommandID.SWAP_MAP, lambda n: SwapMap(slam_helper)),
         (CommandID.STOP_MAPPING, lambda n: StopMapping(slam_helper)),
-        (CommandID.ADD_CURRENT_POSITION_WAYPOINT, build_current_pose_as_landmark_tree),
+        (CommandID.ADD_CURRENT_POSITION_WAYPOINT, build_current_pose_as_waypoint_tree),
         (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint(slam_helper)),
         (CommandID.MOVE_TO_WAYPOINT, build_navigate_to_goal_pose_tree),
     ]
@@ -271,7 +269,7 @@ def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
     return manipulation
 
 
-def build_current_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+def build_current_pose_as_waypoint_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
     get_goal = SaveCurrentPoseAsGoal(name="SaveCurrentPoseAsGoal")
     get_goal.setup(node=node)

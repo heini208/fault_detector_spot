@@ -30,6 +30,38 @@ class LastLocalizationPose(py_trees.behaviour.Behaviour):
         super().__init__(name)
         self.node: Optional[Node] = None
         self.blackboard = self.attach_blackboard_client()
+
+
+        self.amcl_leeway_sec = amcl_leeway_sec
+        self._last_amcl_pose: Optional[PoseWithCovarianceStamped] = None
+        self._last_slam_pose: Optional[PoseWithCovarianceStamped] = None
+
+        self._sub_amcl: Optional[rclpy.subscription.Subscription] = None
+        self._sub_slam: Optional[rclpy.subscription.Subscription] = None
+
+    def setup(self, **kwargs):
+        """
+        Initialize ROS subscriptions with proper QoS.
+        """
+        self.node = kwargs['node']
+
+        # AMCL is typically TRANSIENT_LOCAL, RELIABLE
+        self._sub_amcl = self.node.create_subscription(
+            PoseWithCovarianceStamped,
+            '/amcl_pose',
+            self._amcl_callback,
+            LATCHED_QOS
+        )
+
+        # SLAM pose is usually VOLATILE / BEST_EFFORT
+        self._sub_slam = self.node.create_subscription(
+            PoseWithCovarianceStamped,
+            '/pose',
+            self._slam_callback,
+            VOLATILE_QOS
+        )
+
+        self.logger.info("LastLocalizationPose subscriptions initialized with proper QoS.")
         self.blackboard.register_key("last_pose_estimation", access=py_trees.common.Access.WRITE)
 
         # Initialize blackboard variable with zero pose
@@ -44,40 +76,6 @@ class LastLocalizationPose(py_trees.behaviour.Behaviour):
         zero_pose.pose.pose.orientation.z = 0.0
         zero_pose.pose.pose.orientation.w = 1.0  # identity quaternion
         self.blackboard.last_pose_estimation = zero_pose
-
-        self.amcl_leeway_sec = amcl_leeway_sec
-        self._last_amcl_pose: Optional[PoseWithCovarianceStamped] = None
-        self._last_slam_pose: Optional[PoseWithCovarianceStamped] = None
-
-        self._sub_amcl: Optional[rclpy.subscription.Subscription] = None
-        self._sub_slam: Optional[rclpy.subscription.Subscription] = None
-
-    def setup(self, **kwargs):
-        """
-        Initialize ROS subscriptions with proper QoS.
-        """
-        try:
-            self.node = kwargs['node']
-
-            # AMCL is typically TRANSIENT_LOCAL, RELIABLE
-            self._sub_amcl = self.node.create_subscription(
-                PoseWithCovarianceStamped,
-                '/amcl_pose',
-                self._amcl_callback,
-                LATCHED_QOS
-            )
-
-            # SLAM pose is usually VOLATILE / BEST_EFFORT
-            self._sub_slam = self.node.create_subscription(
-                PoseWithCovarianceStamped,
-                '/pose',
-                self._slam_callback,
-                VOLATILE_QOS
-            )
-
-            self.logger.info("LastLocalizationPose subscriptions initialized with proper QoS.")
-        except KeyError as e:
-            self.logger.error(f"Could not retrieve node from kwargs: {e}")
 
     def _amcl_callback(self, msg: PoseWithCovarianceStamped):
         self._last_amcl_pose = msg

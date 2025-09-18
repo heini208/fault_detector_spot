@@ -5,9 +5,10 @@ from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import
 class SwapMap(py_trees.behaviour.Behaviour):
     """
     Swap/load a map in RTAB-Map by restarting SLAM or localization with the new database.
-    If RTAB-Map is not running, just set the active map and publish it.
+    If SLAM_TOOLBOX-Map is not running, just set the active map and publish it.
     Updates blackboard variable `active_map_name`.
     """
+    #TODO this can be replaced with a combination behaviour from get_map_path and EnableSLAM/EnableLocalization
 
     def __init__(self,slam_helper: SlamToolboxHelper, name="SwapMap"):
         super().__init__(name)

@@ -27,7 +27,7 @@ from fault_detector_spot.behaviour_tree import (
     ManipulatorMoveRelativeAction,
     ToggleGripperAction, CloseGripperAction, HelperInitializer, DeleteWaypoint, StopMapping, SwapMap, DeleteMap,
     InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
-    NavigateToGoalPose,
+    NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.nodes.sensing.last_localization_pose import LastLocalizationPose
@@ -86,7 +86,10 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     tag_publisher = PublishTagStates(name="TagPublisher")
     detect.setup(node=node)
 
-    tag_scan_sequence.add_children([detect, hand_detect, in_range_checker, tag_publisher])
+    world_frame_transformer = VisibleTagToMap(slam_helper=get_helper_container(node).slam_helper,
+                                              name="VisibleTagToMap")
+
+    tag_scan_sequence.add_children([detect, hand_detect, in_range_checker, tag_publisher, world_frame_transformer])
 
     sensing_seq.add_children([tag_scan_sequence, cmd_sub, pose_sub])
     return sensing_seq
@@ -143,7 +146,8 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.DELETE_MAP, lambda n: DeleteMap()),
         (CommandID.SWAP_MAP, lambda n: SwapMap(slam_helper)),
         (CommandID.STOP_MAPPING, lambda n: StopMapping(slam_helper)),
-        (CommandID.ADD_CURRENT_POSITION_WAYPOINT, build_current_pose_as_landmark_tree),
+        (CommandID.ADD_CURRENT_POSITION_WAYPOINT, build_current_pose_as_waypoint_tree),
+        (CommandID.ADD_TAG_AS_LANDMARK, build_tag_pose_as_landmark_tree),
         (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint(slam_helper)),
         (CommandID.MOVE_TO_WAYPOINT, build_navigate_to_goal_pose_tree),
 
@@ -204,12 +208,14 @@ def build_publisher_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     cmd_pub = BufferStatusPublisher(name="CommandStatusPublisher")
     cmd_pub.setup(node=node)
 
+    init_pose_pub = LandmarkRelocalizer(get_helper_container(node).slam_helper, name="InitPosePublisher")
+    init_pose_pub.setup(node=node)
     # Parallel so both can exist simultaneously
     publisher_tree = py_trees.composites.Parallel(
         "PublisherTree",
         policy=py_trees.common.ParallelPolicy.SuccessOnAll()
     )
-    publisher_tree.add_children([initial_ui_info, cmd_pub])
+    publisher_tree.add_children([initial_ui_info, cmd_pub, init_pose_pub])
 
     return publisher_tree
 
@@ -275,12 +281,24 @@ def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
     return manipulation
 
 
-def build_current_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+def build_current_pose_as_waypoint_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
     get_goal = SaveCurrentPoseAsGoal(name="SaveCurrentPoseAsGoal")
     get_goal.setup(node=node)
 
     add_waypoint = AddGoalPoseAsWaypoint(get_helper_container(node).slam_helper, name="AddGoalPoseAsWaypoint")
+    add_waypoint.setup(node=node)
+    sequence.add_children([get_goal, add_waypoint])
+    return sequence
+
+
+def build_tag_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    slam_helper = get_helper_container(node).slam_helper
+    sequence = py_trees.composites.Sequence("SaveTagAsLandmark", memory=True)
+    get_goal = SetTagAsGoal(name="SetTagAsGoal")
+    get_goal.setup(node=node)
+
+    add_waypoint = AddGoalPoseAsLandmark(slam_helper=slam_helper, name="AddGoalPoseAsLandmark")
     add_waypoint.setup(node=node)
     sequence.add_children([get_goal, add_waypoint])
     return sequence

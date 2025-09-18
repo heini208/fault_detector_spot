@@ -1,22 +1,22 @@
+import json
 import math
 import os
 import signal
 import subprocess
-import json
 
 import py_trees
 import rclpy
 import tf2_ros
-from rclpy import Future
-from rclpy.time import Time
-from slam_toolbox.srv import DeserializePoseGraph, SaveMap
-from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Pose
-from fault_detector_msgs.msg import StringArray
-from fault_detector_spot.behaviour_tree.nodes.navigation.nav2_helper import Nav2Helper
-from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS, INITIALPOSE_QOS
 from ament_index_python.packages import get_package_share_directory
-from tf_transformations import quaternion_from_euler
+from fault_detector_msgs.msg import StringArray
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
+from fault_detector_spot.behaviour_tree.nodes.navigation.nav2_helper import Nav2Helper
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from rclpy.duration import Duration
+from rclpy.time import Time
+from slam_toolbox.srv import DeserializePoseGraph
+from std_msgs.msg import String
+from tf2_geometry_msgs import tf2_geometry_msgs
 
 
 class SlamToolboxHelper():
@@ -97,6 +97,7 @@ class SlamToolboxHelper():
         self.active_map_pub = self.node.create_publisher(String, "active_map", LATCHED_QOS)
         self.map_list_pub = self.node.create_publisher(StringArray, "map_list", LATCHED_QOS)
         self.waypoint_list_pub = self.node.create_publisher(StringArray, "waypoint_list", LATCHED_QOS)
+        self.landmark_list_pub = self.node.create_publisher(StringArray, "landmark_list", LATCHED_QOS)
 
     def _posegraph_path(self, map_name: str):
         return os.path.join(self.recordings_dir, f"{map_name}.posegraph")
@@ -104,7 +105,7 @@ class SlamToolboxHelper():
     def _posegraph_without_ext(self, map_name: str):
         return os.path.join(self.recordings_dir, f"{map_name}")
 
-    def _json_path(self, map_name: str):
+    def get_json_path(self, map_name: str):
         return os.path.join(self.recordings_dir, f"{map_name}.json")
 
     def _publish_active_map(self):
@@ -113,6 +114,7 @@ class SlamToolboxHelper():
             msg.data = self.bb.active_map_name
             self.active_map_pub.publish(msg)
             self.publish_waypoint_list()
+            self.publish_landmark_list()
 
     def update_map_list(self, extra_map: str = None):
         maps = [f[:-10] for f in os.listdir(self.recordings_dir) if f.endswith(".posegraph")]
@@ -289,9 +291,12 @@ class SlamToolboxHelper():
 
         # Create empty JSON for waypoints if it does not exist
         if not os.path.exists(json_path):
-            import json
+            data = {
+                "waypoints": [],
+                "landmarks": []
+            }
             with open(json_path, "w") as f:
-                json.dump({"waypoints": []}, f, indent=4)
+                json.dump(data, f, indent=4)
 
         return self._launch_slam_toolbox(map_name, mode="mapping")
 
@@ -360,30 +365,52 @@ class SlamToolboxHelper():
 
     # --- Waypoint Management ---
     def publish_waypoint_list(self, map_name: str = None):
-        map_name = map_name or self.bb.active_map_name
-        if not map_name:
-            return
-        json_path = self._json_path(map_name)
-        if not os.path.exists(json_path):
-            return
-        with open(json_path, "r") as f:
-            data = json.load(f)
-        names = [wp["name"] for wp in data.get("waypoints", [])]
+        names = self.get_list_from_json_category("waypoints", map_name)
         msg = StringArray()
         msg.names = names
         self.waypoint_list_pub.publish(msg)
 
+    def publish_landmark_list(self, map_name: str = None):
+        names = self.get_list_from_json_category("landmarks", map_name)
+        msg = StringArray()
+        msg.names = names
+        self.landmark_list_pub.publish(msg)
+
+    def get_list_from_json_category(self, category: String, map_name: str = None, ):
+        map_name = map_name or self.bb.active_map_name
+        if not map_name:
+            return
+        json_path = self.get_json_path(map_name)
+        if not os.path.exists(json_path):
+            return
+        with open(json_path, "r") as f:
+            data = json.load(f)
+        names = [wp["name"] for wp in data.get(category, [])]
+        return names
+
     def add_pose_as_waypoint(self, waypoint_name: str, pose: PoseStamped, map_name: str = None):
+        self.add_pose_to_json("waypoints", waypoint_name, pose, map_name)
+
+        if map_name == self.bb.active_map_name:
+            self.publish_waypoint_list(map_name)
+
+    def add_pose_as_landmark(self, landmark_name: str, pose: PoseStamped, map_name: str = None):
+        self.add_pose_to_json("landmarks", landmark_name, pose, map_name)
+
+        if map_name == self.bb.active_map_name:
+            self.publish_landmark_list(map_name)
+
+    def add_pose_to_json(self, category: String, entry_name: String, pose: PoseStamped, map_name: str = None):
         map_name = map_name or self.bb.active_map_name
         if not map_name:
             raise ValueError("No active map set")
 
-        json_path = self._json_path(map_name)
+        json_path = self.get_json_path(map_name)
         if os.path.exists(json_path):
             with open(json_path, "r") as f:
                 data = json.load(f)
         else:
-            data = {"waypoints": []}
+            data = {category: []}
 
         pose_dict = {
             "position": {
@@ -400,26 +427,23 @@ class SlamToolboxHelper():
         }
 
         updated = False
-        for wp in data["waypoints"]:
-            if wp["name"] == waypoint_name:
+        for wp in data[category]:
+            if wp["name"] == entry_name:
                 wp["pose"] = pose_dict
                 updated = True
                 break
         if not updated:
-            data["waypoints"].append({"name": waypoint_name, "pose": pose_dict})
+            data[category].append({"name": entry_name, "pose": pose_dict})
 
         with open(json_path, "w") as f:
             json.dump(data, f, indent=2)
-
-        if map_name == self.bb.active_map_name:
-            self.publish_waypoint_list(map_name)
 
     def delete_waypoint(self, waypoint_name: str, map_name: str = None):
         map_name = map_name or self.bb.active_map_name
         if not map_name:
             raise ValueError("No active map set")
 
-        json_path = self._json_path(map_name)
+        json_path = self.get_json_path(map_name)
         if not os.path.exists(json_path):
             return False
 
@@ -437,3 +461,28 @@ class SlamToolboxHelper():
         if map_name == self.bb.active_map_name:
             self.publish_waypoint_list(map_name)
         return True
+
+    def transform_to_map_frame(self, pose: PoseStamped, source_frame: str) -> PoseStamped | None:
+        """
+        Transform a pose from a source frame into the map frame.
+
+        Args:
+            pose: PoseStamped in the source frame.
+            source_frame: The frame the pose is expressed in.
+
+        Returns:
+            PoseStamped in map frame, or None if the transform fails.
+        """
+        print(self.tf_buffer.all_frames_as_yaml())
+
+        stamp = Time.from_msg(pose.header.stamp)
+        trans = self.tf_buffer.lookup_transform(
+            "map",
+            source_frame,
+            stamp,
+            rclpy.duration.Duration(seconds=5.0)
+        )
+
+        transformed_pose = tf2_geometry_msgs.do_transform_pose(pose, trans)
+        transformed_pose.header.frame_id = "map"
+        return transformed_pose
