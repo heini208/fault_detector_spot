@@ -17,7 +17,7 @@ def generate_launch_description():
 
     delete_db_arg = DeclareLaunchArgument(
         'delete_db',
-        default_value='true',
+        default_value='false',
         description='Delete existing database on launch'
     )
 
@@ -28,9 +28,6 @@ def generate_launch_description():
 
     # List of cameras
     cameras = [
-        ('left', '/camera/left/image', '/depth_registered/left/image', '/camera/left/camera_info', 'rgbd_image_left'),
-        ('right', '/camera/right/image', '/depth_registered/right/image', '/camera/right/camera_info',
-         'rgbd_image_right'),
         ('frontleft', '/camera/frontleft/image', '/depth_registered/frontleft/image', '/camera/frontleft/camera_info',
          'rgbd_image_frontleft'),
         ('frontright', '/camera/frontright/image', '/depth_registered/frontright/image',
@@ -79,10 +76,8 @@ def generate_launch_description():
             'sync_queue_size': 20,
         }],
         remappings=[
-            ('rgbd_image0', 'rgbd_image_left'),
-            ('rgbd_image1', 'rgbd_image_right'),
-            ('rgbd_image2', 'rgbd_image_frontleft'),
-            ('rgbd_image3', 'rgbd_image_frontright'),
+            ('rgbd_image0', 'rgbd_image_frontleft'),
+            ('rgbd_image1', 'rgbd_image_frontright'),
             ('odom', '/odometry')
         ]
     )
