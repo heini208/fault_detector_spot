@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QMessageBox
-from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
+
 from fault_detector_msgs.msg import ComplexCommand, TagElement
+from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from .UIControlHelper import UIControlHelper
 
 
@@ -56,6 +57,10 @@ class ManipulationControls(UIControlHelper):
         self.scan_all_button.clicked.connect(
             lambda _, cid=CommandID.SCAN_ALL_IN_RANGE: self.handle_scan_all_in_range(cid))
         row.addWidget(self.scan_all_button)
+
+        self.move_base_button = QPushButton("Move Base Into Range")
+        self.move_base_button.clicked.connect(self.handle_move_base_into_range)
+        row.addWidget(self.move_base_button)
 
         return row
 
@@ -244,10 +249,8 @@ class ManipulationControls(UIControlHelper):
         )
 
     def handle_tag_selection(self):
-        try:
-            complex_command = self.build_move_to_tag_command()
-        except TagNotFound:
-            return
+
+        complex_command = self.build_move_to_tag_command()
 
         pos = complex_command.tag.pose.pose.position
         offset = complex_command.offset.pose.position
@@ -260,8 +263,40 @@ class ManipulationControls(UIControlHelper):
         reply = self.ask_question("Confirm Move", message)
 
         if reply != QMessageBox.Yes:
-            self.status_label.setText(f"Move & Wait to tag {complex_command.tag.id} canceled")
+            self.status_label.setText(f"Move to tag {complex_command.tag.id} canceled")
             return
 
         self.complex_command_publisher.publish(complex_command)
         self.status_label.setText(f"Command sent: Move to tag {complex_command.tag.id}")
+
+    def handle_move_base_into_range(self):
+        """
+        Build a ComplexCommand that requests the base to move until the tag is in arm range.
+        Uses UIControlHelper dialogs for confirmation and info/warnings.
+        """
+        try:
+            complex_command = self.build_move_to_tag_command()
+        except TagNotFound:
+            return
+
+        complex_command.command.command_id = CommandID.MOVE_INTO_TAG_RANGE
+        pos = complex_command.tag.pose.pose.position
+        offset = complex_command.offset.pose.position
+
+        message = (
+            f"Move BASE until tag {complex_command.tag.id} is in arm range.\n"
+            f"Tag at X={pos.x:.2f}, Y={pos.y:.2f}\n"
+            f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
+            f"Orientation: {complex_command.orientation_mode}\n"
+            f"Timeout/Wait: {complex_command.wait_time:.1f}s"
+        )
+
+        reply = self.ask_question("Confirm Move Base Into Range", message)
+        if reply != QMessageBox.Yes:
+            if self.status_label:
+                self.status_label.setText(f"Move base into range to tag {complex_command.tag.id} canceled")
+            return
+
+        self.complex_command_publisher.publish(complex_command)
+        if self.status_label:
+            self.status_label.setText(f"Command sent: Move base into range to tag {complex_command.tag.id}")

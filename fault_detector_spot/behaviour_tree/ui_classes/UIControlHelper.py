@@ -35,4 +35,4 @@ class UIControlHelper(ABC):
         reply = QMessageBox.question(
             self.ui, title, message, QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
-        return reply == QMessageBox.Yes
+        return reply
