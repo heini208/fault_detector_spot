@@ -33,6 +33,7 @@ class SlamToolboxHelper():
         self.recordings_dir = os.path.join(
             get_package_share_directory("fault_detector_spot"), "maps"
         )
+        os.makedirs(self.recordings_dir, exist_ok=True)
 
         # Blackboard setup
         self.init_blackboard_keys()
