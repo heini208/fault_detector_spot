@@ -2,22 +2,18 @@
 """
 A behaviour that moves the Spot arm by a relative XYZ offset in the body frame.
 """
-import py_trees
-from py_trees.common import Access, Status
-from geometry_msgs.msg import PoseStamped
-import time
-from spot_msgs.action import RobotCommand
-from bosdyn.client.robot_command import RobotCommandBuilder
-from bosdyn_msgs.conversions import convert
-from synchros2.action_client import ActionClientWrapper
-from synchros2.utilities import namespace_with
-from synchros2.tf_listener_wrapper import TFListenerWrapper
-import synchros2.scope as ros_scope
-import rclpy
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, HAND_FRAME_NAME
+from bosdyn.client.robot_command import RobotCommandBuilder
 
+import rclpy
+from bosdyn_msgs.conversions import convert
 from fault_detector_spot.behaviour_tree.commands.manipulator_move_command import ManipulatorMoveCommand
 from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import ActionClientBehaviour
+from py_trees.common import Access, Status
+from spot_msgs.action import RobotCommand
+from synchros2.action_client import ActionClientWrapper
+from synchros2.tf_listener_wrapper import TFListenerWrapper
+from synchros2.utilities import namespace_with
 
 
 class ManipulatorMoveRelativeAction(ActionClientBehaviour):
