@@ -3,7 +3,7 @@ import signal
 import sys
 
 from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QApplication, QTabWidget
@@ -189,7 +189,12 @@ class Fault_Detector_UI(QWidget):
         self.reachable_tags = {tag.id: tag for tag in msg.elements}
 
     def _process_buffer(self, msg: String):
-        self.buffer_label.setText(f"Buffer: {msg.data}")
+        max_width = 400
+        text = f"Buffer: {msg.data}"
+        metrics = QFontMetrics(self.buffer_label.font())
+        elided = metrics.elidedText(text, Qt.ElideRight, max_width)
+        self.buffer_label.setText(elided)
+        self.buffer_label.setFixedWidth(max_width)
 
     def _process_command_status(self, msg: String):
         self.command_status_label.setText(f"Command Status: {msg.data}")
