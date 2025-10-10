@@ -3,14 +3,16 @@ import os
 import signal
 import subprocess
 
+from rtabmap_ros.srv import SaveMap
+
+import py_trees
+import rclpy
+from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import StringArray
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
 from fault_detector_spot.behaviour_tree.nodes.navigation.nav2_helper import Nav2Helper
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
-from ament_index_python.packages import get_package_share_directory
-import py_trees
-from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
-import rclpy
 
 
 class RTABHelper:
@@ -19,10 +21,14 @@ class RTABHelper:
     Integrates with py_trees Blackboard and ROS2 Node for publishing map state.
     """
 
-    def __init__(self, node, blackboard, nav2_launch_file="nav2_sim_launch.py", nav2_params_file=None):
+    def __init__(self, node, blackboard, nav2_launch_file="nav2_sim_launch.py", nav2_params_file=None,
+                 launch_file="rtab_mapping_launch.py"):
+
         self.node = node
+        self.slam_launch_file = launch_file
         self.bb = blackboard
-        self.recordings_dir = os.path.join(get_package_share_directory("fault_detector_spot"), "maps")
+        self.maps_dir = os.path.join(get_package_share_directory("fault_detector_spot"), "maps")
+        os.makedirs(self.maps_dir, exist_ok=True)
 
         # Ensure blackboard keys exist
         self.init_blackboard_keys()
@@ -37,13 +43,14 @@ class RTABHelper:
 
     def init_blackboard_keys(self):
         self.bb.register_key("active_map_name", access=py_trees.common.Access.WRITE)
-        self.bb.register_key("mapping_launch_process", access=py_trees.common.Access.WRITE)
+        self.bb.register_key("slam_launch_process", access=py_trees.common.Access.WRITE)
         self.bb.register_key("nav2_launch_process", access=py_trees.common.Access.WRITE)
+        self.bb.register_key("last_pose_estimation", access=py_trees.common.Access.READ)
 
         if not self.bb.exists("active_map_name"):
             self.bb.active_map_name = None
-        if not self.bb.exists("mapping_launch_process"):
-            self.bb.mapping_launch_process = None
+        if not self.bb.exists("slam_launch_process"):
+            self.bb.slam_launch_process = None
         if not self.bb.exists("nav2_launch_process"):
             self.bb.nav2_launch_process = None
 
@@ -52,9 +59,13 @@ class RTABHelper:
         self.active_map_pub = self.node.create_publisher(String, "active_map", LATCHED_QOS)
         self.map_list_pub = self.node.create_publisher(StringArray, "map_list", LATCHED_QOS)
         self.waypoint_list_pub = self.node.create_publisher(StringArray, "waypoint_list", LATCHED_QOS)
+        self.landmark_list_pub = self.node.create_publisher(StringArray, "landmark_list", LATCHED_QOS)
 
     def _db_path(self, map_name: str):
-        return os.path.join(self.recordings_dir, f"{map_name}.db")
+        return os.path.join(self.maps_dir, f"{map_name}.db")
+
+    def get_json_path(self, map_name: str):
+        return os.path.join(self.maps_dir, f"{map_name}.json")
 
     def _publish_active_map(self):
         if self.bb.active_map_name:
@@ -62,74 +73,98 @@ class RTABHelper:
             msg.data = self.bb.active_map_name
             self.active_map_pub.publish(msg)
             self.publish_waypoint_list()
+            self.publish_landmark_list()
 
     def update_map_list(self, extra_map: str = None):
-        maps = [f[:-3] for f in os.listdir(self.recordings_dir) if f.endswith(".db")]
-        if extra_map is not None and extra_map not in maps:
+        maps = [f[:-10] for f in os.listdir(self.maps_dir) if f.endswith(".posegraph")]
+        if extra_map and extra_map not in maps:
             maps.append(extra_map)
-
         msg = StringArray()
         msg.names = maps
         self.map_list_pub.publish(msg)
 
-    def start_mapping(self, map_name: str = None, launch_file="slam_merged_launch.py"):
-        self.stop_current_process()
-        if map_name is None:
-            map_name = self.bb.active_map_name
-            if map_name is None:
-                raise RuntimeError("No active map set to start mapping")
-        db_path = self._db_path(map_name)
-        args = [
-            "ros2", "launch", "fault_detector_spot", launch_file,
-            f"database_path:={db_path}", "rviz:=true"
-        ]
-        proc = subprocess.Popen(args, preexec_fn=os.setsid)
-        self.bb.mapping_launch_process = proc
-        self.bb.active_map_name = map_name
-        self.set_mode_mapping()
-        self._publish_active_map()
-        return proc
+    def save_static_map(self, path: str) -> bool:
+        """
+        Save the static map using RTAB-Map's /rtabmap/save_map service.
 
-    def start_localization(self, map_name: str = None, launch_file="localization_merged_launch.py"):
-        self.stop_current_process()
-        if map_name is None:
-            map_name = self.bb.active_map_name
-            if map_name is None:
-                raise RuntimeError("No active map set to start mapping")
-        db_path = self._db_path(map_name)
-        args = [
-            "ros2", "launch", "fault_detector_spot", launch_file,
-            f"database_path:={db_path}", "rviz:=true"
-        ]
-        proc = subprocess.Popen(args, preexec_fn=os.setsid)
-        self.bb.mapping_launch_process = proc
-        self.bb.active_map_name = map_name
-        self.set_mode_localization()
-        self._publish_active_map()
+        Args:
+            path: Full path (without extension) where the map should be saved.
 
-        #if not self.nav2_helper.is_running():
-            #self.nav2_helper.start()
-        return proc
+        Returns:
+            True if successful, False otherwise.
+        """
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        request = SaveMap.Request()
+        request.database_path = path + ".db"  # RTAB-Map database file
+        request.output_path = path  # Occupancy grid output path
+        request.binary = False  # Save as image + YAML
+        request.cloud = False  # Skip point cloud
+        request.graph = True  # Save graph info (optional)
+
+        result = self._call_service("/rtabmap/save_map", SaveMap, request)
+        if result and getattr(result, "success", False):
+            self.node.get_logger().info(f"RTAB-Map successfully saved to {path}")
+            return True
+        else:
+            self.node.get_logger().error(f"Failed to save RTAB-Map to {path}")
+            return False
 
     def stop_current_process(self):
-        proc = getattr(self.bb, "mapping_launch_process", None)
-        if self.nav2_helper.is_running():
-            self.nav2_helper.stop()
+        """
+        Stop RTAB-Map and Nav2 safely.
+        - If in mapping mode: pause RTAB-Map, publish final map, and save it via /rtabmap/save_map.
+        - Then stop the RTAB-Map and Nav2 processes.
+        """
+        proc = getattr(self.bb, "slam_launch_process", None)
 
         if proc:
             try:
-                if self._get_running_mode() == "mapping":
-                    self._call_service("pause")
-                    self._call_service("publish_map")
+                running_mode = self._get_running_mode()
+                map_name = self.bb.active_map_name or "unnamed_map"
+                map_path = os.path.join(self.maps_dir, map_name)
 
+                # If we are in mapping mode → save before shutdown
+                if running_mode == "mapping":
+                    self.node.get_logger().info(f"Pausing RTAB-Map before shutdown...")
+                    self._call_service("/rtabmap/pause")
+
+                    self.node.get_logger().info(f"Publishing latest map to topics...")
+                    self._call_service("/rtabmap/publish_map")
+
+                    self.node.get_logger().info(f"Saving RTAB-Map to {map_path} ...")
+                    self.save_static_map(map_path)
+
+                # Stop RTAB-Map process
+                self.node.get_logger().info("Stopping RTAB-Map process...")
                 os.killpg(os.getpgid(proc.pid), signal.SIGINT)
                 proc.wait(timeout=1)
 
-
             except Exception as e:
-                print(f"Failed to stop RTAB-Map process: {e}")
+                self.node.get_logger().warn(f"Failed to stop RTAB-Map cleanly: {e}")
             finally:
-                self.bb.mapping_launch_process = None
+                self.bb.slam_launch_process = None
+
+        self.stop_nav2()
+
+    def stop_without_save(self):
+        """Stop Slam Toolbox and Nav2 without saving the map."""
+        proc = getattr(self.bb, "slam_launch_process", None)
+        if proc:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+                proc.wait(timeout=1)
+            except Exception as e:
+                self.node.get_logger().warn(f"Failed to stop Slam Toolbox: {e}")
+            finally:
+                self.bb.slam_launch_process = None
+
+        self.stop_nav2()
+
+    def stop_nav2(self):
+        if self.nav2_helper.is_running():
+            self.node.get_logger().info("Stopping Nav2...")
+            self.nav2_helper.stop()
 
     def _call_service(self, service_name: str, srv_type=None, request=None, timeout_sec=2.0):
         """
@@ -159,48 +194,143 @@ class RTABHelper:
             return future.result()
         return False
 
-    def initialize_mapping(self, map_name: str = None, launch_file="slam_merged_launch.py"):
+    def get_last_localization_pose(self, tolerance_sec: float = 0.1) -> PoseStamped | None:
         """
-        Creates a new empty RTAB-Map database and corresponding JSON for waypoints,
-        then starts SLAM with it.
+        Return the most recent localization pose.
+        Prioritize AMCL if it is newer than Slam Toolbox pose within a tolerance.
         """
-        # If map_name not given, try to get it from last_command on blackboard
-        if map_name is None:
-            return
+        pose = PoseStamped()
+        last_pose = self.bb.last_pose_estimation
+        pose.header = last_pose.header
+        pose.pose = last_pose.pose.pose
 
-        os.makedirs(self.recordings_dir, exist_ok=True)
+        return pose
 
-        db_path = os.path.join(self.recordings_dir, f"{map_name}.db")
-        json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
+    def start_mapping_from_existing(self, map_name: str = None, extend_map: bool = True, delete_db: bool = False,
+                                    rviz: bool = True):
+        """
+        Start RTAB-Map in mapping or localization mode.
 
-        # Create empty JSON for waypoints if it does not exist
-        if not os.path.exists(json_path):
-            import json
-            with open(json_path, "w") as f:
-                json.dump({"waypoints": []}, f, indent=4)
-
-        # Stop any currently running SLAM/localization
+        Args:
+            map_name: Name of the map (used to locate the .db file).
+            extend_map: True for mapping mode, False for localization mode.
+            delete_db: Whether to delete the database on start.
+            rviz: Whether to launch RViz.
+        """
+        # Stop any running mapping/localization process
         self.stop_current_process()
 
-        # Build launch command
+        # Determine map name
+        if map_name is None:
+            map_name = self.bb.active_map_name
+            if map_name is None:
+                raise RuntimeError("No active map set to start mapping/localization")
+
+        # Build DB path
+        db_path = self._db_path(map_name)
+
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+        # Convert booleans to lowercase strings
+        extend_map_str = "true" if extend_map else "false"
+        delete_db_str = "true" if delete_db else "false"
+        rviz_str = "true" if rviz else "false"
+
+        # Build the ros2 launch command
         args = [
-            "ros2", "launch", "fault_detector_spot", launch_file,
-            f"database_path:={db_path}", "rviz:=true"
+            "ros2", "launch", "fault_detector_spot", self.slam_launch_file,
+            f"db_path:={db_path}",
+            f"delete_db:={delete_db_str}",
+            f"extend_map:={extend_map_str}",
+            f"rviz:={rviz_str}"
         ]
 
-        # If DB is new or empty, tell rtabmap to delete it on start
-        if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
-            args.append("delete_db_on_start:=true")
+        # Start the launch process
+        proc = subprocess.Popen(args, preexec_fn=os.setsid)
 
-        # Launch SLAM
-        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid)
-        self.bb.mapping_launch_process = proc
+        # Store process info and update state
+        self.bb.slam_launch_process = proc
         self.bb.active_map_name = map_name
-
-        # Publish active map and map list
         self._publish_active_map()
-        self.update_map_list(map_name)
 
+        self.node.get_logger().info(
+            f"Started RTAB-Map in {'mapping' if extend_map else 'localization'} mode with DB: {db_path}"
+        )
+
+        return proc
+
+    def start_mapping_from_scratch(self, map_name: str = None):
+        """
+        Start RTAB-Map mapping completely from scratch (deletes any existing map/database).
+
+        Creates a new JSON waypoint/landmark file if needed and launches RTAB-Map
+        in mapping mode with a new database file.
+        """
+        self.stop_current_process()
+
+        # Determine the map name
+        if map_name is None:
+            map_name = self.bb.active_map_name
+            if map_name is None:
+                raise RuntimeError("No active map name provided to start mapping from scratch")
+
+        # Update internal map list and ensure paths exist
+        self.update_map_list(map_name)
+        os.path.join(self.maps_dir, f"{map_name}.db")
+        json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
+
+        # Create an empty JSON file if not existing
+        if not os.path.exists(json_path):
+            data = {"waypoints": [], "landmarks": []}
+            os.makedirs(os.path.dirname(json_path), exist_ok=True)
+            with open(json_path, "w") as f:
+                json.dump(data, f, indent=4)
+            self.node.get_logger().info(f"Created new JSON map file: {json_path}")
+
+        # Launch RTAB-Map in fresh mapping mode
+        self.node.get_logger().info(f"Starting a new RTAB-Map mapping session for '{map_name}'")
+        return self.start_mapping_from_existing(map_name=map_name, extend_map=True, delete_db=True, rviz=True)
+
+    def start_localization(self, map_name: str = None, rviz: bool = True):
+        """
+        Start RTAB-Map in localization-only mode using an existing database.
+        """
+        self.stop_current_process()
+
+        # Determine which map to use
+        if map_name is None:
+            map_name = self.bb.active_map_name
+            if map_name is None:
+                raise RuntimeError("No active map specified to start localization")
+
+        db_path = self._db_path(map_name)
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(f"Database file not found for map: {db_path}")
+
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+        # Convert RViz flag to string for the launch argument
+        rviz_str = "true" if rviz else "false"
+
+        # Launch RTAB-Map in localization mode (extend_map=False)
+        args = [
+            "ros2", "launch", "fault_detector_spot", self.slam_launch_file,
+            f"db_path:={db_path}",
+            "delete_db:=false",
+            "extend_map:=false",
+            f"rviz:={rviz_str}"
+        ]
+
+        proc = subprocess.Popen(args, preexec_fn=os.setsid)
+
+        # Save state
+        self.bb.slam_launch_process = proc
+        self.bb.active_map_name = map_name
+        self._publish_active_map()
+
+        self.node.get_logger().info(f"Started RTAB-Map localization with database: {db_path}")
         return proc
 
     def set_mode_localization(self):
@@ -212,103 +342,105 @@ class RTABHelper:
         self._call_service("/rtabmap/set_mode_mapping")
 
     def is_rtabmap_running(self) -> bool:
-        proc = getattr(self.bb, "mapping_launch_process", None)
+        proc = getattr(self.bb, "slam_launch_process", None)
         if proc is None:
             return False
         return proc.poll() is None
 
     def _get_running_mode(self) -> str:
-        """
-        Returns the current RTAB-Map mode as a string: "mapping" or "localization".
-        Defaults to "mapping" if detection fails.
-        """
-        try:
-            result = subprocess.run(
-                ["ros2", "param", "get", "/rtabmap", "localization"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-            if "True" in result.stdout:
-                return "localization"
-            else:
-                return "mapping"
-        except Exception:
+        if not self.is_rtabmap_running():
+            return "none"
+        result = subprocess.run(
+            ["ros2", "param", "get", "/rtabmap", "localization"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        if "True" in result.stdout:
+            return "localization"
+        else:
             return "mapping"
 
-    def change_map(self, map_name: str, slam_launch="slam_merged_launch.py",
-                   localization_launch="localization_merged_launch.py"):
+    def change_map(self, map_name: str):
         """
-        Switch RTAB-Map to a different map while keeping the current mode (mapping or localization).
-        If no map_name is given, uses the currently active map.
+        Switch RTAB-Map to a different map while preserving the current mode
+        (mapping or localization). If RTAB-Map is not running, only updates
+        the active map metadata.
         """
         if not map_name:
-            raise RuntimeError("No map specified and no active map set")
-
-        if not self.is_rtabmap_running():
+            raise RuntimeError("No map specified to switch to")
+        if map_name == self.bb.active_map_name:
+            self.node.get_logger().info(f"Map '{map_name}' already active")
+            return True
+        current_mode = self._get_running_mode()
+        if current_mode == "none":
             self.bb.active_map_name = map_name
             self._publish_active_map()
+            self.node.get_logger().info(f"Set active map to '{map_name}' (no running process).")
             return True
 
+        # Stop current RTAB-Map process
         self.stop_current_process()
+        self.node.get_logger().info(f"Switching to map '{map_name}' in {current_mode} mode...")
 
-        # Start process with new map in the current mode
-        current_mode = self._get_running_mode()
+        # Restart RTAB-Map in the same mode but with a new database
         if current_mode == "mapping":
-            self.start_mapping(map_name, slam_launch)
-        elif current_mode == "localization":
-            self.start_localization(map_name, localization_launch)
-        else:
-            raise RuntimeError(f"Unknown current mode '{current_mode}'")
-
+            proc = self.start_mapping(map_name)
+        else:  # localization
+            proc = self.start_localization(map_name)
         self.feedback_message = f"Changed to map '{map_name}' in {current_mode} mode"
+        self.node.get_logger().info(self.feedback_message)
         return True
 
+    # --- Waypoint Management ---
     def publish_waypoint_list(self, map_name: str = None):
-        if map_name is None:
-            map_name = self.bb.active_map_name
-        if map_name is None:
-            print("No active map set, cannot publish waypoint list")
-            return
-
-        json_path = os.path.join(self.recordings_dir, f"{self.bb.active_map_name}.json")
-        if not os.path.exists(json_path):
-            print(f"No waypoint file found for map '{self.bb.active_map_name}'")
-            return
-
-        with open(json_path, "r") as f:
-            data = json.load(f)
-
-        waypoints = data.get("waypoints", [])
-        waypoint_names = [wp.get("name", "") for wp in waypoints]
-
+        names = self.get_list_from_json_category("waypoints", map_name)
         msg = StringArray()
-        msg.names = waypoint_names
+        msg.names = names
         self.waypoint_list_pub.publish(msg)
 
-    def add_pose_as_waypoint(self, waypoint_name: str, map_name: str = None, pose: PoseStamped = None):
-        """
-        Add or update a waypoint in the JSON file for the given map.
-        """
-        if map_name is None:
-            map_name = self.bb.active_map_name
-        if map_name is None:
-            raise ValueError("No map_name provided and no active map set")
-        if waypoint_name is None:
-            raise ValueError("waypoint_name must be provided")
-        if pose is None:
-            raise ValueError("pose must be provided")
+    def publish_landmark_list(self, map_name: str = None):
+        names = self.get_list_from_json_category("landmarks", map_name)
+        msg = StringArray()
+        msg.names = names
+        self.landmark_list_pub.publish(msg)
 
-        json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
+    def get_list_from_json_category(self, category: String, map_name: str = None, ):
+        map_name = map_name or self.bb.active_map_name
+        if not map_name:
+            return
+        json_path = self.get_json_path(map_name)
+        if not os.path.exists(json_path):
+            return
+        with open(json_path, "r") as f:
+            data = json.load(f)
+        names = [wp["name"] for wp in data.get(category, [])]
+        return names
 
-        # Load or create JSON structure
+    def add_pose_as_waypoint(self, waypoint_name: str, pose: PoseStamped, map_name: str = None):
+        self.add_pose_to_json("waypoints", waypoint_name, pose, map_name)
+
+        if map_name == self.bb.active_map_name:
+            self.publish_waypoint_list(map_name)
+
+    def add_pose_as_landmark(self, landmark_name: str, pose: PoseStamped, map_name: str = None):
+        self.add_pose_to_json("landmarks", landmark_name, pose, map_name)
+
+        if map_name == self.bb.active_map_name:
+            self.publish_landmark_list(map_name)
+
+    def add_pose_to_json(self, category: String, entry_name: String, pose: PoseStamped, map_name: str = None):
+        map_name = map_name or self.bb.active_map_name
+        if not map_name:
+            raise ValueError("No active map set")
+
+        json_path = self.get_json_path(map_name)
         if os.path.exists(json_path):
             with open(json_path, "r") as f:
                 data = json.load(f)
         else:
-            data = {"waypoints": []}
+            data = {category: []}
 
-        # Pose to dictionary
         pose_dict = {
             "position": {
                 "x": pose.pose.position.x,
@@ -323,67 +455,38 @@ class RTABHelper:
             },
         }
 
-        # Update existing waypoint if found
         updated = False
-        for wp in data.get("waypoints", []):
-            if wp.get("name") == waypoint_name:
+        for wp in data[category]:
+            if wp["name"] == entry_name:
                 wp["pose"] = pose_dict
                 updated = True
                 break
-
-        # Otherwise add new waypoint
         if not updated:
-            data["waypoints"].append({
-                "name": waypoint_name,
-                "pose": pose_dict,
-            })
+            data[category].append({"name": entry_name, "pose": pose_dict})
 
-        # Ensure directory exists
-        os.makedirs(self.recordings_dir, exist_ok=True)
-
-        # Write back to file
         with open(json_path, "w") as f:
             json.dump(data, f, indent=2)
 
-        # Update waypoint list publisher
-        if map_name == self.bb.active_map_name:
-            self.publish_waypoint_list(map_name)
-
-        return json_path
-
     def delete_waypoint(self, waypoint_name: str, map_name: str = None):
-        """
-        Delete a waypoint by name from the JSON file for the given map.
-        """
-        if map_name is None:
-            map_name = self.bb.active_map_name
-        if map_name is None:
-            raise ValueError("No map_name provided and no active map set")
-        if waypoint_name is None:
-            raise ValueError("waypoint_name must be provided")
+        map_name = map_name or self.bb.active_map_name
+        if not map_name:
+            raise ValueError("No active map set")
 
-        json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
-
+        json_path = self.get_json_path(map_name)
         if not os.path.exists(json_path):
-            print(f"No waypoint file found for map '{map_name}'")
             return False
 
         with open(json_path, "r") as f:
             data = json.load(f)
 
-        waypoints = data.get("waypoints", [])
-        new_waypoints = [wp for wp in waypoints if wp.get("name") != waypoint_name]
-
-        if len(new_waypoints) == len(waypoints):
-            print(f"Waypoint '{waypoint_name}' not found in map '{map_name}'")
+        new_wps = [wp for wp in data.get("waypoints", []) if wp["name"] != waypoint_name]
+        if len(new_wps) == len(data.get("waypoints", [])):
             return False
 
-        data["waypoints"] = new_waypoints
-
+        data["waypoints"] = new_wps
         with open(json_path, "w") as f:
             json.dump(data, f, indent=2)
 
         if map_name == self.bb.active_map_name:
             self.publish_waypoint_list(map_name)
-
         return True

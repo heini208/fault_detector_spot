@@ -21,6 +21,12 @@ def generate_launch_description():
         description='Delete existing database on launch'
     )
 
+    extend_map_arg = DeclareLaunchArgument(
+        'extend_map',
+        default_value='true',
+        description='If true, RTAB-Map will extend the map (mapping mode). If false, runs in localization-only mode.'
+    )
+
     config_rviz = os.path.join(
         get_package_share_directory('rtabmap_demos'),
         'config/demo_robot_mapping.rviz'
@@ -70,7 +76,6 @@ def generate_launch_description():
             'subscribe_rgbd': True,
             'rgbd_cameras': 2,
             'Reg/Strategy': '0',  # Geometric
-            'Mem/IncrementalMemory': 'true',
             'RGBD/LinearUpdate': '0.1',
             'RGBD/AngularUpdate': '0.1',
             'RGBD/NeighborLinkRefining': 'true',
@@ -78,6 +83,10 @@ def generate_launch_description():
             'delete_db_on_start': LaunchConfiguration('delete_db'),
             'topic_queue_size': 20,
             'sync_queue_size': 20,
+
+            # Extend map option
+            'Mem/IncrementalMemory': LaunchConfiguration('extend_map'),
+            'Mem/InitWMWithAllNodes': ['false', 'true'],  # handled below
         }],
         remappings=[
             ('rgbd_image0', 'rgbd_image_left'),
@@ -87,6 +96,9 @@ def generate_launch_description():
             ('odom', '/odometry')
         ]
     )
+
+    # Note: rtabmap will automatically interpret
+    # Mem/IncrementalMemory=false + Mem/InitWMWithAllNodes=true as localization mode.
 
     # RViz node
     rviz_node = Node(
@@ -98,5 +110,5 @@ def generate_launch_description():
     )
 
     return LaunchDescription(
-        [db_path_arg, delete_db_arg] + rgbd_sync_nodes + [rtabmap_node, rviz_node]
+        [db_path_arg, delete_db_arg, extend_map_arg] + rgbd_sync_nodes + [rtabmap_node, rviz_node]
     )
