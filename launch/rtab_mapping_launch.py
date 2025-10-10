@@ -65,6 +65,7 @@ def generate_launch_description():
         parameters=[{
             'frame_id': 'base_link',
             'map_frame_id': 'map',
+            'odom_frame_id': 'odom',
             'approx_sync': True,
             'subscribe_rgbd': True,
             'rgbd_cameras': 2,

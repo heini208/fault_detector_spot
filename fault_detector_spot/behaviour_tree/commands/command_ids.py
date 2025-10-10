@@ -28,3 +28,4 @@ class CommandID(str, Enum):
     ADD_TAG_AS_LANDMARK = "add_tag_as_landmark"
     DELETE_WAYPOINT = "delete_waypoint"
     MOVE_TO_WAYPOINT = "move_to_waypoint"
+    MOVE_INTO_TAG_RANGE = "move_into_tag_range"
