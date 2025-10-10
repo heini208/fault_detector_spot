@@ -3,6 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -17,13 +18,13 @@ def generate_launch_description():
 
     delete_db_arg = DeclareLaunchArgument(
         'delete_db',
-        default_value='true',
+        default_value="false",  # string, not boolean
         description='Delete existing database on launch'
     )
 
     extend_map_arg = DeclareLaunchArgument(
         'extend_map',
-        default_value='true',
+        default_value='true',  # string: 'true' or 'false'
         description='If true, RTAB-Map will extend the map (mapping mode). If false, runs in localization-only mode.'
     )
 
@@ -62,8 +63,9 @@ def generate_launch_description():
             )
         )
 
-    # RTAB-Map node
-    rtabmap_node = Node(
+    extend_map = LaunchConfiguration('extend_map')
+
+    rtabmap_mapping_node = Node(
         package='rtabmap_slam',
         executable='rtabmap',
         name='rtabmap',
@@ -74,8 +76,8 @@ def generate_launch_description():
             'odom_frame_id': 'odom',
             'approx_sync': True,
             'subscribe_rgbd': True,
-            'rgbd_cameras': 2,
-            'Reg/Strategy': '0',  # Geometric
+            'rgbd_cameras': 4,
+            'Reg/Strategy': '0',
             'RGBD/LinearUpdate': '0.1',
             'RGBD/AngularUpdate': '0.1',
             'RGBD/NeighborLinkRefining': 'true',
@@ -83,10 +85,7 @@ def generate_launch_description():
             'delete_db_on_start': LaunchConfiguration('delete_db'),
             'topic_queue_size': 20,
             'sync_queue_size': 20,
-
-            # Extend map option
-            'Mem/IncrementalMemory': LaunchConfiguration('extend_map'),
-            'Mem/InitWMWithAllNodes': ['false', 'true'],  # handled below
+            'Mem/IncrementalMemory': 'true',  # mapping mode
         }],
         remappings=[
             ('rgbd_image0', 'rgbd_image_left'),
@@ -94,11 +93,42 @@ def generate_launch_description():
             ('rgbd_image2', 'rgbd_image_frontleft'),
             ('rgbd_image3', 'rgbd_image_frontright'),
             ('odom', '/odometry')
-        ]
+        ],
+        condition=IfCondition(extend_map)
     )
 
-    # Note: rtabmap will automatically interpret
-    # Mem/IncrementalMemory=false + Mem/InitWMWithAllNodes=true as localization mode.
+    # RTAB-Map node for localization
+    rtabmap_localization_node = Node(
+        package='rtabmap_slam',
+        executable='rtabmap',
+        name='rtabmap',
+        output='screen',
+        parameters=[{
+            'frame_id': 'base_link',
+            'map_frame_id': 'map',
+            'odom_frame_id': 'odom',
+            'approx_sync': True,
+            'subscribe_rgbd': True,
+            'rgbd_cameras': 4,
+            'Reg/Strategy': '0',
+            'RGBD/LinearUpdate': '0.1',
+            'RGBD/AngularUpdate': '0.1',
+            'RGBD/NeighborLinkRefining': 'true',
+            'database_path': LaunchConfiguration('db_path'),
+            'delete_db_on_start': LaunchConfiguration('delete_db'),
+            'topic_queue_size': 20,
+            'sync_queue_size': 20,
+            'Mem/IncrementalMemory': 'false',  # localization mode
+        }],
+        remappings=[
+            ('rgbd_image0', 'rgbd_image_left'),
+            ('rgbd_image1', 'rgbd_image_right'),
+            ('rgbd_image2', 'rgbd_image_frontleft'),
+            ('rgbd_image3', 'rgbd_image_frontright'),
+            ('odom', '/odometry')
+        ],
+        condition=UnlessCondition(extend_map)
+    )
 
     # RViz node
     rviz_node = Node(
@@ -110,5 +140,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription(
-        [db_path_arg, delete_db_arg, extend_map_arg] + rgbd_sync_nodes + [rtabmap_node, rviz_node]
+        [db_path_arg, delete_db_arg, extend_map_arg] + rgbd_sync_nodes +
+        [rtabmap_mapping_node, rtabmap_localization_node, rviz_node]
     )

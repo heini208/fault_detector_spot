@@ -1,5 +1,5 @@
 import py_trees
-from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
+from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 
 
 class SwapMap(py_trees.behaviour.Behaviour):
@@ -10,7 +10,7 @@ class SwapMap(py_trees.behaviour.Behaviour):
     """
     #TODO this can be replaced with a combination behaviour from get_map_path and EnableSLAM/EnableLocalization
 
-    def __init__(self,slam_helper: SlamToolboxHelper, name="SwapMap"):
+    def __init__(self, slam_helper: RTABHelper, name="SwapMap"):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client()
         self.slam_helper = slam_helper
@@ -38,5 +38,3 @@ class SwapMap(py_trees.behaviour.Behaviour):
 
         self.slam_helper.change_map(requested_map)
         return py_trees.common.Status.SUCCESS
-
-

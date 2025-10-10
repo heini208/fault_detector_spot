@@ -1,4 +1,5 @@
 import py_trees
+from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
 
 
@@ -28,10 +29,10 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
                 nav2_params_file="nav2_sim_params.yaml"
             )
         else: # real robot
-            self.slam_helper = SlamToolboxHelper(
+            self.slam_helper = RTABHelper(
                 node=self.node,
                 blackboard=self.bb_client,
-                launch_file="slam_merged_launch.py",
+                launch_file="rtab_mapping_launch.py",
                 nav2_launch_file="nav2_spot_launch.py",
                 nav2_params_file="nav2_spot_params.yaml"
             )

@@ -1,7 +1,7 @@
 import py_trees
 from fault_detector_spot.behaviour_tree.commands.generic_complex_command import GenericCommand
+from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 
-from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
 from py_trees.behaviours import Success
 
 
@@ -11,7 +11,7 @@ class InitializeEmptyMap(py_trees.behaviour.Behaviour):
     then starts SLAM.
     """
 
-    def __init__(self, slam_helper: SlamToolboxHelper, name: str = "InitializeEmptyMap"):
+    def __init__(self, slam_helper: RTABHelper, name: str = "InitializeEmptyMap"):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client(name=name)
         self.blackboard.register_key("last_command", access=py_trees.common.Access.READ)

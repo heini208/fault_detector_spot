@@ -1,12 +1,12 @@
 import typing
-import py_trees
 
-from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
+import py_trees
+from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 from nav_msgs.msg import OccupancyGrid
 
 
 class EnableSLAM(py_trees.behaviour.Behaviour):
-    def __init__(self, slam_helper: SlamToolboxHelper, name: str = "EnableSLAM"):
+    def __init__(self, slam_helper: RTABHelper, name: str = "EnableSLAM"):
         super().__init__(name)
         self.slam_helper = slam_helper
         self.blackboard = self.attach_blackboard_client(name=name)

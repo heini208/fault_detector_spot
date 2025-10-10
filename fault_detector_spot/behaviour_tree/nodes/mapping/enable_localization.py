@@ -1,10 +1,9 @@
 import py_trees
-
-from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
+from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 
 
 class EnableLocalization(py_trees.behaviour.Behaviour):
-    def __init__(self, slam_helper: SlamToolboxHelper, name: str = "EnableLocalization"):
+    def __init__(self, slam_helper: RTABHelper, name: str = "EnableLocalization"):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client(name=name)
         self.slam_helper = slam_helper

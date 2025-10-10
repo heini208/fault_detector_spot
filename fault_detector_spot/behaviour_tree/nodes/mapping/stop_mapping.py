@@ -1,6 +1,5 @@
-import typing
 import py_trees
-from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
+from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 
 
 class StopMapping(py_trees.behaviour.Behaviour):
@@ -9,7 +8,7 @@ class StopMapping(py_trees.behaviour.Behaviour):
     until it is fully terminated.
     """
 
-    def __init__(self, helper: SlamToolboxHelper, name="StopMapping", with_save: bool = True):
+    def __init__(self, helper: RTABHelper, name="StopMapping", with_save: bool = True):
         super().__init__(name)
         self._stop_called = False
         self.helper = helper
@@ -30,5 +29,3 @@ class StopMapping(py_trees.behaviour.Behaviour):
             self.feedback_message = "Stop requested, waiting for Slam Toolbox to terminate"
 
         return py_trees.common.Status.RUNNING  # Keep behaviour running
-
-

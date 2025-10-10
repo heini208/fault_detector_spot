@@ -6,6 +6,7 @@ import numpy as np
 import py_trees
 import rclpy
 import tf2_ros
+from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
 from rclpy.duration import Duration
 from rclpy.time import Time
@@ -28,7 +29,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
     robot's observed pose to get the corrected robot pose.
     """
 
-    def __init__(self, slam_helper, node=None, base_frame: str = "base_link", name="LandmarkRelocalizer"):
+    def __init__(self, slam_helper: RTABHelper, node=None, base_frame: str = "base_link", name="LandmarkRelocalizer"):
         super().__init__(name)
         self.slam_helper = slam_helper
         self.node = node

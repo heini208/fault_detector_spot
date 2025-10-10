@@ -1,5 +1,5 @@
 import py_trees
-from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
+from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 
 
 class DeleteWaypoint(py_trees.behaviour.Behaviour):
@@ -8,7 +8,7 @@ class DeleteWaypoint(py_trees.behaviour.Behaviour):
     Expects last_command.waypoint_name and last_command.map_name on the blackboard.
     """
 
-    def __init__(self,slam_helper: SlamToolboxHelper, name: str = "DeleteWaypoint"):
+    def __init__(self, slam_helper: RTABHelper, name: str = "DeleteWaypoint"):
         super(DeleteWaypoint, self).__init__(name)
         self.bb = self.attach_blackboard_client()
         self.helper = slam_helper

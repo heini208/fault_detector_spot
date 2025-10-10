@@ -4,7 +4,6 @@ import subprocess
 import time
 
 import py_trees
-from geometry_msgs.msg import PoseWithCovarianceStamped
 
 
 class Nav2Helper:
@@ -19,7 +18,6 @@ class Nav2Helper:
         self.bb = blackboard
         self.launch_file = launch_file
         self.params_file = params_file
-        self.amcl_pose = None
 
         # Register blackboard key for nav2 process
         self.bb.register_key("nav2_launch_process", access=py_trees.common.Access.WRITE)
@@ -38,17 +36,10 @@ class Nav2Helper:
         """
         self.params_file = params_file
 
-    def pose_callback(self, msg: PoseWithCovarianceStamped):
-        self.amcl_pose = msg
-
-    def start(self, map_file: str = None, initial_pose=[0, 0, 0], extra_args: list = None, ) -> subprocess.Popen:
+    def start(self, map_file: str = None, extra_args: list = None, ) -> subprocess.Popen:
         """
         Launch Nav2 using the specified launch file and parameters.
         """
-        if initial_pose is None:
-            initial_pose = [0, 0, 0]
-        x, y, theta = initial_pose
-
         args = ["ros2", "launch", "fault_detector_spot", self.launch_file]
 
         # Pass params file if specified
@@ -57,12 +48,6 @@ class Nav2Helper:
 
         if map_file:
             args.append(f"map:={map_file}")
-
-        args.append(f"initial_pose_x:={x}")
-        args.append(f"initial_pose_y:={y}")
-        args.append(f"initial_pose_z:=0.0")  # fixed z, can be parameterized if needed
-        args.append(f"initial_pose_theta:={theta}")
-        args.append(f"set_initial_pose:=True")
 
         # Extra launch arguments (e.g., use_sim_time)
         if extra_args is None:

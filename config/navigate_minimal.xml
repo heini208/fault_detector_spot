@@ -1,0 +1,6 @@
+<root main_tree_to_execute="MainTree">
+    <BehaviorTree ID="MainTree">
+        <!-- Minimal navigation without recovery -->
+        <NavigateToPose name="NavigateToPose" planner_id="GridBased"/>
+    </BehaviorTree>
+</root>

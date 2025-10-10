@@ -361,6 +361,10 @@ class RTABHelper:
         else:
             return "mapping"
 
+    def is_slam_running(self) -> bool:
+        """Check if RTABMAPPING is currently running."""
+        return self._get_running_mode() == "mapping"
+
     def change_map(self, map_name: str):
         """
         Switch RTAB-Map to a different map while preserving the current mode

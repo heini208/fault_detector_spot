@@ -1,5 +1,5 @@
 import py_trees
-from fault_detector_spot.behaviour_tree.nodes.mapping.slam_toolbox_helper import SlamToolboxHelper
+from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 from geometry_msgs.msg import PoseStamped
 
 
@@ -8,7 +8,7 @@ class AddGoalPoseAsLandmark(py_trees.behaviour.Behaviour):
     Saves the last_command.goal_pose as a landmark in the map's JSON file
     """
 
-    def __init__(self, slam_helper: SlamToolboxHelper, name: str = "AddGoalPoseAsLandmark"):
+    def __init__(self, slam_helper: RTABHelper, name: str = "AddGoalPoseAsLandmark"):
         super(AddGoalPoseAsLandmark, self).__init__(name)
         self.bb = self.attach_blackboard_client()
         self.helper = slam_helper
