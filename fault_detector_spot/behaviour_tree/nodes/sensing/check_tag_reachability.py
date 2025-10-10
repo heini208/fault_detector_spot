@@ -1,11 +1,12 @@
 # fault_detector_spot/behaviour_tree/nodes/check_tag_reachability.py
 
 import math
+from typing import Dict, Optional
+
 import py_trees
 import rclpy.time
 import tf2_ros
-from fault_detector_msgs.msg import TagElement, TagElementArray
-from typing import Dict, Optional
+from fault_detector_msgs.msg import TagElement
 
 
 class CheckTagReachability(py_trees.behaviour.Behaviour):
@@ -19,7 +20,7 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
                  body_frame: str = "body",
                  arm_base_frame: str = "arm_link_sh0",
                  arm_reach: float = 0.984,
-                 tolerance: float = 0.15):
+                 tolerance: float = 0.05):
         super().__init__(name)
         self.body_frame = body_frame
         self.arm_base_frame = arm_base_frame
@@ -51,21 +52,27 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
         self.blackboard.reachable_tags = reachable
 
     def _check_transform_exists(self) -> bool:
-        try:
-            # target_frame='body', source_frame='arm_link_sh0'
+        # target_frame='body', source_frame='arm_link_sh0'
+
+        if self.tf_buffer.can_transform(
+                self.body_frame,
+                self.arm_base_frame,
+                rclpy.time.Time(),
+        ):
             t = self.tf_buffer.lookup_transform(
                 self.body_frame, self.arm_base_frame,
-                rclpy.time.Time()
+                rclpy.time.Time(),
+
             )
             tr = t.transform.translation
             self.arm_base_offset = (tr.x, tr.y, tr.z)
             self.logger.info(f"{self.name}: got arm base offset {self.arm_base_offset}")
-        except Exception as e:
-            self.arm_base_offset = (0.0, 0.0, 0.0)
 
     def update(self) -> py_trees.common.Status:
-        if self.arm_base_offset == (0.0, 0.0, 0.0):
+        if self.arm_base_offset == None:
             self._check_transform_exists()
+            self.feedback_message = f"No transform available"
+            return py_trees.common.Status.SUCCESS
 
         reachable: Dict[int, TagElement] = {}
 
