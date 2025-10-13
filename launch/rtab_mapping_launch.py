@@ -7,6 +7,7 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+pkg = get_package_share_directory('fault_detector_spot')
 
 def generate_launch_description():
     # Launch arguments
@@ -28,10 +29,11 @@ def generate_launch_description():
         description='If true, RTAB-Map will extend the map (mapping mode). If false, runs in localization-only mode.'
     )
 
-    config_rviz = os.path.join(
-        get_package_share_directory('rtabmap_demos'),
-        'config/demo_robot_mapping.rviz'
-    )
+    # config_rviz = os.path.join(
+    #    get_package_share_directory('rtabmap_demos'),
+    #    'config/demo_robot_mapping.rviz'
+    # )
+    config_rviz = os.path.join(pkg, 'config', 'mapping.rviz')
 
     # List of cameras
     cameras = [

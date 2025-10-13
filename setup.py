@@ -1,6 +1,7 @@
-from setuptools import find_packages, setup
 import os
 from glob import glob
+
+from setuptools import find_packages, setup
 
 package_name = 'fault_detector_spot'
 setup(
@@ -14,6 +15,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/fault_detector_spot/launch', glob('launch/*.launch.py')),
+        ('share/' + package_name + '/config', glob('config/*.rviz')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

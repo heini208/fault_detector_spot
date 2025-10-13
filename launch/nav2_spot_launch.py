@@ -28,8 +28,6 @@ def generate_launch_description():
 
     # Paths
     nav2_params = os.path.join(pkg, 'config', 'nav2_sim_params.yaml')
-    rviz_config = '/opt/ros/humble/share/nav2_bringup/rviz/nav2_default_view.rviz'
-
     # Nav2 bringup (no AMCL)
     nav2 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -79,19 +77,8 @@ def generate_launch_description():
             )
         )
 
-    # RViz
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        arguments=["-d", rviz_config],
-        parameters=[{'use_sim_time': use_sim_time}],
-        output="screen"
-    )
-
     return LaunchDescription([
                                  use_sim_time_arg,
                                  map_name_arg,
                                  nav2,
-                                 rviz_node
                              ] + pcl_to_scan_nodes)
