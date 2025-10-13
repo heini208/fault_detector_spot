@@ -2,11 +2,9 @@ import json
 import os
 import signal
 import subprocess
-
-from rtabmap_ros.srv import SaveMap
+import time
 
 import py_trees
-import rclpy
 from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import StringArray
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
@@ -76,7 +74,7 @@ class RTABHelper:
             self.publish_landmark_list()
 
     def update_map_list(self, extra_map: str = None):
-        maps = [f[:-10] for f in os.listdir(self.maps_dir) if f.endswith(".posegraph")]
+        maps = [f[:-3] for f in os.listdir(self.maps_dir) if f.endswith(".db")]
         if extra_map and extra_map not in maps:
             maps.append(extra_map)
         msg = StringArray()
@@ -94,56 +92,36 @@ class RTABHelper:
             True if successful, False otherwise.
         """
         os.makedirs(os.path.dirname(path), exist_ok=True)
-
-        request = SaveMap.Request()
-        request.database_path = path + ".db"  # RTAB-Map database file
-        request.output_path = path  # Occupancy grid output path
-        request.binary = False  # Save as image + YAML
-        request.cloud = False  # Skip point cloud
-        request.graph = True  # Save graph info (optional)
-
-        result = self._call_service("/rtabmap/save_map", SaveMap, request)
-        if result and getattr(result, "success", False):
-            self.node.get_logger().info(f"RTAB-Map successfully saved to {path}")
-            return True
-        else:
-            self.node.get_logger().error(f"Failed to save RTAB-Map to {path}")
-            return False
+        self._call_service("/rtabmap/save_db")
 
     def stop_current_process(self):
         """
         Stop RTAB-Map and Nav2 safely.
-        - If in mapping mode: pause RTAB-Map, publish final map, and save it via /rtabmap/save_map.
+        - If in mapping mode: pause RTAB-Map, publish final map.
         - Then stop the RTAB-Map and Nav2 processes.
         """
         proc = getattr(self.bb, "slam_launch_process", None)
 
         if proc:
-            try:
-                running_mode = self._get_running_mode()
-                map_name = self.bb.active_map_name or "unnamed_map"
-                map_path = os.path.join(self.maps_dir, map_name)
+            running_mode = self._get_running_mode()
+            map_name = self.bb.active_map_name or "unnamed_map"
+            # If we are in mapping mode → save before shutdown
+            if running_mode == "mapping":
+                self.node.get_logger().info(f"Pausing RTAB-Map before shutdown...")
+                self._call_service("/rtabmap/pause")
 
-                # If we are in mapping mode → save before shutdown
-                if running_mode == "mapping":
-                    self.node.get_logger().info(f"Pausing RTAB-Map before shutdown...")
-                    self._call_service("/rtabmap/pause")
+                self.node.get_logger().info(f"Saving the RTAB-Map database to disk...")
+                self._call_service("/rtabmap/save_db")
 
-                    self.node.get_logger().info(f"Publishing latest map to topics...")
-                    self._call_service("/rtabmap/publish_map")
+                self.node.get_logger().info(f"Publishing latest map to topics...")
+                self._call_service("/rtabmap/publish_map")
+                time.sleep(5)
 
-                    self.node.get_logger().info(f"Saving RTAB-Map to {map_path} ...")
-                    self.save_static_map(map_path)
-
-                # Stop RTAB-Map process
-                self.node.get_logger().info("Stopping RTAB-Map process...")
-                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-                proc.wait(timeout=1)
-
-            except Exception as e:
-                self.node.get_logger().warn(f"Failed to stop RTAB-Map cleanly: {e}")
-            finally:
-                self.bb.slam_launch_process = None
+            # Stop RTAB-Map process
+            self.node.get_logger().info("Stopping RTAB-Map process...")
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=3)
+            self.bb.slam_launch_process = None
 
         self.stop_nav2()
 
@@ -153,7 +131,7 @@ class RTABHelper:
         if proc:
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-                proc.wait(timeout=1)
+                proc.wait(timeout=2)
             except Exception as e:
                 self.node.get_logger().warn(f"Failed to stop Slam Toolbox: {e}")
             finally:
@@ -187,12 +165,17 @@ class RTABHelper:
             request = srv_type.Request()
 
         future = client.call_async(request)
+        if not future:
+            return False
 
-        # Wait for response
-        rclpy.spin_until_future_complete(self.node, future, timeout_sec=timeout_sec)
-        if future.done():
-            return future.result()
-        return False
+        start_time = time.time()
+        while not future.done():
+            time.sleep(0.05)  # tiny sleep so the BT tick can continue elsewhere
+            if time.time() - start_time > timeout_sec:
+                self.node.get_logger().warn(f"Service {service_name} timed out after {timeout_sec}s")
+                return False
+
+        return True
 
     def get_last_localization_pose(self, tolerance_sec: float = 0.1) -> PoseStamped | None:
         """
@@ -208,15 +191,28 @@ class RTABHelper:
 
     def start_mapping_from_existing(self, map_name: str = None, extend_map: bool = True, delete_db: bool = False,
                                     rviz: bool = True):
-        """
-        Start RTAB-Map in mapping or localization mode.
+        if not self.is_rtabmap_running():
+            return self.initialize_mapping_from_existing(map_name, extend_map, delete_db, rviz)
+        else:
+            if self.nav2_helper.is_running():
+                self.nav2_helper.stop()
+            if extend_map:
+                self.set_mode_mapping()
+            else:
+                self.set_mode_localization()
+            return self.bb.slam_launch_process
 
-        Args:
-            map_name: Name of the map (used to locate the .db file).
-            extend_map: True for mapping mode, False for localization mode.
-            delete_db: Whether to delete the database on start.
-            rviz: Whether to launch RViz.
+    def initialize_mapping_from_existing(self, map_name: str = None, extend_map: bool = True, delete_db: bool = False,
+                                         rviz: bool = True):
         """
+                Start RTAB-Map in mapping or localization mode.
+
+                Args:
+                    map_name: Name of the map (used to locate the .db file).
+                    extend_map: True for mapping mode, False for localization mode.
+                    delete_db: Whether to delete the database on start.
+                    rviz: Whether to launch RViz.
+                """
         # Stop any running mapping/localization process
         self.stop_current_process()
 
@@ -277,8 +273,7 @@ class RTABHelper:
 
         # Update internal map list and ensure paths exist
         self.update_map_list(map_name)
-        os.path.join(self.maps_dir, f"{map_name}.db")
-        json_path = os.path.join(self.recordings_dir, f"{map_name}.json")
+        json_path = os.path.join(self.maps_dir, f"{map_name}.json")
 
         # Create an empty JSON file if not existing
         if not os.path.exists(json_path):
@@ -290,12 +285,23 @@ class RTABHelper:
 
         # Launch RTAB-Map in fresh mapping mode
         self.node.get_logger().info(f"Starting a new RTAB-Map mapping session for '{map_name}'")
-        return self.start_mapping_from_existing(map_name=map_name, extend_map=True, delete_db=True, rviz=True)
+        return self.initialize_mapping_from_existing(map_name=map_name, extend_map=True, delete_db=True, rviz=True)
 
     def start_localization(self, map_name: str = None, rviz: bool = True):
+        if not self.is_rtabmap_running():
+            self.init_localization(map_name, rviz)
+        else:
+            self.set_mode_localization()
+
+        if not self.nav2_helper.is_running():
+            self.nav2_helper.start()
+
+        return self.bb.slam_launch_process
+
+    def init_localization(self, map_name: str = None, rviz: bool = True):
         """
-        Start RTAB-Map in localization-only mode using an existing database.
-        """
+                Start RTAB-Map in localization-only mode using an existing database.
+                """
         self.stop_current_process()
 
         # Determine which map to use
@@ -342,7 +348,7 @@ class RTABHelper:
         self._call_service("/rtabmap/set_mode_mapping")
 
     def is_rtabmap_running(self) -> bool:
-        proc = getattr(self.bb, "slam_launch_process", None)
+        proc = self.bb.slam_launch_process
         if proc is None:
             return False
         return proc.poll() is None

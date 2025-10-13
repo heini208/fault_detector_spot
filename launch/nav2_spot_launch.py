@@ -49,8 +49,6 @@ def generate_launch_description():
         '/depth_registered/back/points',
         '/depth_registered/frontleft/points',
         '/depth_registered/frontright/points',
-        '/depth_registered/left/points',
-        '/depth_registered/right/points'
     ]
 
     pcl_to_scan_nodes = []

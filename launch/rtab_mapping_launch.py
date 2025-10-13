@@ -77,6 +77,7 @@ def generate_launch_description():
             'map_frame_id': 'map',
             'odom_frame_id': 'odom',
             'approx_sync': True,
+            'approx_sync_max_interval': '0.01',
             'subscribe_rgbd': True,
             'rgbd_cameras': 4,
             'Reg/Strategy': '0',

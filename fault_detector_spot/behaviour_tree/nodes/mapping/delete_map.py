@@ -1,6 +1,6 @@
 import glob
 import os
-import json
+
 import py_trees
 from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import StringArray
@@ -10,7 +10,7 @@ from fault_detector_spot.behaviour_tree.commands.generic_complex_command import 
 
 class DeleteMap(py_trees.behaviour.Behaviour):
     """
-    Deletes a .posegraph and its corresponding .data and JSON file for waypoints.
+    Deletes a .db and its corresponding .data and JSON file for waypoints.
     The map name is expected in blackboard.last_command.map_name (GenericCommand).
     """
 
@@ -74,15 +74,15 @@ class DeleteMap(py_trees.behaviour.Behaviour):
         return True
 
     def publish_map_list(self):
-        """Collect all .posegraph filenames in the recordings folder and publish as StringArray."""
+        """Collect all .db filenames in the recordings folder and publish as StringArray."""
         if self.publisher is None:
             return
 
         map_files = []
         if os.path.isdir(self.recordings_dir):
             for f in sorted(os.listdir(self.recordings_dir)):
-                if f.endswith(".posegraph"):
-                    map_files.append(f[:-10])  # remove ".posegraph"
+                if f.endswith(".db"):
+                    map_files.append(f[:-3])  # remove ".db"
 
         msg = StringArray()
         msg.names = map_files

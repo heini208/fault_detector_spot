@@ -9,7 +9,7 @@ from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
 class PublishInitialUIInfoOnce(py_trees.behaviour.Behaviour):
     def __init__(self, name: str = "PublishInitialMapListOnce"):
         super().__init__(name)
-        self.recordings_dir = os.path.join(
+        self.maps_dir = os.path.join(
             get_package_share_directory("fault_detector_spot"),
             "maps"
         )
@@ -37,10 +37,10 @@ class PublishInitialUIInfoOnce(py_trees.behaviour.Behaviour):
 
     def publish_map_list(self):
         map_files = []
-        if os.path.isdir(self.recordings_dir):
-            for f in sorted(os.listdir(self.recordings_dir)):
-                if f.endswith(".posegraph"):
-                    map_files.append(f[:-10])
+        if os.path.isdir(self.maps_dir):
+            for f in sorted(os.listdir(self.maps_dir)):
+                if f.endswith(".db"):
+                    map_files.append(f[:-3])
 
         msg = StringArray()
         msg.names = map_files
