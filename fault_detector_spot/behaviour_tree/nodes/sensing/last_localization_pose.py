@@ -21,19 +21,20 @@ VOLATILE_QOS = QoSProfile(
 
 class LastLocalizationPose(py_trees.behaviour.Behaviour):
     """
-    Listens to /pose and /amcl_pose (PoseWithCovarianceStamped) and updates
+    Listens to /pose and the localization topic (PoseWithCovarianceStamped) and updates
     the blackboard with the latest pose estimation.
-    Prioritizes /amcl_pose if it is recent (slightly older is still preferred).
+    Prioritizes the localization topic if it is recent (slightly older is still preferred).
     """
 
-    def __init__(self, name: str = "LastLocalizationPose", amcl_leeway_sec: float = 0.1):
+    def __init__(self, name: str = "LastLocalizationPose", localization_leeway_sec: float = 0.1,
+                 localization_topic: str = "/localization_pose"):
         super().__init__(name)
         self.node: Optional[Node] = None
         self.blackboard = self.attach_blackboard_client()
 
-
-        self.amcl_leeway_sec = amcl_leeway_sec
-        self._last_amcl_pose: Optional[PoseWithCovarianceStamped] = None
+        self.localization_topic = localization_topic
+        self.localization_leeway_sec = localization_leeway_sec
+        self._last_localization_pose: Optional[PoseWithCovarianceStamped] = None
         self._last_slam_pose: Optional[PoseWithCovarianceStamped] = None
 
         self._sub_amcl: Optional[rclpy.subscription.Subscription] = None
@@ -48,7 +49,7 @@ class LastLocalizationPose(py_trees.behaviour.Behaviour):
         # AMCL is typically TRANSIENT_LOCAL, RELIABLE
         self._sub_amcl = self.node.create_subscription(
             PoseWithCovarianceStamped,
-            '/amcl_pose',
+            self.localization_topic,
             self._amcl_callback,
             LATCHED_QOS
         )
@@ -61,7 +62,7 @@ class LastLocalizationPose(py_trees.behaviour.Behaviour):
             VOLATILE_QOS
         )
 
-        self.logger.info("LastLocalizationPose subscriptions initialized with proper QoS.")
+        self.logger.info("LastLocalizationPose subscriptions.")
         self.blackboard.register_key("last_pose_estimation", access=py_trees.common.Access.WRITE)
 
         # Initialize blackboard variable with zero pose
@@ -78,7 +79,7 @@ class LastLocalizationPose(py_trees.behaviour.Behaviour):
         self.blackboard.last_pose_estimation = zero_pose
 
     def _amcl_callback(self, msg: PoseWithCovarianceStamped):
-        self._last_amcl_pose = msg
+        self._last_localization_pose = msg
 
     def _slam_callback(self, msg: PoseWithCovarianceStamped):
         self._last_slam_pose = msg
@@ -87,21 +88,21 @@ class LastLocalizationPose(py_trees.behaviour.Behaviour):
         """
         Determine which pose to use and write it to the blackboard.
         """
-        if self._last_amcl_pose and self._last_slam_pose:
+        if self._last_localization_pose and self._last_slam_pose:
             # Compare timestamps
-            amcl_time = self._last_amcl_pose.header.stamp.sec + self._last_amcl_pose.header.stamp.nanosec * 1e-9
+            localization_time = self._last_localization_pose.header.stamp.sec + self._last_localization_pose.header.stamp.nanosec * 1e-9
             slam_time = self._last_slam_pose.header.stamp.sec + self._last_slam_pose.header.stamp.nanosec * 1e-9
 
-            # Prioritize AMCL if it's newer or slightly older within leeway
-            if amcl_time >= slam_time - self.amcl_leeway_sec:
-                selected_pose = self._last_amcl_pose
-                source = "/amcl_pose"
+            # Prioritize localization if it's newer or slightly older within leeway
+            if localization_time >= slam_time - self.localization_leeway_sec:
+                selected_pose = self._last_localization_pose
+                source = self.localization_topic
             else:
                 selected_pose = self._last_slam_pose
                 source = "/pose"
-        elif self._last_amcl_pose:
-            selected_pose = self._last_amcl_pose
-            source = "/amcl_pose"
+        elif self._last_localization_pose:
+            selected_pose = self._last_localization_pose
+            source = self.localization_topic
         elif self._last_slam_pose:
             selected_pose = self._last_slam_pose
             source = "/pose"
