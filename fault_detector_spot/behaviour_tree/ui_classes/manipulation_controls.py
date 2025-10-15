@@ -1,7 +1,10 @@
+import math
+
 from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QMessageBox
 
 from fault_detector_msgs.msg import ComplexCommand, TagElement
-from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
+from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID, OrientationModes, FrameNames
+from geometry_msgs.msg import Quaternion
 from .UIControlHelper import UIControlHelper
 
 
@@ -11,6 +14,18 @@ class TagNotFound(Exception):
 
 
 class ManipulationControls(UIControlHelper):
+    DEFAULT_OFFSETS = {
+        "X": -0.10,
+        "Y": 0.00,
+        "Z": 0.05,
+    }
+
+    DEFAULT_ANGLES = {
+        "Roll": 0.0,
+        "Pitch": 0.0,
+        "Yaw": 0.0,
+    }
+
     def __init__(self, parent_ui: "Fault_Detector_UI"):
         self.offset_fields = {}
         self.orientation_combo = None
@@ -23,6 +38,8 @@ class ManipulationControls(UIControlHelper):
         rows = [
             self._make_tag_input_row(),
             self._make_offset_row(),
+            self._make_orientation_offset_row(),
+            self._make_reset_fields_and_move_relative_row(),
             self._make_control_row()
         ]
         return rows
@@ -68,8 +85,31 @@ class ManipulationControls(UIControlHelper):
         row = QHBoxLayout()
         row.addWidget(QLabel("Offsets & Orientation:"))
 
+        self.offset_frame_combo = QComboBox()
+        self.offset_frame_combo.addItems([frame.value for frame in FrameNames])
+        row.addWidget(QLabel("Frame:"))
+        row.addWidget(self.offset_frame_combo)
+
         self._add_offset_controls(row)
+
+        return row
+
+    def _make_orientation_offset_row(self):
+        row = QHBoxLayout()
         self.add_orientation_dropdown(row)
+        self._add_orientation_offset_controls(row)
+        return row
+
+    def _make_reset_fields_and_move_relative_row(self):
+        row = QHBoxLayout()
+        reset_zero_btn = QPushButton("Set All = 0")
+        reset_zero_btn.clicked.connect(self._reset_all_zero)
+        row.addWidget(reset_zero_btn)
+
+        reset_default_btn = QPushButton("Set All = Default")
+        reset_default_btn.clicked.connect(self._reset_all_default)
+        row.addWidget(reset_default_btn)
+
         self.move_by_offset_button = QPushButton("Move Arm by Offset")
         self.move_by_offset_button.clicked.connect(
             lambda _, cid=CommandID.MOVE_ARM_RELATIVE: self.handle_full_message(cid))
@@ -77,12 +117,19 @@ class ManipulationControls(UIControlHelper):
 
         return row
 
+    def _reset_all_zero(self):
+        """Set all offset and orientation fields to 0."""
+        for axis in ("X", "Y", "Z", "Roll", "Pitch", "Yaw"):
+            if axis in self.offset_fields:
+                self.offset_fields[axis].setText("0.0")
+
+    def _reset_all_default(self):
+        """Restore default offsets and orientation angles."""
+        for axis, value in {**self.DEFAULT_OFFSETS, **self.DEFAULT_ANGLES}.items():
+            if axis in self.offset_fields:
+                self.offset_fields[axis].setText(f"{value:.2f}" if axis in self.DEFAULT_OFFSETS else f"{value:.1f}")
+
     def _add_offset_controls(self, row: QHBoxLayout):
-        default_offsets = {
-            "X": -0.10,
-            "Y": 0.00,
-            "Z": 0.05,
-        }
         self.offset_fields = {}
         for axis, dec_txt, inc_txt, dec_delta, inc_delta in [
             ("X", "backward", "forward", -0.05, +0.05),
@@ -92,7 +139,7 @@ class ManipulationControls(UIControlHelper):
             dec = QPushButton(dec_txt)
             fld = QLineEdit()
             fld.setFixedWidth(50)
-            fld.setText(f"{default_offsets[axis]:.2f}")
+            fld.setText(f"{self.DEFAULT_OFFSETS[axis]:.2f}")
             inc = QPushButton(inc_txt)
 
             dec.clicked.connect(lambda _, a=axis, d=dec_delta: self._change_offset(a, d))
@@ -105,16 +152,47 @@ class ManipulationControls(UIControlHelper):
 
             self.offset_fields[axis] = fld
 
+    def _add_orientation_offset_controls(self, row: QHBoxLayout):
+        # Each tuple: (axis, dec_label, inc_label, dec_delta, inc_delta)
+        controls = [
+            ("Roll", "⟲ CCW", "⟳ CW", -5.0, +5.0),
+            ("Pitch", "Down", "Up", -5.0, +5.0),
+            ("Yaw", "Left", "Right", -5.0, +5.0),
+        ]
+
+        if not self.offset_fields:
+            self.offset_fields = {}
+
+        for axis, dec_txt, inc_txt, dec_delta, inc_delta in controls:
+            dec = QPushButton(dec_txt)
+            fld = QLineEdit()
+            fld.setFixedWidth(50)
+            fld.setText(f"{self.DEFAULT_ANGLES[axis]:.1f}")
+            inc = QPushButton(inc_txt)
+
+            dec.clicked.connect(lambda _, a=axis, d=dec_delta: self._change_angle(a, d))
+            inc.clicked.connect(lambda _, a=axis, d=inc_delta: self._change_angle(a, d))
+
+            row.addWidget(QLabel(axis))
+            row.addWidget(dec)
+            row.addWidget(fld)
+            row.addWidget(inc)
+
+            self.offset_fields[axis] = fld
+
+    def _change_angle(self, axis: str, delta: float):
+        field = self.offset_fields[axis]
+        val = float(field.text()) + delta
+        # Wrap around -180..180
+        if val > 180.0:
+            val -= 360.0
+        elif val < -180.0:
+            val += 360.0
+        field.setText(f"{val:.1f}")
+
     def add_orientation_dropdown(self, row: QHBoxLayout):
         self.orientation_combo = QComboBox()
-        self.orientation_combo.addItems([
-            "look_straight",
-            "tag_orientation",
-            "left",
-            "right",
-            "up",
-            "down"
-        ])
+        self.orientation_combo.addItems([mode.value for mode in OrientationModes])
         row.addWidget(QLabel("Orientation:"))
         row.addWidget(self.orientation_combo)
 
@@ -149,14 +227,41 @@ class ManipulationControls(UIControlHelper):
         return complex_command
 
     def add_offset_to_command(self, command: ComplexCommand):
-        ox, oy, oz = (self._get_offset(a) for a in ("X", "Y", "Z"))
+        ox, oy, oz, roll_deg, pitch_deg, yaw_deg = (self._get_offset(a) for a in
+                                                    ("X", "Y", "Z", "Roll", "Pitch", "Yaw"))
         omode = self.orientation_combo.currentText()
+        roll = math.radians(roll_deg)
+        pitch = math.radians(pitch_deg)
+        yaw = math.radians(yaw_deg)
+        q = self._euler_to_quaternion(roll, pitch, yaw)
+
+        frame_choice = FrameNames(self.offset_frame_combo.currentText())
+
         command.offset.header = command.tag.pose.header
+        command.offset.header.frame_id = frame_choice
         command.offset.pose.position.x = ox
         command.offset.pose.position.y = oy
         command.offset.pose.position.z = oz
+        command.offset.pose.orientation = q
+
         command.orientation_mode = omode
         return command
+
+    def _euler_to_quaternion(self, roll, pitch, yaw) -> Quaternion:
+        """Convert Euler angles (radians) to a Quaternion message."""
+        cy = math.cos(yaw * 0.5)
+        sy = math.sin(yaw * 0.5)
+        cp = math.cos(pitch * 0.5)
+        sp = math.sin(pitch * 0.5)
+        cr = math.cos(roll * 0.5)
+        sr = math.sin(roll * 0.5)
+
+        q = Quaternion()
+        q.w = cr * cp * cy + sr * sp * sy
+        q.x = sr * cp * cy - cr * sp * sy
+        q.y = cr * sp * cy + sr * cp * sy
+        q.z = cr * cp * sy - sr * sp * cy
+        return q
 
     def add_tag_info_to_command(self, command: ComplexCommand):
         command = self.add_tag_element_to_command(command)

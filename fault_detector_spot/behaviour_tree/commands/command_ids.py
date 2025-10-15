@@ -29,3 +29,18 @@ class CommandID(str, Enum):
     DELETE_WAYPOINT = "delete_waypoint"
     MOVE_TO_WAYPOINT = "move_to_waypoint"
     MOVE_INTO_TAG_RANGE = "move_into_tag_range"
+
+
+class OrientationModes(str, Enum):
+    CUSTOM_ORIENTATION = "custom"
+    STRAIGHT = "look_straight"
+    TAG_ORIENTATION = "tag_orientation"
+    LOOK_LEFT = "left"
+    LOOK_RIGHT = "right"
+    LOOK_UP = "up"
+    LOOK_DOWN = "down"
+
+
+class FrameNames(str, Enum):
+    GRAV_BODY_FRAME = "flat_body"
+    WORLD_FRAME = "world"

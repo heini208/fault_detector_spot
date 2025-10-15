@@ -2,18 +2,20 @@
 """
 A behaviour that moves the Spot arm by a relative XYZ offset in the body frame.
 """
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, HAND_FRAME_NAME
+from bosdyn.client.frame_helpers import HAND_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
+from synchros2.action_client import ActionClientWrapper
+from synchros2.tf_listener_wrapper import TFListenerWrapper
+from synchros2.utilities import namespace_with
 
 import rclpy
 from bosdyn_msgs.conversions import convert
 from fault_detector_spot.behaviour_tree.commands.manipulator_move_command import ManipulatorMoveCommand
 from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import ActionClientBehaviour
 from py_trees.common import Access, Status
+from rclpy.duration import Duration
 from spot_msgs.action import RobotCommand
-from synchros2.action_client import ActionClientWrapper
-from synchros2.tf_listener_wrapper import TFListenerWrapper
-from synchros2.utilities import namespace_with
+from tf_transformations import quaternion_multiply
 
 
 class ManipulatorMoveRelativeAction(ActionClientBehaviour):
@@ -48,11 +50,25 @@ class ManipulatorMoveRelativeAction(ActionClientBehaviour):
             return False
 
     def _build_goal(self) -> RobotCommand.Goal:
+        # Start the timeout timer when first entering RUNNING state
+        if not hasattr(self, "_tf_wait_start_time"):
+            self._tf_wait_start_time = self.node.get_clock().now()
 
         if not self.tf_listener._tf_buffer.can_transform(
-                GRAV_ALIGNED_BODY_FRAME_NAME, HAND_FRAME_NAME, rclpy.time.Time()):
-            self.feedback_message = "Waiting for TF flat_body→hand"
+                self.blackboard.last_command.goal_pose.header.frame_id,
+                HAND_FRAME_NAME,
+                rclpy.time.Time()):
+            elapsed = self.node.get_clock().now() - self._tf_wait_start_time
+            if elapsed > Duration(seconds=5.0):
+                self.feedback_message = "TF →hand timeout (5s)"
+                del self._tf_wait_start_time  # reset for next run
+                return Status.FAILURE
+            self.feedback_message = "Waiting for TF →hand"
             return Status.RUNNING
+
+        # Success — transform available, clear timer
+        if hasattr(self, "_tf_wait_start_time"):
+            del self._tf_wait_start_time
 
         arm_cmd = self.get_goal_cmd_with_offset()
         goal = RobotCommand.Goal()
@@ -63,20 +79,24 @@ class ManipulatorMoveRelativeAction(ActionClientBehaviour):
         cmd_obj = self.blackboard.last_command
         if not isinstance(cmd_obj, ManipulatorMoveCommand):
             raise RuntimeError(f"Expected ManipulatorMoveCommand, got {type(cmd_obj).__name__}")
-
-        tf_msg = self.tf_listener.lookup_a_tform_b(GRAV_ALIGNED_BODY_FRAME_NAME, HAND_FRAME_NAME, timeout_sec=2)
+        tf_msg = self.tf_listener.lookup_a_tform_b(cmd_obj.goal_pose.header.frame_id, HAND_FRAME_NAME, timeout_sec=2)
         t = tf_msg.transform.translation
         r = tf_msg.transform.rotation
 
         dx, dy, dz = (cmd_obj.goal_pose.pose.position.x,
                       cmd_obj.goal_pose.pose.position.y,
                       cmd_obj.goal_pose.pose.position.z)
-
         tx, ty, tz = t.x + dx, t.y + dy, t.z + dz
+        dr = cmd_obj.goal_pose.pose.orientation
+        offset_quat = [dr.x, dr.y, dr.z, dr.w]
+        r_quat = [r.x, r.y, r.z, r.w]
+
+        # ✅ combine rotations correctly (tf * offset)
+        rtx, rty, rtz, rtw = quaternion_multiply(r_quat, offset_quat)
         arm_cmd = RobotCommandBuilder.arm_pose_command(
             tx, ty, tz,
-            r.w, r.x, r.y, r.z,
-            namespace_with(self.robot_name, GRAV_ALIGNED_BODY_FRAME_NAME),
+            rtw, rtx, rty, rtz,
+            namespace_with(self.robot_name, cmd_obj.goal_pose.header.frame_id),
             self.duration
         )
         return arm_cmd

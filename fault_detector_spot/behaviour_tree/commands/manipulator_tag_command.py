@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 from math import sin, cos, pi
 
-from .manipulator_move_command import ManipulatorMoveCommand
-from geometry_msgs.msg import PoseStamped, Quaternion
 from builtin_interfaces.msg import Time
+from fault_detector_spot.behaviour_tree.commands.command_ids import OrientationModes
+from geometry_msgs.msg import PoseStamped, Quaternion
+from .manipulator_move_command import ManipulatorMoveCommand
 
 _YAW_90_SIN = sin(pi / 4)  # sin(45°)
 _YAW_90_COS = cos(pi / 4)  # cos(45°)
@@ -17,8 +18,6 @@ class ManipulatorTagCommand(ManipulatorMoveCommand):
     - id: numeric tag identifier
     - goal_pose: PoseStamped from fiducial detection
     - offset: PoseStamped representing positional offsets
-    - orientation_mode: one of 'tag_orientation', 'look_straight',
-      'left', 'right', 'up', 'down'
 
     Provides get_offset_pose() to combine them.
     """
@@ -82,35 +81,34 @@ class ManipulatorTagCommand(ManipulatorMoveCommand):
         result.header = pose.header
         result.pose.position = pose.pose.position
 
-        if self.orientation_mode == "tag_orientation":
+        if self.orientation_mode == OrientationModes.TAG_ORIENTATION:
             result.pose.orientation = pose.pose.orientation
-            return pose
-
-        elif self.orientation_mode == "look_straight":
+        elif self.orientation_mode == OrientationModes.CUSTOM_ORIENTATION:
+            result.pose.orientation = self.goal_pose.pose.orientation
+        elif self.orientation_mode == OrientationModes.STRAIGHT:
             result.pose.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-
-        elif self.orientation_mode == "left":
+        elif self.orientation_mode == OrientationModes.LOOK_LEFT:
             result.pose.orientation = Quaternion(
                 x=0.0, y=0.0,
                 z=_YAW_90_SIN,
                 w=_YAW_90_COS
             )
 
-        elif self.orientation_mode == "right":
+        elif self.orientation_mode == OrientationModes.LOOK_RIGHT:
             result.pose.orientation = Quaternion(
                 x=0.0, y=0.0,
                 z=-_YAW_90_SIN,
                 w=_YAW_90_COS
             )
 
-        elif self.orientation_mode == "up":
+        elif self.orientation_mode == OrientationModes.LOOK_UP:
             result.pose.orientation = Quaternion(
                 x=0.0,
                 y=-_PITCH_45_SIN,
                 z=0.0,
                 w=_PITCH_45_COS
             )
-        elif self.orientation_mode == "down":
+        elif self.orientation_mode == OrientationModes.LOOK_DOWN:
             result.pose.orientation = Quaternion(
                 x=0.0,
                 y=_PITCH_45_SIN,
