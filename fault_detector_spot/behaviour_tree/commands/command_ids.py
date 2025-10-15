@@ -43,4 +43,4 @@ class OrientationModes(str, Enum):
 
 class FrameNames(str, Enum):
     GRAV_BODY_FRAME = "flat_body"
-    WORLD_FRAME = "world"
+    MAP_FRAME = "map"

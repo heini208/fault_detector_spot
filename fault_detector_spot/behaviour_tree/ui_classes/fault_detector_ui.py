@@ -32,6 +32,7 @@ class Fault_Detector_UI(QWidget):
         self.command_status_label = QLabel("Command Status: IDLE")
         self.visible_label = QLabel("Visible tags: []")
         self.visible_label.setTextFormat(Qt.RichText)
+        self.navigation_mode_label = QLabel("Navigation: OFF")
 
         self.visible_tags = {}
         self.reachable_tags = {}
@@ -61,6 +62,7 @@ class Fault_Detector_UI(QWidget):
         status_col.addWidget(self.status_label)
         status_col.addWidget(self.buffer_label)
         status_col.addWidget(self.command_status_label)
+        status_col.addWidget(self.navigation_mode_label)
 
         self.visible_label = QLabel()
         self.visible_label.setTextFormat(Qt.RichText)
@@ -81,6 +83,10 @@ class Fault_Detector_UI(QWidget):
         self.add_navigation_control_tab()
 
         self.recording_controls.add_rows(main_layout)
+
+    def set_navigation_mode(self, active: bool):
+        text = "ON" if active else "OFF"
+        self.navigation_mode_label.setText(f"Navigation: {text}")
 
     def _on_tab_changed(self, index):
         if self.tabs.tabText(index) == "Navigation Control":
@@ -138,9 +144,6 @@ class Fault_Detector_UI(QWidget):
         self.complex_command_publisher = self.node.create_publisher(
             ComplexCommand, "fault_detector/commands/complex_command", COMMAND_QOS
         )
-
-        self.command_pub = self.node.create_publisher(
-            BasicCommand, "fault_detector/commands/basic_command", COMMAND_QOS)
 
         self.visible_tags_sub = self.node.create_subscription(
             TagElementArray,
@@ -208,7 +211,9 @@ class Fault_Detector_UI(QWidget):
 
     def handle_simple_command(self, command_id: str):
         cmd = self.build_basic_command(command_id)
-        self.command_pub.publish(cmd)
+        as_complex_command = ComplexCommand()
+        as_complex_command.command = cmd
+        self.complex_command_publisher.publish(as_complex_command)
         self.status_label.setText(f"Command sent: {command_id}")
 
     def closeEvent(self, event):

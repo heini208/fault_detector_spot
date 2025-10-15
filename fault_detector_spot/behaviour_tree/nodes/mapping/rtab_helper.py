@@ -395,7 +395,7 @@ class RTABHelper:
 
         # Restart RTAB-Map in the same mode but with a new database
         if current_mode == "mapping":
-            proc = self.start_mapping(map_name)
+            proc = self.initialize_mapping_from_existing(map_name)
         else:  # localization
             proc = self.start_localization(map_name)
         self.feedback_message = f"Changed to map '{map_name}' in {current_mode} mode"

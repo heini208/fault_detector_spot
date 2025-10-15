@@ -271,19 +271,21 @@ class NavigationControls(UIControlHelper):
 
     def handle_mode_none(self, checked: bool):
         if checked:
+            self.ui.set_navigation_mode(False)
             self.ui.handle_simple_command(CommandID.STOP_MAPPING)
-            pass
 
     def handle_mode_mapping(self, checked: bool):
         if checked:
             if not self._check_current_map_selected():
                 return
+            self.ui.set_navigation_mode(True)
             self.ui.handle_simple_command(CommandID.START_SLAM)
 
     def handle_mode_localization(self, checked: bool):
         if checked:
             if not self._check_current_map_selected():
                 return
+            self.ui.set_navigation_mode(True)
             self.ui.handle_simple_command(CommandID.START_LOCALIZATION)
 
     def _check_current_map_selected(self) -> bool:
@@ -379,7 +381,7 @@ class NavigationControls(UIControlHelper):
         complex_command.command = self.ui.build_basic_command(CommandID.CREATE_MAP)
         complex_command.map_name = name
         self.complex_command_publisher.publish(complex_command)
-
+        self.ui.set_navigation_mode(True)
         # Switch mode to Mapping in the UI **without triggering the mapping handler**
         self.mode_mapping.blockSignals(True)
         self.mode_mapping.setChecked(True)

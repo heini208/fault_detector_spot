@@ -55,7 +55,10 @@ def generate_launch_description():
                 executable='rgbd_sync',
                 name=f'rgbd_sync_{cam_name}',
                 output='screen',
-                parameters=[{'approx_sync': True}],
+                parameters=[{
+                    'approx_sync': True,
+                    'approx_sync_max_interval': 0.1  # Added for safer synchronization
+                }],
                 remappings=[
                     ('rgb/image', rgb_topic),
                     ('depth/image', depth_topic),
@@ -77,17 +80,17 @@ def generate_launch_description():
             'map_frame_id': 'map',
             'odom_frame_id': 'odom',
             'approx_sync': True,
-            'approx_sync_max_interval': '0.01',
+            'approx_sync_max_interval': '0.1',
             'subscribe_rgbd': True,
-            'rgbd_cameras': 4,
+            'rgbd_cameras': len(cameras),
             'Reg/Strategy': '0',
             'RGBD/LinearUpdate': '0.1',
             'RGBD/AngularUpdate': '0.1',
             'RGBD/NeighborLinkRefining': 'true',
             'database_path': LaunchConfiguration('db_path'),
             'delete_db_on_start': LaunchConfiguration('delete_db'),
-            'topic_queue_size': 20,
-            'sync_queue_size': 20,
+            'topic_queue_size': 50,
+            'sync_queue_size': 50,
             'Mem/IncrementalMemory': 'true',  # mapping mode
         }],
         remappings=[
@@ -112,7 +115,7 @@ def generate_launch_description():
             'odom_frame_id': 'odom',
             'approx_sync': True,
             'subscribe_rgbd': True,
-            'rgbd_cameras': 4,
+            'rgbd_cameras': len(cameras),
             'Reg/Strategy': '0',
             'RGBD/LinearUpdate': '0.1',
             'RGBD/AngularUpdate': '0.1',

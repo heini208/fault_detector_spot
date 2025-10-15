@@ -97,6 +97,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 self.trigger_estop()
                 self.logger.warning("ESTOP triggered imediately.")
                 return
+        elif isinstance(msg, ComplexCommand):
+            if msg.command.command_id == CommandID.EMERGENCY_CANCEL:
+                self.trigger_estop()
+                self.logger.warning("ESTOP triggered imediately.")
+                return
         stamp = self._extract_timestamp(msg)
         if stamp is None:
             self.logger.warning("Command without timestamp ignored.")

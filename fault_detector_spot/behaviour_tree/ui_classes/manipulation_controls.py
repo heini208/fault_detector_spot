@@ -236,6 +236,15 @@ class ManipulationControls(UIControlHelper):
         q = self._euler_to_quaternion(roll, pitch, yaw)
 
         frame_choice = FrameNames(self.offset_frame_combo.currentText())
+        if frame_choice == FrameNames.MAP_FRAME:
+            if getattr(self.ui, "navigation_mode_label", None) and \
+                    self.ui.navigation_mode_label.text() == "Navigation: OFF":
+                self.show_warning(
+                    "Navigation Mode Required",
+                    "You are using MAP_FRAME but Navigation Mode is OFF.\n"
+                    "Please enable Navigation Mode to proceed."
+                )
+                return None  # abort publishing command
 
         command.offset.header = command.tag.pose.header
         command.offset.header.frame_id = frame_choice
@@ -303,8 +312,9 @@ class ManipulationControls(UIControlHelper):
         except TagNotFound:
             pass
         complex_command = self.add_offset_to_command(complex_command)
+        if not complex_command:
+            return
         complex_command.wait_time = self.duration_input.value()
-
         self.complex_command_publisher.publish(complex_command)
         self.status_label.setText(f"Command sent: {command_id}")
 
@@ -313,6 +323,8 @@ class ManipulationControls(UIControlHelper):
         complex_command.command = self.ui.build_basic_command(command_id)
         complex_command.wait_time = self.duration_input.value()
         complex_command = self.add_offset_to_command(complex_command)
+        if not complex_command:
+            return
 
         reply = self.ask_question(
         "Confirm Scan",
