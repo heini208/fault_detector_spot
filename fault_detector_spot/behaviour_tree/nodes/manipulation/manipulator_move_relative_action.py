@@ -2,19 +2,21 @@
 """
 A behaviour that moves the Spot arm by a relative XYZ offset in the body frame.
 """
-from bosdyn.client.frame_helpers import HAND_FRAME_NAME
+from bosdyn.client.frame_helpers import HAND_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
-from synchros2.action_client import ActionClientWrapper
-from synchros2.tf_listener_wrapper import TFListenerWrapper
-from synchros2.utilities import namespace_with
 
 import rclpy
+import tf2_geometry_msgs
 from bosdyn_msgs.conversions import convert
 from fault_detector_spot.behaviour_tree.commands.manipulator_move_command import ManipulatorMoveCommand
 from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import ActionClientBehaviour
+from geometry_msgs.msg import PoseStamped
 from py_trees.common import Access, Status
 from rclpy.duration import Duration
 from spot_msgs.action import RobotCommand
+from synchros2.action_client import ActionClientWrapper
+from synchros2.tf_listener_wrapper import TFListenerWrapper
+from synchros2.utilities import namespace_with
 from tf_transformations import quaternion_multiply
 
 
@@ -76,6 +78,21 @@ class ManipulatorMoveRelativeAction(ActionClientBehaviour):
         return goal
 
     def get_goal_cmd_with_offset(self):
+        pose_with_offset = self._hand_position_with_offset_in_offset_frame()
+        tf_to_body = self.tf_listener.lookup_a_tform_b(GRAV_ALIGNED_BODY_FRAME_NAME, pose_with_offset.header.frame_id,
+                                                       timeout_sec=2)
+        pose_in_body = tf2_geometry_msgs.do_transform_pose_stamped(pose_with_offset, tf_to_body)
+
+        arm_cmd = RobotCommandBuilder.arm_pose_command(
+            pose_in_body.pose.position.x, pose_in_body.pose.position.y, pose_in_body.pose.position.z,
+            pose_in_body.pose.orientation.w, pose_in_body.pose.orientation.x, pose_in_body.pose.orientation.y,
+            pose_in_body.pose.orientation.z,
+            namespace_with(self.robot_name, GRAV_ALIGNED_BODY_FRAME_NAME),
+            self.duration
+        )
+        return arm_cmd
+
+    def _hand_position_with_offset_in_offset_frame(self):
         cmd_obj = self.blackboard.last_command
         if not isinstance(cmd_obj, ManipulatorMoveCommand):
             raise RuntimeError(f"Expected ManipulatorMoveCommand, got {type(cmd_obj).__name__}")
@@ -90,13 +107,19 @@ class ManipulatorMoveRelativeAction(ActionClientBehaviour):
         dr = cmd_obj.goal_pose.pose.orientation
         offset_quat = [dr.x, dr.y, dr.z, dr.w]
         r_quat = [r.x, r.y, r.z, r.w]
-
-        # ✅ combine rotations correctly (tf * offset)
         rtx, rty, rtz, rtw = quaternion_multiply(r_quat, offset_quat)
-        arm_cmd = RobotCommandBuilder.arm_pose_command(
-            tx, ty, tz,
-            rtw, rtx, rty, rtz,
-            namespace_with(self.robot_name, cmd_obj.goal_pose.header.frame_id),
-            self.duration
-        )
-        return arm_cmd
+
+        pose_stamped = PoseStamped()
+        pose_stamped.header.frame_id = cmd_obj.goal_pose.header.frame_id
+        pose_stamped.header.stamp = self.node.get_clock().now().to_msg()
+
+        pose_stamped.pose.position.x = tx
+        pose_stamped.pose.position.y = ty
+        pose_stamped.pose.position.z = tz
+
+        pose_stamped.pose.orientation.x = rtx
+        pose_stamped.pose.orientation.y = rty
+        pose_stamped.pose.orientation.z = rtz
+        pose_stamped.pose.orientation.w = rtw
+
+        return pose_stamped
