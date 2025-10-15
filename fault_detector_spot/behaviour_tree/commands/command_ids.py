@@ -34,7 +34,7 @@ class CommandID(str, Enum):
 class OrientationModes(str, Enum):
     CUSTOM_ORIENTATION = "custom"
     STRAIGHT = "look_straight"
-    TAG_ORIENTATION = "tag_orientation"
+    TAG_ORIENTATION = "relative_to_tag"
     LOOK_LEFT = "left"
     LOOK_RIGHT = "right"
     LOOK_UP = "up"

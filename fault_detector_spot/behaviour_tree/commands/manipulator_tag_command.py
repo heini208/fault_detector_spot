@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 from math import sin, cos, pi
 
+import tf2_geometry_msgs
+import tf_transformations
 from builtin_interfaces.msg import Time
 from fault_detector_spot.behaviour_tree.commands.command_ids import OrientationModes
 from geometry_msgs.msg import PoseStamped, Quaternion
+from synchros2.tf_listener_wrapper import TFListenerWrapper
 from .manipulator_move_command import ManipulatorMoveCommand
 
 _YAW_90_SIN = sin(pi / 4)  # sin(45°)
@@ -26,9 +29,9 @@ class ManipulatorTagCommand(ManipulatorMoveCommand):
             self,
             command_id: str,
             stamp: Time,
-            goal_pose: PoseStamped,
+            goal_pose: PoseStamped,  # in body frame
             tag_id: int,
-            offset: PoseStamped = None,
+            offset: PoseStamped = None,  # in target frame
             orientation_mode: str = "tag_orientation"
     ):
         super().__init__(command_id, stamp, goal_pose)
@@ -51,6 +54,7 @@ class ManipulatorTagCommand(ManipulatorMoveCommand):
         Returns a new PoseStamped which is the sum of goal_pose and offset,
         with orientation adjusted according to orientation_mode.
         """
+
         result = PoseStamped()
         result.header = self.goal_pose.header
         result = self._add_position_offset(result)
@@ -82,9 +86,9 @@ class ManipulatorTagCommand(ManipulatorMoveCommand):
         result.pose.position = pose.pose.position
 
         if self.orientation_mode == OrientationModes.TAG_ORIENTATION:
-            result.pose.orientation = pose.pose.orientation
+            result.pose.orientation = self._get_tag_orientation_with_offset()
         elif self.orientation_mode == OrientationModes.CUSTOM_ORIENTATION:
-            result.pose.orientation = self.goal_pose.pose.orientation
+            result.pose.orientation = self.offset.pose.orientation
         elif self.orientation_mode == OrientationModes.STRAIGHT:
             result.pose.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
         elif self.orientation_mode == OrientationModes.LOOK_LEFT:
@@ -120,12 +124,34 @@ class ManipulatorTagCommand(ManipulatorMoveCommand):
 
         return result
 
-    def get_as_manipulator_move_command_with_offset(self) -> ManipulatorMoveCommand:
+    def _get_tag_orientation_with_offset(self):
+        q1 = self.goal_pose.pose.orientation
+        q2 = self.offset.pose.orientation
+
+        q1_list = [q1.x, q1.y, q1.z, q1.w]
+        q2_list = [q2.x, q2.y, q2.z, q2.w]
+
+        q_combined = tf_transformations.quaternion_multiply(q1_list, q2_list)
+
+        return Quaternion(x=q_combined[0], y=q_combined[1], z=q_combined[2], w=q_combined[3])
+
+    def transform_tag_to_offset_frame(self, transformer: TFListenerWrapper):
+        tf_msg = transformer.lookup_a_tform_b(self.offset.header.frame_id, self.goal_pose.header.frame_id,
+                                              timeout_sec=2)
+
+        self.goal_pose = tf2_geometry_msgs.do_transform_pose_stamped(self.goal_pose, tf_msg)
+        return self.goal_pose
+
+    def transform_tag_and_apply_offset(self, transformer: TFListenerWrapper) -> PoseStamped:
+        self.transform_tag_to_offset_frame(transformer)
+        return self.get_offset_pose()
+
+    def get_as_manipulator_move_command_with_offset(self, transformer: TFListenerWrapper) -> ManipulatorMoveCommand:
         """
         Returns a ManipulatorMoveCommand with the same goal pose and offset.
         """
         return ManipulatorMoveCommand(
             command_id=self.command_id,
             stamp=self.stamp,
-            goal_pose=self.get_offset_pose()
+            goal_pose=self.transform_tag_and_apply_offset(transformer),
         )

@@ -1,4 +1,3 @@
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
 from synchros2.action_client import ActionClientWrapper
 from synchros2.tf_listener_wrapper import TFListenerWrapper
@@ -60,7 +59,7 @@ class ManipulatorMoveArmAction(ActionClientBehaviour):
             target.pose.orientation.x,
             target.pose.orientation.y,
             target.pose.orientation.z,
-            namespace_with(self.robot_name, GRAV_ALIGNED_BODY_FRAME_NAME),
+            namespace_with(self.robot_name, target.header.frame_id),
             self.duration
         )
         goal = RobotCommand.Goal()

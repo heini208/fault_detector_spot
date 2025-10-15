@@ -83,7 +83,7 @@ class ManipulationControls(UIControlHelper):
 
     def _make_offset_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        row.addWidget(QLabel("Offsets & Orientation:"))
+        row.addWidget(QLabel("Positional Offset:"))
 
         self.offset_frame_combo = QComboBox()
         self.offset_frame_combo.addItems([frame.value for frame in FrameNames])
@@ -156,8 +156,8 @@ class ManipulationControls(UIControlHelper):
         # Each tuple: (axis, dec_label, inc_label, dec_delta, inc_delta)
         controls = [
             ("Roll", "⟲ CCW", "⟳ CW", -5.0, +5.0),
-            ("Pitch", "Down", "Up", -5.0, +5.0),
-            ("Yaw", "Left", "Right", -5.0, +5.0),
+            ("Pitch", "Down", "Up", +5.0, -5.0),
+            ("Yaw", "Left", "Right", +5.0, -5.0),
         ]
 
         if not self.offset_fields:
