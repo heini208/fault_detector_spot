@@ -20,10 +20,8 @@ planner_server:
 controller_server:
   ros__parameters:
     controller_frequency: 20.0
-    # declare the controller plugin name used below ("MPPI")
+    autostart: false
     controller_plugins: [ "MPPI" ]
-
-    # MPPI controller configuration
     MPPI:
       plugin: "nav2_mppi_controller::MPPIController"
       # Basic MPPI tuning — adjust to your robot
@@ -192,4 +190,5 @@ local_costmap:
 
 bt_navigator:
   ros__parameters:
+    autostart: false
     default_bt_xml_filename: "navigate_w_replanning_and_recovery.xml"

@@ -75,8 +75,16 @@ def generate_launch_description():
             )
         )
 
+    cmd_vel_gate_node = Node(
+        package='fault_detector_spot',
+        executable='nav2_cmd_vel_gate',  # name of the node script
+        name='nav2_cmd_vel_gate',
+        output='screen',
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}]
+    )
+
     return LaunchDescription([
                                  use_sim_time_arg,
                                  map_name_arg,
                                  nav2,
-                             ] + pcl_to_scan_nodes)
+                             ] + pcl_to_scan_nodes + [cmd_vel_gate_node])

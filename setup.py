@@ -46,6 +46,7 @@ setup(
             'pointcloud_merger = fault_detector_spot.behaviour_tree.nodes.mapping.pointcloud_merger:main',
             'pointcloud_republisher = fault_detector_spot.behaviour_tree.nodes.mapping.pointcloud_republisher:main',
             'rgb_resizer = fault_detector_spot.behaviour_tree.nodes.mapping.rgb_resizer:main',
+            'nav2_cmd_vel_gate = fault_detector_spot.behaviour_tree.nodes.navigation.nav2_cmd_vel_gate:main'
         ],
     },
 )
