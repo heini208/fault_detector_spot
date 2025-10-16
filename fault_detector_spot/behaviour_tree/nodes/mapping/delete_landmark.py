@@ -1,0 +1,52 @@
+import py_trees
+from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
+
+
+class DeleteLandmark(py_trees.behaviour.Behaviour):
+    """
+    Deletes a landmark from the active map using slam_helper.delete_landmark().
+    Expects last_command.waypoint_name as the landmark name and last_command.map_name on the blackboard.
+    """
+
+    def __init__(self, slam_helper: RTABHelper, name: str = "DeleteLandmark"):
+        super(DeleteLandmark, self).__init__(name)
+        self.bb = self.attach_blackboard_client()
+        self.helper = slam_helper
+
+    def setup(self, **kwargs):
+        """Register required blackboard keys."""
+        self.bb.register_key("last_command", access=py_trees.common.Access.READ)
+
+    def update(self) -> py_trees.common.Status:
+        """Try to delete the landmark specified in last_command."""
+        if not self.bb.exists("last_command") or self.bb.last_command is None:
+            self.feedback_message = "No last_command on blackboard"
+            return py_trees.common.Status.FAILURE
+
+        cmd = self.bb.last_command
+        if not hasattr(cmd, "map_name") or cmd.map_name is None:
+            self.feedback_message = "last_command has no map_name"
+            return py_trees.common.Status.FAILURE
+
+        if not hasattr(cmd, "waypoint_name") or cmd.waypoint_name is None:
+            self.feedback_message = "last_command has no waypoint_name (used as landmark name)"
+            return py_trees.common.Status.FAILURE
+
+        try:
+            success = self.helper.delete_landmark(
+                landmark_name=cmd.waypoint_name,
+                map_name=cmd.map_name,
+            )
+            if success:
+                self.feedback_message = (
+                    f"Deleted landmark '{cmd.waypoint_name}' from map '{cmd.map_name}'"
+                )
+                return py_trees.common.Status.SUCCESS
+            else:
+                self.feedback_message = (
+                    f"Landmark '{cmd.waypoint_name}' not found in map '{cmd.map_name}'"
+                )
+                return py_trees.common.Status.FAILURE
+        except Exception as e:
+            self.feedback_message = f"Failed to delete landmark: {e}"
+            return py_trees.common.Status.FAILURE

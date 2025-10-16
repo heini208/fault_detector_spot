@@ -6,6 +6,7 @@ from .nodes.manipulation.manipulator_move_relative_action import ManipulatorMove
 from .nodes.manipulation.ready_arm_action import ReadyArmActionSimple
 from .nodes.manipulation.stow_arm_action import StowArmActionSimple
 from .nodes.manipulation.toggle_gripper_action import ToggleGripperAction
+from .nodes.mapping.delete_landmark import DeleteLandmark
 from .nodes.mapping.delete_map import DeleteMap
 from .nodes.mapping.delete_waypoint import DeleteWaypoint
 from .nodes.mapping.enable_localization import EnableLocalization
@@ -72,5 +73,6 @@ __all__ = [
   "SetTagAsGoal",
   "AddGoalPoseAsLandmark",
   "VisibleTagToMap",
-  "LandmarkRelocalizer"
+  "LandmarkRelocalizer",
+  "DeleteLandmark"
 ]

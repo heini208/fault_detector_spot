@@ -125,15 +125,16 @@ class NavigationControls(UIControlHelper):
         if not self._cached_landmark_list:
             self.landmark_label.setText("no landmarks saved")
             self.landmark_label.setStyleSheet("")  # default color
+            self.landmark_dropdown.clear()
+            self.landmark_dropdown.addItem("no landmarks saved")
             return
 
-        # Build text string, color visible tags green
+        # Build text string, color visible tags green/red
         text_parts = []
         for lm_name in self._cached_landmark_list:
             if lm_name.startswith("Tag_"):
                 tag_id = int(lm_name.split("_")[1])
                 if tag_id in self.ui.visible_tags:
-                    # Wrap visible tags in green HTML span
                     text_parts.append(f'<span style="color: green;">{lm_name}</span>')
                 else:
                     text_parts.append(f'<span style="color: red;">{lm_name}</span>')
@@ -141,6 +142,11 @@ class NavigationControls(UIControlHelper):
                 text_parts.append(lm_name)
 
         self.landmark_label.setText(", ".join(text_parts))
+
+        # Populate the dropdown with landmarks
+        self.landmark_dropdown.clear()
+        for lm_name in self._cached_landmark_list:
+            self.landmark_dropdown.addItem(lm_name)
 
     def map_list_callback(self, msg: StringArray):
         # Cache the latest map list
@@ -239,10 +245,20 @@ class NavigationControls(UIControlHelper):
         row = QHBoxLayout()
         row.addWidget(QLabel("Landmarks:"))
 
+        # Label showing all landmarks (rich text for coloring visible tags)
         self.landmark_label = QLabel("no landmarks saved")
         self.landmark_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.landmark_label.setTextFormat(Qt.RichText)
         row.addWidget(self.landmark_label)
+
+        # Dropdown for deleting a landmark
+        self.landmark_dropdown = QComboBox()
+        row.addWidget(self.landmark_dropdown)
+
+        # Delete landmark button
+        self.delete_landmark_button = QPushButton("Delete Landmark")
+        self.delete_landmark_button.clicked.connect(self.handle_delete_landmark)
+        row.addWidget(self.delete_landmark_button)
 
         row.addStretch(1)
         return row
@@ -301,10 +317,10 @@ class NavigationControls(UIControlHelper):
             self.show_warning("Missing Name", "Please enter a waypoint name.")
             return
 
-        if not self.mode_localization.isChecked():
+        if self.mode_none.isChecked():
             self.show_warning(
-                "Not in Localization Mode",
-                "Waypoints can only be saved while in localization mode (AMCL active)."
+                "Not in Mapping or Localization Mode",
+                "Waypoints can only be saved while in localization or mapping mode."
             )
             return
 
@@ -326,10 +342,10 @@ class NavigationControls(UIControlHelper):
             self.show_warning("Missing ID", "Please enter a valid tag ID")
             return
 
-        if not self.mode_localization.isChecked():
+        if self.mode_none.isChecked():
             self.show_warning(
                 "Not in Localization Mode",
-                "Waypoints or landmarks can only be saved while in localization mode (AMCL active)."
+                "Waypoints or landmarks can only be saved while in localization or mapping mode."
             )
             return
 
@@ -408,4 +424,16 @@ class NavigationControls(UIControlHelper):
         complex_command.command = self.ui.build_basic_command(CommandID.DELETE_WAYPOINT)
         complex_command.map_name = self.current_map
         complex_command.waypoint_name = selected
+        self.complex_command_publisher.publish(complex_command)
+
+    def handle_delete_landmark(self):
+        selected = self.landmark_dropdown.currentText()
+        if not selected or selected == "no landmarks saved":
+            self.show_warning("No Landmark Selected", "Please select a landmark to delete.")
+            return
+
+        complex_command = ComplexCommand()
+        complex_command.command = self.ui.build_basic_command(CommandID.DELETE_LANDMARK)
+        complex_command.map_name = self.current_map
+        complex_command.waypoint_name = selected  # the landmark name
         self.complex_command_publisher.publish(complex_command)

@@ -27,7 +27,7 @@ from fault_detector_spot.behaviour_tree import (
     ManipulatorMoveRelativeAction,
     ToggleGripperAction, CloseGripperAction, HelperInitializer, DeleteWaypoint, StopMapping, SwapMap, DeleteMap,
     InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
-    NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer,
+    NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.nodes.sensing.last_localization_pose import LastLocalizationPose
@@ -150,7 +150,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.ADD_TAG_AS_LANDMARK, build_tag_pose_as_landmark_tree),
         (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint(slam_helper)),
         (CommandID.MOVE_TO_WAYPOINT, build_navigate_to_goal_pose_tree),
-
+        (CommandID.DELETE_LANDMARK, lambda n: DeleteLandmark(slam_helper)),
     ]
 
     for cmd_id, ctor in specs:

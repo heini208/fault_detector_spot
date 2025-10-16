@@ -500,3 +500,32 @@ class RTABHelper:
         if map_name == self.bb.active_map_name:
             self.publish_waypoint_list(map_name)
         return True
+
+    def delete_landmark(self, landmark_name: str, map_name: str = None):
+        map_name = map_name or self.bb.active_map_name
+        if not map_name:
+            raise ValueError("No active map set")
+
+        json_path = self.get_json_path(map_name)
+        if not os.path.exists(json_path):
+            return False
+
+        with open(json_path, "r") as f:
+            data = json.load(f)
+
+        # Filter out the landmark with the given name
+        new_landmarks = [lm for lm in data.get("landmarks", []) if lm["name"] != landmark_name]
+        if len(new_landmarks) == len(data.get("landmarks", [])):
+            # Nothing was removed
+            return False
+
+        data["landmarks"] = new_landmarks
+
+        # Save updated JSON
+        with open(json_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+        # Publish updated list if it's the active map
+        if map_name == self.bb.active_map_name:
+            self.publish_landmark_list(map_name)  # implement similar to publish_waypoint_list
+        return True
