@@ -29,6 +29,8 @@ class CommandID(str, Enum):
     DELETE_WAYPOINT = "delete_waypoint"
     MOVE_TO_WAYPOINT = "move_to_waypoint"
     MOVE_INTO_TAG_RANGE = "move_into_tag_range"
+    MOVE_BASE_TO_TAG = "move_base_to_tag"
+    MOVE_BASE_RELATIVE = "move_base_relative"
     DELETE_LANDMARK = "delete_landmark"
 
 
@@ -45,3 +47,5 @@ class OrientationModes(str, Enum):
 class FrameNames(str, Enum):
     GRAV_BODY_FRAME = "flat_body"
     MAP_FRAME = "map"
+    ODOMETRY_FRAME = "odom"
+    VISION_FRAME = "vision"

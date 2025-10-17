@@ -44,6 +44,8 @@ def generate_launch_description():
          'rgbd_image_frontleft'),
         ('frontright', '/camera/frontright/image', '/depth_registered/frontright/image',
          '/camera/frontright/camera_info', 'rgbd_image_frontright'),
+        ('back', '/camera/back/image', '/depth_registered/back/image',
+         '/camera/back/camera_info', 'rgbd_image_back'),
     ]
 
     # Generate rgbd_sync nodes
@@ -57,7 +59,7 @@ def generate_launch_description():
                 output='screen',
                 parameters=[{
                     'approx_sync': True,
-                    'approx_sync_max_interval': 0.1  # Added for safer synchronization
+                    'approx_sync_max_interval': 0.2  # Added for safer synchronization
                 }],
                 remappings=[
                     ('rgb/image', rgb_topic),
@@ -98,6 +100,7 @@ def generate_launch_description():
             ('rgbd_image1', 'rgbd_image_right'),
             ('rgbd_image2', 'rgbd_image_frontleft'),
             ('rgbd_image3', 'rgbd_image_frontright'),
+            ('rgbd_image4', 'rgbd_image_back'),
             ('odom', '/odometry')
         ],
         condition=IfCondition(extend_map)
@@ -131,6 +134,7 @@ def generate_launch_description():
             ('rgbd_image1', 'rgbd_image_right'),
             ('rgbd_image2', 'rgbd_image_frontleft'),
             ('rgbd_image3', 'rgbd_image_frontright'),
+            ('rgbd_image4', 'rgbd_image_back'),
             ('odom', '/odometry')
         ],
         condition=UnlessCondition(extend_map)

@@ -15,6 +15,7 @@ from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from rclpy.node import Node
 from std_msgs.msg import Header, String
+from .base_movement_controls import BaseMovementControls
 from .manipulation_controls import ManipulationControls
 from .navigation_controls import NavigationControls
 from .recording_controls import RecordingControls
@@ -44,6 +45,7 @@ class Fault_Detector_UI(QWidget):
         self.manipulation_controls = ManipulationControls(self)
         self.recording_controls = RecordingControls(self)
         self.navigation_controls = NavigationControls(self)
+        self.base_movement_controls = BaseMovementControls(self)
 
         self.create_user_interface()
 
@@ -70,8 +72,8 @@ class Fault_Detector_UI(QWidget):
         status_col.addWidget(self.visible_label)
 
         top_row.addLayout(status_col)
-        top_row.addStretch()  # push estop to right
-        top_row.addLayout(self._make_estop_row())  # 🔴 estop at top-right
+        top_row.addStretch()
+        top_row.addLayout(self._make_estop_row())
 
         main_layout.addLayout(top_row)
 
@@ -80,6 +82,7 @@ class Fault_Detector_UI(QWidget):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         main_layout.addWidget(self.tabs)
         self.add_manipulator_control_tab()
+        self.add_base_movement_control_tab()
         self.add_navigation_control_tab()
 
         self.recording_controls.add_rows(main_layout)
@@ -137,6 +140,12 @@ class Fault_Detector_UI(QWidget):
         nav_layout = QVBoxLayout(nav_tab)
         self.navigation_controls.add_rows(nav_layout)
         self.tabs.addTab(nav_tab, "Navigation Control")
+
+    def add_base_movement_control_tab(self):
+        base_tab = QWidget()
+        base_layout = QVBoxLayout(base_tab)
+        self.base_movement_controls.add_rows(base_layout)
+        self.tabs.addTab(base_tab, "Base Movement Control")
 
     # ---- feedback information
 

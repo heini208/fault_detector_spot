@@ -4,6 +4,7 @@ import py_trees
 import rclpy
 from fault_detector_msgs.msg import ComplexCommand, BasicCommand
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS
+from fault_detector_spot.behaviour_tree.commands.base_tag_command import BaseTagCommand
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.commands.generic_complex_command import GenericCommand
 from fault_detector_spot.behaviour_tree.commands.manipulator_move_command import ManipulatorMoveCommand
@@ -34,6 +35,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.MOVE_ARM_TO_TAG: self._move_to_tag,
             CommandID.MOVE_ARM_TO_TAG_AND_WAIT: self._move_to_tag_and_wait,
             CommandID.MOVE_ARM_RELATIVE: self._move_arm_command_with_offset,
+            CommandID.MOVE_BASE_TO_TAG: self._move_base_to_tag,
             CommandID.ESTOP_STATE: self._return_to_estop_state,
         }
         self.pending_msgs = []
@@ -202,6 +204,19 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def _move_to_tag(self, msg: ComplexCommand) -> List[SimpleCommand]:
         command = ManipulatorTagCommand(CommandID.MOVE_ARM_TO_TAG, self._create_command_stamp(), msg.tag.pose,
                                         msg.tag.id, msg.offset, msg.orientation_mode)
+        return [command]
+
+    def _move_base_to_tag(self, msg: ComplexCommand):
+        """
+        Builds a BaseTagCommand for moving the base to a visible tag (not just reachable).
+        """
+        command = BaseTagCommand(
+            command_id=CommandID.MOVE_BASE_TO_TAG,
+            stamp=self._create_command_stamp(),
+            goal_pose=msg.tag.pose,
+            tag_id=msg.tag.id,
+            offset=msg.offset,
+        )
         return [command]
 
     ### Command builders for combination commands ###

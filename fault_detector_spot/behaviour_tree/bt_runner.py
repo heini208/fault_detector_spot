@@ -28,6 +28,7 @@ from fault_detector_spot.behaviour_tree import (
     ToggleGripperAction, CloseGripperAction, HelperInitializer, DeleteWaypoint, StopMapping, SwapMap, DeleteMap,
     InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
     NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
+    BaseGetGoalTag, BaseMoveToTagAction,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.nodes.sensing.last_localization_pose import LastLocalizationPose
@@ -134,6 +135,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.READY_ARM, lambda n: ReadyArmActionSimple(name="ReadyArmAction")),
         (CommandID.TOGGLE_GRIPPER, lambda n: ToggleGripperAction(name="ToggleGripperAction")),
         (CommandID.MOVE_ARM_TO_TAG, build_manipulator_goal_tree),
+        (CommandID.MOVE_BASE_TO_TAG, build_base_goal_tree),
         (CommandID.MOVE_ARM_RELATIVE, lambda n: ManipulatorMoveRelativeAction(name="MoveArmRelativeAction")),
         (CommandID.STAND_UP, lambda n: StandUpActionSimple(name="StandUpAction")),
         (CommandID.WAIT_TIME, lambda n: WaitForDuration(name="WaitForDuration")),
@@ -280,6 +282,21 @@ def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
 
     return manipulation
 
+
+def build_base_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    """
+    Build the behaviour sequence to move the base relative to a visible tag.
+    """
+    base_sequence = py_trees.composites.Sequence("BaseMoveToTagSequence", memory=True)
+
+    get_goal = BaseGetGoalTag(name="BaseGetGoalTag")
+    get_goal.setup(node=node)
+
+    move_base = BaseMoveToTagAction(name="BaseMoveToTagAction")
+    move_base.setup(node=node)
+
+    base_sequence.add_children([get_goal, move_base])
+    return base_sequence
 
 def build_current_pose_as_waypoint_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
