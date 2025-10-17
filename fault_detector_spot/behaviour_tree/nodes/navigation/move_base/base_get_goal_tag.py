@@ -24,7 +24,6 @@ class BaseGetGoalTag(py_trees.behaviour.Behaviour):
         self.blackboard.register_key(key="last_command", access=py_trees.common.Access.READ)
 
     def update(self) -> py_trees.common.Status:
-        # Sanity check for the command
         command = getattr(self.blackboard, "last_command", None)
         if not isinstance(command, BaseTagCommand):
             self.feedback_message = "Expected BaseTagCommand"

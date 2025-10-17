@@ -9,6 +9,7 @@ from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.commands.generic_complex_command import GenericCommand
 from fault_detector_spot.behaviour_tree.commands.manipulator_move_command import ManipulatorMoveCommand
 from fault_detector_spot.behaviour_tree.commands.manipulator_tag_command import ManipulatorTagCommand
+from fault_detector_spot.behaviour_tree.commands.move_base_relative_command import MoveBaseRelativeCommand
 from fault_detector_spot.behaviour_tree.commands.simple_command import SimpleCommand
 from fault_detector_spot.behaviour_tree.commands.timer_command import TimerCommand
 
@@ -36,6 +37,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.MOVE_ARM_TO_TAG_AND_WAIT: self._move_to_tag_and_wait,
             CommandID.MOVE_ARM_RELATIVE: self._move_arm_command_with_offset,
             CommandID.MOVE_BASE_TO_TAG: self._move_base_to_tag,
+            CommandID.MOVE_BASE_RELATIVE: self._move_base_with_offset,
             CommandID.ESTOP_STATE: self._return_to_estop_state,
         }
         self.pending_msgs = []
@@ -215,6 +217,17 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             stamp=self._create_command_stamp(),
             goal_pose=msg.tag.pose,
             tag_id=msg.tag.id,
+            offset=msg.offset,
+        )
+        return [command]
+
+    def _move_base_with_offset(self, msg: ComplexCommand):
+        """
+        Builds a BaseMoveCommand for moving the base with an offset.
+        """
+        command = MoveBaseRelativeCommand(
+            command_id=CommandID.MOVE_BASE_RELATIVE,
+            stamp=self._create_command_stamp(),
             offset=msg.offset,
         )
         return [command]

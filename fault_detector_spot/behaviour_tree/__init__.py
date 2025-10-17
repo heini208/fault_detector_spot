@@ -19,6 +19,7 @@ from .nodes.navigation.add_goal_pose_as_waypoint import AddGoalPoseAsWaypoint
 from .nodes.navigation.cancel_movement import PublishZeroVel
 from .nodes.navigation.landmark_relocalizer import LandmarkRelocalizer
 from .nodes.navigation.move_base.base_get_goal_tag import BaseGetGoalTag
+from .nodes.navigation.move_base.base_move_relative_action import BaseMoveRelativeAction
 from .nodes.navigation.move_base.base_move_to_tag_action import BaseMoveToTagAction
 from .nodes.navigation.navigate_to_goal_pose import NavigateToGoalPose
 from .nodes.navigation.save_current_pose_as_goal import SaveCurrentPoseAsGoal
@@ -78,4 +79,5 @@ __all__ = [
   "DeleteLandmark",
   "BaseGetGoalTag",
   "BaseMoveToTagAction",
+  "BaseMoveRelativeAction",
 ]

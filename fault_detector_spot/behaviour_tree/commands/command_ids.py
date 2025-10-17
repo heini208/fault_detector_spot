@@ -49,3 +49,4 @@ class FrameNames(str, Enum):
     MAP_FRAME = "map"
     ODOMETRY_FRAME = "odom"
     VISION_FRAME = "vision"
+    BODY_FRAME = "body"

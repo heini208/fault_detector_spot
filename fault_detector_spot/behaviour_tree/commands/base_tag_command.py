@@ -4,11 +4,12 @@ import numpy as np
 import tf2_geometry_msgs
 import tf_transformations as tf
 from builtin_interfaces.msg import Time
+from fault_detector_spot.behaviour_tree.commands.simple_command import SimpleCommand
 from geometry_msgs.msg import PoseStamped, Quaternion
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 
 
-class BaseTagCommand:
+class BaseTagCommand(SimpleCommand):
     """
     Move the robot base relative to a detected tag, with an optional offset in another frame.
     Offset axes are rotated into the target frame axes.
