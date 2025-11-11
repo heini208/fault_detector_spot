@@ -61,9 +61,3 @@ The platform is therefore ideal for developing on a stable, well-tested foundati
 
 4. **Open Robotics.** *ROS 2 Humble Hawksbill Documentation.* Accessed: 27.10.2025.  
    Available at: [https://docs.ros.org/en/humble](https://docs.ros.org/en/humble)
-
-
-![Safety Stop Sequence Diagram](images/Requirements_Specification/safety_stop_sequence.png)
-![Sequential Command Execution](images/Requirements_Specification/command_queue.png)
-![not_new_error.png](images%2FRequirements_Specification%2Fnot_new_error.png)
-![recording.png](images%2FRequirements_Specification%2Frecording.png)

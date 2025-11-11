@@ -232,3 +232,7 @@ Record and Playback follow the same execution path.
     * **Record and Playback:** An external `record` node captures all command topics, stores them, and can replay them with updated timestamps.  
 
 
+![Safety Stop Sequence Diagram](images/Requirements_Specification/safety_stop_sequence.png)
+![Sequential Command Execution](images/Requirements_Specification/command_queue.png)
+![not_new_error.png](images%2FRequirements_Specification%2Fnot_new_error.png)
+![recording.png](images%2FRequirements_Specification%2Frecording.png)
