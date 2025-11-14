@@ -188,13 +188,12 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
         name="EmergencyGuard",
         child=normal_tree,
         condition=not_emergency,
-        blackboard_keys={"estop_flag"}  # now triggers as soon as estop_flag==True
+        blackboard_keys={"estop_flag"}
     )
 
     root = py_trees.composites.Selector("CancelableCommandSelector", memory=True)
     root.add_children([cancel_seq, emergency_guard])
 
-    # Wrap in StatusToBlackboard to get a flag on the blackboard status
     command_tree_with_flag = StatusToBlackboard(
         name="CommandTree→BB",
         child=root,

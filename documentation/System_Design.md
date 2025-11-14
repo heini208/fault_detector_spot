@@ -403,14 +403,141 @@ one at a time. This design ensures that actions do not overlap and that the robo
 The main structure includes:
 
 - **CommandManager:** Acts as a command buffer, storing and managing incoming commands.
-- **Guarded Command Sequence:** Ensures that only new commands trigger execution and that they can be safely interrupted.
-- **Cancelable Command Tree:** Enables emergency stops or cancellations through behaviors like `ResetEstopFlag` or `StopMapping`.
+- **NewCommandGuard:** Ensures that only new commands trigger execution and that they can be safely interrupted.
+- **EmergencyGuard:** Enables emergency stops or cancellations through behaviors like `ResetEstopFlag` or `StopMapping`.
 
 Each supported command, such as `MOVE_ARM_TO_TAG`, `START_SLAM`, or `DELETE_MAP` is represented by a corresponding behavior or subtree that defines its logic
 and
 interactions with the rest of the system.
 
-### 2.X Available Commands
+#### CommandManager
+The [CommandManager](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fcommand_manager.py) is responsible for buffering incoming commands and dispatching them to the command execution tree in a controlled manner. Its main functions are:
+
+- **FIFO Dispatch**: When the command tree is idle (i.e., not `RUNNING`), the oldest command is popped from the buffer and written to `blackboard.last_command`.
+- **Emergency Handling**: If an `EMERGENCY_CANCEL` command is found anywhere in the buffer, it is immediately promoted to `last_command` and the buffer is cleared. This ensures that emergency stops are enforced reliably.
+- **Failure Handling**: Optionally, commands that fail (`FAILED` status) can trigger buffer clearing to prevent the execution of outdated or conflicting commands.
+
+#### NewCommandGuard
+
+The [NewCommandGuard](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fnew_command_guard.py) ensures that each command is processed exactly once, avoiding duplicate execution:
+
+- **Timestamp Check:** Compares the timestamp of `last_command` with `last_processed_command`.
+- **Activation Control:** Only allows the guarded command sequence to execute if a new command is detected.
+- **Duplicate Prevention:** Prevents repeated executions of the same command.
+
+
+#### EmergencyGuard
+
+Because the CommandManager cannot terminate arbitrary nodes directly, the EmergencyGuard decorator wraps a command sequence and immediately cancels it if an emergency flag is set:
+
+- **Immediate Emergency Handling:** Enables immediate execution of `EMERGENCY_CANCEL` sequences.
+- **Safe Stop:** Ensures the robot can safely stop any ongoing action regardless of current command execution.
+
+#### Command Selector
+
+The **Command Selector** is the core node in the behaviour tree responsible for choosing and executing the correct command based on the current `last_command` from the blackboard.
+
+Key points:
+
+- Implemented as a `py_trees.composites.Selector` that **checks each command ID** and runs the corresponding behaviour sequence.
+- Wraps each command in a **guarded sequence** that first verifies the blackboard variable `last_command` matches the command ID.
+- Handles both **Spot actions** (via `ActionClientBehaviour` / `SimpleSpotAction`) and **non-robot commands** (navigation, mapping, or state updates).
+- Integrated with **emergency cancellation** via a higher-level `CancelableCommandSelector` that prioritizes emergency stop sequences over normal commands.
+- Supports **preprocessing and helper logic**, e.g., fetching target poses, checking tag visibility, or computing SLAM-related goals before executing the command.
+- Modular: Adding a new command only requires defining its behaviour sequence and registering it in the selector.
+
+#### Command Execution Flow
+
+The buffered command subtree is structured as follows:
+
+TREE DIAGRAM
+
+### Command Behaviour Execution Nodes 
+
+In the Spot behaviour tree architecture, **executors of commands** can be broadly divided into two categories based on how they interact with the robot:
+
+---
+
+#### 1. Action Client Behaviours [(`ActionClientBehaviour` / `SimpleSpotAction`)](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fspot_action.py)
+
+These executors communicate **directly with the robot via the Spots ROS2 drivers `RobotCommand` action**. They handle asynchronous action sending, monitoring, and cancellation.
+
+###### Characteristics:
+
+- Inherit from **`ActionClientBehaviour`** (custom Spot action lifecycle) or **`SimpleSpotAction`** (Spot-specific `RobotCommand` helper).
+- **Lifecycle Management:** Handles initialization, goal sending, result polling, and cleanup automatically.
+- **Emergency Handling:** Can cancel ongoing goals immediately if an emergency is triggered.
+- **Blackboard Integration:** Reads the current command from the py_trees blackboard set by the command manager (`last_command`) to set necessary parameters.
+- **Extensible:** Subclasses must implement:
+  - `_build_goal() → Goal`: Construct the goal message.
+- **Optional Overrides:** The following methods have default implementations in the base class and **do not need to be implemented by most subclasses**. Only override if special logic is required:
+  - `_init_client() → bool`: Initialize the specific action client.
+  - `_send_goal(goal) → Future`: Send the goal via the action client.
+- **Spot-Specific Variant:** `SimpleSpotAction` wraps Spot's `RobotCommand` action, providing helpers to simplify sending robot-specific commands.
+- **Examples of Subclasses:**
+  - `StowArmActionSimple`
+  - `ReadyArmActionSimple`
+  - `CloseGripperAction`
+  - `ManipulatorMoveArmAction`
+  - `ManipulatorMoveRelativeAction`
+  - `BaseMoveToTagAction`
+
+#### 2. Other Commands (`py_trees.behaviour.Behaviour`)
+
+Some commands do **not** use the ROS2 `RobotCommand` action driver. Instead, they interact with:
+
+- **Mapping or SLAM** (e.g., RTAB-Map)
+- **Navigation** (e.g., Nav2)
+- **Information flow** or **blackboard state**
+
+###### Key Points
+
+- Inherit directly from `py_trees.behaviour.Behaviour`.
+- Implement `update()` to define their specific logic.
+- May read from and/or write to blackboard variables.
+- Communicate via **topics**, **services**, or **helper classes**, rather than `RobotCommand` actions.
+
+###### Examples
+
+- `DeleteWaypoint` — removes a waypoint from the map.
+- `NavigateToGoalPose` — sends a goal to Nav2.
+- `ManipulatorGetGoalTag` — fetches a visible goal tag.
+
+### Available Commands
+
+Below is a list of all currently available commands and their respective behaviours. Each command is referenced via its `CommandID` from the [command_ids.py](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fcommands%2Fcommand_ids.py) file. The table shows the mapping from command IDs to the corresponding behavior sequences.
+
+The exact functionality of each command will become clear either:
+
+- In the dedicated section describing the corresponding subsystem, or
+- By reading the detailed explanation in the Command Reference Document that provides argument structures, parameter options, and example use cases for each command.
+
+
+| CommandID                     | Behavior Sequence                                                                                                                                                                                                                                         |
+| ----------------------------- |-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| STOW_ARM                      | [StowArmActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fstow_arm_action.py)                                                                                                                                              |
+| READY_ARM                     | [ReadyArmActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fready_arm_action.py)                                                                                                                                            |
+| TOGGLE_GRIPPER                | [ToggleGripperAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Ftoggle_gripper_action.py)                                                                                                                                        |
+| CLOSE_GRIPPER                 | [CloseGripperAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fclose_gripper_action.py)                                                                                                                                          |
+| MOVE_ARM_TO_TAG               | [ManipulatorGetGoalTag](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_get_goal_tag.py) → [ManipulatorMoveArmAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_arm_action.py)   |
+| MOVE_BASE_TO_TAG              | [BaseGetGoalTag](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_get_goal_tag.py) → [BaseMoveToTagAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_to_tag_action.py)      |
+| MOVE_ARM_RELATIVE             | [ManipulatorMoveRelativeAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_relative_action.py)                                                                                                                   |
+| MOVE_BASE_RELATIVE            | [BaseMoveRelativeAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_relative_action.py)                                                                                                                       |
+| STAND_UP                      | [StandUpActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fstand_up_action.py)                                                                                                                                                |
+| WAIT_TIME                     | [WaitForDuration](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fwait_for_duration.py)                                                                                                                                                     |
+| STOP_BASE                     | [PublishZeroVel](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fcancel_movement.py)                                                                                                                                                     |
+| START_SLAM                    | [EnableSLAM](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fenable_slam.py)                                                                                                                                                                |
+| START_LOCALIZATION            | [EnableLocalization](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fenable_localization.py)                                                                                                                                                |
+| CREATE_MAP                    | [InitializeEmptyMap](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Finitialize_empty_map.py)                                                                                                                                               |
+| DELETE_MAP                    | [DeleteMap](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fdelete_map.py)                                                                                                                                                                  |
+| SWAP_MAP                      | [SwapMap](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fswap_map.py)                                                                                                                                                                      |
+| STOP_MAPPING                  | [StopMapping](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fstop_mapping.py)                                                                                                                                                              |
+| ADD_CURRENT_POSITION_WAYPOINT | [SaveCurrentPoseAsGoal](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fsave_current_pose_as_goal.py) → [AddGoalPoseAsWaypoint](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fadd_goal_pose_as_waypoint.py)           |
+| ADD_TAG_AS_LANDMARK           | [SetTagAsGoal](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fset_tag_as_goal.py) → [AddGoalPoseAsLandmark](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fadd_goal_pose_as_landmark.py)                              |
+| DELETE_WAYPOINT               | [DeleteWaypoint](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fdelete_waypoint.py)                                                                                                                                                        |
+| MOVE_TO_WAYPOINT              | [SetWaypointAsGoal](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fset_waypoint_as_goal.py) → [NavigateToGoalPose](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fnavigate_to_goal_pose.py)] |
+| DELETE_LANDMARK               | [DeleteLandmark](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fdelete_landmark.py)                                                                                                                                                                                                                                          |
+
 
 ## 3. Sensing Subtree
 
