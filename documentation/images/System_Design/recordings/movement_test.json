@@ -1,0 +1,471 @@
+[
+  {
+    "topic": "complex",
+    "timestamp": 15.34,
+    "data": {
+      "command": {
+        "header": {
+          "stamp": {
+            "sec": 1760974930,
+            "nanosec": 471787247
+          },
+          "frame_id": ""
+        },
+        "command_id": "move_base_relative"
+      },
+      "tag": {
+        "id": 0,
+        "pose": {
+          "header": {
+            "stamp": {
+              "sec": 0,
+              "nanosec": 0
+            },
+            "frame_id": ""
+          },
+          "pose": {
+            "position": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "orientation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0,
+              "w": 1.0
+            }
+          }
+        }
+      },
+      "offset": {
+        "header": {
+          "stamp": {
+            "sec": 0,
+            "nanosec": 0
+          },
+          "frame_id": "odom"
+        },
+        "pose": {
+          "position": {
+            "x": -1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
+          }
+        }
+      },
+      "orientation_mode": "",
+      "wait_time": 0.0,
+      "map_name": "",
+      "waypoint_name": ""
+    }
+  },
+  {
+    "topic": "complex",
+    "timestamp": 19.39,
+    "data": {
+      "command": {
+        "header": {
+          "stamp": {
+            "sec": 1760974935,
+            "nanosec": 518125674
+          },
+          "frame_id": ""
+        },
+        "command_id": "wait_time"
+      },
+      "tag": {
+        "id": 0,
+        "pose": {
+          "header": {
+            "stamp": {
+              "sec": 0,
+              "nanosec": 0
+            },
+            "frame_id": "flat_body"
+          },
+          "pose": {
+            "position": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "orientation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0,
+              "w": 1.0
+            }
+          }
+        }
+      },
+      "offset": {
+        "header": {
+          "stamp": {
+            "sec": 0,
+            "nanosec": 0
+          },
+          "frame_id": "flat_body"
+        },
+        "pose": {
+          "position": {
+            "x": -0.1,
+            "y": 0.0,
+            "z": 0.05
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
+          }
+        }
+      },
+      "orientation_mode": "custom",
+      "wait_time": 2.0,
+      "map_name": "",
+      "waypoint_name": ""
+    }
+  },
+  {
+    "topic": "complex",
+    "timestamp": 34.07,
+    "data": {
+      "command": {
+        "header": {
+          "stamp": {
+            "sec": 1760974948,
+            "nanosec": 677354680
+          },
+          "frame_id": ""
+        },
+        "command_id": "move_base_relative"
+      },
+      "tag": {
+        "id": 0,
+        "pose": {
+          "header": {
+            "stamp": {
+              "sec": 0,
+              "nanosec": 0
+            },
+            "frame_id": ""
+          },
+          "pose": {
+            "position": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "orientation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0,
+              "w": 1.0
+            }
+          }
+        }
+      },
+      "offset": {
+        "header": {
+          "stamp": {
+            "sec": 0,
+            "nanosec": 0
+          },
+          "frame_id": "odom"
+        },
+        "pose": {
+          "position": {
+            "x": 0.0,
+            "y": -1.0,
+            "z": 0.0
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
+          }
+        }
+      },
+      "orientation_mode": "",
+      "wait_time": 0.0,
+      "map_name": "",
+      "waypoint_name": ""
+    }
+  },
+  {
+    "topic": "complex",
+    "timestamp": 37.0,
+    "data": {
+      "command": {
+        "header": {
+          "stamp": {
+            "sec": 1760974953,
+            "nanosec": 126839417
+          },
+          "frame_id": ""
+        },
+        "command_id": "wait_time"
+      },
+      "tag": {
+        "id": 0,
+        "pose": {
+          "header": {
+            "stamp": {
+              "sec": 0,
+              "nanosec": 0
+            },
+            "frame_id": "flat_body"
+          },
+          "pose": {
+            "position": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "orientation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0,
+              "w": 1.0
+            }
+          }
+        }
+      },
+      "offset": {
+        "header": {
+          "stamp": {
+            "sec": 0,
+            "nanosec": 0
+          },
+          "frame_id": "flat_body"
+        },
+        "pose": {
+          "position": {
+            "x": -0.1,
+            "y": 0.0,
+            "z": 0.05
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
+          }
+        }
+      },
+      "orientation_mode": "custom",
+      "wait_time": 2.0,
+      "map_name": "",
+      "waypoint_name": ""
+    }
+  },
+  {
+    "topic": "complex",
+    "timestamp": 56.68,
+    "data": {
+      "command": {
+        "header": {
+          "stamp": {
+            "sec": 1760974967,
+            "nanosec": 292757976
+          },
+          "frame_id": ""
+        },
+        "command_id": "move_base_relative"
+      },
+      "tag": {
+        "id": 0,
+        "pose": {
+          "header": {
+            "stamp": {
+              "sec": 0,
+              "nanosec": 0
+            },
+            "frame_id": ""
+          },
+          "pose": {
+            "position": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "orientation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0,
+              "w": 1.0
+            }
+          }
+        }
+      },
+      "offset": {
+        "header": {
+          "stamp": {
+            "sec": 0,
+            "nanosec": 0
+          },
+          "frame_id": "odom"
+        },
+        "pose": {
+          "position": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
+          }
+        }
+      },
+      "orientation_mode": "",
+      "wait_time": 0.0,
+      "map_name": "",
+      "waypoint_name": ""
+    }
+  },
+  {
+    "topic": "complex",
+    "timestamp": 73.99,
+    "data": {
+      "command": {
+        "header": {
+          "stamp": {
+            "sec": 1760974990,
+            "nanosec": 116738221
+          },
+          "frame_id": ""
+        },
+        "command_id": "wait_time"
+      },
+      "tag": {
+        "id": 0,
+        "pose": {
+          "header": {
+            "stamp": {
+              "sec": 0,
+              "nanosec": 0
+            },
+            "frame_id": "flat_body"
+          },
+          "pose": {
+            "position": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "orientation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0,
+              "w": 1.0
+            }
+          }
+        }
+      },
+      "offset": {
+        "header": {
+          "stamp": {
+            "sec": 0,
+            "nanosec": 0
+          },
+          "frame_id": "flat_body"
+        },
+        "pose": {
+          "position": {
+            "x": -0.1,
+            "y": 0.0,
+            "z": 0.05
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
+          }
+        }
+      },
+      "orientation_mode": "custom",
+      "wait_time": 2.0,
+      "map_name": "",
+      "waypoint_name": ""
+    }
+  },
+  {
+    "topic": "complex",
+    "timestamp": 76.22,
+    "data": {
+      "command": {
+        "header": {
+          "stamp": {
+            "sec": 1760974992,
+            "nanosec": 356000600
+          },
+          "frame_id": ""
+        },
+        "command_id": "estop_state"
+      },
+      "tag": {
+        "id": 0,
+        "pose": {
+          "header": {
+            "stamp": {
+              "sec": 0,
+              "nanosec": 0
+            },
+            "frame_id": ""
+          },
+          "pose": {
+            "position": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "orientation": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0,
+              "w": 1.0
+            }
+          }
+        }
+      },
+      "offset": {
+        "header": {
+          "stamp": {
+            "sec": 0,
+            "nanosec": 0
+          },
+          "frame_id": ""
+        },
+        "pose": {
+          "position": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
+          }
+        }
+      },
+      "orientation_mode": "",
+      "wait_time": 0.0,
+      "map_name": "",
+      "waypoint_name": ""
+    }
+  }
+]
