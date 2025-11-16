@@ -335,7 +335,7 @@ Petter Ögren. This notation will be used consistently in the following chapters
 > the `Selector`
 > behaves effectively like a classical Fallback node.
 
-![BT_general.png](images%2FSystem_Design%2FBT_general.png)
+![bt_general.png](images%2FSystem_Design%2FBT_general.png)
 *Figure: The general behaviour tree structure and its division into three subtrees.*
 
 ## 2. Command Handling
@@ -686,6 +686,7 @@ After AprilTags are detected by the Sensing Subtree, a post-processing step eval
 
 By separating these steps, the system ensures efficiency, safety, and clear feedback to the user while maintaining modularity in the behaviour tree.
 
+---
 
 ## 4. Feedback Subtree
 
