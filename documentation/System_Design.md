@@ -1,5 +1,9 @@
 # System Design Overview
 
+GENERAL CONCEPT OF THIS DOCUMENT
+
+INHALTSANGABE
+
 ## General Architecture
 
 The developed system extends the Boston Dynamics Spot robot with a modular ROS 2–based framework for external fault detection and non-invasive condition
@@ -25,13 +29,15 @@ and data exchange between components remain standardized through ROS 2 topics, s
 
 An architectural overview is provided as a diagram:
 ![general_architecture.png](images%2FSystem_Design%2Fgeneral_architecture.png)
+*Figure: High-level software architecture of the ROS2 system developed.*
+
 ---
 
 # Core Concept
 
 The following Core Concept section provides a concise overview of the system’s main components as illustrated in the architectural diagram above.
 It outlines the functional purpose of each major subsystem and explains how they interact within the overall control structure.
-This section serves as a bridge between the high-level architecture and the subsequent Detailed System Design, which elaborates on implementation details, data
+This section serves as an overview of the high-level architecture. The subsequent Detailed System Design elaborates on implementation details, data
 handling, and internal logic.
 
 ## Behavior Tree Execution Layer
@@ -273,9 +279,9 @@ the Requirements Specification.
 This section explains how each part of the system is implemented and interacts internally, bridging the gap between high-level architecture and operational
 behavior. It focuses on subsystems, internal data handling, software dependencies, and execution logic.
 
-**Note:** In this section, "nodes" refer to behavior tree nodes, which are logical elements of the Behavior Tree (actions, conditions, and control-flow
-structures). They are distinct from ROS 2 nodes, which are the software processes that implement the system’s functionality and communicate via topics,
-services, or actions.
+> **Note:** In this section, "nodes" refer to behavior tree nodes, which are logical elements of the Behavior Tree (actions, conditions, and control-flow
+> structures). They are distinct from ROS 2 nodes, which are the software processes that implement the system’s functionality and communicate via topics,
+> services, or actions.
 
 In a typical ROS 2 + py_trees setup:
 
@@ -319,6 +325,19 @@ The separation into three subtrees is used for clarity and modularity:
 This division mirrors the natural flow of information through the system, from perception to decision to communication, allowing each subsystem to operate
 independently while remaining synchronized through shared blackboard variables and ROS 2 communication channels.
 
+The Subtree structure can be seen in the diagram built using [draw.io](https://www.drawio.com/) below, with notation adapted
+from [Behavior Trees in Robotics and AI](https://arxiv.org/abs/1709.00084): An
+Introduction by Michele Colledanchise &
+Petter Ögren. This notation will be used consistently in the following chapters to illustrate each subtree in more detail.
+> **Note:** The `py_trees` `Selector` node used in the implementation is slightly different from the classical Fallback node in the source. In `py_trees`,
+> a `Selector` can optionally maintain memory of the last running child (with `memory=True`) and will resume from that child on subsequent ticks, whereas the
+> standard Fallback always evaluates children from left to right on every tick. In the current system, this memory feature is **not utilized**, so
+> the `Selector`
+> behaves effectively like a classical Fallback node.
+
+![BT_general.png](images%2FSystem_Design%2FBT_general.png)
+*Figure: The general behaviour tree structure and its division into three subtrees.*
+
 ## 2. Command Handling
 
 The command-handling system defines how external input, such as user interface actions or automated test sequences, are received, interpreted, and transformed
@@ -344,6 +363,7 @@ onto a command buffer on the
 system’s blackboard, where they can be accessed by other tree components responsible for execution.
 
 #### The Command Subscriber
+
 The Command subscriber is a node from the sensing subtree it distinguishes between commands by inspecting their message type and the `commandID` parameter.  
 The mapping from command identifiers to executable command objects is handled through builder functions. Each recognized command ID has a corresponding handler
 that defines how it should be instantiated. This modular structure ensures that new commands can be integrated with minimal modification to the core system.
@@ -373,17 +393,21 @@ A detailed command reference table is provided later in this document.
 For extended per-command explanations, refer to the dedicated **Command Reference Document**, which contains argument structures, parameter options, and example
 use cases.
 
-**Note on Current Limitation**
+> **Note on Current Limitation**:
+> The system presently uses separate ROS 2 subscribers for Basic Commands and Complex Commands, even though both forward incoming messages into the same
+> callback
+> and unified processing pipeline. When commands of both types are published in quick succession, for example in recorded playback scenarios, their relative
+> order
+> may occasionally become inconsistent. This has so far only been observed during recorded message replay but not during live operation.
 
-The system presently uses separate ROS 2 subscribers for Basic Commands and Complex Commands, even though both forward incoming messages into the same callback
-and unified processing pipeline. When commands of both types are published in quick succession, for example in recorded playback scenarios, their relative order
-may occasionally become inconsistent. This has so far only been observed during recorded message replay but not during live operation.
-
-As a temporary workaround, all Basic Commands can be encapsulated within Complex Command messages. This ensures that the full sequence of operations is received
-through a single subscriber path and therefore preserves ordering.  
-This limitation will be resolved once the Basic Command type is either removed or merged into a unified command structure.
+> As a temporary workaround, all Basic Commands can be encapsulated within Complex Command messages. This ensures that the full sequence of operations is
+> received
+> through a single subscriber path and therefore preserves ordering.  
+> This limitation will be resolved once the Basic Command type is either removed or merged into a unified command structure.
 
 ### Buffered Command Subtree
+
+#### Command Execution Flow
 
 Once commands have been received, validated, and converted into their internal representations by the CommandSubscriber node, they are placed into a shared
 command buffer on the system’s blackboard. At this point the command-handling layer has completed its responsibility: commands are normalized, ordered, and
@@ -404,38 +428,52 @@ The main structure includes:
 
 - **CommandManager:** Acts as a command buffer, storing and managing incoming commands.
 - **NewCommandGuard:** Ensures that only new commands trigger execution and that they can be safely interrupted.
-- **EmergencyGuard:** Enables emergency stops or cancellations through behaviors like `ResetEstopFlag` or `StopMapping`.
+- **Emergency Sequence:** Cancel Sequence Command that stops all robot movements.
+- **Command Selector:** Selects the corresponding behaviour for each command ID popped from the buffer.
+- **EmergencyGuard:** Enables cancellation of running commands through the estop_flag blackboard variable.
+- **Command Execution Nodes:** Behaviours responsible for handling the execution of commands
 
 Each supported command, such as `MOVE_ARM_TO_TAG`, `START_SLAM`, or `DELETE_MAP` is represented by a corresponding behavior or subtree that defines its logic
 and
 interactions with the rest of the system.
 
+The buffered command subtree is visualized in the following behaviour tree diagram:
+
+![command_subtree.drawio.png](images%2FSystem_Design%2Fcommand_subtree.drawio.png)
+*Figure: The Buffered Command Subtree. Shows the command buffer, guards, emergency paths, and selector logic.*
+
 #### CommandManager
-The [CommandManager](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fcommand_manager.py) is responsible for buffering incoming commands and dispatching them to the command execution tree in a controlled manner. Its main functions are:
+
+The [CommandManager](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fcommand_manager.py) is responsible for buffering incoming commands and
+dispatching them to the command execution tree in a controlled manner. Its main functions are:
 
 - **FIFO Dispatch**: When the command tree is idle (i.e., not `RUNNING`), the oldest command is popped from the buffer and written to `blackboard.last_command`.
-- **Emergency Handling**: If an `EMERGENCY_CANCEL` command is found anywhere in the buffer, it is immediately promoted to `last_command` and the buffer is cleared. This ensures that emergency stops are enforced reliably.
-- **Failure Handling**: Optionally, commands that fail (`FAILED` status) can trigger buffer clearing to prevent the execution of outdated or conflicting commands.
+- **Emergency Handling**: If an `EMERGENCY_CANCEL` command is found anywhere in the buffer, it is immediately promoted to `last_command` and the buffer is
+  cleared. This ensures that emergency stops are enforced reliably.
+- **Failure Handling**: Optionally, commands that fail (`FAILED` status) can trigger buffer clearing to prevent the execution of outdated or conflicting
+  commands.
 
 #### NewCommandGuard
 
-The [NewCommandGuard](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fnew_command_guard.py) ensures that each command is processed exactly once, avoiding duplicate execution:
+The [NewCommandGuard](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fnew_command_guard.py) ensures that each command is processed exactly once,
+avoiding duplicate execution:
 
 - **Timestamp Check:** Compares the timestamp of `last_command` with `last_processed_command`.
 - **Activation Control:** Only allows the guarded command sequence to execute if a new command is detected.
 - **Duplicate Prevention:** Prevents repeated executions of the same command.
 
+#### EmergencyGuard and Emergency Sequence
 
-#### EmergencyGuard
+Because the CommandManager cannot terminate nodes directly, the EmergencyGuard decorator wraps a command sequence and immediately cancels it if an
+emergency flag is set:
 
-Because the CommandManager cannot terminate arbitrary nodes directly, the EmergencyGuard decorator wraps a command sequence and immediately cancels it if an emergency flag is set:
-
-- **Immediate Emergency Handling:** Enables immediate execution of `EMERGENCY_CANCEL` sequences.
+- **Immediate Emergency Handling:** Enables immediate execution of `EMERGENCY_CANCEL` sequences by canceling currently running commands.
 - **Safe Stop:** Ensures the robot can safely stop any ongoing action regardless of current command execution.
 
 #### Command Selector
 
-The **Command Selector** is the core node in the behaviour tree responsible for choosing and executing the correct command based on the current `last_command` from the blackboard.
+The **Command Selector** is the core node in the behaviour tree responsible for choosing and executing the correct command based on the current `last_command`
+from the blackboard.
 
 Key points:
 
@@ -443,24 +481,22 @@ Key points:
 - Wraps each command in a **guarded sequence** that first verifies the blackboard variable `last_command` matches the command ID.
 - Handles both **Spot actions** (via `ActionClientBehaviour` / `SimpleSpotAction`) and **non-robot commands** (navigation, mapping, or state updates).
 - Integrated with **emergency cancellation** via a higher-level `CancelableCommandSelector` that prioritizes emergency stop sequences over normal commands.
-- Supports **preprocessing and helper logic**, e.g., fetching target poses, checking tag visibility, or computing SLAM-related goals before executing the command.
+- Supports **preprocessing and helper logic**, e.g., fetching target poses, checking tag visibility, or computing SLAM-related goals before executing the
+  command.
 - Modular: Adding a new command only requires defining its behaviour sequence and registering it in the selector.
 
-#### Command Execution Flow
+### Command Behaviour Execution Nodes
 
-The buffered command subtree is structured as follows:
+When adding a new command to the tree, each command is automatically wrapped with a Command ID checker by a helper class. Each command needs this checker for
+the
+Command Selector to ensure that the correct subtree or action sequence is executed for the currently active command stored on the blackboard.
 
-TREE DIAGRAM
-
-### Command Behaviour Execution Nodes 
-
-In the Spot behaviour tree architecture, **executors of commands** can be broadly divided into two categories based on how they interact with the robot:
-
----
+**Executors of commands** can be broadly divided into two categories based on how they interact with the robot:
 
 #### 1. Action Client Behaviours [(`ActionClientBehaviour` / `SimpleSpotAction`)](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fspot_action.py)
 
-These executors communicate **directly with the robot via the Spots ROS2 drivers `RobotCommand` action**. They handle asynchronous action sending, monitoring, and cancellation.
+These executors communicate **directly with the robot via the Spots ROS2 drivers `RobotCommand` action**. They handle asynchronous action sending, monitoring,
+and cancellation.
 
 ###### Characteristics:
 
@@ -469,18 +505,19 @@ These executors communicate **directly with the robot via the Spots ROS2 drivers
 - **Emergency Handling:** Can cancel ongoing goals immediately if an emergency is triggered.
 - **Blackboard Integration:** Reads the current command from the py_trees blackboard set by the command manager (`last_command`) to set necessary parameters.
 - **Extensible:** Subclasses must implement:
-  - `_build_goal() → Goal`: Construct the goal message.
-- **Optional Overrides:** The following methods have default implementations in the base class and **do not need to be implemented by most subclasses**. Only override if special logic is required:
-  - `_init_client() → bool`: Initialize the specific action client.
-  - `_send_goal(goal) → Future`: Send the goal via the action client.
+    - `_build_goal() → Goal`: Construct the goal message.
+- **Optional Overrides:** The following methods have default implementations in the base class and **do not need to be implemented by most subclasses**. Only
+  override if special logic is required:
+    - `_init_client() → bool`: Initialize the specific action client.
+    - `_send_goal(goal) → Future`: Send the goal via the action client.
 - **Spot-Specific Variant:** `SimpleSpotAction` wraps Spot's `RobotCommand` action, providing helpers to simplify sending robot-specific commands.
 - **Examples of Subclasses:**
-  - `StowArmActionSimple`
-  - `ReadyArmActionSimple`
-  - `CloseGripperAction`
-  - `ManipulatorMoveArmAction`
-  - `ManipulatorMoveRelativeAction`
-  - `BaseMoveToTagAction`
+    - `StowArmActionSimple`
+    - `ReadyArmActionSimple`
+    - `CloseGripperAction`
+    - `ManipulatorMoveArmAction`
+    - `ManipulatorMoveRelativeAction`
+    - `BaseMoveToTagAction`
 
 #### 2. Other Commands (`py_trees.behaviour.Behaviour`)
 
@@ -505,63 +542,150 @@ Some commands do **not** use the ROS2 `RobotCommand` action driver. Instead, the
 
 ### Available Commands
 
-Below is a list of all currently available commands and their respective behaviours. Each command is referenced via its `CommandID` from the [command_ids.py](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fcommands%2Fcommand_ids.py) file. The table shows the mapping from command IDs to the corresponding behavior sequences.
+Below is a list of all currently available commands and their respective behaviours. Each command is referenced via its `CommandID` from
+the [command_ids.py](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fcommands%2Fcommand_ids.py) file. The table shows the mapping from command IDs to the
+corresponding behavior sequences.
 
 The exact functionality of each command will become clear either:
 
 - In the dedicated section describing the corresponding subsystem, or
-- By reading the detailed explanation in the Command Reference Document that provides argument structures, parameter options, and example use cases for each command.
+- By reading the detailed explanation in the [Command Reference Document](detailed_command_descriptions.md) that provides argument structures, parameter options, and example use cases for each
+  command.
 
+| CommandID                     | Behavior Sequence                                                                                                                                                                                                                                       |
+|-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| STOW_ARM                      | [StowArmActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fstow_arm_action.py)                                                                                                                                            |
+| READY_ARM                     | [ReadyArmActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fready_arm_action.py)                                                                                                                                          |
+| TOGGLE_GRIPPER                | [ToggleGripperAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Ftoggle_gripper_action.py)                                                                                                                                      |
+| CLOSE_GRIPPER                 | [CloseGripperAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fclose_gripper_action.py)                                                                                                                                        |
+| MOVE_ARM_TO_TAG               | [ManipulatorGetGoalTag](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_get_goal_tag.py) → [ManipulatorMoveArmAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_arm_action.py) |
+| MOVE_BASE_TO_TAG              | [BaseGetGoalTag](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_get_goal_tag.py) → [BaseMoveToTagAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_to_tag_action.py)    |
+| MOVE_ARM_RELATIVE             | [ManipulatorMoveRelativeAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_relative_action.py)                                                                                                                 |
+| MOVE_BASE_RELATIVE            | [BaseMoveRelativeAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_relative_action.py)                                                                                                                     |
+| STAND_UP                      | [StandUpActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fstand_up_action.py)                                                                                                                                              |
+| WAIT_TIME                     | [WaitForDuration](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fwait_for_duration.py)                                                                                                                                                   |
+| STOP_BASE                     | [PublishZeroVel](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fcancel_movement.py)                                                                                                                                                   |
+| START_SLAM                    | [EnableSLAM](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fenable_slam.py)                                                                                                                                                              |
+| START_LOCALIZATION            | [EnableLocalization](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fenable_localization.py)                                                                                                                                              |
+| CREATE_MAP                    | [InitializeEmptyMap](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Finitialize_empty_map.py)                                                                                                                                             |
+| DELETE_MAP                    | [DeleteMap](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fdelete_map.py)                                                                                                                                                                |
+| SWAP_MAP                      | [SwapMap](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fswap_map.py)                                                                                                                                                                    |
+| STOP_MAPPING                  | [StopMapping](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fstop_mapping.py)                                                                                                                                                            |
+| ADD_CURRENT_POSITION_WAYPOINT | [SaveCurrentPoseAsGoal](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fsave_current_pose_as_goal.py) → [AddGoalPoseAsWaypoint](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fadd_goal_pose_as_waypoint.py)         |
+| ADD_TAG_AS_LANDMARK           | [SetTagAsGoal](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fset_tag_as_goal.py) → [AddGoalPoseAsLandmark](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fadd_goal_pose_as_landmark.py)                            |
+| DELETE_WAYPOINT               | [DeleteWaypoint](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fdelete_waypoint.py)                                                                                                                                                      |
+| MOVE_TO_WAYPOINT              | [SetWaypointAsGoal](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fset_waypoint_as_goal.py) → [NavigateToGoalPose](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fnavigate_to_goal_pose.py)]                        |
+| DELETE_LANDMARK               | [DeleteLandmark](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fdelete_landmark.py)                                                                                                                                                      |
 
-| CommandID                     | Behavior Sequence                                                                                                                                                                                                                                         |
-| ----------------------------- |-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| STOW_ARM                      | [StowArmActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fstow_arm_action.py)                                                                                                                                              |
-| READY_ARM                     | [ReadyArmActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fready_arm_action.py)                                                                                                                                            |
-| TOGGLE_GRIPPER                | [ToggleGripperAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Ftoggle_gripper_action.py)                                                                                                                                        |
-| CLOSE_GRIPPER                 | [CloseGripperAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fclose_gripper_action.py)                                                                                                                                          |
-| MOVE_ARM_TO_TAG               | [ManipulatorGetGoalTag](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_get_goal_tag.py) → [ManipulatorMoveArmAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_arm_action.py)   |
-| MOVE_BASE_TO_TAG              | [BaseGetGoalTag](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_get_goal_tag.py) → [BaseMoveToTagAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_to_tag_action.py)      |
-| MOVE_ARM_RELATIVE             | [ManipulatorMoveRelativeAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_relative_action.py)                                                                                                                   |
-| MOVE_BASE_RELATIVE            | [BaseMoveRelativeAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_relative_action.py)                                                                                                                       |
-| STAND_UP                      | [StandUpActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fstand_up_action.py)                                                                                                                                                |
-| WAIT_TIME                     | [WaitForDuration](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fwait_for_duration.py)                                                                                                                                                     |
-| STOP_BASE                     | [PublishZeroVel](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fcancel_movement.py)                                                                                                                                                     |
-| START_SLAM                    | [EnableSLAM](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fenable_slam.py)                                                                                                                                                                |
-| START_LOCALIZATION            | [EnableLocalization](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fenable_localization.py)                                                                                                                                                |
-| CREATE_MAP                    | [InitializeEmptyMap](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Finitialize_empty_map.py)                                                                                                                                               |
-| DELETE_MAP                    | [DeleteMap](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fdelete_map.py)                                                                                                                                                                  |
-| SWAP_MAP                      | [SwapMap](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fswap_map.py)                                                                                                                                                                      |
-| STOP_MAPPING                  | [StopMapping](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fstop_mapping.py)                                                                                                                                                              |
-| ADD_CURRENT_POSITION_WAYPOINT | [SaveCurrentPoseAsGoal](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fsave_current_pose_as_goal.py) → [AddGoalPoseAsWaypoint](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fadd_goal_pose_as_waypoint.py)           |
-| ADD_TAG_AS_LANDMARK           | [SetTagAsGoal](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fset_tag_as_goal.py) → [AddGoalPoseAsLandmark](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fadd_goal_pose_as_landmark.py)                              |
-| DELETE_WAYPOINT               | [DeleteWaypoint](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fdelete_waypoint.py)                                                                                                                                                        |
-| MOVE_TO_WAYPOINT              | [SetWaypointAsGoal](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fset_waypoint_as_goal.py) → [NavigateToGoalPose](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fnavigate_to_goal_pose.py)] |
-| DELETE_LANDMARK               | [DeleteLandmark](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fdelete_landmark.py)                                                                                                                                                                                                                                          |
-
+---
 
 ## 3. Sensing Subtree
 
-The Sensing Tree handles all incoming data and system inputs. This includes sensor data (e.g., detected AprilTags, robot poses) and as already mentioned user
-commands from
-the UI. Its main goal is to keep the system aware of its surroundings and incoming requests in real time.
+The Sensing Tree handles all incoming data and system inputs. This includes sensor data (e.g., detected AprilTags, robot poses) and, as already mentioned, user
+commands from the UI. Its main goal is to keep the system aware of its surroundings and incoming requests in real time.
 
-It runs several behaviors in parallel, including:
+As shown in the **Sensing Tree overview diagram** below (see Figure),  
+the Sensing Subtree runs several behaviors in parallel, including:
 
-- **CommandSubscriber:** Receives new commands from the user interface.
-- **LastLocalizationPose:** Subscribes to and stores the robot’s most recent localization pose.
-- **ScanForTags Sequence:** A nested sequence that manages tag detection through both the Spot’s built-in cameras and the arm-mounted hand camera.
+- [**CommandSubscriber:**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcommand_subscriber.py) Receives new commands from the user interface.  
+  For details on how command messages are parsed and validated before entering the selector,
+  see the dedicated section: [The Command Subscriber](#the-command-subscriber).
+- [**Localization Pose Subscriber:**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Flast_localization_pose.py) Subscribes to and stores the robot’s most recent localization pose.
+- **ScanForTags Sequence:** A nested sequence that manages tag detection through both the Spot’s built-in cameras
+  and the arm-mounted hand camera.
 
 The tag detection process combines multiple components:
 
-- **DetectVisibleTags** and **HandCameraTagDetection** are responsible for scanning for AprilTags.
-- **CheckTagReachability** determines whether a detected tag is reachable.
-- **PublishTagStates** updates the shared blackboard and publishes the current tag states.
-- **VisibleTagToMap** transforms the detected tag poses into the global SLAM map frame.
+- [**DetectVisibleTags**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fdetect_visible_tags.py) and [**HandCameraTagDetection**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fhand_camera_tag_detection.py) are responsible for scanning for AprilTags.
+- [**CheckTagReachability**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcheck_tag_reachability.py) determines whether a detected tag is reachable.
+- [**VisibleTagToMap**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fvisible_tag_to_map.py) transforms the detected tag poses into the global SLAM map frame if mapping is used.
 
-The AprilTag detection is based on both the Spot driver’s integrated fiducial detection (which publishes AprilTags directly to the TF tree) and the
-external [`apriltag_ros`](https://github.com/AprilRobotics/apriltag_ros) package. The additional use of `apriltag_ros` is necessary since the Spot’s driver does
-not include the arm camera in its TF hierarchy. This allows the arm to move independently, scan for reference tags beyond the main camera’s field of view, and
-then navigate to precise scanning points.
+The AprilTag detection is based on both the Spot driver’s integrated fiducial detection (which publishes AprilTags
+directly into the TF tree) and the external [`apriltag_ros`](https://github.com/AprilRobotics/apriltag_ros) package.
+The additional use of [`apriltag_ros`](https://github.com/AprilRobotics/apriltag_ros) is necessary since the Spot driver does not include the arm-mounted camera
+in
+its fiducials detection. This allows the arm to move independently, scan for reference tags beyond the main camera’s field
+of view, and then navigate to precise scanning points.
+<a id="bt-overview"></a>
+![sensing_subtree_diagram.png](images/System_Design/sensing_subtree_diagram.png)
+
+*Figure: The Sensing Subtree, running tag-sensing, localization, and command reception behaviors in parallel.*
+
+### Tag Handling
+
+While most components of the Sensing Subtree are already explained or relatively self-explanatory, the **tag-scanning pipeline** requires additional detail.  
+This is because it integrates two independent detection sources, multiple coordinate frames, and a fusion of visual and depth data.  
+The following section explains how fiducials are detected, transformed, and enriched before being used by the Behavior Tree.
+
+#### AprilTag Type and Generation
+
+The system uses **AprilTags of the 36h11 family**, a robust and widely used encoding suitable for localization, mapping, and manipulation.
+
+An example configuration and usage snippet is provided in the appendix (see [Appendix 1: Example AprilTag (ID: 0)](#appendix-1-example-apriltag-id-0))
+
+All tags used in this project were generated using the online [AprilTag generator](https://chaitanyantr.github.io/apriltag.html)
+
+AprilTags are used because they provide reliable, uniquely identifiable visual fiducials that remain detectable even under challenging lighting,
+motion, or viewing-angle conditions.
+The 36h11 encoding is widely supported by both Boston Dynamics’ built-in fiducial detector and by `apriltag_ros`, ensuring compatibility across all parts of the
+system.
+
+#### Spot’s Integrated Fiducial Detector
+
+Spot’s built-in detector identifies AprilTags using the robot’s body cameras.  
+For each detected tag, Spot automatically publishes:
+
+- a TF frame for the tag (e.g., `fiducial_23`),
+- a fully estimated 6-DoF pose (position + orientation),
+- transforms linking it to the robot’s internal frames.
+
+Because these frames are inserted directly into Spot’s TF tree, they can be transformed into any connected frame, such as`body`, `odom` or `world`
+
+A visualization of the TF structure is included in the appendix  
+(see [Appendix 2: TF Tree for Spot AprilTag Detections](#appendix-2-tf-tree-for-spot-apriltag-detections)).
+
+However, Spot’s detector **does not include the manipulator’s hand camera** in its TF hierarchy.  
+Tags outside the body-camera field of view therefore require an external detector.
+
+#### Hand-Camera Tag Detection (apriltag_ros + Depth Fusion)
+
+To enable tag scanning using the manipulator’s wrist-mounted camera, the Sensing Subtree implements a second detection method based on the `apriltag_ros` package.
+
+The processing pipeline works as follows:
+
+1. **apriltag_ros** detects AprilTags in the hand-camera image stream.
+2. It computes an initial tag pose, but this estimate **lacks correct depth (Z) information** because:
+
+- the depth stream of the arm camera is not integrated into `apriltag_ros`, and
+- the AprilTag pose estimator cannot recover real-world scale from a monocular image alone.
+
+3. To recover accurate 3D information, the system:
+
+- determines the pixel location of the detected tag,
+- retrieves the depth value at that pixel from the manipulator’s depth image, and
+- **fuses** the depth measurement with the AprilTag’s 2D pose estimate.
+
+4. The corrected 3D tag pose is then published into the system and added to the TF tree, enabling transformation into map frames such as `odom` and `world`.
+
+This fusion step ensures that hand-camera detections provide **complete, metric 3D tag poses** equivalent in usability to Spot’s built-in detector.  
+It enables precise alignment, manipulation, and navigation even when tags are only visible to the arm camera.
+
+#### Tag Post Processing
+
+After AprilTags are detected by the Sensing Subtree, a post-processing step evaluates each tag for its usability in downstream tasks. This processing serves two main purposes:
+
+1. **Reachability Check:**  
+   Each detected tag is checked to determine whether it falls within the circular reach of the robot’s manipulator. This ensures that:
+  - Manipulation behaviours do not attempt to reach tags that are physically out of range.
+  - The user interface can provide feedback on which tags are currently reachable versus just visible.
+
+   Tags that pass this check are stored in a **`reachable_tags`** list on the blackboard, in addition to the **`visible_tags`** list maintained by the Sensing Subtree.
+
+2. **Map Frame Transformation:**  
+   To simplify further processing, a transformer node converts detected tag poses into the global map frame. This allows any behaviour or node requiring map coordinates of tags to access them directly, without needing to perform repeated transformations.
+
+By separating these steps, the system ensures efficiency, safety, and clear feedback to the user while maintaining modularity in the behaviour tree.
+
 
 ## 4. Feedback Subtree
 
@@ -594,3 +718,15 @@ Its main elements include:
 - py_trees for behavior tree management
 - Spot SDK and drivers
 - Other relevant libraries and tools
+
+# Appendix 
+
+### Appendix 1: Example AprilTag (ID: 0)
+![tag36h11-0.svg](images/System_Design/tag36h11-0.svg)  
+*Figure: AprilTag with 36h11 encoding, ID 0.*
+
+### Appendix 2: TF Tree for Spot AprilTag Detections
+[tf_tree_spot_tag.pdf](images/System_Design/tf_tree_spot_tag.pdf)  
+*PDF: TF tree showing how Spot publishes AprilTag detections relative to body, odom, and world frames.*
+
+
