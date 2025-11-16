@@ -335,7 +335,7 @@ Petter Ögren. This notation will be used consistently in the following chapters
 > the `Selector`
 > behaves effectively like a classical Fallback node.
 
-![bt_general.png](images%2FSystem_Design%2FBT_general.png)
+![bt_general_diagram.png](images%2FSystem_Design%2Fbt_general_diagram.png)
 *Figure: The general behaviour tree structure and its division into three subtrees.*
 
 ## 2. Command Handling
@@ -439,7 +439,7 @@ interactions with the rest of the system.
 
 The buffered command subtree is visualized in the following behaviour tree diagram:
 
-![command_subtree.drawio.png](images%2FSystem_Design%2Fcommand_subtree.drawio.png)
+![command_subtree.diagram.png](images%2FSystem_Design%2Fcommand_subtree.diagram.png)
 *Figure: The Buffered Command Subtree. Shows the command buffer, guards, emergency paths, and selector logic.*
 
 #### CommandManager
