@@ -1,4 +1,4 @@
-# System Design Overview
+# System Design Document
 
 GENERAL CONCEPT OF THIS DOCUMENT
 
@@ -6,25 +6,24 @@ INHALTSANGABE
 
 ## General Architecture
 
-The developed system extends the Boston Dynamics Spot robot with a modular ROS 2–based framework for external fault detection and non-invasive condition
-monitoring.  
-Its architecture follows the principles of modularity, reusability, and transparency. Each subsystem, navigation, manipulation, data acquisition, and user
-interaction, can operate independently while being orchestrated through a shared behavioral control layer.
+The Systems architecture follows the principles of modularity, reusability, and transparency. Each subsystem, navigation, manipulation, data acquisition, and
+user
+interaction, can operate independently while being orchestrated through a shared behavioural control layer.
 
-At the center of the architecture is the Behavior Tree, which functions as the system’s control and coordination core.  
-It continuously monitors incoming commands and system states, deciding which behavior to execute at any given time.  
+At the center of the architecture is the behaviour tree (BT), which functions as the system’s control and coordination core.  
+It continuously monitors incoming commands and system states, deciding which behaviour to execute at any given time.  
 The tree integrates sensing, decision-making, and action execution into a single hierarchical control structure.
 
-Incoming user commands are received and buffered, after which the Behavior Tree interprets their intent and delegates them to the corresponding behavioral
+Incoming user commands are received and buffered, after which the BT interprets their intent and delegates them to the corresponding behavioural
 branch.  
 Each branch encapsulates a distinct capability of the robot, such as navigation, manipulation, or mapping, and defines the logical sequence of steps required to
 complete that task.
 
-This approach places all high-level decision logic inside the Behavior Tree itself, allowing it to directly coordinate perception, motion, and feedback
+This approach places all high-level decision logic inside the BT itself, allowing it to directly coordinate perception, motion, and feedback
 processes without external supervisory nodes.  
 It also ensures that each command is executed deterministically, with built-in handling for cancellation, error conditions, and feedback publication.
 
-The result is a modular yet unified control structure: new behaviors can be introduced by extending the tree with additional branches, while the communication
+The result is a modular yet unified control structure: new behaviours can be introduced by extending the tree with additional branches, while the communication
 and data exchange between components remain standardized through ROS 2 topics, services, and the shared blackboard.
 
 An architectural overview is provided as a diagram:
@@ -33,16 +32,16 @@ An architectural overview is provided as a diagram:
 
 ---
 
-# Core Concept
+# Main System Components and Features
 
-The following Core Concept section provides a concise overview of the system’s main components as illustrated in the architectural diagram above.
+The following section provides a concise overview of the system’s main components as illustrated in the architectural diagram above.
 It outlines the functional purpose of each major subsystem and explains how they interact within the overall control structure.
 This section serves as an overview of the high-level architecture. The subsequent Detailed System Design elaborates on implementation details, data
 handling, and internal logic.
 
-## Behavior Tree Execution Layer
+## Behaviour Tree Execution Layer
 
-The Behavior Tree (BT) constitutes the logical center of the system.  
+The behaviour tree (BT) constitutes the logical center of the system.  
 It defines the robot’s operational logic as a dynamic hierarchy of nodes, including conditions, actions, and control structures such as selectors and
 sequences.  
 This approach was chosen over traditional finite state machines to improve scalability, readability, and runtime flexibility.
@@ -52,7 +51,7 @@ All decision-making and command execution are based on this shared context.
 
 The BT also incorporates a command-handling branch, which processes incoming commands in a first-in, first-out (FIFO) buffer to ensure sequential execution and
 prevent conflicts.  
-Each command is interpreted by the BT and mapped to its corresponding behavior subtree, which encapsulates the logical steps required to achieve the requested
+Each command is interpreted by the BT and mapped to its corresponding behaviour subtree, which encapsulates the logical steps required to achieve the requested
 action.
 
 This modular and message-driven structure allows the system to:
@@ -65,30 +64,27 @@ This modular and message-driven structure allows the system to:
 
 ### 1. User Interface (UI)
 
-The User Interface provides an entry point for system control and monitoring.  
-It allows the user to:
+The User Interface provides the main entry point for system control and monitoring. It allows the user to:
 
 - Send commands (e.g., manipulator goals, navigation goals, scanning sequences).
 - Manage recorded command sequences.
-- View system state, queue contents, and behavior execution status in real time.
+- View system state, queue contents, and behaviour execution status in real time.
 
-All commands issued via the UI are transmitted through the same communication pathway as recorded test commands, ensuring consistent handling between manual and
-autonomous operation.
+All commands issued via the UI use the same communication pathway as recorded test commands, ensuring consistent handling between manual and autonomous
+operation.
 
-The UI is implemented as a loosely coupled subsystem with a focus on modularity, expandability, and testability.  
-Its main purpose is to support experimental development and automated testing, where usability is secondary.  
-It can be replaced by a simplified operator interface or integrated with an automated control agent without requiring structural changes to the rest of the
-system.
+The UI is implemented as a loosely coupled subsystem with a focus on modularity, expandability, and testability. Its primary purpose is to support experimental
+development and automated testing, rather than polished end-user usability. It can be replaced by a simplified operator interface or integrated with an
+automated control agent without structural changes to the rest of the system.
 
 ### 2. Spot ROS 2 Driver Integration
 
-The system interfaces with the Boston Dynamics Spot robot through the official **Spot ROS 2 driver**, which bridges the functionality of the Spot SDK to the ROS
-2 ecosystem.  
-This driver exposes all major robot capabilities as ROS 2 topics, services, and actions, allowing external control and monitoring without directly interacting
-with the Spot-SDK.
+The system interfaces with the Boston Dynamics Spot robot through the official [Spot ROS 2 driver](https://github.com/boston-dynamics/spot_ros2), which bridges
+the Spot SDK into the ROS 2 ecosystem.  
+The driver exposes major robot capabilities as ROS 2 topics, services, and actions, enabling external control and monitoring without directly using the Spot
+SDK.
 
-The driver corresponds to **Spot SDK version 5.0.1** and provides access to both low-level sensor data and high-level control functions.  
-Among the supported interfaces are:
+The integrated driver (Spot SDK **v5.0.1**) provides access to:
 
 - Base and arm motion control
 - Gripper actuation (open/close, force control)
@@ -97,140 +93,119 @@ Among the supported interfaces are:
 - Power and lease management
 - Autonomous mobility and obstacle avoidance
 
-All commands issued by the system, whether navigation goals, arm trajectories, or gripper actions are ultimately executed through this driver.  
-It ensures safety and compliance with Spot’s onboard controllers, which continue to handle balance, terrain adaptation, and obstacle avoidance internally.  
-This design allows external behavior coordination and automation while maintaining the robot’s built-in safety features.
-
-A detailed reference of the Spot ROS 2 driver and available interfaces can be found here:  
-[https://github.com/boston-dynamics/spot_ros2](https://github.com/boston-dynamics/spot_ros2)
-
+All navigation, manipulation, and gripper commands issued by the system are ultimately executed via this driver.  
+Spot’s onboard controllers retain responsibility for balance, terrain adaptation, and obstacle avoidance, so the system can focus on high-level behaviour
+coordination while relying on the robot’s built-in safety features.
 
 ---
 
-### 3. Command Subtree
+### 3. Command and Control
 
-The command subtree handles the mapping of incoming commands to the appropriate execution sequences.  
-Within the behavior tree, it serves as the decision layer that activates navigation, manipulation, or system management behaviors.  
-Each command type is implemented as an independent subtree to maintain separation of concerns and allow isolated testing.
+The command subtree maps incoming commands to their corresponding execution sequences.  
+Within the behaviour tree, it serves as the decision layer that activates navigation, manipulation, and system management behaviours.  
+Each low-level command is mapped to a dedicated subtree, maintaining separation of concerns and enabling isolated testing.
 
 #### 3.1 Navigation Control
 
-The Navigation Commands are responsible for controlling the Spot base, handling maps, and maintaining localization.  
-This subsystem builds upon the ROS 2 navigation stack (`nav2`) and the official Spot ROS 2 driver, integrating autonomous motion planning with the robot’s
-internal control and safety systems.
+Navigation commands control the Spot base, manage maps, and maintain localization.  
+They build on the ROS 2 navigation stack `nav2`, `rtabmap_ros` and the Spot ROS 2 driver, combining autonomous motion planning with Spot’s internal safety
+systems.
 
-Navigation functionalities can be divided into two main categories: **Mapping and Map Navigation** and **Base Control**.
+Key capabilities:
 
-##### Mapping and Map Navigation
+- **Mapping and Map Navigation**
+    - Create new maps using SLAM (`rtabmap_ros`) from Spot’s odometry and vision.
+    - Save and load maps to enable re-localization in known environments.
+    - Manage waypoints (define, name, store) as navigation targets.
+    - Plan collision-free paths between waypoints or user-defined goals via `nav2`.
 
-The system supports both the creation of new maps and the use of previously stored ones.  
-Key functions include:
+- **Base Control**
+    - Execute high-level base motions (stand, walk, rotate) via the Spot driver.
+    - Preserve Spot’s native safety (obstacle avoidance, balance, gait control) by sending target poses rather than low-level leg commands.
+    - Support motion relative to the robot’s frame or to detected markers (e.g., AprilTags) for precise positioning and alignment.
 
-- **Map creation and SLAM:** Generating new maps using `rtabmap_ros` and Spot’s onboard odometry and vision data.
-- **Map saving and loading:** Storing generated maps for later use, allowing the robot to re-localize within previously explored environments.
-- **Waypoint management:** Users can define, name, and store specific locations in a map. These waypoints can later be selected as goal positions for autonomous
-  navigation.
-- **Path planning:** High-level path planning is executed through the ROS 2 navigation framework, ensuring collision-free paths between waypoints or
-  user-defined targets.
-
-Mapping and navigation are coordinated through the Behavior Tree’s command handling subsystem.  
-The robot can autonomously transition between mapping, navigating, and inspection modes without manual reconfiguration.
-
-##### Base Control
-
-General base control handles direct motion commands such as standing, sitting, walking, or rotating.  
-These commands are executed through the Spot ROS 2 driver’s base control interfaces, which internally ensure terrain adaptation, stability, and obstacle
-avoidance.
-
-The external system therefore does **not** override Spot’s native locomotion safety or balance algorithms.  
-Instead, it issues high-level target poses while Spot’s onboard systems handle:
-
-- Real-time obstacle avoidance,
-- Leg coordination and gait stability,
-- Dynamic balance and posture control.
-
-Base motion commands can be specified relative to the robot’s current position or relative to a detected marker (e.g., an AprilTag).  
-This allows the system to move precisely in relation to the environment or objects of interest, enabling tasks such as approaching a tag or aligning for
-manipulation.
-
-This layered control approach enables robust, high-level navigation planning within the ROS 2 ecosystem while preserving Spot’s internal safety and mobility
-features.
+This layered approach provides high-level navigation planning in ROS 2 while preserving Spot’s built-in mobility and safety behaviour.
 
 #### 3.2 Manipulation Control
 
-The Manipulation Commands handle the Spot Arm and the attached prototype sensor head.  
-Using ROS 2 motion planning tools, the system enables Cartesian and joint-space control for surface scanning and interaction tasks.  
-Commanded poses similar to base control can be defined through:
+Manipulation commands operate the Spot Arm and attached sensor head.  
+Using ROS 2 motion planning tools, the system supports both Cartesian and joint-space motions for scanning and interaction tasks.
 
-- Relative positional input, or
-- Marker-based detection (AprilTags).
+Commanded poses can be specified:
 
-A software-level emergency stop mechanism is integrated at this layer.  
-The behavior tree monitors a shared blackboard flag and, if triggered, immediately cancels all ongoing actions, stops base motion, halts mapping activities, and
-moves the manipulator into a stowed position.  
-This ensures safety overrides take effect at any point in the command sequence.
+- As relative motions, or
+- With respect to detected markers (AprilTags).
+
+### 3.3 Emergency Stop
+
+A software-level emergency stop mechanism is integrated into the behaviour tree.  
+A blackboard flag is monitored continuously; when triggered, the system:
+
+- Cancels all ongoing actions,
+- Stops base motion and mapping activities, and
+- Stows the manipulator.
+
+This ensures safety overrides can take effect at any point in the command sequence.
+
 
 ---
 
-### 4. Sensing Subtree
+### 4. Sensing and Input
 
-The sensing subsystem forms one of the main branches of the behavior tree alongside command execution and feedback publishing.  
-It continuously gathers environmental and system state information, processes it, and writes results to the shared blackboard.
+The sensing subsystem forms one of the main branches of the behaviour tree alongside command execution and feedback publishing.  
+It continuously gathers environmental and system state information and writes the results to the shared blackboard.
 
 The sensing branch runs multiple non-blocking tasks in parallel, including:
 
-- AprilTag detection using both hand-mounted and body-mounted cameras.
-- Transformation of detected tag poses into the world frame.
-- Continuous subscription to localization and state updates from the Spot driver.
+- AprilTag-based perception using both body-mounted and arm-mounted cameras.
+- Transformation of detected tag poses into the global/world frame.
+- Subscription to localization and state updates from the mapping subsystem.
 - Monitoring of new incoming commands from the command subscriber.
 
-All sensing data are published to the blackboard for access by other components.  
-Feedback from ongoing actions, such as navigation progress, manipulation status, and error reports, is continuously published to the UI and recording systems,
-ensuring synchronized operation and traceable execution across all active subsystems.
+All sensing data are published to the blackboard for access by other components, ensuring that navigation, manipulation, and feedback behaviours operate on a
+consistent, up-to-date view of the environment.
 
-#### AprilTag detection and arm-camera integration
+### 5. System State and Feedback
 
-Spot’s driver already contributes fiducial detections from the body cameras into the system transform tree. However, the arm-mounted camera is not used. To
-support precise manipulator-centric workflows and to enable the robot to use reference points outside the field of view of the body cameras, the system
-integrates an additional AprilTag detection pipeline based on the [apriltag_ros](https://github.com/christianrauch/apriltag_ros)
-package.
+The Feedback Subtree provides a continuous stream of system-state information to the user interface and external monitoring tools.
+It operates in parallel to command execution and sensing, ensuring the operator always receives up-to-date information without affecting ongoing behaviours.
 
-Integration summary:
+**Main responsibilities:**
 
-- body-camera fiducials (provided by the Spot driver) and arm-camera detections (provided by apriltag_ros) are treated as complementary inputs to the perception
-  subsystem;
-- apriltag_ros performs tag detection on the arm camera stream and publishes tag poses so they appear in the same spatial frame conventions used elsewhere in
-  the system.
+- **Visible Tags**  
+  Publishes the AprilTags currently detected by the robot.
 
-The "AprilTag Detector" element in the architecture diagram should therefore be understood as a combined perception subsystem: the Spot driver’s fiducial
-outputs plus the apriltag_ros node operating on the arm camera. This combined setup enables robust, manipulator-aware localisation and alignment for scanning
-tasks. See apriltag_ros for implementation details: https://github.com/christianrauch/apriltag_ros
+- **Reachable Tags**  
+  Publishes the subset of visible tags that can be reached by the manipulator.
 
-### 5. Feedback Subtree
+- **Command Buffer State**  
+  Publishes the list of queued commands awaiting execution.
 
-The Feedback Subtree provides real-time status information to the user interface and any other monitoring nodes.  
-It subscribes to key topics in the system and updates of the blackboard and publishes that information for external monitoring.
+- **Command Execution Status**  
+  Publishes the current state of the command subtree (e.g., active, running, failed).
 
-**Main Functions:**
-
-- **Visible Tags:** subscribes to `fault_detector/state/visible_tags` to track tags currently detected by the robot.
-- **Reachable Tags:** subscribes to `fault_detector/state/reachable_tags` to determine which tags can be interacted with.
-- **Command Buffer:** subscribes to `fault_detector/command_buffer` to reflect queued commands awaiting execution.
-- **Command Tree Status:** subscribes to `fault_detector/command_tree_status` to monitor current action execution state.
-
-The feedback branch operates in parallel to command execution and sensing, ensuring the UI always reflects the latest system state without blocking ongoing
-operations.  
-This allows the operator to make informed decisions, verify system behavior, and respond quickly to errors or changes in the environment.
+The feedback subsystem provides a unified, non-blocking view of the system’s internal state, enabling reliable operator awareness and quick responses to errors
+or unexpected conditions.
 
 ### 6. Command Recording and Playback
 
-The Recording and Playback Node provides functionality to capture and reproduce command sequences.  
-During operation, all commands published to the execution pipeline are timestamped and logged.  
-These sequences can later be replayed for regression testing, demonstrations, or reproducible condition monitoring, using the same command-handling structure as
-live operation.
+The **Recording and Playback subsystem** provides the ability to capture and reproduce command sequences.  
+All commands sent through the system are timestamped and logged, allowing them to be replayed later using the exact same execution pathway as live operation.
 
-This mechanism allows complex inspection routines or test scenarios to be executed repeatedly without additional programming, turning the system into a
-scriptable robotic test platform.
+**Main capabilities:**
+
+- **Start Recording**  
+  Begins logging all incoming commands.
+
+- **Stop Recording**  
+  Finalizes and stores the recorded sequence.
+
+- **Play Recording**  
+  Replays a previously saved command sequence for testing or demonstration.
+
+This functionality enables repeatable test runs, regression testing, and automated inspection routines without additional programming, effectively turning the
+system into a scriptable robotic test platform.
+
 
 ---
 
@@ -238,17 +213,12 @@ scriptable robotic test platform.
 
 1. **External Input (UI / API)** → Publishes a command to the system topic.
 2. **Command Subscriber** → Queues and validates incoming commands.
-3. **Behavior Tree Execution** → Maps command ID to subtree and executes associated behavior.
+3. **Behaviour Tree Execution** → Maps command ID to subtree and executes associated behaviour.
 4. **Subsystem Nodes** (Navigation, Manipulation) → Carry out low-level control.
 5. **Blackboard** → Stores sensor data, intermediate results, and execution state.
 6. **Feedback Publishing** → UI continuously receives updates for visualization.
 
 This data-driven, modular organization ensures a clear separation of responsibilities while maintaining robust synchronization across components.
-
-The UI is intentionally loosely coupled to the rest of the system, prioritizing expandability and testability over end-user usability.  
-It serves primarily as a research and development interface, designed for scientific testing and system validation rather than field deployment.  
-However, this design allows it to be easily replaced by more user-friendly interfaces or even autonomous control agents (e.g., AI-based assistants or
-voice-driven operators) without altering the underlying execution framework.
 
 ---
 
@@ -256,10 +226,10 @@ voice-driven operators) without altering the underlying execution framework.
 
 - **ROS 2 Integration:**  
   ROS 2 provides distributed communication via topics, services, and actions, enabling flexible orchestration between Spot’s hardware interfaces and custom
-  behavior logic.
+  behaviour logic.
 
-- **Behavior Trees over Finite State Machine:**  
-  Behavior Trees offer a hierarchical and reactive control framework, simplifying parallel behaviors, condition checking, and command prioritization.
+- **Behaviour Trees over Finite State Machine:**  
+  Behaviour trees offer a hierarchical and reactive control framework, simplifying parallel behaviours, condition checking, and command prioritization.
 
 - **Centralized Blackboard:**  
   The blackboard serves as a single source of truth for shared data, reducing inter-node dependencies and easing debugging.
@@ -277,15 +247,22 @@ the Requirements Specification.
 # Detailed System Design
 
 This section explains how each part of the system is implemented and interacts internally, bridging the gap between high-level architecture and operational
-behavior. It focuses on subsystems, internal data handling, software dependencies, and execution logic.
+behaviour. It focuses on subsystems, internal data handling, software dependencies, and execution logic.
 
-> **Note:** In this section, "nodes" refer to behavior tree nodes, which are logical elements of the Behavior Tree (actions, conditions, and control-flow
-> structures). They are distinct from ROS 2 nodes, which are the software processes that implement the system’s functionality and communicate via topics,
+<details>
+  <summary><strong>Note ond Nodes (click to expand)</strong></summary>
+
+> In this section, "nodes" refer to behaviour tree nodes, which are logical elements  
+> of the behaviour tree (actions, conditions, and control-flow structures).  
+> They are distinct from ROS 2 nodes, which are the software processes that  
+> implement the system’s functionality and communicate via topics,  
 > services, or actions.
+
+</details>
 
 In a typical ROS 2 + py_trees setup:
 
-- The Behavior Tree is hosted within a single ROS 2 node.
+- The behaviour tree is hosted within a single ROS 2 node.
 - Each tree-node is a Python object and may:
     - Publish or subscribe to ROS 2 topics
     - Call ROS 2 services
@@ -295,17 +272,59 @@ In a typical ROS 2 + py_trees setup:
 The following subsections describe the custom components and their interactions that form the developed control system.  
 However, the design and internal functionality of major third-party components such as **spot_ros2**, **apriltag_ros**, **nav2**, and **rtabmap_ros** are not
 explained in detail here, as each of these frameworks provides its own comprehensive documentation authored and maintained by their respective creators.  
-References to these original sources are provided in the **References** (ADD REFERENCE HEREEEEEEEE) chapter at the end of this document.
+References to these original sources are provided in the [**References**](#10-sources-and-references) section at the end of this document.
 
 This section therefore focuses on the integration logic, the data flow between components, and how the system builds upon these established frameworks to
 achieve coordinated control, perception, and feedback.
 
-## 1. Behavior Tree Implementation
+## 1. Interface Summary (Topics, Services, Actions)
 
-The behavior of the system is organized and executed through a hierarchical Behavior Tree (BT) implemented with the `py_trees` and `py_trees_ros` frameworks.
-This approach provides modularity, scalability, and clarity in defining complex robot behaviors by composing them from smaller, reusable building blocks.
+This section summarizes the main ROS 2 interfaces exposed by the system for user interfaces, automated agents, and test tools.  
+For full message structures and per-command details, see the separate [interface reference document](interface_reference_document.md).
 
-The main entry point of the Behavior Tree is defined in the `bt_runner.py` file. The system runs as a single ROS 2 node (`bt_driver`), hosting the entire tree.
+### 1.1 Command Input
+
+All external control is expressed as `fault_detector_msgs/ComplexCommand` messages.
+
+| Purpose             | Topic                                     | Type                                 | Direction          |
+|---------------------|-------------------------------------------|--------------------------------------|--------------------|
+| Command input (all) | `fault_detector/commands/complex_command` | `fault_detector_msgs/ComplexCommand` | UI / external → BT |
+
+Key idea:
+
+- `ComplexCommand.command.command_id` selects the behaviour (one of the `CommandID` values).
+- Optional fields (`tag`, `offset`, `map_name`, `waypoint_name`, `wait_time`) provide context for that command.
+
+### 1.2 State and Feedback Output
+
+| Purpose                 | Topic                                 | Type                                  | Direction       |
+|-------------------------|---------------------------------------|---------------------------------------|-----------------|
+| Visible AprilTags       | `fault_detector/state/visible_tags`   | `fault_detector_msgs/TagElementArray` | BT → UI / tools |
+| Reachable AprilTags     | `fault_detector/state/reachable_tags` | `fault_detector_msgs/TagElementArray` | BT → UI / tools |
+| Command buffer contents | `fault_detector/command_buffer`       | `std_msgs/String`                     | BT → UI / tools |
+| Command tree status     | `fault_detector/command_tree_status`  | `std_msgs/String`                     | BT → UI / tools |
+
+### 1.3 Mapping, Navigation, and Recording
+
+| Purpose           | Topic                            | Type                                       | Direction             |
+|-------------------|----------------------------------|--------------------------------------------|-----------------------|
+| Active map name   | `/active_map`                    | `std_msgs/String`                          | Mapping → UI / tools  |
+| Available maps    | `/map_list`                      | `fault_detector_msgs/StringArray`          | Mapping → UI / tools  |
+| Waypoints         | `/waypoint_list`                 | `fault_detector_msgs/StringArray`          | Mapping → UI / tools  |
+| Landmarks         | `/landmark_list`                 | `fault_detector_msgs/StringArray`          | Mapping → UI / tools  |
+| Recording control | `fault_detector/record_control`  | `fault_detector_msgs/CommandRecordControl` | UI / tools → recorder |
+| Recordings list   | `fault_detector/recordings_list` | `fault_detector_msgs/StringArray`          | Recorder → UI / tools |
+
+Commands for mapping, navigation, and recording are sent via `fault_detector/commands/complex_command` using the appropriate `command_id` (
+e.g. `CREATE_MAP`, `SWAP_MAP`, `MOVE_TO_WAYPOINT`, `ADD_TAG_AS_LANDMARK`, `START_SLAM`, `START_LOCALIZATION`) and associated
+fields (`map_name`, `waypoint_name`, `tag`, `wait_time`).
+
+## 2. Behaviour Tree Implementation
+
+The behaviour of the system is organized and executed through a hierarchical behaviour tree (BT) implemented with the `py_trees` and `py_trees_ros` frameworks.
+This approach provides modularity, scalability, and clarity in defining complex robot behaviours by composing them from smaller, reusable building blocks.
+
+The main entry point of the behaviour tree is defined in the `bt_runner.py` file. The system runs as a single ROS 2 node (`bt_driver`), hosting the entire tree.
 Within this node, individual tree-nodes (actions, checks, and control structures) are defined as Python objects that interact with the rest of the ROS 2 system
 through topics, services, and actions.
 
@@ -326,28 +345,34 @@ This division mirrors the natural flow of information through the system, from p
 independently while remaining synchronized through shared blackboard variables and ROS 2 communication channels.
 
 The Subtree structure can be seen in the diagram built using [draw.io](https://www.drawio.com/) below, with notation adapted
-from [Behavior Trees in Robotics and AI](https://arxiv.org/abs/1709.00084): An
+from [Behaviour Trees in Robotics and AI](https://arxiv.org/abs/1709.00084): An
 Introduction by Michele Colledanchise &
 Petter Ögren. This notation will be used consistently in the following chapters to illustrate each subtree in more detail.
-> **Note:** The `py_trees` `Selector` node used in the implementation is slightly different from the classical Fallback node in the source. In `py_trees`,
+
+<details>
+  <summary><strong>Note on Selector (click to expand)</strong></summary>
+
+> The `py_trees` `Selector` node used in the implementation is slightly different from the classical Fallback node in the source. In `py_trees`,
 > a `Selector` can optionally maintain memory of the last running child (with `memory=True`) and will resume from that child on subsequent ticks, whereas the
 > standard Fallback always evaluates children from left to right on every tick. In the current system, this memory feature is **not utilized**, so
 > the `Selector`
 > behaves effectively like a classical Fallback node.
+</details>
+
 
 ![bt_general_diagram.png](images%2FSystem_Design%2Fbt_general_diagram.png)
 *Figure: The general behaviour tree structure and its division into three subtrees.*
 
-## 2. Command Handling
+## 3. Command Handling
 
 The command-handling system defines how external input, such as user interface actions or automated test sequences, are received, interpreted, and transformed
-into behavior tree-compatible actions.
+into behaviour tree-compatible actions.
 
 A *command* represents an instruction for the system to perform a specific operation, such as moving the robot base, manipulating the arm, or executing a
 scanning procedure. These commands can be broadly divided into two categories: **Basic Commands** and **Complex Commands**.
 
 Basic Commands are minimal instructions that only contain a command identifier. They represent discrete, self-contained operations like starting or stopping a
-behavior, toggling a component state, or triggering an emergency stop. Complex Commands, in contrast, can carry additional contextual information. This may
+behaviour, toggling a component state, or triggering an emergency stop. Complex Commands, in contrast, can carry additional contextual information. This may
 include spatial offsets, tag references, orientation modes, timing parameters, or mapping context. Complex commands enable parameterized control and are
 represented by separate ROS 2 message types that expand on the BasicCommand structure.
 
@@ -356,7 +381,7 @@ message definitions would provide stronger type safety, it would also increase t
 design enables flexibility and rapid extension. Once the final command set is known, this trade-off
 may be reconsidered as high modularity of the system enables swapping out the command handler without altering each command.
 
-Incoming commands are handled by the **CommandSubscriber** behavior tree node. This node subscribes to two custom ROS 2 topics found in
+Incoming commands are handled by the **CommandSubscriber** behaviour tree node. This node subscribes to two custom ROS 2 topics found in
 the [fault_detector_msgs package](https://github.com/heini208/fault_detector_msgs): one for basic commands and one
 for complex commands. Both types are queued internally upon reception, time-sorted, and then converted into internal command objects. These are stored appended
 onto a command buffer on the
@@ -386,14 +411,17 @@ Finally, the command-handling layer integrates safety logic. Emergency-stop comm
 ongoing activity, and trigger the system’s stop routines. This ensures that user- or system-level interruptions are reliably enforced regardless of the current
 execution state.
 
-Through this structure, the command-handling subsystem forms the interface between high-level user or test input and the low-level behavior execution tree. It
+Through this structure, the command-handling subsystem forms the interface between high-level user or test input and the low-level behaviour execution tree. It
 abstracts the input modality, manages command sequencing, and maintains extensibility while preserving consistent execution semantics.
 
 A detailed command reference table is provided later in this document.  
 For extended per-command explanations, refer to the dedicated **Command Reference Document**, which contains argument structures, parameter options, and example
 use cases.
 
-> **Note on Current Limitation**:
+<details>
+  <summary><strong>Note on limitation (click to expand)</strong></summary>
+
+>
 > The system presently uses separate ROS 2 subscribers for Basic Commands and Complex Commands, even though both forward incoming messages into the same
 > callback
 > and unified processing pipeline. When commands of both types are published in quick succession, for example in recorded playback scenarios, their relative
@@ -404,6 +432,7 @@ use cases.
 > received
 > through a single subscriber path and therefore preserves ordering.  
 > This limitation will be resolved once the Basic Command type is either removed or merged into a unified command structure.
+</details>
 
 ### Buffered Command Subtree
 
@@ -413,12 +442,13 @@ Once commands have been received, validated, and converted into their internal r
 command buffer on the system’s blackboard. At this point the command-handling layer has completed its responsibility: commands are normalized, ordered, and
 ready for execution, but not yet acted upon.
 
-The actual execution and life-cycle management of these command objects is handled by a dedicated subtree inside the behavior tree: the **Command Buffer Handler
+The actual execution and life-cycle management of these command objects is handled by a dedicated subtree inside the behaviour tree: the **Command Buffer
+Handler
 **.  
 This subsystem continuously monitors the command buffer, selects the next executable command, and invokes the appropriate action nodes responsible for base
 movement, manipulation, mapping, recording, or other high-level functions.
 
-The next section describes how the Command Buffer Handler operates, how command classes transition from buffered objects to active behaviors, and how execution
+The next section describes how the Command Buffer Handler operates, how command classes transition from buffered objects to active behaviours, and how execution
 flow, cancellation, and completion states are coordinated. It also includes a summary of all currently available command types integrated into the system.
 
 The Buffered Command Tree manages and executes user commands in a controlled, buffered manner. Commands received from the UI are stored, queued, and processed
@@ -433,13 +463,14 @@ The main structure includes:
 - **EmergencyGuard:** Enables cancellation of running commands through the estop_flag blackboard variable.
 - **Command Execution Nodes:** Behaviours responsible for handling the execution of commands
 
-Each supported command, such as `MOVE_ARM_TO_TAG`, `START_SLAM`, or `DELETE_MAP` is represented by a corresponding behavior or subtree that defines its logic
+Each supported command, such as `MOVE_ARM_TO_TAG`, `START_SLAM`, or `DELETE_MAP` is represented by a corresponding behaviour or subtree that defines its logic
 and
 interactions with the rest of the system.
 
 The buffered command subtree is visualized in the following behaviour tree diagram:
 
 ![command_subtree.diagram.png](images%2FSystem_Design%2Fcommand_subtree.diagram.png)
+
 *Figure: The Buffered Command Subtree. Shows the command buffer, guards, emergency paths, and selector logic.*
 
 #### CommandManager
@@ -544,15 +575,16 @@ Some commands do **not** use the ROS2 `RobotCommand` action driver. Instead, the
 
 Below is a list of all currently available commands and their respective behaviours. Each command is referenced via its `CommandID` from
 the [command_ids.py](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fcommands%2Fcommand_ids.py) file. The table shows the mapping from command IDs to the
-corresponding behavior sequences.
+corresponding behaviour sequences.
 
 The exact functionality of each command will become clear either:
 
 - In the dedicated section describing the corresponding subsystem, or
-- By reading the detailed explanation in the [Command Reference Document](detailed_command_descriptions.md) that provides argument structures, parameter options, and example use cases for each
+- By reading the detailed explanation in the [Command Reference Document](detailed_command_descriptions.md) that provides argument structures, parameter
+  options, and example use cases for each
   command.
 
-| CommandID                     | Behavior Sequence                                                                                                                                                                                                                                       |
+| CommandID                     | behaviour Sequence                                                                                                                                                                                                                                      |
 |-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | STOW_ARM                      | [StowArmActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fstow_arm_action.py)                                                                                                                                            |
 | READY_ARM                     | [ReadyArmActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fready_arm_action.py)                                                                                                                                          |
@@ -579,26 +611,30 @@ The exact functionality of each command will become clear either:
 
 ---
 
-## 3. Sensing Subtree
+## 4. Sensing Subtree
 
 The Sensing Tree handles all incoming data and system inputs. This includes sensor data (e.g., detected AprilTags, robot poses) and, as already mentioned, user
 commands from the UI. Its main goal is to keep the system aware of its surroundings and incoming requests in real time.
 
 As shown in the **Sensing Tree overview diagram** below (see Figure),  
-the Sensing Subtree runs several behaviors in parallel, including:
+the Sensing Subtree runs several behaviours in parallel, including:
 
 - [**CommandSubscriber:**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcommand_subscriber.py) Receives new commands from the user interface.  
   For details on how command messages are parsed and validated before entering the selector,
   see the dedicated section: [The Command Subscriber](#the-command-subscriber).
-- [**Localization Pose Subscriber:**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Flast_localization_pose.py) Subscribes to and stores the robot’s most recent localization pose.
+- [**Localization Pose Subscriber:**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Flast_localization_pose.py) Subscribes to and stores the
+  robot’s most recent localization pose.
 - **ScanForTags Sequence:** A nested sequence that manages tag detection through both the Spot’s built-in cameras
   and the arm-mounted hand camera.
 
-The tag detection process combines multiple components:
+The ScanForTags Sequence combines multiple components:
 
-- [**DetectVisibleTags**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fdetect_visible_tags.py) and [**HandCameraTagDetection**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fhand_camera_tag_detection.py) are responsible for scanning for AprilTags.
-- [**CheckTagReachability**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcheck_tag_reachability.py) determines whether a detected tag is reachable.
-- [**VisibleTagToMap**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fvisible_tag_to_map.py) transforms the detected tag poses into the global SLAM map frame if mapping is used.
+- [**DetectVisibleTags**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fdetect_visible_tags.py) and [**HandCameraTagDetection
+  **](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fhand_camera_tag_detection.py) are responsible for scanning for AprilTags.
+- [**CheckTagReachability**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcheck_tag_reachability.py) determines whether a detected tag is
+  reachable.
+- [**VisibleTagToMap**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fvisible_tag_to_map.py) transforms the detected tag poses into the global
+  SLAM map frame if mapping is used.
 
 The AprilTag detection is based on both the Spot driver’s integrated fiducial detection (which publishes AprilTags
 directly into the TF tree) and the external [`apriltag_ros`](https://github.com/AprilRobotics/apriltag_ros) package.
@@ -606,16 +642,16 @@ The additional use of [`apriltag_ros`](https://github.com/AprilRobotics/apriltag
 in
 its fiducials detection. This allows the arm to move independently, scan for reference tags beyond the main camera’s field
 of view, and then navigate to precise scanning points.
-<a id="bt-overview"></a>
+
 ![sensing_subtree_diagram.png](images/System_Design/sensing_subtree_diagram.png)
 
-*Figure: The Sensing Subtree, running tag-sensing, localization, and command reception behaviors in parallel.*
+*Figure: The Sensing Subtree, running tag-sensing, localization, and command reception behaviours in parallel.*
 
 ### Tag Handling
 
 While most components of the Sensing Subtree are already explained or relatively self-explanatory, the **tag-scanning pipeline** requires additional detail.  
 This is because it integrates two independent detection sources, multiple coordinate frames, and a fusion of visual and depth data.  
-The following section explains how fiducials are detected, transformed, and enriched before being used by the Behavior Tree.
+The following section explains how fiducials are detected, transformed, and enriched before being used by the behaviour tree.
 
 #### AprilTag Type and Generation
 
@@ -629,6 +665,13 @@ AprilTags are used because they provide reliable, uniquely identifiable visual f
 motion, or viewing-angle conditions.
 The 36h11 encoding is widely supported by both Boston Dynamics’ built-in fiducial detector and by `apriltag_ros`, ensuring compatibility across all parts of the
 system.
+
+#### AprilTag detection and arm-camera integration
+
+Spot’s driver already contributes fiducial detections from the body cameras into the system transform tree. However, the arm-mounted camera is not used. To
+support precise manipulator-centric workflows and to enable the robot to use reference points outside the field of view of the body cameras, the system
+integrates an additional AprilTag detection pipeline based on the [apriltag_ros](https://github.com/christianrauch/apriltag_ros)
+package.
 
 #### Spot’s Integrated Fiducial Detector
 
@@ -649,7 +692,8 @@ Tags outside the body-camera field of view therefore require an external detecto
 
 #### Hand-Camera Tag Detection (apriltag_ros + Depth Fusion)
 
-To enable tag scanning using the manipulator’s wrist-mounted camera, the Sensing Subtree implements a second detection method based on the `apriltag_ros` package.
+To enable tag scanning using the manipulator’s wrist-mounted camera, the Sensing Subtree implements a second detection method based on the `apriltag_ros`
+package.
 
 The processing pipeline works as follows:
 
@@ -672,23 +716,27 @@ It enables precise alignment, manipulation, and navigation even when tags are on
 
 #### Tag Post Processing
 
-After AprilTags are detected by the Sensing Subtree, a post-processing step evaluates each tag for its usability in downstream tasks. This processing serves two main purposes:
+After AprilTags are detected by the Sensing Subtree, a post-processing step evaluates each tag for its usability in downstream tasks. This processing serves two
+main purposes:
 
 1. **Reachability Check:**  
    Each detected tag is checked to determine whether it falls within the circular reach of the robot’s manipulator. This ensures that:
-  - Manipulation behaviours do not attempt to reach tags that are physically out of range.
-  - The user interface can provide feedback on which tags are currently reachable versus just visible.
 
-   Tags that pass this check are stored in a **`reachable_tags`** list on the blackboard, in addition to the **`visible_tags`** list maintained by the Sensing Subtree.
+- Manipulation behaviours do not attempt to reach tags that are physically out of range.
+- The user interface can provide feedback on which tags are currently reachable versus just visible.
+
+Tags that pass this check are stored in a **`reachable_tags`** list on the blackboard, in addition to the **`visible_tags`** list maintained by the Sensing
+Subtree.
 
 2. **Map Frame Transformation:**  
-   To simplify further processing, a transformer node converts detected tag poses into the global map frame. This allows any behaviour or node requiring map coordinates of tags to access them directly, without needing to perform repeated transformations.
+   To simplify further processing, a transformer node converts detected tag poses into the global map frame. This allows any behaviour or node requiring map
+   coordinates of tags to access them directly, without needing to perform repeated transformations.
 
 By separating these steps, the system ensures efficiency, safety, and clear feedback to the user while maintaining modularity in the behaviour tree.
 
 ---
 
-## 4. Feedback Subtree
+## 5. Feedback Subtree
 
 ### Publisher Tree
 
@@ -701,32 +749,78 @@ Its main elements include:
 - **CommandStatusPublisher:** Reports command execution states and system status updates.
 - **LandmarkRelocalizer:** Publishes localization updates to SLAM, assisting in map alignment and relocalization.
 
-## 4. Recording and Playback
+## 6. Recording and Playback
 
-## 5. Subsystem Interactions
+## 7. Mapping and Navigation
 
-## 6. User Interface
+others are explained by just looking at the commands while mapping and navigation has a lot more going on and a lot more decisions made
 
-- Loosely-coupled architecture and communication with the behavior tree
+##### Mapping and Map Navigation
+
+The system supports both the creation of new maps and the use of previously stored ones.  
+Key functions include:
+
+- **Map creation and SLAM:** Generating new maps using `rtabmap_ros` and Spot’s onboard odometry and vision data.
+- **Map saving and loading:** Storing generated maps for later use, allowing the robot to re-localize within previously explored environments.
+- **Waypoint management:** Users can define, name, and store specific locations in a map. These waypoints can later be selected as goal positions for autonomous
+  navigation.
+- **Path planning:** High-level path planning is executed through the ROS 2 navigation framework, ensuring collision-free paths between waypoints or
+  user-defined targets.
+
+Mapping and navigation are coordinated through the behaviour tree’s command handling subsystem.  
+The robot can autonomously transition between mapping, navigating, and inspection modes without manual reconfiguration.
+
+##### Base Control
+
+General base control handles direct motion commands such as standing, sitting, walking, or rotating.  
+These commands are executed through the Spot ROS 2 driver’s base control interfaces, which internally ensure terrain adaptation, stability, and obstacle
+avoidance.
+
+The external system therefore does **not** override Spot’s native locomotion safety or balance algorithms.  
+Instead, it issues high-level target poses while Spot’s onboard systems handle:
+
+- Real-time obstacle avoidance,
+- Leg coordination and gait stability,
+- Dynamic balance and posture control.
+
+Base motion commands can be specified relative to the robot’s current position or relative to a detected marker (e.g., an AprilTag).  
+This allows the system to move precisely in relation to the environment or objects of interest, enabling tasks such as approaching a tag or aligning for
+manipulation.
+
+This layered control approach enables robust, high-level navigation planning within the ROS 2 ecosystem while preserving Spot’s internal safety and mobility
+features.
+
+## 8. User Interface
+
+- Loosely-coupled architecture and communication with the behaviour tree
 - Command input and visualization of system state
 - Integration with recording/playback
 - Optional replacement with automated control agents
 - devided into manip,navigation,mapping
 
-## 7. Technology Stack
+The UI is intentionally loosely coupled to the rest of the system, prioritizing expandability and testability over end-user usability.  
+It serves primarily as a research and development interface, designed for scientific testing and system validation rather than field deployment.  
+However, this design allows it to be easily replaced by more user-friendly interfaces or even autonomous control agents (e.g., AI-based assistants or
+voice-driven operators) without altering the underlying execution framework.
+
+## 9. Technology Stack
 
 - ROS 2 version and packages
-- py_trees for behavior tree management
+- py_trees for behaviour tree management
 - Spot SDK and drivers
 - Other relevant libraries and tools
 
-# Appendix 
+## 10. Sources and References
+
+# Appendix
 
 ### Appendix 1: Example AprilTag (ID: 0)
+
 ![tag36h11-0.svg](images/System_Design/tag36h11-0.svg)  
 *Figure: AprilTag with 36h11 encoding, ID 0.*
 
 ### Appendix 2: TF Tree for Spot AprilTag Detections
+
 [tf_tree_spot_tag.pdf](images/System_Design/tf_tree_spot_tag.pdf)  
 *PDF: TF tree showing how Spot publishes AprilTag detections relative to body, odom, and world frames.*
 

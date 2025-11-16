@@ -132,13 +132,13 @@ The user interface allows:
 * Modular ROS 2 design
 * Expandability for later sensor integration
 * All subsystems should be loosely coupled and modularly developed to allow quick replacement or adaptation if requirements or priorities change.
-* The design philosophy ensures that even major behavioral changes (e.g., replacement of navigation or manipulation strategies) can be implemented with reasonable effort.
+* The design philosophy ensures that even major behavioural changes (e.g., replacement of navigation or manipulation strategies) can be implemented with reasonable effort.
 
 #### **5.2 Technical Requirements**
 
 * **Frameworks:** ROS 2 Humble, *spot_ros2*, *moveit2*, *nav2*, *apriltag_ros*, *rtab_map*
 * **Version Control:** GitHub ([https://github.com/heini208/fault_detector_spot](https://github.com/heini208/fault_detector_spot))
-* **Communication:** ROS 2 topics, services, and actions; behavior control via Behaviour Trees (*py_trees*).
+* **Communication:** ROS 2 topics, services, and actions; behaviour control via behaviour trees (*py_trees*).
 * **Deployment:** Runs on Fraunhofer-owned Linux systems compatible with ROS 2.
 
 #### **5.3 Hardware Requirements**
@@ -191,7 +191,7 @@ The user interface allows:
 * Spot ROS 2 Driver: [https://github.com/bdaiinstitute/spot_ros2](https://github.com/bdaiinstitute/spot_ros2)
 * Project Repository (current system state): [https://github.com/heini208/fault_detector_spot](https://github.com/heini208/fault_detector_spot)
 * RTAB-Map (SLAM Framework): [https://github.com/introlab/rtabmap](https://github.com/introlab/rtabmap)
-* py_trees (Behavior Tree Framework): [https://github.com/splintered-reality/py_trees_ros](https://github.com/splintered-reality/py_trees_ros)
+* py_trees (behaviour tree framework): [https://github.com/splintered-reality/py_trees_ros](https://github.com/splintered-reality/py_trees_ros)
 * ROS 2 Documentation (Humble Hawksbill): [https://docs.ros.org/en/humble](https://docs.ros.org/en/humble)
 
 **Documentation Sources:**
@@ -208,7 +208,7 @@ The user interface allows:
 ### **Appendix A: Command Structure — Overview**
 
 **Objective**  
-Provide a unified command path from both UI and testing tools into the Behaviour Tree execution layer, with clear rules for sequencing, safety, and feedback.  
+Provide a unified command path from both UI and testing tools into the behaviour tree execution layer, with clear rules for sequencing, safety, and feedback.  
 Record and Playback follow the same execution path.
 
 **Process Summary**
@@ -223,7 +223,7 @@ Record and Playback follow the same execution path.
    A central instance ensures each command is passed into the execution tree exactly once.
 
 4. **Matching and Execution:**  
-   A selector matches the command ID to the corresponding behavior and executes it.
+   A selector matches the command ID to the corresponding behaviour and executes it.
 
 5. **Additional Functions:**
     * **Safety:** If the `estop_flag` is active, a cancel sequence is triggered immediately.  
