@@ -1174,7 +1174,7 @@ not significantly affect path planning or goal execution in this project.
 </details>
 
 A more complex example environment, including additional 2D and 3D map views from a cluttered lab scenario, is shown
-in [Appendix 3: Lab Map Example](#appendix-3-lab-map-example).
+in [Appendix 4: Lab Map Example](#appendix-4-lab-map-example).
 
 ### 3.7 Waypoints, landmarks, and goal selection
 
@@ -1420,7 +1420,7 @@ This appendix contains example recording files used for testing and demonstratio
 
 [test_basic_commands.json](images%2FSystem_Design%2Frecordings%2Ftest_basic_commands.json)
 
-### Appendix 3: Lab Map Example
+### Appendix 4: Lab Map Example
 
 ![lab_2d_grid.png](images%2FSystem_Design%2Fmaps%2Flab_2d_grid.png)
 
