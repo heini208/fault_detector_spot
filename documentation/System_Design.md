@@ -153,7 +153,6 @@ A blackboard flag is monitored continuously; when triggered, the system:
 
 This ensures safety overrides can take effect at any point in the command sequence.
 
-
 ---
 
 ### 4. Sensing and Input
@@ -212,6 +211,22 @@ All commands sent through the system are timestamped and logged, allowing them t
 This functionality enables repeatable test runs, regression testing, and automated inspection routines without additional programming, effectively turning the
 system into a scriptable robotic test platform.
 
+### 7. System Startup and Launch
+
+The core ROS 2 nodes of the Fault Detector Spot system are started using a unified launch file:
+
+- **Launch file:** [`launch/fault_detector_launch.py`](..%2Flaunch%2Ffault_detector_launch.py)
+- **Main nodes started:**
+    - `fault_detector_ui` (User Interface)
+    - `bt_runner` (behaviour tree execution node)
+    - `apriltag_node` (AprilTag perception via `apriltag_ros`)
+    - `record_manager` (command recording and playback)
+
+This launch file can be invoked, for example, with:
+
+```
+ros2 launch fault_detector_spot fault_detector_launch.py
+```
 
 ---
 
@@ -256,7 +271,7 @@ This section explains how each part of the system is implemented and interacts i
 behaviour. It focuses on subsystems, internal data handling, software dependencies, and execution logic.
 
 <details>
-  <summary><strong>Note ond Nodes (click to expand)</strong></summary>
+  <summary><strong>Note on Nodes (click to expand)</strong></summary>
 
 > In this section, "nodes" refer to behaviour tree nodes, which are logical elements  
 > of the behaviour tree (actions, conditions, and control-flow structures).  
@@ -394,7 +409,8 @@ to a command buffer on the system’s blackboard, where they can be accessed by 
 
 #### 3.1 The Command Subscriber
 
-The [CommandSubscriber](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcommand_subscriber.py) is a node from the Sensing Subtree. It distinguishes between commands by inspecting their message type and the `command_id` parameter.  
+The [CommandSubscriber](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcommand_subscriber.py) is a node from the Sensing Subtree. It
+distinguishes between commands by inspecting their message type and the `command_id` parameter.  
 The mapping from command identifiers to executable command objects is handled through builder functions. Each recognized command ID has a corresponding handler
 that defines how it should be instantiated. This modular structure ensures that new commands can be integrated with minimal modification to the core system.
 
@@ -420,7 +436,8 @@ Through this structure, the command-handling subsystem forms the interface betwe
 abstracts the input modality, manages command sequencing, and maintains extensibility while preserving consistent execution semantics.
 
 A detailed command reference table is provided later in this document.  
-For extended per-command explanations, refer to the dedicated [**Command Reference Document**](detailed_command_descriptions.md), which contains argument structures, parameter options, and example
+For extended per-command explanations, refer to the dedicated [**Command Reference Document**](detailed_command_descriptions.md), which contains argument
+structures, parameter options, and example
 use cases.
 
 <details>
@@ -436,7 +453,9 @@ use cases.
 </details>
 
 **Design rationale:**  
-Centralizing all external inputs into a uniform command abstraction allows the Behaviour Tree to remain independent of the concrete source (UI, recordings, automated agents). The internal command objects and buffer provide a single place to implement sequencing, cancellation, and safety policies, while the message types remain flexible enough to evolve with the command set.
+Centralizing all external inputs into a uniform command abstraction allows the Behaviour Tree to remain independent of the concrete source (UI, recordings,
+automated agents). The internal command objects and buffer provide a single place to implement sequencing, cancellation, and safety policies, while the message
+types remain flexible enough to evolve with the command set.
 
 ### 3.2 Buffered Command Subtree
 
@@ -656,16 +675,20 @@ of view, and then navigate to precise scanning points.
 The Sensing Subtree is designed to:
 
 - **Separate perception from decision-making:**  
-  All raw and preprocessed sensor information is written to the blackboard before it is used elsewhere in the Behaviour Tree. This keeps control logic independent of specific sensor implementations and simplifies testing.
+  All raw and preprocessed sensor information is written to the blackboard before it is used elsewhere in the Behaviour Tree. This keeps control logic
+  independent of specific sensor implementations and simplifies testing.
 
 - **Support parallel, non-blocking sensing:**  
-  Command reception, localization updates, and tag detection run in parallel behaviours. This ensures that slow operations in one sensing component (e.g. tag detection) do not block others (e.g. command reception).
+  Command reception, localization updates, and tag detection run in parallel behaviours. This ensures that slow operations in one sensing component (e.g. tag
+  detection) do not block others (e.g. command reception).
 
 - **Unify multiple perception sources:**  
-  By combining Spot’s built-in fiducial detector with `apriltag_ros` on the arm camera, the system can use tags detected anywhere in the robot’s field of view, while presenting them in a common representation on the blackboard.
+  By combining Spot’s built-in fiducial detector with `apriltag_ros` on the arm camera, the system can use tags detected anywhere in the robot’s field of view,
+  while presenting them in a common representation on the blackboard.
 
 - **Provide reusable, high-level tag information:**  
-  The reachability check and map-frame transform are handled once in the Sensing Subtree. Downstream behaviours (navigation, manipulation, relocalization, UI feedback) can work directly with `visible_tags`, `reachable_tags`, and `visible_tags_map_frame` without duplicating TF or reachability logic.
+  The reachability check and map-frame transform are handled once in the Sensing Subtree. Downstream behaviours (navigation, manipulation, relocalization, UI
+  feedback) can work directly with `visible_tags`, `reachable_tags`, and `visible_tags_map_frame` without duplicating TF or reachability logic.
 
 ### 4.2 Tag Handling
 
@@ -820,7 +843,7 @@ Key aspects:
 - Designed to be run after the Sensing Subtree has updated tag information.
 
 **Rationale:**  
-This behaviour provides a clean separation between internal perception pipelines and external consumers. UIs, planners, or external agents can reason about tags
+This behaviour provides a clean separation between internal functions and external consumers. UIs, planners, or external agents can reason about tags
 based solely on these topics, without needing direct access to TF or the blackboard.
 
 ### 5.4 Landmark-Based Relocalization (LandmarkRelocalizer)
@@ -860,77 +883,11 @@ Overall, the Feedback Subtree provides:
 All of these are made available via ROS 2 topics, so external clients can monitor and visualize system behaviour without direct access to internal BT structures
 or the blackboard.
 
-# Detailed Robot Control Features
+# Detailed Robot Control Implementations
 
 ## 1. Manipulator Control
 
 ## 2. Base Control
-
-## 3. Mapping and Navigation
-
-### 7.1 Package Selection and Overall Architecture
-
-For navigation, the system is built around the ROS 2 Navigation Stack (`nav2`), which acts as the high-level planner and controller for the Spot base. `nav2` was chosen because it is the de‑facto standard navigation framework in ROS 2, integrates well with behaviour trees, and can treat Spot essentially as an omnidirectional mobile base by sending pose or velocity commands via the Spot ROS 2 driver.
-
-For mapping and localization, an RGB‑D based SLAM system, **RTAB‑Map**, is used instead of a classical 2D laser-based pipeline (`slam_toolbox` + AMCL). RTAB‑Map can consume multiple RGB‑D streams and odometry directly, making it better suited to the available sensor configuration on Spot (multiple depth cameras, but no lidar). RTAB‑Map produces a consistent map and a pose estimate in the map frame; `nav2` then uses this pose as its localization source while maintaining its own 2D costmaps and planners.
-
-In summary, the architecture is:
-
-- Spot ROS 2 driver → provides odometry, depth/RGB streams, and base control interfaces.
-- RTAB‑Map → fuses odometry and depth/RGB data into a map and provides global localization.
-- `nav2` → consumes RTAB‑Map’s pose and costmap information to plan and execute base motions.
-- The Behaviour Tree → issues high-level navigation and mapping commands, but delegates path planning and low-level base control to `nav2` and the Spot driver.
-
----
-
-### 7.2 Constraints: RGB‑D Cameras Without LiDAR
-
-During development, the Spot platform was **not** equipped with the optional lidar payload. As a result, all mapping and localization had to rely on the five body-mounted depth cameras surrounding the robot.
-
-This introduces several challenges for classical 2D scan–based SLAM and AMCL:
-
-- **Multiple, unsynchronized sensors:**  
-  The depth cameras are separate devices with individual image and depth streams, connected over the network. They are not time-synchronised to the degree expected by many 2D SLAM systems that assume a single laser scan or pointcloud per time step.
-
-- **Different data characteristics:**  
-  AMCL and many 2D SLAM pipelines are designed for planar range data (laser scans) or a single, consistent 3D pointcloud. In contrast, the available data are multiple RGB‑D images with different viewpoints, fields of view, and update rates.
-
-- **Increased latency:**  
-  Transport, fusion and processing of high-resolution depth data introduce delays. When combined with fast base motions or turns, this delay leads to a mismatch between the robot’s motion and the perceived environment, degrading both mapping and localization quality.
-
-Because of these constraints, a straightforward “drop‑in” replacement of a laser scanner with virtual 2D scans from the depth cameras did not yield reliable performance and motivated the move towards RTAB‑Map as an RGB‑D–native solution.
-
----
-
-### 7.3 Initial Approaches: Merged PointCloud and 2D Scan Pipelines
-
-Before adopting RTAB‑Map, several approaches were evaluated to use the depth cameras with more traditional 2D SLAM and AMCL pipelines:
-
-1. **Merged 2D scan / pointcloud for `slam_toolbox` + AMCL**
-
-   A custom [`PointCloudMerger`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fpointcloud_merger.py) component was implemented to combine range information from multiple cameras into a single synthetic 2D scan or pointcloud. This merged data was then fed into:
-
-  - `slam_toolbox` for map building, and
-  - AMCL (via `nav2`) for localization.
-
-   While this worked in principle, several issues were observed:
-
-  - **Slow and noisy mapping:** the fusion and projection steps added latency, so the map often lagged behind the robot’s motion, especially during turns.
-  - **Desynchronization artifacts:** small timing differences between cameras caused inconsistent obstacle positions, which accumulated into map distortions over time.
-  - **Reduced reliability under dynamic motion:** during faster manoeuvres the mismatch between odometry and delayed sensor data could significantly degrade map quality.
-
-2. **Fusion of all camera topics into a single depth source**
-
-   As a variant, all camera topics were fused into one shared topic to simplify downstream processing. However, this led to additional problems:
-
-  - **Camera dominance:** one or two cameras effectively dominated the merged signal, meaning that other viewpoints contributed little useful information.
-  - **Less diverse observations for AMCL:** instead of benefiting from multiple independent views, AMCL effectively received a biased, less informative sensor stream, which reduced the robustness of its pose updates.
-
-These experiments showed that trying to force the multi‑camera depth configuration into a single 2D scan/pointcloud abstraction was not a good fit. The system could technically build maps, but performance and consistency were insufficient for the project’s goals, especially compared to an RGB‑D–native SLAM approach. This experience directly motivated the switch to RTAB‑Map, which is described in the following section.
-
-
-
-##### Base Control
 
 General base control handles direct motion commands such as standing, sitting, walking, or rotating.  
 These commands are executed through the Spot ROS 2 driver’s base control interfaces, which internally ensure terrain adaptation, stability, and obstacle
@@ -949,6 +906,384 @@ manipulation.
 
 This layered control approach enables robust, high-level navigation planning within the ROS 2 ecosystem while preserving Spot’s internal safety and mobility
 features.
+
+## 3. Mapping and Navigation
+
+The mapping and navigation subsystem provides the foundation for repeatable fault-detection routines. Its primary goal is to build a map of the inspection
+environment, localize the robot within that map, and then use this information to execute reproducible navigation and manipulation sequences.
+
+### 3.1 Features
+
+The subsystem supports the following workflow:
+
+1. **Map creation**  
+   The robot is manually guided through the environment while a SLAM backend builds a map. This map represents the area in which fault detection or maintenance
+   will take place.
+
+2. **Map management**  
+   Once a map is created, it can be:
+
+- Saved under a chosen name,
+- Reloaded later to continue mapping and refine the environment representation, or
+- Loaded in a localization-only mode for navigation without changing the map.
+
+3. **Goal positions (waypoints)**  
+   On a selected map, the current robot pose can be stored as a named goal position. These **waypoints** are locations the robot can navigate to from any other
+   pose in the map. They form the backbone of repeatable “inspection stops” within the environment.
+
+4. **Landmarks for relocalization**  
+   Known markers (AprilTags) can be stored as **landmarks**. A landmark does not necessarily define a navigation goal but is used as a reference for
+   relocalization if the robot becomes lost or the pose estimate drifts. When a stored landmark is seen again, it can help recover an approximate pose in the
+   map frame.
+
+5. **Navigation between goals**  
+   After defining waypoints and landmarks, the robot can be instructed to move between named goal positions. Additional base-relative motions can refine the
+   final pose at each stop to reach the precision required for manipulation.
+
+The following subsections describe how this concept is realized using `nav2`, RTAB‑Map, and the underlying command set, and discuss the constraints and design
+decisions that resulted from operating without a dedicated lidar sensor.
+
+### 3.2 Constraints: RGB‑D Cameras Without LiDAR
+
+During development, the Spot platform was **not** equipped with the optional lidar payload. As a result, all mapping and localization had to rely on the five
+body-mounted depth cameras surrounding the robot.
+
+This introduces several challenges for classical 2D scan–based SLAM and AMCL:
+
+- **Multiple, unsynchronized sensors:**  
+  The depth cameras are separate devices with individual image and depth streams, connected over the network. They are not time-synchronised to the degree
+  expected by many 2D SLAM systems that assume a single laser scan or pointcloud per time step.
+
+- **Different data characteristics:**  
+  AMCL and many 2D SLAM packages are designed for planar range data (laser scans) or a single, consistent 3D pointcloud. In contrast, the available data are
+  multiple RGB‑D images with different viewpoints, fields of view, and update rates.
+
+- **Increased latency:**  
+  Transport, fusion and processing of high-resolution depth data introduce delays. When combined with fast base motions or turns, this delay leads to a mismatch
+  between the robot’s motion and the perceived environment, degrading both mapping and localization quality.
+
+Because of these constraints, a straightforward “drop‑in” replacement of a laser scanner with virtual 2D scans from the depth cameras did not yield reliable
+performance and motivated the move towards RTAB‑Map as an RGB‑D–native solution.
+
+---
+
+### 3.3 Initial Approaches: Merged PointCloud and 2D Scan Pipelines
+
+Before adopting RTAB‑Map, several approaches were evaluated to use the depth cameras with more traditional 2D SLAM and AMCL pipelines:
+
+1. **Merged 2D scan / pointcloud for `slam_toolbox` + AMCL**
+
+   A custom [`PointCloudMerger`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fpointcloud_merger.py) component was implemented to combine range
+   information from multiple cameras into a single synthetic 2D scan or pointcloud. This merged data was then fed into:
+
+- `slam_toolbox` for map building, and
+- AMCL (via `nav2`) for localization.
+
+While this worked in principle, several issues were observed:
+
+- **Slow and noisy mapping:** the fusion and projection steps added latency, so the map often lagged behind the robot’s motion, especially during turns.
+- **Desynchronization artifacts:** small timing differences between cameras caused inconsistent obstacle positions, which accumulated into map distortions over
+  time.
+- **Reduced reliability under dynamic motion:** during faster manoeuvres the mismatch between odometry and delayed sensor data could significantly degrade map
+  quality.
+
+2. **Fusion of all camera topics into a single depth source**
+
+   As a variant, all camera topics were fused into one shared topic using
+   a [pointcloud_republisher](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fpointcloud_republisher.py) to simplify downstream processing.
+   However, this led to additional problems:
+
+- **Camera dominance:** one or two cameras effectively dominated the merged signal, meaning that other viewpoints contributed little useful information.
+- **Less diverse observations for AMCL:** instead of benefiting from multiple independent views, AMCL effectively received a biased, less informative sensor
+  stream, which reduced the robustness of its pose updates.
+
+These experiments showed that trying to force the multi‑camera depth configuration into a single 2D scan/pointcloud abstraction was not a good fit. The system
+could technically build maps, but performance and consistency were insufficient for the project’s goals, especially compared to an RGB‑D–native SLAM approach.
+This experience directly motivated the switch to RTAB‑Map, which is described in the following section.
+
+### 3.4 Package Selection
+
+For navigation, the system is built around the ROS 2 Navigation Stack (`nav2`), which acts as the high-level planner and controller for the Spot base. `nav2`
+was chosen because it is the de‑facto standard navigation framework in ROS 2, integrates well with behaviour trees, and can treat Spot essentially as an
+omnidirectional mobile base by sending pose or velocity commands via the Spot ROS 2 driver.
+
+For mapping and localization, an RGB‑D-based SLAM system, **RTAB‑Map**, is used instead of a classical 2D laser-based pipeline (`slam_toolbox` + AMCL). RTAB‑Map
+can consume multiple RGB‑D streams and odometry directly, making it better suited to the available sensor configuration on Spot (multiple depth cameras, but no
+lidar). RTAB‑Map produces a consistent map and a pose estimate in the map frame; `nav2` then uses this pose as its localization source while maintaining its own
+2D costmaps and planners.
+
+In summary, the architecture is:
+
+- Spot ROS 2 driver → provides odometry, depth/RGB streams, and base control interfaces.
+- RTAB‑Map → fuses odometry and depth/RGB data into a map and provides global localization.
+- `nav2` → consumes RTAB‑Map’s pose to plan and execute base motions using 2D costmaps.
+- Behaviour Tree → issues high-level mapping and navigation commands (e.g. `CREATE_MAP`, `START_SLAM`, `START_LOCALIZATION`, `MOVE_TO_WAYPOINT`), but delegates
+  path planning and low-level base control to `nav2` and the Spot driver.
+
+#### 3.4.1 Why RTAB‑Map instead of slam_toolbox + AMCL?
+
+Initially, the system was designed around the more conventional combination of `slam_toolbox` (for mapping) and AMCL (for localization), fed by 2D scans made
+from merged pointclouds derived from the five depth cameras (Section 3.2). In practice, this approach ran into the constraints described above:
+
+- Multiple, **unsynchronized** RGB‑D cameras on a network,
+- Non-planar, camera-based depth data instead of a single planar laser scan,
+- Additional **latency** from depth processing and fusion.
+
+These constraints turned out to be a poor match for tools that assume a single, well-synchronised 2D scan or pointcloud per time step with low latency. RTAB‑Map
+was chosen because it is designed from the outset to handle **RGB‑D and multi-camera setups**, making it a better fit for the available hardware.
+
+**Advantages of RTAB‑Map in this setup**
+
+- Native RGB‑D support: no need to force depth cameras through a 2D scan abstraction.
+- Multi-camera capability: can leverage several viewpoints instead of compressing them into one stream.
+- Rich visual features: uses image texture and depth for loop closures and map refinement.
+- Integrated mapping + localization: built-in support for saving/loading and extending maps, matching the required workflow (create, continue, reuse maps).
+
+**Disadvantages and trade-offs**
+
+- Higher computational cost than purely 2D, laser-based SLAM.
+- More sensitivity to camera configuration, textures, and lighting.
+- Initial pose estimation remains challenging; this is partly addressed by the landmark-based relocalization mechanism that uses stored AprilTag landmarks to
+  provide a coarse `/initialpose` when the robot is badly mis-localized.
+
+for more info view the [RTAB‑Map repository](https://github.com/introlab/rtabmap_ros).
+
+Under ideal conditions (single planar lidar, low latency), a `slam_toolbox` + AMCL pipeline would likely be simpler and more robust. However, with five
+networked depth cameras and no lidar, RTAB‑Map provides a more suitable basis for the mapping and navigation capabilities required by this project.
+
+### 3.5 Implementation Overview
+
+The mapping and navigation logic is implemented as a thin integration layer around RTAB‑Map, Nav2, and the Spot ROS 2 driver. Two helper components coordinate
+most of the work:
+
+- [**`RTABHelper`**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Frtab_helper.py) – manages RTAB‑Map processes, map databases, and the JSON
+  files used for waypoints and landmarks.
+- [**`Nav2Helper`**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fnav2_helper.py) – manages the Nav2 lifecycle and its launch parameters.
+
+Both helpers store their process handles and state on the behaviour tree blackboard, so behaviours can query whether mapping/localization and Nav2 are running
+without directly managing processes.
+
+At a high level:
+
+- RTAB‑Map is launched in **mapping mode** or **localization mode** through `RTABHelper`, which calls a dedicated launch file
+  ([`rtab_mapping_launch.py`](..%2Flaunch%2Frtab_mapping_launch.py)). That launch file:
+    - Starts RTAB‑Map with the selected database.
+    - Sets up RGB‑D synchronization for all body cameras.
+    - Optionally starts RViz with a preconfigured mapping/navigation layout (`mapping.rviz`).
+
+- Nav2 is started and stopped via `Nav2Helper`, which launches a custom Nav2 bringup file
+  ([`nav2_spot_launch.py`](..%2Flaunch%2Fnav2_spot_launch.py)) using a parameter set tuned for RTAB‑Map and multi‑camera depth input
+  [(`nav2_spot_params.yaml`](..%2Fconfig%2Fnav2_spot_params.yaml)). `Nav2Helper` also tracks whether the Nav2 process is currently running.
+
+- The currently active map name and the lists of maps, waypoints, and landmarks are published as latched topics
+  (`/active_map`, `/map_list`, `/waypoint_list`, `/landmark_list`), matching the interfaces summarized in
+  [Section 1.3: Mapping, Navigation, and Recording](#13-mapping-navigation-and-recording).
+
+The individual mapping and navigation commands (e.g. `CREATE_MAP`, `SWAP_MAP`, `START_SLAM`, `START_LOCALIZATION`, `ADD_CURRENT_POSITION_WAYPOINT`,
+`MOVE_TO_WAYPOINT`...) are implemented as dedicated behaviour tree nodes that call into these helpers. Their detailed behaviour is
+documented
+in [detailed_command_descriptions.md](detailed_command_descriptions.md), only the overall flow is summarized here.
+
+---
+
+### 3.6 Map lifecycle and process control
+
+The map lifecycle is coordinated entirely through `RTABHelper`, with behaviour tree nodes acting as thin adapters that validate commands and call into it.
+
+At a high level:
+
+- **Map creation and initialization**  
+  When a new map is created, `RTABHelper`:
+    - Creates a fresh RTAB‑Map database (`.db`) and a matching JSON file for waypoints and landmarks.
+    - Starts RTAB‑Map in mapping mode with this database.
+    - Updates the blackboard’s `active_map_name` and publishes it on `/active_map`.
+    - Updates `/map_list` so external tools see the new map.
+
+- **Switching between mapping and localization**  
+  Mapping on an existing map and localization-only operation both reuse the same RTAB‑Map database:
+    - RTAB‑Map is started (or switched) into mapping or localization mode using the appropriate RTAB‑Map services.
+    - `active_map_name` remains the global reference so all mapping commands operate on the same selected map.
+    - Nav2 is started or stopped via `Nav2Helper` depending on whether navigation is required.
+
+- **Stopping and saving**  
+  When mapping/localization is stopped, `RTABHelper`:
+    - Pauses RTAB‑Map if mapping is active, saves the database, and publishes the final map.
+    - Terminates the RTAB‑Map process.
+    - Stops Nav2 via `Nav2Helper` where appropriate.
+
+- **Changing the active map**  
+  When switching maps, `RTABHelper`:
+    - Updates `active_map_name` on the blackboard and publishes it on `/active_map`.
+    - If RTAB‑Map is running, it stops the current process and restarts it with the new database in the same mode (mapping or localization).
+
+Which exact combination of actions is triggered for each command (`CREATE_MAP`, `START_SLAM`, `START_LOCALIZATION`, `STOP_MAPPING`, `SWAP_MAP`) is described in
+detail in the separate [detailed_command_descriptions.md](detailed_command_descriptions.md). Here it is sufficient to note that all map lifecycle operations go
+through `RTABHelper`, and that the behaviour tree nodes limit themselves to validating input and selecting the correct helper calls.
+
+---
+
+### 3.6.1 Mapping Results
+
+To illustrate how the mapping and navigation subsystem is used in practice, this section shows one representative map and its derived representations, all
+generated by RTAB‑Map.
+
+#### 3.6.1 Example Environment and Mapping Trajectory
+
+The example environment is a rectangular corridor loop around a central structure. During mapping, the robot was manually guided along the loop while RTAB‑Map
+built the map from Spot’s odometry and RGB‑D camera data.
+
+![staircase_2d_graph.png](images/System_Design/maps/staircase_2d_graph.png)
+
+*Figure X: 2D occupancy grid generated by RTAB‑Map and visualized in RViz. The grey cells represent free space, black cells represent obstacles, and the blue
+line shows the robot trajectory during the mapping run.*
+
+Key points:
+
+- The **blue line** indicates the path the robot actually took while mapping. It is useful for diagnosing coverage, loop closures, and blind spots.
+- The resulting 2D occupancy grid is consumed directly by Nav2 as the global costmap source, enabling standard “navigate to pose” and `MOVE_TO_WAYPOINT`
+  commands.
+- The RTAB‑Map database (`.db`) corresponding to this environment also stores the underlying 3D structure used for localization and 3D visualization.
+
+#### 3.6.2 3D Reconstruction for Localization and Analysis
+
+In addition to the 2D grid, RTAB‑Map maintains a 3D reconstruction of the environment. This is not required for simple path planning, but it is important for:
+
+- **Visual relocalization**: RTAB‑Map uses image features and depth to recognize previously seen places and maintain a consistent pose estimate in the `map`
+  frame.
+- **Landmark-based relocalization**: AprilTag landmarks are stored in the same `map` frame as the 3D reconstruction. When a landmark is detected again,
+  LandmarkRelocalizer uses its stored pose to provide a corrected `/initialpose`.
+- **Offline inspection and debugging**: the 3D clouds help assess map coverage, alignment quality, and sensor noise.
+
+![staircase_occupancy_grid.png](images/System_Design/maps/staircase_occupancy_grid.png)
+
+*Figure Y: 3D occupancy-style view of the same environment generated by RTAB‑Map, showing the structure from a top‑down perspective.*
+
+![staircase_rtabmap.png](images/System_Design/maps/staircase_rtabmap.png)
+
+*Figure Z: Alternative RTAB‑Map 3D visualization, emphasizing vertical structure and clutter around the looped corridor.*
+
+The maps shown are clean enough to support safe navigation and relocalization in the tested environments. Some small artifacts and local inconsistencies
+remain (e.g. small specks in otherwise clear areas caused by dynamic objects or poorly observed regions), but they are typically ignored by the planners or did
+not significantly affect path planning or goal execution in this project.
+<details>
+  <summary><strong>Note on map quality (click to expand)</strong></summary>
+
+> The maps shown in this section are used directly as produced by RTAB‑Map’s online SLAM pipeline. They could be further improved through offline
+> post‑processing, but this was intentionally not performed in this project to keep the focus on live mapping and navigation behaviour rather than offline map
+> editing.
+</details>
+
+A more complex example environment, including additional 2D and 3D map views from a cluttered lab scenario, is shown
+in [Appendix 3: Lab Map Example](#appendix-3-lab-map-example).
+
+### 3.7 Waypoints, landmarks, and goal selection
+
+Waypoints and landmarks are stored in the per-map JSON files managed by `RTABHelper`:
+
+- Each entry has the form:
+  ```json
+  {
+    "name": "WaypointA",
+    "pose": {
+      "position": { "x": ..., "y": ..., "z": ... },
+      "orientation": { "x": ..., "y": ..., "z": ..., "w": ... }
+    }
+  }
+  ```
+
+At a conceptual level, the mapping and navigation subsystem provides three core capabilities:
+
+- **Storing poses as waypoints or landmarks**  
+  The current robot pose (or a pose derived from a visible tag) can be saved under a user-chosen name and associated with the active map. Waypoints are intended
+  as navigation goals, landmarks are used for relocalization.
+
+- **Resolving symbolic names to poses**  
+  When a navigation or manipulation command references a waypoint a small set of
+  behaviours converts that symbolic reference (`waypoint_name`, `tag_id`) into a concrete `PoseStamped` in the `map` frame. This pose is written into the
+  command object and then passed on to the relevant navigation action.
+
+- **Maintaining and cleaning up map metadata**  
+  Waypoints and landmarks can be removed again, and the JSON files and list topics are updated accordingly. This keeps the map description consistent with the
+  actual inspection workflow.
+
+All of these operations are triggered by commands (see [Command Handling](#3-command-handling) and the [Interface Summary](#1-interface-summary)) and are
+described in detail, including per‑command behaviour, in the separate [detailed_command_descriptions.md](detailed_command_descriptions.md). In this document it
+is only important that:
+
+- `RTABHelper` owns the persistent map metadata (databases + JSON), and
+- the behaviour tree provides the link between symbolic command arguments and concrete goals in the `map` frame.
+
+---
+
+### 3.8 Navigation to goals with Nav2
+
+Once `last_command.goal_pose` is set (from a waypoint, tag, or current pose), navigation is executed by the `NavigateToGoalPose` behaviour:
+
+- It reads `last_command.goal_pose` from the blackboard and constructs a `NavigateToPose.Goal` for Nav2.
+- It sends this goal to the `/navigate_to_pose` action server and monitors the result:
+    - `STATUS_SUCCEEDED` → behaviour returns `SUCCESS`.
+    - Any other terminal status → behaviour returns `FAILURE`.
+- The behaviour remains `RUNNING` while Nav2 is planning and executing.
+
+An additional support ROS2-node [`Nav2CmdVelGate`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fnav2_cmd_vel_gate.py), manages the Nav2
+controller lifecycle (e.g. activating or deactivating the `controller_server` based on goal status). This was introduced because Nav2 would otherwise
+continuously publish velocity commands and block other sources of base control. By gating the controller, the system can safely mix goal‑based navigation with
+direct base movement commands without conflicts.
+
+Base-level commands such as `STAND_UP`, `MOVE_BASE_RELATIVE`, or `STOP_BASE` are implemented using Spot-specific action behaviours (see
+[Command Behaviour Execution Nodes](#33-command-behaviour-execution-nodes)) and can be freely combined with mapping and navigation commands in the command
+buffer or in recorded sequences.
+
+Nav2 itself is configured via the [`nav2_spot_params.yaml`](..%2Fconfig%2Fnav2_spot_params.yaml) file, which disables AMCL and the map server, subscribes
+directly to RTAB‑Map’s `/map` topic for the
+global costmap, and uses multi-source obstacle layers (depth cameras and, when available, base lidar) to build local and global costmaps suitable for Spot’s
+omnidirectional base.
+
+---
+
+### 3.9 Landmark-based relocalization
+
+Because the system runs without a lidar and relies on visual SLAM, initial pose estimation and recovery from large localization errors remain challenging. To
+mitigate this, the mapping subsystem integrates the **LandmarkRelocalizer** (see also Section 5.4):
+
+- Landmarks stored in the map JSON (via `RTABHelper.add_pose_as_landmark()`) provide “true” tag poses in the `map` frame.
+- At runtime, `visible_tags_map_frame` holds observed tag poses (also in `map`).
+- When a landmark tag becomes visible:
+    - `LandmarkRelocalizer` computes a 2D correction that aligns the observed tag pose to the stored landmark pose.
+    - It applies the same correction to the current robot pose (derived from TF), yielding a corrected pose.
+    - It publishes this corrected pose as a `PoseWithCovarianceStamped` on `/initialpose`.
+
+This mechanism is deliberately approximate. As discussed in the Feedback Subtree section, it is best used sparingly—primarily when the robot is severely
+mislocalized, so that RTAB‑Map can refine the pose again afterwards. Mapping and localization therefore remain the subsystem with the most potential for future
+improvement, especially once lidar data becomes available.
+
+### 3.10 Design Rationale
+
+The design of the mapping and navigation subsystem is driven by a few key constraints and goals:
+
+- **Work with what the hardware provides (no lidar, multiple RGB‑D cameras)**  
+  The choice of RTAB‑Map over a `slam_toolbox` + AMCL pipeline follows directly from the available sensors.
+- **Make maps reusable and self‑contained**  
+  Each map consists of:
+    - An RTAB‑Map database (`.db`) for the SLAM state, and
+    - A JSON file for waypoints and landmarks.  
+      `RTABHelper` owns these files and publishes `/active_map`, `/map_list`, `/waypoint_list`, and `/landmark_list`. This makes maps portable between sessions
+      and lets external tools reason about “where the robot can go” and “where it can relocalize” without inspecting internal SLAM data structures.
+- **Use RTAB‑Map and Nav2 as “replaceable” components**  
+  The mapping and navigation stack is wired so that:
+    - RTAB‑Map could, in principle, be replaced by a lidar‑based SLAM system once a lidar is available, and
+    - Nav2 parameters and controllers are configured via external YAML and launch files.  
+      This aligns with the project’s research nature: the design should survive changes in SLAM or navigation backends with minimal impact on the Behaviour Tree
+      and command layer.
+- **Support human‑in‑the‑loop mapping and later automation**  
+  RViz is launched with a preconfigured view (`mapping.rviz`) whenever RTAB‑Map runs, so a human can supervise mapping, visualize the map, and debug
+  localization. At the same time, all control flows through the same command interface that automated agents and recordings use. This allows a natural
+  progression:
+    - First build and validate maps manually,
+    - Then gradually move towards fully scripted inspection routines built on those maps.
+
+Overall, the design aims to provide a robust mapping/navigation foundation under imperfect sensing conditions, while keeping the control layer modular,
+testable, and open to future improvements (such as adding lidar or changing SLAM backends).
 
 # Recording and Playback
 
@@ -988,20 +1323,21 @@ Two topics are used (see also the Interface Summary): TODO interface link
 
 - **`fault_detector/record_control`** (`fault_detector_msgs/CommandRecordControl`, UI/tools → recorder)  
   Carries control messages with fields:
-  - `name` – identifier of the recording.
-  - `mode` – one of `"start"`, `"stop"`, `"play"`, or `"delete"`.
+    - `name` – identifier of the recording.
+    - `mode` – one of `"start"`, `"stop"`, `"play"`, or `"delete"`.
 
 - **`fault_detector/recordings_list`** (`fault_detector_msgs/StringArray`, recorder → UI/tools)  
   Publishes the set of available recording names as a simple string array (typically using a latched QoS profile).
 
-Any client (GUI, CLI tool, or automated agent) can use these topics to start/stop recording, trigger playback, or delete recordings, without requiring changes to the Behaviour Tree or recorder internals.
+Any client (GUI, CLI tool, or automated agent) can use these topics to start/stop recording, trigger playback, or delete recordings, without requiring changes
+to the Behaviour Tree or recorder internals.
 
 ### 6.3 Design Rationale
 
 - **Shared command pathway**  
   Recordings operate entirely on the same `ComplexCommand` topic as the UI and other clients. This ensures that:
-  - Live and replayed commands are handled identically by the Behaviour Tree.
-  - Regression tests exercise the real command-handling and execution logic, not a bypass path.
+    - Live and replayed commands are handled identically by the Behaviour Tree.
+    - Regression tests exercise the real command-handling and execution logic, not a bypass path.
 
 - **Simple external interface**  
   A single control message (`CommandRecordControl`) with a small set of modes (`start`, `stop`, `play`, `delete`) is sufficient to control the recorder. The
@@ -1009,13 +1345,12 @@ Any client (GUI, CLI tool, or automated agent) can use these topics to start/sto
 
 - **Reproducibility**  
   By storing timestamped command sequences (see example JSONs in the appendix), the system can:
-  - Reproduce complex interaction scenarios.
-  - Support automated test runs and comparison of system behaviour across software versions.
-  - Capture demonstrations that can later be replayed for evaluation or debugging.
+    - Reproduce complex interaction scenarios.
+    - Support automated test runs and comparison of system behaviour across software versions.
+    - Capture demonstrations that can later be replayed for evaluation or debugging.
 
 In summary, the Recording and Playback subsystem turns the command interface into a scriptable test and demonstration channel without introducing special‑case
 logic into the Behaviour Tree or robot control stack.
-
 
 # User Interface Design
 
@@ -1030,12 +1365,23 @@ It serves primarily as a research and development interface, designed for scient
 However, this design allows it to be easily replaced by more user-friendly interfaces or even autonomous control agents (e.g., AI-based assistants or
 voice-driven operators) without altering the underlying execution framework.
 
-# Technoligy Stack and Summary
+# Technology Stack and Summary
 
 - ROS 2 version and packages
 - py_trees for behaviour tree management
 - Spot SDK and drivers
 - Other relevant libraries and tools
+
+6. **combining mapping, base movement, manipulation and recording**  
+   Because mapping, navigation, and manipulation are all driven through the same command interface (see [Interface Summary](#1-interface-summary)
+   and [Command Handling](#3-command-handling)), they can be freely combined and recorded:
+
+- Navigate to a waypoint,
+- Adjust the base pose with relative movement commands,
+- Execute a manipulator-based fault-detection sequence.
+
+Using the Recording and Playback subsystem, such a chain can be captured as a single command sequence and replayed later. This enables entire maintenance
+routines (movement between assets, precise positioning, and inspection actions) to be executed automatically once the map and navigation goals have been set up.
 
 # References
 
@@ -1048,6 +1394,7 @@ voice-driven operators) without altering the underlying execution framework.
 - Chaitanya Ntr. *April Tag Generator*. Available at: [https://chaitanyantr.github.io/apriltag.html](https://chaitanyantr.github.io/apriltag.html)
 - Splintered‑Reality. *py_trees_ros*. GitHub. Available
   at: [https://github.com/splintered-reality/py_trees_ros](https://github.com/splintered-reality/py_trees_ros)
+- Steve Macenski. *slam_toolbox*. GitHub. Available at: [https://github.com/SteveMacenski/slam_toolbox](https://github.com/SteveMacenski/slam_toolbox)
 
 # Appendix
 
@@ -1072,3 +1419,18 @@ This appendix contains example recording files used for testing and demonstratio
 [movement_test.json](images%2FSystem_Design%2Frecordings%2Fmovement_test.json)
 
 [test_basic_commands.json](images%2FSystem_Design%2Frecordings%2Ftest_basic_commands.json)
+
+### Appendix 3: Lab Map Example
+
+![lab_2d_grid.png](images%2FSystem_Design%2Fmaps%2Flab_2d_grid.png)
+
+*Figure A: 2D occupancy grid of the lab generated by RTAB‑Map and visualized in RViz. Grey cells represent free space, black cells obstacles, and the blue line
+shows the mapping trajectory.*
+
+![lab_3d_map.png](images%2FSystem_Design%2Fmaps%2Flab_3d_map.png)
+
+*Figure B: 3D view of the lab generated by RTAB‑Map, showing the reconstructed scene geometry used for visual localization and qualitative map inspection.*
+
+![lab_combined.png](images%2FSystem_Design%2Fmaps%2Flab_combined.png)
+
+*Figure C: Combined 2D/3D visualization of the lab map, illustrating the relationship between the occupancy grid and the underlying 3D structure.*
