@@ -19,8 +19,8 @@ class CheckTagReachability(py_trees.behaviour.Behaviour):
                  name: str = "CheckTagReachability",
                  body_frame: str = "body",
                  arm_base_frame: str = "arm_link_sh0",
-                 arm_reach: float = 0.984,
-                 tolerance: float = 0.05):
+                 arm_reach: float = 1.1,
+                 tolerance: float = 0.00):
         super().__init__(name)
         self.body_frame = body_frame
         self.arm_base_frame = arm_base_frame

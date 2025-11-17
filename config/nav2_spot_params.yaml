@@ -70,15 +70,8 @@ global_costmap:
     obstacle_layer:
       plugin: "nav2_costmap_2d::ObstacleLayer"
       # observation_sources: <name1> <name2> ...
-      observation_sources: jn0_scan frontleft_points frontright_points left_points right_points back_points
+      observation_sources: frontleft_points frontright_points
       observation_persistence: 0.5
-
-      jn0_scan:
-        topic: /jn0/base_scan
-        expected_update_rate: 20.0
-        data_type: LaserScan
-        marking: true
-        clearing: true
 
       frontleft_points:
         topic: /depth_registered/frontleft/points
@@ -94,26 +87,6 @@ global_costmap:
         marking: true
         clearing: false
 
-      left_points:
-        topic: /depth_registered/left/points
-        expected_update_rate: 10.0
-        data_type: PointCloud2
-        marking: true
-        clearing: false
-
-      right_points:
-        topic: /depth_registered/right/points
-        expected_update_rate: 10.0
-        data_type: PointCloud2
-        marking: true
-        clearing: false
-
-      back_points:
-        topic: /depth_registered/back/points
-        expected_update_rate: 10.0
-        data_type: PointCloud2
-        marking: true
-        clearing: false
     robot_radius: 0.35
     inflation_layer:
       plugin: "nav2_costmap_2d::InflationLayer"
@@ -145,19 +118,12 @@ local_costmap:
 
     obstacle_layer:
       plugin: "nav2_costmap_2d::ObstacleLayer"
-      observation_sources: jn0_scan frontleft_points frontright_points left_points right_points back_points
+      observation_sources: frontleft_points frontright_points
       min_obstacle_height: 0.10    # ignore floor clutter
       max_obstacle_height: 0.60    # ignore high ceilings
       obstacle_range: 8.0
       raytrace_range: 8.0
       observation_persistence: 0.5
-
-      jn0_scan:
-        topic: /jn0/base_scan
-        expected_update_rate: 20.0
-        data_type: LaserScan
-        marking: true
-        clearing: true
 
       frontleft_points:
         topic: /depth_registered/frontleft/points
@@ -173,26 +139,6 @@ local_costmap:
         marking: true
         clearing: false
 
-      left_points:
-        topic: /depth_registered/left/points
-        expected_update_rate: 10.0
-        data_type: PointCloud2
-        marking: true
-        clearing: false
-
-      right_points:
-        topic: /depth_registered/right/points
-        expected_update_rate: 10.0
-        data_type: PointCloud2
-        marking: true
-        clearing: false
-
-      back_points:
-        topic: /depth_registered/back/points
-        expected_update_rate: 10.0
-        data_type: PointCloud2
-        marking: true
-        clearing: false
     robot_radius: 0.35
     inflation_layer:
       plugin: "nav2_costmap_2d::InflationLayer"
