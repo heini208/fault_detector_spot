@@ -892,12 +892,20 @@ fundamental building blocks, for higher-level custom behaviors use to interact w
 This chapter details the two primary aspects of local motion control implemented in the system: manipulator control for the robotic arm and base control for the
 robot's body.
 
+# Local Motion Control
+
+Local motion control encompasses the direct, immediate command of the robot's physical components, specifically its manipulator and base. Unlike global
+navigation, which plans long-distance paths across a map, local motion control focuses on executing precise, short-range movements. These actions are
+fundamental building blocks that higher-level custom behaviors use to interact with the environment.
+
+This chapter details the two primary aspects of local motion control implemented in the system: manipulator control for the robotic arm and base control for the
+robot's body.
+
 ## 1. Manipulator Control
 
 Manipulator control provides the functionality to precisely position the Spot arm and its attached sensor head. The system's design abstracts the complexity of
-joint-level
-control by exposing a set of intuitive, task-oriented commands. These commands are executed via the Spot ROS 2 driver, which translates high-level goals into
-the necessary actions for the physical hardware.
+joint-level control by exposing a set of intuitive, task-oriented commands. These commands are executed via the Spot ROS 2 driver, which translates high-level
+goals into the necessary actions for the physical hardware.
 
 The core commands for basic arm states include:
 
@@ -913,6 +921,10 @@ For more nuanced positioning, the system offers two primary modes of relative mo
 
 This mode allows the operator to command the manipulator to a position defined *relative to a detected AprilTag*. For example, a command to "move 10cm in front
 of Tag 23" will always result in the arm moving to that exact world position, regardless of its starting pose.
+
+It is crucial to note that the target pose is the origin of the AprilTag itself. Commanding a move with a zero offset will direct the gripper to the tag's
+center, inevitably causing a collision if the tag is mounted on a solid surface like a wall. Therefore, applying a standoff offset is essential for safe
+operation.
 
 This is the primary mode for reliable and repeatable inspection tasks. As illustrated by the `ManipulatorGetGoalTag` and `ManipulatorMoveArmAction` behaviors,
 the workflow is as follows:
@@ -943,8 +955,8 @@ a combination of standard frames provided by the Spot platform and a persistent 
 The primary frames used for defining orientation offsets are:
 
 * **`body` frame:** This frame is attached to the robot's chassis, moving and rotating with it. It is highly intuitive for manual control, as an operator can
-  easily visualize "forward" or "left" relative to the robot's physical orientation. However, it is less for repeatable sequences; if the robot is facing
-  a different direction on a subsequent run, a "move forward" command will send the arm in a completely different world direction.
+  easily visualize "forward" or "left" relative to the robot's physical orientation. However, it is less suitable for repeatable sequences; if the robot is
+  facing a different direction on a subsequent run, a "move forward" command will send the arm in a completely different world direction.
 * **`odom` frame:** This is another standard Spot frame, which is fixed to the world at the robot's startup location. It provides session-specific
   repeatability, as all movements are relative to a consistent world orientation for as long as the robot remains powered on. This is useful for temporary
   setups, such as a trade show demonstration, where the environment is consistent for a single session.
@@ -962,15 +974,15 @@ always applied relative to the manipulator's current position or the target tag'
 
 ### 1.3 Orientation Modes
 
-In addition to positional control, the system provides several preset orientation modes for the gripper or sensor head. These presets,
-defined in `command_ids.py`, simplify the task of aligning the sensor with a target surface. The `ManipulatorTagCommand` class interprets an `orientation_mode`
+In addition to positional control, the system provides several preset orientation modes for the gripper or sensor head. These presets, defined
+in `command_ids.py`, simplify the task of aligning the sensor with a target surface. The `ManipulatorTagCommand` class interprets an `orientation_mode`
 parameter to determine the final orientation.
 
 The available presets are:
 
-* **`relative_to_tag`**: Matches the grippers orientation to that of the detected AprilTag. This makes the gripper *parallel* to the tag's surface.
-  During development, this behavior was found to be unintuitive for tasks requiring the sensor to *face* the tag, as it does not automatically calculate the
-  inverse orientation. It often served as a starting point that required further manual or calculated adjustments.
+* **`relative_to_tag`**: Matches the gripper's orientation to that of the detected AprilTag. This makes the gripper *parallel* to the tag's surface. During
+  development, this behavior was found to be unintuitive for tasks requiring the sensor to *face* the tag, as it does not automatically calculate the inverse
+  orientation. It often served as a starting point that required further manual or calculated adjustments.
 * **`look_straight`**: Sets the gripper to a neutral, forward-facing orientation (identity quaternion), ignoring the tag's orientation.
 * **`look_left` / `look_right`**: Yaws the gripper 90 degrees to the left or right.
 * **`look_up` / `look_down`**: Pitches the gripper 45 degrees up or down.
@@ -982,13 +994,12 @@ descriptive commands.
 
 ### 1.4 Critical Limitation: Lack of Collision Avoidance
 
-A significant consideration when using the manipulator is its **lack of active collision avoidance** for the gripper. While the arm has built-in protection
-to prevent collisions with the robot's own body, it will not automatically stop if its path is obstructed by an object in the environment.
+A significant consideration when using the manipulator is its **lack of active collision avoidance** for the gripper. While the arm has built-in protection to
+prevent collisions with the robot's own body, it will not automatically stop if its path is obstructed by an object in the environment.
 
 It's assumed that this is a deliberate design choice by the manufacturer, as collision avoidance would prevent the arm from performing intended physical
-interactions like
-grasping objects or pushing doors. However, for this project's application of non-invasive sensing, this presents a substantial risk of damaging the sensor
-head.
+interactions like grasping objects or pushing doors. However, for this project's application of non-invasive sensing, this presents a substantial risk of
+damaging the sensor head.
 
 While developing a robust collision avoidance system, potentially involving pre-scanning an object, planning a safe trajectory, or using vision-based reactive
 control, was beyond the scope of this thesis, it represents a critical area for future work. A reliable, production-ready implementation of this system would
@@ -997,23 +1008,60 @@ surrounding environment.
 
 ## 2. Base Control
 
-General base control handles direct motion commands such as standing, sitting, walking, or rotating.  
-These commands are executed through the Spot ROS 2 driver’s base control interfaces, which internally ensure terrain adaptation, stability, and obstacle
-avoidance.
+Base control refers to the direct locomotion of the Spot robot, including fundamental actions like standing, walking, and rotating. Similar to manipulator
+control, this system does not implement low-level leg coordination or motion planning from scratch. Instead, it operates as a high-level command layer on top of
+the official Spot ROS 2 driver.
 
-The external system therefore does **not** override Spot’s native locomotion safety or balance algorithms.  
-Instead, it issues high-level target poses while Spot’s onboard systems handle:
+This layered approach is a key design choice, as it allows the system to leverage Boston Dynamics' sophisticated and extensively tested onboard controllers.
+When a command such as "move forward" is issued, the system translates it into a `synchro_se2_trajectory_point_command` and sends this high-level target pose to
+the driver. Spot's internal systems then handle the complex underlying tasks:
 
-- Real-time obstacle avoidance,
-- Leg coordination and gait stability,
-- Dynamic balance and posture control.
+* Real-time obstacle avoidance
+* Leg coordination and gait stability across varied terrain
+* Dynamic balance and posture control
 
-Base motion commands can be specified relative to the robot’s current position or relative to a detected marker (e.g., an AprilTag).  
-This allows the system to move precisely in relation to the environment or objects of interest, enabling tasks such as approaching a tag or aligning for
-manipulation.
+By delegating these critical functions, the system can focus on task-level logic while benefiting from the robot's inherent safety and mobility features.
 
-This layered control approach enables robust, high-level navigation planning within the ROS 2 ecosystem while preserving Spot’s internal safety and mobility
-features.
+### 2.1 Modes of Relative Movement
+
+The base can be commanded using the same two relative movement paradigms as the manipulator, providing flexibility for different operational needs. As shown in
+the `BaseMoveToTagAction` and `BaseMoveRelativeAction` implementations, a key feature for both modes is the deliberate use of reduced speed limits. This
+enhances safety and precision, which is particularly important when performing the final alignment before a close-quarters inspection task.
+
+#### 2.1.1 Target-Relative Poses
+
+This mode enables the robot to position its base relative to a detected AprilTag. For example, a command can instruct the robot to align itself precisely 1.5
+meters in front of a specific tag. This is essential for tasks that require the robot to be at a consistent, repeatable standoff distance from an inspection
+point, regardless of its starting location in the wider environment. The `BaseGetGoalTag` behavior is responsible for processing the tag's position and applying
+the requested offset to generate the final goal pose.
+
+#### 2.1.2 Base-Relative Poses
+
+This mode executes movements relative to the robot's current position and orientation. Commands like "move forward 0.5 meters" or "rotate 15 degrees left" allow
+for incremental adjustments. This is particularly useful for fine-tuning the robot's position manually or for executing simple, script-like motion sequences
+where the starting context is known.
+
+### 2.2 Coordinate Frames
+
+The same coordinate frames, `body`, `odom`, and `map`, that provide context for manipulator commands also apply to base movements. Their importance for ensuring
+command reliability and repeatability remains the same: the `map` frame offers persistent, global consistency for autonomous routines, `odom` provides
+session-specific repeatability, and `body` offers an intuitive frame for manual control. Unlike manipulator commands, base movements do not have specialized
+orientation modes; the robot's body simply moves to achieve the target pose.
+
+### 2.3 Active Position Holding and Collision Avoidance
+
+A unique side effect of using the Spot driver for base movement is the robot's "active position holding" behavior. Once a base movement command is completed,
+the driver actively works to maintain the robot's final pose. This manifests in two distinct ways:
+
+1. **Active Collision Avoidance:** If an external object, such as a person walking past or a closing door, encroaches on the robot's space, the robot will
+   automatically adjust its footing and move away to prevent a collision.
+2. **Position Correction:** Conversely, if the robot is physically pushed or drifts away from its commanded pose, it will autonomously move back to re-establish
+   the target position.
+
+While this behavior is a powerful demonstration of the platform's reactive stability, it may not always be desirable, as the robot will continue to make minor
+adjustments. To return the robot to a neutral, idle standing state and disable this active holding, a `STOP_BASE` command can be issued. This effectively
+cancels the active goal. Additionally, a basic `STAND_UP` command is available to bring the robot to a ready, standing position after it has been powered on or
+is in a sitting state.
 
 # Mapping and Navigation
 
@@ -1242,7 +1290,6 @@ built the map from Spot’s odometry and RGB‑D camera data.
 
 *Figure: RViz visualizing the robot's state, including the map, the robot's position (arrow), costmaps (colored areas), and the planned path (green line).*
 
-
 Key points:
 
 - The **blue line** indicates the path the robot actually took while mapping. It is useful for diagnosing coverage, loop closures, and blind spots.
@@ -1250,7 +1297,8 @@ Key points:
   commands.
 - The RTAB‑Map database (`.db`) corresponding to this environment also stores the underlying 3D structure used for localization and 3D visualization.
 
-To provide a live, intuitive understanding of the system's state, the RViz visualization tool is used. It displays the map being built by SLAM, the robot's estimated position (pose), and the path planned by nav2. This visualization is crucial for
+To provide a live, intuitive understanding of the system's state, the RViz visualization tool is used. It displays the map being built by SLAM, the robot's
+estimated position (pose), and the path planned by nav2. This visualization is crucial for
 monitoring mapping progress, debugging localization issues, and verifying that the robot is localized and navigating as expected.
 
 #### 3.6.1 3D Reconstruction for Localization and Analysis
