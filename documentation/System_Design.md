@@ -590,9 +590,9 @@ Some commands do **not** use the ROS2 `RobotCommand` action driver. Instead, the
 
 **Examples**
 
-- `DeleteWaypoint` — removes a waypoint from the map.
-- `NavigateToGoalPose` — sends a goal to Nav2.
-- `ManipulatorGetGoalTag` — fetches a visible goal tag.
+- `DeleteWaypoint`: removes a waypoint from the map.
+- `NavigateToGoalPose`: sends a goal to Nav2.
+- `ManipulatorGetGoalTag`: fetches a visible goal tag.
 
 ### 3.4 Available Commands
 
@@ -1410,7 +1410,7 @@ mitigate this, the mapping subsystem integrates the **LandmarkRelocalizer** (see
     - It applies the same correction to the current robot pose (derived from TF), yielding a corrected pose.
     - It publishes this corrected pose as a `PoseWithCovarianceStamped` on `/initialpose`.
 
-This mechanism is deliberately approximate. As discussed in the Feedback Subtree section, it is best used sparingly—primarily when the robot is severely
+This mechanism is deliberately approximate. As discussed in the Feedback Subtree section, it is best used sparingly-primarily when the robot is severely
 mislocalized, so that RTAB‑Map can refine the pose again afterwards. Mapping and localization therefore remain the subsystem with the most potential for future
 improvement, especially once lidar data becomes available.
 
@@ -1511,34 +1511,105 @@ logic into the Behaviour Tree or robot control stack.
 
 # User Interface Design
 
-- Loosely-coupled architecture and communication with the behaviour tree
-- Command input and visualization of system state
-- Integration with recording/playback
-- Optional replacement with automated control agents
-- devided into manip,navigation,mapping
+To control the robot and visualize its state, a graphical user interface (GUI) was developed using Python and
+the [PyQt5](https://pypi.org/project/PyQt5/#:~:text=PyQt5%20is%20a%20comprehensive%20set,platforms%20including%20iOS%20and%20Android.) framework. The design
+philosophy behind
+the UI was to create a comprehensive development tool that exposes the system's full functionality in a clear and accessible manner. Rather than aiming for a
+polished, simplified end-user product, the interface serves as a simple interface for developers and researchers to conduct tests, validate behaviors, and
+debug the system in real-time.
 
-The UI is intentionally loosely coupled to the rest of the system, prioritizing expandability and testability over end-user usability.  
-It serves primarily as a research and development interface, designed for scientific testing and system validation rather than field deployment.  
-However, this design allows it to be easily replaced by more user-friendly interfaces or even autonomous control agents (e.g., AI-based assistants or
-voice-driven operators) without altering the underlying execution framework.
+## Design Rationale and Architecture
+
+The UI is intentionally loosely coupled to the rest of the system, prioritizing expandability and testability. This is achieved by ensuring all communication
+between the UI and the robot's control logic occurs exclusively through the public ROS 2 topics defined by the system architecture. The UI acts as a client,
+publishing `ComplexCommand` messages to send instructions and subscribing to various feedback topics to receive state updates.
+
+This architectural separation is a critical feature, as it means the UI can be modified or even completely replaced without any changes to the underlying
+behavior tree or robot-side logic. Any alternative client-such as a command-line tool, a web-based interface, or a future AI-driven control agent-could be
+developed by interacting with the same set of ROS 2 interfaces.
+
+Despite its focus on developer functionality, the UI incorporates user-friendly features and safety checks to strike a balance between power and usability. For
+example, it provides descriptive labels for offsets (e.g., "forward" and "left" instead of abstract axes like `+X` and `-Y`), validates user input to prevent
+malformed commands, and uses confirmation dialogs for significant actions.
+
+![A confirmation dialog asking the user to confirm a 'Move to Tag' command, showing the tag ID, target coordinates, and offsets.](images%2FSystem_Design%2FUI%2Fui_confirmation_check.png)
+
+*Figure 4: A confirmation dialog box, which provides a summary of the command and its parameters before execution, acting as a safety catch for the operator.*
+
+## UI Layout and Components
+
+The user interface is organized into a main window with two primary sections: a permanent area for global status and control, and a tabbed widget for
+context-specific commands.
+
+![The Fault Detector Spot UI, showing the Manipulation Control tab.](images%2FSystem_Design%2FUI%2Fmanip_ui.png)
+*Figure 1: The main user interface, with the "Manipulation Control" tab active.*
+
+### Permanent View
+
+The sections at the top and bottom of the window are always visible, regardless of the selected tab. This ensures that critical information and universal
+controls are permanently accessible.
+
+* **Status Display:** A block of labels at the top-left provides real-time feedback on the system's state, including ROS 2 connection status, the contents of
+  the command buffer, the status of the last executed command, and whether the navigation system is active.
+* **Visible Tags:** This label provides a list of all currently detected AprilTags. To give immediate feedback on manipulator reachability, tags that are within
+  the arm's range are colored green, while those that are visible but out of reach are colored red.
+
+![A close-up of the UI status panel showing a 'stow_arm' command was sent, a buffer with queued commands, the current running status as 'move_to_tag', and visible tags 1 and 3.](images%2FSystem_Design%2FUI%2Fui_with_feedback.png)
+
+*Figure 5: The real-time status display area of the UI. It shows the last command sent, the current command buffer, the execution status of the active behavior,
+and the list of visible AprilTags.*
+
+* **Emergency Stop:** A large, red "EMERGENCY STOP" button is prominently placed at the top-right, allowing for immediate cancellation of all robot actions.
+* **Recording Controls:** A dedicated panel at the bottom of the window manages the command recording and playback functionality. Users can name a sequence,
+  start recording, and stop recording. The "Start Recording" button turns into a red "Stop Recording" button to provide a clear visual cue that a recording is
+  active. Saved recordings can be selected from a dropdown menu for playback or deletion.
+
+![The UI's recording panel, showing a recording in progress with a red 'Stop Recording' button, and a dropdown to select previously saved recordings for playback.](images%2FSystem_Design%2FUI%2Frecording_ui.png)
+
+*Figure 6: The command recording control panel. The red "Stop Recording" button provides a clear visual indicator that a recording session is currently active.*
+
+### Tabbed Control Panels
+
+The central area of the UI is a tabbed widget that separates controls into logical groups based on the system's main capabilities.
+
+#### Manipulation Control
+
+*Figure 2: The "Manipulation Movement Control" tab.*
+
+As shown in Figure 1, this tab exposes all functions related to the Spot arm. It includes fields for entering a target tag ID, specifying positional and
+orientation offsets in various coordinate frames, and selecting preset orientation modes. It also provides buttons for basic actions
+like `Ready Arm`, `Stow Arm`, and `Toggle Gripper`.
+
+![The Base Movement Control tab.](images%2FSystem_Design%2FUI%2Fbase_ui.png)
+
+*Figure 2: The "Base Movement Control" tab.*
+
+#### Base Movement Control
+
+This tab (Figure 2) provides controls for direct locomotion of the robot's base. Its layout is similar to the manipulation tab, allowing the user to command the
+base relative to a tag or its current position, with user-defined offsets for X, Y, and Yaw.
+
+![The Navigation Control tab.](images%2FSystem_Design%2FUI%2Fnav_ui.png)
+
+*Figure 3: The "Navigation Control" tab for map, waypoint, and landmark management.*
+
+#### Navigation Control
+
+The navigation tab (Figure 3) centralizes all functions related to mapping and localization. From here, a user can:
+
+* Load, create, and delete maps.
+* Switch the system between idle, mapping (`SLAM`), and `Localization` modes.
+* Define waypoints at the robot's current position.
+* Save visible AprilTags as persistent landmarks for relocalization.
+* Command the robot to navigate to a saved waypoint.
+
+By organizing the controls into these distinct tabs, the interface is less cluttered while providing comprehensive access to every feature implemented in the
+behavior tree. The functionality of each button maps directly to the commands described in previous chapters, effectively making the UI a complete graphical
+front-end for the system's command-and-control architecture.
 
 # Technology Stack and Summary
 
-- ROS 2 version and packages
-- py_trees for behaviour tree management
-- Spot SDK and drivers
-- Other relevant libraries and tools
 
-6. **combining mapping, base movement, manipulation and recording**  
-   Because mapping, navigation, and manipulation are all driven through the same command interface (see [Interface Summary](#1-interface-summary)
-   and [Command Handling](#3-command-handling)), they can be freely combined and recorded:
-
-- Navigate to a waypoint,
-- Adjust the base pose with relative movement commands,
-- Execute a manipulator-based fault-detection sequence.
-
-Using the Recording and Playback subsystem, such a chain can be captured as a single command sequence and replayed later. This enables entire maintenance
-routines (movement between assets, precise positioning, and inspection actions) to be executed automatically once the map and navigation goals have been set up.
 
 # References
 
@@ -1553,6 +1624,7 @@ routines (movement between assets, precise positioning, and inspection actions) 
   at: [https://github.com/splintered-reality/py_trees_ros](https://github.com/splintered-reality/py_trees_ros)
 - Steve Macenski. *slam_toolbox*. GitHub. Available at: [https://github.com/SteveMacenski/slam_toolbox](https://github.com/SteveMacenski/slam_toolbox)
 - Boston Dynamics. Geometry and Frames. Available at: https://dev.bostondynamics.com/docs/concepts/geometry_and_frames.html. Accessed on 2.11.2025.
+  https://pypi.org/project/PyQt5/#:~:text=PyQt5%20is%20a%20comprehensive%20set,platforms%20including%20iOS%20and%20Android.
 
 # Appendix
 
