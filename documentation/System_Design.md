@@ -14,7 +14,72 @@ components, their interactions, and the design principles that enable the system
 To achieve this, the document is organized into several key sections, moving from a high-level overview to detailed implementation specifics.
 By following this structure, this document aims to be an all-in-one resource for anyone working with the Fault Detector Spot project.
 
-INHALTSANGABE
+- [1. General Architecture](#1-general-architecture)
+
+- [2. Main System Components and Features](#2-main-system-components-and-features)
+  - [2.1 Behaviour Tree Execution Layer](#21-behaviour-tree-execution-layer)
+  - [2.2 System Components](#22-system-components)
+  - [2.3 Command and Control](#23-command-and-control)
+  - [2.4 Sensing and Input](#24-sensing-and-input)
+  - [2.5 System State and Feedback](#25-system-state-and-feedback)
+  - [2.6 Command Recording and Playback](#26-command-recording-and-playback)
+  - [2.7 System Startup and Launch](#27-system-startup-and-launch)
+
+- [3. Data Flow Summary](#3-data-flow-summary)
+
+- [4. Design Rationale](#4-design-rationale)
+
+- [5. Interface Summary](#5-interface-summary)
+  - [5.1 Command Input](#51-command-input)
+  - [5.2 State and Feedback Output](#52-state-and-feedback-output)
+  - [5.3 Mapping, Navigation, and Recording](#53-mapping-navigation-and-recording)
+
+- [6. Detailed Behaviour Tree Design](#6-detailed-behaviour-tree-design)
+  - [6.1 Behaviour Tree Implementation](#61-behaviour-tree-implementation)
+  - [6.2 Command Handling](#62-command-handling)
+  - [6.3 Command Behaviour Execution Nodes](#63-command-behaviour-execution-nodes)
+  - [6.4 Available Commands](#64-available-commands)
+
+- [7. Sensing Subtree](#7-sensing-subtree)
+  - [7.1 Design Rationale](#71-design-rationale)
+  - [7.2 Tag Handling](#72-tag-handling)
+
+- [8. Feedback Subtree](#8-feedback-subtree)
+  - [8.1 Initial UI Information (PublishInitialUIInfoOnce)](#81-initial-ui-information-publishinitialuiinfoonce)
+  - [8.2 Command and Buffer Status (BufferStatusPublisher)](#82-command-and-buffer-status-bufferstatuspublisher)
+  - [8.3 Tag State Publishing (PublishTagStates)](#83-tag-state-publishing-publishtagstates)
+  - [8.4 Landmark-Based Relocalization (LandmarkRelocalizer)](#84-landmark-based-relocalization-landmarkrelocalizer)
+
+- [9. Local Motion Control](#9-local-motion-control)
+  - [9.1 Manipulator Control](#91-manipulator-control)
+  - [9.2 Base Control](#92-base-control)
+
+- [10. Mapping and Navigation](#10-mapping-and-navigation)
+  - [10.1 Features](#101-features)
+  - [10.2 Constraints: RGB‑D Cameras Without LiDAR](#102-constraints-rgbd-cameras-without-lidar)
+  - [10.3 Initial Approaches: Merged PointCloud and 2D Scan Pipelines](#103-initial-approaches-merged-pointcloud-and-2d-scan-pipelines)
+  - [10.4 Package Selection](#104-package-selection)
+  - [10.5 Implementation Overview](#105-implementation-overview)
+  - [10.6 Map lifecycle and process control](#106-map-lifecycle-and-process-control)
+  - [10.7 Waypoints, landmarks, and goal selection](#107-waypoints-landmarks-and-goal-selection)
+  - [10.8 Navigation to goals with Nav2](#108-navigation-to-goals-with-nav2)
+  - [10.9 Landmark-based relocalization](#109-landmark-based-relocalization)
+  - [10.10 Design Rationale](#1010-design-rationale)
+
+- [11. Recording and Playback](#11-recording-and-playback)
+  - [11.1 High-Level Behaviour](#111-high-level-behaviour)
+  - [11.2 External Interfaces](#112-external-interfaces)
+  - [11.3 Design Rationale](#113-design-rationale)
+
+- [12. User Interface Design](#12-user-interface-design)
+  - [12.1 Design Rationale and Architecture](#121-design-rationale-and-architecture)
+  - [12.2 UI Layout and Components](#122-ui-layout-and-components)
+
+- [13. Technology Stack and System Summary](#13-technology-stack-and-system-summary)
+  - [13.1 Technology Stack](#131-technology-stack)
+  - [13.2 System Summary and Integration](#132-system-summary-and-integration)
+
+- [14. References](#14-references)
 ---
 
 # 1. General Architecture
