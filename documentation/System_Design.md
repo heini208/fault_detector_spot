@@ -7,16 +7,20 @@ to understand the system's architecture, use its capabilities, or contribute to 
 to the project's software, detailing not just *what* the system does, but *how* it does it. Upon reading, one should have a clear understanding of all major
 components, their interactions, and the design principles that enable the system's functionality and future extension.
 
+![Fault Detector Spot with prototype sensor head](images%2FSystem_Design%2Ffair_image.jpeg)
+
+*Figure X: The Fault Detector Spot system operating with a prototype sensor head mounted on the arm.
+
 To achieve this, the document is organized into several key sections, moving from a high-level overview to detailed implementation specifics.
 By following this structure, this document aims to be an all-in-one resource for anyone working with the Fault Detector Spot project.
 
 INHALTSANGABE
+---
 
 # 1. General Architecture
 
-The Systems architecture follows the principles of modularity, reusability, and transparency. Each subsystem, navigation, manipulation, data acquisition, and
-user
-interaction, can operate independently while being orchestrated through a shared behavioural control layer.
+The system’s architecture follows the principles of modularity, reusability, and transparency. Each subsystem, navigation, manipulation, data acquisition, and
+user interaction, can operate independently while being orchestrated through a shared behavioural control layer.
 
 At the center of the architecture is the behaviour tree (BT), which functions as the system’s control and coordination core.  
 It continuously monitors incoming commands and system states, deciding which behaviour to execute at any given time.  
@@ -32,9 +36,9 @@ processes without external supervisory nodes.
 It also ensures that each command is executed deterministically, with built-in handling for cancellation, error conditions, and feedback publication.
 
 The result is a modular yet unified control structure: new behaviours can be introduced by extending the tree with additional branches, while the communication
-and data exchange between components remain standardized through ROS 2 topics, services, and the shared blackboard.
+and data exchange between components remain standardized through ROS2 topics, services, and the shared blackboard.
 
-An architectural overview is provided as a diagram all behaviour tree and system architecture diagrams were created using [Draw.io](https://app.diagrams.net/).
+An architectural overview is provided as a diagram. All behaviour tree and system architecture diagrams were created using [Draw.io](https://app.diagrams.net/).
 
 ![general_architecture.png](images%2FSystem_Design%2Fgeneral_architecture.png)
 *Figure: High-level software architecture of the ROS2 system developed.*
@@ -65,9 +69,9 @@ action.
 
 This modular and message-driven structure allows the system to:
 
-- React to external inputs in real time.
+- React to external inputs in real-time.
 - Integrate new actions without modifying core logic.
-- Maintain synchronized state feedback across all subsystems
+- Maintain synchronized state feedback across all subsystems.
 
 ## 2.2 System Components
 
@@ -77,7 +81,7 @@ The User Interface provides the main entry point for system control and monitori
 
 - Send commands (e.g., manipulator goals, navigation goals, scanning sequences).
 - Manage recorded command sequences.
-- View system state, queue contents, and behaviour execution status in real time.
+- View system state, queue contents, and behaviour execution status in real-time.
 
 All commands issued via the UI use the same communication pathway as recorded test commands, ensuring consistent handling between manual and autonomous
 operation.
@@ -91,10 +95,10 @@ automated control agent without structural changes to the rest of the system.
 *Figure: Graphical user interface of the Fault Detector Spot system, showing status overview, emergency stop, and tabs for manipulation, base movement,
 navigation, and recording control.*
 
-### 2.2.2 Spot ROS 2 Driver Integration
+### 2.2.2 Spot ROS2 Driver Integration
 
-The system interfaces with the Boston Dynamics Spot robot through the official [Spot ROS 2 driver](https://github.com/bdaiinstitute/spot_ros2), which bridges
-the Spot SDK into the ROS 2 ecosystem. The driver exposes major robot capabilities as ROS 2 topics, services, and actions, enabling external control and
+The system interfaces with the Boston Dynamics Spot robot through the official [Spot ROS2 driver](https://github.com/bdaiinstitute/spot_ros2), which bridges
+the Spot SDK into the ROS2 ecosystem. The driver exposes major robot capabilities as ROS2 topics, services, and actions, enabling external control and
 monitoring without directly using the Spot SDK. For a detailed overview of the Spot robot platform and its technical specifications, please refer to the
 separate [Boston Dynamics Spot Platform Description](boston_dynamics_spot_description.md) document.
 
@@ -122,14 +126,14 @@ Each low-level command is mapped to a dedicated subtree, maintaining separation 
 ### 2.3.1 Navigation Control
 
 Navigation commands control the Spot base, manage maps, and maintain localization.  
-They build on the ROS 2 navigation stack `nav2`, `rtabmap_ros` and the Spot ROS 2 driver, combining autonomous motion planning with Spot’s internal safety
+They build on the ROS2 navigation stack `nav2`, `rtabmap_ros` and the Spot ROS2 driver, combining autonomous motion planning with Spot’s internal safety
 systems.
 
 Key capabilities:
 
 - **Mapping and Map Navigation**
     - Create new maps using SLAM (`rtabmap_ros`) from Spot’s odometry and vision.
-    - Save and load maps to enable re-localization in known environments.
+    - Save and load maps to enable relocalization in known environments.
     - Manage waypoints (define, name, store) as navigation targets.
     - Plan collision-free paths between waypoints or user-defined goals via `nav2`.
 
@@ -138,12 +142,12 @@ Key capabilities:
     - Preserve Spot’s native safety (obstacle avoidance, balance, gait control) by sending target poses rather than low-level leg commands.
     - Support motion relative to the robot’s frame or to detected markers (e.g., AprilTags) for precise positioning and alignment.
 
-This layered approach provides high-level navigation planning in ROS 2 while preserving Spot’s built-in mobility and safety behaviour.
+This layered approach provides high-level navigation planning in ROS2 while preserving Spot’s built-in mobility and safety behaviour.
 
 ### 2.3.2 Manipulation Control
 
 Manipulation commands operate the Spot Arm and attached sensor head.  
-Using ROS 2 motion planning tools, the system supports both Cartesian and joint-space motions for scanning and interaction tasks.
+Using ROS2 motion planning tools, the system supports both Cartesian and joint-space motions for scanning and interaction tasks.
 
 Commanded poses can be specified:
 
@@ -221,7 +225,7 @@ system into a scriptable robotic test platform.
 
 ## 2.7 System Startup and Launch
 
-The core ROS 2 nodes of the Fault Detector Spot system are started using a unified launch file:
+The core ROS2 nodes of the Fault Detector Spot system are started using a unified launch file:
 
 - **Launch file:** [`launch/fault_detector_launch.py`](..%2Flaunch%2Ffault_detector_launch.py)
 - **Main nodes started:**
@@ -253,8 +257,8 @@ This data-driven, modular organization ensures a clear separation of responsibil
 
 # 4. Design Rationale
 
-- **ROS 2 Integration:**  
-  ROS 2 provides distributed communication via topics, services, and actions, enabling flexible orchestration between Spot’s hardware interfaces and custom
+- **ROS2 Integration:**  
+  ROS2 provides distributed communication via topics, services, and actions, enabling flexible orchestration between Spot’s hardware interfaces and custom
   behaviour logic.
 
 - **Behaviour Trees over Finite State Machine:**  
@@ -267,15 +271,16 @@ This data-driven, modular organization ensures a clear separation of responsibil
   Enables repeatable testing, benchmarking, and demonstration of inspection routines, which is critical in research contexts and aligns with project
   deliverables defined in the Requirements Specification.
 
----
-Overall the system’s modular design enables seamless interaction between autonomous decision-making and manual control while remaining flexible for future
+
+Overall, the system’s modular design enables seamless interaction between autonomous decision-making and manual control while remaining flexible for future
 sensor integration and algorithmic extensions.  
-Each subsystem can operate independently or as part of the full execution pipeline, ensuring both scalability and maintainability core design goals stated in
-the Requirements Specification.
+Each subsystem can operate independently or as part of the full execution pipeline, ensuring both scalability and maintainability, which are core design goals
+stated in the Requirements Specification.
+---
 
 # 5. Interface Summary
 
-This section summarizes the main ROS 2 interfaces exposed by the system for user interfaces, automated agents, and test tools.  
+This section summarizes the main ROS2 interfaces exposed by the system for user interfaces, automated agents, and test tools.  
 For full message structures and per-command details, see the separate [interface reference document](interface_reference_document.md).
 
 ## 5.1 Command Input
@@ -315,6 +320,8 @@ Commands for mapping, navigation, and recording are sent via `fault_detector/com
 e.g. `CREATE_MAP`, `SWAP_MAP`, `MOVE_TO_WAYPOINT`, `ADD_TAG_AS_LANDMARK`, `START_SLAM`, `START_LOCALIZATION`) and associated
 fields (`map_name`, `waypoint_name`, `tag`, `wait_time`).
 
+---
+
 # 6. Detailed Behaviour Tree Design
 
 This section explains how each part of the system is implemented and interacts internally, bridging the gap between high-level architecture and operational
@@ -325,20 +332,20 @@ behaviour. It focuses on subsystems, internal data handling, software dependenci
 
 > In this section, "nodes" refer to behaviour tree nodes, which are logical elements  
 > of the behaviour tree (actions, conditions, and control-flow structures).  
-> They are distinct from ROS 2 nodes, which are the software processes that  
+> They are distinct from ROS2 nodes, which are the software processes that  
 > implement the system’s functionality and communicate via topics,  
 > services, or actions.
 
 </details>
 
-In a typical ROS 2 + py_trees setup:
+In a typical ROS2 + py_trees setup:
 
-- The behaviour tree is hosted within a single ROS 2 node.
+- The behaviour tree is hosted within a single ROS2 node.
 - Each tree-node is a Python object and may:
-    - Publish or subscribe to ROS 2 topics
-    - Call ROS 2 services
-    - Use ROS 2 timers
-- All tree-nodes execute within the context of the host ROS 2 node, meaning they share the same process and runtime environment.
+    - Publish or subscribe to ROS2 topics
+    - Call ROS2 services
+    - Use ROS2 timers
+- All tree-nodes execute within the context of the host ROS2 node, meaning they share the same process and runtime environment.
 
 The following subsections describe the custom components and their interactions that form the developed control system.  
 However, the design and internal functionality of major third-party components such as **spot_ros2**, **apriltag_ros**, **nav2**, and **rtabmap_ros** are not
@@ -353,8 +360,8 @@ achieve coordinated control, perception, and feedback.
 The behaviour of the system is organized and executed through a hierarchical behaviour tree (BT) implemented with the `py_trees` and `py_trees_ros` frameworks.
 This approach provides modularity, scalability, and clarity in defining complex robot behaviours by composing them from smaller, reusable building blocks.
 
-The main entry point of the behaviour tree is defined in the `bt_runner.py` file. The system runs as a single ROS 2 node (`bt_driver`), hosting the entire tree.
-Within this node, individual tree-nodes (actions, checks, and control structures) are defined as Python objects that interact with the rest of the ROS 2 system
+The main entry point of the behaviour tree is defined in the `bt_runner.py` file. The system runs as a single ROS2 node (`bt_driver`), hosting the entire tree.
+Within this node, individual tree-nodes (actions, checks, and control structures) are defined as Python objects that interact with the rest of the ROS2 system
 through topics, services, and actions.
 
 The root node of the tree is a **Parallel** composite titled `"FaultDetectorSpot"`, which contains three major subtrees:
@@ -371,9 +378,9 @@ The separation into three subtrees is used for clarity and modularity:
 - The **Publisher Tree** ensures consistent outward communication of system states and updates.
 
 This division mirrors the natural flow of information through the system, from perception to decision to communication, allowing each subsystem to operate
-independently while remaining synchronized through shared blackboard variables and ROS 2 communication channels.
+independently while remaining synchronized through shared blackboard variables and ROS2 communication channels.
 
-The Subtree structure can be seen in the diagram built using [draw.io](https://www.drawio.com/) below, with notation adapted
+The subtree structure can be seen in the diagram built using [draw.io](https://www.drawio.com/) below, with notation adapted
 from [Behaviour Trees in Robotics and AI](https://arxiv.org/abs/1709.00084): An
 Introduction by Michele Colledanchise &
 Petter Ögren. This notation will be used consistently in the following chapters to illustrate each subtree in more detail.
@@ -403,14 +410,14 @@ scanning procedure. These commands can be broadly divided into two categories: *
 Basic Commands are minimal instructions that only contain a command identifier. They represent discrete, self-contained operations like starting or stopping a
 behaviour, toggling a component state, or triggering an emergency stop. Complex Commands, in contrast, can carry additional contextual information. This may
 include spatial offsets, tag references, orientation modes, timing parameters, or mapping context. Complex commands enable parameterized control and are
-represented by separate ROS 2 message types that expand on the `BasicCommand` structure.
+represented by separate ROS2 message types that expand on the `BasicCommand` structure.
 
 Although multiple specialized message types could have been defined for each command variation, this approach was intentionally avoided. While having distinct
 message definitions would provide stronger type safety, it would also increase the development effort required when introducing new command types. The chosen
 design enables flexibility and rapid extension. Once the final command set is known, this trade-off
 may be reconsidered, as the high modularity of the system enables swapping out the command handler without altering individual commands.
 
-Incoming commands are handled by the **CommandSubscriber** behaviour tree node. This node subscribes to two custom ROS 2 topics found in
+Incoming commands are handled by the **CommandSubscriber** behaviour tree node. This node subscribes to two custom ROS2 topics found in
 the [fault_detector_msgs package](https://github.com/heini208/fault_detector_msgs): one for basic commands and one
 for complex commands. Both types are queued internally upon reception, time-sorted, and then converted into internal command objects. These are appended
 to a command buffer on the system’s blackboard, where they can be accessed by other tree components responsible for execution.
@@ -451,7 +458,7 @@ use cases.
 <details>
   <summary><strong>Note on limitation (click to expand)</strong></summary>
 
-> The system presently uses separate ROS 2 subscribers for Basic Commands and Complex Commands, even though both forward incoming messages into the same
+> The system presently uses separate ROS2 subscribers for Basic Commands and Complex Commands, even though both forward incoming messages into the same
 > callback and unified processing pipeline. When commands of both types are published in quick succession, for example in recorded playback scenarios, their
 > relative order may occasionally become inconsistent. This has so far only been observed during recorded message replay but not during live operation.
 >
@@ -645,7 +652,7 @@ The exact functionality of each command will become clear either:
 # 7. Sensing Subtree
 
 The Sensing Tree handles all incoming data and system inputs. This includes sensor data (e.g., detected AprilTags, robot poses) and, as already mentioned, user
-commands from the UI. Its main goal is to keep the system aware of its surroundings and incoming requests in real time.
+commands from the UI. Its main goal is to keep the system aware of its surroundings and incoming requests in real-time.
 
 As shown in the **Sensing Tree overview diagram** below (see Figure),  
 the Sensing Subtree runs several behaviours in parallel, including:
@@ -660,8 +667,7 @@ the Sensing Subtree runs several behaviours in parallel, including:
 
 The ScanForTags Sequence combines multiple components:
 
-- [**DetectVisibleTags**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fdetect_visible_tags.py) and [**HandCameraTagDetection
-  **](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fhand_camera_tag_detection.py) are responsible for scanning for AprilTags.
+- [**DetectVisibleTags**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fdetect_visible_tags.py) and [**HandCameraTagDetection**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fhand_camera_tag_detection.py) are responsible for scanning for AprilTags.
 - [**CheckTagReachability**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcheck_tag_reachability.py) determines whether a detected tag is
   reachable.
 - [**VisibleTagToMap**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fvisible_tag_to_map.py) transforms the detected tag poses into the global
@@ -670,9 +676,7 @@ The ScanForTags Sequence combines multiple components:
 The AprilTag detection is based on both the Spot driver’s integrated fiducial detection (which publishes AprilTags
 directly into the TF tree) and the external [`apriltag_ros`](https://github.com/AprilRobotics/apriltag_ros) package.
 The additional use of [`apriltag_ros`](https://github.com/AprilRobotics/apriltag_ros) is necessary since the Spot driver does not include the arm-mounted camera
-in
-its fiducials detection. This allows the arm to move independently, scan for reference tags beyond the main camera’s field
-of view, and then navigate to precise scanning points.
+in its fiducials detection. This allows the arm to move independently, scan for reference tags beyond the main camera’s field of view, and then navigate to precise scanning points.
 
 ![sensing_subtree_diagram.png](images/System_Design/sensing_subtree_diagram.png)
 
@@ -708,9 +712,9 @@ The following section explains how fiducials are detected, transformed, and enri
 
 The system uses **AprilTags of the 36h11 family**, a robust and widely used encoding suitable for localization, mapping, and manipulation.
 
-An example configuration and usage snippet is provided in the appendix (see [Appendix 1: Example AprilTag (ID: 0)](#appendix-1-example-apriltag-id-0))
+An example configuration and usage snippet is provided in the appendix (see [Appendix 1: Example AprilTag (ID: 0)](#appendix-1-example-apriltag-id-0)).
 
-All tags used in this project were generated using the online [AprilTag generator](https://chaitanyantr.github.io/apriltag.html)
+All tags used in this project were generated using the online [AprilTag generator](https://chaitanyantr.github.io/apriltag.html).
 
 AprilTags are used because they provide reliable, uniquely identifiable visual fiducials that remain detectable even under challenging lighting,
 motion, or viewing-angle conditions.
@@ -733,7 +737,7 @@ For each detected tag, Spot automatically publishes:
 - a fully estimated 6-DoF pose (position + orientation),
 - transforms linking it to the robot’s internal frames.
 
-Because these frames are inserted directly into Spot’s TF tree, they can be transformed into any connected frame, such as `body`, `odom` or `world`
+Because these frames are inserted directly into Spot’s TF tree, they can be transformed into any connected frame, such as `body`, `odom` or `world`.
 
 A visualization of the TF structure is included in the appendix  
 (see [Appendix 2: TF Tree for Spot AprilTag Detections](#appendix-2-tf-tree-for-spot-apriltag-detections)).
@@ -794,7 +798,7 @@ By separating these steps, the system ensures efficiency, safety, and clear feed
 *Figure: Publisher (Feedback) Subtree of the behaviour tree.*
 
 The Feedback Subtree is responsible for exposing the internal state of the system to external consumers (UI, monitoring tools, SLAM) without affecting core
-decision-making. It runs in parallel to the Sensing and Buffered Command subtrees and publishes a small set of well-defined ROS 2 topics, as summarized in the
+decision-making. It runs in parallel to the Sensing and Buffered Command subtrees and publishes a small set of well-defined ROS2 topics, as summarized in the
 [Interface Summary](#1-interface-summary).
 
 The main components are:
@@ -879,7 +883,6 @@ The detailed relocalization logic and its interaction with RTAB-Map are describe
 > In practice, LandmarkRelocalizer can provide a useful coarse relocalization when the robot is badly mis-localized. However, the resulting pose should be
 > treated as an approximate correction that still requires refinement by the normal RTAB-Map localization.
 </details>
----
 
 Overall, the Feedback Subtree provides:
 
@@ -888,14 +891,14 @@ Overall, the Feedback Subtree provides:
 - A standardized representation of visible and reachable tags, and
 - Automatic landmark-based relocalization support.
 
-All of these are made available via ROS 2 topics, so external clients can monitor and visualize system behaviour without direct access to internal BT structures
+All of these are made available via ROS2 topics, so external clients can monitor and visualize system behaviour without direct access to internal BT structures
 or the blackboard.
+---
 
 # 9. Local Motion Control
 
 Local motion control refers to the direct, immediate command of the robot's physical components, specifically its manipulator and base. Unlike global
-navigation, which plans long-distance paths across a map, local motion control focuses on executing precise, short-range movements. These actions are
-fundamental building blocks, for higher-level custom behaviors use to interact with the environment.
+navigation, which plans long-distance paths across a map, local motion control focuses on executing precise, short-range movements. These actions are fundamental building blocks that higher-level custom behaviours use to interact with the environment.
 
 This chapter details the two primary aspects of local motion control implemented in the system: manipulator control for the robotic arm and base control for the
 robot's body.
@@ -903,7 +906,7 @@ robot's body.
 ## 9.1 Manipulator Control
 
 Manipulator control provides the functionality to precisely position the Spot arm and its attached sensor head. The system's design abstracts the complexity of
-joint-level control by exposing a set of intuitive, task-oriented commands. These commands are executed via the Spot ROS 2 driver, which translates high-level
+joint-level control by exposing a set of intuitive, task-oriented commands. These commands are executed via the Spot ROS2 driver, which translates high-level
 goals into the necessary actions for the physical hardware.
 
 The core commands for basic arm states include:
@@ -925,7 +928,7 @@ It is crucial to note that the target pose is the origin of the AprilTag itself.
 center, inevitably causing a collision if the tag is mounted on a solid surface like a wall. Therefore, applying a standoff offset is essential for safe
 operation.
 
-This is the primary mode for reliable and repeatable inspection tasks. As illustrated by the `ManipulatorGetGoalTag` and `ManipulatorMoveArmAction` behaviors,
+This is the primary mode for reliable and repeatable inspection tasks. As illustrated by the `ManipulatorGetGoalTag` and `ManipulatorMoveArmAction` behaviours,
 the workflow is as follows:
 
 1. The system identifies the target AprilTag from the list of currently visible tags.
@@ -941,7 +944,7 @@ consistent.
 In this mode, movements are executed *relative to the manipulator's current position*. For example, issuing a "move 5cm left" command twice will result in a
 total movement of 10cm to the left from the original starting point.
 
-This mode is implemented in the `ManipulatorMoveRelativeAction` behavior. It is particularly useful for manual, iterative adjustments where the operator "jogs"
+This mode is implemented in the `ManipulatorMoveRelativeAction` behaviour. It is particularly useful for manual, iterative adjustments where the operator "jogs"
 the arm into a desired position. While intuitive for live control, this mode is less suitable for automated, repeatable sequences, as any deviation in the
 starting pose will propagate through all subsequent movements, leading to inaccurate final positioning.
 
@@ -949,7 +952,7 @@ starting pose will propagate through all subsequent movements, leading to inaccu
 
 A key feature of the manipulator control system is the ability to define movement offsets within different coordinate frames. The choice of frame is critical
 for ensuring the reliability and context-appropriateness of a command, especially when creating recorded sequences for autonomous operation. The system utilizes
-a combination of standard frames provided by the Spot platform and a persistent frame generated by the ROS 2 mapping system.
+a combination of standard frames provided by the Spot platform and a persistent frame generated by the ROS2 mapping system.
 
 The primary frames used for defining orientation offsets are:
 
@@ -959,13 +962,14 @@ The primary frames used for defining orientation offsets are:
 * **`odom` frame:** This is another standard Spot frame, which is fixed to the world at the robot's startup location. It provides session-specific
   repeatability, as all movements are relative to a consistent world orientation for as long as the robot remains powered on. This is useful for temporary
   setups, such as a trade show demonstration, where the environment is consistent for a single session.
-* **`map` frame:** This frame is generated by the ROS 2 mapping system (RTAB-Map) and represents the global coordinate system of the entire mapped environment.
+* **`map` frame:** This frame is generated by the ROS2 mapping system (RTAB-Map) and represents the global coordinate system of the entire mapped environment.
   It is the most robust frame for persistent, long-term autonomous tasks. As long as the mapping and localization system is active, the `map` frame provides a
   consistent "north" that persists across robot reboots and multiple sessions. A "move forward" command in the `map` frame will always correspond to the same
   global direction, ensuring true sequence reliability.
 
 The system also supports other native Spot frames like `vision` (a visually-corrected odometry frame) and `flat_body` (a gravity-aligned body frame), whose
-behaviors are documented by [Boston Dynamics](https://dev.bostondynamics.com/docs/concepts/geometry_and_frames.html). However, `body`, `odom`, and `map` are the
+behaviours are documented by [Boston Dynamics](https://dev.bostondynamics.com/docs/concepts/geometry_and_frames.html). However, `body`, `odom`, and `map` are
+the
 most relevant for establishing a command's context within this project.
 
 For all relative movement commands, the system is designed to use only the **orientation** of the selected frame. The positional component of the command is
@@ -980,7 +984,7 @@ parameter to determine the final orientation.
 The available presets are:
 
 * **`relative_to_tag`**: Matches the gripper's orientation to that of the detected AprilTag. This makes the gripper *parallel* to the tag's surface. During
-  development, this behavior was found to be unintuitive for tasks requiring the sensor to *face* the tag, as it does not automatically calculate the inverse
+  development, this behaviour was found to be unintuitive for tasks requiring the sensor to *face* the tag, as it does not automatically calculate the inverse
   orientation. It often served as a starting point that required further manual or calculated adjustments.
 * **`look_straight`**: Sets the gripper to a neutral, forward-facing orientation (identity quaternion), ignoring the tag's orientation.
 * **`look_left` / `look_right`**: Yaws the gripper 90 degrees to the left or right.
@@ -996,8 +1000,8 @@ descriptive commands.
 A significant consideration when using the manipulator is its **lack of active collision avoidance** for the gripper. While the arm has built-in protection to
 prevent collisions with the robot's own body, it will not automatically stop if its path is obstructed by an object in the environment.
 
-It's assumed that this is a deliberate design choice by the manufacturer, as collision avoidance would prevent the arm from performing intended physical
-interactions like grasping objects or pushing doors. However, for this project's application of non-invasive sensing, this presents a substantial risk of
+It is assumed that this is a deliberate design choice by the manufacturer, as collision avoidance would prevent the arm from performing intended physical
+interactions like grasping objects or pushing doors. However, given this project's focus on non-invasive sensing, this presents a substantial risk of
 damaging the sensor head.
 
 While developing a robust collision avoidance system, potentially involving pre-scanning an object, planning a safe trajectory, or using vision-based reactive
@@ -1009,7 +1013,7 @@ surrounding environment.
 
 Base control refers to the direct locomotion of the Spot robot, including fundamental actions like standing, walking, and rotating. Similar to manipulator
 control, this system does not implement low-level leg coordination or motion planning from scratch. Instead, it operates as a high-level command layer on top of
-the official Spot ROS 2 driver.
+the official Spot ROS2 driver.
 
 This layered approach is a key design choice, as it allows the system to leverage Boston Dynamics' sophisticated and extensively tested onboard controllers.
 When a command such as "move forward" is issued, the system translates it into a `synchro_se2_trajectory_point_command` and sends this high-level target pose to
@@ -1031,7 +1035,8 @@ enhances safety and precision, which is particularly important when performing t
 
 This mode enables the robot to position its base relative to a detected AprilTag. For example, a command can instruct the robot to align itself precisely 1.5
 meters in front of a specific tag. This is essential for tasks that require the robot to be at a consistent, repeatable standoff distance from an inspection
-point, regardless of its starting location in the wider environment. The `BaseGetGoalTag` behavior is responsible for processing the tag's position and applying
+point, regardless of its starting location in the wider environment. The `BaseGetGoalTag` behaviour is responsible for processing the tag's position and
+applying
 the requested offset to generate the final goal pose.
 
 #### 9.2.1.2 Base-Relative Poses
@@ -1049,7 +1054,7 @@ orientation modes; the robot's body simply moves to achieve the target pose.
 
 ### 9.2.3 Active Position Holding and Collision Avoidance
 
-A unique side effect of using the Spot driver for base movement is the robot's "active position holding" behavior. Once a base movement command is completed,
+A unique side effect of using the Spot driver for base movement is the robot's "active position holding" behaviour. Once a base movement command is completed,
 the driver actively works to maintain the robot's final pose. This manifests in two distinct ways:
 
 1. **Active Collision Avoidance:** If an external object, such as a person walking past or a closing door, encroaches on the robot's space, the robot will
@@ -1057,10 +1062,13 @@ the driver actively works to maintain the robot's final pose. This manifests in 
 2. **Position Correction:** Conversely, if the robot is physically pushed or drifts away from its commanded pose, it will autonomously move back to re-establish
    the target position.
 
-While this behavior is a powerful demonstration of the platform's reactive stability, it may not always be desirable, as the robot will continue to make minor
+While this behaviour is a powerful demonstration of the platform's reactive stability, it may not always be desirable, as the robot will continue to make minor
 adjustments. To return the robot to a neutral, idle standing state and disable this active holding, a `STOP_BASE` command can be issued. This effectively
 cancels the active goal. Additionally, a basic `STAND_UP` command is available to bring the robot to a ready, standing position after it has been powered on or
 is in a sitting state.
+
+---
+
 
 # 10. Mapping and Navigation
 
@@ -1096,11 +1104,11 @@ The subsystem supports the following workflow:
    final pose at each stop to reach the precision required for manipulation.
 
 The following subsections describe how this concept is realized using `nav2`, RTAB‑Map, and the underlying command set, and discuss the constraints and design
-decisions that resulted from operating without a dedicated lidar sensor.
+decisions that resulted from operating without a dedicated LiDAR sensor.
 
 ## 10.2 Constraints: RGB‑D Cameras Without LiDAR
 
-During development, the Spot platform was **not** equipped with the optional lidar payload. As a result, all mapping and localization had to rely on the five
+During development, the Spot platform was **not** equipped with the optional LiDAR payload. As a result, all mapping and localization had to rely on the five
 body-mounted depth cameras surrounding the robot.
 
 This introduces several challenges for classical 2D scan–based SLAM and AMCL:
@@ -1131,7 +1139,7 @@ Before adopting RTAB‑Map, several approaches were evaluated to use the depth c
    A custom [`PointCloudMerger`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fpointcloud_merger.py) component was implemented to combine range
    information from multiple cameras into a single synthetic 2D scan or pointcloud. This merged data was then fed into:
 
-- `slam_toolbox` for map building, and
+- `slam_toolbox` for map building.
 - AMCL (via `nav2`) for localization.
 
 While this worked in principle, several issues were observed:
@@ -1158,18 +1166,18 @@ This experience directly motivated the switch to RTAB‑Map, which is described 
 
 ## 10.4 Package Selection
 
-For navigation, the system is built around the ROS 2 Navigation Stack (`nav2`), which acts as the high-level planner and controller for the Spot base. `nav2`
-was chosen because it is the de‑facto standard navigation framework in ROS 2, integrates well with behaviour trees, and can treat Spot essentially as an
-omnidirectional mobile base by sending pose or velocity commands via the Spot ROS 2 driver.
+For navigation, the system is built around the ROS2 Navigation Stack (`nav2`), which acts as the high-level planner and controller for the Spot base. `nav2`
+was chosen because it is the de‑facto standard navigation framework in ROS2, integrates well with behaviour trees, and can treat Spot essentially as an
+omnidirectional mobile base by sending pose or velocity commands via the Spot ROS2 driver.
 
 For mapping and localization, an RGB‑D-based SLAM system, **RTAB‑Map**, is used instead of a classical 2D laser-based pipeline (`slam_toolbox` + AMCL). RTAB‑Map
 can consume multiple RGB‑D streams and odometry directly, making it better suited to the available sensor configuration on Spot (multiple depth cameras, but no
-lidar). RTAB‑Map produces a consistent map and a pose estimate in the map frame; `nav2` then uses this pose as its localization source while maintaining its own
+LiDAR). RTAB‑Map produces a consistent map and a pose estimate in the map frame; `nav2` then uses this pose as its localization source while maintaining its own
 2D costmaps and planners.
 
 In summary, the architecture is:
 
-- Spot ROS 2 driver → provides odometry, depth/RGB streams, and base control interfaces.
+- Spot ROS2 driver → provides odometry, depth/RGB streams, and base control interfaces.
 - RTAB‑Map → fuses odometry and depth/RGB data into a map and provides global localization.
 - `nav2` → consumes RTAB‑Map’s pose to plan and execute base motions using 2D costmaps.
 - Behaviour Tree → issues high-level mapping and navigation commands (e.g. `CREATE_MAP`, `START_SLAM`, `START_LOCALIZATION`, `MOVE_TO_WAYPOINT`), but delegates
@@ -1201,14 +1209,14 @@ was chosen because it is designed from the outset to handle **RGB‑D and multi-
 - Initial pose estimation remains challenging; this is partly addressed by the landmark-based relocalization mechanism that uses stored AprilTag landmarks to
   provide a coarse `/initialpose` when the robot is badly mis-localized.
 
-for more info view the [RTAB‑Map repository](https://github.com/introlab/rtabmap_ros).
+For more info see the [RTAB‑Map repository](https://github.com/introlab/rtabmap_ros).
 
-Under ideal conditions (single planar lidar, low latency), a `slam_toolbox` + AMCL pipeline would likely be simpler and more robust. However, with five
-networked depth cameras and no lidar, RTAB‑Map provides a more suitable basis for the mapping and navigation capabilities required by this project.
+Under ideal conditions (single planar LiDAR, low latency), a `slam_toolbox` + AMCL pipeline would likely be simpler and more robust. However, with five
+networked depth cameras and no LiDAR, RTAB‑Map provides a more suitable basis for the mapping and navigation capabilities required by this project.
 
 ## 10.5 Implementation Overview
 
-The mapping and navigation logic is implemented as a thin integration layer around RTAB‑Map, Nav2, and the Spot ROS 2 driver. Two helper components coordinate
+The mapping and navigation logic is implemented as a thin integration layer around RTAB‑Map, Nav2, and the Spot ROS2 driver. Two helper components coordinate
 most of the work:
 
 - [**`RTABHelper`**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Frtab_helper.py) – manages RTAB‑Map processes, map databases, and the JSON
@@ -1237,7 +1245,7 @@ At a high level:
 The individual mapping and navigation commands (e.g. `CREATE_MAP`, `SWAP_MAP`, `START_SLAM`, `START_LOCALIZATION`, `ADD_CURRENT_POSITION_WAYPOINT`,
 `MOVE_TO_WAYPOINT`...) are implemented as dedicated behaviour tree nodes that call into these helpers. Their detailed behaviour is
 documented
-in [detailed_command_descriptions.md](detailed_command_descriptions.md), only the overall flow is summarized here.
+in [detailed_command_descriptions.md](detailed_command_descriptions.md), while only the overall flow is summarized here.
 
 ---
 
@@ -1381,7 +1389,7 @@ Once `last_command.goal_pose` is set (from a waypoint, tag, or current pose), na
     - Any other terminal status → behaviour returns `FAILURE`.
 - The behaviour remains `RUNNING` while Nav2 is planning and executing.
 
-An additional support ROS2-node [`Nav2CmdVelGate`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fnav2_cmd_vel_gate.py), manages the Nav2
+An additional support ROS2 node [`Nav2CmdVelGate`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fnav2_cmd_vel_gate.py), manages the Nav2
 controller lifecycle (e.g. activating or deactivating the `controller_server` based on goal status). This was introduced because Nav2 would otherwise
 continuously publish velocity commands and block other sources of base control. By gating the controller, the system can safely mix goal‑based navigation with
 direct base movement commands without conflicts.
@@ -1392,14 +1400,14 @@ buffer or in recorded sequences.
 
 Nav2 itself is configured via the [`nav2_spot_params.yaml`](..%2Fconfig%2Fnav2_spot_params.yaml) file, which disables AMCL and the map server, subscribes
 directly to RTAB‑Map’s `/map` topic for the
-global costmap, and uses multi-source obstacle layers (depth cameras and, when available, base lidar) to build local and global costmaps suitable for Spot’s
+global costmap, and uses multi-source obstacle layers (depth cameras and, when available, base LiDAR) to build local and global costmaps suitable for Spot’s
 omnidirectional base.
 
 ---
 
 ## 10.9 Landmark-based relocalization
 
-Because the system runs without a lidar and relies on visual SLAM, initial pose estimation and recovery from large localization errors remain challenging. To
+Because the system runs without a LiDAR and relies on visual SLAM, initial pose estimation and recovery from large localization errors remain challenging. To
 mitigate this, the mapping subsystem integrates the **LandmarkRelocalizer** (see also Section 5.4):
 
 - Landmarks stored in the map JSON (via `RTABHelper.add_pose_as_landmark()`) provide “true” tag poses in the `map` frame.
@@ -1411,13 +1419,13 @@ mitigate this, the mapping subsystem integrates the **LandmarkRelocalizer** (see
 
 This mechanism is deliberately approximate. As discussed in the Feedback Subtree section, it is best used sparingly-primarily when the robot is severely
 mislocalized, so that RTAB‑Map can refine the pose again afterwards. Mapping and localization therefore remain the subsystem with the most potential for future
-improvement, especially once lidar data becomes available.
+improvement, especially once LiDAR data becomes available.
 
 ## 10.10 Design Rationale
 
 The design of the mapping and navigation subsystem is driven by a few key constraints and goals:
 
-- **Work with what the hardware provides (no lidar, multiple RGB‑D cameras)**  
+- **Work with what the hardware provides (no LiDAR, multiple RGB‑D cameras)**  
   The choice of RTAB‑Map over a `slam_toolbox` + AMCL pipeline follows directly from the available sensors.
 - **Make maps reusable and self‑contained**  
   Each map consists of:
@@ -1427,7 +1435,7 @@ The design of the mapping and navigation subsystem is driven by a few key constr
       and lets external tools reason about “where the robot can go” and “where it can relocalize” without inspecting internal SLAM data structures.
 - **Use RTAB‑Map and Nav2 as “replaceable” components**  
   The mapping and navigation stack is wired so that:
-    - RTAB‑Map could, in principle, be replaced by a lidar‑based SLAM system once a lidar is available, and
+    - RTAB‑Map could, in principle, be replaced by a LiDAR‑based SLAM system once a LiDAR is available, and
     - Nav2 parameters and controllers are configured via external YAML and launch files.  
       This aligns with the project’s research nature: the design should survive changes in SLAM or navigation backends with minimal impact on the Behaviour Tree
       and command layer.
@@ -1439,7 +1447,8 @@ The design of the mapping and navigation subsystem is driven by a few key constr
     - Then gradually move towards fully scripted inspection routines built on those maps.
 
 Overall, the design aims to provide a robust mapping/navigation foundation under imperfect sensing conditions, while keeping the control layer modular,
-testable, and open to future improvements (such as adding lidar or changing SLAM backends).
+testable, and open to future improvements (such as adding LiDAR or changing SLAM backends).
+---
 
 # 11. Recording and Playback
 
@@ -1447,7 +1456,7 @@ The Recording and Playback subsystem provides a way to capture, store, replay, a
 existing command pathway: recorded sequences are re-injected as `ComplexCommand` messages and therefore use the Behaviour Tree and command buffer exactly
 like live UI input.
 
-The external ROS 2 interface of this subsystem is described in the **Interface Summary** (see `fault_detector/record_control`
+The external ROS2 interface of this subsystem is described in the **Interface Summary** (see `fault_detector/record_control`
 and `fault_detector/recordings_list`). Example JSON structures for stored recordings are provided in the appendix (see [Appendix X: Example Recording Files]).
 
 ## 11.1 High-Level Behaviour
@@ -1459,7 +1468,7 @@ The subsystem supports four basic modes, controlled by the `CommandRecordControl
 - `play` – replay a previously recorded sequence.
 - `delete` – remove a stored recording.
 
-Internally, a [recorder ROS2-node](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fui_classes%2Frecording_controls.py):
+Internally, a [recorder ROS2 node](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fui_classes%2Frecording_controls.py):
 
 1. Subscribes to the command topic used by the UI and other clients (`fault_detector/commands/complex_command`).
 2. When in `start` mode, appends each incoming command (with timestamp) to an in-memory list.
@@ -1473,7 +1482,7 @@ is exercised in the same way during regression tests.
 
 ## 11.2 External Interfaces
 
-The Recording and Playback subsystem is controlled entirely through ROS 2 topics and does not depend on any specific user interface implementation.
+The Recording and Playback subsystem is controlled entirely through ROS2 topics and does not depend on any specific user interface implementation.
 
 Two topics are used (see also the Interface Summary): TODO interface link
 
@@ -1507,6 +1516,7 @@ to the Behaviour Tree or recorder internals.
 
 In summary, the Recording and Playback subsystem turns the command interface into a scriptable test and demonstration channel without introducing special‑case
 logic into the Behaviour Tree or robot control stack.
+---
 
 # 12. User Interface Design
 
@@ -1514,18 +1524,18 @@ To control the robot and visualize its state, a graphical user interface (GUI) w
 the [PyQt5](https://pypi.org/project/PyQt5/#:~:text=PyQt5%20is%20a%20comprehensive%20set,platforms%20including%20iOS%20and%20Android.) framework. The design
 philosophy behind
 the UI was to create a comprehensive development tool that exposes the system's full functionality in a clear and accessible manner. Rather than aiming for a
-polished, simplified end-user product, the interface serves as a simple interface for developers and researchers to conduct tests, validate behaviors, and
+polished, simplified end-user product, the interface serves as a simple interface for developers and researchers to conduct tests, validate behaviours, and
 debug the system in real-time.
 
 ## 12.1 Design Rationale and Architecture
 
 The UI is intentionally loosely coupled to the rest of the system, prioritizing expandability and testability. This is achieved by ensuring all communication
-between the UI and the robot's control logic occurs exclusively through the public ROS 2 topics defined by the system architecture. The UI acts as a client,
+between the UI and the robot's control logic occurs exclusively through the public ROS2 topics defined by the system architecture. The UI acts as a client,
 publishing `ComplexCommand` messages to send instructions and subscribing to various feedback topics to receive state updates.
 
 This architectural separation is a critical feature, as it means the UI can be modified or even completely replaced without any changes to the underlying
-behavior tree or robot-side logic. Any alternative client-such as a command-line tool, a web-based interface, or a future AI-driven control agent-could be
-developed by interacting with the same set of ROS 2 interfaces.
+behaviour tree or robot-side logic. Any alternative client-such as a command-line tool, a web-based interface, or a future AI-driven control agent-could be
+developed by interacting with the same set of ROS2 interfaces.
 
 Despite its focus on developer functionality, the UI incorporates user-friendly features and safety checks to strike a balance between power and usability. For
 example, it provides descriptive labels for offsets (e.g., "forward" and "left" instead of abstract axes like `+X` and `-Y`), validates user input to prevent
@@ -1548,14 +1558,15 @@ context-specific commands.
 The sections at the top and bottom of the window are always visible, regardless of the selected tab. This ensures that critical information and universal
 controls are permanently accessible.
 
-* **Status Display:** A block of labels at the top-left provides real-time feedback on the system's state, including ROS 2 connection status, the contents of
+* **Status Display:** A block of labels at the top-left provides real-time feedback on the system's state, including ROS2 connection status, the contents of
   the command buffer, the status of the last executed command, and whether the navigation system is active.
 * **Visible Tags:** This label provides a list of all currently detected AprilTags. To give immediate feedback on manipulator reachability, tags that are within
   the arm's range are colored green, while those that are visible but out of reach are colored red.
 
 ![A close-up of the UI status panel showing a 'stow_arm' command was sent, a buffer with queued commands, the current running status as 'move_to_tag', and visible tags 1 and 3.](images%2FSystem_Design%2FUI%2Fui_with_feedback.png)
 
-*Figure 5: The real-time status display area of the UI. It shows the last command sent, the current command buffer, the execution status of the active behavior,
+*Figure 5: The real-time status display area of the UI. It shows the last command sent, the current command buffer, the execution status of the active
+behaviour,
 and the list of visible AprilTags.*
 
 * **Emergency Stop:** A large, red "EMERGENCY STOP" button is prominently placed at the top-right, allowing for immediate cancellation of all robot actions.
@@ -1572,8 +1583,6 @@ and the list of visible AprilTags.*
 The central area of the UI is a tabbed widget that separates controls into logical groups based on the system's main capabilities.
 
 #### 12.2.2.1 Manipulation Control
-
-*Figure 2: The "Manipulation Movement Control" tab.*
 
 As shown in Figure 1, this tab exposes all functions related to the Spot arm. It includes fields for entering a target tag ID, specifying positional and
 orientation offsets in various coordinate frames, and selecting preset orientation modes. It also provides buttons for basic actions
@@ -1603,8 +1612,9 @@ The navigation tab (Figure 3) centralizes all functions related to mapping and l
 * Command the robot to navigate to a saved waypoint.
 
 By organizing the controls into these distinct tabs, the interface is less cluttered while providing comprehensive access to every feature implemented in the
-behavior tree. The functionality of each button maps directly to the commands described in previous chapters, effectively making the UI a complete graphical
+behaviour tree. The functionality of each button maps directly to the commands described in previous chapters, effectively making the UI a complete graphical
 front-end for the system's command-and-control architecture.
+---
 
 # 13. Technology Stack and System Summary
 
@@ -1615,26 +1625,27 @@ these components interoperate to deliver the project's core functionalities, fro
 
 The system is built upon a foundation of industry-standard robotics software, integrated with custom components to meet the project's specific requirements.
 
-* **Core Framework: ROS 2 Humble Hawksbill**
-  The entire system is orchestrated within the Robot Operating System 2 (ROS 2), which provides the fundamental tools for distributed, message-based
+* **Core Framework: ROS2 Humble Hawksbill**
+  The entire system is orchestrated within the Robot Operating System 2 (ROS2), which provides the fundamental tools for distributed, message-based
   communication between all software modules (nodes).
 
 * **Robot Platform and Driver: Boston Dynamics Spot**
   The physical hardware platform is the Boston Dynamics Spot robot, equipped with the optional manipulator arm. All interaction with the robot is managed
-  through the official `spot_ros2` driver (interfacing with Spot SDK v5.0.1), which exposes the robot's sensors and actuators as standard ROS 2 topics,
+  through the official `spot_ros2` driver (interfacing with Spot SDK v5.0.1), which exposes the robot's sensors and actuators as standard ROS2 topics,
   services, and actions.
 
-* **Behavioral Control: `py_trees`**
-  The system's decision-making logic is implemented as a behavior tree using the `py_trees` and `py_trees_ros` libraries. This hierarchical and reactive control
+* **Behavioural Control: `py_trees`**
+  The system's decision-making logic is implemented as a behaviour tree using the `py_trees` and `py_trees_ros` libraries. This hierarchical and reactive
+  control
   structure was chosen over a traditional finite-state machine for its superior scalability, readability, and flexibility in managing complex, parallel
-  behaviors.
+  behaviours.
 
 * **Mapping and Localization: RTAB-Map**
   Due to the absence of a LiDAR sensor, the system relies on the robot's five body-mounted RGB-D cameras for perception. **RTAB-Map** (`rtabmap_ros`) was
   selected as the SLAM (Simultaneous Localization and Mapping) solution because it is natively designed to process visual and depth information, making it
   well-suited for this sensor configuration.
 
-* **Navigation: ROS 2 Navigation Stack (Nav2)**
+* **Navigation: ROS2 Navigation Stack (Nav2)**
   High-level path planning and navigation to waypoints are handled by **Nav2**. It consumes the map and localization data from RTAB-Map to generate
   collision-free paths, treating the Spot robot as an omnidirectional base.
 
@@ -1650,17 +1661,18 @@ The system is built upon a foundation of industry-standard robotics software, in
   The standard ROS visualization tool, **RViz**, is used extensively for monitoring the system's state, including visualizing the generated map, the robot's
   estimated pose, planned navigation paths, and sensor data.
 
-* **Documentation** 
-The text of this thesis was written by the author. Formatting as well as grammatical and semantic refinement was assisted by generative AI tools, including Google's Gemini 2.5 Pro and OpenAI's ChatGPT 5.1.
-Diagrams were created using Draw.io.
+* **Documentation**
+  The text of this thesis was written by the author. Formatting as well as grammatical and semantic refinement was assisted by generative AI tools, including
+  Google's Gemini 2.5 Pro and OpenAI's ChatGPT 5.1.
+  Diagrams were created using Draw.io.
 
 ## 13.2 System Summary and Integration
 
-The architecture of the Fault Detector Spot system is defined by its modularity and the clear separation of concerns, managed by a central behavior tree. The
+The architecture of the Fault Detector Spot system is defined by its modularity and the clear separation of concerns, managed by a central behaviour tree. The
 system successfully integrates three primary capabilities, Local Motion Control, Mapping and Navigation, and Command Recording, into one system, all
 managed through a flexible command interface.
 
-At its core, the behavior tree runs three parallel subtrees for **Sensing**, **Command Execution**, and **Feedback**. This design ensures that the system is
+At its core, the behaviour tree runs three parallel subtrees for **Sensing**, **Command Execution**, and **Feedback**. This design ensures that the system is
 always aware of its environment and user inputs, can execute commands in a controlled and sequential manner, and provides continuous, real-time feedback to the
 operator.
 
@@ -1676,6 +1688,7 @@ Critically, the **Recording and Playback** subsystem allows this entire complex 
 the exact same execution path as live commands, this feature turns the system into a scriptable platform for fully automated and repeatable testing and
 inspection tasks. The loosely coupled user interface serves as the primary development tool for creating and validating these sequences, but its architectural
 separation means it can be readily replaced by other control clients without altering the robust underlying logic.
+---
 
 # 14. References
 
@@ -1689,8 +1702,9 @@ separation means it can be readily replaced by other control clients without alt
 - Splintered‑Reality. *py_trees_ros*. GitHub. Available
   at: [https://github.com/splintered-reality/py_trees_ros](https://github.com/splintered-reality/py_trees_ros)
 - Steve Macenski. *slam_toolbox*. GitHub. Available at: [https://github.com/SteveMacenski/slam_toolbox](https://github.com/SteveMacenski/slam_toolbox)
-- Boston Dynamics. Geometry and Frames. Available at: https://dev.bostondynamics.com/docs/concepts/geometry_and_frames.html. Accessed on 2.11.2025.
-  https://pypi.org/project/PyQt5/#:~:text=PyQt5%20is%20a%20comprehensive%20set,platforms%20including%20iOS%20and%20Android.
+- Boston Dynamics. Geometry and Frames. Available at: https://dev.bostondynamics.com/docs/concepts/geometry_and_frames.html.
+- PyQt5. *Python Qt bindings.* Available at: https://pypi.org/project/PyQt5/#:~:text=PyQt5%20is%20a%20comprehensive%20set,platforms%20including%20iOS%20and%20Android.
+---
 
 # Appendix
 
