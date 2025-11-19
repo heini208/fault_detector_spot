@@ -1,5 +1,7 @@
 # System Design Document
 
+This system and the accompanying documentation were developed by Marcel Stemmeler in the context of a master's project.
+
 This document provides a comprehensive technical description of the Fault Detector Spot system. It is intended for developers, researchers, and users who wish
 to understand the system's architecture, use its capabilities, or contribute to its development. The goal of this documentation is to serve as a complete guide
 to the project's software, detailing not just *what* the system does, but *how* it does it. Upon reading, one should have a clear understanding of all major
@@ -1656,6 +1658,10 @@ The system is built upon a foundation of industry-standard robotics software, in
 * **Visualization and Debugging: RViz**
   The standard ROS visualization tool, **RViz**, is used extensively for monitoring the system's state, including visualizing the generated map, the robot's
   estimated pose, planned navigation paths, and sensor data.
+
+* **Documentation** 
+The text of this thesis was written by the author. Formatting as well as grammatical and semantic refinement was assisted by generative AI tools, including Google's Gemini 2.5 Pro and OpenAI's ChatGPT 5.1.
+Diagrams were created using Draw.io.
 
 ## 2. System Summary and Integration
 
