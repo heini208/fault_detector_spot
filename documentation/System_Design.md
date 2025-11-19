@@ -1,6 +1,12 @@
 # System Design Document
 
-GENERAL CONCEPT OF THIS DOCUMENT
+This document provides a comprehensive technical description of the Fault Detector Spot system. It is intended for developers, researchers, and users who wish
+to understand the system's architecture, use its capabilities, or contribute to its development. The goal of this documentation is to serve as a complete guide
+to the project's software, detailing not just *what* the system does, but *how* it does it. Upon reading, one should have a clear understanding of all major
+components, their interactions, and the design principles that enable the system's functionality and future extension.
+
+To achieve this, the document is organized into several key sections, moving from a high-level overview to detailed implementation specifics.
+By following this structure, this document aims to be an all-in-one resource for anyone working with the Fault Detector Spot project.
 
 INHALTSANGABE
 
@@ -85,10 +91,10 @@ navigation, and recording control.*
 
 ### 2. Spot ROS 2 Driver Integration
 
-The system interfaces with the Boston Dynamics Spot robot through the official [Spot ROS 2 driver](https://github.com/boston-dynamics/spot_ros2), which bridges
-the Spot SDK into the ROS 2 ecosystem.  
-The driver exposes major robot capabilities as ROS 2 topics, services, and actions, enabling external control and monitoring without directly using the Spot
-SDK.
+The system interfaces with the Boston Dynamics Spot robot through the official [Spot ROS 2 driver](https://github.com/bdaiinstitute/spot_ros2), which bridges
+the Spot SDK into the ROS 2 ecosystem. The driver exposes major robot capabilities as ROS 2 topics, services, and actions, enabling external control and
+monitoring without directly using the Spot SDK. For a detailed overview of the Spot robot platform and its technical specifications, please refer to the
+separate [Boston Dynamics Spot Platform Description](boston_dynamics_spot_description.md) document.
 
 The integrated driver (Spot SDK **v5.0.1**) provides access to:
 
@@ -1445,7 +1451,7 @@ testable, and open to future improvements (such as adding lidar or changing SLAM
 # Recording and Playback
 
 The Recording and Playback subsystem provides a way to capture, store, replay, and delete command sequences. It is implemented as a thin layer around the
-existing command pathway: recorded sequences are re-injected as `ComplexCommand` messages and therefore traverse the Behaviour Tree and command buffer exactly
+existing command pathway: recorded sequences are re-injected as `ComplexCommand` messages and therefore use the Behaviour Tree and command buffer exactly
 like live UI input.
 
 The external ROS 2 interface of this subsystem is described in the **Interface Summary** (see `fault_detector/record_control`
@@ -1607,9 +1613,72 @@ By organizing the controls into these distinct tabs, the interface is less clutt
 behavior tree. The functionality of each button maps directly to the commands described in previous chapters, effectively making the UI a complete graphical
 front-end for the system's command-and-control architecture.
 
-# Technology Stack and Summary
+# Technology Stack and System Summary
 
+This chapter provides a consolidated overview of the key software technologies and frameworks that constitute the system's architecture. It also summarizes how
+these components interoperate to deliver the project's core functionalities, from low-level robot control to high-level autonomous routines.
 
+## 1. Technology Stack
+
+The system is built upon a foundation of industry-standard robotics software, integrated with custom components to meet the project's specific requirements.
+
+* **Core Framework: ROS 2 Humble Hawksbill**
+  The entire system is orchestrated within the Robot Operating System 2 (ROS 2), which provides the fundamental tools for distributed, message-based
+  communication between all software modules (nodes).
+
+* **Robot Platform and Driver: Boston Dynamics Spot**
+  The physical hardware platform is the Boston Dynamics Spot robot, equipped with the optional manipulator arm. All interaction with the robot is managed
+  through the official `spot_ros2` driver (interfacing with Spot SDK v5.0.1), which exposes the robot's sensors and actuators as standard ROS 2 topics,
+  services, and actions.
+
+* **Behavioral Control: `py_trees`**
+  The system's decision-making logic is implemented as a behavior tree using the `py_trees` and `py_trees_ros` libraries. This hierarchical and reactive control
+  structure was chosen over a traditional finite-state machine for its superior scalability, readability, and flexibility in managing complex, parallel
+  behaviors.
+
+* **Mapping and Localization: RTAB-Map**
+  Due to the absence of a LiDAR sensor, the system relies on the robot's five body-mounted RGB-D cameras for perception. **RTAB-Map** (`rtabmap_ros`) was
+  selected as the SLAM (Simultaneous Localization and Mapping) solution because it is natively designed to process visual and depth information, making it
+  well-suited for this sensor configuration.
+
+* **Navigation: ROS 2 Navigation Stack (Nav2)**
+  High-level path planning and navigation to waypoints are handled by **Nav2**. It consumes the map and localization data from RTAB-Map to generate
+  collision-free paths, treating the Spot robot as an omnidirectional base.
+
+* **Visual Perception: `apriltag_ros`**
+  The system uses AprilTags for precise localization and as reference points for manipulation and navigation tasks. The `apriltag_ros` package is used to detect
+  tags, particularly from the arm-mounted hand camera, complementing the fiducial detection already provided by the main Spot driver.
+
+* **User Interface: PyQt5**
+  A custom graphical user interface was developed using the **PyQt5** framework to provide a comprehensive tool for development, testing, and manual control of
+  the robot.
+
+* **Visualization and Debugging: RViz**
+  The standard ROS visualization tool, **RViz**, is used extensively for monitoring the system's state, including visualizing the generated map, the robot's
+  estimated pose, planned navigation paths, and sensor data.
+
+## 2. System Summary and Integration
+
+The architecture of the Fault Detector Spot system is defined by its modularity and the clear separation of concerns, managed by a central behavior tree. The
+system successfully integrates three primary capabilities, Local Motion Control, Mapping and Navigation, and Command Recording, into one system, all
+managed through a flexible command interface.
+
+At its core, the behavior tree runs three parallel subtrees for **Sensing**, **Command Execution**, and **Feedback**. This design ensures that the system is
+always aware of its environment and user inputs, can execute commands in a controlled and sequential manner, and provides continuous, real-time feedback to the
+operator.
+
+The functionality of the system enables a powerful workflow for creating automated inspection routines. By combining the different subsystems through the
+unified command interface, a user can:
+
+1. Use the **Mapping and Navigation** system to create a persistent map of an environment and define key waypoints.
+2. Command the robot to autonomously navigate between these waypoints using Nav2.
+3. Upon arrival, engage the **Local Motion Control** system to perform precise base and manipulator adjustments relative to a target (e.g., an AprilTag).
+4. Execute a specific fault-detection or scanning sequence with the manipulator.
+
+Critically, the **Recording and Playback** subsystem allows this entire complex sequence to be captured, saved, and replayed. Because recorded commands use
+the exact same execution path as live commands, this feature turns the system into a scriptable platform for fully automated and repeatable testing and
+inspection tasks. The loosely coupled user interface serves as the primary development tool for creating and validating these sequences, but its architectural
+separation means it can be readily replaced by other control clients without altering the robust underlying logic.
 
 # References
 
