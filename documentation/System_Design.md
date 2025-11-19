@@ -9,7 +9,7 @@ components, their interactions, and the design principles that enable the system
 
 ![Fault Detector Spot with prototype sensor head](images%2FSystem_Design%2Ffair_image.jpeg)
 
-*Figure X: The Fault Detector Spot system operating with a prototype sensor head mounted on the arm.
+*Figure 1: The Fault Detector Spot system operating with a prototype sensor head mounted on the arm.*
 
 To achieve this, the document is organized into several key sections, moving from a high-level overview to detailed implementation specifics.
 By following this structure, this document aims to be an all-in-one resource for anyone working with the Fault Detector Spot project.
@@ -38,10 +38,10 @@ It also ensures that each command is executed deterministically, with built-in h
 The result is a modular yet unified control structure: new behaviours can be introduced by extending the tree with additional branches, while the communication
 and data exchange between components remain standardized through ROS2 topics, services, and the shared blackboard.
 
-An architectural overview is provided as a diagram. All behaviour tree and system architecture diagrams were created using [Draw.io](https://app.diagrams.net/).
+An architectural overview is provided as a diagram (Figure 2). All behaviour tree and system architecture diagrams were created using [Draw.io](https://app.diagrams.net/).
 
 ![general_architecture.png](images%2FSystem_Design%2Fgeneral_architecture.png)
-*Figure: High-level software architecture of the ROS2 system developed.*
+*Figure 2: High-level software architecture of the ROS2 system developed.*
 
 ---
 
@@ -92,8 +92,8 @@ automated control agent without structural changes to the rest of the system.
 
 ![ui_empty.png](images%2FSystem_Design%2Fui_empty.png)
 
-*Figure: Graphical user interface of the Fault Detector Spot system, showing status overview, emergency stop, and tabs for manipulation, base movement,
-navigation, and recording control.*
+*Figure 3: Graphical user interface of the Fault Detector Spot system, showing status overview, emergency stop, and tabs for manipulation, base movement, navigation, and recording control.*
+
 
 ### 2.2.2 Spot ROS2 Driver Integration
 
@@ -380,7 +380,7 @@ The separation into three subtrees is used for clarity and modularity:
 This division mirrors the natural flow of information through the system, from perception to decision to communication, allowing each subsystem to operate
 independently while remaining synchronized through shared blackboard variables and ROS2 communication channels.
 
-The subtree structure can be seen in the diagram built using [draw.io](https://www.drawio.com/) below, with notation adapted
+The subtree structure can be seen in the diagram (Figure 4) built using [draw.io](https://www.drawio.com/) below, with notation adapted
 from [Behaviour Trees in Robotics and AI](https://arxiv.org/abs/1709.00084): An
 Introduction by Michele Colledanchise &
 Petter Ögren. This notation will be used consistently in the following chapters to illustrate each subtree in more detail.
@@ -397,7 +397,7 @@ Petter Ögren. This notation will be used consistently in the following chapters
 
 
 ![bt_general_diagram.png](images%2FSystem_Design%2Fbt_general_diagram.png)
-*Figure: The general behaviour tree structure and its division into three subtrees.*
+*Figure 4: The general behaviour tree structure and its division into three subtrees.*
 
 ## 6.2 Command Handling
 
@@ -505,11 +505,11 @@ Each supported command, such as `MOVE_ARM_TO_TAG`, `START_SLAM`, or `DELETE_MAP`
 and
 interactions with the rest of the system.
 
-The buffered command subtree is visualized in the following behaviour tree diagram:
+The buffered command subtree is visualized in the following behaviour tree diagram (Figure 5):
 
 ![command_subtree.diagram.png](images%2FSystem_Design%2Fcommand_subtree.diagram.png)
 
-*Figure: The Buffered Command Subtree. Shows the command buffer, guards, emergency paths, and selector logic.*
+*Figure 5: The Buffered Command Subtree, showing the command buffer, guards, emergency paths, and selector logic.*
 
 #### 6.2.2.2 CommandManager
 
@@ -654,7 +654,7 @@ The exact functionality of each command will become clear either:
 The Sensing Tree handles all incoming data and system inputs. This includes sensor data (e.g., detected AprilTags, robot poses) and, as already mentioned, user
 commands from the UI. Its main goal is to keep the system aware of its surroundings and incoming requests in real-time.
 
-As shown in the **Sensing Tree overview diagram** below (see Figure),  
+As shown in the **Sensing Tree overview diagram** below (see Figure 6),  
 the Sensing Subtree runs several behaviours in parallel, including:
 
 - [**CommandSubscriber:**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcommand_subscriber.py) Receives new commands from the user interface.  
@@ -680,7 +680,7 @@ in its fiducials detection. This allows the arm to move independently, scan for 
 
 ![sensing_subtree_diagram.png](images/System_Design/sensing_subtree_diagram.png)
 
-*Figure: The Sensing Subtree, running tag-sensing, localization, and command reception behaviours in parallel.*
+*Figure 6: The Sensing Subtree, running tag sensing, localization, and command reception behaviours in parallel.*
 
 ## 7.1 Design Rationale
 
@@ -795,7 +795,7 @@ By separating these steps, the system ensures efficiency, safety, and clear feed
 
 ![publisher_subtree.png](images%2FSystem_Design%2Fpublisher_subtree.png)
 
-*Figure: Publisher (Feedback) Subtree of the behaviour tree.*
+*Figure 7: Publisher (Feedback) Subtree of the behaviour tree.*
 
 The Feedback Subtree is responsible for exposing the internal state of the system to external consumers (UI, monitoring tools, SLAM) without affecting core
 decision-making. It runs in parallel to the Sensing and Buffered Command subtrees and publishes a small set of well-defined ROS2 topics, as summarized in the
@@ -1295,7 +1295,7 @@ built the map from Spot’s odometry and RGB‑D camera data.
 
 ![RViz showing a robot navigating in a mapped environment](images%2FSystem_Design%2Fmaps%2Frviz_example.png)
 
-*Figure: RViz visualizing the robot's state, including the map, the robot's position (arrow), costmaps (colored areas), and the planned path (green line).*
+*Figure 8: RViz visualizing the robot's state, including the map, the robot's position (arrow), costmaps (colored areas), and the planned path (green line).*
 
 Key points:
 
@@ -1320,11 +1320,11 @@ In addition to the 2D grid, RTAB‑Map maintains a 3D reconstruction of the envi
 
 ![staircase_occupancy_grid.png](images/System_Design/maps/staircase_occupancy_grid.png)
 
-*Figure Y: 3D occupancy-style view of the same environment generated by RTAB‑Map, showing the structure from a top‑down perspective.*
+*Figure 9: 3D occupancy-style view of the example environment generated by RTAB‑Map, showing the structure from a top‑down perspective.*
 
 ![staircase_rtabmap.png](images/System_Design/maps/staircase_rtabmap.png)
 
-*Figure Z: Alternative RTAB‑Map 3D visualization, emphasizing vertical structure and clutter around the looped corridor.*
+*Figure 10: Alternative RTAB‑Map 3D visualization, emphasizing vertical structure and clutter around the looped corridor.*
 
 The maps shown are clean enough to support safe navigation and relocalization in the tested environments. Some small artifacts and local inconsistencies
 remain (e.g. small specks in otherwise clear areas caused by dynamic objects or poorly observed regions), but they are typically ignored by the planners or did
@@ -1543,7 +1543,7 @@ malformed commands, and uses confirmation dialogs for significant actions.
 
 ![A confirmation dialog asking the user to confirm a 'Move to Tag' command, showing the tag ID, target coordinates, and offsets.](images%2FSystem_Design%2FUI%2Fui_confirmation_check.png)
 
-*Figure 4: A confirmation dialog box, which provides a summary of the command and its parameters before execution, acting as a safety catch for the operator.*
+*Figure 11: A confirmation dialog box, which provides a summary of the command and its parameters before execution, acting as a safety catch for the operator.*
 
 ## 12.2 UI Layout and Components
 
@@ -1551,7 +1551,7 @@ The user interface is organized into a main window with two primary sections: a 
 context-specific commands.
 
 ![The Fault Detector Spot UI, showing the Manipulation Control tab.](images%2FSystem_Design%2FUI%2Fmanip_ui.png)
-*Figure 1: The main user interface, with the "Manipulation Control" tab active.*
+*Figure 12: The main user interface, with the "Manipulation Control" tab active.*
 
 ### 12.2.1 Permanent View
 
@@ -1565,7 +1565,7 @@ controls are permanently accessible.
 
 ![A close-up of the UI status panel showing a 'stow_arm' command was sent, a buffer with queued commands, the current running status as 'move_to_tag', and visible tags 1 and 3.](images%2FSystem_Design%2FUI%2Fui_with_feedback.png)
 
-*Figure 5: The real-time status display area of the UI. It shows the last command sent, the current command buffer, the execution status of the active
+*Figure 13: The real-time status display area of the UI. It shows the last command sent, the current command buffer, the execution status of the active
 behaviour,
 and the list of visible AprilTags.*
 
@@ -1576,7 +1576,7 @@ and the list of visible AprilTags.*
 
 ![The UI's recording panel, showing a recording in progress with a red 'Stop Recording' button, and a dropdown to select previously saved recordings for playback.](images%2FSystem_Design%2FUI%2Frecording_ui.png)
 
-*Figure 6: The command recording control panel. The red "Stop Recording" button provides a clear visual indicator that a recording session is currently active.*
+*Figure 14: The command recording control panel. The red "Stop Recording" button provides a clear visual indicator that a recording session is currently active.*
 
 ### 12.2.2 Tabbed Control Panels
 
@@ -1584,26 +1584,26 @@ The central area of the UI is a tabbed widget that separates controls into logic
 
 #### 12.2.2.1 Manipulation Control
 
-As shown in Figure 1, this tab exposes all functions related to the Spot arm. It includes fields for entering a target tag ID, specifying positional and
+As shown in Figure 12, this tab exposes all functions related to the Spot arm. It includes fields for entering a target tag ID, specifying positional and
 orientation offsets in various coordinate frames, and selecting preset orientation modes. It also provides buttons for basic actions
 like `Ready Arm`, `Stow Arm`, and `Toggle Gripper`.
 
 ![The Base Movement Control tab.](images%2FSystem_Design%2FUI%2Fbase_ui.png)
 
-*Figure 2: The "Base Movement Control" tab.*
+*Figure 15: The "Base Movement Control" tab.*
 
 #### 12.2.2.2 Base Movement Control
 
-This tab (Figure 2) provides controls for direct locomotion of the robot's base. Its layout is similar to the manipulation tab, allowing the user to command the
+This tab (Figure 15) provides controls for direct locomotion of the robot's base. Its layout is similar to the manipulation tab, allowing the user to command the
 base relative to a tag or its current position, with user-defined offsets for X, Y, and Yaw.
 
 ![The Navigation Control tab.](images%2FSystem_Design%2FUI%2Fnav_ui.png)
 
-*Figure 3: The "Navigation Control" tab for map, waypoint, and landmark management.*
+*Figure 16: The "Navigation Control" tab for map, waypoint, and landmark management.*
 
 #### 12.2.2.3 Navigation Control
 
-The navigation tab (Figure 3) centralizes all functions related to mapping and localization. From here, a user can:
+The navigation tab (Figure 16) centralizes all functions related to mapping and localization. From here, a user can:
 
 * Load, create, and delete maps.
 * Switch the system between idle, mapping (`SLAM`), and `Localization` modes.
@@ -1711,7 +1711,7 @@ separation means it can be readily replaced by other control clients without alt
 ## Appendix A: Example AprilTag (ID: 0)
 
 ![tag36h11-0.svg](images/System_Design/tag36h11-0.svg)  
-*Figure: AprilTag with 36h11 encoding, ID 0.*
+*AprilTag with 36h11 encoding, ID 0.*
 
 ## Appendix B: TF Tree for Spot AprilTag Detections
 
