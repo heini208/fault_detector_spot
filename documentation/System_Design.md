@@ -1,6 +1,6 @@
 # System Design Document
 
-This system and the accompanying documentation were developed by Marcel Stemmeler in the context of a master's project.
+This work was carried out as part of the Master's program at Hochschule Bonn-Rhein-Sieg in cooperation with Fraunhofer IAO. The system and the accompanying documentation were developed by Marcel Stemmeler in the context of a master's project.
 
 This document provides a comprehensive technical description of the Fault Detector Spot system. It is intended for developers, researchers, and users who wish
 to understand the system's architecture, use its capabilities, or contribute to its development. The goal of this documentation is to serve as a complete guide
