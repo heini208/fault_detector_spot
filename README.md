@@ -13,18 +13,19 @@ The system was developed as part of a **Master’s project at Hochschule Bonn‑
 in cooperation with **Fraunhofer IAO**, by **Marcel Stemmeler**.
 
 For the full technical description, refer to the accompanying system design document:  
-[`docs/System_Design.md`](System_Design.md).
+[System_Design.md](documentation%2FSystem_Design.md).
 
 ---
 
 ## 1. Repository Structure (high level)
 
 - `fault_detector_spot/`
-  - `behaviour_tree/`
-    - `bt_runner.py` – main behaviour tree node
-    - `nodes/…` – custom BT behaviours for sensing, mapping, navigation, manipulation, utility
-    - `commands/…` – internal command classes and `CommandID` definitions
-    - `ui_classes/…` – UI and recording control nodes
+  - `fault_detector_spot/`
+    - `behaviour_tree/`
+      - `bt_runner.py` – main behaviour tree node
+      - `nodes/…` – custom BT behaviours for sensing, mapping, navigation, manipulation, utility
+      - `commands/…` – internal command classes and `CommandID` definitions
+      - `ui_classes/…` – UI and recording control nodes
 - `launch/`
   - `fault_detector_launch.py` – main launch file for real robot
   - `sim_fault_detector_launch.py` – simplified launch for simulation
@@ -34,7 +35,7 @@ For the full technical description, refer to the accompanying system design docu
   - `nav2_spot_params.yaml` / `nav2_sim_params.yaml` – Nav2 configuration
   - `mapping.rviz` – RViz config for mapping/navigation
   - `my_tags.yaml`, `my_tags_sim.yaml` – AprilTag configuration for `apriltag_ros`
-- `docs/`
+- `documentation/`
   - `System_Design.md` – detailed system design & architecture (you pasted the latest version)
   - Additional docs, figures and example recordings under `images/System_Design/…`
 
@@ -199,16 +200,17 @@ The behaviour tree (`bt_runner`) interacts with Nav2 via the `NavigateToGoalPose
 If you want to **understand or extend** the system, follow this reading order:
 
 1. **High‑level architecture & components**
-   - [`System_Design.md`](System_Design.md)
+   - [System_Design.md](documentation%2FSystem_Design.md)
      - Section 1 – General Architecture
      - Section 2 – Main System Components and Features
      - Section 3 – Data Flow Summary
 2. **Interfaces & commands**
    - `System_Design.md` Section 5 – Interface Summary
+   - [interface_reference_document.md](documentation%2Finterface_reference_document.md)
    - `fault_detector_msgs` repo:
      - [`ComplexCommand.msg`](https://github.com/heini208/fault_detector_msgs/blob/main/msg/ComplexCommand.msg)
      - [`CommandRecordControl.msg`](https://github.com/heini208/fault_detector_msgs/blob/main/msg/CommandRecordControl.msg)
-   - (Optional) `detailed_command_descriptions.md` in this repo, if present
+   - [detailed_command_descriptions.md](documentation%2Fdetailed_command_descriptions.md)
 3. **Behaviour Tree internals**
    - `System_Design.md` Sections 6–9
    - [`bt_runner.py`](fault_detector_spot/behaviour_tree/bt_runner.py)
@@ -251,4 +253,4 @@ If you want to **understand or extend** the system, follow this reading order:
    - Record and replay a sequence
 
 For detailed behaviour descriptions and design rationale, always refer back to  
-[`System_Design.md`](System_Design.md) and the [`fault_detector_msgs`](https://github.com/heini208/fault_detector_msgs) message definitions.
+[System_Design.md](documentation%2FSystem_Design.md), [detailed_command_descriptions.md](documentation%2Fdetailed_command_descriptions.md) and the [`fault_detector_msgs`](https://github.com/heini208/fault_detector_msgs) message definitions.
