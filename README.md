@@ -195,7 +195,7 @@ The behaviour tree (`bt_runner`) interacts with Nav2 via the `NavigateToGoalPose
 
 ---
 
-## 6. Quick Start Checklist
+## 5. Quick Start Checklist
 
 1. **Hardware & network**
    - Spot online and reachable from your ROS machine
