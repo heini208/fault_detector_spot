@@ -195,37 +195,7 @@ The behaviour tree (`bt_runner`) interacts with Nav2 via the `NavigateToGoalPose
 
 ---
 
-## 5. Documentation Overview
-
-If you want to **understand or extend** the system, follow this reading order:
-
-1. **High‑level architecture & components**
-   - [System_Design.md](documentation%2FSystem_Design.md)
-     - Section 1 – General Architecture
-     - Section 2 – Main System Components and Features
-     - Section 3 – Data Flow Summary
-2. **Interfaces & commands**
-   - `System_Design.md` Section 5 – Interface Summary
-   - [interface_reference_document.md](documentation%2Finterface_reference_document.md)
-   - `fault_detector_msgs` repo:
-     - [`ComplexCommand.msg`](https://github.com/heini208/fault_detector_msgs/blob/main/msg/ComplexCommand.msg)
-     - [`CommandRecordControl.msg`](https://github.com/heini208/fault_detector_msgs/blob/main/msg/CommandRecordControl.msg)
-   - [detailed_command_descriptions.md](documentation%2Fdetailed_command_descriptions.md)
-3. **Behaviour Tree internals**
-   - `System_Design.md` Sections 6–9
-   - [`bt_runner.py`](fault_detector_spot/behaviour_tree/bt_runner.py)
-4. **Mapping & Navigation**
-   - `System_Design.md` Section 10
-   - [`rtab_mapping_launch.py`](rtab_mapping_launch.py)
-   - [`nav2_spot_launch.py`](nav2_spot_launch.py) and `config/nav2_spot_params.yaml`
-5. **Recording & Playback, UI**
-   - `System_Design.md` Sections 11–12
-6. **Full list of external references**
-   - `System_Design.md` Section 14 – References
-
----
-
-## 7. Quick Start Checklist
+## 6. Quick Start Checklist
 
 1. **Hardware & network**
    - Spot online and reachable from your ROS machine
