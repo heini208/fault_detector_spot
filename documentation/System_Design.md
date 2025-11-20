@@ -336,11 +336,11 @@ This data-driven, modular organization ensures a clear separation of responsibil
   Enables repeatable testing, benchmarking, and demonstration of inspection routines, which is critical in research contexts and aligns with project
   deliverables defined in the Requirements Specification.
 
-
 Overall, the system’s modular design enables seamless interaction between autonomous decision-making and manual control while remaining flexible for future
 sensor integration and algorithmic extensions.  
 Each subsystem can operate independently or as part of the full execution pipeline, ensuring both scalability and maintainability, which are core design goals
 stated in the Requirements Specification.
+
 ---
 
 # 5. Interface Summary
@@ -957,6 +957,7 @@ Overall, the Feedback Subtree provides:
 
 All of these are made available via ROS2 topics, so external clients can monitor and visualize system behaviour without direct access to internal BT structures
 or the blackboard.
+
 ---
 
 # 9. Local Motion Control
@@ -1512,6 +1513,7 @@ The design of the mapping and navigation subsystem is driven by a few key constr
 
 Overall, the design aims to provide a robust mapping/navigation foundation under imperfect sensing conditions, while keeping the control layer modular,
 testable, and open to future improvements (such as adding LiDAR or changing SLAM backends).
+
 ---
 
 # 11. Recording and Playback
@@ -1580,6 +1582,7 @@ to the Behaviour Tree or recorder internals.
 
 In summary, the Recording and Playback subsystem turns the command interface into a scriptable test and demonstration channel without introducing special‑case
 logic into the Behaviour Tree or robot control stack.
+
 ---
 
 # 12. User Interface Design
@@ -1678,6 +1681,7 @@ The navigation tab (Figure 16) centralizes all functions related to mapping and 
 By organizing the controls into these distinct tabs, the interface is less cluttered while providing comprehensive access to every feature implemented in the
 behaviour tree. The functionality of each button maps directly to the commands described in previous chapters, effectively making the UI a complete graphical
 front-end for the system's command-and-control architecture.
+
 ---
 
 # 13. Technology Stack and System Summary
@@ -1752,6 +1756,7 @@ Critically, the **Recording and Playback** subsystem allows this entire complex 
 the exact same execution path as live commands, this feature turns the system into a scriptable platform for fully automated and repeatable testing and
 inspection tasks. The loosely coupled user interface serves as the primary development tool for creating and validating these sequences, but its architectural
 separation means it can be readily replaced by other control clients without altering the robust underlying logic.
+
 ---
 
 # 14. References
