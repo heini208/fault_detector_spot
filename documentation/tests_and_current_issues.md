@@ -25,7 +25,7 @@ Comprehensive verification of the manipulator system, including basic state comm
 | **Combination** | Scan All In Range | N/A | Verifies sequential scanning and dynamic filtering of tags | ✅ Pass | Video 11 |
 
 ## Observations & Notes
-- **Unreachable Orientations (Video 2, 4:00):** If an orientation target is unreachable, the arm enters an error state. This is expected behavior; stowing the arm successfully resets the system.
+- **Unreachable Orientations (Video 2, 4:00):** If an orientation target is unreachable, the arm enters an error state. This is expected behavior; stowing the arm or navigating to a reachable state successfully resets the system.
 - **Orientation Mode Failure:** The system fails to support non-custom orientation modes during relative movements. Regardless of the mode selected, the system applies the orientation as if it were in "custom" mode.
 - **Odometry Scope:** Orientation mode testing was excluded from the Odometry frame tests (Video 4) due to the known failure identified during the Body frame tests.
 - **Map Frame Visual Reference (Videos 7 & 8):** In the top-right map view, the colored points indicate position relative to the map frame (Red: Up/Down, Green: Left/Right).
