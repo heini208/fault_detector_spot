@@ -1,5 +1,20 @@
-# System Verification
+# Test Description: System Verification
 Full playlist of all 40 uploaded test videos: https://www.youtube.com/watch?v=alZEPmOZxNE&list=PLyqti-zvsEaH48GBObaMNQcK6wwJ_p7y3&index=1
+
+## Table of Contents
+1. **[Test ID 1: Manipulator System](#test-id-1)**
+    - *Recommended:* [Video 8: Tag-Relative Manipulator Movements (Map Frame) 2](https://www.youtube.com/watch?v=zHVklbptjsk)
+    - *Recommended:* [Video 10: Manipulator Recording & Playback (Odom Frame)](https://www.youtube.com/watch?v=6oHCDRIGcXg)
+2. **[Test ID 2: Base Movement](#test-id-2)**
+3. **[Test ID 3: Mapping & Localization](#test-id-3)**
+    - *Recommended:* [Video 27: Manual Map Building and Refinement](https://youtu.be/c8lwK_ZCB3M)
+    - *Recommended:* [Video 28: Localization, Waypoints, and Obstacle Avoidance](https://youtu.be/kJ5P2cTgtOM)
+4. **[Test ID 4: Full System Integration](#test-id-4)**
+    - *ESSENTIAL:* [Video 33: Full System Validation](https://youtu.be/pEeT_Krulio)
+    - *ESSENTIAL:* [Video 33b: Sequence Recording and Reliability](https://youtu.be/EIX_GhtDRFI)
+5. **[Issues Found While Testing](#issues-found-while-testing-anomalies--todos)**
+
+---
 
 ## Test ID: 1
 
