@@ -1,5 +1,5 @@
 # Test Description: Manipulator System Verification
-
+Full playlist of all 40 uploaded test videos: https://www.youtube.com/watch?v=alZEPmOZxNE&list=PLyqti-zvsEaH48GBObaMNQcK6wwJ_p7y3&index=1
 ## Test ID: 1
 
 ## Overview
@@ -55,3 +55,8 @@ While basic commands, complex recording features, and directional movements func
 - ***Video 10:** [Manipulator Recording & Playback (Odom Frame) -- Recommended Watch](https://www.youtube.com/watch?v=6oHCDRIGcXg)
 - **Video 11:** [Scan All In Range Command](https://www.youtube.com/watch?v=Xi_xJR1xhAs)
 - **Video 12:** [Manipulator Emergency Stop during Playback](https://www.youtube.com/watch?v=pgF93NtzF0g)
+
+
+
+
+TODO ADD: ANOMALIES weird behaviour when using ubuntu recording, crashing of the mapping and localization, sometimes when extending a map and then directly switching to localization only the new data shows in the localization map, this does not happen when mapping is closed before swapping to localization
