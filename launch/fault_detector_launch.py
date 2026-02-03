@@ -42,4 +42,10 @@ def generate_launch_description():
             name='record_manager',
             output='screen'
         ),
+        Node(
+            package='fault_detector_spot',
+            executable='available_frames_publisher',
+            name='available_frames_publisher',
+            output='screen'
+        )
     ])

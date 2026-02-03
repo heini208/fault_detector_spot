@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
 )
 
 from fault_detector_msgs.msg import ComplexCommand, TagElement
-from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID, FrameNames
+from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from geometry_msgs.msg import Quaternion
 from .UIControlHelper import UIControlHelper
 
@@ -53,10 +53,10 @@ class BaseMovementControls(UIControlHelper):
         row.addWidget(QLabel("Base Offset:"))
 
         # Frame selection (same as ManipulationControls)
-        self.offset_frame_combo = QComboBox()
-        self.offset_frame_combo.addItems([frame.value for frame in FrameNames])
+        self.frames_dropdown = QComboBox()
         row.addWidget(QLabel("Frame:"))
-        row.addWidget(self.offset_frame_combo)
+        self.update_frames_dropdown()
+        row.addWidget(self.frames_dropdown)
 
         # X/Y controls
         for axis, dec_txt, inc_txt, dec_delta, inc_delta in [
@@ -151,6 +151,14 @@ class BaseMovementControls(UIControlHelper):
             if axis in self.offset_fields:
                 self.offset_fields[axis].setText(f"{val:.1f}")
 
+    def update_frames_dropdown(self):
+        self.frames_dropdown.clear()
+        available_frames = self.ui.available_frames
+        if not available_frames:
+            self.frames_dropdown.addItem("no frames available")
+        else:
+            for frame_name in available_frames:
+                self.frames_dropdown.addItem(frame_name)
     # ---------------------- Command Builders ----------------------
 
     def build_move_base_command(self, command_id):
@@ -180,8 +188,7 @@ class BaseMovementControls(UIControlHelper):
         cmd.offset.pose.position.z = 0.0
         cmd.offset.pose.orientation = q
 
-        frame_choice = FrameNames(self.offset_frame_combo.currentText())
-        cmd.offset.header.frame_id = frame_choice
+        cmd.offset.header.frame_id = self.frames_dropdown.currentText()
         return cmd
 
     # ---------------------- Button Handlers ----------------------

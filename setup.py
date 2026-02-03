@@ -34,6 +34,7 @@ setup(
             'rgb_resizer = fault_detector_spot.behaviour_tree.nodes.mapping.rgb_resizer:main',
             'nav2_cmd_vel_gate = fault_detector_spot.behaviour_tree.nodes.navigation.nav2_cmd_vel_gate:main',
             'rest_api_bridge = fault_detector_spot.behaviour_tree.rest_bridge:main',
+            'available_frames_publisher = fault_detector_spot.behaviour_tree.ui_classes.available_frames_publisher:main',
         ],
     },
 )

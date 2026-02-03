@@ -42,11 +42,3 @@ class OrientationModes(str, Enum):
     LOOK_RIGHT = "right"
     LOOK_UP = "up"
     LOOK_DOWN = "down"
-
-
-class FrameNames(str, Enum):
-    GRAV_BODY_FRAME = "flat_body"
-    MAP_FRAME = "map"
-    ODOMETRY_FRAME = "odom"
-    VISION_FRAME = "vision"
-    BODY_FRAME = "body"

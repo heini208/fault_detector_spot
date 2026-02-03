@@ -265,7 +265,6 @@ class NavigationControls(UIControlHelper):
 
     # --- Dropdown updates ---
     def update_waypoint_dropdown(self):
-        """Load waypoints from JSON next to the selected map and populate dropdown with names."""
         self.waypoint_dropdown.clear()
 
         current_map = self.map_dropdown.currentText()

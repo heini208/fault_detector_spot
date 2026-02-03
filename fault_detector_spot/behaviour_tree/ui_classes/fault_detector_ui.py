@@ -10,8 +10,8 @@ from PyQt5.QtWidgets import (
 )
 
 import rclpy
-from fault_detector_msgs.msg import ComplexCommand, BasicCommand, TagElementArray
-from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS
+from fault_detector_msgs.msg import ComplexCommand, BasicCommand, TagElementArray, StringArray
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from rclpy.node import Node
 from std_msgs.msg import Header, String
@@ -37,6 +37,7 @@ class Fault_Detector_UI(QWidget):
 
         self.visible_tags = {}
         self.reachable_tags = {}
+        self.available_frames = []
 
         if self.node:
             self.init_ros_communication()
@@ -180,6 +181,12 @@ class Fault_Detector_UI(QWidget):
             self._process_command_status,
             10
         )
+        self.available_frames_sub = self.node.create_subscription(
+            StringArray,
+            "fault_detector/state/available_frames",
+            self._process_available_frames,
+            LATCHED_QOS
+        )
 
         self.status_label.setText("Status: Connected to ROS2")
 
@@ -210,6 +217,11 @@ class Fault_Detector_UI(QWidget):
 
     def _process_command_status(self, msg: String):
         self.command_status_label.setText(f"Command Status: {msg.data}")
+
+    def _process_available_frames(self, msg: StringArray):
+        self.available_frames = list(msg.names)
+        self.manipulation_controls.update_frames_dropdown()
+        self.base_movement_controls.update_frames_dropdown()
 
     def build_basic_command(self, command_id: str) -> BasicCommand:
         cmd = BasicCommand()

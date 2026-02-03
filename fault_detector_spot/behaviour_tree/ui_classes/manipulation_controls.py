@@ -3,7 +3,7 @@ import math
 from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QMessageBox
 
 from fault_detector_msgs.msg import ComplexCommand, TagElement
-from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID, OrientationModes, FrameNames
+from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID, OrientationModes
 from geometry_msgs.msg import Quaternion
 from .UIControlHelper import UIControlHelper
 
@@ -80,10 +80,10 @@ class ManipulationControls(UIControlHelper):
         row = QHBoxLayout()
         row.addWidget(QLabel("Positional Offset:"))
 
-        self.offset_frame_combo = QComboBox()
-        self.offset_frame_combo.addItems([frame.value for frame in FrameNames])
+        self.frames_dropdown = QComboBox()
         row.addWidget(QLabel("Frame:"))
-        row.addWidget(self.offset_frame_combo)
+        self.update_frames_dropdown()
+        row.addWidget(self.frames_dropdown)
 
         self._add_offset_controls(row)
 
@@ -230,8 +230,8 @@ class ManipulationControls(UIControlHelper):
         yaw = math.radians(yaw_deg)
         q = self._euler_to_quaternion(roll, pitch, yaw)
 
-        frame_choice = FrameNames(self.offset_frame_combo.currentText())
-        if frame_choice == FrameNames.MAP_FRAME:
+        frame_choice = self.frames_dropdown.currentText()
+        if frame_choice == "map":
             if getattr(self.ui, "navigation_mode_label", None) and \
                     self.ui.navigation_mode_label.text() == "Navigation: OFF":
                 self.show_warning(
@@ -250,6 +250,15 @@ class ManipulationControls(UIControlHelper):
 
         command.orientation_mode = omode
         return command
+
+    def update_frames_dropdown(self):
+        self.frames_dropdown.clear()
+        frames = self.ui.available_frames
+        if not frames:
+            self.frames_dropdown.addItem("no frames available")
+        else:
+            for frame in frames:
+                self.frames_dropdown.addItem(frame)
 
     def _euler_to_quaternion(self, roll, pitch, yaw) -> Quaternion:
         """Convert Euler angles (radians) to a Quaternion message."""
