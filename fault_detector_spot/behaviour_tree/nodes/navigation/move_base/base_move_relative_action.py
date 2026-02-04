@@ -4,34 +4,31 @@ from bosdyn.client.frame_helpers import ODOM_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
 
 import tf_transformations as tf
-from fault_detector_spot.behaviour_tree.commands.move_base_relative_command import MoveBaseRelativeCommand
-from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import ActionClientBehaviour
+from bosdyn_msgs.conversions import convert
+from fault_detector_spot.behaviour_tree.commands.base_move_relative_command import BaseMoveRelativeCommand
+from fault_detector_spot.behaviour_tree.nodes.utility.move_command_action import MoveCommandAction
 from geometry_msgs.msg import PoseStamped
-from py_trees.common import Access
 from spot_msgs.action import RobotCommand
 from synchros2.action_client import ActionClientWrapper
-from synchros2.tf_listener_wrapper import TFListenerWrapper
 from synchros2.utilities import namespace_with
 from tf2_geometry_msgs import do_transform_pose_stamped
 
 
-class BaseMoveRelativeAction(ActionClientBehaviour):
+class BaseMoveRelativeAction(MoveCommandAction):
     """
-    Moves the robot base to the tag with the given offset, using low speed limits.
+    Moves the robot base relative to a target using low speed limits.
+    Inherits TF safety checks from MoveCommandAction.
     """
 
-    def __init__(self, name="BaseMoveToTagAction", robot_name=""):
+    def __init__(self, name="BaseMoveRelativeAction", robot_name=""):
         super().__init__(name)
         self.robot_name = robot_name
-        self.blackboard = self.attach_blackboard_client()
-        self.tf_listener: TFListenerWrapper = None
+        # blackboard & tf_listener init handled in base/setup
 
     def setup(self, **kwargs):
+        # Call base setup to initialize TF listener and blackboard
+        super().setup(**kwargs)
         self.node = kwargs.get("node")
-        self.tf_listener = TFListenerWrapper(self.node)
-
-        # Blackboard keys: read visible tags, read/write last command
-        self.blackboard.register_key(key="last_command", access=Access.READ)
 
     def _init_client(self):
         action_ns = namespace_with(self.robot_name, "robot_command")
@@ -40,11 +37,11 @@ class BaseMoveRelativeAction(ActionClientBehaviour):
         return True
 
     def _build_goal(self) -> RobotCommand.Goal:
-        if not isinstance(self.blackboard.last_command, MoveBaseRelativeCommand):
-            raise RuntimeError("Expected MoveBaseRelativeCommand on blackboard.last_command")
+        if not isinstance(self.blackboard.last_command, BaseMoveRelativeCommand):
+            raise RuntimeError("Expected BaseMoveRelativeCommand on blackboard.last_command")
 
-        cmd: MoveBaseRelativeCommand = self.blackboard.last_command
-        target: PoseStamped = cmd.compute_goal_pose(self.tf_listener)
+        # TF readiness is guaranteed by MoveCommandAction.update()
+        target: PoseStamped = self.blackboard.last_command.compute_goal_pose(self.tf_listener)
 
         # Build low-speed mobility params
         low_speed_params = RobotCommandBuilder.mobility_params()
@@ -55,6 +52,7 @@ class BaseMoveRelativeAction(ActionClientBehaviour):
             )
         )
 
+        # Ensure target is in ODOM frame for base navigation
         if target.header.frame_id != ODOM_FRAME_NAME:
             tf_to_odom = self.tf_listener.lookup_a_tform_b(
                 ODOM_FRAME_NAME, target.header.frame_id, timeout_sec=2
@@ -75,8 +73,6 @@ class BaseMoveRelativeAction(ActionClientBehaviour):
             params=low_speed_params
         )
 
-        # Step 5: wrap in RobotCommand.Goal
         goal = RobotCommand.Goal()
-        from bosdyn_msgs.conversions import convert
         convert(cmd, goal.command)
         return goal

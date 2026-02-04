@@ -4,12 +4,12 @@ import py_trees
 import rclpy
 from fault_detector_msgs.msg import ComplexCommand, BasicCommand
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS
-from fault_detector_spot.behaviour_tree.commands.base_tag_command import BaseTagCommand
+from fault_detector_spot.behaviour_tree.commands.base_move_relative_command import BaseMoveRelativeCommand
+from fault_detector_spot.behaviour_tree.commands.base_to_tag_command import BaseToTagCommand
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.commands.generic_complex_command import GenericCommand
-from fault_detector_spot.behaviour_tree.commands.manipulator_move_command import ManipulatorMoveCommand
-from fault_detector_spot.behaviour_tree.commands.manipulator_tag_command import ManipulatorTagCommand
-from fault_detector_spot.behaviour_tree.commands.move_base_relative_command import MoveBaseRelativeCommand
+from fault_detector_spot.behaviour_tree.commands.manipulator_move_relative_command import ManipulatorMoveRelativeCommand
+from fault_detector_spot.behaviour_tree.commands.manipulator_to_tag_command import ManipulatorToTagCommand
 from fault_detector_spot.behaviour_tree.commands.simple_command import SimpleCommand
 from fault_detector_spot.behaviour_tree.commands.timer_command import TimerCommand
 
@@ -200,11 +200,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     ### Command builders for complex commands ###
 
     def _move_arm_command_with_offset(self, msg: ComplexCommand):
-        command = ManipulatorMoveCommand(msg.command.command_id, self._create_command_stamp(), msg.offset)
+        command = ManipulatorMoveRelativeCommand(msg.command.command_id, self._create_command_stamp(), msg.offset)
         return [command]
 
     def _move_to_tag(self, msg: ComplexCommand) -> List[SimpleCommand]:
-        command = ManipulatorTagCommand(CommandID.MOVE_ARM_TO_TAG, self._create_command_stamp(), msg.tag.pose,
+        command = ManipulatorToTagCommand(CommandID.MOVE_ARM_TO_TAG, self._create_command_stamp(), msg.tag.pose,
                                         msg.tag.id, msg.offset, msg.orientation_mode)
         return [command]
 
@@ -212,10 +212,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         """
         Builds a BaseTagCommand for moving the base to a visible tag (not just reachable).
         """
-        command = BaseTagCommand(
+        command = BaseToTagCommand(
             command_id=CommandID.MOVE_BASE_TO_TAG,
             stamp=self._create_command_stamp(),
-            goal_pose=msg.tag.pose,
+            tag_pose=msg.tag.pose,
             tag_id=msg.tag.id,
             offset=msg.offset,
         )
@@ -225,7 +225,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         """
         Builds a BaseMoveCommand for moving the base with an offset.
         """
-        command = MoveBaseRelativeCommand(
+        command = BaseMoveRelativeCommand(
             command_id=CommandID.MOVE_BASE_RELATIVE,
             stamp=self._create_command_stamp(),
             offset=msg.offset,

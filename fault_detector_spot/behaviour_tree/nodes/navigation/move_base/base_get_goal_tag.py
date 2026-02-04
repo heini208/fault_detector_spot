@@ -1,12 +1,12 @@
 import py_trees
-from fault_detector_spot.behaviour_tree.commands.base_tag_command import BaseTagCommand
+from fault_detector_spot.behaviour_tree.commands.base_to_tag_command import BaseToTagCommand
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 
 
 class BaseGetGoalTag(py_trees.behaviour.Behaviour):
     """
     Reads a visible tag and prepares a base navigation goal (in odom/world frame),
-    applying any offset defined in the BaseTagCommand.
+    applying any offset defined in the BaseToTagCommand.
     """
 
     def __init__(self, name: str = "BaseGetGoalTag"):
@@ -25,7 +25,7 @@ class BaseGetGoalTag(py_trees.behaviour.Behaviour):
 
     def update(self) -> py_trees.common.Status:
         command = getattr(self.blackboard, "last_command", None)
-        if not isinstance(command, BaseTagCommand):
+        if not isinstance(command, BaseToTagCommand):
             self.feedback_message = "Expected BaseTagCommand"
             return py_trees.common.Status.FAILURE
 
@@ -41,10 +41,7 @@ class BaseGetGoalTag(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
         # Use the visible tag's pose
-        command.goal_pose = visible_tags[tag_id].pose
-
-        base_goal_pose = command.get_offset_pose(self.tf_listener)
-        command.goal_pose = base_goal_pose
+        command.initial_goal_pose = visible_tags[tag_id].pose
 
         self.feedback_message = f"Prepared base goal for visible tag {tag_id}"
         return py_trees.common.Status.SUCCESS

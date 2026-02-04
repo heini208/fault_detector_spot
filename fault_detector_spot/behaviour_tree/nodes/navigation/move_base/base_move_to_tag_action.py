@@ -4,26 +4,25 @@ from bosdyn.client.robot_command import RobotCommandBuilder
 
 import tf_transformations as tf
 from bosdyn_msgs.conversions import convert
-from fault_detector_spot.behaviour_tree.commands.base_tag_command import BaseTagCommand
-from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import ActionClientBehaviour
+from fault_detector_spot.behaviour_tree.commands.base_to_tag_command import BaseToTagCommand
+from fault_detector_spot.behaviour_tree.nodes.utility.move_command_action import MoveCommandAction
 from geometry_msgs.msg import PoseStamped
-from py_trees.common import Access
 from spot_msgs.action import RobotCommand
 from synchros2.action_client import ActionClientWrapper
 from synchros2.utilities import namespace_with
 
 
-class BaseMoveToTagAction(ActionClientBehaviour):
+class BaseMoveToTagAction(MoveCommandAction):
     """
     Moves the robot base to the tag with the given offset, using low speed limits.
+    Inherits TF safety checks from MoveCommandAction.
     """
 
     def __init__(self, name="BaseMoveToTagAction", robot_name="", duration=3.0):
         super().__init__(name)
         self.robot_name = robot_name
         self.duration = duration
-        self.blackboard = self.attach_blackboard_client()
-        self.blackboard.register_key(key="last_command", access=Access.READ)
+        # blackboard & tf_listener init handled in base/setup
 
     def _init_client(self):
         action_ns = namespace_with(self.robot_name, "robot_command")
@@ -32,10 +31,11 @@ class BaseMoveToTagAction(ActionClientBehaviour):
         return True
 
     def _build_goal(self) -> RobotCommand.Goal:
-        if not isinstance(self.blackboard.last_command, BaseTagCommand):
-            raise RuntimeError("Expected BaseTagCommand on blackboard.last_command")
+        if not isinstance(self.blackboard.last_command, BaseToTagCommand):
+            raise RuntimeError("Expected BaseToTagCommand on blackboard.last_command")
 
-        target: PoseStamped = self.blackboard.last_command.goal_pose
+        # TF readiness is guaranteed by MoveCommandAction.update()
+        target: PoseStamped = self.blackboard.last_command.compute_goal_pose(self.tf_listener)
 
         # Build low-speed mobility params
         low_speed_params = RobotCommandBuilder.mobility_params()
