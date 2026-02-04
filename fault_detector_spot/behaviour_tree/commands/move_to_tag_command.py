@@ -23,7 +23,7 @@ class MoveToTagCommand(MoveCommand):
             target_frame: str = "odom",
     ):
         super().__init__(command_id, stamp, offset, target_frame)
-        self.initial_goal_pose = tag_pose
+        self.tag_pose = tag_pose
         self.tag_id = tag_id
 
     def transform_tag_to_target_frame(self, transformer: TFListenerWrapper) -> PoseStamped:
@@ -32,15 +32,15 @@ class MoveToTagCommand(MoveCommand):
         """
         if transformer:
             tf_to_target = transformer.lookup_a_tform_b(
-                self.target_frame, self.initial_goal_pose.header.frame_id, timeout_sec=2
+                self.target_frame, self.tag_pose.header.frame_id, timeout_sec=2
             )
             tag_in_target = tf2_geometry_msgs.do_transform_pose_stamped(
-                transform=tf_to_target, pose=self.initial_goal_pose
+                transform=tf_to_target, pose=self.tag_pose
             )
             return tag_in_target
         else:
             # Assuming already in target frame if no transformer (risky but fallback)
-            return self.initial_goal_pose
+            return self.tag_pose
 
     def add_offset_to_tag_pose(self, tag_in_target: PoseStamped, transformer: TFListenerWrapper) -> PoseStamped:
         """

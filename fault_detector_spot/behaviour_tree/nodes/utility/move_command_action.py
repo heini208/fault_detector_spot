@@ -3,6 +3,7 @@ from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
 
 import rclpy
 from fault_detector_spot.behaviour_tree.commands.move_command import MoveCommand
+from fault_detector_spot.behaviour_tree.commands.move_to_tag_command import MoveToTagCommand
 from fault_detector_spot.behaviour_tree.nodes.utility.spot_action import ActionClientBehaviour
 from py_trees.common import Status, Access
 from spot_msgs.action import RobotCommand
@@ -62,11 +63,16 @@ class MoveCommandAction(ActionClientBehaviour):
                     if not self.tf_listener._tf_buffer.can_transform(target_frame, source_frame, rclpy.time.Time()):
                         self.feedback_message = f"Waiting for TF: {source_frame} -> {target_frame}"
                         return Status.RUNNING
-
                 # Check 2: Target -> Body
                 if target_frame != final_frame:
                     if not self.tf_listener._tf_buffer.can_transform(final_frame, target_frame, rclpy.time.Time()):
                         self.feedback_message = f"Waiting for TF: {target_frame} -> {final_frame}"
+                        return Status.RUNNING
+            if isinstance(cmd, MoveToTagCommand):
+                tag_frame = cmd.tag_pose.header.frame_id
+                if tag_frame != target_frame:
+                    if not self.tf_listener._tf_buffer.can_transform(target_frame, tag_frame, rclpy.time.Time()):
+                        self.feedback_message = f"Waiting for TF: {tag_frame} -> {target_frame}"
                         return Status.RUNNING
 
         # TF is ready (or goal already sent), proceed with base logic

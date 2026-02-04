@@ -41,7 +41,7 @@ class BaseGetGoalTag(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
         # Use the visible tag's pose
-        command.initial_goal_pose = visible_tags[tag_id].pose
+        command.tag_pose = visible_tags[tag_id].pose
 
         self.feedback_message = f"Prepared base goal for visible tag {tag_id}"
         return py_trees.common.Status.SUCCESS

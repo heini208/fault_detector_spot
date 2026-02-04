@@ -41,7 +41,7 @@ class ManipulatorGetGoalTag(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
         # Update command with tag pose
-        command.initial_goal_pose = reachable_tags[goal_id].pose
+        command.tag_pose = reachable_tags[goal_id].pose
 
         self.feedback_message = f"Found goal tag {goal_id}"
         return py_trees.common.Status.SUCCESS
