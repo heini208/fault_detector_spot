@@ -8,8 +8,6 @@ from fault_detector_spot.behaviour_tree.commands.move_command import MoveCommand
 # CHANGED: Import intermediate class
 from fault_detector_spot.behaviour_tree.nodes.utility.move_command_action import MoveCommandAction
 from spot_msgs.action import RobotCommand
-from synchros2.action_client import ActionClientWrapper
-from synchros2.tf_listener_wrapper import TFListenerWrapper
 from synchros2.utilities import namespace_with
 
 
@@ -20,22 +18,10 @@ class ManipulatorMoveRelativeAction(MoveCommandAction):
 
     def __init__(self,
                  name: str = "ManipulatorMoveRelativeAction",
-                 robot_name: str = "",
                  duration: float = 2):
         super().__init__(name)
-        self.robot_name = robot_name
         self.duration = duration
 
-    def _init_client(self) -> bool:
-        try:
-            action_ns = namespace_with(self.robot_name, "robot_command")
-            self._client = ActionClientWrapper(RobotCommand, action_ns, self.node)
-            self.tf_listener = TFListenerWrapper(self.node)  # Ensure listener exists
-            self.initialized = True
-            return True
-        except Exception as e:
-            self.logger.error(f"[{self.name}] init failed: {e}")
-            return False
 
     def _build_goal(self) -> RobotCommand.Goal:
         cmd = self.blackboard.last_command

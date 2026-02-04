@@ -9,7 +9,6 @@ from fault_detector_spot.behaviour_tree.commands.base_move_relative_command impo
 from fault_detector_spot.behaviour_tree.nodes.utility.move_command_action import MoveCommandAction
 from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
-from synchros2.action_client import ActionClientWrapper
 from synchros2.utilities import namespace_with
 from tf2_geometry_msgs import do_transform_pose_stamped
 
@@ -29,12 +28,6 @@ class BaseMoveRelativeAction(MoveCommandAction):
         # Call base setup to initialize TF listener and blackboard
         super().setup(**kwargs)
         self.node = kwargs.get("node")
-
-    def _init_client(self):
-        action_ns = namespace_with(self.robot_name, "robot_command")
-        self._client = ActionClientWrapper(RobotCommand, action_ns, self.node)
-        self.initialized = True
-        return True
 
     def _build_goal(self) -> RobotCommand.Goal:
         if not isinstance(self.blackboard.last_command, BaseMoveRelativeCommand):

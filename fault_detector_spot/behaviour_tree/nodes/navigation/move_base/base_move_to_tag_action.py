@@ -8,8 +8,6 @@ from fault_detector_spot.behaviour_tree.commands.base_to_tag_command import Base
 from fault_detector_spot.behaviour_tree.nodes.utility.move_command_action import MoveCommandAction
 from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
-from synchros2.action_client import ActionClientWrapper
-from synchros2.utilities import namespace_with
 
 
 class BaseMoveToTagAction(MoveCommandAction):
@@ -23,12 +21,6 @@ class BaseMoveToTagAction(MoveCommandAction):
         self.robot_name = robot_name
         self.duration = duration
         # blackboard & tf_listener init handled in base/setup
-
-    def _init_client(self):
-        action_ns = namespace_with(self.robot_name, "robot_command")
-        self._client = ActionClientWrapper(RobotCommand, action_ns, self.node)
-        self.initialized = True
-        return True
 
     def _build_goal(self) -> RobotCommand.Goal:
         if not isinstance(self.blackboard.last_command, BaseToTagCommand):

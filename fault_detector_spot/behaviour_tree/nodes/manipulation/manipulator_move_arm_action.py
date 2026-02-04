@@ -5,8 +5,6 @@ from fault_detector_spot.behaviour_tree.commands.move_command import MoveCommand
 from fault_detector_spot.behaviour_tree.nodes.utility.move_command_action import MoveCommandAction
 from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
-from synchros2.action_client import ActionClientWrapper
-from synchros2.tf_listener_wrapper import TFListenerWrapper
 from synchros2.utilities import namespace_with
 
 
@@ -21,21 +19,8 @@ class ManipulatorMoveArmAction(MoveCommandAction):
         self.robot_name = robot_name
         self.duration = duration
 
-
     def setup(self, **kwargs):
         super().setup(**kwargs)
-
-    def _init_client(self) -> bool:
-        try:
-            action_ns = namespace_with(self.robot_name, "robot_command")
-            self._client = ActionClientWrapper(RobotCommand, action_ns, self.node)
-            # Initialize TF listener
-            self.tf_listener = TFListenerWrapper(self.node)
-            self.initialized = True
-            return True
-        except Exception as e:
-            self.logger.error(f"[{self.name}] init failed: {e}")
-            return False
 
     def _build_goal(self) -> RobotCommand.Goal:
         # Fetch and validate desired pose
