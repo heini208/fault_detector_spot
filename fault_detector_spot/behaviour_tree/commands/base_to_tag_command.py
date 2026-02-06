@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import tf_transformations as tf
+from builtin_interfaces.msg import Time
 from fault_detector_spot.behaviour_tree.commands.move_to_tag_command import MoveToTagCommand
 from geometry_msgs.msg import Quaternion, PoseStamped
 from synchros2.tf_listener_wrapper import TFListenerWrapper
@@ -9,6 +10,18 @@ class BaseToTagCommand(MoveToTagCommand):
     """
     Specialization for Base: Flattens result to SE2 (Yaw only).
     """
+
+    def __init__(
+            self,
+            command_id: str,
+            stamp: Time,
+            tag_pose: PoseStamped,
+            tag_id: int,
+            offset: PoseStamped = None,
+            target_frame: str = "odom"
+    ):
+        # Initialize parent with goal_pose frame as the default target frame
+        super().__init__(command_id, stamp, tag_pose, tag_id, offset, target_frame=target_frame)
 
     def compute_goal_pose(self, transformer: TFListenerWrapper) -> PoseStamped:
         # Get generic 3D result from parent

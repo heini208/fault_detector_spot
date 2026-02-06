@@ -4,7 +4,6 @@ import numpy as np
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
 
 import rclpy
-import tf_transformations as tf
 from fault_detector_spot.behaviour_tree.commands.command_ids import TagFrames
 from fault_detector_spot.behaviour_tree.commands.move_command import MoveCommand
 from fault_detector_spot.behaviour_tree.commands.move_to_tag_command import MoveToTagCommand
@@ -99,24 +98,16 @@ class MoveCommandAction(ActionClientBehaviour):
             ]
 
             rotated_orientation = cmd._rotate_only_yaw_into_frame(quat, resolved, cmd.target_frame, self.tf_listener)
-
-            q_zero = [0.0, 0.0, 0.0, 1.0]
-
-            tag_yaw = cmd._rotate_only_yaw_into_frame(q_zero, resolved, cmd.target_frame, self.tf_listener)
-            # tag->target yaw (delta), removing offset’s own yaw
-            _, _, yaw_tf = tf.euler_from_quaternion(tag_yaw)
-            R_yaw = tf.quaternion_matrix(tf.quaternion_from_euler(0.0, 0.0, yaw_tf))[:3, :3]
-
-            # rotate XY by yaw_tf; keep Z unchanged
-            offset_vec = np.array([cmd.offset.pose.position.x, cmd.offset.pose.position.y, 0.0])
-            rotated_xy = R_yaw.dot(offset_vec)
+            offset_vec = np.array([cmd.offset.pose.position.x, cmd.offset.pose.position.y, cmd.offset.pose.position.z])
+            rotated_vector = cmd._rotate_vector_into_frame_yaw_only(offset_vec, resolved, cmd.target_frame,
+                                                                    self.tf_listener)
 
             # Build new offset in target (body) frame
             new_offset = PoseStamped()
             new_offset.header.frame_id = cmd.target_frame
-            new_offset.pose.position.x = rotated_xy[0]
-            new_offset.pose.position.y = rotated_xy[1]
-            new_offset.pose.position.z = cmd.offset.pose.position.z
+            new_offset.pose.position.x = rotated_vector[0]
+            new_offset.pose.position.y = rotated_vector[1]
+            new_offset.pose.position.z = rotated_vector[2]
             new_offset.pose.orientation.x = rotated_orientation[0]
             new_offset.pose.orientation.y = rotated_orientation[1]
             new_offset.pose.orientation.z = rotated_orientation[2]

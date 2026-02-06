@@ -105,3 +105,17 @@ class MoveCommand(SimpleCommand):
 
         final_orientation = tf.quaternion_multiply(rot_quat, quat_xyzw)
         return list(final_orientation)
+
+    def _rotate_vector_into_frame_yaw_only(self, vector: np.ndarray, source_frame: str, target_frame: str,
+                                           transformer: TFListenerWrapper) -> np.ndarray:
+        q_zero = [0.0, 0.0, 0.0, 1.0]
+
+        tag_yaw = self._rotate_only_yaw_into_frame(q_zero, source_frame, target_frame, transformer)
+        _, _, yaw_tf = tf.euler_from_quaternion(tag_yaw)
+        R_yaw = tf.quaternion_matrix(tf.quaternion_from_euler(0.0, 0.0, yaw_tf))[:3, :3]
+
+        # rotate XY by yaw_tf; keep Z unchanged
+        offset_vec = np.array([vector[0], vector[1], 0.0])
+        rotated_xy = R_yaw.dot(offset_vec)
+
+        return [rotated_xy[0], rotated_xy[1], vector[2]]
