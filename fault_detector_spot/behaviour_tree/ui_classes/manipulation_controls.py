@@ -252,13 +252,7 @@ class ManipulationControls(UIControlHelper):
         return command
 
     def update_frames_dropdown(self):
-        self.frames_dropdown.clear()
-        frames = self.ui.available_frames
-        if not frames:
-            self.frames_dropdown.addItem("no frames available")
-        else:
-            for frame in frames:
-                self.frames_dropdown.addItem(frame)
+        self.ui.update_frames_dropdown(self.frames_dropdown)
 
     def _euler_to_quaternion(self, roll, pitch, yaw) -> Quaternion:
         """Convert Euler angles (radians) to a Quaternion message."""

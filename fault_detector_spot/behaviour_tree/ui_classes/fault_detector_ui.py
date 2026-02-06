@@ -3,7 +3,7 @@ import signal
 import sys
 
 from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QFont, QFontMetrics
+from PyQt5.QtGui import QFont, QFontMetrics, QColor
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QApplication, QTabWidget
@@ -241,6 +241,46 @@ class Fault_Detector_UI(QWidget):
         self.timer.stop()
         event.accept()
 
+    def update_frames_dropdown(self, frames_dropdown):
+        prev_selection = frames_dropdown.currentText()
+
+        frames_dropdown.blockSignals(True)
+        frames_dropdown.clear()
+
+        available_frames = list(self.available_frames)
+        frames = list(available_frames)
+
+        # Keep the previous selection even if it is no longer advertised
+        if prev_selection and prev_selection not in frames and prev_selection != "no frames available":
+            frames.append(prev_selection)
+
+        if not frames:
+            frames = ["no frames available"]
+
+        missing_indexes = set()
+
+        for frame in frames:
+            frames_dropdown.addItem(frame)
+            idx = frames_dropdown.count() - 1
+            if frame not in available_frames and frame != "no frames available":
+                frames_dropdown.setItemData(idx, QColor("red"), Qt.ForegroundRole)
+                missing_indexes.add(idx)
+
+        # Restore selection (fallback to first item)
+        target_idx = frames_dropdown.findText(prev_selection)
+        if target_idx < 0:
+            target_idx = 0
+        frames_dropdown.setCurrentIndex(target_idx)
+
+        # Ensure the selected item keeps its color if it’s missing
+        if target_idx in missing_indexes:
+            frames_dropdown.setItemData(target_idx, QColor("red"), Qt.ForegroundRole)
+
+        frames_dropdown.blockSignals(False)
+
+        # Restore selection (fallback to first item)
+        idx = frames_dropdown.findText(prev_selection)
+        frames_dropdown.setCurrentIndex(idx if idx >= 0 else 0)
 
 def main(args=None):
     rclpy.init(args=args)

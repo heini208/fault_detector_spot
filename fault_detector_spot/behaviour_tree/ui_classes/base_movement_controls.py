@@ -152,13 +152,7 @@ class BaseMovementControls(UIControlHelper):
                 self.offset_fields[axis].setText(f"{val:.1f}")
 
     def update_frames_dropdown(self):
-        self.frames_dropdown.clear()
-        available_frames = self.ui.available_frames
-        if not available_frames:
-            self.frames_dropdown.addItem("no frames available")
-        else:
-            for frame_name in available_frames:
-                self.frames_dropdown.addItem(frame_name)
+        self.ui.update_frames_dropdown(self.frames_dropdown)
     # ---------------------- Command Builders ----------------------
 
     def build_move_base_command(self, command_id):
