@@ -20,7 +20,7 @@ class MoveToTagCommand(MoveCommand):
             tag_pose: PoseStamped,
             tag_id: int,
             offset: PoseStamped = None,
-            target_frame: str = "odom",
+            target_frame: str = "body",
     ):
         super().__init__(command_id, stamp, offset, target_frame)
         self.tag_pose = tag_pose

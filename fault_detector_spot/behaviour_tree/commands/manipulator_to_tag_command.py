@@ -28,10 +28,11 @@ class ManipulatorToTagCommand(MoveToTagCommand):
             tag_pose: PoseStamped,
             tag_id: int,
             offset: PoseStamped = None,
-            orientation_mode: str = "tag_orientation"
+            orientation_mode: str = "tag_orientation",
+            target_frame: str = "body"
     ):
         # Initialize parent with goal_pose frame as the default target frame
-        super().__init__(command_id, stamp, tag_pose, tag_id, offset, target_frame=tag_pose.header.frame_id)
+        super().__init__(command_id, stamp, tag_pose, tag_id, offset, target_frame=target_frame)
         self.orientation_mode = orientation_mode
 
     def compute_goal_pose(self, transformer: TFListenerWrapper) -> PoseStamped:

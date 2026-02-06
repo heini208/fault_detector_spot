@@ -78,3 +78,39 @@ class MoveCommand(SimpleCommand):
             ]
             return list(tf.quaternion_multiply(q_rot, quat_xyzw))
         return quat_xyzw
+
+    def _rotate_only_yaw_into_frame(self, quat_xyzw: list, source_frame: str, target_frame: str,
+                                    transformer: TFListenerWrapper) -> list:
+        """
+        Rotates a quaternion from source to target and calculates the 2D Yaw
+        by projecting the X-axis vector. Robust against high-pitch Gimbal Lock.
+        """
+        # 1. Calculate the full 3D rotation quaternion
+        if transformer and source_frame != target_frame:
+            # Get transform
+            tf_msg = transformer.lookup_a_tform_b(target_frame, source_frame, timeout_sec=2)
+            q_rot = [
+                tf_msg.transform.rotation.x,
+                tf_msg.transform.rotation.y,
+                tf_msg.transform.rotation.z,
+                tf_msg.transform.rotation.w
+            ]
+            # Combine Transform * Source_Orientation
+            q_final_3d = tf.quaternion_multiply(q_rot, quat_xyzw)
+        else:
+            q_final_3d = quat_xyzw
+        # Convert quaternion to 3x3 rotation matrix
+        R = tf.quaternion_matrix(q_final_3d)[:3, :3]
+
+        # Define the object's "Forward" axis in its own frame
+        v_forward_source = np.array([0.0, 0.0, -1.0])
+
+        # Rotate this vector into the Target Frame
+        v_forward_target = np.dot(R, v_forward_source)
+
+        # Calculate Yaw from the X and Y components of the vector
+        yaw_new = np.arctan2(v_forward_target[1], v_forward_target[0])
+
+        # Re-assemble as a flat quaternion (Roll=0, Pitch=0)
+        rot_quat = tf.quaternion_from_euler(0.0, 0.0, yaw_new)
+        return list(rot_quat)
