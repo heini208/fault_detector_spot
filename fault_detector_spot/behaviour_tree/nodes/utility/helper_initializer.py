@@ -21,9 +21,9 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
         self.slam_helper = RTABHelper(
             node=self.node,
             blackboard=self.bb_client,
-            launch_file="rtab_mapping_launch.py",
-            nav2_launch_file="nav2_spot_launch.py",
-            nav2_params_file="nav2_spot_params.yaml"
+            launch_file="lidar_rtab_mapping_launch.py",
+            nav2_launch_file="nav2_lidar_launch.py",
+            nav2_params_file="nav2_lidar_params.yaml"
         )
 
         self.nav2_helper = self.slam_helper.nav2_helper

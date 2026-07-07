@@ -31,6 +31,10 @@
   <exec_depend>rtabmap_ros</exec_depend>
   <exec_depend>rtabmap_slam</exec_depend>
   <exec_depend>rviz2</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>rtabmap_odom</exec_depend>
+  <exec_depend>rtabmap_util</exec_depend>
 
 
 
