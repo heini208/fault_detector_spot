@@ -183,9 +183,9 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
 
     def update(self):
         # basic preconditions
-        if not self.slam_helper.nav2_helper.is_running():
+        if not self.slam_helper.is_rtabmap_running():
             self.feedback_message = "Localization not running"
-            self.seen_tags: typing.Set[int] = set()
+            self.seen_tags = set()
             return py_trees.common.Status.SUCCESS
 
         map_name = getattr(self.blackboard, 'active_map_name', None) or getattr(getattr(self.slam_helper, 'bb', None),

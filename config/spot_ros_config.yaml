@@ -38,6 +38,8 @@
     # The following parameters are used in the image stitcher node and were determined through a lot of manual tuning.
     # They can be adjusted if the stitched image looks incorrect on your robot.
 
+    use_velodyne: True
+    velodyne_rate: 10.0
     # Virtual camera intrinsic matrix [fx, 0, cx, 0, fy, cy, 0, 0, 1]
     # fx stretches the image left-right, fy zooms in, cx moves the image left-right, cy moves the image up-down.
     virtual_camera_intrinsics: [385.0, 0.0, 315.0, 0.0, 385.0, 844.0, 0.0, 0.0, 1.0]

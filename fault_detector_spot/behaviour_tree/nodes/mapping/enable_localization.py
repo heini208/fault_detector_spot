@@ -23,5 +23,5 @@ class EnableLocalization(py_trees.behaviour.Behaviour):
         if self.slam_helper.nav2_helper.is_running():
             self.launched_initialized = False
             return py_trees.common.Status.SUCCESS
-        else:
-            return py_trees.common.Status.FAILURE
+
+        return py_trees.common.Status.RUNNING

@@ -37,6 +37,8 @@ def make_rtabmap_node(incremental_memory, condition):
             "RGBD/NeighborLinkRefining": "true",
             "RGBD/ProximityBySpace": "true",
             "RGBD/ProximityMaxGraphDepth": "0",
+            "RGBD/ProximityPathMaxNeighbors": "10" if incremental_memory == "false" else "0",
+            "RGBD/ProximityGlobalScanMap": "true" if incremental_memory == "false" else "false",
             "RGBD/AngularUpdate": "0.05",
             "RGBD/LinearUpdate": "0.05",
             "RGBD/CreateOccupancyGrid": "true",
