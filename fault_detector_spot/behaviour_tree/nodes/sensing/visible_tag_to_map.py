@@ -28,23 +28,29 @@ class VisibleTagToMap(py_trees.behaviour.Behaviour):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self.node)
 
     def update(self):
-        if not self.slam_helper.nav2_helper.is_running():
+        if not self.slam_helper.is_rtabmap_running():
+            self.blackboard.visible_tags_map_frame = {}
             self.feedback_message = "Localization not running"
             return py_trees.common.Status.SUCCESS
 
         map_name = self.slam_helper.bb.active_map_name
         if not map_name:
+            self.blackboard.visible_tags_map_frame = {}
             self.feedback_message = "No active map"
             return py_trees.common.Status.SUCCESS
 
         if not self.blackboard.exists("visible_tags") or not self.blackboard.visible_tags:
+            self.blackboard.visible_tags_map_frame = {}
             self.feedback_message = "No visible tags"
             return py_trees.common.Status.SUCCESS
 
         tags_in_map = self._get_visible_tags_in_map_frame()
-        if not tags_in_map:
-            return py_trees.common.Status.SUCCESS
         self.blackboard.visible_tags_map_frame = tags_in_map
+
+        if not tags_in_map:
+            self.feedback_message = "No tags could be transformed to map"
+            return py_trees.common.Status.SUCCESS
+
         self.feedback_message = f"Transformed {len(tags_in_map)} tags to map frame"
         return py_trees.common.Status.SUCCESS
 

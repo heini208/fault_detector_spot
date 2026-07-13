@@ -5,7 +5,7 @@ import py_trees
 import rclpy
 import tf2_ros
 from fault_detector_msgs.msg import TagElement
-
+from rclpy.time import Time
 
 class DetectVisibleTags(py_trees.behaviour.Behaviour):
     """
@@ -13,13 +13,19 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
     visible tags and their poses.
     """
 
-    def __init__(self, name: str = "DetectVisibleTags", frame_pattern: str = r"tag_(\d+)"):
-        super(DetectVisibleTags, self).__init__(name)
+    def __init__(
+            self,
+            name: str = "DetectVisibleTags",
+            frame_pattern: str = r"tag_(\d+)",
+            max_age_sec: float = 0.5
+    ):
+        super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
         self.tf_buffer: Optional[tf2_ros.Buffer] = None
         self.tf_listener: Optional[tf2_ros.TransformListener] = None
         self.blackboard = self.attach_blackboard_client()
         self.frame_pattern = re.compile(frame_pattern)
+        self.max_age_sec = max_age_sec
 
     def setup(self, **kwargs):
         """
@@ -71,15 +77,31 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
                 tag_id = int(match.group(1))  # Just the ID number
 
                 try:
-                    # Get transform from robot base to tag
                     transform = self.tf_buffer.lookup_transform(
-                        'body', frame_name, rclpy.time.Time()
+                        "body",
+                        frame_name,
+                        rclpy.time.Time()
                     )
+
+                    stamp = Time.from_msg(transform.header.stamp)
+                    age_sec = (
+                                      self.node.get_clock().now() - stamp
+                              ).nanoseconds / 1_000_000_000.0
+
+                    if age_sec < -0.1 or age_sec > self.max_age_sec:
+                        continue
+
                     tag_element = self._create_tag_element(tag_id, transform)
                     visible_tags_dict[tag_id] = tag_element
-                except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
-                    self.logger.debug(f"Could not get transform for {frame_name}: {e}")
 
+                except (
+                        tf2_ros.LookupException,
+                        tf2_ros.ConnectivityException,
+                        tf2_ros.ExtrapolationException
+                ) as e:
+                    self.logger.debug(
+                        f"Could not get transform for {frame_name}: {e}"
+                    )
         return visible_tags_dict
 
     @staticmethod
