@@ -28,6 +28,11 @@ from fault_detector_spot.inspection.transform_utils import (
     pose_to_pose_data,
     relative_pose,
 )
+from fault_detector_spot.inspection.object_pose_resolver import (
+    ObjectPoseResolver,
+    ObjectPoseState,
+    ResolvedObjectPose,
+)
 
 __all__ = [
     "ImagePoint",
@@ -50,4 +55,7 @@ __all__ = [
     "pose_to_matrix",
     "pose_to_pose_data",
     "relative_pose",
+    "ObjectPoseResolver",
+    "ObjectPoseState",
+    "ResolvedObjectPose",
 ]

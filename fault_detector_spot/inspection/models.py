@@ -484,6 +484,7 @@ class MapDefinition:
         """Validate names and references across the map."""
         waypoint_names = set()
         landmark_names = set()
+        landmarks_by_name = {}
         object_ids = set()
 
         for waypoint in self.waypoints:
@@ -505,6 +506,7 @@ class MapDefinition:
                 )
 
             landmark_names.add(landmark.name)
+            landmarks_by_name[landmark.name] = landmark
 
         for inspection_object in self.objects:
             inspection_object.validate()
@@ -523,6 +525,20 @@ class MapDefinition:
                     "Unknown landmark "
                     f"{inspection_object.landmark_name} "
                     f"for object {inspection_object.object_id}"
+                )
+
+            landmark = landmarks_by_name[
+                inspection_object.landmark_name
+            ]
+
+            if (
+                    landmark.tag_id is not None
+                    and landmark.tag_id != inspection_object.tag_id
+            ):
+                raise ValueError(
+                    f"Object {inspection_object.object_id} tag "
+                    f"{inspection_object.tag_id} does not match landmark tag "
+                    f"{landmark.tag_id} for {landmark.name}"
                 )
 
             for waypoint_name in (
