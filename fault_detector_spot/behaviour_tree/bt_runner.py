@@ -29,6 +29,7 @@ from fault_detector_spot.behaviour_tree import (
     InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
     NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
     BaseGetGoalTag, BaseMoveToTagAction, BaseMoveRelativeAction,
+    ResolveInspectionObjects, PublishInspectionObjects,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.nodes.sensing.last_localization_pose import LastLocalizationPose
@@ -87,10 +88,33 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     tag_publisher = PublishTagStates(name="TagPublisher")
     detect.setup(node=node)
 
-    world_frame_transformer = VisibleTagToMap(slam_helper=get_helper_container(node).slam_helper,
-                                              name="VisibleTagToMap")
+    slam_helper = get_helper_container(
+        node
+    ).slam_helper
 
-    tag_scan_sequence.add_children([detect, hand_detect, in_range_checker, tag_publisher, world_frame_transformer])
+    world_frame_transformer = VisibleTagToMap(
+        slam_helper=slam_helper,
+        name="VisibleTagToMap",
+    )
+
+    object_resolver = ResolveInspectionObjects(
+        slam_helper=slam_helper,
+        name="ResolveInspectionObjects",
+    )
+
+    object_publisher = PublishInspectionObjects(
+        name="PublishInspectionObjects",
+    )
+
+    tag_scan_sequence.add_children([
+        detect,
+        hand_detect,
+        in_range_checker,
+        tag_publisher,
+        world_frame_transformer,
+        object_resolver,
+        object_publisher,
+    ])
 
     sensing_seq.add_children([tag_scan_sequence, cmd_sub, pose_sub])
     return sensing_seq

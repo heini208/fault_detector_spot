@@ -34,6 +34,15 @@ from fault_detector_spot.inspection.object_pose_resolver import (
     ResolvedObjectPose,
 )
 
+from fault_detector_spot.inspection.tag_element_adapter import (
+    tag_elements_to_pose_stamped,
+)
+
+from fault_detector_spot.inspection.object_state_adapter import (
+    resolved_object_pose_to_msg,
+    resolved_object_poses_to_array_msg,
+)
+
 __all__ = [
     "ImagePoint",
     "InspectionDefinition",
@@ -58,4 +67,7 @@ __all__ = [
     "ObjectPoseResolver",
     "ObjectPoseState",
     "ResolvedObjectPose",
+    "tag_elements_to_pose_stamped",
+    "resolved_object_pose_to_msg",
+    "resolved_object_poses_to_array_msg",
 ]
