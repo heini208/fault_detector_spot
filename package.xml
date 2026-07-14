@@ -9,6 +9,7 @@
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <depend>ament_cmake</depend>
+  <depend>geometry_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
@@ -36,7 +37,7 @@
   <exec_depend>rtabmap_odom</exec_depend>
   <exec_depend>rtabmap_util</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-
+  <exec_depend>python3-numpy</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

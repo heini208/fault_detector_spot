@@ -19,6 +19,15 @@ from fault_detector_spot.inspection.models import (
     WaypointDefinition,
     WaypointReference,
 )
+from fault_detector_spot.inspection.transform_utils import (
+    compose_poses,
+    inverse_pose,
+    matrix_to_pose,
+    pose_data_to_pose,
+    pose_to_matrix,
+    pose_to_pose_data,
+    relative_pose,
+)
 
 __all__ = [
     "ImagePoint",
@@ -34,4 +43,11 @@ __all__ = [
     "Vector3Data",
     "WaypointDefinition",
     "WaypointReference",
+    "compose_poses",
+    "inverse_pose",
+    "matrix_to_pose",
+    "pose_data_to_pose",
+    "pose_to_matrix",
+    "pose_to_pose_data",
+    "relative_pose",
 ]
