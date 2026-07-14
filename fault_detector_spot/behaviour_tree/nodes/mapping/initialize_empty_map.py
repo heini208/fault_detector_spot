@@ -2,9 +2,6 @@ import py_trees
 from fault_detector_spot.behaviour_tree.commands.generic_complex_command import GenericCommand
 from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
 
-from py_trees.behaviours import Success
-
-
 class InitializeEmptyMap(py_trees.behaviour.Behaviour):
     """
     Initializes a new RTAB-Map database and corresponding JSON file for waypoints,
@@ -25,7 +22,7 @@ class InitializeEmptyMap(py_trees.behaviour.Behaviour):
         map_name = cmd.map_name.strip()
         self.slam_helper.start_mapping_from_scratch(map_name)
 
-        return Success
+        return py_trees.common.Status.SUCCESS
 
     def is_command_valid(self) -> bool:
         if not self.blackboard.exists("last_command") or self.blackboard.last_command is None:
