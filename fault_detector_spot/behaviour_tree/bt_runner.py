@@ -76,17 +76,22 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         memory=True
     )
 
-    detect = DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)")
-    detect.setup(node=node)
+    detect = DetectVisibleTags(
+        name="Detect Tags",
+        frame_pattern=r"filtered_fiducial_(\d+)",
+    )
 
-    hand_detect = HandCameraTagDetection(name="HandCameraTagDetection")
-    detect.setup(node=node)
+    hand_detect = HandCameraTagDetection(
+        name="HandCameraTagDetection"
+    )
 
-    in_range_checker = CheckTagReachability(name="CheckTagReachability")
-    detect.setup(node=node)
+    in_range_checker = CheckTagReachability(
+        name="CheckTagReachability"
+    )
 
-    tag_publisher = PublishTagStates(name="TagPublisher")
-    detect.setup(node=node)
+    tag_publisher = PublishTagStates(
+        name="TagPublisher"
+    )
 
     slam_helper = get_helper_container(
         node

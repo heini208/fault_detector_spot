@@ -17,7 +17,7 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
             self,
             name: str = "DetectVisibleTags",
             frame_pattern: str = r"tag_(\d+)",
-            max_age_sec: float = 0.5
+            max_age_sec: float = 1.5
     ):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
