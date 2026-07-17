@@ -28,6 +28,7 @@
   <exec_depend>py_trees_ros_interfaces</exec_depend>
 
   <exec_depend>apriltag_ros</exec_depend>
+  <exec_depend>apriltag_msgs</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>rtabmap_ros</exec_depend>
   <exec_depend>rtabmap_slam</exec_depend>

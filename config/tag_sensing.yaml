@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    tag_sensing.base_frame: body
+    tag_sensing.base_frame_pattern: 'filtered_fiducial_(\d+)'
+    tag_sensing.hand_tag_frame_prefix: 'tag36h11:'
+    tag_sensing.visible_max_age_sec: 1.5
+    tag_sensing.probe_max_age_sec: 0.25
+    tag_sensing.preferred_legacy_source: base

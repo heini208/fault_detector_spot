@@ -11,6 +11,11 @@ pkg = get_package_share_directory('fault_detector_spot')
 def generate_launch_description():
     pkg = get_package_share_directory('fault_detector_spot')
     tag_config = os.path.join(pkg, 'config', 'my_tags.yaml')
+    tag_sensing_config = os.path.join(
+        pkg,
+        "config",
+        "tag_sensing.yaml",
+    )
 
     return LaunchDescription([
         Node(
@@ -20,10 +25,11 @@ def generate_launch_description():
             output='screen'
         ),
         Node(
-            package='fault_detector_spot',
-            executable='bt_runner',
-            name='bt_runner',
-            output='screen'
+            package="fault_detector_spot",
+            executable="bt_runner",
+            name="bt_runner",
+            output="screen",
+            parameters=[tag_sensing_config],
         ),
         Node(
             package='apriltag_ros',

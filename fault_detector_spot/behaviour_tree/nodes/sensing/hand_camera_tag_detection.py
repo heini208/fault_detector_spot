@@ -1,156 +1,173 @@
 from typing import Dict, Optional
 
-import numpy as np
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
-from bosdyn.client.math_helpers import SE3Pose, Quat
-
 import py_trees
+import rclpy
+import tf2_ros
 from apriltag_msgs.msg import AprilTagDetectionArray
 from fault_detector_msgs.msg import TagElement
+from rclpy.duration import Duration
 from rclpy.node import Node
-from sensor_msgs.msg import Image, CameraInfo
-from synchros2.tf_listener_wrapper import TFListenerWrapper
+from rclpy.time import Time
+
+from fault_detector_spot.behaviour_tree.nodes.sensing.tag_observation_time import (
+    is_observation_fresh,
+)
 
 
-class HandCameraTagDetection(py_trees.behaviour.Behaviour):
-    """
-    Detect AprilTags using depth
-    Positions are transformed to GRAV_ALIGNED_BODY_FRAME_NAME.
-    """
+class HandCameraTagDetection(
+    py_trees.behaviour.Behaviour
+):
 
-    def __init__(self, name: str = "HandCameraTagDetection", hand_camera_topic: str = "/depth_registered/hand/image", hand_camera_info_topic: str = "/depth_registered/hand/camera_info", target_frame: str = GRAV_ALIGNED_BODY_FRAME_NAME, source_frame: str = ""):
+    def __init__(
+        self,
+        name: str = "HandCameraTagDetection",
+        detection_topic: str = "/detections",
+        target_frame: str = "body",
+        tag_frame_prefix: str = "tag36h11:",
+        max_age_sec: float = 0.5,
+    ):
         super().__init__(name)
         self.node: Optional[Node] = None
         self.blackboard = self.attach_blackboard_client()
-
-        self.hand_camera_info_topic = hand_camera_info_topic
-        self.hand_camera_topic = hand_camera_topic
-
-        self.depth_image: Optional[Image] = None
-        self.camera_info: Optional[CameraInfo] = None
-        self.latest_detections: Optional[AprilTagDetectionArray] = None
-        self.tf_listener: Optional[TFListenerWrapper] = None
-
-        self.camera_frame: Optional[str] = None
-        self.target_frame: str = target_frame
-        self.camera_frame: str = source_frame
+        self.detection_topic = detection_topic
+        self.target_frame = target_frame
+        self.tag_frame_prefix = tag_frame_prefix
+        self.max_age_sec = max_age_sec
+        self.latest_detections: Optional[
+            AprilTagDetectionArray
+        ] = None
+        self.tf_buffer: Optional[tf2_ros.Buffer] = None
+        self.tf_listener: Optional[
+            tf2_ros.TransformListener
+        ] = None
 
     def setup(self, **kwargs):
-        try:
-            self.node = kwargs["node"]
+        self.node = kwargs.get("node")
 
-            self.node.create_subscription(
-                Image,
-                self.hand_camera_topic,
-                self._depth_cb,
-                10
+        if self.node is None:
+            raise RuntimeError(
+                f"{self.name}: no ROS node provided"
             )
-            self.node.create_subscription(
-                CameraInfo,
-                self.hand_camera_info_topic,
-                self._camera_info_cb,
-                10
-            )
-            self.node.create_subscription(
-                AprilTagDetectionArray,
-                "/detections",
-                self._detections_cb,
-                10
-            )
-            self.tf_listener = TFListenerWrapper(self.node)
 
-            self.blackboard.register_key("visible_tags", access=py_trees.common.Access.READ)
-            self.logger.info("DetectNewTagsWithDepth node initialized.")
-        except KeyError as e:
-            self.logger.error(f"Missing required setup argument: {e}")
-
-    def _depth_cb(self, msg: Image):
-        self.depth_image = msg
-        if not self.camera_frame:
-            self.camera_frame = msg.header.frame_id
-
-    def _camera_info_cb(self, msg: CameraInfo):
-        self.camera_info = msg
-
-    def _detections_cb(self, msg: AprilTagDetectionArray):
-        self.latest_detections = msg
-
-    def update(self) -> py_trees.common.Status:
-        if self.depth_image is None or self.camera_info is None or self.latest_detections is None:
-            return py_trees.common.Status.SUCCESS
-
-        visible_tags: Dict[int, TagElement] = getattr(self.blackboard, "visible_tags", {})
-        new_elements = []
-
-        for detection in self.latest_detections.detections:
-            tag_id = detection.id
-            if tag_id in visible_tags:
-                continue  # Skip already known tags
-
-            u, v = int(detection.centre.x), int(detection.centre.y)
-            depth = self._get_valid_depth(u, v)
-
-            if depth is None:
-                self.logger.debug(f"No valid depth for tag {tag_id} at ({u},{v})")
-                continue
-
-            x, y = self._unproject_pixel(u, v, depth)
-            local_pose = SE3Pose(x, y, depth, Quat())
-
-            tf_msg = self.tf_listener.lookup_a_tform_b(
-                frame_a=self.target_frame,
-                frame_b=self.camera_frame,
-                timeout_sec=2.0
-            )
-            t = tf_msg.transform.translation
-            r = tf_msg.transform.rotation
-            world_tf = SE3Pose(t.x, t.y, t.z, Quat(r.w, r.x, r.y, r.z))
-            world_pose = world_tf * local_pose
-
-            tag_element = TagElement()
-            tag_element.id = tag_id
-            tag_element.pose.header.stamp = self.node.get_clock().now().to_msg()
-            tag_element.pose.header.frame_id = self.target_frame
-            tag_element.pose.pose.position.x = world_pose.x
-            tag_element.pose.pose.position.y = world_pose.y
-            tag_element.pose.pose.position.z = world_pose.z
-            tag_element.pose.pose.orientation.x = world_pose.rot.x
-            tag_element.pose.pose.orientation.y = world_pose.rot.y
-            tag_element.pose.pose.orientation.z = world_pose.rot.z
-            tag_element.pose.pose.orientation.w = world_pose.rot.w
-
-            new_elements.append(tag_element)
-
-        if new_elements:
-            self.blackboard.visible_tags.update({e.id: e for e in new_elements})
-            self.feedback_message = f"Published new tags: {[e.id for e in new_elements]}"
-            return py_trees.common.Status.SUCCESS
-
-        self.feedback_message = "No new tags detected"
-        return py_trees.common.Status.SUCCESS
-
-    def _get_valid_depth(self, u: int, v: int, radius: int = 5) -> Optional[float]:
-        if self.depth_image is None:
-            return None
-
-        arr = np.frombuffer(self.depth_image.data, dtype=np.uint16).reshape(
-            (self.depth_image.height, self.depth_image.width)
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(
+            self.tf_buffer,
+            self.node,
         )
 
-        h, w = arr.shape
-        for r in range(radius + 1):
-            for dx in range(-r, r + 1):
-                for dy in range(-r, r + 1):
-                    x, y = u + dx, v + dy
-                    if 0 <= x < w and 0 <= y < h:
-                        val = arr[y, x]
-                        if val > 0:
-                            return float(val) * 1e-3  # mm to m
-        return None
+        self.node.create_subscription(
+            AprilTagDetectionArray,
+            self.detection_topic,
+            self._detections_callback,
+            10,
+        )
 
-    def _unproject_pixel(self, u: int, v: int, z: float):
-        k = self.camera_info.k
-        fx, fy, cx, cy = k[0], k[4], k[2], k[5]
-        x = (u - cx) * z / fx
-        y = (v - cy) * z / fy
-        return x, y
+        self.blackboard.register_key(
+            key="hand_tag_observations",
+            access=py_trees.common.Access.WRITE,
+        )
+        self.blackboard.hand_tag_observations = {}
+
+    def _detections_callback(
+        self,
+        message: AprilTagDetectionArray,
+    ):
+        self.latest_detections = message
+
+    def update(self) -> py_trees.common.Status:
+        observations = self._resolve_observations()
+        self.blackboard.hand_tag_observations = observations
+        self.feedback_message = (
+            f"Hand tags: {sorted(observations.keys())}"
+        )
+        return py_trees.common.Status.SUCCESS
+
+    def _resolve_observations(
+        self,
+    ) -> Dict[int, TagElement]:
+        if (
+            self.latest_detections is None
+            or self.tf_buffer is None
+        ):
+            return {}
+
+        message = self.latest_detections
+
+        if not is_observation_fresh(
+            self.node.get_clock().now(),
+            message.header.stamp,
+            self.max_age_sec,
+        ):
+            return {}
+
+        observation_time = Time.from_msg(
+            message.header.stamp
+        )
+        observations = {}
+
+        for detection in message.detections:
+            tag_id = int(detection.id)
+            tag_frame = (
+                f"{self.tag_frame_prefix}{tag_id}"
+            )
+
+            if not self.tf_buffer.can_transform(
+                self.target_frame,
+                tag_frame,
+                observation_time,
+                timeout=Duration(seconds=0.0),
+            ):
+                continue
+
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    self.target_frame,
+                    tag_frame,
+                    observation_time,
+                )
+            except (
+                tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException,
+            ) as exception:
+                self.logger.debug(
+                    f"Could not resolve {tag_frame}: "
+                    f"{exception}"
+                )
+                continue
+
+            observations[tag_id] = (
+                self._create_tag_element(
+                    tag_id,
+                    transform,
+                    message.header.stamp,
+                )
+            )
+
+        return observations
+
+    @staticmethod
+    def _create_tag_element(
+        tag_id,
+        transform,
+        observation_stamp,
+    ) -> TagElement:
+        tag = TagElement()
+        tag.id = tag_id
+        tag.pose.header.frame_id = (
+            transform.header.frame_id
+        )
+        tag.pose.header.stamp = observation_stamp
+        tag.pose.pose.position.x = (
+            transform.transform.translation.x
+        )
+        tag.pose.pose.position.y = (
+            transform.transform.translation.y
+        )
+        tag.pose.pose.position.z = (
+            transform.transform.translation.z
+        )
+        tag.pose.pose.orientation = (
+            transform.transform.rotation
+        )
+        return tag

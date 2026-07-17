@@ -29,7 +29,7 @@ from fault_detector_spot.behaviour_tree import (
     InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
     NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
     BaseGetGoalTag, BaseMoveToTagAction, BaseMoveRelativeAction,
-    ResolveInspectionObjects, PublishInspectionObjects,
+    ResolveInspectionObjects, PublishInspectionObjects, MergeVisibleTagObservations,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.nodes.sensing.last_localization_pose import LastLocalizationPose
@@ -40,6 +40,11 @@ from py_trees.decorators import StatusToBlackboard, EternalGuard
 
 helper_initializer: HelperInitializer = None
 
+def read_parameter(node, name, default):
+    if not node.has_parameter(name):
+        node.declare_parameter(name, default)
+
+    return node.get_parameter(name).value
 
 def create_root(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     return create_behavior_tree(node)
@@ -61,6 +66,38 @@ def create_behavior_tree(node: rclpy.node.Node):
 
 
 def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    base_frame = read_parameter(
+        node,
+        "tag_sensing.base_frame",
+        "body",
+    )
+
+    base_frame_pattern = read_parameter(
+        node,
+        "tag_sensing.base_frame_pattern",
+        r"filtered_fiducial_(\d+)",
+    )
+
+    hand_tag_frame_prefix = read_parameter(
+        node,
+        "tag_sensing.hand_tag_frame_prefix",
+        "tag36h11:",
+    )
+
+    visible_max_age_sec = float(
+        read_parameter(
+            node,
+            "tag_sensing.visible_max_age_sec",
+            0.5,
+        )
+    )
+
+    preferred_source = read_parameter(
+        node,
+        "tag_sensing.preferred_legacy_source",
+        "base",
+    )
+
     sensing_seq = py_trees.composites.Parallel("Sensing", policy=py_trees.common.ParallelPolicy.SuccessOnAll())
 
     cmd_sub = CommandSubscriber(name="UI Command Listener")
@@ -73,12 +110,23 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     )
 
     detect = DetectVisibleTags(
-        name="Detect Tags",
-        frame_pattern=r"filtered_fiducial_(\d+)",
+        name="DetectBaseTags",
+        frame_pattern=base_frame_pattern,
+        target_frame=base_frame,
+        max_age_sec=visible_max_age_sec,
     )
 
     hand_detect = HandCameraTagDetection(
-        name="HandCameraTagDetection"
+        name="DetectHandTags",
+        detection_topic="/detections",
+        target_frame=base_frame,
+        tag_frame_prefix=hand_tag_frame_prefix,
+        max_age_sec=visible_max_age_sec,
+    )
+
+    merge_tags = MergeVisibleTagObservations(
+        name="MergeVisibleTags",
+        preferred_source=preferred_source,
     )
 
     in_range_checker = CheckTagReachability(
@@ -110,6 +158,7 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     tag_scan_sequence.add_children([
         detect,
         hand_detect,
+        merge_tags,
         in_range_checker,
         tag_publisher,
         world_frame_transformer,
