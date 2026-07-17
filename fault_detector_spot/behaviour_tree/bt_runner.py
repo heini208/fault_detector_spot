@@ -41,13 +41,11 @@ from py_trees.decorators import StatusToBlackboard, EternalGuard
 helper_initializer: HelperInitializer = None
 
 
-def create_root() -> py_trees.behaviour.Behaviour:
-    root = create_behavior_tree()
-    return root
+def create_root(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    return create_behavior_tree(node)
 
 
-def create_behavior_tree():
-    node = rclpy.create_node("bt_driver")
+def create_behavior_tree(node: rclpy.node.Node):
 
     root = py_trees.composites.Parallel(
         "FaultDetectorSpot",
@@ -66,10 +64,8 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sensing_seq = py_trees.composites.Parallel("Sensing", policy=py_trees.common.ParallelPolicy.SuccessOnAll())
 
     cmd_sub = CommandSubscriber(name="UI Command Listener")
-    cmd_sub.setup(node=node)
 
     pose_sub = LastLocalizationPose(name="LastLocalizationPose")
-    pose_sub.setup(node=node)
 
     tag_scan_sequence = py_trees.composites.Sequence(
         name="ScanForTags",
@@ -133,7 +129,6 @@ def build_buffered_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
     command_tree = build_repeat_guarded_cancelable_command_tree(node)
 
     buffer = CommandManager(name="CommandManager")
-    buffer.setup()
     buffered_command_tree.add_children([
         buffer,
         command_tree
@@ -152,7 +147,7 @@ def get_helper_container(node: rclpy.node.Node):
 
 def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     command_selector = py_trees.composites.Selector(
-        name="CommandSelector",
+        name="ommandSelector",
         memory=True
     )
 
@@ -199,11 +194,6 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
     stow_cancel = StowArmActionSimple(name="StowArmCancel")
     close_gripper = CloseGripperAction(name="CloseGripperAction")
     reset_estop = ResetEstopFlag(name="ResetEStopFlag")
-    stop_base.setup(node=node)
-    stop_mapping.setup(node=node)
-    stow_cancel.setup(node=node)
-    close_gripper.setup(node=node)
-    reset_estop.setup(node=node)
 
     cancel_seq = py_trees.composites.Sequence("CancelSequence", memory=True)
     cancel_seq.add_children([cancel_check, stop_base, stop_mapping, stow_cancel, close_gripper, reset_estop])
@@ -233,14 +223,11 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
 
 def build_publisher_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     initial_ui_info = PublishInitialUIInfoOnce(name="PublishInitialUIInfoOnce")
-    initial_ui_info.setup(node=node)
 
     # Other publishers
     cmd_pub = BufferStatusPublisher(name="CommandStatusPublisher")
-    cmd_pub.setup(node=node)
 
     init_pose_pub = LandmarkRelocalizer(get_helper_container(node).slam_helper, name="InitPosePublisher")
-    init_pose_pub.setup(node=node)
     # Parallel so both can exist simultaneously
     publisher_tree = py_trees.composites.Parallel(
         "PublisherTree",
@@ -253,7 +240,6 @@ def build_publisher_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
 def build_repeat_guarded_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     guard = NewCommandGuard(name="NewCommandGuard")
-    guard.setup(node=node)
     guarded_sequence = py_trees.composites.Sequence(
         name="GuardedCommands",
         memory=True
@@ -281,8 +267,6 @@ def make_simple_command_sequence(
         )
     )
     child = behaviour_ctor(node)
-    if hasattr(child, "setup"):
-        child.setup(node=node)
     seq.add_children([check, child])
     return seq
 
@@ -302,10 +286,8 @@ def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
 def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     manipulation = py_trees.composites.Sequence("ManipulationSequence", memory=True)
     get_goal = ManipulatorGetGoalTag(name="GetGoalTagPosition")
-    get_goal.setup(node=node)
 
     move_arm = ManipulatorMoveArmAction(name="MoveArm")
-    move_arm.setup(node=node)
 
     manipulation.add_children([get_goal, move_arm])
 
@@ -319,10 +301,7 @@ def build_base_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     base_sequence = py_trees.composites.Sequence("BaseMoveToTagSequence", memory=True)
 
     get_goal = BaseGetGoalTag(name="BaseGetGoalTag")
-    get_goal.setup(node=node)
-
     move_base = BaseMoveToTagAction(name="BaseMoveToTagAction")
-    move_base.setup(node=node)
 
     base_sequence.add_children([get_goal, move_base])
     return base_sequence
@@ -330,10 +309,8 @@ def build_base_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 def build_current_pose_as_waypoint_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
     get_goal = SaveCurrentPoseAsGoal(name="SaveCurrentPoseAsGoal")
-    get_goal.setup(node=node)
 
     add_waypoint = AddGoalPoseAsWaypoint(get_helper_container(node).slam_helper, name="AddGoalPoseAsWaypoint")
-    add_waypoint.setup(node=node)
     sequence.add_children([get_goal, add_waypoint])
     return sequence
 
@@ -342,10 +319,8 @@ def build_tag_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour
     slam_helper = get_helper_container(node).slam_helper
     sequence = py_trees.composites.Sequence("SaveTagAsLandmark", memory=True)
     get_goal = SetTagAsGoal(name="SetTagAsGoal")
-    get_goal.setup(node=node)
 
     add_waypoint = AddGoalPoseAsLandmark(slam_helper=slam_helper, name="AddGoalPoseAsLandmark")
-    add_waypoint.setup(node=node)
     sequence.add_children([get_goal, add_waypoint])
     return sequence
 
@@ -353,10 +328,8 @@ def build_tag_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour
 def build_navigate_to_goal_pose_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("NavigateToWaypoint", memory=True)
     set_goal = SetWaypointAsGoal(name="SetWaypointAsGoal")
-    set_goal.setup(node=node)
 
     navigate = NavigateToGoalPose(name="NavigateToGoalPose")
-    navigate.setup(node=node)
     sequence.add_children([set_goal, navigate])
 
     return sequence
@@ -386,20 +359,27 @@ def main(args=None):
     global stop_mapping_behavior, stop_mapping_tree
 
     rclpy.init(args=args)
+    node = rclpy.create_node("bt_driver")
 
-    root = create_root()
+    root = create_root(node)
     tree = py_trees_ros.trees.BehaviourTree(
         root=root,
         unicode_tree_debug=False
     )
 
     try:
-        tree.setup(timeout=15.0)
-    except py_trees_ros.exceptions.TimedOutError as e:
-        print(f"Failed to setup the tree: {e}")
+        tree.setup(
+            node=node,
+            timeout=15.0
+        )
+    except py_trees_ros.exceptions.TimedOutError as exception:
+        node.get_logger().error(
+            f"Behavior tree setup failed: {exception}"
+        )
         tree.shutdown()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
         sys.exit(1)
+
 
     tree.tick_tock(period_ms=50.0)
 
