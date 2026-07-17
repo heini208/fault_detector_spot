@@ -13,8 +13,8 @@ def generate_launch_description():
     tag_config = os.path.join(pkg, 'config', 'my_tags.yaml')
     tag_sensing_config = os.path.join(
         pkg,
-        "config",
-        "tag_sensing.yaml",
+        'config',
+        'tag_sensing.yaml',
     )
 
     return LaunchDescription([
@@ -25,10 +25,10 @@ def generate_launch_description():
             output='screen'
         ),
         Node(
-            package="fault_detector_spot",
-            executable="bt_runner",
-            name="bt_runner",
-            output="screen",
+            package='fault_detector_spot',
+            executable='bt_runner',
+            name='bt_runner',
+            output='screen',
             parameters=[tag_sensing_config],
         ),
         Node(

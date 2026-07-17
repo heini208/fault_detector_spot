@@ -1,8 +1,8 @@
 from copy import deepcopy
 from typing import Dict
+from fault_detector_msgs.msg import TagElement
 
 import py_trees
-from fault_detector_msgs.msg import TagElement
 
 
 class MergeVisibleTagObservations(
@@ -11,8 +11,8 @@ class MergeVisibleTagObservations(
 
     def __init__(
         self,
-        name: str = "MergeVisibleTagObservations",
-        preferred_source: str = "base",
+        name: str = 'MergeVisibleTagObservations',
+        preferred_source: str = 'base',
     ):
         super().__init__(name)
 

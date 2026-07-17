@@ -6,7 +6,10 @@ def observation_age_sec(
     current_time: Time,
     observation_stamp: TimeMessage,
 ) -> float:
-    observation_time = Time.from_msg(observation_stamp)
+    observation_time = Time.from_msg(
+        observation_stamp,
+        clock_type=current_time.clock_type,
+    )
     return (
         current_time - observation_time
     ).nanoseconds / 1_000_000_000.0

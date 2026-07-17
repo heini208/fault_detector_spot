@@ -7,6 +7,8 @@
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
+  <depend>rclpy</depend>
+  <depend>builtin_interfaces</depend>
   <depend>std_msgs</depend>
   <depend>ament_cmake</depend>
   <depend>geometry_msgs</depend>

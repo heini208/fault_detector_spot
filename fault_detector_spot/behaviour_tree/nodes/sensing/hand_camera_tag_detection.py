@@ -1,10 +1,8 @@
 from typing import Dict, Optional
-
-import py_trees
-import rclpy
-import tf2_ros
 from apriltag_msgs.msg import AprilTagDetectionArray
 from fault_detector_msgs.msg import TagElement
+import py_trees
+import tf2_ros
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
@@ -19,12 +17,12 @@ class HandCameraTagDetection(
 ):
 
     def __init__(
-        self,
-        name: str = "HandCameraTagDetection",
-        detection_topic: str = "/detections",
-        target_frame: str = "body",
-        tag_frame_prefix: str = "tag36h11:",
-        max_age_sec: float = 0.5,
+            self,
+            name: str = 'HandCameraTagDetection',
+            detection_topic: str = '/detections',
+            target_frame: str = 'body',
+            tag_frame_prefix: str = 'tag36h11:',
+            max_age_sec: float = 0.5,
     ):
         super().__init__(name)
         self.node: Optional[Node] = None
@@ -69,8 +67,8 @@ class HandCameraTagDetection(
         self.blackboard.hand_tag_observations = {}
 
     def _detections_callback(
-        self,
-        message: AprilTagDetectionArray,
+            self,
+            message: AprilTagDetectionArray,
     ):
         self.latest_detections = message
 
@@ -83,20 +81,20 @@ class HandCameraTagDetection(
         return py_trees.common.Status.SUCCESS
 
     def _resolve_observations(
-        self,
+            self,
     ) -> Dict[int, TagElement]:
         if (
-            self.latest_detections is None
-            or self.tf_buffer is None
+                self.latest_detections is None
+                or self.tf_buffer is None
         ):
             return {}
 
         message = self.latest_detections
 
         if not is_observation_fresh(
-            self.node.get_clock().now(),
-            message.header.stamp,
-            self.max_age_sec,
+                self.node.get_clock().now(),
+                message.header.stamp,
+                self.max_age_sec,
         ):
             return {}
 
@@ -112,10 +110,10 @@ class HandCameraTagDetection(
             )
 
             if not self.tf_buffer.can_transform(
-                self.target_frame,
-                tag_frame,
-                observation_time,
-                timeout=Duration(seconds=0.0),
+                    self.target_frame,
+                    tag_frame,
+                    observation_time,
+                    timeout=Duration(seconds=0.0),
             ):
                 continue
 
@@ -126,9 +124,9 @@ class HandCameraTagDetection(
                     observation_time,
                 )
             except (
-                tf2_ros.LookupException,
-                tf2_ros.ConnectivityException,
-                tf2_ros.ExtrapolationException,
+                    tf2_ros.LookupException,
+                    tf2_ros.ConnectivityException,
+                    tf2_ros.ExtrapolationException,
             ) as exception:
                 self.logger.debug(
                     f"Could not resolve {tag_frame}: "
@@ -148,9 +146,9 @@ class HandCameraTagDetection(
 
     @staticmethod
     def _create_tag_element(
-        tag_id,
-        transform,
-        observation_stamp,
+            tag_id,
+            transform,
+            observation_stamp,
     ) -> TagElement:
         tag = TagElement()
         tag.id = tag_id
