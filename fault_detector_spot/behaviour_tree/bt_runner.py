@@ -84,18 +84,50 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         "tag36h11:",
     )
 
-    visible_max_age_sec = float(
+    hand_detection_topic = read_parameter(
+        node,
+        "tag_sensing.hand_detection_topic",
+        "/detections",
+    )
+
+    base_max_age_sec = float(
         read_parameter(
             node,
-            "tag_sensing.visible_max_age_sec",
+            "tag_sensing.base_max_age_sec",
+            1.5,
+        )
+    )
+
+    hand_max_age_sec = float(
+        read_parameter(
+            node,
+            "tag_sensing.hand_max_age_sec",
+            1.0,
+        )
+    )
+
+    hand_tf_pending_sec = float(
+        read_parameter(
+            node,
+            "tag_sensing.hand_tf_pending_sec",
             0.5,
         )
     )
 
-    preferred_source = read_parameter(
-        node,
-        "tag_sensing.preferred_legacy_source",
-        "base",
+    hand_max_hamming = int(
+        read_parameter(
+            node,
+            "tag_sensing.hand_max_hamming",
+            0,
+        )
+    )
+
+    hand_min_decision_margin = float(
+        read_parameter(
+            node,
+            "tag_sensing.hand_min_decision_margin",
+            0.0,
+        )
     )
 
     sensing_seq = py_trees.composites.Parallel("Sensing", policy=py_trees.common.ParallelPolicy.SuccessOnAll())
@@ -113,20 +145,22 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         name="DetectBaseTags",
         frame_pattern=base_frame_pattern,
         target_frame=base_frame,
-        max_age_sec=visible_max_age_sec,
+        max_age_sec=base_max_age_sec,
     )
 
     hand_detect = HandCameraTagDetection(
         name="DetectHandTags",
-        detection_topic="/detections",
+        detection_topic=hand_detection_topic,
         target_frame=base_frame,
         tag_frame_prefix=hand_tag_frame_prefix,
-        max_age_sec=visible_max_age_sec,
+        max_age_sec=hand_max_age_sec,
+        tf_pending_sec=hand_tf_pending_sec,
+        max_hamming=hand_max_hamming,
+        min_decision_margin=hand_min_decision_margin,
     )
 
     merge_tags = MergeVisibleTagObservations(
         name="MergeVisibleTags",
-        preferred_source=preferred_source,
     )
 
     in_range_checker = CheckTagReachability(
