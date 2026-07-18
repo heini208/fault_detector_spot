@@ -14,3 +14,7 @@
     tag_sensing.hand_min_decision_margin: 0.0
 
     tag_sensing.probe_max_age_sec: 0.25
+
+    inspection.active_object_id: ''
+    inspection.active_inspection_id: ''
+    inspection.execution_frame: odom

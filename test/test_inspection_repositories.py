@@ -3,6 +3,7 @@
 import json
 
 import pytest
+import yaml
 
 from fault_detector_spot.inspection.inspection_repository import (
     InspectionRepository,
@@ -10,12 +11,17 @@ from fault_detector_spot.inspection.inspection_repository import (
 from fault_detector_spot.inspection.map_repository import (
     MapRepository,
 )
+from fault_detector_spot.inspection.object_repository import (
+    ObjectRepository,
+)
 from fault_detector_spot.inspection.models import (
     InspectionDefinition,
     InspectionObject,
     LandmarkDefinition,
     MapDefinition,
+    ObjectDefinition,
     PoseData,
+    QuaternionData,
     ProbePoint,
     Vector3Data,
     WaypointDefinition,
@@ -78,8 +84,10 @@ def create_valid_inspection() -> InspectionDefinition:
 
     return InspectionDefinition(
         inspection_id="motor_a_standard",
-        map_name="laboratory",
         object_id="motor_a",
+        map_name="laboratory",
+        display_name="Motor A standard",
+        preferred_execution_frame="odom",
         probe_points=[probe_point],
         reference_image="reference.png",
         default_approach_waypoint="motor_front",
@@ -172,39 +180,170 @@ def test_invalid_map_is_not_written(tmp_path):
     assert not repository.get_map_path("invalid").exists()
 
 
+def create_valid_object() -> ObjectDefinition:
+    """Create a portable object definition."""
+    return ObjectDefinition(
+        object_id="motor_a",
+        display_name="Motor A",
+        tag_id=23,
+        tag_family="36h11",
+        marker_to_object=PoseData(
+            orientation=QuaternionData(w=1.0),
+        ),
+    )
+
+
+def test_object_repository_round_trip(tmp_path):
+    """Portable object YAML survives saving and loading."""
+    repository = ObjectRepository(tmp_path)
+    original = create_valid_object()
+
+    saved_path = repository.save(original)
+    restored = repository.load("motor_a")
+
+    assert saved_path.is_file()
+    assert restored == original
+    assert repository.list_object_ids() == ["motor_a"]
+
+
+def test_object_repository_rejects_path_traversal(tmp_path):
+    """Object IDs cannot escape the repository."""
+    repository = ObjectRepository(tmp_path)
+
+    with pytest.raises(ValueError):
+        repository.get_object_path("../other")
+
+
+def test_object_repository_rejects_zero_quaternion(tmp_path):
+    """Object transforms require a valid quaternion."""
+    repository = ObjectRepository(tmp_path)
+    definition = create_valid_object()
+    definition.marker_to_object.orientation.w = 0.0
+
+    with pytest.raises(ValueError):
+        repository.save(definition)
+
+
+def test_object_repository_requires_explicit_transform(tmp_path):
+    """An empty transform cannot silently become identity."""
+    path = ObjectRepository(tmp_path).get_object_path("motor_a")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        yaml.safe_dump({
+            "id": "motor_a",
+            "display_name": "Motor A",
+            "tag_id": 23,
+            "marker_to_object": {},
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        ObjectRepository(tmp_path).load("motor_a")
+
+
 def test_inspection_repository_round_trip(tmp_path):
-    """Inspection YAML survives saving and loading."""
+    """Inspection YAML uses object-scoped storage."""
     repository = InspectionRepository(tmp_path)
     original = create_valid_inspection()
 
     saved_path = repository.save(original)
     restored = repository.load(
-        "laboratory",
+        "motor_a",
         "motor_a_standard",
     )
 
     assert saved_path.is_file()
+    assert saved_path == (
+        tmp_path
+        / "motor_a"
+        / "motor_a_standard"
+        / "inspection.yaml"
+    )
     assert restored == original
 
 
 def test_inspection_repository_lists_inspections(tmp_path):
-    """Only valid inspection directories are listed."""
+    """Only canonical object inspections are listed."""
     repository = InspectionRepository(tmp_path)
-
     repository.save(create_valid_inspection())
 
     invalid_directory = (
         tmp_path
-        / "laboratory"
+        / "motor_a"
         / "not_an_inspection"
     )
     invalid_directory.mkdir(parents=True)
 
-    inspection_ids = repository.list_inspection_ids(
-        "laboratory"
+    assert repository.list_inspection_ids(
+        "motor_a"
+    ) == ["motor_a_standard"]
+
+
+def test_inspection_repository_loads_legacy_without_moving(
+    tmp_path,
+):
+    """Legacy map data loads only through explicit fallback."""
+    repository = InspectionRepository(tmp_path)
+    legacy_path = repository.get_legacy_inspection_path(
+        "laboratory",
+        "motor_a_standard",
+    )
+    legacy_path.parent.mkdir(parents=True)
+    legacy_data = create_valid_inspection().to_dict()
+    legacy_data["schema_version"] = 1
+    legacy_data.pop("preferred_execution_frame")
+    legacy_path.write_text(
+        yaml.safe_dump(legacy_data, sort_keys=False),
+        encoding="utf-8",
     )
 
-    assert inspection_ids == ["motor_a_standard"]
+    restored = repository.load(
+        "motor_a",
+        "motor_a_standard",
+        legacy_map_name="laboratory",
+    )
+
+    assert restored.preferred_execution_frame == "odom"
+    assert restored.schema_version == 1
+    assert legacy_path.is_file()
+    assert not repository.get_inspection_path(
+        "motor_a",
+        "motor_a_standard",
+    ).exists()
+
+
+def test_saving_loaded_legacy_creates_v2_without_deleting_old(
+    tmp_path,
+):
+    """Explicit save migrates a copy and preserves legacy data."""
+    repository = InspectionRepository(tmp_path)
+    legacy_path = repository.get_legacy_inspection_path(
+        "laboratory",
+        "motor_a_standard",
+    )
+    legacy_path.parent.mkdir(parents=True)
+    legacy_data = create_valid_inspection().to_dict()
+    legacy_data["schema_version"] = 1
+    legacy_path.write_text(
+        yaml.safe_dump(legacy_data, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    restored = repository.load(
+        "motor_a",
+        "motor_a_standard",
+        legacy_map_name="laboratory",
+    )
+    current_path = repository.save(restored)
+    current = repository.load(
+        "motor_a",
+        "motor_a_standard",
+    )
+
+    assert current_path.is_file()
+    assert current.schema_version == 2
+    assert legacy_path.is_file()
 
 
 def test_inspection_repository_rejects_path_traversal(
@@ -215,6 +354,6 @@ def test_inspection_repository_rejects_path_traversal(
 
     with pytest.raises(ValueError):
         repository.get_inspection_path(
-            "../other_map",
+            "../other_object",
             "inspection",
         )

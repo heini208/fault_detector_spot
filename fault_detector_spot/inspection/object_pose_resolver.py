@@ -1,9 +1,11 @@
 """Resolve remembered and live object poses."""
 
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, Mapping, Optional
 
+from builtin_interfaces.msg import Time as TimeMessage
 from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.inspection.models import (
@@ -26,6 +28,14 @@ class ObjectPoseState(str, Enum):
     INVALID = "invalid"
 
 
+class ObjectPoseSource(str, Enum):
+    """Source and intended use of an object pose."""
+
+    LIVE_LOCAL = "live_local"
+    LIVE_MAP = "live_map"
+    REMEMBERED_MAP = "remembered_map"
+
+
 @dataclass
 class ResolvedObjectPose:
     """Resolved runtime state of one inspection object."""
@@ -37,6 +47,11 @@ class ResolvedObjectPose:
     remembered_pose: Optional[PoseStamped] = None
     live_pose: Optional[PoseStamped] = None
     message: str = ""
+    frame_id: str = ""
+    source: Optional[ObjectPoseSource] = None
+    observation_timestamp: Optional[TimeMessage] = None
+    observation_age_sec: Optional[float] = None
+    observation_source: str = ""
 
     @property
     def is_available(self) -> bool:
@@ -47,6 +62,15 @@ class ResolvedObjectPose:
     def is_live(self) -> bool:
         """Return whether the selected pose is a live observation."""
         return self.state == ObjectPoseState.LIVE
+
+    @property
+    def is_probe_usable(self) -> bool:
+        """Return whether the pose is a fresh local probe reference."""
+        return (
+            self.state == ObjectPoseState.LIVE
+            and self.source == ObjectPoseSource.LIVE_LOCAL
+            and self.selected_pose is not None
+        )
 
 
 class ObjectPoseResolver:
@@ -78,6 +102,7 @@ class ObjectPoseResolver:
                 tag_id=None,
                 state=ObjectPoseState.INVALID,
                 message=f"Unknown object: {object_id}",
+                frame_id=self.map_frame,
             )
 
         landmark = self._find_landmark(
@@ -99,6 +124,7 @@ class ObjectPoseResolver:
                     f"does not match landmark tag "
                     f"{landmark.tag_id}"
                 ),
+                frame_id=self.map_frame,
             )
 
         try:
@@ -117,6 +143,7 @@ class ObjectPoseResolver:
                 tag_id=inspection_object.tag_id,
                 state=ObjectPoseState.INVALID,
                 message=str(exception),
+                frame_id=self.map_frame,
             )
 
         if live_pose is not None:
@@ -128,6 +155,12 @@ class ObjectPoseResolver:
                 remembered_pose=remembered_pose,
                 live_pose=live_pose,
                 message="Using live marker observation",
+                frame_id=self.map_frame,
+                source=ObjectPoseSource.LIVE_MAP,
+                observation_timestamp=deepcopy(
+                    live_pose.header.stamp
+                ),
+                observation_source="base",
             )
 
         if remembered_pose is not None:
@@ -139,6 +172,9 @@ class ObjectPoseResolver:
                 remembered_pose=remembered_pose,
                 live_pose=None,
                 message="Using remembered landmark pose",
+                frame_id=self.map_frame,
+                source=ObjectPoseSource.REMEMBERED_MAP,
+                observation_source="stored_map",
             )
 
         return ResolvedObjectPose(
@@ -146,6 +182,7 @@ class ObjectPoseResolver:
             tag_id=inspection_object.tag_id,
             state=ObjectPoseState.UNAVAILABLE,
             message="No live or remembered object pose available",
+            frame_id=self.map_frame,
         )
 
     def resolve_all(
@@ -164,6 +201,34 @@ class ObjectPoseResolver:
             )
             for inspection_object in map_definition.objects
         }
+
+    def resolve_global(
+        self,
+        map_definition: MapDefinition,
+        object_id: str,
+        live_marker_poses: Optional[
+            Mapping[int, PoseStamped]
+        ] = None,
+    ) -> ResolvedObjectPose:
+        """Resolve one global map object."""
+        return self.resolve(
+            map_definition,
+            object_id,
+            live_marker_poses,
+        )
+
+    def resolve_all_global(
+        self,
+        map_definition: MapDefinition,
+        live_marker_poses: Optional[
+            Mapping[int, PoseStamped]
+        ] = None,
+    ) -> Dict[str, ResolvedObjectPose]:
+        """Resolve every global map object."""
+        return self.resolve_all(
+            map_definition,
+            live_marker_poses,
+        )
 
     def _resolve_remembered_pose(
         self,

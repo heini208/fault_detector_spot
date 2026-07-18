@@ -1,23 +1,22 @@
-"""Repository for reusable inspection definitions."""
+"""Repository for object-scoped inspection definitions."""
 
 import os
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from typing import List, Optional, Union
 
 import yaml
 
-from fault_detector_spot.inspection.models import (
-    InspectionDefinition,
-)
-from fault_detector_spot.inspection.repository_utils import (
+from .models import InspectionDefinition
+from .repository_utils import (
     atomic_write_text,
     validate_storage_name,
 )
 
 
 class InspectionRepository:
-    """Load and save reusable inspection configurations."""
+    """Load current inspections with optional legacy fallback."""
 
     FILE_NAME = "inspection.yaml"
 
@@ -25,6 +24,7 @@ class InspectionRepository:
         self,
         root_dir: Optional[Union[str, Path]] = None,
     ):
+        """Create a repository under ROS_HOME by default."""
         if root_dir is None:
             ros_home = Path(
                 os.environ.get(
@@ -40,56 +40,70 @@ class InspectionRepository:
 
         self.root_dir = Path(root_dir).expanduser()
 
-    def get_map_dir(self, map_name: str) -> Path:
-        """Return the inspection directory for a map."""
-        validate_storage_name(map_name, "map name")
-        return self.root_dir / map_name
+    def get_object_dir(self, object_id: str) -> Path:
+        """Return the canonical inspection directory for an object."""
+        validate_storage_name(object_id, "object ID")
+        return self.root_dir / object_id
 
     def get_inspection_dir(
         self,
-        map_name: str,
+        object_id: str,
         inspection_id: str,
     ) -> Path:
-        """Return the directory for an inspection."""
+        """Return the canonical directory for an inspection."""
         validate_storage_name(inspection_id, "inspection ID")
-        return self.get_map_dir(map_name) / inspection_id
+        return self.get_object_dir(object_id) / inspection_id
 
     def get_inspection_path(
         self,
-        map_name: str,
+        object_id: str,
         inspection_id: str,
     ) -> Path:
-        """Return the YAML path for an inspection."""
+        """Return the canonical YAML path for an inspection."""
         return (
-            self.get_inspection_dir(
-                map_name,
-                inspection_id,
-            )
+            self.get_inspection_dir(object_id, inspection_id)
             / self.FILE_NAME
         )
 
-    def exists(
+    def get_legacy_inspection_path(
         self,
         map_name: str,
         inspection_id: str,
+    ) -> Path:
+        """Return an old map-scoped inspection path."""
+        validate_storage_name(map_name, "map name")
+        validate_storage_name(inspection_id, "inspection ID")
+        return self.root_dir / map_name / inspection_id / self.FILE_NAME
+
+    def exists(
+        self,
+        object_id: str,
+        inspection_id: str,
     ) -> bool:
-        """Return whether an inspection exists."""
+        """Return whether a canonical inspection exists."""
         return self.get_inspection_path(
-            map_name,
+            object_id,
             inspection_id,
         ).is_file()
 
     def load(
         self,
-        map_name: str,
+        object_id: str,
         inspection_id: str,
         validate: bool = True,
+        legacy_map_name: Optional[str] = None,
     ) -> InspectionDefinition:
-        """Load an inspection definition."""
+        """Load canonical data or explicitly requested legacy data."""
         path = self.get_inspection_path(
-            map_name,
+            object_id,
             inspection_id,
         )
+
+        if not path.is_file() and legacy_map_name:
+            path = self.get_legacy_inspection_path(
+                legacy_map_name,
+                inspection_id,
+            )
 
         if not path.is_file():
             raise FileNotFoundError(
@@ -114,10 +128,10 @@ class InspectionRepository:
 
         inspection = InspectionDefinition.from_dict(data)
 
-        if inspection.map_name != map_name:
+        if inspection.object_id != object_id:
             raise ValueError(
-                f"Inspection map mismatch in {path}: "
-                f"{inspection.map_name}"
+                f"Inspection object mismatch in {path}: "
+                f"{inspection.object_id}"
             )
 
         if inspection.inspection_id != inspection_id:
@@ -136,58 +150,59 @@ class InspectionRepository:
         inspection: InspectionDefinition,
         validate: bool = True,
     ) -> Path:
-        """Validate and atomically save an inspection."""
-        validate_storage_name(
-            inspection.map_name,
-            "map name",
-        )
+        """Save as schema version 2 in the object-scoped location."""
+        validate_storage_name(inspection.object_id, "object ID")
         validate_storage_name(
             inspection.inspection_id,
             "inspection ID",
         )
 
+        current = deepcopy(inspection)
+        current.schema_version = 2
+
+        if not current.preferred_execution_frame:
+            current.preferred_execution_frame = "odom"
+
         if validate:
-            inspection.validate()
+            current.validate()
 
         path = self.get_inspection_path(
-            inspection.map_name,
-            inspection.inspection_id,
+            current.object_id,
+            current.inspection_id,
         )
-
         content = yaml.safe_dump(
-            inspection.to_dict(),
+            current.to_dict(),
             sort_keys=False,
             allow_unicode=True,
         )
-
         atomic_write_text(path, content)
         return path
 
     def list_inspection_ids(
         self,
-        map_name: str,
+        object_id: str,
     ) -> List[str]:
-        """List saved inspections for a map."""
-        map_dir = self.get_map_dir(map_name)
+        """List canonical inspections for an object."""
+        object_dir = self.get_object_dir(object_id)
 
-        if not map_dir.is_dir():
+        if not object_dir.is_dir():
             return []
 
         return sorted(
             directory.name
-            for directory in map_dir.iterdir()
+            for directory in object_dir.iterdir()
             if directory.is_dir()
             and (directory / self.FILE_NAME).is_file()
         )
 
     def delete(
         self,
-        map_name: str,
+        object_id: str,
         inspection_id: str,
     ) -> bool:
-        """Delete an inspection directory."""
+        """Delete only the canonical inspection directory."""
         inspection_dir = self.get_inspection_dir(
-            map_name,
+            object_id,
             inspection_id,
         )
 

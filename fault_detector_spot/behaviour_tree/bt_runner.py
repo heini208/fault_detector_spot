@@ -30,6 +30,7 @@ from fault_detector_spot.behaviour_tree import (
     NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
     BaseGetGoalTag, BaseMoveToTagAction, BaseMoveRelativeAction,
     ResolveInspectionObjects, PublishInspectionObjects, MergeVisibleTagObservations,
+    ResolveLiveInspectionObject, PublishLiveInspectionObject,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.nodes.sensing.last_localization_pose import LastLocalizationPose
@@ -130,6 +131,32 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         )
     )
 
+    probe_max_age_sec = float(
+        read_parameter(
+            node,
+            "tag_sensing.probe_max_age_sec",
+            0.25,
+        )
+    )
+
+    active_object_id = read_parameter(
+        node,
+        "inspection.active_object_id",
+        "",
+    )
+
+    active_inspection_id = read_parameter(
+        node,
+        "inspection.active_inspection_id",
+        "",
+    )
+
+    inspection_execution_frame = read_parameter(
+        node,
+        "inspection.execution_frame",
+        "odom",
+    )
+
     sensing_seq = py_trees.composites.Parallel("Sensing", policy=py_trees.common.ParallelPolicy.SuccessOnAll())
 
     cmd_sub = CommandSubscriber(name="UI Command Listener")
@@ -163,6 +190,18 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         name="MergeVisibleTags",
     )
 
+    live_object_resolver = ResolveLiveInspectionObject(
+        object_id=active_object_id,
+        inspection_id=active_inspection_id,
+        execution_frame=inspection_execution_frame,
+        maximum_age_sec=probe_max_age_sec,
+        name="ResolveLiveInspectionObject",
+    )
+
+    live_object_publisher = PublishLiveInspectionObject(
+        name="PublishLiveInspectionObject",
+    )
+
     in_range_checker = CheckTagReachability(
         name="CheckTagReachability"
     )
@@ -193,6 +232,8 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         detect,
         hand_detect,
         merge_tags,
+        live_object_resolver,
+        live_object_publisher,
         in_range_checker,
         tag_publisher,
         world_frame_transformer,
@@ -485,3 +526,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+

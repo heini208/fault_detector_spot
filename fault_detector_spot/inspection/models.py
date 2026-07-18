@@ -1,5 +1,6 @@
 """Data models for inspection objects, maps, and probe definitions."""
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -202,6 +203,101 @@ class LandmarkDefinition:
 
 
 @dataclass
+class ObjectDefinition:
+    """Portable inspection object independent of any map."""
+
+    object_id: str
+    display_name: str
+    tag_id: int
+    marker_to_object: PoseData
+    tag_family: str = "36h11"
+    schema_version: int = 1
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ObjectDefinition":
+        """Create an object definition from serialized data."""
+        if "marker_to_object" not in data:
+            raise ValueError(
+                "Object requires an explicit marker_to_object transform"
+            )
+
+        marker_to_object = data["marker_to_object"]
+        if (
+            not isinstance(marker_to_object, dict)
+            or "position" not in marker_to_object
+            or "orientation" not in marker_to_object
+        ):
+            raise ValueError(
+                "marker_to_object requires position and orientation"
+            )
+
+        object_id = str(data["id"])
+        return cls(
+            object_id=object_id,
+            display_name=str(data.get("display_name", object_id)),
+            tag_id=int(data["tag_id"]),
+            marker_to_object=PoseData.from_dict(
+                marker_to_object
+            ),
+            tag_family=str(data.get("tag_family", "36h11")),
+            schema_version=int(data.get("schema_version", 1)),
+        )
+
+    def validate(self) -> None:
+        """Validate identity, marker information, and transform."""
+        if not self.object_id:
+            raise ValueError("Object ID must not be empty")
+
+        if not self.display_name:
+            raise ValueError("Object display name must not be empty")
+
+        if not self.tag_family:
+            raise ValueError("Tag family must not be empty")
+
+        if self.tag_id < 0:
+            raise ValueError("Tag ID must not be negative")
+
+        pose = self.marker_to_object
+        values = (
+            pose.position.x,
+            pose.position.y,
+            pose.position.z,
+            pose.orientation.x,
+            pose.orientation.y,
+            pose.orientation.z,
+            pose.orientation.w,
+        )
+
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError(
+                "marker_to_object contains a non-finite value"
+            )
+
+        quaternion_norm = math.sqrt(
+            pose.orientation.x ** 2
+            + pose.orientation.y ** 2
+            + pose.orientation.z ** 2
+            + pose.orientation.w ** 2
+        )
+
+        if quaternion_norm < 1e-12:
+            raise ValueError(
+                "marker_to_object quaternion norm is zero"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the object definition."""
+        return {
+            "schema_version": self.schema_version,
+            "id": self.object_id,
+            "display_name": self.display_name,
+            "tag_family": self.tag_family,
+            "tag_id": self.tag_id,
+            "marker_to_object": self.marker_to_object.to_dict(),
+        }
+
+
+@dataclass
 class InspectionObject:
     """Static inspection object linked to a marker landmark."""
 
@@ -361,47 +457,60 @@ class ProbePoint:
 
 @dataclass
 class InspectionDefinition:
-    """Complete reusable inspection configuration."""
+    """Reusable inspection configuration owned by an object."""
 
     inspection_id: str
-    map_name: str
     object_id: str
     probe_points: List[ProbePoint] = field(default_factory=list)
+    display_name: str = ""
     reference_image: Optional[str] = None
     default_approach_waypoint: Optional[str] = None
-    schema_version: int = 1
+    preferred_execution_frame: str = "odom"
+    map_name: Optional[str] = None
+    schema_version: int = 2
 
     @classmethod
     def from_dict(
         cls,
         data: Dict[str, Any],
     ) -> "InspectionDefinition":
-        """Create an inspection definition from serialized data."""
+        """Create a current or legacy inspection definition."""
+        map_name = data.get("map_name")
         return cls(
             inspection_id=str(data["inspection_id"]),
-            map_name=str(data["map_name"]),
             object_id=str(data["object_id"]),
             probe_points=[
                 ProbePoint.from_dict(point)
                 for point in data.get("probe_points", [])
             ],
+            display_name=str(data.get("display_name", "")),
             reference_image=data.get("reference_image"),
             default_approach_waypoint=data.get(
                 "default_approach_waypoint"
+            ),
+            preferred_execution_frame=str(
+                data.get("preferred_execution_frame", "odom")
+            ),
+            map_name=(
+                str(map_name)
+                if map_name is not None
+                else None
             ),
             schema_version=int(data.get("schema_version", 1)),
         )
 
     def validate(self) -> None:
-        """Validate inspection identifiers and probe points."""
+        """Validate inspection identity and probe points."""
         if not self.inspection_id:
             raise ValueError("Inspection ID must not be empty")
 
-        if not self.map_name:
-            raise ValueError("Inspection requires a map name")
-
         if not self.object_id:
             raise ValueError("Inspection requires an object ID")
+
+        if not self.preferred_execution_frame:
+            raise ValueError(
+                "Inspection requires an execution frame"
+            )
 
         probe_ids = set()
         for probe_point in self.probe_points:
@@ -420,13 +529,20 @@ class InspectionDefinition:
         result = {
             "schema_version": self.schema_version,
             "inspection_id": self.inspection_id,
-            "map_name": self.map_name,
             "object_id": self.object_id,
+            "preferred_execution_frame":
+                self.preferred_execution_frame,
             "probe_points": [
                 point.to_dict()
                 for point in self.probe_points
             ],
         }
+
+        if self.display_name:
+            result["display_name"] = self.display_name
+
+        if self.map_name is not None:
+            result["map_name"] = self.map_name
 
         if self.reference_image is not None:
             result["reference_image"] = self.reference_image
