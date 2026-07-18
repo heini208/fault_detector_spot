@@ -1,4 +1,4 @@
-"""Tests for base-only authoritative tag selection."""
+"""Tests for strict base-first tag observation selection."""
 
 import py_trees
 from fault_detector_msgs.msg import TagElement
@@ -12,13 +12,16 @@ MergeVisibleTagObservations = (
 )
 
 
-def make_tag(tag_id: int, x: float) -> TagElement:
+def make_tag(
+    tag_id: int,
+    x: float,
+) -> TagElement:
     """Create a body-frame tag observation."""
     tag = TagElement()
     tag.id = tag_id
     tag.pose.header.frame_id = "body"
-    tag.pose.pose.position.x = x
     tag.pose.pose.orientation.w = 1.0
+    tag.pose.pose.position.x = x
     return tag
 
 
@@ -33,7 +36,7 @@ def teardown_function():
 
 
 def create_writer():
-    """Create a writer for both camera sources."""
+    """Create a blackboard writer for source observations."""
     writer = py_trees.blackboard.Client(
         name="TagMergeTestWriter"
     )
@@ -48,64 +51,85 @@ def create_writer():
     return writer
 
 
-def test_base_tags_are_authoritative():
-    """Base observations are published unchanged by hand data."""
+def test_merges_different_tag_ids():
+    """Different IDs can be selected from different sources."""
+    writer = create_writer()
+    writer.base_tag_observations = {
+        1: make_tag(1, 1.0),
+    }
+    writer.hand_tag_observations = {
+        2: make_tag(2, 2.0),
+    }
+
+    behavior = MergeVisibleTagObservations()
+    behavior.setup()
+    status = behavior.update()
+
+    assert status == py_trees.common.Status.SUCCESS
+    assert set(behavior.blackboard.visible_tags) == {1, 2}
+    assert behavior.blackboard.visible_tag_sources == {
+        1: "base",
+        2: "hand",
+    }
+
+
+def test_base_always_has_precedence_for_same_id():
+    """The hand observation cannot override a base observation."""
     writer = create_writer()
     writer.base_tag_observations = {
         1: make_tag(1, 1.0),
     }
     writer.hand_tag_observations = {
         1: make_tag(1, 2.0),
-        2: make_tag(2, 3.0),
     }
 
     behavior = MergeVisibleTagObservations()
     behavior.setup()
     behavior.update()
 
-    assert set(behavior.blackboard.visible_tags) == {1}
-    assert (
-        behavior.blackboard.visible_tags[
-            1
-        ].pose.pose.position.x
-        == 1.0
-    )
-    assert behavior.blackboard.visible_tag_sources == {
-        1: "base",
-    }
+    selected = behavior.blackboard.visible_tags[1]
+    assert selected.pose.pose.position.x == 1.0
+    assert behavior.blackboard.visible_tag_sources[1] == "base"
 
 
-def test_hand_only_tag_is_not_promoted():
-    """A hand-only tag cannot become a movement reference."""
+def test_hand_is_used_when_base_is_absent():
+    """The hand camera supplies a tag only without a base observation."""
     writer = create_writer()
     writer.base_tag_observations = {}
     writer.hand_tag_observations = {
-        7: make_tag(7, 1.0),
+        1: make_tag(1, 2.0),
     }
 
     behavior = MergeVisibleTagObservations()
     behavior.setup()
     behavior.update()
 
-    assert behavior.blackboard.visible_tags == {}
-    assert behavior.blackboard.visible_tag_sources == {}
+    assert behavior.blackboard.visible_tag_sources[1] == "hand"
 
 
-def test_source_changes_only_track_base_visibility():
-    """Appearance and loss of a base tag are reported once."""
+def test_base_immediately_reclaims_returning_tag():
+    """A returning base observation replaces hand fallback once."""
     writer = create_writer()
-    writer.base_tag_observations = {
-        7: make_tag(7, 1.0),
+    writer.base_tag_observations = {}
+    writer.hand_tag_observations = {
+        1: make_tag(1, 2.0),
     }
-    writer.hand_tag_observations = {}
 
     behavior = MergeVisibleTagObservations()
     behavior.setup()
     behavior.update()
 
+    assert behavior.blackboard.visible_tag_sources[1] == "hand"
+
+    writer.base_tag_observations = {
+        1: make_tag(1, 1.0),
+    }
+    behavior.update()
+
+    assert behavior.blackboard.visible_tag_sources[1] == "base"
     assert (
         behavior.blackboard.visible_tag_source_changed_ids
-        == {7}
+        == {1}
     )
 
     behavior.update()
@@ -115,27 +139,43 @@ def test_source_changes_only_track_base_visibility():
         == set()
     )
 
-    writer.base_tag_observations = {}
-    behavior.update()
 
-    assert (
-        behavior.blackboard.visible_tag_source_changed_ids
-        == {7}
-    )
-
-
-def test_selected_tag_is_a_deep_copy():
-    """Consumers cannot mutate the source observation."""
+def test_empty_inputs_clear_visible_tags():
+    """A tag is removed once neither source cache contains it."""
     writer = create_writer()
-    source = make_tag(7, 1.0)
-    writer.base_tag_observations = {7: source}
+    writer.base_tag_observations = {
+        1: make_tag(1, 1.0),
+    }
     writer.hand_tag_observations = {}
 
     behavior = MergeVisibleTagObservations()
     behavior.setup()
     behavior.update()
+
+    writer.base_tag_observations = {}
+    behavior.update()
+
+    assert behavior.blackboard.visible_tags == {}
+    assert behavior.blackboard.visible_tag_sources == {}
+    assert (
+        behavior.blackboard.visible_tag_source_changed_ids
+        == {1}
+    )
+
+
+def test_selected_observation_is_a_deep_copy():
+    """Downstream mutation cannot modify the source observation."""
+    writer = create_writer()
+    source_tag = make_tag(1, 1.0)
+    writer.base_tag_observations = {1: source_tag}
+    writer.hand_tag_observations = {}
+
+    behavior = MergeVisibleTagObservations()
+    behavior.setup()
+    behavior.update()
+
     behavior.blackboard.visible_tags[
-        7
+        1
     ].pose.pose.position.x = 99.0
 
-    assert source.pose.pose.position.x == 1.0
+    assert source_tag.pose.pose.position.x == 1.0
