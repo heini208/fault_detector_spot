@@ -2,6 +2,7 @@
 
 import os
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -99,12 +100,15 @@ class ObjectRepository:
         """Validate and atomically save an object."""
         validate_storage_name(definition.object_id, "object ID")
 
-        if validate:
-            definition.validate()
+        current = deepcopy(definition)
+        current.schema_version = 2
 
-        path = self.get_object_path(definition.object_id)
+        if validate:
+            current.validate()
+
+        path = self.get_object_path(current.object_id)
         content = yaml.safe_dump(
-            definition.to_dict(),
+            current.to_dict(),
             sort_keys=False,
             allow_unicode=True,
         )

@@ -228,6 +228,24 @@ class ResolveLiveInspectionObject(
                 )
 
             if (
+                self.inspection_definition.object_calibration_revision
+                != self.object_definition.calibration_revision
+            ):
+                inspection_revision = (
+                    self.inspection_definition
+                    .object_calibration_revision
+                )
+                object_revision = (
+                    self.object_definition.calibration_revision
+                )
+                raise ValueError(
+                    "Inspection object calibration revision "
+                    f"{inspection_revision} does not match current "
+                    "object calibration revision "
+                    f"{object_revision}"
+                )
+
+            if (
                 self.inspection_definition.preferred_execution_frame
                 != self.execution_frame
             ):

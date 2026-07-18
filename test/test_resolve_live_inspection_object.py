@@ -10,6 +10,9 @@ from rclpy.time import Time
 from fault_detector_spot.behaviour_tree.nodes.inspection import (
     resolve_live_inspection_object,
 )
+from fault_detector_spot.inspection.inspection_repository import (
+    InspectionRepository,
+)
 from fault_detector_spot.inspection.models import (
     InspectionDefinition,
     ObjectDefinition,
@@ -17,6 +20,9 @@ from fault_detector_spot.inspection.models import (
 )
 from fault_detector_spot.inspection.object_pose_resolver import (
     ObjectPoseState,
+)
+from fault_detector_spot.inspection.object_repository import (
+    ObjectRepository,
 )
 
 ResolveLiveInspectionObject = (
@@ -82,10 +88,12 @@ def make_behavior(tf_available=True):
         display_name="Panel",
         tag_id=7,
         marker_to_object=PoseData(),
+        calibration_revision=1,
     )
     behavior.inspection_definition = InspectionDefinition(
         inspection_id="phase3",
         object_id="panel",
+        object_calibration_revision=1,
     )
     behavior.configuration_error = ""
     behavior.blackboard.register_key(
@@ -172,3 +180,40 @@ def test_missing_odom_transform_is_unavailable():
 
     assert result.state == ObjectPoseState.UNAVAILABLE
     assert "Cannot transform" in result.message
+
+
+def test_calibration_revision_mismatch_rejects_configuration(
+    tmp_path,
+):
+    """An inspection cannot run after object recalibration."""
+    object_root = tmp_path / "objects"
+    inspection_root = tmp_path / "inspections"
+    ObjectRepository(object_root).save(
+        ObjectDefinition(
+            object_id="panel",
+            display_name="Panel",
+            tag_id=7,
+            calibration_revision=2,
+        )
+    )
+    InspectionRepository(inspection_root).save(
+        InspectionDefinition(
+            inspection_id="phase3",
+            object_id="panel",
+            object_calibration_revision=1,
+        )
+    )
+    behavior = ResolveLiveInspectionObject(
+        object_id="panel",
+        inspection_id="phase3",
+        object_root=object_root,
+        inspection_root=inspection_root,
+    )
+
+    behavior._load_configuration()
+
+    assert (
+        behavior.configuration_error
+        == "Inspection object calibration revision 1 does not match "
+        "current object calibration revision 2"
+    )

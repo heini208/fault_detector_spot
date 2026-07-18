@@ -209,26 +209,21 @@ class ObjectDefinition:
     object_id: str
     display_name: str
     tag_id: int
-    marker_to_object: PoseData
+    marker_to_object: PoseData = field(default_factory=PoseData)
     tag_family: str = "36h11"
-    schema_version: int = 1
+    calibration_revision: int = 1
+    schema_version: int = 2
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ObjectDefinition":
         """Create an object definition from serialized data."""
-        if "marker_to_object" not in data:
-            raise ValueError(
-                "Object requires an explicit marker_to_object transform"
-            )
-
-        marker_to_object = data["marker_to_object"]
+        marker_to_object = data.get("marker_to_object")
         if (
-            not isinstance(marker_to_object, dict)
-            or "position" not in marker_to_object
-            or "orientation" not in marker_to_object
+            marker_to_object is not None
+            and not isinstance(marker_to_object, dict)
         ):
             raise ValueError(
-                "marker_to_object requires position and orientation"
+                "marker_to_object must be an object"
             )
 
         object_id = str(data["id"])
@@ -240,6 +235,9 @@ class ObjectDefinition:
                 marker_to_object
             ),
             tag_family=str(data.get("tag_family", "36h11")),
+            calibration_revision=int(
+                data.get("calibration_revision", 1)
+            ),
             schema_version=int(data.get("schema_version", 1)),
         )
 
@@ -256,6 +254,11 @@ class ObjectDefinition:
 
         if self.tag_id < 0:
             raise ValueError("Tag ID must not be negative")
+
+        if self.calibration_revision < 1:
+            raise ValueError(
+                "Object calibration revision must be positive"
+            )
 
         pose = self.marker_to_object
         values = (
@@ -293,6 +296,7 @@ class ObjectDefinition:
             "display_name": self.display_name,
             "tag_family": self.tag_family,
             "tag_id": self.tag_id,
+            "calibration_revision": self.calibration_revision,
             "marker_to_object": self.marker_to_object.to_dict(),
         }
 
@@ -366,6 +370,7 @@ class ProbePoint:
     approach_waypoint: Optional[str] = None
     sensor_path: Optional[str] = None
     reference_pixel: Optional[ImagePoint] = None
+    schema_version: int = 1
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProbePoint":
@@ -399,12 +404,18 @@ class ProbePoint:
                 if pixel_data is not None
                 else None
             ),
+            schema_version=int(data.get("schema_version", 1)),
         )
 
     def validate(self) -> None:
         """Validate probe distances and tolerances."""
         if not self.probe_point_id:
             raise ValueError("Probe point ID must not be empty")
+
+        if self.schema_version < 1:
+            raise ValueError(
+                "Probe point schema version must be positive"
+            )
 
         if self.standoff_m < 0.0:
             raise ValueError("Standoff must not be negative")
@@ -427,6 +438,7 @@ class ProbePoint:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the probe point."""
         result = {
+            "schema_version": self.schema_version,
             "id": self.probe_point_id,
             "surface_point_object":
                 self.surface_point_object.to_dict(),
@@ -467,7 +479,8 @@ class InspectionDefinition:
     default_approach_waypoint: Optional[str] = None
     preferred_execution_frame: str = "odom"
     map_name: Optional[str] = None
-    schema_version: int = 2
+    object_calibration_revision: int = 1
+    schema_version: int = 3
 
     @classmethod
     def from_dict(
@@ -496,6 +509,9 @@ class InspectionDefinition:
                 if map_name is not None
                 else None
             ),
+            object_calibration_revision=int(
+                data.get("object_calibration_revision", 1)
+            ),
             schema_version=int(data.get("schema_version", 1)),
         )
 
@@ -506,6 +522,11 @@ class InspectionDefinition:
 
         if not self.object_id:
             raise ValueError("Inspection requires an object ID")
+
+        if self.object_calibration_revision < 1:
+            raise ValueError(
+                "Object calibration revision must be positive"
+            )
 
         if not self.preferred_execution_frame:
             raise ValueError(
@@ -530,6 +551,8 @@ class InspectionDefinition:
             "schema_version": self.schema_version,
             "inspection_id": self.inspection_id,
             "object_id": self.object_id,
+            "object_calibration_revision":
+                self.object_calibration_revision,
             "preferred_execution_frame":
                 self.preferred_execution_frame,
             "probe_points": [

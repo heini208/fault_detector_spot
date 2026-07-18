@@ -85,6 +85,7 @@ def create_valid_inspection() -> InspectionDefinition:
     return InspectionDefinition(
         inspection_id="motor_a_standard",
         object_id="motor_a",
+        object_calibration_revision=1,
         map_name="laboratory",
         display_name="Motor A standard",
         preferred_execution_frame="odom",
@@ -187,6 +188,7 @@ def create_valid_object() -> ObjectDefinition:
         display_name="Motor A",
         tag_id=23,
         tag_family="36h11",
+        calibration_revision=1,
         marker_to_object=PoseData(
             orientation=QuaternionData(w=1.0),
         ),
@@ -203,6 +205,8 @@ def test_object_repository_round_trip(tmp_path):
 
     assert saved_path.is_file()
     assert restored == original
+    assert restored.schema_version == 2
+    assert restored.calibration_revision == 1
     assert repository.list_object_ids() == ["motor_a"]
 
 
@@ -224,8 +228,10 @@ def test_object_repository_rejects_zero_quaternion(tmp_path):
         repository.save(definition)
 
 
-def test_object_repository_requires_explicit_transform(tmp_path):
-    """An empty transform cannot silently become identity."""
+def test_object_repository_defaults_missing_transform_to_identity(
+    tmp_path,
+):
+    """A legacy object without a transform uses tag-frame identity."""
     path = ObjectRepository(tmp_path).get_object_path("motor_a")
     path.parent.mkdir(parents=True)
     path.write_text(
@@ -233,13 +239,15 @@ def test_object_repository_requires_explicit_transform(tmp_path):
             "id": "motor_a",
             "display_name": "Motor A",
             "tag_id": 23,
-            "marker_to_object": {},
         }),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError):
-        ObjectRepository(tmp_path).load("motor_a")
+    restored = ObjectRepository(tmp_path).load("motor_a")
+
+    assert restored.marker_to_object == PoseData()
+    assert restored.calibration_revision == 1
+    assert restored.schema_version == 1
 
 
 def test_inspection_repository_round_trip(tmp_path):
@@ -261,6 +269,22 @@ def test_inspection_repository_round_trip(tmp_path):
         / "inspection.yaml"
     )
     assert restored == original
+    assert restored.schema_version == 3
+    assert restored.object_calibration_revision == 1
+
+
+def test_probe_point_schema_round_trip(tmp_path):
+    """Probe points persist their independent schema version."""
+    repository = InspectionRepository(tmp_path)
+    original = create_valid_inspection()
+
+    repository.save(original)
+    restored = repository.load(
+        "motor_a",
+        "motor_a_standard",
+    )
+
+    assert restored.probe_points[0].schema_version == 1
 
 
 def test_inspection_repository_lists_inspections(tmp_path):
@@ -313,7 +337,7 @@ def test_inspection_repository_loads_legacy_without_moving(
     ).exists()
 
 
-def test_saving_loaded_legacy_creates_v2_without_deleting_old(
+def test_saving_loaded_legacy_creates_v3_without_deleting_old(
     tmp_path,
 ):
     """Explicit save migrates a copy and preserves legacy data."""
@@ -342,7 +366,7 @@ def test_saving_loaded_legacy_creates_v2_without_deleting_old(
     )
 
     assert current_path.is_file()
-    assert current.schema_version == 2
+    assert current.schema_version == 3
     assert legacy_path.is_file()
 
 
