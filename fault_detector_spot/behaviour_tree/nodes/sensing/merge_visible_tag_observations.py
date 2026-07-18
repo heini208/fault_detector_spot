@@ -1,32 +1,28 @@
-"""Select visible tag observations with strict base-camera priority."""
+"""Expose base-camera tags as the authoritative tag set."""
 
 from copy import deepcopy
-from typing import Dict, Optional
+from typing import Dict
 
 import py_trees
 from fault_detector_msgs.msg import TagElement
-from rclpy.node import Node
 
 
 class MergeVisibleTagObservations(
     py_trees.behaviour.Behaviour
 ):
-    """Select base observations first and hand observations as fallback."""
+    """Keep hand detections diagnostic and motion-ineligible."""
 
     def __init__(
         self,
         name: str = "MergeVisibleTagObservations",
     ):
-        """Create a strict base-first observation selector."""
+        """Create a base-only authoritative selector."""
         super().__init__(name)
-        self.node: Optional[Node] = None
         self.blackboard = self.attach_blackboard_client()
         self._previous_sources: Dict[int, str] = {}
 
     def setup(self, **kwargs):
-        """Register blackboard inputs and outputs."""
-        self.node = kwargs.get("node")
-
+        """Register source inputs and authoritative outputs."""
         self.blackboard.register_key(
             key="base_tag_observations",
             access=py_trees.common.Access.READ,
@@ -47,14 +43,13 @@ class MergeVisibleTagObservations(
             key="visible_tag_source_changed_ids",
             access=py_trees.common.Access.WRITE,
         )
-
         self.blackboard.visible_tags = {}
         self.blackboard.visible_tag_sources = {}
         self.blackboard.visible_tag_source_changed_ids = set()
         self._previous_sources = {}
 
     def update(self) -> py_trees.common.Status:
-        """Select one authoritative observation for every tag ID."""
+        """Publish base observations and never promote hand tags."""
         base_tags: Dict[int, TagElement] = getattr(
             self.blackboard,
             "base_tag_observations",
@@ -66,21 +61,11 @@ class MergeVisibleTagObservations(
             {},
         ) or {}
 
-        selected = {}
-        sources = {}
-
-        for tag_id in set(base_tags) | set(hand_tags):
-            if tag_id in base_tags:
-                selected[tag_id] = deepcopy(
-                    base_tags[tag_id]
-                )
-                sources[tag_id] = "base"
-            else:
-                selected[tag_id] = deepcopy(
-                    hand_tags[tag_id]
-                )
-                sources[tag_id] = "hand"
-
+        selected = deepcopy(base_tags)
+        sources = {
+            tag_id: "base"
+            for tag_id in selected
+        }
         changed_ids = {
             tag_id
             for tag_id in (
@@ -90,37 +75,14 @@ class MergeVisibleTagObservations(
             != sources.get(tag_id)
         }
 
-        self._log_source_changes(changed_ids, sources)
         self._previous_sources = deepcopy(sources)
-
         self.blackboard.visible_tags = selected
         self.blackboard.visible_tag_sources = sources
         self.blackboard.visible_tag_source_changed_ids = (
             changed_ids
         )
         self.feedback_message = (
-            f"Selected tags: {sources}; "
-            f"source changes: {sorted(changed_ids)}"
+            f"Authoritative base tags: {sorted(selected)}; "
+            f"diagnostic hand tags: {sorted(hand_tags)}"
         )
-
         return py_trees.common.Status.SUCCESS
-
-    def _log_source_changes(
-        self,
-        changed_ids,
-        sources: Dict[int, str],
-    ) -> None:
-        """Log source transitions when a ROS node is available."""
-        if self.node is None:
-            return
-
-        for tag_id in sorted(changed_ids):
-            previous = self._previous_sources.get(
-                tag_id,
-                "none",
-            )
-            current = sources.get(tag_id, "none")
-            self.node.get_logger().info(
-                f"Tag {tag_id} source changed: "
-                f"{previous} -> {current}"
-            )
