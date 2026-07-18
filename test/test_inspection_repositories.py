@@ -247,6 +247,7 @@ def test_object_repository_defaults_missing_transform_to_identity(
     assert restored.marker_to_object == PoseData()
     assert restored.calibration_revision == 1
 
+
 def test_inspection_repository_round_trip(tmp_path):
     """Inspection YAML uses object-scoped storage."""
     repository = InspectionRepository(tmp_path)
@@ -267,18 +268,6 @@ def test_inspection_repository_round_trip(tmp_path):
     )
     assert restored == original
     assert restored.object_calibration_revision == 1
-
-
-def test_probe_point_schema_round_trip(tmp_path):
-    """Probe points persist their independent schema version."""
-    repository = InspectionRepository(tmp_path)
-    original = create_valid_inspection()
-
-    repository.save(original)
-    restored = repository.load(
-        "motor_a",
-        "motor_a_standard",
-    )
 
 def test_inspection_repository_lists_inspections(tmp_path):
     """Only canonical object inspections are listed."""
@@ -328,7 +317,7 @@ def test_inspection_repository_loads_legacy_without_moving(
     ).exists()
 
 
-def test_saving_loaded_legacy_creates_v3_without_deleting_old(
+def test_saving_loaded_legacy_creates_canonical_copy_without_deleting_old(
     tmp_path,
 ):
     """Explicit save migrates a copy and preserves legacy data."""
