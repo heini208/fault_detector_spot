@@ -150,7 +150,6 @@ class InspectionRepository:
         inspection: InspectionDefinition,
         validate: bool = True,
     ) -> Path:
-        """Save as schema version 3 in the object-scoped location."""
         validate_storage_name(inspection.object_id, "object ID")
         validate_storage_name(
             inspection.inspection_id,
@@ -158,7 +157,6 @@ class InspectionRepository:
         )
 
         current = deepcopy(inspection)
-        current.schema_version = 3
 
         if not current.preferred_execution_frame:
             current.preferred_execution_frame = "odom"

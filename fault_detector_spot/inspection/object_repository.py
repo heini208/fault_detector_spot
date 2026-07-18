@@ -101,7 +101,6 @@ class ObjectRepository:
         validate_storage_name(definition.object_id, "object ID")
 
         current = deepcopy(definition)
-        current.schema_version = 2
 
         if validate:
             current.validate()

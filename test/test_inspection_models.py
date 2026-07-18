@@ -38,7 +38,6 @@ def test_legacy_map_loads_without_objects():
     map_definition = MapDefinition.from_dict(data)
 
     assert map_definition.objects == []
-    assert map_definition.schema_version == 1
     assert (
         map_definition.waypoints[0].reference_type
         == WaypointReference.MAP

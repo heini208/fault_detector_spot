@@ -205,7 +205,6 @@ def test_object_repository_round_trip(tmp_path):
 
     assert saved_path.is_file()
     assert restored == original
-    assert restored.schema_version == 2
     assert restored.calibration_revision == 1
     assert repository.list_object_ids() == ["motor_a"]
 
@@ -247,8 +246,6 @@ def test_object_repository_defaults_missing_transform_to_identity(
 
     assert restored.marker_to_object == PoseData()
     assert restored.calibration_revision == 1
-    assert restored.schema_version == 1
-
 
 def test_inspection_repository_round_trip(tmp_path):
     """Inspection YAML uses object-scoped storage."""
@@ -269,7 +266,6 @@ def test_inspection_repository_round_trip(tmp_path):
         / "inspection.yaml"
     )
     assert restored == original
-    assert restored.schema_version == 3
     assert restored.object_calibration_revision == 1
 
 
@@ -283,9 +279,6 @@ def test_probe_point_schema_round_trip(tmp_path):
         "motor_a",
         "motor_a_standard",
     )
-
-    assert restored.probe_points[0].schema_version == 1
-
 
 def test_inspection_repository_lists_inspections(tmp_path):
     """Only canonical object inspections are listed."""
@@ -315,7 +308,6 @@ def test_inspection_repository_loads_legacy_without_moving(
     )
     legacy_path.parent.mkdir(parents=True)
     legacy_data = create_valid_inspection().to_dict()
-    legacy_data["schema_version"] = 1
     legacy_data.pop("preferred_execution_frame")
     legacy_path.write_text(
         yaml.safe_dump(legacy_data, sort_keys=False),
@@ -329,7 +321,6 @@ def test_inspection_repository_loads_legacy_without_moving(
     )
 
     assert restored.preferred_execution_frame == "odom"
-    assert restored.schema_version == 1
     assert legacy_path.is_file()
     assert not repository.get_inspection_path(
         "motor_a",
@@ -348,7 +339,6 @@ def test_saving_loaded_legacy_creates_v3_without_deleting_old(
     )
     legacy_path.parent.mkdir(parents=True)
     legacy_data = create_valid_inspection().to_dict()
-    legacy_data["schema_version"] = 1
     legacy_path.write_text(
         yaml.safe_dump(legacy_data, sort_keys=False),
         encoding="utf-8",
@@ -366,7 +356,6 @@ def test_saving_loaded_legacy_creates_v3_without_deleting_old(
     )
 
     assert current_path.is_file()
-    assert current.schema_version == 3
     assert legacy_path.is_file()
 
 

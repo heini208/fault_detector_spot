@@ -212,7 +212,6 @@ class ObjectDefinition:
     marker_to_object: PoseData = field(default_factory=PoseData)
     tag_family: str = "36h11"
     calibration_revision: int = 1
-    schema_version: int = 2
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ObjectDefinition":
@@ -238,7 +237,6 @@ class ObjectDefinition:
             calibration_revision=int(
                 data.get("calibration_revision", 1)
             ),
-            schema_version=int(data.get("schema_version", 1)),
         )
 
     def validate(self) -> None:
@@ -291,7 +289,6 @@ class ObjectDefinition:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the object definition."""
         return {
-            "schema_version": self.schema_version,
             "id": self.object_id,
             "display_name": self.display_name,
             "tag_family": self.tag_family,
@@ -370,7 +367,6 @@ class ProbePoint:
     approach_waypoint: Optional[str] = None
     sensor_path: Optional[str] = None
     reference_pixel: Optional[ImagePoint] = None
-    schema_version: int = 1
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProbePoint":
@@ -404,18 +400,12 @@ class ProbePoint:
                 if pixel_data is not None
                 else None
             ),
-            schema_version=int(data.get("schema_version", 1)),
         )
 
     def validate(self) -> None:
         """Validate probe distances and tolerances."""
         if not self.probe_point_id:
             raise ValueError("Probe point ID must not be empty")
-
-        if self.schema_version < 1:
-            raise ValueError(
-                "Probe point schema version must be positive"
-            )
 
         if self.standoff_m < 0.0:
             raise ValueError("Standoff must not be negative")
@@ -438,7 +428,6 @@ class ProbePoint:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the probe point."""
         result = {
-            "schema_version": self.schema_version,
             "id": self.probe_point_id,
             "surface_point_object":
                 self.surface_point_object.to_dict(),
@@ -480,7 +469,6 @@ class InspectionDefinition:
     preferred_execution_frame: str = "odom"
     map_name: Optional[str] = None
     object_calibration_revision: int = 1
-    schema_version: int = 3
 
     @classmethod
     def from_dict(
@@ -512,7 +500,6 @@ class InspectionDefinition:
             object_calibration_revision=int(
                 data.get("object_calibration_revision", 1)
             ),
-            schema_version=int(data.get("schema_version", 1)),
         )
 
     def validate(self) -> None:
@@ -548,7 +535,6 @@ class InspectionDefinition:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the inspection definition."""
         result = {
-            "schema_version": self.schema_version,
             "inspection_id": self.inspection_id,
             "object_id": self.object_id,
             "object_calibration_revision":
@@ -585,14 +571,12 @@ class MapDefinition:
     waypoints: List[WaypointDefinition] = field(default_factory=list)
     landmarks: List[LandmarkDefinition] = field(default_factory=list)
     objects: List[InspectionObject] = field(default_factory=list)
-    schema_version: int = 1
     extra_fields: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MapDefinition":
         """Create a map definition from current or legacy data."""
         known_fields = {
-            "schema_version",
             "waypoints",
             "landmarks",
             "objects",
@@ -611,7 +595,6 @@ class MapDefinition:
                 InspectionObject.from_dict(object_data)
                 for object_data in data.get("objects", [])
             ],
-            schema_version=int(data.get("schema_version", 1)),
             extra_fields={
                 key: value
                 for key, value in data.items()
@@ -708,7 +691,6 @@ class MapDefinition:
         """Serialize the complete map metadata."""
         result = dict(self.extra_fields)
         result.update({
-            "schema_version": self.schema_version,
             "waypoints": [
                 waypoint.to_dict()
                 for waypoint in self.waypoints
