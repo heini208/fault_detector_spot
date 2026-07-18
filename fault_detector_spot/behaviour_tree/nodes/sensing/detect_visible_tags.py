@@ -8,6 +8,7 @@ import tf2_ros
 from fault_detector_msgs.msg import TagElement
 from rclpy.node import Node
 from rclpy.time import Time
+from copy import deepcopy
 
 from .tag_observation_cache import (
     TagObservationCache,
@@ -58,10 +59,16 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         )
 
         self.blackboard.register_key(
-            key="base_tag_observations",
+            "base_tag_observations",
             access=py_trees.common.Access.WRITE,
         )
+        self.blackboard.register_key(
+            "visible_tags",
+            access=py_trees.common.Access.WRITE,
+        )
+
         self.blackboard.base_tag_observations = {}
+        self.blackboard.visible_tags = {}
         self.observation_cache.clear()
 
     def update(self) -> py_trees.common.Status:
@@ -71,7 +78,8 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         self.observation_cache.update(new_observations)
         observations = self.observation_cache.snapshot(now)
 
-        self.blackboard.base_tag_observations = observations
+        self.blackboard.base_tag_observations = deepcopy(observations)
+        self.blackboard.visible_tags = deepcopy(observations)
         self.feedback_message = (
             f"Base tags: {sorted(observations.keys())}"
         )

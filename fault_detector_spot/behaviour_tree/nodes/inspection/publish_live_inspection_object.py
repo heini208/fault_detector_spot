@@ -9,7 +9,7 @@ from rclpy.node import Node
 from std_msgs.msg import Header
 
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import (
-    LATCHED_QOS,
+    LIVE_OBJECT_QOS,
 )
 from fault_detector_spot.inspection.live_object_state_adapter import (
     live_object_pose_to_msg,
@@ -53,7 +53,7 @@ class PublishLiveInspectionObject(
         self.publisher = self.node.create_publisher(
             LiveInspectionObjectState,
             self.topic_name,
-            LATCHED_QOS,
+            LIVE_OBJECT_QOS,
         )
         self.blackboard.register_key(
             "live_inspection_object",

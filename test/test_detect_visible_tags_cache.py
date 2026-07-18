@@ -52,16 +52,22 @@ def teardown_function():
     """Clear blackboard state after each test."""
     py_trees.blackboard.Blackboard.clear()
 
+def register_outputs(behavior):
+    behavior.blackboard.register_key(
+        "base_tag_observations",
+        access=py_trees.common.Access.WRITE,
+    )
+    behavior.blackboard.register_key(
+        "visible_tags",
+        access=py_trees.common.Access.WRITE,
+    )
 
 def test_missed_scan_retains_base_observation():
     """A single empty TF scan does not remove a base tag."""
     behavior = DetectVisibleTags(max_age_sec=1.5)
     clock = FakeClock(10.1)
     behavior.node = FakeNode(clock)
-    behavior.blackboard.register_key(
-        "base_tag_observations",
-        access=py_trees.common.Access.WRITE,
-    )
+    register_outputs(behavior)
 
     observations = [{7: make_tag()}, {}]
     behavior._get_visible_tags_from_tf = (
@@ -72,9 +78,8 @@ def test_missed_scan_retains_base_observation():
     clock.current_time = Time(seconds=10.5)
     behavior.update()
 
-    assert set(
-        behavior.blackboard.base_tag_observations
-    ) == {7}
+    assert set(behavior.blackboard.base_tag_observations) == {7}
+    assert set(behavior.blackboard.visible_tags) == {7}
 
 
 def test_base_observation_expires():
@@ -82,10 +87,7 @@ def test_base_observation_expires():
     behavior = DetectVisibleTags(max_age_sec=1.5)
     clock = FakeClock(10.1)
     behavior.node = FakeNode(clock)
-    behavior.blackboard.register_key(
-        "base_tag_observations",
-        access=py_trees.common.Access.WRITE,
-    )
+    register_outputs(behavior)
 
     observations = [{7: make_tag()}, {}]
     behavior._get_visible_tags_from_tf = (
@@ -97,3 +99,4 @@ def test_base_observation_expires():
     behavior.update()
 
     assert behavior.blackboard.base_tag_observations == {}
+    assert behavior.blackboard.visible_tags == {}

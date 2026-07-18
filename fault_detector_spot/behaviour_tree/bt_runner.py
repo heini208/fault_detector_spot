@@ -29,7 +29,7 @@ from fault_detector_spot.behaviour_tree import (
     InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
     NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
     BaseGetGoalTag, BaseMoveToTagAction, BaseMoveRelativeAction,
-    ResolveInspectionObjects, PublishInspectionObjects, MergeVisibleTagObservations,
+    ResolveInspectionObjects, PublishInspectionObjects,
     ResolveLiveInspectionObject, PublishLiveInspectionObject,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
@@ -186,10 +186,6 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         min_decision_margin=hand_min_decision_margin,
     )
 
-    merge_tags = MergeVisibleTagObservations(
-        name="MergeVisibleTags",
-    )
-
     live_object_resolver = ResolveLiveInspectionObject(
         object_id=active_object_id,
         inspection_id=active_inspection_id,
@@ -231,7 +227,6 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     tag_scan_sequence.add_children([
         detect,
         hand_detect,
-        merge_tags,
         live_object_resolver,
         live_object_publisher,
         in_range_checker,
@@ -526,4 +521,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-

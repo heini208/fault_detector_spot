@@ -41,7 +41,6 @@ from .nodes.utility.spot_action import SimpleSpotAction
 from .nodes.utility.wait_for_duration import WaitForDuration
 from .nodes.sensing.resolve_inspection_objects import ResolveInspectionObjects
 from .nodes.sensing.publish_inspection_objects import PublishInspectionObjects
-from .nodes.sensing.merge_visible_tag_observations import MergeVisibleTagObservations
 from .nodes.inspection.publish_live_inspection_object import (
     PublishLiveInspectionObject,
 )
@@ -91,7 +90,6 @@ __all__ = [
   "BaseMoveRelativeAction",
   "ResolveInspectionObjects",
   "PublishInspectionObjects",
-  "MergeVisibleTagObservations",
   "PublishLiveInspectionObject",
   "ResolveLiveInspectionObject",
 ]
