@@ -29,6 +29,7 @@ from fault_detector_spot.behaviour_tree import (
     InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
     NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
     BaseGetGoalTag, BaseMoveToTagAction, BaseMoveRelativeAction,
+    ResolveLiveInspectionObject, PublishLiveInspectionObject,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.nodes.sensing.last_localization_pose import LastLocalizationPose
@@ -39,14 +40,17 @@ from py_trees.decorators import StatusToBlackboard, EternalGuard
 
 helper_initializer: HelperInitializer = None
 
+def read_parameter(node, name, default):
+    if not node.has_parameter(name):
+        node.declare_parameter(name, default)
 
-def create_root() -> py_trees.behaviour.Behaviour:
-    root = create_behavior_tree()
-    return root
+    return node.get_parameter(name).value
+
+def create_root(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    return create_behavior_tree(node)
 
 
-def create_behavior_tree():
-    node = rclpy.create_node("bt_driver")
+def create_behavior_tree(node: rclpy.node.Node):
 
     root = py_trees.composites.Parallel(
         "FaultDetectorSpot",
@@ -62,35 +66,163 @@ def create_behavior_tree():
 
 
 def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+    base_frame = read_parameter(
+        node,
+        "tag_sensing.base_frame",
+        "body",
+    )
+
+    base_frame_pattern = read_parameter(
+        node,
+        "tag_sensing.base_frame_pattern",
+        r"filtered_fiducial_(\d+)",
+    )
+
+    hand_tag_frame_prefix = read_parameter(
+        node,
+        "tag_sensing.hand_tag_frame_prefix",
+        "tag36h11:",
+    )
+
+    hand_detection_topic = read_parameter(
+        node,
+        "tag_sensing.hand_detection_topic",
+        "/detections",
+    )
+
+    base_max_age_sec = float(
+        read_parameter(
+            node,
+            "tag_sensing.base_max_age_sec",
+            1.5,
+        )
+    )
+
+    hand_max_age_sec = float(
+        read_parameter(
+            node,
+            "tag_sensing.hand_max_age_sec",
+            1.0,
+        )
+    )
+
+    hand_tf_pending_sec = float(
+        read_parameter(
+            node,
+            "tag_sensing.hand_tf_pending_sec",
+            0.5,
+        )
+    )
+
+    hand_max_hamming = int(
+        read_parameter(
+            node,
+            "tag_sensing.hand_max_hamming",
+            0,
+        )
+    )
+
+    hand_min_decision_margin = float(
+        read_parameter(
+            node,
+            "tag_sensing.hand_min_decision_margin",
+            0.0,
+        )
+    )
+
+    probe_max_age_sec = float(
+        read_parameter(
+            node,
+            "tag_sensing.probe_max_age_sec",
+            0.25,
+        )
+    )
+
+    active_object_id = read_parameter(
+        node,
+        "inspection.active_object_id",
+        "",
+    )
+
+    active_routine_id = read_parameter(
+        node,
+        "inspection.active_routine_id",
+        "",
+    )
+
+    inspection_execution_frame = read_parameter(
+        node,
+        "inspection.execution_frame",
+        "odom",
+    )
+
     sensing_seq = py_trees.composites.Parallel("Sensing", policy=py_trees.common.ParallelPolicy.SuccessOnAll())
 
     cmd_sub = CommandSubscriber(name="UI Command Listener")
-    cmd_sub.setup(node=node)
 
     pose_sub = LastLocalizationPose(name="LastLocalizationPose")
-    pose_sub.setup(node=node)
 
     tag_scan_sequence = py_trees.composites.Sequence(
         name="ScanForTags",
         memory=True
     )
 
-    detect = DetectVisibleTags(name="Detect Tags", frame_pattern=r"filtered_fiducial_(\d+)")
-    detect.setup(node=node)
+    detect = DetectVisibleTags(
+        name="DetectBaseTags",
+        frame_pattern=base_frame_pattern,
+        target_frame=base_frame,
+        max_age_sec=base_max_age_sec,
+    )
 
-    hand_detect = HandCameraTagDetection(name="HandCameraTagDetection")
-    detect.setup(node=node)
+    hand_detect = HandCameraTagDetection(
+        name="DetectHandTags",
+        detection_topic=hand_detection_topic,
+        target_frame=base_frame,
+        tag_frame_prefix=hand_tag_frame_prefix,
+        max_age_sec=hand_max_age_sec,
+        tf_pending_sec=hand_tf_pending_sec,
+        max_hamming=hand_max_hamming,
+        min_decision_margin=hand_min_decision_margin,
+    )
 
-    in_range_checker = CheckTagReachability(name="CheckTagReachability")
-    detect.setup(node=node)
+    live_object_resolver = ResolveLiveInspectionObject(
+        object_id=active_object_id,
+        routine_id=active_routine_id,
+        execution_frame=inspection_execution_frame,
+        maximum_age_sec=probe_max_age_sec,
+        name="ResolveLiveInspectionObject",
+    )
 
-    tag_publisher = PublishTagStates(name="TagPublisher")
-    detect.setup(node=node)
+    live_object_publisher = PublishLiveInspectionObject(
+        name="PublishLiveInspectionObject",
+    )
 
-    world_frame_transformer = VisibleTagToMap(slam_helper=get_helper_container(node).slam_helper,
-                                              name="VisibleTagToMap")
+    in_range_checker = CheckTagReachability(
+        name="CheckTagReachability"
+    )
 
-    tag_scan_sequence.add_children([detect, hand_detect, in_range_checker, tag_publisher, world_frame_transformer])
+    tag_publisher = PublishTagStates(
+        name="TagPublisher"
+    )
+
+    slam_helper = get_helper_container(
+        node
+    ).slam_helper
+
+    world_frame_transformer = VisibleTagToMap(
+        slam_helper=slam_helper,
+        name="VisibleTagToMap",
+    )
+
+    tag_scan_sequence.add_children([
+        detect,
+        hand_detect,
+        live_object_resolver,
+        live_object_publisher,
+        in_range_checker,
+        tag_publisher,
+        world_frame_transformer,
+    ])
 
     sensing_seq.add_children([tag_scan_sequence, cmd_sub, pose_sub])
     return sensing_seq
@@ -104,7 +236,6 @@ def build_buffered_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Beh
     command_tree = build_repeat_guarded_cancelable_command_tree(node)
 
     buffer = CommandManager(name="CommandManager")
-    buffer.setup()
     buffered_command_tree.add_children([
         buffer,
         command_tree
@@ -123,7 +254,7 @@ def get_helper_container(node: rclpy.node.Node):
 
 def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     command_selector = py_trees.composites.Selector(
-        name="CommandSelector",
+        name="ommandSelector",
         memory=True
     )
 
@@ -170,11 +301,6 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
     stow_cancel = StowArmActionSimple(name="StowArmCancel")
     close_gripper = CloseGripperAction(name="CloseGripperAction")
     reset_estop = ResetEstopFlag(name="ResetEStopFlag")
-    stop_base.setup(node=node)
-    stop_mapping.setup(node=node)
-    stow_cancel.setup(node=node)
-    close_gripper.setup(node=node)
-    reset_estop.setup(node=node)
 
     cancel_seq = py_trees.composites.Sequence("CancelSequence", memory=True)
     cancel_seq.add_children([cancel_check, stop_base, stop_mapping, stow_cancel, close_gripper, reset_estop])
@@ -204,14 +330,11 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
 
 def build_publisher_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     initial_ui_info = PublishInitialUIInfoOnce(name="PublishInitialUIInfoOnce")
-    initial_ui_info.setup(node=node)
 
     # Other publishers
     cmd_pub = BufferStatusPublisher(name="CommandStatusPublisher")
-    cmd_pub.setup(node=node)
 
     init_pose_pub = LandmarkRelocalizer(get_helper_container(node).slam_helper, name="InitPosePublisher")
-    init_pose_pub.setup(node=node)
     # Parallel so both can exist simultaneously
     publisher_tree = py_trees.composites.Parallel(
         "PublisherTree",
@@ -224,7 +347,6 @@ def build_publisher_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
 def build_repeat_guarded_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     guard = NewCommandGuard(name="NewCommandGuard")
-    guard.setup(node=node)
     guarded_sequence = py_trees.composites.Sequence(
         name="GuardedCommands",
         memory=True
@@ -252,8 +374,6 @@ def make_simple_command_sequence(
         )
     )
     child = behaviour_ctor(node)
-    if hasattr(child, "setup"):
-        child.setup(node=node)
     seq.add_children([check, child])
     return seq
 
@@ -273,10 +393,8 @@ def match_command_checker(command_id: int) -> CheckBlackboardVariableValue:
 def build_manipulator_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     manipulation = py_trees.composites.Sequence("ManipulationSequence", memory=True)
     get_goal = ManipulatorGetGoalTag(name="GetGoalTagPosition")
-    get_goal.setup(node=node)
 
     move_arm = ManipulatorMoveArmAction(name="MoveArm")
-    move_arm.setup(node=node)
 
     manipulation.add_children([get_goal, move_arm])
 
@@ -290,10 +408,7 @@ def build_base_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     base_sequence = py_trees.composites.Sequence("BaseMoveToTagSequence", memory=True)
 
     get_goal = BaseGetGoalTag(name="BaseGetGoalTag")
-    get_goal.setup(node=node)
-
     move_base = BaseMoveToTagAction(name="BaseMoveToTagAction")
-    move_base.setup(node=node)
 
     base_sequence.add_children([get_goal, move_base])
     return base_sequence
@@ -301,10 +416,8 @@ def build_base_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 def build_current_pose_as_waypoint_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
     get_goal = SaveCurrentPoseAsGoal(name="SaveCurrentPoseAsGoal")
-    get_goal.setup(node=node)
 
     add_waypoint = AddGoalPoseAsWaypoint(get_helper_container(node).slam_helper, name="AddGoalPoseAsWaypoint")
-    add_waypoint.setup(node=node)
     sequence.add_children([get_goal, add_waypoint])
     return sequence
 
@@ -313,10 +426,8 @@ def build_tag_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour
     slam_helper = get_helper_container(node).slam_helper
     sequence = py_trees.composites.Sequence("SaveTagAsLandmark", memory=True)
     get_goal = SetTagAsGoal(name="SetTagAsGoal")
-    get_goal.setup(node=node)
 
     add_waypoint = AddGoalPoseAsLandmark(slam_helper=slam_helper, name="AddGoalPoseAsLandmark")
-    add_waypoint.setup(node=node)
     sequence.add_children([get_goal, add_waypoint])
     return sequence
 
@@ -324,10 +435,8 @@ def build_tag_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour
 def build_navigate_to_goal_pose_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("NavigateToWaypoint", memory=True)
     set_goal = SetWaypointAsGoal(name="SetWaypointAsGoal")
-    set_goal.setup(node=node)
 
     navigate = NavigateToGoalPose(name="NavigateToGoalPose")
-    navigate.setup(node=node)
     sequence.add_children([set_goal, navigate])
 
     return sequence
@@ -357,20 +466,27 @@ def main(args=None):
     global stop_mapping_behavior, stop_mapping_tree
 
     rclpy.init(args=args)
+    node = rclpy.create_node("bt_driver")
 
-    root = create_root()
+    root = create_root(node)
     tree = py_trees_ros.trees.BehaviourTree(
         root=root,
         unicode_tree_debug=False
     )
 
     try:
-        tree.setup(timeout=15.0)
-    except py_trees_ros.exceptions.TimedOutError as e:
-        print(f"Failed to setup the tree: {e}")
+        tree.setup(
+            node=node,
+            timeout=15.0
+        )
+    except py_trees_ros.exceptions.TimedOutError as exception:
+        node.get_logger().error(
+            f"Behavior tree setup failed: {exception}"
+        )
         tree.shutdown()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
         sys.exit(1)
+
 
     tree.tick_tock(period_ms=50.0)
 

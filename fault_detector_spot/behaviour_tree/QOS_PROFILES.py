@@ -12,6 +12,13 @@ LATCHED_QOS = QoSProfile(
     durability=DurabilityPolicy.TRANSIENT_LOCAL,
 )
 
+LIVE_OBJECT_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.VOLATILE,
+)
+
 POINT_CLOUD_QOS = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -21,5 +28,5 @@ POINT_CLOUD_QOS = QoSProfile(
 INITIALPOSE_QOS = QoSProfile(
     depth=1,
     reliability=ReliabilityPolicy.RELIABLE,
-    durability=DurabilityPolicy.VOLATILE,  # <-- not TRANSIENT_LOCAL
+    durability=DurabilityPolicy.VOLATILE,
 )

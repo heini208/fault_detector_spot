@@ -7,8 +7,10 @@
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
+  <depend>builtin_interfaces</depend>
   <depend>std_msgs</depend>
   <depend>ament_cmake</depend>
+  <depend>geometry_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
@@ -27,16 +29,18 @@
   <exec_depend>py_trees_ros_interfaces</exec_depend>
 
   <exec_depend>apriltag_ros</exec_depend>
+  <exec_depend>apriltag_msgs</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>rtabmap_ros</exec_depend>
   <exec_depend>rtabmap_slam</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
   <exec_depend>rtabmap_odom</exec_depend>
   <exec_depend>rtabmap_util</exec_depend>
-
-
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

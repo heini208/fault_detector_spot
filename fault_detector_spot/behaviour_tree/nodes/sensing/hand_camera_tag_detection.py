@@ -1,156 +1,259 @@
-from typing import Dict, Optional
+"""Resolve hand-camera AprilTag detections into body-frame poses."""
 
-import numpy as np
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
-from bosdyn.client.math_helpers import SE3Pose, Quat
+from collections import deque
+from copy import deepcopy
+from typing import Deque, Dict, Optional
 
 import py_trees
+import tf2_ros
 from apriltag_msgs.msg import AprilTagDetectionArray
+from builtin_interfaces.msg import Time as TimeMessage
 from fault_detector_msgs.msg import TagElement
 from rclpy.node import Node
-from sensor_msgs.msg import Image, CameraInfo
-from synchros2.tf_listener_wrapper import TFListenerWrapper
+from rclpy.time import Time
+
+from .tag_observation_cache import (
+    TagObservationCache,
+)
+from .tag_observation_time import (
+    is_observation_fresh,
+)
 
 
 class HandCameraTagDetection(py_trees.behaviour.Behaviour):
-    """
-    Detect AprilTags using depth
-    Positions are transformed to GRAV_ALIGNED_BODY_FRAME_NAME.
-    """
+    """Cache valid hand detections and retry delayed TF transforms."""
 
-    def __init__(self, name: str = "HandCameraTagDetection", hand_camera_topic: str = "/depth_registered/hand/image", hand_camera_info_topic: str = "/depth_registered/hand/camera_info", target_frame: str = GRAV_ALIGNED_BODY_FRAME_NAME, source_frame: str = ""):
+    def __init__(
+        self,
+        name: str = "HandCameraTagDetection",
+        detection_topic: str = "/detections",
+        target_frame: str = "body",
+        tag_frame_prefix: str = "tag36h11:",
+        max_age_sec: float = 1.0,
+        tf_pending_sec: float = 0.5,
+        max_hamming: int = 0,
+        min_decision_margin: float = 0.0,
+        pending_queue_size: int = 10,
+    ):
+        """Create the hand-camera detection behaviour."""
         super().__init__(name)
+
+        if tf_pending_sec < 0.0:
+            raise ValueError("tf_pending_sec must be non-negative")
+
+        if pending_queue_size < 1:
+            raise ValueError("pending_queue_size must be positive")
+
         self.node: Optional[Node] = None
         self.blackboard = self.attach_blackboard_client()
-
-        self.hand_camera_info_topic = hand_camera_info_topic
-        self.hand_camera_topic = hand_camera_topic
-
-        self.depth_image: Optional[Image] = None
-        self.camera_info: Optional[CameraInfo] = None
-        self.latest_detections: Optional[AprilTagDetectionArray] = None
-        self.tf_listener: Optional[TFListenerWrapper] = None
-
-        self.camera_frame: Optional[str] = None
-        self.target_frame: str = target_frame
-        self.camera_frame: str = source_frame
+        self.detection_topic = detection_topic
+        self.target_frame = target_frame
+        self.tag_frame_prefix = tag_frame_prefix
+        self.max_age_sec = max_age_sec
+        self.tf_pending_sec = tf_pending_sec
+        self.max_hamming = max_hamming
+        self.min_decision_margin = min_decision_margin
+        self.pending_queue_size = pending_queue_size
+        self.pending_detections: Dict[
+            int,
+            Deque[TimeMessage],
+        ] = {}
+        self.observation_cache = TagObservationCache(
+            max_age_sec=max_age_sec,
+        )
+        self.tf_buffer: Optional[tf2_ros.Buffer] = None
+        self.tf_listener: Optional[
+            tf2_ros.TransformListener
+        ] = None
+        self.detection_subscription = None
 
     def setup(self, **kwargs):
-        try:
-            self.node = kwargs["node"]
+        """Create ROS resources and register blackboard outputs."""
+        self.node = kwargs.get("node")
 
-            self.node.create_subscription(
-                Image,
-                self.hand_camera_topic,
-                self._depth_cb,
-                10
+        if self.node is None:
+            raise RuntimeError(
+                f"{self.name}: no ROS node provided"
             )
-            self.node.create_subscription(
-                CameraInfo,
-                self.hand_camera_info_topic,
-                self._camera_info_cb,
-                10
-            )
-            self.node.create_subscription(
-                AprilTagDetectionArray,
-                "/detections",
-                self._detections_cb,
-                10
-            )
-            self.tf_listener = TFListenerWrapper(self.node)
 
-            self.blackboard.register_key("visible_tags", access=py_trees.common.Access.READ)
-            self.logger.info("DetectNewTagsWithDepth node initialized.")
-        except KeyError as e:
-            self.logger.error(f"Missing required setup argument: {e}")
-
-    def _depth_cb(self, msg: Image):
-        self.depth_image = msg
-        if not self.camera_frame:
-            self.camera_frame = msg.header.frame_id
-
-    def _camera_info_cb(self, msg: CameraInfo):
-        self.camera_info = msg
-
-    def _detections_cb(self, msg: AprilTagDetectionArray):
-        self.latest_detections = msg
-
-    def update(self) -> py_trees.common.Status:
-        if self.depth_image is None or self.camera_info is None or self.latest_detections is None:
-            return py_trees.common.Status.SUCCESS
-
-        visible_tags: Dict[int, TagElement] = getattr(self.blackboard, "visible_tags", {})
-        new_elements = []
-
-        for detection in self.latest_detections.detections:
-            tag_id = detection.id
-            if tag_id in visible_tags:
-                continue  # Skip already known tags
-
-            u, v = int(detection.centre.x), int(detection.centre.y)
-            depth = self._get_valid_depth(u, v)
-
-            if depth is None:
-                self.logger.debug(f"No valid depth for tag {tag_id} at ({u},{v})")
-                continue
-
-            x, y = self._unproject_pixel(u, v, depth)
-            local_pose = SE3Pose(x, y, depth, Quat())
-
-            tf_msg = self.tf_listener.lookup_a_tform_b(
-                frame_a=self.target_frame,
-                frame_b=self.camera_frame,
-                timeout_sec=2.0
-            )
-            t = tf_msg.transform.translation
-            r = tf_msg.transform.rotation
-            world_tf = SE3Pose(t.x, t.y, t.z, Quat(r.w, r.x, r.y, r.z))
-            world_pose = world_tf * local_pose
-
-            tag_element = TagElement()
-            tag_element.id = tag_id
-            tag_element.pose.header.stamp = self.node.get_clock().now().to_msg()
-            tag_element.pose.header.frame_id = self.target_frame
-            tag_element.pose.pose.position.x = world_pose.x
-            tag_element.pose.pose.position.y = world_pose.y
-            tag_element.pose.pose.position.z = world_pose.z
-            tag_element.pose.pose.orientation.x = world_pose.rot.x
-            tag_element.pose.pose.orientation.y = world_pose.rot.y
-            tag_element.pose.pose.orientation.z = world_pose.rot.z
-            tag_element.pose.pose.orientation.w = world_pose.rot.w
-
-            new_elements.append(tag_element)
-
-        if new_elements:
-            self.blackboard.visible_tags.update({e.id: e for e in new_elements})
-            self.feedback_message = f"Published new tags: {[e.id for e in new_elements]}"
-            return py_trees.common.Status.SUCCESS
-
-        self.feedback_message = "No new tags detected"
-        return py_trees.common.Status.SUCCESS
-
-    def _get_valid_depth(self, u: int, v: int, radius: int = 5) -> Optional[float]:
-        if self.depth_image is None:
-            return None
-
-        arr = np.frombuffer(self.depth_image.data, dtype=np.uint16).reshape(
-            (self.depth_image.height, self.depth_image.width)
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(
+            self.tf_buffer,
+            self.node,
         )
 
-        h, w = arr.shape
-        for r in range(radius + 1):
-            for dx in range(-r, r + 1):
-                for dy in range(-r, r + 1):
-                    x, y = u + dx, v + dy
-                    if 0 <= x < w and 0 <= y < h:
-                        val = arr[y, x]
-                        if val > 0:
-                            return float(val) * 1e-3  # mm to m
-        return None
+        self.detection_subscription = (
+            self.node.create_subscription(
+                AprilTagDetectionArray,
+                self.detection_topic,
+                self._detections_callback,
+                10,
+            )
+        )
 
-    def _unproject_pixel(self, u: int, v: int, z: float):
-        k = self.camera_info.k
-        fx, fy, cx, cy = k[0], k[4], k[2], k[5]
-        x = (u - cx) * z / fx
-        y = (v - cy) * z / fy
-        return x, y
+        self.blackboard.register_key(
+            key="hand_tag_observations",
+            access=py_trees.common.Access.WRITE,
+        )
+        self.blackboard.hand_tag_observations = {}
+        self.pending_detections.clear()
+        self.observation_cache.clear()
+
+    def _detections_callback(
+        self,
+        message: AprilTagDetectionArray,
+    ) -> None:
+        """Queue valid detections without clearing state on empty arrays."""
+        for detection in message.detections:
+            if int(detection.hamming) > self.max_hamming:
+                continue
+
+            if (
+                float(detection.decision_margin)
+                < self.min_decision_margin
+            ):
+                continue
+
+            tag_id = int(detection.id)
+            pending = self.pending_detections.setdefault(
+                tag_id,
+                deque(maxlen=self.pending_queue_size),
+            )
+            stamp = deepcopy(message.header.stamp)
+
+            if pending and pending[-1] == stamp:
+                continue
+
+            pending.append(stamp)
+
+    def update(self) -> py_trees.common.Status:
+        """Resolve pending transforms and publish the fresh hand cache."""
+        now = self.node.get_clock().now()
+        resolved = self._resolve_pending_observations(now)
+        self.observation_cache.update(resolved)
+        observations = self.observation_cache.snapshot(now)
+
+        self.blackboard.hand_tag_observations = observations
+        self.feedback_message = (
+            f"Hand tags: {sorted(observations.keys())}; "
+            f"pending: {sorted(self.pending_detections.keys())}"
+        )
+        return py_trees.common.Status.SUCCESS
+
+    def _resolve_pending_observations(
+        self,
+        current_time: Time,
+    ) -> Dict[int, TagElement]:
+        """Retry exact-time TF lookup for queued detections."""
+        if self.tf_buffer is None or self.node is None:
+            return {}
+
+        observations = {}
+
+        for tag_id in list(self.pending_detections):
+            pending = self.pending_detections[tag_id]
+            fresh_stamps = [
+                stamp
+                for stamp in pending
+                if is_observation_fresh(
+                    current_time,
+                    stamp,
+                    self.tf_pending_sec,
+                )
+            ]
+
+            if not fresh_stamps:
+                del self.pending_detections[tag_id]
+                continue
+
+            resolved_index = None
+
+            for index in range(
+                len(fresh_stamps) - 1,
+                -1,
+                -1,
+            ):
+                stamp = fresh_stamps[index]
+                observation_time = Time.from_msg(
+                    stamp,
+                    clock_type=(
+                        self.node.get_clock().clock_type
+                    ),
+                )
+                tag_frame = (
+                    f"{self.tag_frame_prefix}{tag_id}"
+                )
+
+                try:
+                    transform = self.tf_buffer.lookup_transform(
+                        self.target_frame,
+                        tag_frame,
+                        observation_time,
+                    )
+                except (
+                    tf2_ros.LookupException,
+                    tf2_ros.ConnectivityException,
+                    tf2_ros.ExtrapolationException,
+                ) as exception:
+                    self.logger.debug(
+                        f"Could not resolve {tag_frame} at "
+                        f"{stamp.sec}.{stamp.nanosec:09d}: "
+                        f"{exception}"
+                    )
+                    continue
+
+                observations[tag_id] = self._create_tag_element(
+                    tag_id,
+                    transform,
+                    stamp,
+                )
+                resolved_index = index
+                break
+
+            if resolved_index is None:
+                self.pending_detections[tag_id] = deque(
+                    fresh_stamps,
+                    maxlen=self.pending_queue_size,
+                )
+                continue
+
+            unresolved_newer_stamps = fresh_stamps[
+                resolved_index + 1:
+            ]
+
+            if unresolved_newer_stamps:
+                self.pending_detections[tag_id] = deque(
+                    unresolved_newer_stamps,
+                    maxlen=self.pending_queue_size,
+                )
+            else:
+                del self.pending_detections[tag_id]
+
+        return observations
+
+    @staticmethod
+    def _create_tag_element(
+        tag_id: int,
+        transform,
+        observation_stamp: TimeMessage,
+    ) -> TagElement:
+        """Convert a resolved transform into a tag observation."""
+        tag = TagElement()
+        tag.id = tag_id
+        tag.pose.header.frame_id = (
+            transform.header.frame_id
+        )
+        tag.pose.header.stamp = observation_stamp
+        tag.pose.pose.position.x = (
+            transform.transform.translation.x
+        )
+        tag.pose.pose.position.y = (
+            transform.transform.translation.y
+        )
+        tag.pose.pose.position.z = (
+            transform.transform.translation.z
+        )
+        tag.pose.pose.orientation = (
+            transform.transform.rotation
+        )
+        return tag

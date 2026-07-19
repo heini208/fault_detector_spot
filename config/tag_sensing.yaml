@@ -1,0 +1,20 @@
+/**:
+  ros__parameters:
+    tag_sensing.base_frame: body
+    tag_sensing.base_frame_pattern: 'filtered_fiducial_(\d+)'
+
+    tag_sensing.hand_detection_topic: '/detections'
+    tag_sensing.hand_tag_frame_prefix: 'tag36h11:'
+
+    tag_sensing.base_max_age_sec: 1.5
+    tag_sensing.hand_max_age_sec: 1.0
+    tag_sensing.hand_tf_pending_sec: 0.5
+
+    tag_sensing.hand_max_hamming: 0
+    tag_sensing.hand_min_decision_margin: 0.0
+
+    tag_sensing.probe_max_age_sec: 0.25
+
+    inspection.active_object_id: ''
+    inspection.active_routine_id: ''
+    inspection.execution_frame: odom
