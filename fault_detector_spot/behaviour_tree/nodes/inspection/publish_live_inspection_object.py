@@ -14,7 +14,7 @@ from fault_detector_spot.behaviour_tree.QOS_PROFILES import (
 from fault_detector_spot.inspection.live_object_state_adapter import (
     live_object_pose_to_msg,
 )
-from fault_detector_spot.inspection.object_pose_resolver import (
+from fault_detector_spot.inspection.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
 )

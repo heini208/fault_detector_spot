@@ -1,4 +1,4 @@
-"""Resolve a fresh local object pose from a base-camera fiducial."""
+"""Resolve a fresh object pose from a base-camera fiducial."""
 
 import math
 from copy import deepcopy
@@ -7,15 +7,10 @@ from typing import Optional
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
 
-from .models import ObjectDefinition
-from .object_pose_resolver import (
-    ObjectPoseSource,
+from .models import InspectionObject
+from .resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
-)
-from .transform_utils import (
-    compose_poses,
-    pose_data_to_pose,
 )
 
 
@@ -27,46 +22,43 @@ class LiveObjectPoseResolver:
         execution_frame: str = "odom",
         maximum_age_sec: float = 0.25,
     ):
-        """Configure the local execution frame and freshness limit."""
+        """Configure the execution frame and freshness limit."""
         if not execution_frame:
             raise ValueError("Execution frame must not be empty")
-
         if maximum_age_sec <= 0.0:
             raise ValueError(
                 "Maximum observation age must be positive"
             )
-
         self.execution_frame = execution_frame
         self.maximum_age_sec = maximum_age_sec
 
     def resolve(
         self,
-        object_definition: ObjectDefinition,
+        inspection_object: InspectionObject,
         marker_pose: Optional[PoseStamped],
         current_time: Time,
         observed_tag_id: Optional[int] = None,
         observation_source: str = "base",
     ) -> ResolvedObjectPose:
-        """Resolve one object from a transformed marker pose."""
+        """Resolve the tag-defined object frame."""
         try:
-            object_definition.validate()
+            inspection_object.validate()
         except ValueError as exception:
             return self._result(
-                object_definition,
+                inspection_object,
                 ObjectPoseState.INVALID,
                 str(exception),
             )
 
         if observation_source != "base":
             return self._result(
-                object_definition,
+                inspection_object,
                 ObjectPoseState.INVALID,
                 "Local object motion accepts base-camera tags only",
             )
-
         if marker_pose is None:
             return self._result(
-                object_definition,
+                inspection_object,
                 ObjectPoseState.UNAVAILABLE,
                 "Expected base-camera tag is not visible",
             )
@@ -74,32 +66,31 @@ class LiveObjectPoseResolver:
         marker_error = self.marker_geometry_error(marker_pose)
         if marker_error:
             return self._result(
-                object_definition,
+                inspection_object,
                 ObjectPoseState.INVALID,
                 marker_error,
             )
 
-        if observed_tag_id != object_definition.tag_id:
+        expected_tag_id = inspection_object.reference_tag.tag_id
+        if observed_tag_id != expected_tag_id:
             return self._result(
-                object_definition,
+                inspection_object,
                 ObjectPoseState.INVALID,
                 "Observed tag does not match object tag: "
-                f"{observed_tag_id} != {object_definition.tag_id}",
+                f"{observed_tag_id} != {expected_tag_id}",
             )
-
         if marker_pose.header.frame_id != self.execution_frame:
             return self._result(
-                object_definition,
+                inspection_object,
                 ObjectPoseState.INVALID,
                 f"Marker is in frame '{marker_pose.header.frame_id}', "
                 f"expected '{self.execution_frame}'",
             )
 
         stamp = marker_pose.header.stamp
-
         if stamp.sec == 0 and stamp.nanosec == 0:
             return self._result(
-                object_definition,
+                inspection_object,
                 ObjectPoseState.INVALID,
                 "Marker observation has a zero timestamp",
             )
@@ -114,49 +105,29 @@ class LiveObjectPoseResolver:
 
         if age_sec < -0.1:
             return self._result(
-                object_definition,
+                inspection_object,
                 ObjectPoseState.INVALID,
                 "Marker observation timestamp is in the future",
                 stamp=stamp,
                 age_sec=age_sec,
             )
-
         if age_sec > self.maximum_age_sec:
             return self._result(
-                object_definition,
+                inspection_object,
                 ObjectPoseState.UNAVAILABLE,
                 f"Base-camera tag is stale: {age_sec:.3f} s",
                 stamp=stamp,
                 age_sec=age_sec,
             )
 
-        try:
-            object_pose = PoseStamped()
-            object_pose.header = deepcopy(marker_pose.header)
-            object_pose.pose = compose_poses(
-                marker_pose.pose,
-                pose_data_to_pose(
-                    object_definition.marker_to_object
-                ),
-            )
-        except (TypeError, ValueError) as exception:
-            return self._result(
-                object_definition,
-                ObjectPoseState.INVALID,
-                str(exception),
-                stamp=stamp,
-                age_sec=age_sec,
-            )
-
+        object_pose = deepcopy(marker_pose)
         return ResolvedObjectPose(
-            object_id=object_definition.object_id,
-            tag_id=object_definition.tag_id,
+            object_id=inspection_object.object_id,
+            tag_id=expected_tag_id,
             state=ObjectPoseState.LIVE,
             selected_pose=object_pose,
-            live_pose=object_pose,
             message="Using fresh base-camera marker observation",
             frame_id=self.execution_frame,
-            source=ObjectPoseSource.LIVE_LOCAL,
             observation_timestamp=deepcopy(stamp),
             observation_age_sec=age_sec,
             observation_source="base",
@@ -166,7 +137,7 @@ class LiveObjectPoseResolver:
     def marker_geometry_error(
         marker_pose: PoseStamped,
     ) -> Optional[str]:
-        """Return an error for unsafe marker pose geometry."""
+        """Return an error for unsafe marker geometry."""
         pose = marker_pose.pose
         values = (
             pose.position.x,
@@ -177,7 +148,6 @@ class LiveObjectPoseResolver:
             pose.orientation.z,
             pose.orientation.w,
         )
-
         if not all(math.isfinite(value) for value in values):
             return "Marker pose contains a non-finite value"
 
@@ -187,20 +157,18 @@ class LiveObjectPoseResolver:
             + pose.orientation.z ** 2
             + pose.orientation.w ** 2
         )
-
         if quaternion_norm < 1e-12:
             return "Marker pose quaternion norm is zero"
-
         return None
 
     def unavailable(
         self,
-        definition: ObjectDefinition,
+        definition: InspectionObject,
         message: str,
         stamp=None,
         age_sec=None,
     ) -> ResolvedObjectPose:
-        """Create an unavailable local result."""
+        """Create an unavailable result."""
         return self._result(
             definition,
             ObjectPoseState.UNAVAILABLE,
@@ -211,10 +179,10 @@ class LiveObjectPoseResolver:
 
     def invalid(
         self,
-        definition: ObjectDefinition,
+        definition: InspectionObject,
         message: str,
     ) -> ResolvedObjectPose:
-        """Create an invalid local result."""
+        """Create an invalid result."""
         return self._result(
             definition,
             ObjectPoseState.INVALID,
@@ -223,7 +191,7 @@ class LiveObjectPoseResolver:
 
     def _result(
         self,
-        definition: ObjectDefinition,
+        definition: InspectionObject,
         state: ObjectPoseState,
         message: str,
         stamp=None,
@@ -232,11 +200,10 @@ class LiveObjectPoseResolver:
         """Create a non-live result with consistent metadata."""
         return ResolvedObjectPose(
             object_id=definition.object_id,
-            tag_id=definition.tag_id,
+            tag_id=definition.reference_tag.tag_id,
             state=state,
             message=message,
             frame_id=self.execution_frame,
-            source=ObjectPoseSource.LIVE_LOCAL,
             observation_timestamp=deepcopy(stamp),
             observation_age_sec=age_sec,
             observation_source="base",

@@ -1,4 +1,3 @@
-import json
 import os
 import signal
 import subprocess
@@ -9,6 +8,15 @@ from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import StringArray
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
 from fault_detector_spot.behaviour_tree.nodes.navigation.nav2_helper import Nav2Helper
+from fault_detector_spot.inspection.map_repository import MapRepository
+from fault_detector_spot.inspection.models import (
+    LocalizationLandmark,
+    ReferenceTag,
+    Waypoint,
+)
+from fault_detector_spot.inspection.transform_utils import (
+    pose_to_pose_data,
+)
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 
@@ -27,6 +35,7 @@ class RTABHelper:
         self.bb = blackboard
         self.maps_dir = os.path.join(get_package_share_directory("fault_detector_spot"), "maps")
         os.makedirs(self.maps_dir, exist_ok=True)
+        self.map_repository = MapRepository(self.maps_dir)
 
         # Ensure blackboard keys exist
         self.init_blackboard_keys()
@@ -273,15 +282,12 @@ class RTABHelper:
 
         # Update internal map list and ensure paths exist
         self.update_map_list(map_name)
-        json_path = os.path.join(self.maps_dir, f"{map_name}.json")
-
-        # Create an empty JSON file if not existing
-        if not os.path.exists(json_path):
-            data = {"waypoints": [], "landmarks": []}
-            os.makedirs(os.path.dirname(json_path), exist_ok=True)
-            with open(json_path, "w") as f:
-                json.dump(data, f, indent=4)
-            self.node.get_logger().info(f"Created new JSON map file: {json_path}")
+        if not self.map_repository.exists(map_name):
+            self.map_repository.create_empty(map_name)
+            path = self.map_repository.get_map_path(map_name)
+            self.node.get_logger().info(
+                f"Created new JSON map file: {path}"
+            )
 
         # Launch RTAB-Map in fresh mapping mode
         self.node.get_logger().info(f"Starting a new RTAB-Map mapping session for '{map_name}'")
@@ -418,84 +424,106 @@ class RTABHelper:
     def get_list_from_json_category(self, category: String, map_name: str = None, ):
         map_name = map_name or self.bb.active_map_name
         if not map_name:
-            return
-        json_path = self.get_json_path(map_name)
-        if not os.path.exists(json_path):
-            return
-        with open(json_path, "r") as f:
-            data = json.load(f)
-        names = [wp["name"] for wp in data.get(category, [])]
-        return names
+            return []
+        if not self.map_repository.exists(map_name):
+            return []
+
+        definition = self.map_repository.load(map_name)
+        if category == "waypoints":
+            return [
+                waypoint.waypoint_id
+                for waypoint in definition.waypoints
+            ]
+        if category == "landmarks":
+            return [
+                landmark.landmark_id
+                for landmark in definition.localization_landmarks
+            ]
+        raise ValueError(f"Unknown map category: {category}")
 
     def add_pose_as_waypoint(self, waypoint_name: str, pose: PoseStamped, map_name: str = None):
-        self.add_pose_to_json("waypoints", waypoint_name, pose, map_name)
+        map_name = map_name or self.bb.active_map_name
+        if not map_name:
+            raise ValueError("No active map set")
+
+        definition = self.map_repository.load(map_name)
+        waypoint = definition.get_waypoint(waypoint_name)
+        if waypoint is None:
+            definition.waypoints.append(
+                Waypoint(
+                    waypoint_id=waypoint_name,
+                    display_name=waypoint_name,
+                    pose_map=pose_to_pose_data(pose),
+                )
+            )
+        else:
+            waypoint.pose_map = pose_to_pose_data(pose)
+        self.map_repository.save(map_name, definition)
 
         if map_name == self.bb.active_map_name:
             self.publish_waypoint_list(map_name)
 
     def add_pose_as_landmark(self, landmark_name: str, pose: PoseStamped, map_name: str = None):
-        self.add_pose_to_json("landmarks", landmark_name, pose, map_name)
-
-        if map_name == self.bb.active_map_name:
-            self.publish_landmark_list(map_name)
-
-    def add_pose_to_json(self, category: String, entry_name: String, pose: PoseStamped, map_name: str = None):
         map_name = map_name or self.bb.active_map_name
         if not map_name:
             raise ValueError("No active map set")
 
-        json_path = self.get_json_path(map_name)
-        if os.path.exists(json_path):
-            with open(json_path, "r") as f:
-                data = json.load(f)
+        try:
+            tag_id = int(landmark_name.rsplit("_", 1)[1])
+        except (IndexError, ValueError) as exception:
+            raise ValueError(
+                "Landmark ID must end with its numeric tag ID"
+            ) from exception
+
+        definition = self.map_repository.load(map_name)
+        landmark = definition.get_landmark(landmark_name)
+        if landmark is None:
+            definition.localization_landmarks.append(
+                LocalizationLandmark(
+                    landmark_id=landmark_name,
+                    display_name=landmark_name,
+                    reference_tag=ReferenceTag(
+                        tag_id=tag_id,
+                        tag_family="36h11",
+                    ),
+                    pose_map=pose_to_pose_data(pose),
+                )
+            )
         else:
-            data = {category: []}
+            landmark.reference_tag = ReferenceTag(
+                tag_id=tag_id,
+                tag_family="36h11",
+            )
+            landmark.pose_map = pose_to_pose_data(pose)
+        self.map_repository.save(map_name, definition)
 
-        pose_dict = {
-            "position": {
-                "x": pose.pose.position.x,
-                "y": pose.pose.position.y,
-                "z": pose.pose.position.z,
-            },
-            "orientation": {
-                "x": pose.pose.orientation.x,
-                "y": pose.pose.orientation.y,
-                "z": pose.pose.orientation.z,
-                "w": pose.pose.orientation.w,
-            },
-        }
-
-        updated = False
-        for wp in data[category]:
-            if wp["name"] == entry_name:
-                wp["pose"] = pose_dict
-                updated = True
-                break
-        if not updated:
-            data[category].append({"name": entry_name, "pose": pose_dict})
-
-        with open(json_path, "w") as f:
-            json.dump(data, f, indent=2)
+        if map_name == self.bb.active_map_name:
+            self.publish_landmark_list(map_name)
 
     def delete_waypoint(self, waypoint_name: str, map_name: str = None):
         map_name = map_name or self.bb.active_map_name
         if not map_name:
             raise ValueError("No active map set")
 
-        json_path = self.get_json_path(map_name)
-        if not os.path.exists(json_path):
+        if not self.map_repository.exists(map_name):
             return False
 
-        with open(json_path, "r") as f:
-            data = json.load(f)
-
-        new_wps = [wp for wp in data.get("waypoints", []) if wp["name"] != waypoint_name]
-        if len(new_wps) == len(data.get("waypoints", [])):
+        definition = self.map_repository.load(map_name)
+        new_waypoints = [
+            waypoint
+            for waypoint in definition.waypoints
+            if waypoint.waypoint_id != waypoint_name
+        ]
+        if len(new_waypoints) == len(definition.waypoints):
             return False
 
-        data["waypoints"] = new_wps
-        with open(json_path, "w") as f:
-            json.dump(data, f, indent=2)
+        definition.waypoints = new_waypoints
+        definition.object_approaches = [
+            approach
+            for approach in definition.object_approaches
+            if approach.waypoint_id != waypoint_name
+        ]
+        self.map_repository.save(map_name, definition)
 
         if map_name == self.bb.active_map_name:
             self.publish_waypoint_list(map_name)
@@ -506,24 +534,22 @@ class RTABHelper:
         if not map_name:
             raise ValueError("No active map set")
 
-        json_path = self.get_json_path(map_name)
-        if not os.path.exists(json_path):
+        if not self.map_repository.exists(map_name):
             return False
 
-        with open(json_path, "r") as f:
-            data = json.load(f)
-
-        # Filter out the landmark with the given name
-        new_landmarks = [lm for lm in data.get("landmarks", []) if lm["name"] != landmark_name]
-        if len(new_landmarks) == len(data.get("landmarks", [])):
-            # Nothing was removed
+        definition = self.map_repository.load(map_name)
+        new_landmarks = [
+            landmark
+            for landmark in definition.localization_landmarks
+            if landmark.landmark_id != landmark_name
+        ]
+        if len(new_landmarks) == len(
+            definition.localization_landmarks
+        ):
             return False
 
-        data["landmarks"] = new_landmarks
-
-        # Save updated JSON
-        with open(json_path, "w") as f:
-            json.dump(data, f, indent=2)
+        definition.localization_landmarks = new_landmarks
+        self.map_repository.save(map_name, definition)
 
         # Publish updated list if it's the active map
         if map_name == self.bb.active_map_name:

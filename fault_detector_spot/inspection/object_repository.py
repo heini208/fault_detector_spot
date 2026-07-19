@@ -2,13 +2,12 @@
 
 import os
 import shutil
-from copy import deepcopy
 from pathlib import Path
 from typing import List, Optional, Union
 
 import yaml
 
-from .models import ObjectDefinition
+from .models import InspectionObject
 from .repository_utils import (
     atomic_write_text,
     validate_storage_name,
@@ -57,8 +56,8 @@ class ObjectRepository:
         self,
         object_id: str,
         validate: bool = True,
-    ) -> ObjectDefinition:
-        """Load an object definition."""
+    ) -> InspectionObject:
+        """Load a complete inspection object."""
         path = self.get_object_path(object_id)
 
         if not path.is_file():
@@ -79,7 +78,7 @@ class ObjectRepository:
                 f"Object root must be an object: {path}"
             )
 
-        definition = ObjectDefinition.from_dict(data)
+        definition = InspectionObject.from_dict(data)
 
         if definition.object_id != object_id:
             raise ValueError(
@@ -94,20 +93,18 @@ class ObjectRepository:
 
     def save(
         self,
-        definition: ObjectDefinition,
+        definition: InspectionObject,
         validate: bool = True,
     ) -> Path:
         """Validate and atomically save an object."""
         validate_storage_name(definition.object_id, "object ID")
 
-        current = deepcopy(definition)
-
         if validate:
-            current.validate()
+            definition.validate()
 
-        path = self.get_object_path(current.object_id)
+        path = self.get_object_path(definition.object_id)
         content = yaml.safe_dump(
-            current.to_dict(),
+            definition.to_dict(),
             sort_keys=False,
             allow_unicode=True,
         )

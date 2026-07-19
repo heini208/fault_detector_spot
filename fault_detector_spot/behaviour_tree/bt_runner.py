@@ -29,7 +29,6 @@ from fault_detector_spot.behaviour_tree import (
     InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
     NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
     BaseGetGoalTag, BaseMoveToTagAction, BaseMoveRelativeAction,
-    ResolveInspectionObjects, PublishInspectionObjects,
     ResolveLiveInspectionObject, PublishLiveInspectionObject,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
@@ -145,9 +144,9 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         "",
     )
 
-    active_inspection_id = read_parameter(
+    active_routine_id = read_parameter(
         node,
-        "inspection.active_inspection_id",
+        "inspection.active_routine_id",
         "",
     )
 
@@ -188,7 +187,7 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
     live_object_resolver = ResolveLiveInspectionObject(
         object_id=active_object_id,
-        inspection_id=active_inspection_id,
+        routine_id=active_routine_id,
         execution_frame=inspection_execution_frame,
         maximum_age_sec=probe_max_age_sec,
         name="ResolveLiveInspectionObject",
@@ -215,15 +214,6 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         name="VisibleTagToMap",
     )
 
-    object_resolver = ResolveInspectionObjects(
-        slam_helper=slam_helper,
-        name="ResolveInspectionObjects",
-    )
-
-    object_publisher = PublishInspectionObjects(
-        name="PublishInspectionObjects",
-    )
-
     tag_scan_sequence.add_children([
         detect,
         hand_detect,
@@ -232,8 +222,6 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         in_range_checker,
         tag_publisher,
         world_frame_transformer,
-        object_resolver,
-        object_publisher,
     ])
 
     sensing_seq.add_children([tag_scan_sequence, cmd_sub, pose_sub])

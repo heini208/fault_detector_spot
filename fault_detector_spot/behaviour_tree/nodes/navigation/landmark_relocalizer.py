@@ -7,6 +7,9 @@ import py_trees
 import rclpy
 import tf2_ros
 from fault_detector_spot.behaviour_tree.nodes.mapping.rtab_helper import RTABHelper
+from fault_detector_spot.inspection.transform_utils import (
+    pose_data_to_pose,
+)
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
 from rclpy.duration import Duration
 from rclpy.time import Time
@@ -108,85 +111,35 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
 
     # ---- Landmark loading/parsing ----
     def _load_landmarks_for_map(self, map_name: str) -> None:
-        """Load landmarks from the map JSON into self.landmark_map.
-
-        The helper `get_list_from_json_category` in your setup only returns *names*.
-        Here we try several fallbacks to get the actual JSON file and parse full landmark
-        entries (dicts with 'name' and 'pose').
-
-        Strategy:
-        - If slam_helper exposes a `_json_path(map_name)` method (used by your helper), call it.
-        - If not, try `get_json_path` or an attribute like `json_path` / `maps_dir` heuristically.
-        - If we obtain a valid json path, open it and parse the 'landmarks' list (full dicts).
-        - Otherwise we fall back to trying `get_list_from_json_category` and bail with a helpful
-          feedback message (since only names are available and no poses can be read).
-        """
+        """Load strict localization landmarks for the active map."""
         self.landmark_map.clear()
 
-        json_path = self.slam_helper.get_json_path(map_name)
-        if json_path:
-            try:
-                import os, json
-
-                if os.path.exists(json_path):
-                    with open(json_path, "r") as f:
-                        data = json.load(f)
-                    raw_list = data.get("landmarks", [])
-                else:
-                    # file not present
-                    self.feedback_message = f"Landmark JSON not found at {json_path}"
-                    return
-            except Exception as ex:
-                self.feedback_message = f"Failed to read landmark JSON: {ex}"
-                return
-
-        # At this point raw_list should be a list of dicts (full entries) or a list of names.
-        if not raw_list:
-            self.feedback_message = "No landmarks found in JSON"
+        try:
+            definition = self.slam_helper.map_repository.load(
+                map_name
+            )
+        except (FileNotFoundError, OSError, ValueError) as exception:
+            self.feedback_message = (
+                f"Failed to load landmarks: {exception}"
+            )
             return
 
-        # If the entries are just strings (names) we cannot recover poses here
-        first = raw_list[0]
-        if isinstance(first, str):
-            self.feedback_message = "Landmark helper only returned names (no poses). Cannot load poses."
-            return
-
-        # parse dict entries
-        for entry in raw_list:
-            try:
-                name = entry.get("name")
-                if not name:
-                    continue
-                # parse id from 'Tag_5' -> 5
-                tag_id = int(str(name).split("_")[-1])
-                # convert dict pose to a PoseStamped-like object
-                pose_dict = entry.get("pose")
-                if not pose_dict:
-                    continue
-                p = PoseStamped()
-                p.header.frame_id = self.map_frame
-                # position
-                p.pose.position.x = float(pose_dict["position"]["x"])
-                p.pose.position.y = float(pose_dict["position"]["y"])
-                p.pose.position.z = float(pose_dict["position"].get("z", 0.0))
-                # orientation
-                q = pose_dict.get("orientation", {})
-                p.pose.orientation.x = float(q.get("x", 0.0))
-                p.pose.orientation.y = float(q.get("y", 0.0))
-                p.pose.orientation.z = float(q.get("z", 0.0))
-                p.pose.orientation.w = float(q.get("w", 1.0))
-                self.landmark_map[tag_id] = p
-            except Exception:
-                # ignore malformed entries but continue parsing the rest
-                continue
+        for landmark in definition.localization_landmarks:
+            pose = PoseStamped()
+            pose.header.frame_id = self.map_frame
+            pose.pose = pose_data_to_pose(landmark.pose_map)
+            self.landmark_map[
+                landmark.reference_tag.tag_id
+            ] = pose
 
         if not self.landmark_map:
-            self.feedback_message = "No valid landmark poses parsed from JSON"
+            self.feedback_message = "No localization landmarks found"
             return
-        # success
-        self.feedback_message = f"Loaded {len(self.landmark_map)} landmarks from JSON"
+        self.feedback_message = (
+            f"Loaded {len(self.landmark_map)} localization landmarks"
+        )
 
-    # ---- equality helper for published pose (2D) ----"}]}
+    # ---- equality helper for published pose (2D) ----
     def poses_equal(self, p1, p2, tol=1e-3):
         dx = abs(p1.position.x - p2.position.x)
         dy = abs(p1.position.y - p2.position.y)

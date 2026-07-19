@@ -1,111 +1,159 @@
-"""Tests for inspection data models."""
+"""Tests for the strict inspection and map models."""
 
 import pytest
 
 from fault_detector_spot.inspection.models import (
+    ImagePoint,
     InspectionObject,
+    InspectionRoutine,
     MapDefinition,
+    ObjectApproach,
     PoseData,
-    WaypointDefinition,
-    WaypointReference,
+    ProbePoint,
+    ReferenceTag,
+    ReferenceView,
+    Waypoint,
 )
 
 
-def test_legacy_map_loads_without_objects():
-    """Legacy maps default to map-relative waypoints."""
-    data = {
-        "waypoints": [
-            {
-                "name": "start",
-                "pose": {
-                    "position": {
-                        "x": 1.0,
-                        "y": 2.0,
-                        "z": 0.0,
-                    },
-                    "orientation": {
-                        "x": 0.0,
-                        "y": 0.0,
-                        "z": 0.0,
-                        "w": 1.0,
-                    },
-                },
-            }
-        ],
-        "landmarks": [],
-    }
-
-    map_definition = MapDefinition.from_dict(data)
-
-    assert map_definition.objects == []
-    assert (
-        map_definition.waypoints[0].reference_type
-        == WaypointReference.MAP
+def make_probe(probe_point_id="point_a") -> ProbePoint:
+    """Create a valid probe point."""
+    return ProbePoint(
+        probe_point_id=probe_point_id,
+        display_name=probe_point_id,
+        safe_approach_pose_object=PoseData.identity(),
+        target_surface_distance_m=0.01,
+        position_tolerance_m=0.005,
+        orientation_tolerance_rad=0.05,
+        measurement_duration_sec=1.0,
+        reference_pixel=ImagePoint(u=100, v=200),
     )
 
 
-def test_object_relative_waypoint_round_trip():
-    """Object-relative waypoints retain their reference."""
-    waypoint = WaypointDefinition(
-        name="motor_front",
-        pose=PoseData(),
-        reference_type=WaypointReference.OBJECT,
+def make_routine(
+    routine_id="magnetic_scan",
+) -> InspectionRoutine:
+    """Create a valid inspection routine."""
+    return InspectionRoutine(
+        routine_id=routine_id,
+        display_name=routine_id,
+        sensor_id="bmm150",
+        probe_frame="sensor_tip",
+        reference_view=ReferenceView(
+            controlled_frame_pose_object=PoseData.identity(),
+            controlled_frame="hand_color_image_sensor",
+            reference_dataset_path="reference/magnetic_scan",
+        ),
+        probe_points=[make_probe()],
+    )
+
+
+def make_object() -> InspectionObject:
+    """Create an object with two independent routines."""
+    return InspectionObject(
         object_id="motor_a",
+        display_name="Motor A",
+        reference_tag=ReferenceTag(
+            tag_id=23,
+            tag_family="36h11",
+        ),
+        routines=[
+            make_routine("magnetic_scan"),
+            make_routine("temperature_scan"),
+        ],
     )
 
-    serialized = waypoint.to_dict()
-    restored = WaypointDefinition.from_dict(serialized)
 
-    assert restored == waypoint
+def test_inspection_object_round_trip_preserves_routine_order():
+    """Serialized routines and probe order remain deterministic."""
+    original = make_object()
+    restored = InspectionObject.from_dict(original.to_dict())
 
+    restored.validate()
 
-def test_object_waypoint_requires_object_id():
-    """Object-relative waypoints require an object ID."""
-    waypoint = WaypointDefinition(
-        name="invalid",
-        pose=PoseData(),
-        reference_type=WaypointReference.OBJECT,
+    assert restored == original
+    assert [
+        routine.routine_id for routine in restored.routines
+    ] == ["magnetic_scan", "temperature_scan"]
+    assert (
+        restored.get_routine("temperature_scan").sensor_id
+        == "bmm150"
     )
 
-    with pytest.raises(ValueError):
-        waypoint.validate()
+
+def test_duplicate_routine_id_is_rejected():
+    """Routine IDs are unique within an object."""
+    inspection_object = make_object()
+    inspection_object.routines[1].routine_id = "magnetic_scan"
+
+    with pytest.raises(ValueError, match="Duplicate routine ID"):
+        inspection_object.validate()
 
 
-def test_map_validates_object_references():
-    """Map validation accepts valid object relationships."""
-    data = {
-        "landmarks": [
-            {
-                "name": "Tag_23",
-                "tag_id": 23,
-                "pose": {},
-            }
+def test_duplicate_probe_point_id_is_rejected():
+    """Probe IDs are unique within one routine."""
+    routine = make_routine()
+    routine.probe_points.append(make_probe())
+
+    with pytest.raises(
+        ValueError,
+        match="Duplicate probe point ID",
+    ):
+        routine.validate()
+
+
+def test_non_normalized_quaternion_is_rejected():
+    """Stored transforms require normalized quaternions."""
+    routine = make_routine()
+    routine.reference_view.controlled_frame_pose_object = (
+        PoseData.identity()
+    )
+    pose = routine.reference_view.controlled_frame_pose_object
+    pose.orientation.w = 2.0
+
+    with pytest.raises(
+        ValueError,
+        match="Quaternion must be normalized",
+    ):
+        routine.validate()
+
+
+def test_old_object_format_is_rejected():
+    """Obsolete object files do not receive implicit migration."""
+    with pytest.raises(KeyError):
+        InspectionObject.from_dict({
+            "id": "motor_a",
+            "tag_id": 23,
+        })
+
+
+def test_map_validates_internal_and_external_references():
+    """Object approaches reference existing map and object IDs."""
+    definition = MapDefinition(
+        map_id="laboratory",
+        display_name="Laboratory",
+        waypoints=[
+            Waypoint(
+                waypoint_id="motor_front",
+                display_name="Motor front",
+                pose_map=PoseData.identity(),
+            )
         ],
-        "waypoints": [
-            {
-                "name": "motor_front",
-                "reference_type": "object",
-                "object_id": "motor_a",
-                "pose": {},
-            }
+        object_approaches=[
+            ObjectApproach(
+                approach_id="motor_a_front",
+                display_name="Motor A front",
+                object_id="motor_a",
+                waypoint_id="motor_front",
+            )
         ],
-        "objects": [
-            {
-                "id": "motor_a",
-                "display_name": "Motor A",
-                "tag_id": 23,
-                "landmark_name": "Tag_23",
-                "approach_waypoints": [
-                    "motor_front"
-                ],
-            }
-        ],
-    }
+    )
 
-    map_definition = MapDefinition.from_dict(data)
-    map_definition.validate()
+    definition.validate()
+    definition.validate_object_references({"motor_a"})
 
-    inspection_object = map_definition.objects[0]
-
-    assert isinstance(inspection_object, InspectionObject)
-    assert inspection_object.tag_id == 23
+    with pytest.raises(
+        ValueError,
+        match="Unknown inspection object",
+    ):
+        definition.validate_object_references(set())

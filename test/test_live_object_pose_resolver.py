@@ -9,26 +9,22 @@ from fault_detector_spot.inspection.live_object_pose_resolver import (
     LiveObjectPoseResolver,
 )
 from fault_detector_spot.inspection.models import (
-    ObjectDefinition,
-    PoseData,
-    QuaternionData,
-    Vector3Data,
+    InspectionObject,
+    ReferenceTag,
 )
-from fault_detector_spot.inspection.object_pose_resolver import (
+from fault_detector_spot.inspection.resolved_object_pose import (
     ObjectPoseState,
 )
 
 
-def make_object(offset_x: float = 0.0) -> ObjectDefinition:
-    """Create a valid portable object."""
-    return ObjectDefinition(
+def make_object() -> InspectionObject:
+    """Create a valid map-independent object."""
+    return InspectionObject(
         object_id="panel",
         display_name="Panel",
-        tag_id=7,
-        tag_family="36h11",
-        marker_to_object=PoseData(
-            position=Vector3Data(x=offset_x),
-            orientation=QuaternionData(w=1.0),
+        reference_tag=ReferenceTag(
+            tag_id=7,
+            tag_family="36h11",
         ),
     )
 
@@ -49,10 +45,9 @@ def make_marker(
     return pose
 
 
-def test_identity_marker_to_object_transform():
-    """Identity calibration preserves the marker pose."""
-    resolver = LiveObjectPoseResolver()
-    result = resolver.resolve(
+def test_reference_tag_pose_is_the_object_pose():
+    """The rigid reference tag directly defines the object frame."""
+    result = LiveObjectPoseResolver().resolve(
         make_object(),
         make_marker(),
         Time(seconds=10.2),
@@ -63,34 +58,15 @@ def test_identity_marker_to_object_transform():
     assert result.state == ObjectPoseState.LIVE
     assert result.is_probe_usable
     assert result.frame_id == "odom"
-    assert result.observation_source == "base"
     assert math.isclose(
         result.selected_pose.pose.position.x,
         1.0,
     )
 
 
-def test_marker_to_object_transform_is_applied():
-    """Object calibration is composed after the marker pose."""
-    resolver = LiveObjectPoseResolver()
-    result = resolver.resolve(
-        make_object(offset_x=0.25),
-        make_marker(x=1.0),
-        Time(seconds=10.2),
-        observed_tag_id=7,
-    )
-
-    assert result.state == ObjectPoseState.LIVE
-    assert math.isclose(
-        result.selected_pose.pose.position.x,
-        1.25,
-    )
-
-
 def test_missing_marker_is_unavailable():
     """No base observation produces no probe reference."""
-    resolver = LiveObjectPoseResolver()
-    result = resolver.resolve(
+    result = LiveObjectPoseResolver().resolve(
         make_object(),
         None,
         Time(seconds=10.2),
@@ -102,8 +78,9 @@ def test_missing_marker_is_unavailable():
 
 def test_stale_marker_is_unavailable():
     """A cached but old marker is rejected for probing."""
-    resolver = LiveObjectPoseResolver(maximum_age_sec=0.25)
-    result = resolver.resolve(
+    result = LiveObjectPoseResolver(
+        maximum_age_sec=0.25
+    ).resolve(
         make_object(),
         make_marker(stamp_sec=9, stamp_nanosec=0),
         Time(seconds=10.0),
@@ -115,9 +92,8 @@ def test_stale_marker_is_unavailable():
 
 
 def test_wrong_tag_is_invalid():
-    """A different tag ID cannot define the object frame."""
-    resolver = LiveObjectPoseResolver()
-    result = resolver.resolve(
+    """A different tag cannot define the object frame."""
+    result = LiveObjectPoseResolver().resolve(
         make_object(),
         make_marker(),
         Time(seconds=10.2),
@@ -128,9 +104,8 @@ def test_wrong_tag_is_invalid():
 
 
 def test_hand_observation_is_invalid():
-    """Hand-camera tags are never probe-motion references."""
-    resolver = LiveObjectPoseResolver()
-    result = resolver.resolve(
+    """Hand-camera tags are not probe-motion references."""
+    result = LiveObjectPoseResolver().resolve(
         make_object(),
         make_marker(),
         Time(seconds=10.2),
@@ -143,9 +118,8 @@ def test_hand_observation_is_invalid():
 
 
 def test_wrong_execution_frame_is_invalid():
-    """The local pose must already be transformed into odom."""
-    resolver = LiveObjectPoseResolver()
-    result = resolver.resolve(
+    """The pose must already be transformed into odom."""
+    result = LiveObjectPoseResolver().resolve(
         make_object(),
         make_marker(frame_id="body"),
         Time(seconds=10.2),
@@ -157,10 +131,9 @@ def test_wrong_execution_frame_is_invalid():
 
 def test_zero_marker_quaternion_is_invalid():
     """Invalid marker orientation cannot produce arm geometry."""
-    resolver = LiveObjectPoseResolver()
     marker = make_marker()
     marker.pose.orientation.w = 0.0
-    result = resolver.resolve(
+    result = LiveObjectPoseResolver().resolve(
         make_object(),
         marker,
         Time(seconds=10.2),
@@ -172,10 +145,9 @@ def test_zero_marker_quaternion_is_invalid():
 
 def test_non_finite_marker_position_is_invalid():
     """NaN perception data cannot enter probe geometry."""
-    resolver = LiveObjectPoseResolver()
     marker = make_marker()
     marker.pose.position.x = math.nan
-    result = resolver.resolve(
+    result = LiveObjectPoseResolver().resolve(
         make_object(),
         marker,
         Time(seconds=10.2),

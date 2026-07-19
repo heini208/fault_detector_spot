@@ -1,14 +1,14 @@
-"""Repository for map metadata and inspection objects."""
+"""Repository for strict map-specific navigation metadata."""
 
 import json
 from pathlib import Path
 from typing import List, Optional, Union
 
 from fault_detector_spot.inspection.models import (
-    InspectionObject,
-    LandmarkDefinition,
+    LocalizationLandmark,
     MapDefinition,
-    WaypointDefinition,
+    ObjectApproach,
+    Waypoint,
 )
 from fault_detector_spot.inspection.repository_utils import (
     atomic_write_text,
@@ -17,28 +17,27 @@ from fault_detector_spot.inspection.repository_utils import (
 
 
 class MapRepository:
-    """Load and save extended map metadata."""
+    """Load and save map navigation metadata."""
 
     def __init__(self, maps_dir: Union[str, Path]):
         self.maps_dir = Path(maps_dir).expanduser()
 
-    def get_map_path(self, map_name: str) -> Path:
+    def get_map_path(self, map_id: str) -> Path:
         """Return the JSON path for a map."""
-        validate_storage_name(map_name, "map name")
-        return self.maps_dir / f"{map_name}.json"
+        validate_storage_name(map_id, "map ID")
+        return self.maps_dir / f"{map_id}.json"
 
-    def exists(self, map_name: str) -> bool:
+    def exists(self, map_id: str) -> bool:
         """Return whether map metadata exists."""
-        return self.get_map_path(map_name).is_file()
+        return self.get_map_path(map_id).is_file()
 
     def load(
         self,
-        map_name: str,
+        map_id: str,
         validate: bool = True,
     ) -> MapDefinition:
-        """Load map metadata."""
-        path = self.get_map_path(map_name)
-
+        """Load strict map metadata."""
+        path = self.get_map_path(map_id)
         if not path.is_file():
             raise FileNotFoundError(
                 f"Map metadata does not exist: {path}"
@@ -52,62 +51,64 @@ class MapRepository:
                 f"Invalid map JSON in {path}: {exception}"
             ) from exception
 
-        if not isinstance(data, dict):
+        definition = MapDefinition.from_dict(data)
+        if definition.map_id != map_id:
             raise ValueError(
-                f"Map metadata root must be an object: {path}"
+                f"Map ID mismatch in {path}: {definition.map_id}"
             )
-
-        map_definition = MapDefinition.from_dict(data)
-
         if validate:
-            map_definition.validate()
-
-        return map_definition
+            definition.validate()
+        return definition
 
     def save(
         self,
-        map_name: str,
-        map_definition: MapDefinition,
+        map_id: str,
+        definition: MapDefinition,
         validate: bool = True,
     ) -> Path:
         """Validate and atomically save map metadata."""
-        path = self.get_map_path(map_name)
-
+        validate_storage_name(map_id, "map ID")
+        if definition.map_id != map_id:
+            raise ValueError(
+                "Map ID does not match repository path: "
+                f"{definition.map_id} != {map_id}"
+            )
         if validate:
-            map_definition.validate()
+            definition.validate()
 
+        path = self.get_map_path(map_id)
         content = json.dumps(
-            map_definition.to_dict(),
+            definition.to_dict(),
             indent=2,
             ensure_ascii=False,
         )
-        content += "\n"
-
-        atomic_write_text(path, content)
+        atomic_write_text(path, content + "\n")
         return path
 
     def create_empty(
         self,
-        map_name: str,
+        map_id: str,
+        display_name: Optional[str] = None,
         overwrite: bool = False,
     ) -> MapDefinition:
-        """Create empty extended map metadata."""
-        path = self.get_map_path(map_name)
-
+        """Create empty map metadata."""
+        path = self.get_map_path(map_id)
         if path.exists() and not overwrite:
             raise FileExistsError(
                 f"Map metadata already exists: {path}"
             )
 
-        map_definition = MapDefinition()
-        self.save(map_name, map_definition)
-        return map_definition
+        definition = MapDefinition(
+            map_id=map_id,
+            display_name=display_name or map_id,
+        )
+        self.save(map_id, definition)
+        return definition
 
-    def list_map_names(self) -> List[str]:
-        """List map names that have JSON metadata."""
+    def list_map_ids(self) -> List[str]:
+        """List map IDs that have JSON metadata."""
         if not self.maps_dir.is_dir():
             return []
-
         return sorted(
             path.stem
             for path in self.maps_dir.glob("*.json")
@@ -116,51 +117,24 @@ class MapRepository:
 
     def get_waypoint(
         self,
-        map_name: str,
-        waypoint_name: str,
-    ) -> Optional[WaypointDefinition]:
-        """Find a waypoint by name."""
-        map_definition = self.load(map_name)
-
-        return next(
-            (
-                waypoint
-                for waypoint in map_definition.waypoints
-                if waypoint.name == waypoint_name
-            ),
-            None,
-        )
+        map_id: str,
+        waypoint_id: str,
+    ) -> Optional[Waypoint]:
+        """Find a waypoint by ID."""
+        return self.load(map_id).get_waypoint(waypoint_id)
 
     def get_landmark(
         self,
-        map_name: str,
-        landmark_name: str,
-    ) -> Optional[LandmarkDefinition]:
-        """Find a landmark by name."""
-        map_definition = self.load(map_name)
+        map_id: str,
+        landmark_id: str,
+    ) -> Optional[LocalizationLandmark]:
+        """Find a localization landmark by ID."""
+        return self.load(map_id).get_landmark(landmark_id)
 
-        return next(
-            (
-                landmark
-                for landmark in map_definition.landmarks
-                if landmark.name == landmark_name
-            ),
-            None,
-        )
-
-    def get_object(
+    def get_object_approach(
         self,
-        map_name: str,
-        object_id: str,
-    ) -> Optional[InspectionObject]:
-        """Find an inspection object by ID."""
-        map_definition = self.load(map_name)
-
-        return next(
-            (
-                inspection_object
-                for inspection_object in map_definition.objects
-                if inspection_object.object_id == object_id
-            ),
-            None,
-        )
+        map_id: str,
+        approach_id: str,
+    ) -> Optional[ObjectApproach]:
+        """Find an object approach by ID."""
+        return self.load(map_id).get_object_approach(approach_id)

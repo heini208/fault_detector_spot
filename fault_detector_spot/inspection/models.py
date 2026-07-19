@@ -1,35 +1,57 @@
-"""Data models for inspection objects, maps, and probe definitions."""
+"""Inspection objects and map-specific navigation data."""
 
 import math
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 
-class WaypointReference(str, Enum):
-    """Supported waypoint reference systems."""
+def _require_dict(data: Any, field_name: str) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ValueError(f"{field_name} must be an object")
+    return data
 
-    MAP = "map"
-    OBJECT = "object"
+
+def _require_list(data: Any, field_name: str) -> List[Any]:
+    if not isinstance(data, list):
+        raise ValueError(f"{field_name} must be a list")
+    return data
+
+
+def _require_text(value: str, field_name: str) -> None:
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be empty")
 
 
 @dataclass
 class Vector3Data:
     """Serializable three-dimensional vector."""
 
-    x: float = 0.0
-    y: float = 0.0
-    z: float = 0.0
+    x: float
+    y: float
+    z: float
 
     @classmethod
-    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "Vector3Data":
+    def from_dict(cls, data: Dict[str, Any]) -> "Vector3Data":
         """Create a vector from serialized data."""
-        data = data or {}
+        data = _require_dict(data, "vector")
         return cls(
-            x=float(data.get("x", 0.0)),
-            y=float(data.get("y", 0.0)),
-            z=float(data.get("z", 0.0)),
+            x=float(data["x"]),
+            y=float(data["y"]),
+            z=float(data["z"]),
         )
+
+    @classmethod
+    def zero(cls) -> "Vector3Data":
+        """Create a zero vector."""
+        return cls(x=0.0, y=0.0, z=0.0)
+
+    def validate(self) -> None:
+        """Validate vector components."""
+        if not all(
+            math.isfinite(value)
+            for value in (self.x, self.y, self.z)
+        ):
+            raise ValueError("Vector contains a non-finite value")
 
     def to_dict(self) -> Dict[str, float]:
         """Serialize the vector."""
@@ -42,26 +64,43 @@ class Vector3Data:
 
 @dataclass
 class QuaternionData:
-    """Serializable quaternion using ROS component ordering."""
+    """Serializable normalized quaternion."""
 
-    x: float = 0.0
-    y: float = 0.0
-    z: float = 0.0
-    w: float = 1.0
+    x: float
+    y: float
+    z: float
+    w: float
 
     @classmethod
     def from_dict(
         cls,
-        data: Optional[Dict[str, Any]],
+        data: Dict[str, Any],
     ) -> "QuaternionData":
         """Create a quaternion from serialized data."""
-        data = data or {}
+        data = _require_dict(data, "quaternion")
         return cls(
-            x=float(data.get("x", 0.0)),
-            y=float(data.get("y", 0.0)),
-            z=float(data.get("z", 0.0)),
-            w=float(data.get("w", 1.0)),
+            x=float(data["x"]),
+            y=float(data["y"]),
+            z=float(data["z"]),
+            w=float(data["w"]),
         )
+
+    @classmethod
+    def identity(cls) -> "QuaternionData":
+        """Create an identity quaternion."""
+        return cls(x=0.0, y=0.0, z=0.0, w=1.0)
+
+    def validate(self) -> None:
+        """Validate quaternion components and normalization."""
+        values = (self.x, self.y, self.z, self.w)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError(
+                "Quaternion contains a non-finite value"
+            )
+
+        norm = math.sqrt(sum(value ** 2 for value in values))
+        if not math.isclose(norm, 1.0, abs_tol=1e-3):
+            raise ValueError("Quaternion must be normalized")
 
     def to_dict(self) -> Dict[str, float]:
         """Serialize the quaternion."""
@@ -77,19 +116,32 @@ class QuaternionData:
 class PoseData:
     """Serializable position and orientation."""
 
-    position: Vector3Data = field(default_factory=Vector3Data)
-    orientation: QuaternionData = field(default_factory=QuaternionData)
+    position: Vector3Data
+    orientation: QuaternionData
 
     @classmethod
-    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "PoseData":
+    def from_dict(cls, data: Dict[str, Any]) -> "PoseData":
         """Create a pose from serialized data."""
-        data = data or {}
+        data = _require_dict(data, "pose")
         return cls(
-            position=Vector3Data.from_dict(data.get("position")),
+            position=Vector3Data.from_dict(data["position"]),
             orientation=QuaternionData.from_dict(
-                data.get("orientation")
+                data["orientation"]
             ),
         )
+
+    @classmethod
+    def identity(cls) -> "PoseData":
+        """Create an identity pose."""
+        return cls(
+            position=Vector3Data.zero(),
+            orientation=QuaternionData.identity(),
+        )
+
+    def validate(self) -> None:
+        """Validate position and orientation."""
+        self.position.validate()
+        self.orientation.validate()
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the pose."""
@@ -101,607 +153,667 @@ class PoseData:
 
 @dataclass
 class ImagePoint:
-    """Pixel coordinate in a reference image."""
+    """Pixel coordinate used only for reference-image display."""
 
     u: int
     v: int
 
     @classmethod
-    def from_list(cls, data: List[int]) -> "ImagePoint":
-        """Create an image point from a two-element list."""
-        if len(data) != 2:
-            raise ValueError("Image point must contain u and v")
-        return cls(u=int(data[0]), v=int(data[1]))
+    def from_dict(cls, data: Dict[str, Any]) -> "ImagePoint":
+        """Create an image point from serialized data."""
+        data = _require_dict(data, "reference_pixel")
+        return cls(u=int(data["u"]), v=int(data["v"]))
 
-    def to_list(self) -> List[int]:
+    def validate(self) -> None:
+        """Validate non-negative pixel coordinates."""
+        if self.u < 0 or self.v < 0:
+            raise ValueError(
+                "Reference pixel coordinates must not be negative"
+            )
+
+    def to_dict(self) -> Dict[str, int]:
         """Serialize the image point."""
-        return [self.u, self.v]
+        return {"u": self.u, "v": self.v}
 
 
 @dataclass
-class WaypointDefinition:
-    """Stored navigation waypoint."""
+class ReferenceTag:
+    """AprilTag that rigidly defines an inspection object frame."""
 
-    name: str
-    pose: PoseData
-    reference_type: WaypointReference = WaypointReference.MAP
-    object_id: Optional[str] = None
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "WaypointDefinition":
-        """Create a waypoint from serialized data."""
-        return cls(
-            name=str(data["name"]),
-            pose=PoseData.from_dict(data.get("pose")),
-            reference_type=WaypointReference(
-                data.get("reference_type", WaypointReference.MAP.value)
-            ),
-            object_id=data.get("object_id"),
-        )
-
-    def validate(self) -> None:
-        """Validate waypoint references."""
-        if not self.name:
-            raise ValueError("Waypoint name must not be empty")
-
-        if (
-            self.reference_type == WaypointReference.OBJECT
-            and not self.object_id
-        ):
-            raise ValueError(
-                "Object-relative waypoint requires object_id"
-            )
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize the waypoint."""
-        result = {
-            "name": self.name,
-            "reference_type": self.reference_type.value,
-            "pose": self.pose.to_dict(),
-        }
-
-        if self.object_id is not None:
-            result["object_id"] = self.object_id
-
-        return result
-
-
-@dataclass
-class LandmarkDefinition:
-    """Stored marker or localization landmark."""
-
-    name: str
-    pose: PoseData
-    tag_id: Optional[int] = None
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LandmarkDefinition":
-        """Create a landmark from serialized data."""
-        tag_id = data.get("tag_id")
-        return cls(
-            name=str(data["name"]),
-            pose=PoseData.from_dict(data.get("pose")),
-            tag_id=int(tag_id) if tag_id is not None else None,
-        )
-
-    def validate(self) -> None:
-        """Validate the landmark."""
-        if not self.name:
-            raise ValueError("Landmark name must not be empty")
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize the landmark."""
-        result = {
-            "name": self.name,
-            "pose": self.pose.to_dict(),
-        }
-
-        if self.tag_id is not None:
-            result["tag_id"] = self.tag_id
-
-        return result
-
-
-@dataclass
-class ObjectDefinition:
-    """Portable inspection object independent of any map."""
-
-    object_id: str
-    display_name: str
     tag_id: int
-    marker_to_object: PoseData = field(default_factory=PoseData)
-    tag_family: str = "36h11"
-    calibration_revision: int = 1
+    tag_family: str
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ObjectDefinition":
-        """Create an object definition from serialized data."""
-        marker_to_object = data.get("marker_to_object")
-        if (
-            marker_to_object is not None
-            and not isinstance(marker_to_object, dict)
-        ):
-            raise ValueError(
-                "marker_to_object must be an object"
-            )
-
-        object_id = str(data["id"])
+    def from_dict(cls, data: Dict[str, Any]) -> "ReferenceTag":
+        """Create a reference tag from serialized data."""
+        data = _require_dict(data, "reference_tag")
         return cls(
-            object_id=object_id,
-            display_name=str(data.get("display_name", object_id)),
             tag_id=int(data["tag_id"]),
-            marker_to_object=PoseData.from_dict(
-                marker_to_object
-            ),
-            tag_family=str(data.get("tag_family", "36h11")),
-            calibration_revision=int(
-                data.get("calibration_revision", 1)
-            ),
+            tag_family=str(data["tag_family"]),
         )
 
     def validate(self) -> None:
-        """Validate identity, marker information, and transform."""
-        if not self.object_id:
-            raise ValueError("Object ID must not be empty")
-
-        if not self.display_name:
-            raise ValueError("Object display name must not be empty")
-
-        if not self.tag_family:
-            raise ValueError("Tag family must not be empty")
-
+        """Validate tag identity."""
         if self.tag_id < 0:
             raise ValueError("Tag ID must not be negative")
-
-        if self.calibration_revision < 1:
-            raise ValueError(
-                "Object calibration revision must be positive"
-            )
-
-        pose = self.marker_to_object
-        values = (
-            pose.position.x,
-            pose.position.y,
-            pose.position.z,
-            pose.orientation.x,
-            pose.orientation.y,
-            pose.orientation.z,
-            pose.orientation.w,
-        )
-
-        if not all(math.isfinite(value) for value in values):
-            raise ValueError(
-                "marker_to_object contains a non-finite value"
-            )
-
-        quaternion_norm = math.sqrt(
-            pose.orientation.x ** 2
-            + pose.orientation.y ** 2
-            + pose.orientation.z ** 2
-            + pose.orientation.w ** 2
-        )
-
-        if quaternion_norm < 1e-12:
-            raise ValueError(
-                "marker_to_object quaternion norm is zero"
-            )
+        _require_text(self.tag_family, "Tag family")
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize the object definition."""
+        """Serialize the reference tag."""
         return {
-            "id": self.object_id,
-            "display_name": self.display_name,
+            "tag_id": self.tag_id,
             "tag_family": self.tag_family,
-            "tag_id": self.tag_id,
-            "calibration_revision": self.calibration_revision,
-            "marker_to_object": self.marker_to_object.to_dict(),
         }
 
 
 @dataclass
-class InspectionObject:
-    """Static inspection object linked to a marker landmark."""
+class ReferenceView:
+    """Saved routine overview pose and synchronized dataset."""
 
-    object_id: str
-    display_name: str
-    tag_id: int
-    landmark_name: str
-    marker_to_object: PoseData = field(default_factory=PoseData)
-    approach_waypoints: List[str] = field(default_factory=list)
-    inspections: List[str] = field(default_factory=list)
+    controlled_frame_pose_object: PoseData
+    controlled_frame: str
+    reference_dataset_path: Optional[str] = None
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "InspectionObject":
-        """Create an inspection object from serialized data."""
-        object_id = str(data["id"])
+    def from_dict(cls, data: Dict[str, Any]) -> "ReferenceView":
+        """Create a reference view from serialized data."""
+        data = _require_dict(data, "reference_view")
+        dataset_path = data.get("reference_dataset_path")
         return cls(
-            object_id=object_id,
-            display_name=str(data.get("display_name", object_id)),
-            tag_id=int(data["tag_id"]),
-            landmark_name=str(data["landmark_name"]),
-            marker_to_object=PoseData.from_dict(
-                data.get("marker_to_object")
+            controlled_frame_pose_object=PoseData.from_dict(
+                data["controlled_frame_pose_object"]
             ),
-            approach_waypoints=list(
-                data.get("approach_waypoints", [])
-            ),
-            inspections=list(data.get("inspections", [])),
-        )
-
-    def validate(self) -> None:
-        """Validate object identifiers and references."""
-        if not self.object_id:
-            raise ValueError("Object ID must not be empty")
-
-        if not self.landmark_name:
-            raise ValueError("Object requires a landmark name")
-
-        if self.tag_id < 0:
-            raise ValueError("Tag ID must not be negative")
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize the inspection object."""
-        return {
-            "id": self.object_id,
-            "display_name": self.display_name,
-            "tag_id": self.tag_id,
-            "landmark_name": self.landmark_name,
-            "marker_to_object": self.marker_to_object.to_dict(),
-            "approach_waypoints": list(self.approach_waypoints),
-            "inspections": list(self.inspections),
-        }
-
-
-@dataclass
-class ProbePoint:
-    """Probe point stored relative to an inspection object."""
-
-    probe_point_id: str
-    surface_point_object: Vector3Data
-    surface_normal_object: Vector3Data
-    standoff_m: float
-    approach_distance_m: float
-    position_tolerance_m: float
-    orientation_tolerance_rad: float
-    measurement_duration_sec: float
-    approach_waypoint: Optional[str] = None
-    sensor_path: Optional[str] = None
-    reference_pixel: Optional[ImagePoint] = None
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ProbePoint":
-        """Create a probe point from serialized data."""
-        pixel_data = data.get("reference_pixel")
-        return cls(
-            probe_point_id=str(data["id"]),
-            surface_point_object=Vector3Data.from_dict(
-                data.get("surface_point_object")
-            ),
-            surface_normal_object=Vector3Data.from_dict(
-                data.get("surface_normal_object")
-            ),
-            standoff_m=float(data.get("standoff_m", 0.01)),
-            approach_distance_m=float(
-                data.get("approach_distance_m", 0.10)
-            ),
-            position_tolerance_m=float(
-                data.get("position_tolerance_m", 0.01)
-            ),
-            orientation_tolerance_rad=float(
-                data.get("orientation_tolerance_rad", 0.087)
-            ),
-            measurement_duration_sec=float(
-                data.get("measurement_duration_sec", 1.0)
-            ),
-            approach_waypoint=data.get("approach_waypoint"),
-            sensor_path=data.get("sensor_path"),
-            reference_pixel=(
-                ImagePoint.from_list(pixel_data)
-                if pixel_data is not None
+            controlled_frame=str(data["controlled_frame"]),
+            reference_dataset_path=(
+                str(dataset_path)
+                if dataset_path is not None
                 else None
             ),
         )
 
     def validate(self) -> None:
-        """Validate probe distances and tolerances."""
-        if not self.probe_point_id:
-            raise ValueError("Probe point ID must not be empty")
-
-        if self.standoff_m < 0.0:
-            raise ValueError("Standoff must not be negative")
-
-        if self.approach_distance_m <= self.standoff_m:
+        """Validate overview pose and frame."""
+        self.controlled_frame_pose_object.validate()
+        _require_text(
+            self.controlled_frame,
+            "Reference view controlled frame",
+        )
+        if (
+            self.reference_dataset_path is not None
+            and not self.reference_dataset_path.strip()
+        ):
             raise ValueError(
-                "Approach distance must exceed standoff"
+                "Reference dataset path must not be empty"
             )
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the reference view."""
+        result = {
+            "controlled_frame_pose_object":
+                self.controlled_frame_pose_object.to_dict(),
+            "controlled_frame": self.controlled_frame,
+        }
+        if self.reference_dataset_path is not None:
+            result["reference_dataset_path"] = (
+                self.reference_dataset_path
+            )
+        return result
+
+
+@dataclass
+class ProbePoint:
+    """One ordered target within an inspection routine."""
+
+    probe_point_id: str
+    display_name: str
+    safe_approach_pose_object: PoseData
+    target_surface_distance_m: float
+    position_tolerance_m: float
+    orientation_tolerance_rad: float
+    measurement_duration_sec: float
+    reference_pixel: Optional[ImagePoint] = None
+    sensor_path: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ProbePoint":
+        """Create a probe point from serialized data."""
+        data = _require_dict(data, "probe_point")
+        pixel = data.get("reference_pixel")
+        sensor_path = data.get("sensor_path")
+        return cls(
+            probe_point_id=str(data["probe_point_id"]),
+            display_name=str(data["display_name"]),
+            safe_approach_pose_object=PoseData.from_dict(
+                data["safe_approach_pose_object"]
+            ),
+            target_surface_distance_m=float(
+                data["target_surface_distance_m"]
+            ),
+            position_tolerance_m=float(
+                data["position_tolerance_m"]
+            ),
+            orientation_tolerance_rad=float(
+                data["orientation_tolerance_rad"]
+            ),
+            measurement_duration_sec=float(
+                data["measurement_duration_sec"]
+            ),
+            reference_pixel=(
+                ImagePoint.from_dict(pixel)
+                if pixel is not None
+                else None
+            ),
+            sensor_path=(
+                str(sensor_path)
+                if sensor_path is not None
+                else None
+            ),
+        )
+
+    def validate(self) -> None:
+        """Validate probe pose, distance, and tolerances."""
+        _require_text(self.probe_point_id, "Probe point ID")
+        _require_text(self.display_name, "Probe point display name")
+        self.safe_approach_pose_object.validate()
+
+        numeric_values = (
+            self.target_surface_distance_m,
+            self.position_tolerance_m,
+            self.orientation_tolerance_rad,
+            self.measurement_duration_sec,
+        )
+        if not all(
+            math.isfinite(value) for value in numeric_values
+        ):
+            raise ValueError(
+                "Probe point contains a non-finite numeric value"
+            )
+        if self.target_surface_distance_m < 0.0:
+            raise ValueError(
+                "Target surface distance must not be negative"
+            )
         if self.position_tolerance_m <= 0.0:
             raise ValueError(
                 "Position tolerance must be positive"
             )
-
         if self.orientation_tolerance_rad <= 0.0:
             raise ValueError(
                 "Orientation tolerance must be positive"
             )
+        if self.measurement_duration_sec <= 0.0:
+            raise ValueError(
+                "Measurement duration must be positive"
+            )
+        if self.reference_pixel is not None:
+            self.reference_pixel.validate()
+        if self.sensor_path is not None:
+            _require_text(self.sensor_path, "Sensor path")
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the probe point."""
         result = {
-            "id": self.probe_point_id,
-            "surface_point_object":
-                self.surface_point_object.to_dict(),
-            "surface_normal_object":
-                self.surface_normal_object.to_dict(),
-            "standoff_m": self.standoff_m,
-            "approach_distance_m": self.approach_distance_m,
+            "probe_point_id": self.probe_point_id,
+            "display_name": self.display_name,
+            "safe_approach_pose_object":
+                self.safe_approach_pose_object.to_dict(),
+            "target_surface_distance_m":
+                self.target_surface_distance_m,
             "position_tolerance_m": self.position_tolerance_m,
             "orientation_tolerance_rad":
                 self.orientation_tolerance_rad,
             "measurement_duration_sec":
                 self.measurement_duration_sec,
         }
-
-        if self.approach_waypoint is not None:
-            result["approach_waypoint"] = self.approach_waypoint
-
-        if self.sensor_path is not None:
-            result["sensor_path"] = self.sensor_path
-
         if self.reference_pixel is not None:
             result["reference_pixel"] = (
-                self.reference_pixel.to_list()
+                self.reference_pixel.to_dict()
             )
-
+        if self.sensor_path is not None:
+            result["sensor_path"] = self.sensor_path
         return result
 
 
 @dataclass
-class InspectionDefinition:
-    """Reusable inspection configuration owned by an object."""
+class InspectionRoutine:
+    """Ordered probe procedure for one sensor and reference view."""
 
-    inspection_id: str
-    object_id: str
+    routine_id: str
+    display_name: str
+    sensor_id: str
+    probe_frame: str
+    reference_view: ReferenceView
     probe_points: List[ProbePoint] = field(default_factory=list)
-    display_name: str = ""
-    reference_image: Optional[str] = None
-    default_approach_waypoint: Optional[str] = None
-    preferred_execution_frame: str = "odom"
-    map_name: Optional[str] = None
-    object_calibration_revision: int = 1
 
     @classmethod
     def from_dict(
         cls,
         data: Dict[str, Any],
-    ) -> "InspectionDefinition":
-        """Create a current or legacy inspection definition."""
-        map_name = data.get("map_name")
+    ) -> "InspectionRoutine":
+        """Create an inspection routine from serialized data."""
+        data = _require_dict(data, "inspection_routine")
+        probe_points = _require_list(
+            data["probe_points"],
+            "probe_points",
+        )
         return cls(
-            inspection_id=str(data["inspection_id"]),
-            object_id=str(data["object_id"]),
+            routine_id=str(data["routine_id"]),
+            display_name=str(data["display_name"]),
+            sensor_id=str(data["sensor_id"]),
+            probe_frame=str(data["probe_frame"]),
+            reference_view=ReferenceView.from_dict(
+                data["reference_view"]
+            ),
             probe_points=[
                 ProbePoint.from_dict(point)
-                for point in data.get("probe_points", [])
+                for point in probe_points
             ],
-            display_name=str(data.get("display_name", "")),
-            reference_image=data.get("reference_image"),
-            default_approach_waypoint=data.get(
-                "default_approach_waypoint"
-            ),
-            preferred_execution_frame=str(
-                data.get("preferred_execution_frame", "odom")
-            ),
-            map_name=(
-                str(map_name)
-                if map_name is not None
-                else None
-            ),
-            object_calibration_revision=int(
-                data.get("object_calibration_revision", 1)
-            ),
         )
 
     def validate(self) -> None:
-        """Validate inspection identity and probe points."""
-        if not self.inspection_id:
-            raise ValueError("Inspection ID must not be empty")
+        """Validate routine identity, frames, and probe points."""
+        _require_text(self.routine_id, "Routine ID")
+        _require_text(self.display_name, "Routine display name")
+        _require_text(self.sensor_id, "Sensor ID")
+        _require_text(self.probe_frame, "Probe frame")
+        self.reference_view.validate()
 
-        if not self.object_id:
-            raise ValueError("Inspection requires an object ID")
-
-        if self.object_calibration_revision < 1:
-            raise ValueError(
-                "Object calibration revision must be positive"
-            )
-
-        if not self.preferred_execution_frame:
-            raise ValueError(
-                "Inspection requires an execution frame"
-            )
-
-        probe_ids = set()
+        probe_ids: Set[str] = set()
         for probe_point in self.probe_points:
             probe_point.validate()
-
             if probe_point.probe_point_id in probe_ids:
                 raise ValueError(
                     "Duplicate probe point ID: "
                     f"{probe_point.probe_point_id}"
                 )
-
             probe_ids.add(probe_point.probe_point_id)
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize the inspection definition."""
-        result = {
-            "inspection_id": self.inspection_id,
-            "object_id": self.object_id,
-            "object_calibration_revision":
-                self.object_calibration_revision,
-            "preferred_execution_frame":
-                self.preferred_execution_frame,
-            "probe_points": [
-                point.to_dict()
+    def get_probe_point(
+        self,
+        probe_point_id: str,
+    ) -> Optional[ProbePoint]:
+        """Find a probe point by ID."""
+        return next(
+            (
+                point
                 for point in self.probe_points
+                if point.probe_point_id == probe_point_id
+            ),
+            None,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the inspection routine."""
+        return {
+            "routine_id": self.routine_id,
+            "display_name": self.display_name,
+            "sensor_id": self.sensor_id,
+            "probe_frame": self.probe_frame,
+            "reference_view": self.reference_view.to_dict(),
+            "probe_points": [
+                point.to_dict() for point in self.probe_points
             ],
         }
 
-        if self.display_name:
-            result["display_name"] = self.display_name
 
-        if self.map_name is not None:
-            result["map_name"] = self.map_name
+@dataclass
+class InspectionObject:
+    """Map-independent object containing all inspection routines."""
 
-        if self.reference_image is not None:
-            result["reference_image"] = self.reference_image
+    object_id: str
+    display_name: str
+    reference_tag: ReferenceTag
+    routines: List[InspectionRoutine] = field(default_factory=list)
 
-        if self.default_approach_waypoint is not None:
-            result["default_approach_waypoint"] = (
-                self.default_approach_waypoint
-            )
+    @classmethod
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+    ) -> "InspectionObject":
+        """Create an inspection object from serialized data."""
+        data = _require_dict(data, "inspection_object")
+        routines = _require_list(data["routines"], "routines")
+        return cls(
+            object_id=str(data["object_id"]),
+            display_name=str(data["display_name"]),
+            reference_tag=ReferenceTag.from_dict(
+                data["reference_tag"]
+            ),
+            routines=[
+                InspectionRoutine.from_dict(routine)
+                for routine in routines
+            ],
+        )
 
-        return result
+    def validate(self) -> None:
+        """Validate object identity, tag, and routines."""
+        _require_text(self.object_id, "Inspection object ID")
+        _require_text(
+            self.display_name,
+            "Inspection object display name",
+        )
+        self.reference_tag.validate()
+
+        routine_ids: Set[str] = set()
+        for routine in self.routines:
+            routine.validate()
+            if routine.routine_id in routine_ids:
+                raise ValueError(
+                    f"Duplicate routine ID: {routine.routine_id}"
+                )
+            routine_ids.add(routine.routine_id)
+
+    def get_routine(
+        self,
+        routine_id: str,
+    ) -> Optional[InspectionRoutine]:
+        """Find an inspection routine by ID."""
+        return next(
+            (
+                routine
+                for routine in self.routines
+                if routine.routine_id == routine_id
+            ),
+            None,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the complete inspection object."""
+        return {
+            "object_id": self.object_id,
+            "display_name": self.display_name,
+            "reference_tag": self.reference_tag.to_dict(),
+            "routines": [
+                routine.to_dict() for routine in self.routines
+            ],
+        }
+
+
+@dataclass
+class Waypoint:
+    """Map-relative navigation waypoint."""
+
+    waypoint_id: str
+    display_name: str
+    pose_map: PoseData
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Waypoint":
+        """Create a waypoint from serialized data."""
+        data = _require_dict(data, "waypoint")
+        return cls(
+            waypoint_id=str(data["waypoint_id"]),
+            display_name=str(data["display_name"]),
+            pose_map=PoseData.from_dict(data["pose_map"]),
+        )
+
+    def validate(self) -> None:
+        """Validate waypoint identity and pose."""
+        _require_text(self.waypoint_id, "Waypoint ID")
+        _require_text(self.display_name, "Waypoint display name")
+        self.pose_map.validate()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the waypoint."""
+        return {
+            "waypoint_id": self.waypoint_id,
+            "display_name": self.display_name,
+            "pose_map": self.pose_map.to_dict(),
+        }
+
+
+@dataclass
+class LocalizationLandmark:
+    """Map-relative AprilTag used only for localization."""
+
+    landmark_id: str
+    display_name: str
+    reference_tag: ReferenceTag
+    pose_map: PoseData
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+    ) -> "LocalizationLandmark":
+        """Create a localization landmark from serialized data."""
+        data = _require_dict(data, "localization_landmark")
+        return cls(
+            landmark_id=str(data["landmark_id"]),
+            display_name=str(data["display_name"]),
+            reference_tag=ReferenceTag.from_dict(
+                data["reference_tag"]
+            ),
+            pose_map=PoseData.from_dict(data["pose_map"]),
+        )
+
+    def validate(self) -> None:
+        """Validate landmark identity, tag, and pose."""
+        _require_text(self.landmark_id, "Landmark ID")
+        _require_text(self.display_name, "Landmark display name")
+        self.reference_tag.validate()
+        self.pose_map.validate()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the localization landmark."""
+        return {
+            "landmark_id": self.landmark_id,
+            "display_name": self.display_name,
+            "reference_tag": self.reference_tag.to_dict(),
+            "pose_map": self.pose_map.to_dict(),
+        }
+
+
+@dataclass
+class ObjectApproach:
+    """Map waypoint associated with an inspection object."""
+
+    approach_id: str
+    display_name: str
+    object_id: str
+    waypoint_id: str
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+    ) -> "ObjectApproach":
+        """Create an object approach from serialized data."""
+        data = _require_dict(data, "object_approach")
+        return cls(
+            approach_id=str(data["approach_id"]),
+            display_name=str(data["display_name"]),
+            object_id=str(data["object_id"]),
+            waypoint_id=str(data["waypoint_id"]),
+        )
+
+    def validate(self) -> None:
+        """Validate approach identity and references."""
+        _require_text(self.approach_id, "Object approach ID")
+        _require_text(
+            self.display_name,
+            "Object approach display name",
+        )
+        _require_text(self.object_id, "Object approach object ID")
+        _require_text(
+            self.waypoint_id,
+            "Object approach waypoint ID",
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the object approach."""
+        return {
+            "approach_id": self.approach_id,
+            "display_name": self.display_name,
+            "object_id": self.object_id,
+            "waypoint_id": self.waypoint_id,
+        }
 
 
 @dataclass
 class MapDefinition:
-    """Extended metadata associated with an RTAB-Map database."""
+    """Map-specific navigation and localization metadata."""
 
-    waypoints: List[WaypointDefinition] = field(default_factory=list)
-    landmarks: List[LandmarkDefinition] = field(default_factory=list)
-    objects: List[InspectionObject] = field(default_factory=list)
-    extra_fields: Dict[str, Any] = field(default_factory=dict)
+    map_id: str
+    display_name: str
+    waypoints: List[Waypoint] = field(default_factory=list)
+    localization_landmarks: List[
+        LocalizationLandmark
+    ] = field(default_factory=list)
+    object_approaches: List[ObjectApproach] = field(
+        default_factory=list
+    )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MapDefinition":
-        """Create a map definition from current or legacy data."""
-        known_fields = {
-            "waypoints",
-            "landmarks",
-            "objects",
-        }
-
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+    ) -> "MapDefinition":
+        """Create map metadata from serialized data."""
+        data = _require_dict(data, "map_definition")
+        waypoints = _require_list(data["waypoints"], "waypoints")
+        landmarks = _require_list(
+            data["localization_landmarks"],
+            "localization_landmarks",
+        )
+        approaches = _require_list(
+            data["object_approaches"],
+            "object_approaches",
+        )
         return cls(
+            map_id=str(data["map_id"]),
+            display_name=str(data["display_name"]),
             waypoints=[
-                WaypointDefinition.from_dict(waypoint)
-                for waypoint in data.get("waypoints", [])
+                Waypoint.from_dict(waypoint)
+                for waypoint in waypoints
             ],
-            landmarks=[
-                LandmarkDefinition.from_dict(landmark)
-                for landmark in data.get("landmarks", [])
+            localization_landmarks=[
+                LocalizationLandmark.from_dict(landmark)
+                for landmark in landmarks
             ],
-            objects=[
-                InspectionObject.from_dict(object_data)
-                for object_data in data.get("objects", [])
+            object_approaches=[
+                ObjectApproach.from_dict(approach)
+                for approach in approaches
             ],
-            extra_fields={
-                key: value
-                for key, value in data.items()
-                if key not in known_fields
-            },
         )
 
     def validate(self) -> None:
-        """Validate names and references across the map."""
-        waypoint_names = set()
-        landmark_names = set()
-        landmarks_by_name = {}
-        object_ids = set()
+        """Validate map identities and internal references."""
+        _require_text(self.map_id, "Map ID")
+        _require_text(self.display_name, "Map display name")
 
+        waypoint_ids: Set[str] = set()
         for waypoint in self.waypoints:
             waypoint.validate()
-
-            if waypoint.name in waypoint_names:
+            if waypoint.waypoint_id in waypoint_ids:
                 raise ValueError(
-                    f"Duplicate waypoint name: {waypoint.name}"
+                    f"Duplicate waypoint ID: {waypoint.waypoint_id}"
                 )
+            waypoint_ids.add(waypoint.waypoint_id)
 
-            waypoint_names.add(waypoint.name)
-
-        for landmark in self.landmarks:
+        landmark_ids: Set[str] = set()
+        landmark_tags = set()
+        for landmark in self.localization_landmarks:
             landmark.validate()
-
-            if landmark.name in landmark_names:
+            if landmark.landmark_id in landmark_ids:
                 raise ValueError(
-                    f"Duplicate landmark name: {landmark.name}"
+                    "Duplicate landmark ID: "
+                    f"{landmark.landmark_id}"
+                )
+            tag_key = (
+                landmark.reference_tag.tag_family,
+                landmark.reference_tag.tag_id,
+            )
+            if tag_key in landmark_tags:
+                raise ValueError(
+                    "Duplicate localization landmark tag: "
+                    f"{tag_key[0]}:{tag_key[1]}"
+                )
+            landmark_ids.add(landmark.landmark_id)
+            landmark_tags.add(tag_key)
+
+        approach_ids: Set[str] = set()
+        for approach in self.object_approaches:
+            approach.validate()
+            if approach.approach_id in approach_ids:
+                raise ValueError(
+                    "Duplicate object approach ID: "
+                    f"{approach.approach_id}"
+                )
+            if approach.waypoint_id not in waypoint_ids:
+                raise ValueError(
+                    f"Unknown waypoint {approach.waypoint_id} "
+                    f"for approach {approach.approach_id}"
+                )
+            approach_ids.add(approach.approach_id)
+
+    def validate_object_references(
+        self,
+        known_object_ids: Set[str],
+    ) -> None:
+        """Validate object IDs against an object repository."""
+        for approach in self.object_approaches:
+            if approach.object_id not in known_object_ids:
+                raise ValueError(
+                    f"Unknown inspection object {approach.object_id} "
+                    f"for approach {approach.approach_id}"
                 )
 
-            landmark_names.add(landmark.name)
-            landmarks_by_name[landmark.name] = landmark
+    def get_waypoint(
+        self,
+        waypoint_id: str,
+    ) -> Optional[Waypoint]:
+        """Find a waypoint by ID."""
+        return next(
+            (
+                waypoint
+                for waypoint in self.waypoints
+                if waypoint.waypoint_id == waypoint_id
+            ),
+            None,
+        )
 
-        for inspection_object in self.objects:
-            inspection_object.validate()
+    def get_landmark(
+        self,
+        landmark_id: str,
+    ) -> Optional[LocalizationLandmark]:
+        """Find a localization landmark by ID."""
+        return next(
+            (
+                landmark
+                for landmark in self.localization_landmarks
+                if landmark.landmark_id == landmark_id
+            ),
+            None,
+        )
 
-            if inspection_object.object_id in object_ids:
-                raise ValueError(
-                    "Duplicate object ID: "
-                    f"{inspection_object.object_id}"
-                )
-
-            if (
-                inspection_object.landmark_name
-                not in landmark_names
-            ):
-                raise ValueError(
-                    "Unknown landmark "
-                    f"{inspection_object.landmark_name} "
-                    f"for object {inspection_object.object_id}"
-                )
-
-            landmark = landmarks_by_name[
-                inspection_object.landmark_name
-            ]
-
-            if (
-                    landmark.tag_id is not None
-                    and landmark.tag_id != inspection_object.tag_id
-            ):
-                raise ValueError(
-                    f"Object {inspection_object.object_id} tag "
-                    f"{inspection_object.tag_id} does not match landmark tag "
-                    f"{landmark.tag_id} for {landmark.name}"
-                )
-
-            for waypoint_name in (
-                inspection_object.approach_waypoints
-            ):
-                if waypoint_name not in waypoint_names:
-                    raise ValueError(
-                        "Unknown approach waypoint "
-                        f"{waypoint_name} for object "
-                        f"{inspection_object.object_id}"
-                    )
-
-            object_ids.add(inspection_object.object_id)
-
-        for waypoint in self.waypoints:
-            if (
-                waypoint.reference_type
-                == WaypointReference.OBJECT
-                and waypoint.object_id not in object_ids
-            ):
-                raise ValueError(
-                    "Unknown object "
-                    f"{waypoint.object_id} for waypoint "
-                    f"{waypoint.name}"
-                )
+    def get_object_approach(
+        self,
+        approach_id: str,
+    ) -> Optional[ObjectApproach]:
+        """Find an object approach by ID."""
+        return next(
+            (
+                approach
+                for approach in self.object_approaches
+                if approach.approach_id == approach_id
+            ),
+            None,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize the complete map metadata."""
-        result = dict(self.extra_fields)
-        result.update({
+        """Serialize the complete map definition."""
+        return {
+            "map_id": self.map_id,
+            "display_name": self.display_name,
             "waypoints": [
-                waypoint.to_dict()
-                for waypoint in self.waypoints
+                waypoint.to_dict() for waypoint in self.waypoints
             ],
-            "landmarks": [
+            "localization_landmarks": [
                 landmark.to_dict()
-                for landmark in self.landmarks
+                for landmark in self.localization_landmarks
             ],
-            "objects": [
-                inspection_object.to_dict()
-                for inspection_object in self.objects
+            "object_approaches": [
+                approach.to_dict()
+                for approach in self.object_approaches
             ],
-        })
-        return result
+        }

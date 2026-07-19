@@ -1,32 +1,29 @@
-"""Resolve the active object in odom from base-camera tags only."""
+"""Resolve an active object routine from base-camera tags."""
 
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Optional, Union
 
 import py_trees
-import tf2_geometry_msgs  # noqa: F401 - registers PoseStamped with tf2
+import tf2_geometry_msgs  # noqa: F401
 import tf2_ros
 from geometry_msgs.msg import PoseStamped
 from rclpy.duration import Duration
 from rclpy.node import Node
 
-from fault_detector_spot.inspection.inspection_repository import (
-    InspectionRepository,
-)
 from fault_detector_spot.inspection.live_object_pose_resolver import (
     LiveObjectPoseResolver,
 )
 from fault_detector_spot.inspection.models import (
-    InspectionDefinition,
-    ObjectDefinition,
-)
-from fault_detector_spot.inspection.object_pose_resolver import (
-    ObjectPoseState,
-    ResolvedObjectPose,
+    InspectionObject,
+    InspectionRoutine,
 )
 from fault_detector_spot.inspection.object_repository import (
     ObjectRepository,
+)
+from fault_detector_spot.inspection.resolved_object_pose import (
+    ObjectPoseState,
+    ResolvedObjectPose,
 )
 from ..sensing.tag_observation_time import (
     is_observation_fresh,
@@ -37,36 +34,34 @@ from ..sensing.tag_observation_time import (
 class ResolveLiveInspectionObject(
     py_trees.behaviour.Behaviour
 ):
-    """Produce a probe reference without map or hand-tag input."""
+    """Produce a tag-defined probe reference for one routine."""
 
     def __init__(
         self,
         object_id: str,
-        inspection_id: str,
+        routine_id: str,
         execution_frame: str = "odom",
         maximum_age_sec: float = 0.25,
         object_root: Optional[Union[str, Path]] = None,
-        inspection_root: Optional[Union[str, Path]] = None,
         name: str = "ResolveLiveInspectionObject",
     ):
-        """Configure the active inspection and local frame."""
+        """Configure the active object routine and local frame."""
         super().__init__(name)
         self.object_id = object_id
-        self.inspection_id = inspection_id
+        self.routine_id = routine_id
         self.execution_frame = execution_frame
         self.maximum_age_sec = maximum_age_sec
         self.object_root = object_root
-        self.inspection_root = inspection_root
         self.node: Optional[Node] = None
         self.tf_buffer: Optional[tf2_ros.Buffer] = None
         self.tf_listener: Optional[
             tf2_ros.TransformListener
         ] = None
-        self.object_definition: Optional[
-            ObjectDefinition
+        self.inspection_object: Optional[
+            InspectionObject
         ] = None
-        self.inspection_definition: Optional[
-            InspectionDefinition
+        self.inspection_routine: Optional[
+            InspectionRoutine
         ] = None
         self.configuration_error = ""
         self.resolver = LiveObjectPoseResolver(
@@ -76,9 +71,8 @@ class ResolveLiveInspectionObject(
         self.blackboard = self.attach_blackboard_client()
 
     def setup(self, **kwargs: Any) -> None:
-        """Create TF resources, load configuration, and register keys."""
+        """Create TF resources and load the selected routine."""
         self.node = kwargs.get("node")
-
         if self.node is None:
             raise RuntimeError(
                 f"{self.name}: no ROS node provided"
@@ -101,12 +95,22 @@ class ResolveLiveInspectionObject(
             "live_inspection_object_error",
             access=py_trees.common.Access.WRITE,
         )
+        self.blackboard.register_key(
+            "inspection_object_definition",
+            access=py_trees.common.Access.WRITE,
+        )
+        self.blackboard.register_key(
+            "inspection_routine_definition",
+            access=py_trees.common.Access.WRITE,
+        )
         self.blackboard.live_inspection_object = None
         self.blackboard.live_inspection_object_error = ""
+        self.blackboard.inspection_object_definition = None
+        self.blackboard.inspection_routine_definition = None
         self._load_configuration()
 
     def update(self) -> py_trees.common.Status:
-        """Resolve the configured object from a fresh base tag."""
+        """Resolve the object frame from a fresh base tag."""
         if self.configuration_error:
             result = ResolvedObjectPose(
                 object_id=self.object_id,
@@ -119,12 +123,11 @@ class ResolveLiveInspectionObject(
             return self._store(result)
 
         now = self.node.get_clock().now()
-        base_tags = self._get_base_tags()
-        tag = base_tags.get(self.object_definition.tag_id)
-
+        tag_id = self.inspection_object.reference_tag.tag_id
+        tag = self._get_base_tags().get(tag_id)
         if tag is None:
             result = self.resolver.resolve(
-                self.object_definition,
+                self.inspection_object,
                 marker_pose=None,
                 current_time=now,
                 observed_tag_id=None,
@@ -134,14 +137,13 @@ class ResolveLiveInspectionObject(
 
         stamp = tag.pose.header.stamp
         age_sec = observation_age_sec(now, stamp)
-
         if not is_observation_fresh(
             now,
             stamp,
             self.maximum_age_sec,
         ):
             result = self.resolver.unavailable(
-                self.object_definition,
+                self.inspection_object,
                 f"Base-camera tag is stale: {age_sec:.3f} s",
                 stamp=stamp,
                 age_sec=age_sec,
@@ -151,13 +153,12 @@ class ResolveLiveInspectionObject(
         marker_pose = PoseStamped()
         marker_pose.header = deepcopy(tag.pose.header)
         marker_pose.pose = deepcopy(tag.pose.pose)
-
         marker_error = self.resolver.marker_geometry_error(
             marker_pose
         )
         if marker_error:
             result = self.resolver.invalid(
-                self.object_definition,
+                self.inspection_object,
                 marker_error,
             )
             return self._store(result)
@@ -176,7 +177,7 @@ class ResolveLiveInspectionObject(
             tf2_ros.ExtrapolationException,
         ) as exception:
             result = self.resolver.unavailable(
-                self.object_definition,
+                self.inspection_object,
                 "Cannot transform base-camera tag to "
                 f"{self.execution_frame}: {exception}",
                 stamp=stamp,
@@ -185,7 +186,7 @@ class ResolveLiveInspectionObject(
             return self._store(result)
 
         result = self.resolver.resolve(
-            self.object_definition,
+            self.inspection_object,
             marker_pose=marker_in_execution_frame,
             current_time=now,
             observed_tag_id=int(tag.id),
@@ -194,84 +195,55 @@ class ResolveLiveInspectionObject(
         return self._store(result)
 
     def _load_configuration(self) -> None:
-        """Load the configured portable object and inspection."""
-        if not self.object_id or not self.inspection_id:
+        """Load the configured object and selected routine."""
+        self.configuration_error = ""
+        if not self.object_id or not self.routine_id:
             self.configuration_error = (
                 "Set inspection.active_object_id and "
-                "inspection.active_inspection_id"
+                "inspection.active_routine_id"
             )
             return
 
         try:
-            object_repository = ObjectRepository(
+            self.inspection_object = ObjectRepository(
                 self.object_root
-            )
-            inspection_repository = InspectionRepository(
-                self.inspection_root
-            )
-            self.object_definition = object_repository.load(
-                self.object_id
-            )
-            self.inspection_definition = (
-                inspection_repository.load(
-                    self.object_id,
-                    self.inspection_id,
+            ).load(self.object_id)
+            self.inspection_routine = (
+                self.inspection_object.get_routine(
+                    self.routine_id
                 )
             )
-
-            if (
-                self.inspection_definition.object_id
-                != self.object_definition.object_id
-            ):
+            if self.inspection_routine is None:
                 raise ValueError(
-                    "Inspection and object IDs do not match"
-                )
-
-            if (
-                self.inspection_definition.object_calibration_revision
-                != self.object_definition.calibration_revision
-            ):
-                inspection_revision = (
-                    self.inspection_definition
-                    .object_calibration_revision
-                )
-                object_revision = (
-                    self.object_definition.calibration_revision
-                )
-                raise ValueError(
-                    "Inspection object calibration revision "
-                    f"{inspection_revision} does not match current "
-                    "object calibration revision "
-                    f"{object_revision}"
-                )
-
-            if (
-                self.inspection_definition.preferred_execution_frame
-                != self.execution_frame
-            ):
-                inspection_frame = (
-                    self.inspection_definition.preferred_execution_frame
-                )
-                raise ValueError(
-                    "Inspection execution frame is "
-                    f"'{inspection_frame}', "
-                    f"configured frame is '{self.execution_frame}'"
+                    f"Unknown routine {self.routine_id} for object "
+                    f"{self.object_id}"
                 )
         except (
             FileNotFoundError,
+            KeyError,
             OSError,
             TypeError,
             ValueError,
         ) as exception:
             self.configuration_error = str(exception)
+            return
+
+        if self.blackboard.exists(
+            "inspection_object_definition"
+        ):
+            self.blackboard.inspection_object_definition = (
+                self.inspection_object
+            )
+            self.blackboard.inspection_routine_definition = (
+                self.inspection_routine
+            )
 
     def _get_base_tags(self):
-        """Return only Spot base-camera fiducial observations."""
+        """Return Spot base-camera fiducial observations."""
         if not self.blackboard.exists(
             "base_tag_observations"
         ):
             return {}
-
         return self.blackboard.base_tag_observations or {}
 
     def _store(

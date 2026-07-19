@@ -39,8 +39,6 @@ from .nodes.utility.new_command_guard import NewCommandGuard
 from .nodes.utility.reset_estop_flag import ResetEstopFlag
 from .nodes.utility.spot_action import SimpleSpotAction
 from .nodes.utility.wait_for_duration import WaitForDuration
-from .nodes.sensing.resolve_inspection_objects import ResolveInspectionObjects
-from .nodes.sensing.publish_inspection_objects import PublishInspectionObjects
 from .nodes.inspection.publish_live_inspection_object import (
     PublishLiveInspectionObject,
 )
@@ -88,8 +86,6 @@ __all__ = [
   "BaseGetGoalTag",
   "BaseMoveToTagAction",
   "BaseMoveRelativeAction",
-  "ResolveInspectionObjects",
-  "PublishInspectionObjects",
   "PublishLiveInspectionObject",
   "ResolveLiveInspectionObject",
 ]

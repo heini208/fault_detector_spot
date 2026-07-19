@@ -8,8 +8,7 @@ from fault_detector_msgs.msg import LiveInspectionObjectState
 from fault_detector_spot.inspection.live_object_state_adapter import (
     live_object_pose_to_msg,
 )
-from fault_detector_spot.inspection.object_pose_resolver import (
-    ObjectPoseSource,
+from fault_detector_spot.inspection.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
 )
@@ -26,9 +25,7 @@ def test_live_result_message_contains_local_metadata():
         tag_id=7,
         state=ObjectPoseState.LIVE,
         selected_pose=pose,
-        live_pose=pose,
         frame_id="odom",
-        source=ObjectPoseSource.LIVE_LOCAL,
         observation_timestamp=pose.header.stamp,
         observation_age_sec=0.05,
         observation_source="base",

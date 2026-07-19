@@ -16,5 +16,5 @@
     tag_sensing.probe_max_age_sec: 0.25
 
     inspection.active_object_id: ''
-    inspection.active_inspection_id: ''
+    inspection.active_routine_id: ''
     inspection.execution_frame: odom
