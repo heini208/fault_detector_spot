@@ -254,7 +254,7 @@ def get_helper_container(node: rclpy.node.Node):
 
 def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     command_selector = py_trees.composites.Selector(
-        name="ommandSelector",
+        name="CommandSelector",
         memory=True
     )
 

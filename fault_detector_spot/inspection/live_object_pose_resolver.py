@@ -157,8 +157,18 @@ class LiveObjectPoseResolver:
             + pose.orientation.z ** 2
             + pose.orientation.w ** 2
         )
+
         if quaternion_norm < 1e-12:
             return "Marker pose quaternion norm is zero"
+
+        if not math.isclose(
+                quaternion_norm,
+                1.0,
+                rel_tol=0.0,
+                abs_tol=1e-3,
+        ):
+            return "Marker pose quaternion must be normalized"
+
         return None
 
     def unavailable(

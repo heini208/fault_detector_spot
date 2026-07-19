@@ -156,3 +156,18 @@ def test_non_finite_marker_position_is_invalid():
 
     assert result.state == ObjectPoseState.INVALID
     assert "non-finite" in result.message
+
+def test_non_normalized_marker_quaternion_is_invalid():
+    """A non-unit marker quaternion cannot define an object."""
+    marker = make_marker()
+    marker.pose.orientation.w = 2.0
+
+    result = LiveObjectPoseResolver().resolve(
+        make_object(),
+        marker,
+        Time(seconds=10.2),
+        observed_tag_id=7,
+    )
+
+    assert result.state == ObjectPoseState.INVALID
+    assert "normalized" in result.message
