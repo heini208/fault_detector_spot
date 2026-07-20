@@ -1,52 +1,110 @@
-map_server:
+bt_navigator:
   ros__parameters:
-    enabled: false
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odometry
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
 
-amcl:
+bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
-    enabled: false
+    use_sim_time: false
 
-planner_server:
+bt_navigator_navigate_to_pose_rclcpp_node:
   ros__parameters:
-    expected_planner_frequency: 10.0
-    planner_plugins: ["GridBased"]
-    GridBased:
-      plugin: "nav2_navfn_planner/NavfnPlanner"
-      tolerance: 0.2
-      allow_unknown: true
+    use_sim_time: false
 
 controller_server:
   ros__parameters:
+    use_sim_time: false
     controller_frequency: 10.0
-    autostart: false
-    controller_plugins: [ "FollowPath" ]
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.10
+      movement_time_allowance: 10.0
+
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.12
+      yaw_goal_tolerance: 0.15
+      stateful: true
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-
       model_dt: 0.10
-      time_steps: 15
-      batch_size: 1000
+      time_steps: 28
+      batch_size: 2000
       iteration_count: 1
-
       vx_max: 0.5
-      vx_min: -0.1
-      vy_max: 0.3
+      vx_min: -0.3
+      vy_max: 0.5
       wz_max: 0.7
-
-      vx_std: 0.1
-      vy_std: 0.1
-      wz_std: 0.25
-
+      vx_std: 0.2
+      vy_std: 0.2
+      wz_std: 0.3
+      retry_attempt_limit: 1
       temperature: 0.3
       gamma: 0.015
-      prune_distance: 1.5
+      prune_distance: 1.7
       transform_tolerance: 0.2
       motion_model: "Omni"
-
-
       visualize: false
-
       critics:
         - ConstraintCritic
         - ObstaclesCritic
@@ -54,100 +112,209 @@ controller_server:
         - GoalAngleCritic
         - PathAlignCritic
         - PathFollowCritic
-        - PathAngleCritic
-        - PreferForwardCritic
 
-    goal_checker_plugins: ["general_goal_checker"]
-    general_goal_checker:
-      plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.10
-      yaw_goal_tolerance: 0.15
-      stateful: false
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
 
-global_costmap:
-  ros__parameters:
-    global_frame: map
-    robot_base_frame: base_link
-    static_map: false
-    map_subscribe_transient_local: true
-    topic: /map
-    update_frequency: 3.0
-    publish_frequency: 1.0
-    rolling_window: false
-    resolution: 0.05
-    plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
 
-    static_layer:
-      plugin: "nav2_costmap_2d::StaticLayer"
-      map_topic: /map
-      map_subscribe_transient_local: true
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
 
-    obstacle_layer:
-      plugin: "nav2_costmap_2d::ObstacleLayer"
-      observation_sources: velodyne
-      observation_persistence: 0.3
-      velodyne:
-        topic: /velodyne/points_filtered
-        data_type: PointCloud2
-        marking: true
-        clearing: true
-        obstacle_min_range: 0.0
-        obstacle_max_range: 10.0
-        raytrace_min_range: 0.0
-        raytrace_max_range: 11.8
-        min_obstacle_height: -0.20
-        max_obstacle_height: 1.50
-        expected_update_rate: 0.2
+      ObstaclesCritic:
+        enabled: true
+        cost_power: 1
+        repulsion_weight: 1.5
+        critical_weight: 20.0
+        consider_footprint: true
+        collision_cost: 10000.0
+        collision_margin_distance: 0.10
+        near_goal_distance: 0.5
 
-    robot_radius: 0.55
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 10.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 3
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
 
-    inflation_layer:
-      plugin: "nav2_costmap_2d::InflationLayer"
-      inflation_radius: 0.45
-      cost_scaling_factor: 3.0
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
 
 local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: false
+      global_frame: odom
+      robot_base_frame: base_link
+      update_frequency: 10.0
+      publish_frequency: 5.0
+      rolling_window: true
+      width: 8.0
+      height: 8.0
+      resolution: 0.05
+      footprint: "[[0.55, 0.30], [-0.55, 0.30], [-0.55, -0.30], [0.55, -0.30]]"
+      plugins: ["voxel_layer", "inflation_layer"]
+
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: true
+        publish_voxel_map: true
+        origin_z: -0.60
+        z_resolution: 0.15
+        z_voxels: 16
+        unknown_threshold: 15
+        mark_threshold: 1
+        observation_sources: velodyne
+        velodyne:
+          topic: /velodyne/points_filtered
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          obstacle_min_range: 0.0
+          obstacle_max_range: 10.0
+          raytrace_min_range: 0.0
+          raytrace_max_range: 11.8
+          min_obstacle_height: -0.35
+          max_obstacle_height: 1.50
+          observation_persistence: 0.3
+          expected_update_rate: 0.2
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.45
+        cost_scaling_factor: 3.0
+
+      always_send_full_costmap: true
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+      global_frame: map
+      robot_base_frame: base_link
+      update_frequency: 3.0
+      publish_frequency: 1.0
+      rolling_window: false
+      resolution: 0.05
+      track_unknown_space: true
+      footprint: "[[0.55, 0.30], [-0.55, 0.30], [-0.55, -0.30], [0.55, -0.30]]"
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: /map
+        map_subscribe_transient_local: true
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: velodyne
+        velodyne:
+          topic: /velodyne/points_filtered
+          data_type: PointCloud2
+          marking: true
+          clearing: true
+          obstacle_min_range: 0.0
+          obstacle_max_range: 10.0
+          raytrace_min_range: 0.0
+          raytrace_max_range: 11.8
+          min_obstacle_height: -0.35
+          max_obstacle_height: 1.50
+          observation_persistence: 0.3
+          expected_update_rate: 0.2
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.55
+        cost_scaling_factor: 3.0
+
+      always_send_full_costmap: true
+
+planner_server:
   ros__parameters:
+    use_sim_time: false
+    expected_planner_frequency: 10.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.2
+      use_astar: false
+      allow_unknown: true
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: false
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: true
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: false
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    assisted_teleop:
+      plugin: "nav2_behaviors/AssistedTeleop"
+    wait:
+      plugin: "nav2_behaviors/Wait"
     global_frame: odom
     robot_base_frame: base_link
-    update_frequency: 10.0
-    publish_frequency: 5.0
-    rolling_window: true
-    width: 8.0
-    height: 8.0
-    resolution: 0.05
-    plugins: ["voxel_layer", "inflation_layer"]
+    transform_tolerance: 0.2
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 0.7
+    min_rotational_vel: 0.2
+    rotational_acc_lim: 1.5
 
-    voxel_layer:
-      plugin: "nav2_costmap_2d::VoxelLayer"
-      enabled: true
-      origin_z: -0.30
-      z_resolution: 0.05
-      z_voxels: 32
-      unknown_threshold: 15
-      marking_threshold: 1
-      observation_sources: velodyne
-      velodyne:
-        topic: /velodyne/points_filtered
-        data_type: PointCloud2
-        marking: true
-        clearing: true
-        obstacle_min_range: 0.0
-        obstacle_max_range: 10.0
-        raytrace_min_range: 0.0
-        raytrace_max_range: 11.8
-        min_obstacle_height: -0.20
-        max_obstacle_height: 1.50
-        expected_update_rate: 0.2
-
-    robot_radius: 0.55
-
-    inflation_layer:
-      plugin: "nav2_costmap_2d::InflationLayer"
-      inflation_radius: 0.45
-      cost_scaling_factor: 3.0
-
-bt_navigator:
+waypoint_follower:
   ros__parameters:
-    autostart: false
-    default_bt_xml_filename: "navigate_w_replanning_and_recovery.xml"
+    use_sim_time: false
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: true
+      waypoint_pause_duration: 200
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: false
+    smoothing_frequency: 20.0
+    scale_velocities: true
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.5, 0.5, 0.7]
+    min_velocity: [-0.3, -0.5, -0.7]
+    max_accel: [0.8, 0.8, 1.5]
+    max_decel: [-0.8, -0.8, -1.5]
+    odom_topic: /odometry
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 0.5
