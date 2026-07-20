@@ -109,6 +109,14 @@ class ResolveLiveInspectionObject(
         self.blackboard.inspection_routine_definition = None
         self._load_configuration()
 
+        if not self.configuration_error:
+            self.blackboard.inspection_object_definition = (
+                self.inspection_object
+            )
+            self.blackboard.inspection_routine_definition = (
+                self.inspection_routine
+            )
+
     def update(self) -> py_trees.common.Status:
         """Resolve the object frame from a fresh base tag."""
         if self.configuration_error:
@@ -227,16 +235,6 @@ class ResolveLiveInspectionObject(
         ) as exception:
             self.configuration_error = str(exception)
             return
-
-        if self.blackboard.exists(
-            "inspection_object_definition"
-        ):
-            self.blackboard.inspection_object_definition = (
-                self.inspection_object
-            )
-            self.blackboard.inspection_routine_definition = (
-                self.inspection_routine
-            )
 
     def _get_base_tags(self):
         """Return Spot base-camera fiducial observations."""
