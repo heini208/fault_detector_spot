@@ -64,7 +64,7 @@ global_costmap:
       observation_sources: velodyne
       observation_persistence: 0.3
       velodyne:
-        topic: /velodyne/points
+        topic: /velodyne/points_filtered
         data_type: PointCloud2
         marking: true
         clearing: true
@@ -103,7 +103,7 @@ local_costmap:
       marking_threshold: 1
       observation_sources: velodyne
       velodyne:
-        topic: /velodyne/points
+        topic: /velodyne/points_filtered
         data_type: PointCloud2
         marking: true
         clearing: true
