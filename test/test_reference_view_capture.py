@@ -32,10 +32,6 @@ def make_object() -> InspectionObject:
                 display_name="Magnetic scan",
                 sensor_id="bmm150",
                 probe_frame="sensor_tip",
-                reference_view=ReferenceView(
-                    controlled_frame_pose_object=PoseData.identity(),
-                    controlled_frame="hand_color_image_sensor",
-                ),
             )
         ],
     )
@@ -225,6 +221,40 @@ def test_missing_routine_is_rejected_before_snapshot(monkeypatch):
     assert synchronizer.requested_tag_ids == []
     assert resolver_calls == []
     assert repository.saved == []
+
+
+def test_existing_reference_view_requires_explicit_replacement(
+    monkeypatch,
+):
+    """Recapture cannot replace persisted teaching data by default."""
+    definition = make_object()
+    definition.routines[0].reference_view = resolved_view()
+    repository = FakeRepository(definition=definition)
+    synchronizer = FakeSynchronizer(make_inputs())
+    resolver_calls = install_resolver(monkeypatch)
+
+    with pytest.raises(FileExistsError, match="already has"):
+        capture(repository, synchronizer)
+
+    assert synchronizer.requested_tag_ids == []
+    assert resolver_calls == []
+    assert repository.saved == []
+
+
+def test_existing_reference_view_can_be_replaced_explicitly(
+    monkeypatch,
+):
+    """The explicit replacement flag permits a deliberate recapture."""
+    definition = make_object()
+    definition.routines[0].reference_view = resolved_view()
+    repository = FakeRepository(definition=definition)
+    synchronizer = FakeSynchronizer(make_inputs())
+    install_resolver(monkeypatch)
+
+    capture(repository, synchronizer, replace_existing=True)
+
+    assert synchronizer.requested_tag_ids == [23]
+    assert len(repository.saved) == 1
 
 
 @pytest.mark.parametrize(

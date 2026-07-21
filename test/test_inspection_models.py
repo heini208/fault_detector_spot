@@ -81,6 +81,36 @@ def test_inspection_object_round_trip_preserves_routine_order():
     )
 
 
+def test_uncaptured_routine_round_trip_preserves_null_reference_view():
+    """A new routine is valid before its first reference capture."""
+    routine = InspectionRoutine(
+        routine_id="magnetic_scan",
+        display_name="Magnetic scan",
+        sensor_id="bmm150",
+        probe_frame="sensor_tip",
+    )
+
+    restored = InspectionRoutine.from_dict(routine.to_dict())
+
+    restored.validate()
+    assert restored == routine
+    assert restored.to_dict()["reference_view"] is None
+
+
+def test_probe_points_require_a_captured_reference_view():
+    """Image-derived probe points cannot exist before capture."""
+    routine = InspectionRoutine(
+        routine_id="magnetic_scan",
+        display_name="Magnetic scan",
+        sensor_id="bmm150",
+        probe_frame="sensor_tip",
+        probe_points=[make_probe()],
+    )
+
+    with pytest.raises(ValueError, match="requires a reference view"):
+        routine.validate()
+
+
 def test_duplicate_routine_id_is_rejected():
     """Routine IDs are unique within an object."""
     inspection_object = make_object()

@@ -381,7 +381,7 @@ class InspectionRoutine:
     display_name: str
     sensor_id: str
     probe_frame: str
-    reference_view: ReferenceView
+    reference_view: Optional[ReferenceView] = None
     probe_points: List[ProbePoint] = field(default_factory=list)
 
     @classmethod
@@ -400,8 +400,10 @@ class InspectionRoutine:
             display_name=str(data["display_name"]),
             sensor_id=str(data["sensor_id"]),
             probe_frame=str(data["probe_frame"]),
-            reference_view=ReferenceView.from_dict(
-                data["reference_view"]
+            reference_view=(
+                ReferenceView.from_dict(data["reference_view"])
+                if data["reference_view"] is not None
+                else None
             ),
             probe_points=[
                 ProbePoint.from_dict(point)
@@ -415,7 +417,12 @@ class InspectionRoutine:
         _require_text(self.display_name, "Routine display name")
         _require_text(self.sensor_id, "Sensor ID")
         _require_text(self.probe_frame, "Probe frame")
-        self.reference_view.validate()
+        if self.reference_view is not None:
+            self.reference_view.validate()
+        elif self.probe_points:
+            raise ValueError(
+                "Routine with probe points requires a reference view"
+            )
 
         probe_ids: Set[str] = set()
         for probe_point in self.probe_points:
@@ -448,7 +455,11 @@ class InspectionRoutine:
             "display_name": self.display_name,
             "sensor_id": self.sensor_id,
             "probe_frame": self.probe_frame,
-            "reference_view": self.reference_view.to_dict(),
+            "reference_view": (
+                self.reference_view.to_dict()
+                if self.reference_view is not None
+                else None
+            ),
             "probe_points": [
                 point.to_dict() for point in self.probe_points
             ],

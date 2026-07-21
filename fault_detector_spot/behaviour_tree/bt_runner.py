@@ -29,8 +29,8 @@ from fault_detector_spot.behaviour_tree import (
     InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
     NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
     BaseGetGoalTag, BaseMoveToTagAction, BaseMoveRelativeAction,
-    CaptureInspectionObjectReferenceView, ResolveLiveInspectionObject,
-    PublishLiveInspectionObject,
+    CaptureInspectionObjectReferenceView, CreateInspectionDefinition,
+    ResolveLiveInspectionObject, PublishLiveInspectionObject,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.nodes.sensing.last_localization_pose import LastLocalizationPose
@@ -294,6 +294,20 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.MOVE_TO_WAYPOINT, build_navigate_to_goal_pose_tree),
         (CommandID.DELETE_LANDMARK, lambda n: DeleteLandmark(slam_helper)),
         (
+            CommandID.CREATE_INSPECTION_OBJECT,
+            lambda n: build_inspection_creation_behavior(
+                n,
+                CommandID.CREATE_INSPECTION_OBJECT,
+            ),
+        ),
+        (
+            CommandID.CREATE_INSPECTION_ROUTINE,
+            lambda n: build_inspection_creation_behavior(
+                n,
+                CommandID.CREATE_INSPECTION_ROUTINE,
+            ),
+        ),
+        (
             CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW,
             build_capture_reference_view_behavior,
         ),
@@ -303,6 +317,22 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         command_selector.add_child(make_simple_command_sequence(node, cmd_id, ctor))
 
     return command_selector
+
+
+def build_inspection_creation_behavior(
+    node: rclpy.node.Node,
+    command_id: CommandID,
+) -> py_trees.behaviour.Behaviour:
+    """Build an explicit object or routine creation behavior."""
+    object_root = read_parameter(
+        node,
+        "inspection.object_root",
+        "",
+    )
+    return CreateInspectionDefinition(
+        command_id=command_id,
+        object_root=object_root or None,
+    )
 
 
 def build_capture_reference_view_behavior(

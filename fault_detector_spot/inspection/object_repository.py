@@ -12,7 +12,11 @@ import yaml
 from rclpy.serialization import deserialize_message, serialize_message
 from sensor_msgs.msg import CameraInfo, Image
 
-from .models import InspectionObject, ReferenceView
+from .models import (
+    InspectionObject,
+    InspectionRoutine,
+    ReferenceView,
+)
 from .repository_utils import (
     atomic_write_text,
     validate_storage_name,
@@ -120,6 +124,42 @@ class ObjectRepository:
         atomic_write_text(path, content)
         return path
 
+    def create(self, definition: InspectionObject) -> InspectionObject:
+        """Create a new object without replacing an existing one."""
+        validate_storage_name(definition.object_id, "object ID")
+        definition.validate()
+        if self.exists(definition.object_id):
+            raise FileExistsError(
+                "Inspection object already exists: "
+                f"{definition.object_id}"
+            )
+        self.save(definition, validate=False)
+        return definition
+
+    def add_routine(
+        self,
+        object_id: str,
+        routine: InspectionRoutine,
+    ) -> InspectionObject:
+        """Add a new routine to an existing inspection object."""
+        validate_storage_name(object_id, "object ID")
+        validate_storage_name(routine.routine_id, "routine ID")
+        routine.validate()
+
+        definition = self.load(object_id)
+        if definition.get_routine(routine.routine_id) is not None:
+            raise FileExistsError(
+                "Inspection routine already exists: "
+                f"{object_id}/{routine.routine_id}"
+            )
+
+        stored_definition = replace(
+            definition,
+            routines=[*definition.routines, routine],
+        )
+        self.save(stored_definition)
+        return stored_definition
+
     def save_reference_dataset(
         self,
         object_id: str,
@@ -144,7 +184,10 @@ class ObjectRepository:
             raise KeyError(f"Routine does not exist: {routine_id}")
 
         old_dataset_path = None
-        if routine.reference_view.reference_dataset_path is not None:
+        if (
+            routine.reference_view is not None
+            and routine.reference_view.reference_dataset_path is not None
+        ):
             old_dataset_path = self._reference_dataset_path(
                 object_id,
                 routine_id,
@@ -246,6 +289,10 @@ class ObjectRepository:
         routine = definition.get_routine(routine_id)
         if routine is None:
             raise KeyError(f"Routine does not exist: {routine_id}")
+        if routine.reference_view is None:
+            raise ValueError(
+                "Routine does not have a captured reference view"
+            )
 
         dataset_path = self._reference_dataset_path(
             object_id,

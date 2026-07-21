@@ -116,7 +116,14 @@ class CaptureInspectionObjectReferenceView(
                 ),
                 fixed_frame=self.fixed_frame,
                 transform_timeout_sec=self.transform_timeout_sec,
+                replace_existing=command.replace_existing,
             )
+            routine = result.get_routine(command.routine_id)
+            if routine is None or routine.reference_view is None:
+                raise RuntimeError(
+                    "Capture did not produce a reference view"
+                )
+            dataset_path = routine.reference_view.reference_dataset_path
         except Exception as exception:
             self.feedback_message = (
                 f"Reference-view capture failed: {exception}"
@@ -125,8 +132,6 @@ class CaptureInspectionObjectReferenceView(
                 self.node.get_logger().error(self.feedback_message)
             return py_trees.common.Status.FAILURE
 
-        routine = result.get_routine(command.routine_id)
-        dataset_path = routine.reference_view.reference_dataset_path
         self.feedback_message = (
             "Captured reference view for "
             f"{command.object_id}/{command.routine_id}: "

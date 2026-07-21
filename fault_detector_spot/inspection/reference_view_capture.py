@@ -32,6 +32,7 @@ def capture_reference_view(
     maximum_tag_timestamp_skew_sec: float = 0.25,
     fixed_frame: str = "odom",
     transform_timeout_sec: float = 0.05,
+    replace_existing: bool = False,
 ) -> InspectionObject:
     """Capture the selected routine's synchronized reference view."""
     if (
@@ -43,8 +44,14 @@ def capture_reference_view(
         )
 
     definition = object_repository.load(object_id)
-    if definition.get_routine(routine_id) is None:
+    routine = definition.get_routine(routine_id)
+    if routine is None:
         raise KeyError(f"Routine does not exist: {routine_id}")
+    if routine.reference_view is not None and not replace_existing:
+        raise FileExistsError(
+            "Routine already has a reference view: "
+            f"{object_id}/{routine_id}"
+        )
 
     reference_tag_id = definition.reference_tag.tag_id
     inputs = input_synchronizer.snapshot(reference_tag_id)

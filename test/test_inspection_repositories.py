@@ -136,6 +136,97 @@ def test_object_repository_round_trip(tmp_path):
     assert repository.list_object_ids() == ["motor_a"]
 
 
+def test_object_repository_creates_new_object_without_overwrite(
+    tmp_path,
+):
+    """Explicit creation persists one empty object only once."""
+    repository = ObjectRepository(tmp_path)
+    definition = InspectionObject(
+        object_id="motor_b",
+        display_name="Motor B",
+        reference_tag=ReferenceTag(
+            tag_id=24,
+            tag_family="36h11",
+        ),
+    )
+
+    created = repository.create(definition)
+
+    assert created == definition
+    assert repository.load("motor_b") == definition
+    with pytest.raises(FileExistsError, match="already exists"):
+        repository.create(definition)
+
+
+def test_object_repository_adds_uncaptured_routine_once(tmp_path):
+    """Routine creation updates its existing object aggregate."""
+    repository = ObjectRepository(tmp_path)
+    definition = InspectionObject(
+        object_id="motor_b",
+        display_name="Motor B",
+        reference_tag=ReferenceTag(
+            tag_id=24,
+            tag_family="36h11",
+        ),
+    )
+    repository.create(definition)
+    routine = InspectionRoutine(
+        routine_id="magnetic_scan",
+        display_name="Magnetic scan",
+        sensor_id="bmm150",
+        probe_frame="sensor_tip",
+    )
+
+    stored = repository.add_routine("motor_b", routine)
+
+    assert stored.get_routine("magnetic_scan") == routine
+    assert repository.load("motor_b") == stored
+    assert stored.get_routine("magnetic_scan").reference_view is None
+    with pytest.raises(FileExistsError, match="already exists"):
+        repository.add_routine("motor_b", routine)
+
+
+def test_object_repository_requires_object_before_routine(tmp_path):
+    """Routine creation never creates a missing parent object."""
+    routine = InspectionRoutine(
+        routine_id="magnetic_scan",
+        display_name="Magnetic scan",
+        sensor_id="bmm150",
+        probe_frame="sensor_tip",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        ObjectRepository(tmp_path).add_routine("missing", routine)
+
+
+def test_reference_dataset_load_requires_captured_view(tmp_path):
+    """An uncaptured routine has no loadable camera dataset."""
+    repository = ObjectRepository(tmp_path)
+    definition = InspectionObject(
+        object_id="motor_b",
+        display_name="Motor B",
+        reference_tag=ReferenceTag(
+            tag_id=24,
+            tag_family="36h11",
+        ),
+        routines=[
+            InspectionRoutine(
+                routine_id="magnetic_scan",
+                display_name="Magnetic scan",
+                sensor_id="bmm150",
+                probe_frame="sensor_tip",
+            )
+        ],
+    )
+    repository.create(definition)
+
+    with pytest.raises(ValueError, match="captured reference view"):
+        repository.load_reference_dataset(
+            "motor_b",
+            "magnetic_scan",
+        )
+
+
 def test_object_repository_rejects_old_format(tmp_path):
     """Old object files fail instead of being migrated."""
     path = ObjectRepository(tmp_path).get_object_path("motor_a")

@@ -23,6 +23,12 @@ class GenericCommand(SimpleCommand):
             waypoint_name: str = None,
             object_id: str = None,
             routine_id: str = None,
+            display_name: str = None,
+            reference_tag_id: int = None,
+            reference_tag_family: str = None,
+            sensor_id: str = None,
+            probe_frame: str = None,
+            replace_existing: bool = False,
     ):
         super().__init__(command_id, stamp)
         self.duration = duration
@@ -34,6 +40,12 @@ class GenericCommand(SimpleCommand):
         self.waypoint_name = waypoint_name
         self.object_id = object_id
         self.routine_id = routine_id
+        self.display_name = display_name
+        self.reference_tag_id = reference_tag_id
+        self.reference_tag_family = reference_tag_family
+        self.sensor_id = sensor_id
+        self.probe_frame = probe_frame
+        self.replace_existing = replace_existing
 
     def __repr__(self):
         ts = f"{self.stamp.sec}.{self.stamp.nanosec:09d}"
@@ -52,5 +64,19 @@ class GenericCommand(SimpleCommand):
             parts.append(f"object_id={self.object_id!r}")
         if self.routine_id:
             parts.append(f"routine_id={self.routine_id!r}")
+        if self.display_name:
+            parts.append(f"display_name={self.display_name!r}")
+        if self.reference_tag_id is not None:
+            parts.append(f"reference_tag_id={self.reference_tag_id}")
+        if self.reference_tag_family:
+            parts.append(
+                f"reference_tag_family={self.reference_tag_family!r}"
+            )
+        if self.sensor_id:
+            parts.append(f"sensor_id={self.sensor_id!r}")
+        if self.probe_frame:
+            parts.append(f"probe_frame={self.probe_frame!r}")
+        if self.replace_existing:
+            parts.append("replace_existing=True")
 
         return "<GenericCommand " + " ".join(parts) + ">"

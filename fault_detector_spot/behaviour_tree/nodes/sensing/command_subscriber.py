@@ -160,6 +160,14 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         generic_command.waypoint_name = msg.waypoint_name
         generic_command.object_id = msg.object_id
         generic_command.routine_id = msg.routine_id
+        generic_command.display_name = msg.display_name
+        generic_command.reference_tag_id = msg.reference_tag_id
+        generic_command.reference_tag_family = (
+            msg.reference_tag_family
+        )
+        generic_command.sensor_id = msg.sensor_id
+        generic_command.probe_frame = msg.probe_frame
+        generic_command.replace_existing = msg.replace_existing
         return generic_command
 
     def is_estop_command(self, command) -> bool:

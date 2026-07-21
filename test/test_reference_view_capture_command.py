@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import py_trees
+import pytest
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import ComplexCommand
 
@@ -73,6 +74,7 @@ class FakeNode:
 def make_command(
     object_id="motor_a",
     routine_id="magnetic_scan",
+    replace_existing=False,
 ):
     """Create one internal reference-view capture command."""
     return GenericCommand(
@@ -82,6 +84,7 @@ def make_command(
         stamp=Time(sec=10),
         object_id=object_id,
         routine_id=routine_id,
+        replace_existing=replace_existing,
     )
 
 
@@ -185,6 +188,12 @@ def test_complex_message_preserves_inspection_identifiers():
     )
     message.object_id = "motor_a"
     message.routine_id = "magnetic_scan"
+    message.display_name = "Magnetic scan"
+    message.reference_tag_id = 23
+    message.reference_tag_family = "36h11"
+    message.sensor_id = "bmm150"
+    message.probe_frame = "sensor_tip"
+    message.replace_existing = True
 
     command = CommandSubscriber().complex_message_to_generic_command(
         message
@@ -192,6 +201,12 @@ def test_complex_message_preserves_inspection_identifiers():
 
     assert command.object_id == "motor_a"
     assert command.routine_id == "magnetic_scan"
+    assert command.display_name == "Magnetic scan"
+    assert command.reference_tag_id == 23
+    assert command.reference_tag_family == "36h11"
+    assert command.sensor_id == "bmm150"
+    assert command.probe_frame == "sensor_tip"
+    assert command.replace_existing is True
 
 
 def test_command_selector_dispatches_reference_view_capture(
@@ -221,6 +236,8 @@ def test_command_selector_dispatches_reference_view_capture(
         CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW
         in command_ids
     )
+    assert CommandID.CREATE_INSPECTION_OBJECT in command_ids
+    assert CommandID.CREATE_INSPECTION_ROUTINE in command_ids
 
 
 def test_behavior_creates_runtime_resources_and_captures(monkeypatch):
@@ -248,11 +265,21 @@ def test_behavior_creates_runtime_resources_and_captures(monkeypatch):
         "maximum_tag_timestamp_skew_sec": 0.2,
         "fixed_frame": "odom",
         "transform_timeout_sec": 0.1,
+        "replace_existing": False,
     }
     assert "reference_datasets/magnetic_scan" in (
         behavior.feedback_message
     )
     assert len(node.logger.info_messages) == 1
+
+
+def test_behavior_passes_explicit_replacement(monkeypatch):
+    """The command replacement flag reaches capture unchanged."""
+    behavior, _, _, capture_calls = configure_behavior(monkeypatch)
+    create_writer(make_command(replace_existing=True))
+
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+    assert capture_calls[0][1]["replace_existing"] is True
 
 
 def test_missing_identifiers_fail_without_capture(monkeypatch):
@@ -312,15 +339,21 @@ def test_capture_failure_becomes_behavior_failure(monkeypatch):
     assert len(node.logger.error_messages) == 1
 
 
-def test_capture_command_is_not_recorded():
-    """Playback cannot overwrite a taught reference dataset."""
+@pytest.mark.parametrize(
+    "command_id",
+    [
+        CommandID.CREATE_INSPECTION_OBJECT,
+        CommandID.CREATE_INSPECTION_ROUTINE,
+        CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW,
+    ],
+)
+def test_inspection_definition_commands_are_not_recorded(command_id):
+    """Playback cannot recreate or replace inspection definitions."""
     manager = RecordManager.__new__(RecordManager)
     manager.recording = True
     manager.temp_data = []
     message = ComplexCommand()
-    message.command.command_id = (
-        CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW
-    )
+    message.command.command_id = command_id
 
     manager.capture_command(message)
 

@@ -15,6 +15,13 @@ from rosidl_runtime_py import set_message_fields
 from std_msgs.msg import Bool
 
 
+NON_RECORDABLE_COMPLEX_COMMANDS = {
+    CommandID.CREATE_INSPECTION_OBJECT,
+    CommandID.CREATE_INSPECTION_ROUTINE,
+    CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW,
+}
+
+
 class RecordManager(Node):
     def __init__(self):
         super().__init__('record_manager')
@@ -89,8 +96,7 @@ class RecordManager(Node):
             return
         if (
             isinstance(msg, ComplexCommand)
-            and msg.command.command_id
-            == CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW
+            and msg.command.command_id in NON_RECORDABLE_COMPLEX_COMMANDS
         ):
             return
 

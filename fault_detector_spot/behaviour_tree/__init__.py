@@ -45,6 +45,9 @@ from .nodes.inspection.publish_live_inspection_object import (
 from .nodes.inspection.capture_inspection_object_reference_view import (
     CaptureInspectionObjectReferenceView,
 )
+from .nodes.inspection.create_inspection_definition import (
+    CreateInspectionDefinition,
+)
 from .nodes.inspection.resolve_live_inspection_object import (
     ResolveLiveInspectionObject,
 )
@@ -90,6 +93,7 @@ __all__ = [
   "BaseMoveToTagAction",
   "BaseMoveRelativeAction",
   "CaptureInspectionObjectReferenceView",
+  "CreateInspectionDefinition",
   "PublishLiveInspectionObject",
   "ResolveLiveInspectionObject",
 ]
