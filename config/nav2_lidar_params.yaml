@@ -32,7 +32,7 @@ bt_navigator:
       - nav2_goal_updater_node_bt_node
       - nav2_recovery_node_bt_node
       - nav2_pipeline_sequence_bt_node
-      - nav2_round_robin_bt_node
+      - nav2_round_robin_node_bt_node
       - nav2_transform_available_condition_bt_node
       - nav2_time_expired_condition_bt_node
       - nav2_path_expiring_timer_condition
@@ -166,8 +166,8 @@ local_costmap:
       update_frequency: 10.0
       publish_frequency: 5.0
       rolling_window: true
-      width: 8.0
-      height: 8.0
+      width: 6
+      height: 10
       resolution: 0.05
       footprint: "[[0.55, 0.30], [-0.55, 0.30], [-0.55, -0.30], [0.55, -0.30]]"
       plugins: ["voxel_layer", "inflation_layer"]
