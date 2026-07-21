@@ -1,9 +1,10 @@
 """Synchronized hand-camera and base-tag reference-view inputs."""
 
 import math
+from collections import deque
 from copy import deepcopy
 from threading import Lock
-from typing import Dict, Optional, Tuple
+from typing import Deque, Dict, Optional, Set, Tuple
 
 from fault_detector_msgs.msg import TagElement, TagElementArray
 from message_filters import ApproximateTimeSynchronizer, Subscriber
@@ -21,7 +22,7 @@ ReferenceViewInputs = Tuple[
 
 
 class ReferenceViewInputSynchronizer:
-    """Retain the latest camera inputs and base-tag observations."""
+    """Retain synchronized camera inputs and timestamped base tags."""
 
     def __init__(
         self,
@@ -48,7 +49,9 @@ class ReferenceViewInputSynchronizer:
         self._camera_info: Optional[CameraInfo] = None
         self._latest_images: Optional[Tuple[Image, Image]] = None
         self._image_sequence = 0
-        self._base_tags: Dict[int, TagElement] = {}
+        self._tag_history_size = queue_size
+        self._base_tags: Dict[int, Deque[TagElement]] = {}
+        self._visible_tag_ids: Set[int] = set()
 
         self.rgb_subscription = Subscriber(
             node,
@@ -88,7 +91,7 @@ class ReferenceViewInputSynchronizer:
         reference_tag_id: int,
         minimum_image_sequence: int = 0,
     ) -> Optional[ReferenceViewInputs]:
-        """Return isolated camera inputs and the selected base tag."""
+        """Return camera inputs and the closest visible base tag."""
         if reference_tag_id < 0:
             raise ValueError("Reference tag ID must not be negative")
         if minimum_image_sequence < 0:
@@ -97,16 +100,22 @@ class ReferenceViewInputSynchronizer:
             )
 
         with self._lock:
-            tag = self._base_tags.get(reference_tag_id)
             if (
                 self._image_sequence < minimum_image_sequence
                 or self._latest_images is None
                 or self._camera_info is None
-                or tag is None
+                or reference_tag_id not in self._visible_tag_ids
             ):
                 return None
 
             rgb_image, depth_image = self._latest_images
+            tag = self._closest_tag(
+                reference_tag_id,
+                rgb_image,
+            )
+            if tag is None:
+                return None
+
             return deepcopy(
                 (rgb_image, depth_image, self._camera_info, tag)
             )
@@ -129,19 +138,26 @@ class ReferenceViewInputSynchronizer:
         observations: TagElementArray,
     ) -> None:
         with self._lock:
-            visible_tags = {}
+            visible_tag_ids = set()
             for observation in observations.elements:
                 tag_id = int(observation.id)
-                existing = self._base_tags.get(tag_id)
-                if (
-                    existing is not None
-                    and self._stamp_key(observation)
-                    < self._stamp_key(existing)
-                ):
-                    visible_tags[tag_id] = existing
-                else:
-                    visible_tags[tag_id] = deepcopy(observation)
-            self._base_tags = visible_tags
+                visible_tag_ids.add(tag_id)
+                history = self._base_tags.setdefault(
+                    tag_id,
+                    deque(maxlen=self._tag_history_size),
+                )
+                if not history:
+                    history.append(deepcopy(observation))
+                    continue
+
+                current_key = self._stamp_key(history[-1])
+                observation_key = self._stamp_key(observation)
+                if observation_key > current_key:
+                    history.append(deepcopy(observation))
+                elif observation_key == current_key:
+                    history[-1] = deepcopy(observation)
+
+            self._visible_tag_ids = visible_tag_ids
 
     def _synchronized_images_callback(
         self,
@@ -149,11 +165,38 @@ class ReferenceViewInputSynchronizer:
         depth_image: Image,
     ) -> None:
         with self._lock:
-            self._latest_images = (
-                deepcopy(rgb_image),
-                deepcopy(depth_image),
-            )
+            self._latest_images = (rgb_image, depth_image)
             self._image_sequence += 1
+
+    def _closest_tag(
+        self,
+        reference_tag_id: int,
+        rgb_image: Image,
+    ) -> Optional[TagElement]:
+        history = self._base_tags.get(reference_tag_id)
+        if not history:
+            return None
+
+        rgb_stamp = self._image_stamp_nanoseconds(rgb_image)
+        if rgb_stamp == 0:
+            return history[-1]
+
+        return min(
+            history,
+            key=lambda observation: abs(
+                self._tag_stamp_nanoseconds(observation) - rgb_stamp
+            ),
+        )
+
+    @staticmethod
+    def _image_stamp_nanoseconds(image: Image) -> int:
+        stamp = image.header.stamp
+        return stamp.sec * 1_000_000_000 + stamp.nanosec
+
+    @staticmethod
+    def _tag_stamp_nanoseconds(observation: TagElement) -> int:
+        stamp = observation.pose.header.stamp
+        return stamp.sec * 1_000_000_000 + stamp.nanosec
 
     @staticmethod
     def _stamp_key(observation: TagElement) -> Tuple[int, int]:
