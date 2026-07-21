@@ -32,6 +32,9 @@ class CommandID(str, Enum):
     MOVE_BASE_TO_TAG = "move_base_to_tag"
     MOVE_BASE_RELATIVE = "move_base_relative"
     DELETE_LANDMARK = "delete_landmark"
+    CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW = (
+        "capture_inspection_object_reference_view"
+    )
 
 
 class OrientationModes(str, Enum):

@@ -29,7 +29,8 @@ from fault_detector_spot.behaviour_tree import (
     InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
     NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
     BaseGetGoalTag, BaseMoveToTagAction, BaseMoveRelativeAction,
-    ResolveLiveInspectionObject, PublishLiveInspectionObject,
+    CaptureInspectionObjectReferenceView, ResolveLiveInspectionObject,
+    PublishLiveInspectionObject,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from fault_detector_spot.behaviour_tree.nodes.sensing.last_localization_pose import LastLocalizationPose
@@ -150,6 +151,12 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         "",
     )
 
+    inspection_object_root = read_parameter(
+        node,
+        "inspection.object_root",
+        "",
+    )
+
     inspection_execution_frame = read_parameter(
         node,
         "inspection.execution_frame",
@@ -190,6 +197,7 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         routine_id=active_routine_id,
         execution_frame=inspection_execution_frame,
         maximum_age_sec=probe_max_age_sec,
+        object_root=inspection_object_root or None,
         name="ResolveLiveInspectionObject",
     )
 
@@ -285,12 +293,80 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint(slam_helper)),
         (CommandID.MOVE_TO_WAYPOINT, build_navigate_to_goal_pose_tree),
         (CommandID.DELETE_LANDMARK, lambda n: DeleteLandmark(slam_helper)),
+        (
+            CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW,
+            build_capture_reference_view_behavior,
+        ),
     ]
 
     for cmd_id, ctor in specs:
         command_selector.add_child(make_simple_command_sequence(node, cmd_id, ctor))
 
     return command_selector
+
+
+def build_capture_reference_view_behavior(
+    node: rclpy.node.Node,
+) -> py_trees.behaviour.Behaviour:
+    """Build the configured inspection reference-view capture."""
+    object_root = read_parameter(
+        node,
+        "inspection.object_root",
+        "",
+    )
+    return CaptureInspectionObjectReferenceView(
+        rgb_topic=read_parameter(
+            node,
+            "inspection.reference_view_rgb_topic",
+            "/camera/hand/image",
+        ),
+        depth_topic=read_parameter(
+            node,
+            "inspection.reference_view_depth_topic",
+            "/depth_registered/hand/image",
+        ),
+        camera_info_topic=read_parameter(
+            node,
+            "inspection.reference_view_camera_info_topic",
+            "/camera/hand/camera_info",
+        ),
+        base_tag_topic=read_parameter(
+            node,
+            "inspection.reference_view_base_tag_topic",
+            "fault_detector/state/visible_tags",
+        ),
+        object_root=object_root or None,
+        synchronization_queue_size=int(read_parameter(
+            node,
+            "inspection.reference_view_sync_queue_size",
+            10,
+        )),
+        maximum_input_age_sec=float(read_parameter(
+            node,
+            "inspection.reference_view_maximum_input_age_sec",
+            0.25,
+        )),
+        maximum_timestamp_skew_sec=float(read_parameter(
+            node,
+            "inspection.reference_view_maximum_timestamp_skew_sec",
+            0.05,
+        )),
+        maximum_tag_timestamp_skew_sec=float(read_parameter(
+            node,
+            "inspection.reference_view_maximum_tag_timestamp_skew_sec",
+            0.25,
+        )),
+        fixed_frame=read_parameter(
+            node,
+            "inspection.reference_view_fixed_frame",
+            "odom",
+        ),
+        transform_timeout_sec=float(read_parameter(
+            node,
+            "inspection.reference_view_transform_timeout_sec",
+            0.05,
+        )),
+    )
 
 
 def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:

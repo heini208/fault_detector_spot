@@ -42,6 +42,9 @@ from .nodes.utility.wait_for_duration import WaitForDuration
 from .nodes.inspection.publish_live_inspection_object import (
     PublishLiveInspectionObject,
 )
+from .nodes.inspection.capture_inspection_object_reference_view import (
+    CaptureInspectionObjectReferenceView,
+)
 from .nodes.inspection.resolve_live_inspection_object import (
     ResolveLiveInspectionObject,
 )
@@ -86,6 +89,7 @@ __all__ = [
   "BaseGetGoalTag",
   "BaseMoveToTagAction",
   "BaseMoveRelativeAction",
+  "CaptureInspectionObjectReferenceView",
   "PublishLiveInspectionObject",
   "ResolveLiveInspectionObject",
 ]

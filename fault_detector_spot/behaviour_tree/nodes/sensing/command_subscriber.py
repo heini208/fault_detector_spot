@@ -158,6 +158,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         generic_command.offset = msg.offset
         generic_command.map_name = msg.map_name
         generic_command.waypoint_name = msg.waypoint_name
+        generic_command.object_id = msg.object_id
+        generic_command.routine_id = msg.routine_id
         return generic_command
 
     def is_estop_command(self, command) -> bool:

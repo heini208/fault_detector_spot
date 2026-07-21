@@ -21,6 +21,8 @@ class GenericCommand(SimpleCommand):
             orientation_mode: str = None,
             map_name: str = None,
             waypoint_name: str = None,
+            object_id: str = None,
+            routine_id: str = None,
     ):
         super().__init__(command_id, stamp)
         self.duration = duration
@@ -30,6 +32,8 @@ class GenericCommand(SimpleCommand):
         self.orientation_mode = orientation_mode
         self.map_name = map_name
         self.waypoint_name = waypoint_name
+        self.object_id = object_id
+        self.routine_id = routine_id
 
     def __repr__(self):
         ts = f"{self.stamp.sec}.{self.stamp.nanosec:09d}"
@@ -44,5 +48,9 @@ class GenericCommand(SimpleCommand):
         if self.goal_pose:
             p = self.goal_pose.pose.position
             parts.append(f"pose=({p.x:.2f}, {p.y:.2f}, {p.z:.2f})")
+        if self.object_id:
+            parts.append(f"object_id={self.object_id!r}")
+        if self.routine_id:
+            parts.append(f"routine_id={self.routine_id!r}")
 
         return "<GenericCommand " + " ".join(parts) + ">"
