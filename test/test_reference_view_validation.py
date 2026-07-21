@@ -4,6 +4,7 @@ from array import array
 from copy import deepcopy
 
 import pytest
+from fault_detector_msgs.msg import TagElement
 from sensor_msgs.msg import CameraInfo, Image
 
 from fault_detector_spot.inspection.models import (
@@ -50,22 +51,42 @@ def make_camera_info() -> CameraInfo:
     return camera_info
 
 
+def make_tag() -> TagElement:
+    """Create a timestamped base-camera reference tag."""
+    tag = TagElement()
+    tag.id = 7
+    tag.pose.header.frame_id = "body"
+    tag.pose.header.stamp.sec = 10
+    tag.pose.pose.position.x = 1.0
+    tag.pose.pose.orientation.w = 1.0
+    return tag
+
+
 def make_inputs():
     """Create one valid reference-view input set."""
     return (
         make_image("rgb8", 3),
         make_image("16UC1", 2),
         make_camera_info(),
+        make_tag(),
+        7,
         PoseData.identity(),
         "hand_color_image_sensor",
     )
 
 
-def validate(inputs, maximum_timestamp_skew_sec=0.05) -> None:
+def validate(
+    inputs,
+    maximum_timestamp_skew_sec=0.05,
+    maximum_tag_timestamp_skew_sec=0.25,
+) -> None:
     """Validate one mutable test input set."""
     validate_reference_view_inputs(
         *inputs,
         maximum_timestamp_skew_sec=maximum_timestamp_skew_sec,
+        maximum_tag_timestamp_skew_sec=(
+            maximum_tag_timestamp_skew_sec
+        ),
     )
 
 
@@ -156,6 +177,59 @@ def test_zero_timestamp_is_rejected():
         validate(inputs)
 
 
+def test_wrong_reference_tag_is_rejected():
+    """The camera dataset must use the object's selected tag."""
+    inputs = list(make_inputs())
+    inputs[3].id = 8
+
+    with pytest.raises(ValueError, match="does not match"):
+        validate(inputs)
+
+
+def test_tag_timestamp_skew_is_rejected():
+    """An old base tag cannot anchor a newer camera dataset."""
+    inputs = list(make_inputs())
+    inputs[3].pose.header.stamp.nanosec = 300_000_000
+
+    with pytest.raises(ValueError, match="tag and RGB timestamps"):
+        validate(inputs)
+
+
+def test_tag_timestamp_skew_boundary_is_accepted():
+    """A base tag at the configured timing limit is accepted."""
+    inputs = list(make_inputs())
+    inputs[3].pose.header.stamp.nanosec = 250_000_000
+
+    validate(inputs)
+
+
+def test_zero_tag_timestamp_is_rejected():
+    """An unstamped tag cannot anchor the captured image."""
+    inputs = list(make_inputs())
+    inputs[3].pose.header.stamp.sec = 0
+
+    with pytest.raises(ValueError, match="tag observation timestamp"):
+        validate(inputs)
+
+
+def test_empty_tag_observation_frame_is_rejected():
+    """A tag pose without its source frame cannot be transformed."""
+    inputs = list(make_inputs())
+    inputs[3].pose.header.frame_id = ""
+
+    with pytest.raises(ValueError, match="observation frame"):
+        validate(inputs)
+
+
+def test_invalid_tag_pose_is_rejected():
+    """Invalid base-tag geometry cannot define the object frame."""
+    inputs = list(make_inputs())
+    inputs[3].pose.pose.orientation.w = 2.0
+
+    with pytest.raises(ValueError, match="normalized"):
+        validate(inputs)
+
+
 @pytest.mark.parametrize(
     "intrinsics, message",
     [
@@ -180,16 +254,25 @@ def test_invalid_camera_intrinsics_are_rejected(
 def test_empty_controlled_frame_is_rejected():
     """The saved overview pose must identify its controlled frame."""
     inputs = list(make_inputs())
-    inputs[4] = " "
+    inputs[6] = " "
 
-    with pytest.raises(ValueError, match="controlled frame"):
+    with pytest.raises(ValueError, match="Controlled frame"):
+        validate(inputs)
+
+
+def test_non_camera_controlled_frame_is_rejected():
+    """The stored pose must describe the image optical frame."""
+    inputs = list(make_inputs())
+    inputs[6] = "arm0.link_wr1"
+
+    with pytest.raises(ValueError, match="RGB optical frame"):
         validate(inputs)
 
 
 def test_invalid_controlled_frame_pose_is_rejected():
     """The overview pose must be finite and normalized."""
     inputs = list(make_inputs())
-    inputs[3] = PoseData(
+    inputs[5] = PoseData(
         position=Vector3Data.zero(),
         orientation=QuaternionData(
             x=0.0,
@@ -201,6 +284,16 @@ def test_invalid_controlled_frame_pose_is_rejected():
 
     with pytest.raises(ValueError, match="normalized"):
         validate(inputs)
+
+
+@pytest.mark.parametrize("maximum_skew", [-0.01, float("inf")])
+def test_invalid_tag_timestamp_limit_is_rejected(maximum_skew):
+    """The tag timing tolerance must be finite and non-negative."""
+    with pytest.raises(ValueError, match="tag timestamp skew"):
+        validate(
+            make_inputs(),
+            maximum_tag_timestamp_skew_sec=maximum_skew,
+        )
 
 
 def test_validation_does_not_modify_inputs():

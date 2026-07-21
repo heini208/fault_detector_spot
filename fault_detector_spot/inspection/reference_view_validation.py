@@ -3,9 +3,15 @@
 import math
 from typing import TYPE_CHECKING
 
-from fault_detector_spot.inspection.models import PoseData, ReferenceView
+from fault_detector_spot.inspection.models import (
+    PoseData,
+    QuaternionData,
+    ReferenceView,
+    Vector3Data,
+)
 
 if TYPE_CHECKING:
+    from fault_detector_msgs.msg import TagElement
     from sensor_msgs.msg import CameraInfo, Image
 
 
@@ -25,9 +31,12 @@ def validate_reference_view_inputs(
     rgb_image: "Image",
     depth_image: "Image",
     camera_info: "CameraInfo",
+    reference_tag_observation: "TagElement",
+    expected_reference_tag_id: int,
     controlled_frame_pose_object: PoseData,
     controlled_frame: str,
     maximum_timestamp_skew_sec: float = 0.05,
+    maximum_tag_timestamp_skew_sec: float = 0.25,
 ) -> None:
     """Reject inputs that cannot produce a valid reference view."""
     if (
@@ -36,6 +45,13 @@ def validate_reference_view_inputs(
     ):
         raise ValueError(
             "Maximum timestamp skew must be finite and non-negative"
+        )
+    if (
+        not math.isfinite(maximum_tag_timestamp_skew_sec)
+        or maximum_tag_timestamp_skew_sec < 0.0
+    ):
+        raise ValueError(
+            "Maximum tag timestamp skew must be finite and non-negative"
         )
 
     _validate_image(
@@ -64,6 +80,16 @@ def validate_reference_view_inputs(
         depth_image,
         maximum_timestamp_skew_sec,
     )
+    _validate_reference_tag(
+        reference_tag_observation,
+        expected_reference_tag_id,
+        rgb_image,
+        maximum_tag_timestamp_skew_sec,
+    )
+    if controlled_frame != rgb_image.header.frame_id:
+        raise ValueError(
+            "Controlled frame must match the RGB optical frame"
+        )
 
     ReferenceView(
         controlled_frame_pose_object=controlled_frame_pose_object,
@@ -147,6 +173,53 @@ def _validate_timestamps(
     if skew_sec > maximum_timestamp_skew_sec:
         raise ValueError(
             "RGB and depth timestamps exceed the allowed skew"
+        )
+
+
+def _validate_reference_tag(
+    observation,
+    expected_tag_id,
+    rgb_image,
+    maximum_skew_sec,
+) -> None:
+    if expected_tag_id < 0:
+        raise ValueError("Expected reference tag ID must not be negative")
+    if int(observation.id) != expected_tag_id:
+        raise ValueError(
+            "Base-camera tag does not match the reference tag"
+        )
+    if not observation.pose.header.frame_id:
+        raise ValueError(
+            "Base-camera tag observation frame must not be empty"
+        )
+
+    pose = observation.pose.pose
+    PoseData(
+        position=Vector3Data(
+            x=pose.position.x,
+            y=pose.position.y,
+            z=pose.position.z,
+        ),
+        orientation=QuaternionData(
+            x=pose.orientation.x,
+            y=pose.orientation.y,
+            z=pose.orientation.z,
+            w=pose.orientation.w,
+        ),
+    ).validate()
+
+    rgb_stamp = _stamp_nanoseconds(
+        rgb_image.header.stamp,
+        "RGB image",
+    )
+    tag_stamp = _stamp_nanoseconds(
+        observation.pose.header.stamp,
+        "Base-camera tag observation",
+    )
+    skew_sec = abs(tag_stamp - rgb_stamp) / 1_000_000_000
+    if skew_sec > maximum_skew_sec:
+        raise ValueError(
+            "Base-camera tag and RGB timestamps exceed the allowed skew"
         )
 
 
