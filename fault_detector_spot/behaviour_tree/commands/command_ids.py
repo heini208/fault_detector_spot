@@ -34,6 +34,8 @@ class CommandID(str, Enum):
     DELETE_LANDMARK = "delete_landmark"
     CREATE_INSPECTION_OBJECT = "create_inspection_object"
     CREATE_INSPECTION_ROUTINE = "create_inspection_routine"
+    DELETE_INSPECTION_OBJECT = "delete_inspection_object"
+    DELETE_INSPECTION_ROUTINE = "delete_inspection_routine"
     CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW = (
         "capture_inspection_object_reference_view"
     )

@@ -220,6 +220,22 @@ def test_older_tag_update_does_not_replace_newer_observation(
     )
 
 
+def test_missing_tag_is_removed_by_next_visible_state(
+    make_synchronizer,
+):
+    """An absent tag cannot remain capturable from stale local state."""
+    synchronizer, _ = make_synchronizer()
+    synchronizer._camera_info_callback(CameraInfo())
+    synchronizer._synchronized_images_callback(Image(), Image())
+    synchronizer._base_tags_callback(
+        make_tag_array(make_tag(7, 200_000_000))
+    )
+
+    assert synchronizer.snapshot(7) is not None
+    synchronizer._base_tags_callback(make_tag_array())
+    assert synchronizer.snapshot(7) is None
+
+
 @pytest.mark.parametrize(
     "queue_size, skew, message",
     [

@@ -49,6 +49,7 @@ class CaptureInspectionObjectReferenceView(
         fixed_frame: str = "odom",
         transform_timeout_sec: float = 0.05,
         capture_timeout_sec: float = 3.0,
+        capture_max_attempts: int = 3,
         name: str = "CaptureInspectionObjectReferenceView",
     ):
         """Configure persistent capture resources and timing limits."""
@@ -73,7 +74,16 @@ class CaptureInspectionObjectReferenceView(
             raise ValueError(
                 "Capture timeout must be finite and positive"
             )
+        if (
+            isinstance(capture_max_attempts, bool)
+            or not isinstance(capture_max_attempts, int)
+            or capture_max_attempts <= 0
+        ):
+            raise ValueError(
+                "Capture maximum attempts must be a positive integer"
+            )
         self.capture_timeout_sec = capture_timeout_sec
+        self.capture_max_attempts = capture_max_attempts
         self.node: Optional[Node] = None
         self.object_repository: Optional[ObjectRepository] = None
         self.input_synchronizer: Optional[
@@ -82,7 +92,8 @@ class CaptureInspectionObjectReferenceView(
         self.tf_buffer: Optional[tf2_ros.Buffer] = None
         self.tf_listener: Optional[tf2_ros.TransformListener] = None
         self._request: Optional[Tuple[str, str, bool]] = None
-        self._request_started_nanoseconds: Optional[int] = None
+        self._attempt_started_nanoseconds: Optional[int] = None
+        self._attempt_number = 0
         self._minimum_image_sequence: Optional[int] = None
         self.blackboard = self.attach_blackboard_client()
 
@@ -117,7 +128,8 @@ class CaptureInspectionObjectReferenceView(
     def initialise(self) -> None:
         """Reset state when a new capture command enters this behavior."""
         self._request = None
-        self._request_started_nanoseconds = None
+        self._attempt_started_nanoseconds = None
+        self._attempt_number = 0
         self._minimum_image_sequence = None
 
     def update(self) -> py_trees.common.Status:
@@ -133,7 +145,7 @@ class CaptureInspectionObjectReferenceView(
                 self.input_synchronizer.image_sequence
                 < self._minimum_image_sequence
             ):
-                return self._wait_or_timeout(
+                return self._wait_retry_or_timeout(
                     current_time,
                     "a newer synchronized RGB and depth pair",
                 )
@@ -168,7 +180,7 @@ class CaptureInspectionObjectReferenceView(
             ReferenceViewInputNotReady,
             tf2_ros.TransformException,
         ) as exception:
-            return self._wait_or_timeout(
+            return self._wait_retry_or_timeout(
                 self.node.get_clock().now(),
                 str(exception),
             )
@@ -201,22 +213,24 @@ class CaptureInspectionObjectReferenceView(
             routine_id,
             replace_existing,
         )
-        self._request_started_nanoseconds = now.nanoseconds
+        self._attempt_number = 1
+        self._attempt_started_nanoseconds = now.nanoseconds
         self._minimum_image_sequence = (
             self.input_synchronizer.image_sequence + 1
         )
         self.feedback_message = (
-            "Waiting for a new synchronized reference-view frame"
+            "Waiting for a new synchronized reference-view frame, "
+            f"attempt 1/{self.capture_max_attempts}"
         )
 
-    def _wait_or_timeout(
+    def _wait_retry_or_timeout(
         self,
         current_time,
         reason: str,
     ) -> py_trees.common.Status:
         elapsed_sec = (
             current_time.nanoseconds
-            - self._request_started_nanoseconds
+            - self._attempt_started_nanoseconds
         ) / 1_000_000_000
         if elapsed_sec < self.capture_timeout_sec:
             self.feedback_message = (
@@ -225,8 +239,29 @@ class CaptureInspectionObjectReferenceView(
             )
             return py_trees.common.Status.RUNNING
 
+        if self._attempt_number < self.capture_max_attempts:
+            if self.node is not None:
+                self.node.get_logger().warning(
+                    "Reference-view capture attempt "
+                    f"{self._attempt_number}/"
+                    f"{self.capture_max_attempts} timed out: "
+                    f"{reason}. Retrying"
+                )
+            self._attempt_number += 1
+            self._attempt_started_nanoseconds = current_time.nanoseconds
+            self._minimum_image_sequence = (
+                self.input_synchronizer.image_sequence + 1
+            )
+            self.feedback_message = (
+                "Retrying reference-view capture, attempt "
+                f"{self._attempt_number}/"
+                f"{self.capture_max_attempts}"
+            )
+            return py_trees.common.Status.RUNNING
+
         return self._failure(RuntimeError(
-            f"timed out after {self.capture_timeout_sec:.3f} s: "
+            f"failed after {self.capture_max_attempts} attempts of "
+            f"{self.capture_timeout_sec:.3f} s: "
             f"{reason}"
         ))
 

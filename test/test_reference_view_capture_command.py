@@ -36,6 +36,7 @@ class FakeLogger:
     def __init__(self):
         """Initialize log storage."""
         self.info_messages = []
+        self.warning_messages = []
         self.error_messages = []
 
     def info(self, message):
@@ -45,6 +46,10 @@ class FakeLogger:
     def error(self, message):
         """Record an error message."""
         self.error_messages.append(message)
+
+    def warning(self, message):
+        """Record a warning message."""
+        self.warning_messages.append(message)
 
 
 class FakeClock:
@@ -186,6 +191,7 @@ def configure_behavior(monkeypatch, capture_error=None):
         fixed_frame="odom",
         transform_timeout_sec=0.1,
         capture_timeout_sec=3.0,
+        capture_max_attempts=3,
     )
     node = FakeNode()
     behavior.setup(node=node)
@@ -263,6 +269,8 @@ def test_command_selector_dispatches_reference_view_capture(
     )
     assert CommandID.CREATE_INSPECTION_OBJECT in command_ids
     assert CommandID.CREATE_INSPECTION_ROUTINE in command_ids
+    assert CommandID.DELETE_INSPECTION_OBJECT in command_ids
+    assert CommandID.DELETE_INSPECTION_ROUTINE in command_ids
 
 
 def test_behavior_creates_runtime_resources_and_captures(monkeypatch):
@@ -380,23 +388,56 @@ def test_capture_failure_becomes_behavior_failure(monkeypatch):
     assert len(node.logger.error_messages) == 1
 
 
-def test_waiting_for_new_images_is_non_blocking_and_times_out(
+def test_waiting_for_new_images_retries_three_times_then_fails(
     monkeypatch,
 ):
-    """One click remains active until its configured deadline."""
+    """One click receives three bounded nonblocking attempts."""
     behavior, node, _, capture_calls = configure_behavior(monkeypatch)
     create_writer(make_command())
 
     assert behavior.update() == py_trees.common.Status.RUNNING
-    node.clock.advance(2.9)
+    node.clock.advance(3.1)
     assert behavior.update() == py_trees.common.Status.RUNNING
+    assert behavior._attempt_number == 2
+    assert len(node.logger.warning_messages) == 1
     assert node.logger.error_messages == []
 
-    node.clock.advance(0.2)
+    node.clock.advance(3.1)
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert behavior._attempt_number == 3
+    assert len(node.logger.warning_messages) == 2
+
+    node.clock.advance(3.1)
     assert behavior.update() == py_trees.common.Status.FAILURE
     assert capture_calls == []
-    assert "timed out after 3.000 s" in behavior.feedback_message
+    assert "failed after 3 attempts of 3.000 s" in (
+        behavior.feedback_message
+    )
     assert len(node.logger.error_messages) == 1
+
+
+def test_retry_requires_an_image_from_the_new_attempt(monkeypatch):
+    """A retry cannot reuse the frame rejected by the prior attempt."""
+    behavior, node, _, capture_calls = configure_behavior(
+        monkeypatch,
+        capture_error=[
+            capture_module.ReferenceViewCaptureNotReady("RGB stale")
+        ],
+    )
+    create_writer(make_command())
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    behavior.input_synchronizer.image_sequence = 1
+    node.clock.advance(3.1)
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert behavior._minimum_image_sequence == 2
+    assert len(capture_calls) == 1
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert len(capture_calls) == 1
+    behavior.input_synchronizer.image_sequence = 2
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+    assert len(capture_calls) == 2
 
 
 def test_transient_input_failure_retries_until_success(monkeypatch):
@@ -425,11 +466,22 @@ def test_invalid_capture_timeout_is_rejected(timeout):
         )
 
 
+@pytest.mark.parametrize("attempts", [0, -1, 1.5, True])
+def test_invalid_capture_attempt_count_is_rejected(attempts):
+    """Capture retry count must be a positive integer."""
+    with pytest.raises(ValueError, match="maximum attempts"):
+        CaptureInspectionObjectReferenceView(
+            capture_max_attempts=attempts,
+        )
+
+
 @pytest.mark.parametrize(
     "command_id",
     [
         CommandID.CREATE_INSPECTION_OBJECT,
         CommandID.CREATE_INSPECTION_ROUTINE,
+        CommandID.DELETE_INSPECTION_OBJECT,
+        CommandID.DELETE_INSPECTION_ROUTINE,
         CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW,
     ],
 )

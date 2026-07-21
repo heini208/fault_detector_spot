@@ -199,6 +199,63 @@ def test_object_repository_requires_object_before_routine(tmp_path):
         ObjectRepository(tmp_path).add_routine("missing", routine)
 
 
+def test_object_repository_deletes_routine_and_owned_datasets(tmp_path):
+    """Routine deletion preserves its object and removes owned data."""
+    repository = ObjectRepository(tmp_path)
+    original = make_object()
+    repository.save(original)
+    stored = repository.save_reference_dataset(
+        "motor_a",
+        "magnetic_scan",
+        original.routines[0].reference_view,
+        *make_reference_inputs(),
+    )
+    dataset_path = (
+        tmp_path
+        / "motor_a"
+        / stored.routines[0].reference_view.reference_dataset_path
+    )
+
+    result = repository.delete_routine(
+        "motor_a",
+        "magnetic_scan",
+    )
+
+    assert result.routines == []
+    assert repository.load("motor_a").routines == []
+    assert not dataset_path.exists()
+    assert not dataset_path.parent.exists()
+
+
+def test_object_repository_rejects_missing_routine_deletion(tmp_path):
+    """Routine deletion cannot silently accept an unknown target."""
+    repository = ObjectRepository(tmp_path)
+    repository.save(make_object())
+
+    with pytest.raises(KeyError, match="does not exist"):
+        repository.delete_routine("motor_a", "missing")
+
+    assert repository.load("motor_a") == make_object()
+
+
+def test_object_repository_deletes_complete_object_tree(tmp_path):
+    """Object deletion removes its definition and all owned datasets."""
+    repository = ObjectRepository(tmp_path)
+    original = make_object()
+    repository.save(original)
+    repository.save_reference_dataset(
+        "motor_a",
+        "magnetic_scan",
+        original.routines[0].reference_view,
+        *make_reference_inputs(),
+    )
+    object_dir = repository.get_object_dir("motor_a")
+
+    assert repository.delete_object("motor_a") is True
+    assert not object_dir.exists()
+    assert repository.delete_object("motor_a") is False
+
+
 def test_reference_dataset_load_requires_captured_view(tmp_path):
     """An uncaptured routine has no loadable camera dataset."""
     repository = ObjectRepository(tmp_path)

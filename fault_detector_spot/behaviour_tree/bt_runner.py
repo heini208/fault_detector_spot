@@ -30,6 +30,7 @@ from fault_detector_spot.behaviour_tree import (
     NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
     BaseGetGoalTag, BaseMoveToTagAction, BaseMoveRelativeAction,
     CaptureInspectionObjectReferenceView, CreateInspectionDefinition,
+    DeleteInspectionDefinition,
     ResolveLiveInspectionObject, PublishLiveInspectionObject,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
@@ -308,6 +309,20 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             ),
         ),
         (
+            CommandID.DELETE_INSPECTION_OBJECT,
+            lambda n: build_inspection_deletion_behavior(
+                n,
+                CommandID.DELETE_INSPECTION_OBJECT,
+            ),
+        ),
+        (
+            CommandID.DELETE_INSPECTION_ROUTINE,
+            lambda n: build_inspection_deletion_behavior(
+                n,
+                CommandID.DELETE_INSPECTION_ROUTINE,
+            ),
+        ),
+        (
             CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW,
             build_capture_reference_view_behavior,
         ),
@@ -330,6 +345,22 @@ def build_inspection_creation_behavior(
         "",
     )
     return CreateInspectionDefinition(
+        command_id=command_id,
+        object_root=object_root or None,
+    )
+
+
+def build_inspection_deletion_behavior(
+    node: rclpy.node.Node,
+    command_id: CommandID,
+) -> py_trees.behaviour.Behaviour:
+    """Build an explicit object or routine deletion behavior."""
+    object_root = read_parameter(
+        node,
+        "inspection.object_root",
+        "",
+    )
+    return DeleteInspectionDefinition(
         command_id=command_id,
         object_root=object_root or None,
     )
@@ -400,6 +431,11 @@ def build_capture_reference_view_behavior(
             node,
             "inspection.reference_view_capture_timeout_sec",
             3.0,
+        )),
+        capture_max_attempts=int(read_parameter(
+            node,
+            "inspection.reference_view_capture_max_attempts",
+            3,
         )),
     )
 

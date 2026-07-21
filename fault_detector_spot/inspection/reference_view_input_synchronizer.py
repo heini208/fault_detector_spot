@@ -129,6 +129,7 @@ class ReferenceViewInputSynchronizer:
         observations: TagElementArray,
     ) -> None:
         with self._lock:
+            visible_tags = {}
             for observation in observations.elements:
                 tag_id = int(observation.id)
                 existing = self._base_tags.get(tag_id)
@@ -137,8 +138,10 @@ class ReferenceViewInputSynchronizer:
                     and self._stamp_key(observation)
                     < self._stamp_key(existing)
                 ):
-                    continue
-                self._base_tags[tag_id] = deepcopy(observation)
+                    visible_tags[tag_id] = existing
+                else:
+                    visible_tags[tag_id] = deepcopy(observation)
+            self._base_tags = visible_tags
 
     def _synchronized_images_callback(
         self,

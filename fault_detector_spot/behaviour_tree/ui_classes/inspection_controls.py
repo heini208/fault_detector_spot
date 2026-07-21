@@ -121,6 +121,10 @@ class InspectionControls(UIControlHelper):
         self.create_object_button = QPushButton("Create Object")
         self.create_object_button.clicked.connect(self.handle_create_object)
         row.addWidget(self.create_object_button)
+
+        self.delete_object_button = QPushButton("Delete Object")
+        self.delete_object_button.clicked.connect(self.handle_delete_object)
+        row.addWidget(self.delete_object_button)
         return row
 
     def _make_routine_identity_row(self):
@@ -153,6 +157,12 @@ class InspectionControls(UIControlHelper):
             self.handle_create_routine
         )
         row.addWidget(self.create_routine_button)
+
+        self.delete_routine_button = QPushButton("Delete Routine")
+        self.delete_routine_button.clicked.connect(
+            self.handle_delete_routine
+        )
+        row.addWidget(self.delete_routine_button)
         return row
 
     def _make_reference_view_row(self):
@@ -436,5 +446,63 @@ class InspectionControls(UIControlHelper):
         command.inspection.object.object_id = object_id
         command.inspection.routine.routine_id = routine_id
         command.inspection.replace_existing = replace_existing
+        self._publish(command)
+        return True
+
+    def handle_delete_object(self):
+        """Publish deletion of the selected saved object."""
+        object_id = self.saved_object_dropdown.currentData()
+        if not object_id:
+            self.show_warning(
+                "No Object Selected",
+                "Select a saved inspection object to delete.",
+            )
+            return False
+        if not self.ask_question(
+            "Delete Inspection Object",
+            (
+                f"Delete '{object_id}' and all of its routines, "
+                "reference views, and probe points?"
+            ),
+        ):
+            return False
+
+        command = self._new_command(
+            CommandID.DELETE_INSPECTION_OBJECT
+        )
+        command.inspection.object.object_id = object_id
+        self._publish(command)
+        return True
+
+    def handle_delete_routine(self):
+        """Publish deletion of the selected saved routine."""
+        object_id = self.saved_object_dropdown.currentData()
+        routine_id = self.saved_routine_dropdown.currentData()
+        if not object_id:
+            self.show_warning(
+                "No Object Selected",
+                "Select a saved inspection object first.",
+            )
+            return False
+        if not routine_id:
+            self.show_warning(
+                "No Routine Selected",
+                "Select a saved inspection routine to delete.",
+            )
+            return False
+        if not self.ask_question(
+            "Delete Inspection Routine",
+            (
+                f"Delete '{object_id}/{routine_id}' including its "
+                "reference view and probe points?"
+            ),
+        ):
+            return False
+
+        command = self._new_command(
+            CommandID.DELETE_INSPECTION_ROUTINE
+        )
+        command.inspection.object.object_id = object_id
+        command.inspection.routine.routine_id = routine_id
         self._publish(command)
         return True

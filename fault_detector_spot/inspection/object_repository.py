@@ -363,8 +363,8 @@ class ObjectRepository:
             and (directory / self.FILE_NAME).is_file()
         )
 
-    def delete(self, object_id: str) -> bool:
-        """Delete an object directory."""
+    def delete_object(self, object_id: str) -> bool:
+        """Delete an object and every dataset owned by it."""
         object_dir = self.get_object_dir(object_id)
 
         if not object_dir.exists():
@@ -372,6 +372,43 @@ class ObjectRepository:
 
         shutil.rmtree(object_dir)
         return True
+
+    def delete_routine(
+        self,
+        object_id: str,
+        routine_id: str,
+    ) -> InspectionObject:
+        """Delete a routine and every dataset owned by it."""
+        validate_storage_name(object_id, "object ID")
+        validate_storage_name(routine_id, "routine ID")
+        definition = self.load(object_id)
+        if definition.get_routine(routine_id) is None:
+            raise KeyError(
+                "Inspection routine does not exist: "
+                f"{object_id}/{routine_id}"
+            )
+
+        stored_definition = replace(
+            definition,
+            routines=[
+                routine
+                for routine in definition.routines
+                if routine.routine_id != routine_id
+            ],
+        )
+        self.save(stored_definition)
+        routine_dataset_dir = (
+            self.get_object_dir(object_id)
+            / self.REFERENCE_DATASET_DIRECTORY
+            / routine_id
+        )
+        if routine_dataset_dir.exists():
+            shutil.rmtree(routine_dataset_dir)
+        return stored_definition
+
+    def delete(self, object_id: str) -> bool:
+        """Delete an object through the retained repository API."""
+        return self.delete_object(object_id)
 
 
 def _capture_id(rgb_image: Image) -> str:

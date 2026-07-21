@@ -190,6 +190,77 @@ def test_confirmed_capture_enables_replacement(controls):
     assert message.inspection.replace_existing is True
 
 
+def test_delete_object_publishes_selected_identifier(controls):
+    """Object deletion targets a persisted dropdown selection."""
+    save_definition(controls)
+    controls.refresh_saved_definitions()
+    controls.saved_object_dropdown.setCurrentIndex(
+        controls.saved_object_dropdown.findData("motor_a")
+    )
+
+    assert controls.handle_delete_object() is True
+
+    message = controls.complex_command_publisher.messages[-1]
+    assert message.command.command_id == (
+        CommandID.DELETE_INSPECTION_OBJECT
+    )
+    assert message.inspection.object.object_id == "motor_a"
+
+
+def test_delete_routine_publishes_selected_identifiers(controls):
+    """Routine deletion targets its persisted parent and routine."""
+    save_definition(controls)
+    controls.refresh_saved_definitions()
+    controls.saved_object_dropdown.setCurrentIndex(
+        controls.saved_object_dropdown.findData("motor_a")
+    )
+    controls.saved_routine_dropdown.setCurrentIndex(
+        controls.saved_routine_dropdown.findData("magnetic_scan")
+    )
+
+    assert controls.handle_delete_routine() is True
+
+    message = controls.complex_command_publisher.messages[-1]
+    assert message.command.command_id == (
+        CommandID.DELETE_INSPECTION_ROUTINE
+    )
+    assert message.inspection.object.object_id == "motor_a"
+    assert message.inspection.routine.routine_id == "magnetic_scan"
+
+
+@pytest.mark.parametrize(
+    "handler_name",
+    ["handle_delete_object", "handle_delete_routine"],
+)
+def test_deletion_requires_saved_selection(controls, handler_name):
+    """Typed identifiers alone cannot select a destructive target."""
+    controls.object_id_field.setText("motor_a")
+    controls.routine_id_field.setText("magnetic_scan")
+
+    assert getattr(controls, handler_name)() is False
+    assert controls.complex_command_publisher.messages == []
+
+
+@pytest.mark.parametrize(
+    "handler_name",
+    ["handle_delete_object", "handle_delete_routine"],
+)
+def test_cancelled_deletion_does_not_publish(controls, handler_name):
+    """Deletion confirmation cancellation preserves stored data."""
+    save_definition(controls)
+    controls.refresh_saved_definitions()
+    controls.saved_object_dropdown.setCurrentIndex(
+        controls.saved_object_dropdown.findData("motor_a")
+    )
+    controls.saved_routine_dropdown.setCurrentIndex(
+        controls.saved_routine_dropdown.findData("magnetic_scan")
+    )
+    controls.ask_question = lambda title, message: False
+
+    assert getattr(controls, handler_name)() is False
+    assert controls.complex_command_publisher.messages == []
+
+
 def test_saved_object_selection_loads_definition_fields(controls):
     """Selecting a stored object fills the command-entry fields."""
     save_definition(controls)
