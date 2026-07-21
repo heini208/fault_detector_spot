@@ -27,6 +27,10 @@ _DEPTH_BYTES_PER_PIXEL = {
 }
 
 
+class ReferenceViewInputNotReady(ValueError):
+    """Indicate that newer temporally compatible inputs may succeed."""
+
+
 def validate_reference_view_inputs(
     rgb_image: "Image",
     depth_image: "Image",
@@ -171,7 +175,7 @@ def _validate_timestamps(
     ]
     skew_sec = (max(stamps) - min(stamps)) / 1_000_000_000
     if skew_sec > maximum_timestamp_skew_sec:
-        raise ValueError(
+        raise ReferenceViewInputNotReady(
             "RGB and depth timestamps exceed the allowed skew"
         )
 
@@ -218,7 +222,7 @@ def _validate_reference_tag(
     )
     skew_sec = abs(tag_stamp - rgb_stamp) / 1_000_000_000
     if skew_sec > maximum_skew_sec:
-        raise ValueError(
+        raise ReferenceViewInputNotReady(
             "Base-camera tag and RGB timestamps exceed the allowed skew"
         )
 

@@ -39,6 +39,7 @@ class Fault_Detector_UI(QWidget):
         self.visible_tags = {}
         self.reachable_tags = {}
         self.available_frames = []
+        self.inspection_object_root = self._inspection_root_parameter()
 
         if self.node:
             self.init_ros_communication()
@@ -99,6 +100,17 @@ class Fault_Detector_UI(QWidget):
         if self.tabs.tabText(index) == "Navigation Control":
             self.navigation_controls._apply_map_list()
             self.navigation_controls._apply_waypoint_list()
+        if self.tabs.tabText(index) == "Inspection Control":
+            self.inspection_controls.refresh_saved_definitions()
+
+    def _inspection_root_parameter(self):
+        if self.node is None:
+            return None
+        parameter_name = "inspection.object_root"
+        if not self.node.has_parameter(parameter_name):
+            self.node.declare_parameter(parameter_name, "")
+        value = self.node.get_parameter(parameter_name).value
+        return value.strip() or None
 
     def _make_estop_row(self) -> QHBoxLayout:
         row = QHBoxLayout()

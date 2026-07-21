@@ -47,6 +47,7 @@ class ReferenceViewInputSynchronizer:
         self._lock = Lock()
         self._camera_info: Optional[CameraInfo] = None
         self._latest_images: Optional[Tuple[Image, Image]] = None
+        self._image_sequence = 0
         self._base_tags: Dict[int, TagElement] = {}
 
         self.rgb_subscription = Subscriber(
@@ -85,15 +86,21 @@ class ReferenceViewInputSynchronizer:
     def snapshot(
         self,
         reference_tag_id: int,
+        minimum_image_sequence: int = 0,
     ) -> Optional[ReferenceViewInputs]:
         """Return isolated camera inputs and the selected base tag."""
         if reference_tag_id < 0:
             raise ValueError("Reference tag ID must not be negative")
+        if minimum_image_sequence < 0:
+            raise ValueError(
+                "Minimum image sequence must not be negative"
+            )
 
         with self._lock:
             tag = self._base_tags.get(reference_tag_id)
             if (
-                self._latest_images is None
+                self._image_sequence < minimum_image_sequence
+                or self._latest_images is None
                 or self._camera_info is None
                 or tag is None
             ):
@@ -103,6 +110,12 @@ class ReferenceViewInputSynchronizer:
             return deepcopy(
                 (rgb_image, depth_image, self._camera_info, tag)
             )
+
+    @property
+    def image_sequence(self) -> int:
+        """Return the number of synchronized image pairs received."""
+        with self._lock:
+            return self._image_sequence
 
     def _camera_info_callback(
         self,
@@ -137,6 +150,7 @@ class ReferenceViewInputSynchronizer:
                 deepcopy(rgb_image),
                 deepcopy(depth_image),
             )
+            self._image_sequence += 1
 
     @staticmethod
     def _stamp_key(observation: TagElement) -> Tuple[int, int]:

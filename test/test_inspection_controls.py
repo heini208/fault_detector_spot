@@ -12,6 +12,16 @@ from fault_detector_spot.behaviour_tree.commands.command_ids import (
 from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
     InspectionControls,
 )
+from fault_detector_spot.inspection.models import (
+    InspectionObject,
+    InspectionRoutine,
+    PoseData,
+    ReferenceTag,
+    ReferenceView,
+)
+from fault_detector_spot.inspection.object_repository import (
+    ObjectRepository,
+)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -31,11 +41,12 @@ class FakePublisher:
 class FakeUI:
     """Provide the main UI contract used by inspection controls."""
 
-    def __init__(self):
+    def __init__(self, inspection_object_root):
         """Initialize UI dependencies."""
         self.node = None
         self.status_label = QLabel()
         self.complex_command_publisher = FakePublisher()
+        self.inspection_object_root = inspection_object_root
 
     def build_basic_command(self, command_id):
         """Build the command header used by controls."""
@@ -51,13 +62,47 @@ def application():
 
 
 @pytest.fixture
-def controls(application):
+def controls(application, tmp_path):
     """Create isolated inspection controls."""
-    ui = FakeUI()
+    ui = FakeUI(tmp_path)
     result = InspectionControls(ui)
     result.show_warning = lambda title, message: None
     result.ask_question = lambda title, message: True
     return result
+
+
+def save_definition(controls, captured=False):
+    """Persist one selectable object and routine for UI tests."""
+    reference_view = None
+    if captured:
+        reference_view = ReferenceView(
+            controlled_frame_pose_object=PoseData.identity(),
+            controlled_frame="hand_color_image_sensor",
+            reference_dataset_path=(
+                "reference_datasets/magnetic_scan/10_200000000"
+            ),
+        )
+    definition = InspectionObject(
+        object_id="motor_a",
+        display_name="Motor A",
+        reference_tag=ReferenceTag(
+            tag_id=23,
+            tag_family="36h11",
+        ),
+        routines=[
+            InspectionRoutine(
+                routine_id="magnetic_scan",
+                display_name="Magnetic scan",
+                sensor_id="bmm150",
+                probe_frame="sensor_tip",
+                reference_view=reference_view,
+            )
+        ],
+    )
+    ObjectRepository(
+        controls.object_repository.root_dir
+    ).create(definition)
+    return definition
 
 
 def set_object_fields(controls):
@@ -143,6 +188,74 @@ def test_confirmed_capture_enables_replacement(controls):
 
     message = controls.complex_command_publisher.messages[-1]
     assert message.inspection.replace_existing is True
+
+
+def test_saved_object_selection_loads_definition_fields(controls):
+    """Selecting a stored object fills the command-entry fields."""
+    save_definition(controls)
+
+    controls.refresh_saved_definitions()
+    controls.saved_object_dropdown.setCurrentIndex(
+        controls.saved_object_dropdown.findData("motor_a")
+    )
+
+    assert controls.object_id_field.text() == "motor_a"
+    assert controls.object_display_name_field.text() == "Motor A"
+    assert controls.reference_tag_id_field.text() == "23"
+    assert controls.reference_tag_family_field.text() == "36h11"
+    assert controls.saved_routine_dropdown.findData(
+        "magnetic_scan"
+    ) >= 0
+
+
+def test_saved_routine_selection_loads_fields_and_capture_state(
+    controls,
+):
+    """Routine selection exposes its configuration and capture state."""
+    save_definition(controls, captured=True)
+    controls.refresh_saved_definitions()
+    controls.saved_object_dropdown.setCurrentIndex(
+        controls.saved_object_dropdown.findData("motor_a")
+    )
+    controls.saved_routine_dropdown.setCurrentIndex(
+        controls.saved_routine_dropdown.findData("magnetic_scan")
+    )
+
+    assert controls.routine_id_field.text() == "magnetic_scan"
+    assert controls.routine_display_name_field.text() == (
+        "Magnetic scan"
+    )
+    assert controls.sensor_id_field.text() == "bmm150"
+    assert controls.probe_frame_field.text() == "sensor_tip"
+    assert "Reference view: captured" in (
+        controls.reference_view_status_label.text()
+    )
+    assert "10_200000000" in (
+        controls.reference_view_status_label.text()
+    )
+
+
+def test_uncaptured_routine_is_identified(controls):
+    """The UI distinguishes a configured routine from a taught one."""
+    save_definition(controls)
+    controls.refresh_saved_definitions()
+    controls.saved_object_dropdown.setCurrentIndex(
+        controls.saved_object_dropdown.findData("motor_a")
+    )
+    controls.saved_routine_dropdown.setCurrentIndex(
+        controls.saved_routine_dropdown.findData("magnetic_scan")
+    )
+
+    assert controls.reference_view_status_label.text() == (
+        "Reference view: not captured"
+    )
+
+
+def test_storage_location_is_visible(controls):
+    """The tab exposes the exact persistent object repository path."""
+    assert str(controls.object_repository.root_dir) in (
+        controls.storage_path_label.text()
+    )
 
 
 @pytest.mark.parametrize(

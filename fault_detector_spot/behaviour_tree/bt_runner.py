@@ -396,6 +396,11 @@ def build_capture_reference_view_behavior(
             "inspection.reference_view_transform_timeout_sec",
             0.05,
         )),
+        capture_timeout_sec=float(read_parameter(
+            node,
+            "inspection.reference_view_capture_timeout_sec",
+            3.0,
+        )),
     )
 
 

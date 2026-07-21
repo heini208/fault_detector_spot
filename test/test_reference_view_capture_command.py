@@ -48,11 +48,19 @@ class FakeLogger:
 
 
 class FakeClock:
-    """Provide one fixed capture time."""
+    """Provide a controllable capture time."""
+
+    def __init__(self):
+        """Start at the standard fresh-input test time."""
+        self.nanoseconds = 10_300_000_000
 
     def now(self):
-        """Return the fixed time."""
-        return SimpleNamespace(nanoseconds=10_300_000_000)
+        """Return the current test time."""
+        return SimpleNamespace(nanoseconds=self.nanoseconds)
+
+    def advance(self, seconds):
+        """Advance the test clock by a duration in seconds."""
+        self.nanoseconds += int(seconds * 1_000_000_000)
 
 
 class FakeNode:
@@ -61,10 +69,11 @@ class FakeNode:
     def __init__(self):
         """Initialize fake node resources."""
         self.logger = FakeLogger()
+        self.clock = FakeClock()
 
     def get_clock(self):
-        """Return the fixed clock."""
-        return FakeClock()
+        """Return the controllable clock."""
+        return self.clock
 
     def get_logger(self):
         """Return the recorded logger."""
@@ -104,7 +113,7 @@ def create_writer(command):
 def configure_behavior(monkeypatch, capture_error=None):
     """Create the behavior with observable runtime resources."""
     repository = object()
-    synchronizer = object()
+    synchronizer = SimpleNamespace(image_sequence=0)
     tf_buffer = object()
     created = {}
     capture_calls = []
@@ -125,6 +134,11 @@ def configure_behavior(monkeypatch, capture_error=None):
         make_synchronizer,
     )
     monkeypatch.setattr(
+        capture_module,
+        "validate_reference_view_capture_target",
+        lambda *args: created.setdefault("capture_target", args),
+    )
+    monkeypatch.setattr(
         capture_module.tf2_ros,
         "Buffer",
         lambda: tf_buffer,
@@ -140,7 +154,12 @@ def configure_behavior(monkeypatch, capture_error=None):
 
     def capture(*args, **kwargs):
         capture_calls.append((args, kwargs))
-        if capture_error is not None:
+        if isinstance(capture_error, list) and capture_error:
+            raise capture_error.pop(0)
+        if capture_error is not None and not isinstance(
+            capture_error,
+            list,
+        ):
             raise capture_error
         view = SimpleNamespace(
             reference_dataset_path=(
@@ -166,6 +185,7 @@ def configure_behavior(monkeypatch, capture_error=None):
         maximum_tag_timestamp_skew_sec=0.2,
         fixed_frame="odom",
         transform_timeout_sec=0.1,
+        capture_timeout_sec=3.0,
     )
     node = FakeNode()
     behavior.setup(node=node)
@@ -246,14 +266,17 @@ def test_command_selector_dispatches_reference_view_capture(
 
 
 def test_behavior_creates_runtime_resources_and_captures(monkeypatch):
-    """One command invokes the complete capture transaction."""
+    """One command waits for and captures the next synchronized pair."""
     behavior, node, created, capture_calls = configure_behavior(
         monkeypatch
     )
     create_writer(make_command())
 
+    first_status = behavior.update()
+    behavior.input_synchronizer.image_sequence = 1
     status = behavior.update()
 
+    assert first_status == py_trees.common.Status.RUNNING
     assert status == py_trees.common.Status.SUCCESS
     assert created["repository"][0] == "/tmp/objects"
     assert created["synchronizer"]["queue_size"] == 7
@@ -261,6 +284,11 @@ def test_behavior_creates_runtime_resources_and_captures(monkeypatch):
         "/depth_registered/hand/camera_info"
     )
     assert created["listener"] == (behavior.tf_buffer, node)
+    assert created["capture_target"][1:4] == (
+        "motor_a",
+        "magnetic_scan",
+        False,
+    )
     args, kwargs = capture_calls[0]
     assert args[0] is behavior.object_repository
     assert args[1] is behavior.input_synchronizer
@@ -274,6 +302,7 @@ def test_behavior_creates_runtime_resources_and_captures(monkeypatch):
         "fixed_frame": "odom",
         "transform_timeout_sec": 0.1,
         "replace_existing": False,
+        "minimum_image_sequence": 1,
     }
     assert "reference_datasets/magnetic_scan" in (
         behavior.feedback_message
@@ -286,6 +315,8 @@ def test_behavior_passes_explicit_replacement(monkeypatch):
     behavior, _, _, capture_calls = configure_behavior(monkeypatch)
     create_writer(make_command(replace_existing=True))
 
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    behavior.input_synchronizer.image_sequence = 1
     assert behavior.update() == py_trees.common.Status.SUCCESS
     assert capture_calls[0][1]["replace_existing"] is True
 
@@ -339,12 +370,59 @@ def test_capture_failure_becomes_behavior_failure(monkeypatch):
     )
     create_writer(make_command())
 
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    behavior.input_synchronizer.image_sequence = 1
     status = behavior.update()
 
     assert status == py_trees.common.Status.FAILURE
     assert len(capture_calls) == 1
     assert "inputs unavailable" in behavior.feedback_message
     assert len(node.logger.error_messages) == 1
+
+
+def test_waiting_for_new_images_is_non_blocking_and_times_out(
+    monkeypatch,
+):
+    """One click remains active until its configured deadline."""
+    behavior, node, _, capture_calls = configure_behavior(monkeypatch)
+    create_writer(make_command())
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    node.clock.advance(2.9)
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert node.logger.error_messages == []
+
+    node.clock.advance(0.2)
+    assert behavior.update() == py_trees.common.Status.FAILURE
+    assert capture_calls == []
+    assert "timed out after 3.000 s" in behavior.feedback_message
+    assert len(node.logger.error_messages) == 1
+
+
+def test_transient_input_failure_retries_until_success(monkeypatch):
+    """A temporary sensor mismatch does not consume the command."""
+    errors = [capture_module.ReferenceViewCaptureNotReady("RGB stale")]
+    behavior, node, _, capture_calls = configure_behavior(
+        monkeypatch,
+        capture_error=errors,
+    )
+    create_writer(make_command())
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    behavior.input_synchronizer.image_sequence = 1
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert node.logger.error_messages == []
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+    assert len(capture_calls) == 2
+
+
+@pytest.mark.parametrize("timeout", [0.0, -1.0, float("inf")])
+def test_invalid_capture_timeout_is_rejected(timeout):
+    """Capture cannot be configured with an unusable deadline."""
+    with pytest.raises(ValueError, match="Capture timeout"):
+        CaptureInspectionObjectReferenceView(
+            capture_timeout_sec=timeout,
+        )
 
 
 @pytest.mark.parametrize(

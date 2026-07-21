@@ -38,6 +38,7 @@ def generate_launch_description():
             name='fault_detector_ui',
             output='screen',
             parameters=[
+                tag_sensing_config,
                 {'use_sim_time': use_sim_time},
             ],
         ),

@@ -1,7 +1,8 @@
 """Capture a routine reference view from one complex command."""
 
+import math
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional, Tuple, Union
 
 import py_trees
 import tf2_ros
@@ -17,10 +18,15 @@ from fault_detector_spot.inspection.object_repository import (
     ObjectRepository,
 )
 from fault_detector_spot.inspection.reference_view_capture import (
+    ReferenceViewCaptureNotReady,
     capture_reference_view,
+    validate_reference_view_capture_target,
 )
 from fault_detector_spot.inspection.reference_view_input_synchronizer import (
     ReferenceViewInputSynchronizer,
+)
+from fault_detector_spot.inspection.reference_view_validation import (
+    ReferenceViewInputNotReady,
 )
 
 
@@ -42,6 +48,7 @@ class CaptureInspectionObjectReferenceView(
         maximum_tag_timestamp_skew_sec: float = 0.25,
         fixed_frame: str = "odom",
         transform_timeout_sec: float = 0.05,
+        capture_timeout_sec: float = 3.0,
         name: str = "CaptureInspectionObjectReferenceView",
     ):
         """Configure persistent capture resources and timing limits."""
@@ -59,6 +66,14 @@ class CaptureInspectionObjectReferenceView(
         )
         self.fixed_frame = fixed_frame
         self.transform_timeout_sec = transform_timeout_sec
+        if (
+            not math.isfinite(capture_timeout_sec)
+            or capture_timeout_sec <= 0.0
+        ):
+            raise ValueError(
+                "Capture timeout must be finite and positive"
+            )
+        self.capture_timeout_sec = capture_timeout_sec
         self.node: Optional[Node] = None
         self.object_repository: Optional[ObjectRepository] = None
         self.input_synchronizer: Optional[
@@ -66,6 +81,9 @@ class CaptureInspectionObjectReferenceView(
         ] = None
         self.tf_buffer: Optional[tf2_ros.Buffer] = None
         self.tf_listener: Optional[tf2_ros.TransformListener] = None
+        self._request: Optional[Tuple[str, str, bool]] = None
+        self._request_started_nanoseconds: Optional[int] = None
+        self._minimum_image_sequence: Optional[int] = None
         self.blackboard = self.attach_blackboard_client()
 
     def setup(self, **kwargs: Any) -> None:
@@ -96,20 +114,37 @@ class CaptureInspectionObjectReferenceView(
             self.node,
         )
 
+    def initialise(self) -> None:
+        """Reset state when a new capture command enters this behavior."""
+        self._request = None
+        self._request_started_nanoseconds = None
+        self._minimum_image_sequence = None
+
     def update(self) -> py_trees.common.Status:
-        """Execute one complete reference-view capture transaction."""
+        """Wait without blocking until a post-command frame can be saved."""
         try:
-            command = self._command()
-            inspection = command.inspection
-            object_id = inspection.object.object_id
-            routine_id = inspection.routine.routine_id
+            if self._request is None:
+                self._begin_request()
+                return py_trees.common.Status.RUNNING
+
+            object_id, routine_id, replace_existing = self._request
+            current_time = self.node.get_clock().now()
+            if (
+                self.input_synchronizer.image_sequence
+                < self._minimum_image_sequence
+            ):
+                return self._wait_or_timeout(
+                    current_time,
+                    "a newer synchronized RGB and depth pair",
+                )
+
             result = capture_reference_view(
                 self.object_repository,
                 self.input_synchronizer,
                 self.tf_buffer,
                 object_id,
                 routine_id,
-                self.node.get_clock().now(),
+                current_time,
                 maximum_input_age_sec=self.maximum_input_age_sec,
                 maximum_timestamp_skew_sec=(
                     self.maximum_timestamp_skew_sec
@@ -119,7 +154,8 @@ class CaptureInspectionObjectReferenceView(
                 ),
                 fixed_frame=self.fixed_frame,
                 transform_timeout_sec=self.transform_timeout_sec,
-                replace_existing=inspection.replace_existing,
+                replace_existing=replace_existing,
+                minimum_image_sequence=self._minimum_image_sequence,
             )
             routine = result.get_routine(routine_id)
             if routine is None or routine.reference_view is None:
@@ -127,13 +163,17 @@ class CaptureInspectionObjectReferenceView(
                     "Capture did not produce a reference view"
                 )
             dataset_path = routine.reference_view.reference_dataset_path
-        except Exception as exception:
-            self.feedback_message = (
-                f"Reference-view capture failed: {exception}"
+        except (
+            ReferenceViewCaptureNotReady,
+            ReferenceViewInputNotReady,
+            tf2_ros.TransformException,
+        ) as exception:
+            return self._wait_or_timeout(
+                self.node.get_clock().now(),
+                str(exception),
             )
-            if self.node is not None:
-                self.node.get_logger().error(self.feedback_message)
-            return py_trees.common.Status.FAILURE
+        except Exception as exception:
+            return self._failure(exception)
 
         self.feedback_message = (
             "Captured reference view for "
@@ -142,6 +182,61 @@ class CaptureInspectionObjectReferenceView(
         )
         self.node.get_logger().info(self.feedback_message)
         return py_trees.common.Status.SUCCESS
+
+    def _begin_request(self) -> None:
+        command = self._command()
+        inspection = command.inspection
+        object_id = inspection.object.object_id
+        routine_id = inspection.routine.routine_id
+        replace_existing = inspection.replace_existing
+        validate_reference_view_capture_target(
+            self.object_repository,
+            object_id,
+            routine_id,
+            replace_existing,
+        )
+        now = self.node.get_clock().now()
+        self._request = (
+            object_id,
+            routine_id,
+            replace_existing,
+        )
+        self._request_started_nanoseconds = now.nanoseconds
+        self._minimum_image_sequence = (
+            self.input_synchronizer.image_sequence + 1
+        )
+        self.feedback_message = (
+            "Waiting for a new synchronized reference-view frame"
+        )
+
+    def _wait_or_timeout(
+        self,
+        current_time,
+        reason: str,
+    ) -> py_trees.common.Status:
+        elapsed_sec = (
+            current_time.nanoseconds
+            - self._request_started_nanoseconds
+        ) / 1_000_000_000
+        if elapsed_sec < self.capture_timeout_sec:
+            self.feedback_message = (
+                "Waiting for reference-view inputs: "
+                f"{reason}"
+            )
+            return py_trees.common.Status.RUNNING
+
+        return self._failure(RuntimeError(
+            f"timed out after {self.capture_timeout_sec:.3f} s: "
+            f"{reason}"
+        ))
+
+    def _failure(self, exception: Exception) -> py_trees.common.Status:
+        self.feedback_message = (
+            f"Reference-view capture failed: {exception}"
+        )
+        if self.node is not None:
+            self.node.get_logger().error(self.feedback_message)
+        return py_trees.common.Status.FAILURE
 
     def _command(self) -> GenericCommand:
         if (

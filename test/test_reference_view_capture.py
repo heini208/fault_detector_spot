@@ -92,10 +92,12 @@ class FakeSynchronizer:
         """Store the configured snapshot."""
         self.inputs = inputs
         self.requested_tag_ids = []
+        self.minimum_sequences = []
 
-    def snapshot(self, reference_tag_id):
+    def snapshot(self, reference_tag_id, minimum_image_sequence=0):
         """Return an isolated configured snapshot."""
         self.requested_tag_ids.append(reference_tag_id)
+        self.minimum_sequences.append(minimum_image_sequence)
         return deepcopy(self.inputs)
 
 
@@ -177,6 +179,7 @@ def test_capture_composes_existing_operations(monkeypatch):
     assert result is repository.definition
     assert repository.loaded_object_ids == ["motor_a"]
     assert synchronizer.requested_tag_ids == [23]
+    assert synchronizer.minimum_sequences == [0]
     assert len(resolver_calls) == 1
     assert resolver_calls[0][0][1].header.frame_id == (
         "hand_color_image_sensor"
@@ -255,6 +258,21 @@ def test_existing_reference_view_can_be_replaced_explicitly(
 
     assert synchronizer.requested_tag_ids == [23]
     assert len(repository.saved) == 1
+
+
+def test_capture_requires_the_requested_image_sequence(monkeypatch):
+    """The command behavior can reject frames cached before its request."""
+    repository = FakeRepository()
+    synchronizer = FakeSynchronizer(make_inputs())
+    install_resolver(monkeypatch)
+
+    capture(
+        repository,
+        synchronizer,
+        minimum_image_sequence=4,
+    )
+
+    assert synchronizer.minimum_sequences == [4]
 
 
 @pytest.mark.parametrize(

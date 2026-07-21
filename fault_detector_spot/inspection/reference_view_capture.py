@@ -20,6 +20,29 @@ from fault_detector_spot.inspection.reference_view_validation import (
 _FUTURE_TOLERANCE_SEC = 0.1
 
 
+class ReferenceViewCaptureNotReady(RuntimeError):
+    """Indicate that a later sensor snapshot may be capturable."""
+
+
+def validate_reference_view_capture_target(
+    object_repository: ObjectRepository,
+    object_id: str,
+    routine_id: str,
+    replace_existing: bool,
+) -> int:
+    """Validate the persistent target before waiting for sensor data."""
+    definition = object_repository.load(object_id)
+    routine = definition.get_routine(routine_id)
+    if routine is None:
+        raise KeyError(f"Routine does not exist: {routine_id}")
+    if routine.reference_view is not None and not replace_existing:
+        raise FileExistsError(
+            "Routine already has a reference view: "
+            f"{object_id}/{routine_id}"
+        )
+    return definition.reference_tag.tag_id
+
+
 def capture_reference_view(
     object_repository: ObjectRepository,
     input_synchronizer: ReferenceViewInputSynchronizer,
@@ -33,6 +56,7 @@ def capture_reference_view(
     fixed_frame: str = "odom",
     transform_timeout_sec: float = 0.05,
     replace_existing: bool = False,
+    minimum_image_sequence: int = 0,
 ) -> InspectionObject:
     """Capture the selected routine's synchronized reference view."""
     if (
@@ -43,20 +67,18 @@ def capture_reference_view(
             "Maximum input age must be finite and non-negative"
         )
 
-    definition = object_repository.load(object_id)
-    routine = definition.get_routine(routine_id)
-    if routine is None:
-        raise KeyError(f"Routine does not exist: {routine_id}")
-    if routine.reference_view is not None and not replace_existing:
-        raise FileExistsError(
-            "Routine already has a reference view: "
-            f"{object_id}/{routine_id}"
-        )
-
-    reference_tag_id = definition.reference_tag.tag_id
-    inputs = input_synchronizer.snapshot(reference_tag_id)
+    reference_tag_id = validate_reference_view_capture_target(
+        object_repository,
+        object_id,
+        routine_id,
+        replace_existing,
+    )
+    inputs = input_synchronizer.snapshot(
+        reference_tag_id,
+        minimum_image_sequence=minimum_image_sequence,
+    )
     if inputs is None:
-        raise RuntimeError(
+        raise ReferenceViewCaptureNotReady(
             "Reference-view inputs are unavailable for tag "
             f"{reference_tag_id}"
         )
@@ -133,4 +155,6 @@ def _require_fresh(
             f"{name} timestamp is in the future: {age_sec:.3f} s"
         )
     if age_sec > maximum_age_sec:
-        raise RuntimeError(f"{name} is stale: {age_sec:.3f} s")
+        raise ReferenceViewCaptureNotReady(
+            f"{name} is stale: {age_sec:.3f} s"
+        )

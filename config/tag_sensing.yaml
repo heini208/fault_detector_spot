@@ -31,3 +31,4 @@
     inspection.reference_view_maximum_tag_timestamp_skew_sec: 0.25
     inspection.reference_view_fixed_frame: odom
     inspection.reference_view_transform_timeout_sec: 0.05
+    inspection.reference_view_capture_timeout_sec: 3.0

@@ -182,6 +182,24 @@ def test_snapshot_selects_tag_and_is_isolated(make_synchronizer):
     assert synchronizer.snapshot(7)[3].id == 7
 
 
+def test_snapshot_can_require_images_received_after_a_command(
+    make_synchronizer,
+):
+    """Sequence gating excludes the pair cached before capture starts."""
+    synchronizer, _ = make_synchronizer()
+    synchronizer._camera_info_callback(CameraInfo())
+    synchronizer._base_tags_callback(make_tag_array(make_tag(7)))
+
+    assert synchronizer.image_sequence == 0
+    synchronizer._synchronized_images_callback(Image(), Image())
+    assert synchronizer.image_sequence == 1
+    assert synchronizer.snapshot(7, minimum_image_sequence=2) is None
+
+    synchronizer._synchronized_images_callback(Image(), Image())
+    assert synchronizer.image_sequence == 2
+    assert synchronizer.snapshot(7, minimum_image_sequence=2) is not None
+
+
 def test_older_tag_update_does_not_replace_newer_observation(
     make_synchronizer,
 ):
@@ -227,3 +245,11 @@ def test_negative_reference_tag_id_is_rejected(make_synchronizer):
 
     with pytest.raises(ValueError, match="tag ID"):
         synchronizer.snapshot(-1)
+
+
+def test_negative_minimum_image_sequence_is_rejected(make_synchronizer):
+    """Sequence gating cannot use an invalid lower bound."""
+    synchronizer, _ = make_synchronizer()
+
+    with pytest.raises(ValueError, match="Minimum image sequence"):
+        synchronizer.snapshot(7, minimum_image_sequence=-1)

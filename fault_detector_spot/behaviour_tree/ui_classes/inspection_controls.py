@@ -1,8 +1,10 @@
 """Inspection setup controls."""
 
+from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QIntValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -11,12 +13,30 @@ from PyQt5.QtWidgets import (
 
 from fault_detector_msgs.msg import ComplexCommand
 
+from fault_detector_spot.inspection.object_repository import (
+    ObjectRepository,
+)
+
 from ..commands.command_ids import CommandID
 from .UIControlHelper import UIControlHelper
 
 
 class InspectionControls(UIControlHelper):
     """Build and publish inspection-definition setup commands."""
+
+    def __init__(self, parent_ui):
+        """Create controls backed by the configured object repository."""
+        self.object_repository = ObjectRepository(
+            getattr(parent_ui, "inspection_object_root", None)
+        )
+        self._selected_definition = None
+        super().__init__(parent_ui)
+        self.refresh_saved_definitions()
+
+    def add_rows(self, layout):
+        """Add the rows constructed during initialization."""
+        for row in self.rows:
+            layout.addLayout(row)
 
     def init_ros_communication(self):
         """Use the complex-command publisher owned by the main UI."""
@@ -25,12 +45,50 @@ class InspectionControls(UIControlHelper):
     def make_rows(self):
         """Create the inspection setup rows."""
         return [
+            self._make_saved_definitions_row(),
+            self._make_storage_row(),
             self._make_object_identity_row(),
             self._make_reference_tag_row(),
             self._make_routine_identity_row(),
             self._make_sensor_row(),
             self._make_reference_view_row(),
         ]
+
+    def _make_saved_definitions_row(self):
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Saved Definitions:"))
+
+        self.saved_object_dropdown = QComboBox()
+        self.saved_object_dropdown.currentIndexChanged.connect(
+            self._load_selected_object
+        )
+        row.addWidget(self.saved_object_dropdown)
+
+        self.saved_routine_dropdown = QComboBox()
+        self.saved_routine_dropdown.currentIndexChanged.connect(
+            self._load_selected_routine
+        )
+        row.addWidget(self.saved_routine_dropdown)
+
+        self.refresh_definitions_button = QPushButton("Refresh")
+        self.refresh_definitions_button.clicked.connect(
+            self.refresh_saved_definitions
+        )
+        row.addWidget(self.refresh_definitions_button)
+        return row
+
+    def _make_storage_row(self):
+        row = QHBoxLayout()
+        self.storage_path_label = QLabel(
+            f"Storage: {self.object_repository.root_dir}"
+        )
+        row.addWidget(self.storage_path_label)
+        self.reference_view_status_label = QLabel(
+            "Reference view: no routine selected"
+        )
+        row.addWidget(self.reference_view_status_label)
+        row.addStretch()
+        return row
 
     def _make_object_identity_row(self):
         row = QHBoxLayout()
@@ -133,6 +191,137 @@ class InspectionControls(UIControlHelper):
         self.status_label.setText(
             f"Command sent: {command.command.command_id}"
         )
+        self._schedule_repository_refresh()
+
+    def refresh_saved_definitions(self):
+        """Reload selectable objects and routines from persistent storage."""
+        desired_object_id = ""
+        if hasattr(self, "object_id_field"):
+            desired_object_id = self.object_id_field.text().strip()
+        if not desired_object_id:
+            desired_object_id = (
+                self.saved_object_dropdown.currentData() or ""
+            )
+
+        self.saved_object_dropdown.blockSignals(True)
+        self.saved_object_dropdown.clear()
+        self.saved_object_dropdown.addItem(
+            "Select saved object",
+            None,
+        )
+        for object_id in self.object_repository.list_object_ids():
+            self.saved_object_dropdown.addItem(object_id, object_id)
+
+        selected_index = self.saved_object_dropdown.findData(
+            desired_object_id
+        )
+        self.saved_object_dropdown.setCurrentIndex(
+            selected_index if selected_index >= 0 else 0
+        )
+        self.saved_object_dropdown.blockSignals(False)
+        self._load_selected_object()
+
+    def _load_selected_object(self, _index=None):
+        object_id = self.saved_object_dropdown.currentData()
+        if not object_id:
+            self._selected_definition = None
+            self._populate_routine_dropdown([])
+            self.reference_view_status_label.setText(
+                "Reference view: no routine selected"
+            )
+            return
+
+        try:
+            definition = self.object_repository.load(object_id)
+        except Exception as exception:
+            self._selected_definition = None
+            self._populate_routine_dropdown([])
+            self.reference_view_status_label.setText(
+                f"Definition load failed: {exception}"
+            )
+            return
+
+        desired_routine_id = self.routine_id_field.text().strip()
+        if not desired_routine_id:
+            desired_routine_id = (
+                self.saved_routine_dropdown.currentData() or ""
+            )
+
+        self._selected_definition = definition
+        self.object_id_field.setText(definition.object_id)
+        self.object_display_name_field.setText(definition.display_name)
+        self.reference_tag_id_field.setText(
+            str(definition.reference_tag.tag_id)
+        )
+        self.reference_tag_family_field.setText(
+            definition.reference_tag.tag_family
+        )
+        self._populate_routine_dropdown(
+            definition.routines,
+            desired_routine_id,
+        )
+
+    def _populate_routine_dropdown(
+        self,
+        routines,
+        desired_routine_id="",
+    ):
+        self.saved_routine_dropdown.blockSignals(True)
+        self.saved_routine_dropdown.clear()
+        self.saved_routine_dropdown.addItem(
+            "Select saved routine",
+            None,
+        )
+        for routine in sorted(
+            routines,
+            key=lambda candidate: candidate.routine_id,
+        ):
+            self.saved_routine_dropdown.addItem(
+                routine.routine_id,
+                routine.routine_id,
+            )
+        selected_index = self.saved_routine_dropdown.findData(
+            desired_routine_id
+        )
+        self.saved_routine_dropdown.setCurrentIndex(
+            selected_index if selected_index >= 0 else 0
+        )
+        self.saved_routine_dropdown.blockSignals(False)
+        self._load_selected_routine()
+
+    def _load_selected_routine(self, _index=None):
+        routine_id = self.saved_routine_dropdown.currentData()
+        if not routine_id or self._selected_definition is None:
+            self.reference_view_status_label.setText(
+                "Reference view: no routine selected"
+            )
+            return
+
+        routine = self._selected_definition.get_routine(routine_id)
+        if routine is None:
+            self.reference_view_status_label.setText(
+                "Reference view: routine no longer exists"
+            )
+            return
+
+        self.routine_id_field.setText(routine.routine_id)
+        self.routine_display_name_field.setText(routine.display_name)
+        self.sensor_id_field.setText(routine.sensor_id)
+        self.probe_frame_field.setText(routine.probe_frame)
+        if routine.reference_view is None:
+            status = "Reference view: not captured"
+        else:
+            status = (
+                "Reference view: captured, "
+                f"{routine.reference_view.reference_dataset_path}"
+            )
+        self.reference_view_status_label.setText(status)
+
+    def _schedule_repository_refresh(self):
+        if self.node is None:
+            return
+        for delay_ms in (250, 1000, 3500):
+            QTimer.singleShot(delay_ms, self.refresh_saved_definitions)
 
     def handle_create_object(self):
         """Publish an explicit inspection-object creation command."""
