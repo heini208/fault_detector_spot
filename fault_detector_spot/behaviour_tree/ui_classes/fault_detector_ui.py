@@ -16,6 +16,7 @@ from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from rclpy.node import Node
 from std_msgs.msg import Header, String
 from .base_movement_controls import BaseMovementControls
+from .inspection_controls import InspectionControls
 from .manipulation_controls import ManipulationControls
 from .navigation_controls import NavigationControls
 from .recording_controls import RecordingControls
@@ -47,6 +48,7 @@ class Fault_Detector_UI(QWidget):
         self.recording_controls = RecordingControls(self)
         self.navigation_controls = NavigationControls(self)
         self.base_movement_controls = BaseMovementControls(self)
+        self.inspection_controls = InspectionControls(self)
 
         self.create_user_interface()
 
@@ -85,6 +87,7 @@ class Fault_Detector_UI(QWidget):
         self.add_manipulator_control_tab()
         self.add_base_movement_control_tab()
         self.add_navigation_control_tab()
+        self.add_inspection_control_tab()
 
         self.recording_controls.add_rows(main_layout)
 
@@ -147,6 +150,13 @@ class Fault_Detector_UI(QWidget):
         base_layout = QVBoxLayout(base_tab)
         self.base_movement_controls.add_rows(base_layout)
         self.tabs.addTab(base_tab, "Base Movement Control")
+
+    def add_inspection_control_tab(self):
+        inspection_tab = QWidget()
+        inspection_layout = QVBoxLayout(inspection_tab)
+        self.inspection_controls.add_rows(inspection_layout)
+        inspection_layout.addStretch()
+        self.tabs.addTab(inspection_tab, "Inspection Control")
 
     # ---- feedback information
 
