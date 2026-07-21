@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import py_trees
 import pytest
 from builtin_interfaces.msg import Time
-from fault_detector_msgs.msg import ComplexCommand
+from fault_detector_msgs.msg import ComplexCommand, InspectionCommand
 
 from fault_detector_spot.behaviour_tree import bt_runner
 from fault_detector_spot.behaviour_tree.commands.command_ids import (
@@ -77,14 +77,16 @@ def make_command(
     replace_existing=False,
 ):
     """Create one internal reference-view capture command."""
+    inspection = InspectionCommand()
+    inspection.object.object_id = object_id
+    inspection.routine.routine_id = routine_id
+    inspection.replace_existing = replace_existing
     return GenericCommand(
         command_id=(
             CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW
         ),
         stamp=Time(sec=10),
-        object_id=object_id,
-        routine_id=routine_id,
-        replace_existing=replace_existing,
+        inspection=inspection,
     )
 
 
@@ -180,33 +182,36 @@ def teardown_function():
     py_trees.blackboard.Blackboard.clear()
 
 
-def test_complex_message_preserves_inspection_identifiers():
-    """ROS command fields reach the internal command unchanged."""
+def test_complex_message_preserves_nested_inspection_payload():
+    """The nested ROS payload reaches the internal command unchanged."""
     message = ComplexCommand()
     message.command.command_id = (
         CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW
     )
-    message.object_id = "motor_a"
-    message.routine_id = "magnetic_scan"
-    message.display_name = "Magnetic scan"
-    message.reference_tag_id = 23
-    message.reference_tag_family = "36h11"
-    message.sensor_id = "bmm150"
-    message.probe_frame = "sensor_tip"
-    message.replace_existing = True
+    message.inspection.object.object_id = "motor_a"
+    message.inspection.object.display_name = "Motor A"
+    message.inspection.object.reference_tag_id = 23
+    message.inspection.object.reference_tag_family = "36h11"
+    message.inspection.routine.routine_id = "magnetic_scan"
+    message.inspection.routine.display_name = "Magnetic scan"
+    message.inspection.routine.sensor_id = "bmm150"
+    message.inspection.routine.probe_frame = "sensor_tip"
+    message.inspection.replace_existing = True
 
     command = CommandSubscriber().complex_message_to_generic_command(
         message
     )
 
-    assert command.object_id == "motor_a"
-    assert command.routine_id == "magnetic_scan"
-    assert command.display_name == "Magnetic scan"
-    assert command.reference_tag_id == 23
-    assert command.reference_tag_family == "36h11"
-    assert command.sensor_id == "bmm150"
-    assert command.probe_frame == "sensor_tip"
-    assert command.replace_existing is True
+    assert command.inspection is message.inspection
+    assert command.inspection.object.object_id == "motor_a"
+    assert command.inspection.object.display_name == "Motor A"
+    assert command.inspection.object.reference_tag_id == 23
+    assert command.inspection.object.reference_tag_family == "36h11"
+    assert command.inspection.routine.routine_id == "magnetic_scan"
+    assert command.inspection.routine.display_name == "Magnetic scan"
+    assert command.inspection.routine.sensor_id == "bmm150"
+    assert command.inspection.routine.probe_frame == "sensor_tip"
+    assert command.inspection.replace_existing is True
 
 
 def test_command_selector_dispatches_reference_view_capture(
@@ -252,6 +257,9 @@ def test_behavior_creates_runtime_resources_and_captures(monkeypatch):
     assert status == py_trees.common.Status.SUCCESS
     assert created["repository"][0] == "/tmp/objects"
     assert created["synchronizer"]["queue_size"] == 7
+    assert created["synchronizer"]["camera_info_topic"] == (
+        "/depth_registered/hand/camera_info"
+    )
     assert created["listener"] == (behavior.tf_buffer, node)
     args, kwargs = capture_calls[0]
     assert args[0] is behavior.object_repository

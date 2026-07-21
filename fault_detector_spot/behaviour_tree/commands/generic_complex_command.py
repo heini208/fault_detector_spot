@@ -1,5 +1,6 @@
 # fault_detector_spot/behaviour_tree/generic_command.py
 from builtin_interfaces.msg import Time
+from fault_detector_msgs.msg import InspectionCommand
 from geometry_msgs.msg import PoseStamped, Quaternion
 from .simple_command import SimpleCommand
 
@@ -21,14 +22,7 @@ class GenericCommand(SimpleCommand):
             orientation_mode: str = None,
             map_name: str = None,
             waypoint_name: str = None,
-            object_id: str = None,
-            routine_id: str = None,
-            display_name: str = None,
-            reference_tag_id: int = None,
-            reference_tag_family: str = None,
-            sensor_id: str = None,
-            probe_frame: str = None,
-            replace_existing: bool = False,
+            inspection: InspectionCommand = None,
     ):
         super().__init__(command_id, stamp)
         self.duration = duration
@@ -38,14 +32,7 @@ class GenericCommand(SimpleCommand):
         self.orientation_mode = orientation_mode
         self.map_name = map_name
         self.waypoint_name = waypoint_name
-        self.object_id = object_id
-        self.routine_id = routine_id
-        self.display_name = display_name
-        self.reference_tag_id = reference_tag_id
-        self.reference_tag_family = reference_tag_family
-        self.sensor_id = sensor_id
-        self.probe_frame = probe_frame
-        self.replace_existing = replace_existing
+        self.inspection = inspection
 
     def __repr__(self):
         ts = f"{self.stamp.sec}.{self.stamp.nanosec:09d}"
@@ -60,23 +47,14 @@ class GenericCommand(SimpleCommand):
         if self.goal_pose:
             p = self.goal_pose.pose.position
             parts.append(f"pose=({p.x:.2f}, {p.y:.2f}, {p.z:.2f})")
-        if self.object_id:
-            parts.append(f"object_id={self.object_id!r}")
-        if self.routine_id:
-            parts.append(f"routine_id={self.routine_id!r}")
-        if self.display_name:
-            parts.append(f"display_name={self.display_name!r}")
-        if self.reference_tag_id is not None:
-            parts.append(f"reference_tag_id={self.reference_tag_id}")
-        if self.reference_tag_family:
-            parts.append(
-                f"reference_tag_family={self.reference_tag_family!r}"
-            )
-        if self.sensor_id:
-            parts.append(f"sensor_id={self.sensor_id!r}")
-        if self.probe_frame:
-            parts.append(f"probe_frame={self.probe_frame!r}")
-        if self.replace_existing:
-            parts.append("replace_existing=True")
+        if self.inspection is not None:
+            object_id = self.inspection.object.object_id
+            routine_id = self.inspection.routine.routine_id
+            if object_id:
+                parts.append(f"object_id={object_id!r}")
+            if routine_id:
+                parts.append(f"routine_id={routine_id!r}")
+            if self.inspection.replace_existing:
+                parts.append("replace_existing=True")
 
         return "<GenericCommand " + " ".join(parts) + ">"

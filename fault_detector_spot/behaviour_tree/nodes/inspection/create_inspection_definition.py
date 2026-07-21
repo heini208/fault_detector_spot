@@ -100,31 +100,42 @@ class CreateInspectionDefinition(py_trees.behaviour.Behaviour):
         return command
 
     def _create_object(self, command: GenericCommand) -> str:
-        if command.reference_tag_id is None:
+        inspection = self._inspection(command)
+        object_definition = inspection.object
+        if object_definition.reference_tag_id < 0:
             raise ValueError("Command reference_tag_id must be set")
         definition = InspectionObject(
-            object_id=command.object_id or "",
-            display_name=command.display_name or "",
+            object_id=object_definition.object_id,
+            display_name=object_definition.display_name,
             reference_tag=ReferenceTag(
-                tag_id=command.reference_tag_id,
-                tag_family=command.reference_tag_family or "",
+                tag_id=object_definition.reference_tag_id,
+                tag_family=object_definition.reference_tag_family,
             ),
         )
         self.object_repository.create(definition)
         return f"Created inspection object {definition.object_id}"
 
     def _create_routine(self, command: GenericCommand) -> str:
+        inspection = self._inspection(command)
+        object_definition = inspection.object
+        routine_definition = inspection.routine
         routine = InspectionRoutine(
-            routine_id=command.routine_id or "",
-            display_name=command.display_name or "",
-            sensor_id=command.sensor_id or "",
-            probe_frame=command.probe_frame or "",
+            routine_id=routine_definition.routine_id,
+            display_name=routine_definition.display_name,
+            sensor_id=routine_definition.sensor_id,
+            probe_frame=routine_definition.probe_frame,
         )
         self.object_repository.add_routine(
-            command.object_id or "",
+            object_definition.object_id,
             routine,
         )
         return (
             "Created inspection routine "
-            f"{command.object_id}/{routine.routine_id}"
+            f"{object_definition.object_id}/{routine.routine_id}"
         )
+
+    @staticmethod
+    def _inspection(command: GenericCommand):
+        if command.inspection is None:
+            raise ValueError("Command inspection payload must be set")
+        return command.inspection

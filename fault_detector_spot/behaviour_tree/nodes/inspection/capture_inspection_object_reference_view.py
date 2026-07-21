@@ -33,11 +33,11 @@ class CaptureInspectionObjectReferenceView(
         self,
         rgb_topic: str = "/camera/hand/image",
         depth_topic: str = "/depth_registered/hand/image",
-        camera_info_topic: str = "/camera/hand/camera_info",
+        camera_info_topic: str = "/depth_registered/hand/camera_info",
         base_tag_topic: str = "fault_detector/state/visible_tags",
         object_root: Optional[Union[str, Path]] = None,
         synchronization_queue_size: int = 10,
-        maximum_input_age_sec: float = 0.25,
+        maximum_input_age_sec: float = 0.75,
         maximum_timestamp_skew_sec: float = 0.05,
         maximum_tag_timestamp_skew_sec: float = 0.25,
         fixed_frame: str = "odom",
@@ -100,12 +100,15 @@ class CaptureInspectionObjectReferenceView(
         """Execute one complete reference-view capture transaction."""
         try:
             command = self._command()
+            inspection = command.inspection
+            object_id = inspection.object.object_id
+            routine_id = inspection.routine.routine_id
             result = capture_reference_view(
                 self.object_repository,
                 self.input_synchronizer,
                 self.tf_buffer,
-                command.object_id,
-                command.routine_id,
+                object_id,
+                routine_id,
                 self.node.get_clock().now(),
                 maximum_input_age_sec=self.maximum_input_age_sec,
                 maximum_timestamp_skew_sec=(
@@ -116,9 +119,9 @@ class CaptureInspectionObjectReferenceView(
                 ),
                 fixed_frame=self.fixed_frame,
                 transform_timeout_sec=self.transform_timeout_sec,
-                replace_existing=command.replace_existing,
+                replace_existing=inspection.replace_existing,
             )
-            routine = result.get_routine(command.routine_id)
+            routine = result.get_routine(routine_id)
             if routine is None or routine.reference_view is None:
                 raise RuntimeError(
                     "Capture did not produce a reference view"
@@ -134,7 +137,7 @@ class CaptureInspectionObjectReferenceView(
 
         self.feedback_message = (
             "Captured reference view for "
-            f"{command.object_id}/{command.routine_id}: "
+            f"{object_id}/{routine_id}: "
             f"{dataset_path}"
         )
         self.node.get_logger().info(self.feedback_message)
@@ -159,8 +162,10 @@ class CaptureInspectionObjectReferenceView(
             raise ValueError(
                 "Command is not a reference-view capture command"
             )
-        if not command.object_id:
+        if command.inspection is None:
+            raise ValueError("Command inspection payload must be set")
+        if not command.inspection.object.object_id:
             raise ValueError("Command object_id must not be empty")
-        if not command.routine_id:
+        if not command.inspection.routine.routine_id:
             raise ValueError("Command routine_id must not be empty")
         return command

@@ -27,7 +27,7 @@ def capture_reference_view(
     object_id: str,
     routine_id: str,
     current_time,
-    maximum_input_age_sec: float = 0.25,
+    maximum_input_age_sec: float = 0.75,
     maximum_timestamp_skew_sec: float = 0.05,
     maximum_tag_timestamp_skew_sec: float = 0.25,
     fixed_frame: str = "odom",

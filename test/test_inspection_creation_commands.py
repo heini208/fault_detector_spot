@@ -2,6 +2,7 @@
 
 import py_trees
 from builtin_interfaces.msg import Time
+from fault_detector_msgs.msg import InspectionCommand
 
 from fault_detector_spot.behaviour_tree.commands.command_ids import (
     CommandID,
@@ -73,10 +74,13 @@ def object_command(**values):
         "reference_tag_family": "36h11",
     }
     fields.update(values)
+    inspection = InspectionCommand()
+    for name, value in fields.items():
+        setattr(inspection.object, name, value)
     return GenericCommand(
         CommandID.CREATE_INSPECTION_OBJECT,
         Time(sec=10),
-        **fields,
+        inspection=inspection,
     )
 
 
@@ -90,10 +94,14 @@ def routine_command(**values):
         "probe_frame": "sensor_tip",
     }
     fields.update(values)
+    inspection = InspectionCommand()
+    inspection.object.object_id = fields.pop("object_id")
+    for name, value in fields.items():
+        setattr(inspection.routine, name, value)
     return GenericCommand(
         CommandID.CREATE_INSPECTION_ROUTINE,
         Time(sec=11),
-        **fields,
+        inspection=inspection,
     )
 
 
@@ -218,6 +226,20 @@ def test_invalid_creation_payload_fails_before_persistence(tmp_path):
     assert status == py_trees.common.Status.FAILURE
     assert ObjectRepository(tmp_path).list_object_ids() == []
     assert "Tag family must not be empty" in behavior.feedback_message
+    assert len(node.logger.error_messages) == 1
+
+
+def test_missing_reference_tag_id_fails_before_persistence(tmp_path):
+    """The message sentinel cannot become an accidental tag zero."""
+    status, behavior, node = run_behavior(
+        tmp_path,
+        CommandID.CREATE_INSPECTION_OBJECT,
+        object_command(reference_tag_id=-1),
+    )
+
+    assert status == py_trees.common.Status.FAILURE
+    assert ObjectRepository(tmp_path).list_object_ids() == []
+    assert "reference_tag_id must be set" in behavior.feedback_message
     assert len(node.logger.error_messages) == 1
 
 
