@@ -24,6 +24,9 @@ from fault_detector_spot.inspection.object_repository import (
 from fault_detector_spot.inspection.reference_view_depth_projection import (
     project_reference_pixel,
 )
+from fault_detector_spot.inspection.reference_view_surface_normal import (
+    estimate_reference_surface_normal,
+)
 
 from ..commands.command_ids import CommandID
 from .UIControlHelper import UIControlHelper
@@ -43,6 +46,7 @@ class InspectionControls(UIControlHelper):
         self._reference_depth_image = None
         self._reference_camera_info = None
         self._selected_surface_point = None
+        self._selected_surface_normal = None
         super().__init__(parent_ui)
         self.refresh_saved_definitions()
 
@@ -210,7 +214,7 @@ class InspectionControls(UIControlHelper):
 
         self.reference_point_panel = QFrame()
         self.reference_point_panel.setFrameShape(QFrame.StyledPanel)
-        self.reference_point_panel.setFixedHeight(96)
+        self.reference_point_panel.setFixedHeight(152)
         panel_layout = QGridLayout(self.reference_point_panel)
         panel_layout.setContentsMargins(8, 6, 8, 6)
         panel_layout.setHorizontalSpacing(10)
@@ -239,6 +243,27 @@ class InspectionControls(UIControlHelper):
             self._fixed_readout_label("—", 145)
         )
         self.reference_projection_status_label = (
+            self._fixed_readout_label("No point", 155)
+        )
+        self.reference_normal_x_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_normal_y_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_normal_z_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_normal_samples_value_label = (
+            self._fixed_readout_label("—", 70)
+        )
+        self.reference_normal_rmse_value_label = (
+            self._fixed_readout_label("—", 90)
+        )
+        self.reference_normal_status_label = (
             self._fixed_readout_label("No point", 155)
         )
 
@@ -292,6 +317,34 @@ class InspectionControls(UIControlHelper):
             1,
             2,
         )
+
+        panel_layout.addWidget(QLabel("Normal:"), 3, 0)
+        panel_layout.addWidget(QLabel("nx"), 3, 1)
+        panel_layout.addWidget(self.reference_normal_x_value_label, 3, 2)
+        panel_layout.addWidget(QLabel("ny"), 3, 3)
+        panel_layout.addWidget(self.reference_normal_y_value_label, 3, 4)
+        panel_layout.addWidget(QLabel("nz"), 3, 5)
+        panel_layout.addWidget(self.reference_normal_z_value_label, 3, 6)
+
+        panel_layout.addWidget(QLabel("Plane fit:"), 4, 0)
+        panel_layout.addWidget(QLabel("samples"), 4, 1)
+        panel_layout.addWidget(
+            self.reference_normal_samples_value_label,
+            4,
+            2,
+        )
+        panel_layout.addWidget(QLabel("RMSE [m]"), 4, 3)
+        panel_layout.addWidget(
+            self.reference_normal_rmse_value_label,
+            4,
+            4,
+        )
+        panel_layout.addWidget(QLabel("Normal status:"), 4, 5)
+        panel_layout.addWidget(
+            self.reference_normal_status_label,
+            4,
+            6,
+        )
         panel_layout.setColumnStretch(7, 1)
 
         preview_column.addWidget(self.reference_point_panel)
@@ -305,6 +358,13 @@ class InspectionControls(UIControlHelper):
         label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         return label
+
+    @staticmethod
+    def _format_readout_value(value, decimals):
+        rounding_threshold = 0.5 * 10 ** (-decimals)
+        if abs(value) < rounding_threshold:
+            value = 0.0
+        return f"{value:.{decimals}f}"
 
     def _handle_reference_image_point_changed(self, u, v):
         self.reference_pixel_value_label.setText(f"u={u}, v={v}")
@@ -321,8 +381,14 @@ class InspectionControls(UIControlHelper):
         """Return the transient projected reference surface point."""
         return self._selected_surface_point
 
+    @property
+    def selected_surface_normal(self):
+        """Return the transient local surface-normal estimate."""
+        return self._selected_surface_normal
+
     def _clear_selected_surface_point(self):
         self._selected_surface_point = None
+        self._clear_selected_surface_normal()
         self.reference_surface_frame_value_label.setText("—")
         self.reference_surface_frame_value_label.setToolTip("")
         self.reference_surface_x_value_label.setText("—")
@@ -331,12 +397,26 @@ class InspectionControls(UIControlHelper):
         self.reference_depth_pixel_value_label.setText("—")
         self._set_projection_status("No point")
 
+    def _clear_selected_surface_normal(self):
+        self._selected_surface_normal = None
+        self.reference_normal_x_value_label.setText("—")
+        self.reference_normal_y_value_label.setText("—")
+        self.reference_normal_z_value_label.setText("—")
+        self.reference_normal_samples_value_label.setText("—")
+        self.reference_normal_rmse_value_label.setText("—")
+        self._set_normal_status("No point")
+
+    def _set_normal_status(self, status, detail=""):
+        self.reference_normal_status_label.setText(status)
+        self.reference_normal_status_label.setToolTip(detail)
+
     def _set_projection_status(self, status, detail=""):
         self.reference_projection_status_label.setText(status)
         self.reference_projection_status_label.setToolTip(detail)
 
     def _set_projection_unavailable(self, status, detail):
         self._selected_surface_point = None
+        self._clear_selected_surface_normal()
         self.reference_surface_frame_value_label.setText("—")
         self.reference_surface_frame_value_label.setToolTip("")
         self.reference_surface_x_value_label.setText("—")
@@ -384,9 +464,15 @@ class InspectionControls(UIControlHelper):
         point = result.point_camera
         self.reference_surface_frame_value_label.setText(result.frame_id)
         self.reference_surface_frame_value_label.setToolTip(result.frame_id)
-        self.reference_surface_x_value_label.setText(f"{point.x:.3f}")
-        self.reference_surface_y_value_label.setText(f"{point.y:.3f}")
-        self.reference_surface_z_value_label.setText(f"{point.z:.3f}")
+        self.reference_surface_x_value_label.setText(
+            self._format_readout_value(point.x, 3)
+        )
+        self.reference_surface_y_value_label.setText(
+            self._format_readout_value(point.y, 3)
+        )
+        self.reference_surface_z_value_label.setText(
+            self._format_readout_value(point.z, 3)
+        )
         if result.sampled_pixel == result.requested_pixel:
             depth_source = "selected pixel"
         else:
@@ -396,6 +482,38 @@ class InspectionControls(UIControlHelper):
             )
         self.reference_depth_pixel_value_label.setText(depth_source)
         self._set_projection_status("Ready")
+        self._estimate_selected_surface_normal(result)
+
+    def _estimate_selected_surface_normal(self, projected_point):
+        self._clear_selected_surface_normal()
+        try:
+            result = estimate_reference_surface_normal(
+                projected_point,
+                self._reference_depth_image,
+                self._reference_camera_info,
+            )
+        except ValueError as exception:
+            self._set_normal_status("Unavailable", str(exception))
+            return
+
+        self._selected_surface_normal = result
+        normal = result.normal_camera
+        self.reference_normal_x_value_label.setText(
+            self._format_readout_value(normal.x, 3)
+        )
+        self.reference_normal_y_value_label.setText(
+            self._format_readout_value(normal.y, 3)
+        )
+        self.reference_normal_z_value_label.setText(
+            self._format_readout_value(normal.z, 3)
+        )
+        self.reference_normal_samples_value_label.setText(
+            str(result.sample_count)
+        )
+        self.reference_normal_rmse_value_label.setText(
+            self._format_readout_value(result.plane_rmse_m, 4)
+        )
+        self._set_normal_status("Ready")
 
     def _required_text(self, field, label):
         value = field.text().strip()
