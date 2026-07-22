@@ -21,6 +21,15 @@ from fault_detector_spot.inspection.models import ImagePoint
 from fault_detector_spot.inspection.object_repository import (
     ObjectRepository,
 )
+from fault_detector_spot.inspection.reference_view_approach_direction import (
+    APPROACH_MODE_AUTOMATIC,
+    APPROACH_MODE_SURFACE_FIT,
+    APPROACH_MODE_TAG_X,
+    APPROACH_SOURCE_SURFACE_FIT,
+    APPROACH_SOURCE_TAG_X_FALLBACK,
+    APPROACH_SOURCE_TAG_X_SELECTED,
+    resolve_reference_approach_direction,
+)
 from fault_detector_spot.inspection.reference_view_depth_projection import (
     project_reference_pixel,
 )
@@ -45,8 +54,11 @@ class InspectionControls(UIControlHelper):
         self._reference_rgb_size = None
         self._reference_depth_image = None
         self._reference_camera_info = None
+        self._reference_view = None
         self._selected_surface_point = None
         self._selected_surface_normal = None
+        self._surface_normal_error = ""
+        self._selected_approach_direction = None
         super().__init__(parent_ui)
         self.refresh_saved_definitions()
 
@@ -214,7 +226,7 @@ class InspectionControls(UIControlHelper):
 
         self.reference_point_panel = QFrame()
         self.reference_point_panel.setFrameShape(QFrame.StyledPanel)
-        self.reference_point_panel.setFixedHeight(152)
+        self.reference_point_panel.setFixedHeight(214)
         panel_layout = QGridLayout(self.reference_point_panel)
         panel_layout.setContentsMargins(8, 6, 8, 6)
         panel_layout.setHorizontalSpacing(10)
@@ -266,6 +278,38 @@ class InspectionControls(UIControlHelper):
         self.reference_normal_status_label = (
             self._fixed_readout_label("No point", 155)
         )
+        self.reference_approach_mode_dropdown = QComboBox()
+        self.reference_approach_mode_dropdown.setFixedWidth(245)
+        self.reference_approach_mode_dropdown.addItem(
+            "Automatic (surface, then tag +X)",
+            APPROACH_MODE_AUTOMATIC,
+        )
+        self.reference_approach_mode_dropdown.addItem(
+            "Surface fit only",
+            APPROACH_MODE_SURFACE_FIT,
+        )
+        self.reference_approach_mode_dropdown.addItem(
+            "Tag +X",
+            APPROACH_MODE_TAG_X,
+        )
+        self.reference_approach_source_value_label = (
+            self._fixed_readout_label("—", 155)
+        )
+        self.reference_approach_status_label = (
+            self._fixed_readout_label("No point", 155)
+        )
+        self.reference_approach_x_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_approach_y_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_approach_z_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
 
         self.clear_reference_pixel_button = QPushButton("Clear Point")
         self.clear_reference_pixel_button.setEnabled(False)
@@ -277,6 +321,9 @@ class InspectionControls(UIControlHelper):
         )
         self.reference_view_widget.image_point_cleared.connect(
             self._handle_reference_image_point_cleared
+        )
+        self.reference_approach_mode_dropdown.currentIndexChanged.connect(
+            self._handle_approach_mode_changed
         )
 
         panel_layout.addWidget(QLabel("Selected pixel:"), 0, 0)
@@ -345,6 +392,35 @@ class InspectionControls(UIControlHelper):
             4,
             6,
         )
+
+        panel_layout.addWidget(QLabel("Approach mode:"), 5, 0)
+        panel_layout.addWidget(
+            self.reference_approach_mode_dropdown,
+            5,
+            1,
+            1,
+            2,
+        )
+        panel_layout.addWidget(QLabel("Used:"), 5, 3)
+        panel_layout.addWidget(
+            self.reference_approach_source_value_label,
+            5,
+            4,
+        )
+        panel_layout.addWidget(QLabel("Status:"), 5, 5)
+        panel_layout.addWidget(
+            self.reference_approach_status_label,
+            5,
+            6,
+        )
+
+        panel_layout.addWidget(QLabel("Approach direction:"), 6, 0)
+        panel_layout.addWidget(QLabel("dx"), 6, 1)
+        panel_layout.addWidget(self.reference_approach_x_value_label, 6, 2)
+        panel_layout.addWidget(QLabel("dy"), 6, 3)
+        panel_layout.addWidget(self.reference_approach_y_value_label, 6, 4)
+        panel_layout.addWidget(QLabel("dz"), 6, 5)
+        panel_layout.addWidget(self.reference_approach_z_value_label, 6, 6)
         panel_layout.setColumnStretch(7, 1)
 
         preview_column.addWidget(self.reference_point_panel)
@@ -376,6 +452,14 @@ class InspectionControls(UIControlHelper):
         self.clear_reference_pixel_button.setEnabled(False)
         self._clear_selected_surface_point()
 
+    def _handle_approach_mode_changed(self, _index=None):
+        if self._selected_surface_point is None:
+            self._clear_selected_approach_direction()
+            return
+        self._resolve_selected_approach_direction(
+            self._selected_surface_point
+        )
+
     @property
     def selected_surface_point(self):
         """Return the transient projected reference surface point."""
@@ -385,6 +469,11 @@ class InspectionControls(UIControlHelper):
     def selected_surface_normal(self):
         """Return the transient local surface-normal estimate."""
         return self._selected_surface_normal
+
+    @property
+    def selected_approach_direction(self):
+        """Return the transient outward approach direction."""
+        return self._selected_approach_direction
 
     def _clear_selected_surface_point(self):
         self._selected_surface_point = None
@@ -399,12 +488,27 @@ class InspectionControls(UIControlHelper):
 
     def _clear_selected_surface_normal(self):
         self._selected_surface_normal = None
+        self._surface_normal_error = ""
+        self._clear_selected_approach_direction()
         self.reference_normal_x_value_label.setText("—")
         self.reference_normal_y_value_label.setText("—")
         self.reference_normal_z_value_label.setText("—")
         self.reference_normal_samples_value_label.setText("—")
         self.reference_normal_rmse_value_label.setText("—")
         self._set_normal_status("No point")
+
+    def _clear_selected_approach_direction(self):
+        self._selected_approach_direction = None
+        self.reference_approach_source_value_label.setText("—")
+        self.reference_approach_source_value_label.setToolTip("")
+        self.reference_approach_x_value_label.setText("—")
+        self.reference_approach_y_value_label.setText("—")
+        self.reference_approach_z_value_label.setText("—")
+        self._set_approach_status("No point")
+
+    def _set_approach_status(self, status, detail=""):
+        self.reference_approach_status_label.setText(status)
+        self.reference_approach_status_label.setToolTip(detail)
 
     def _set_normal_status(self, status, detail=""):
         self.reference_normal_status_label.setText(status)
@@ -493,10 +597,16 @@ class InspectionControls(UIControlHelper):
                 self._reference_camera_info,
             )
         except ValueError as exception:
-            self._set_normal_status("Unavailable", str(exception))
+            self._surface_normal_error = str(exception)
+            self._set_normal_status(
+                "Unavailable",
+                self._surface_normal_error,
+            )
+            self._resolve_selected_approach_direction(projected_point)
             return
 
         self._selected_surface_normal = result
+        self._surface_normal_error = ""
         normal = result.normal_camera
         self.reference_normal_x_value_label.setText(
             self._format_readout_value(normal.x, 3)
@@ -514,6 +624,66 @@ class InspectionControls(UIControlHelper):
             self._format_readout_value(result.plane_rmse_m, 4)
         )
         self._set_normal_status("Ready")
+        self._resolve_selected_approach_direction(projected_point)
+
+    def _resolve_selected_approach_direction(self, projected_point):
+        self._clear_selected_approach_direction()
+        if self._reference_view is None:
+            self._set_approach_status(
+                "Unavailable",
+                "The selected routine has no saved reference-view pose.",
+            )
+            return
+        if self._reference_view.controlled_frame != projected_point.frame_id:
+            self._set_approach_status(
+                "Frame mismatch",
+                "The saved reference-view frame does not match the "
+                "registered depth frame.",
+            )
+            return
+
+        mode = self.reference_approach_mode_dropdown.currentData()
+        try:
+            result = resolve_reference_approach_direction(
+                projected_point=projected_point,
+                surface_normal=self._selected_surface_normal,
+                controlled_frame_pose_object=(
+                    self._reference_view.controlled_frame_pose_object
+                ),
+                mode=mode,
+                surface_normal_unavailable_reason=(
+                    self._surface_normal_error
+                ),
+            )
+        except ValueError as exception:
+            self._set_approach_status("Unavailable", str(exception))
+            return
+
+        self._selected_approach_direction = result
+        direction = result.direction_camera
+        self.reference_approach_x_value_label.setText(
+            self._format_readout_value(direction.x, 3)
+        )
+        self.reference_approach_y_value_label.setText(
+            self._format_readout_value(direction.y, 3)
+        )
+        self.reference_approach_z_value_label.setText(
+            self._format_readout_value(direction.z, 3)
+        )
+        source_text = {
+            APPROACH_SOURCE_SURFACE_FIT: "Surface fit",
+            APPROACH_SOURCE_TAG_X_FALLBACK: "Tag +X fallback",
+            APPROACH_SOURCE_TAG_X_SELECTED: "Tag +X selected",
+        }[result.source]
+        self.reference_approach_source_value_label.setText(source_text)
+        detail = ""
+        if result.fallback_reason:
+            detail = (
+                "Surface fit was unavailable. Using object/tag-frame +X. "
+                f"Reason: {result.fallback_reason}"
+            )
+        self.reference_approach_source_value_label.setToolTip(detail)
+        self._set_approach_status("Ready", detail)
 
     def _required_text(self, field, label):
         value = field.text().strip()
@@ -640,6 +810,7 @@ class InspectionControls(UIControlHelper):
         self._reference_rgb_size = None
         self._reference_depth_image = None
         self._reference_camera_info = None
+        self._reference_view = None
         self._clear_selected_surface_point()
         routine_id = self.saved_routine_dropdown.currentData()
         if not routine_id or self._selected_definition is None:
@@ -673,6 +844,7 @@ class InspectionControls(UIControlHelper):
             )
             return
 
+        self._reference_view = routine.reference_view
         status = (
             "Reference view: captured, "
             f"{routine.reference_view.reference_dataset_path}"
