@@ -13,8 +13,12 @@ from PyQt5.QtWidgets import (
 
 from fault_detector_msgs.msg import ComplexCommand
 
+from fault_detector_spot.inspection.models import ImagePoint
 from fault_detector_spot.inspection.object_repository import (
     ObjectRepository,
+)
+from fault_detector_spot.inspection.reference_view_depth_projection import (
+    project_reference_pixel,
 )
 
 from ..commands.command_ids import CommandID
@@ -31,6 +35,10 @@ class InspectionControls(UIControlHelper):
             getattr(parent_ui, "inspection_object_root", None)
         )
         self._selected_definition = None
+        self._reference_rgb_size = None
+        self._reference_depth_image = None
+        self._reference_camera_info = None
+        self._selected_surface_point = None
         super().__init__(parent_ui)
         self.refresh_saved_definitions()
 
@@ -191,6 +199,9 @@ class InspectionControls(UIControlHelper):
         row.addWidget(QLabel("Reference Image:"))
         self.reference_view_widget = ReferenceViewWidget()
         self.reference_pixel_label = QLabel("Selected pixel: none")
+        self.reference_surface_point_label = QLabel(
+            "Surface point: none"
+        )
         self.clear_reference_pixel_button = QPushButton("Clear Point")
         self.clear_reference_pixel_button.setEnabled(False)
         self.clear_reference_pixel_button.clicked.connect(
@@ -204,6 +215,7 @@ class InspectionControls(UIControlHelper):
         )
         row.addWidget(self.reference_view_widget, 1)
         row.addWidget(self.reference_pixel_label)
+        row.addWidget(self.reference_surface_point_label)
         row.addWidget(self.clear_reference_pixel_button)
         return row
 
@@ -212,10 +224,71 @@ class InspectionControls(UIControlHelper):
             f"Selected pixel: u={u}, v={v}"
         )
         self.clear_reference_pixel_button.setEnabled(True)
+        self._project_selected_reference_pixel(u, v)
 
     def _handle_reference_image_point_cleared(self):
         self.reference_pixel_label.setText("Selected pixel: none")
         self.clear_reference_pixel_button.setEnabled(False)
+        self._clear_selected_surface_point()
+
+    @property
+    def selected_surface_point(self):
+        """Return the transient projected reference surface point."""
+        return self._selected_surface_point
+
+    def _clear_selected_surface_point(self):
+        self._selected_surface_point = None
+        self.reference_surface_point_label.setText(
+            "Surface point: none"
+        )
+
+    def _project_selected_reference_pixel(self, u, v):
+        self._selected_surface_point = None
+        if (
+            self._reference_rgb_size is None
+            or self._reference_depth_image is None
+            or self._reference_camera_info is None
+        ):
+            self.reference_surface_point_label.setText(
+                "Surface point: reference depth unavailable"
+            )
+            return
+        depth_size = (
+            self._reference_depth_image.width,
+            self._reference_depth_image.height,
+        )
+        if self._reference_rgb_size != depth_size:
+            self.reference_surface_point_label.setText(
+                "Surface point unavailable: reference RGB and "
+                "registered depth dimensions do not match"
+            )
+            return
+
+        try:
+            result = project_reference_pixel(
+                ImagePoint(u=u, v=v),
+                self._reference_depth_image,
+                self._reference_camera_info,
+            )
+        except ValueError as exception:
+            self.reference_surface_point_label.setText(
+                f"Surface point unavailable: {exception}"
+            )
+            return
+
+        self._selected_surface_point = result
+        point = result.point_camera
+        sample_suffix = ""
+        if result.sampled_pixel != result.requested_pixel:
+            sample_suffix = (
+                f"; depth pixel u={result.sampled_pixel.u}, "
+                f"v={result.sampled_pixel.v}"
+            )
+        self.reference_surface_point_label.setText(
+            f"Surface point [{result.frame_id}]: "
+            f"x={point.x:.3f}, y={point.y:.3f}, "
+            f"z={point.z:.3f} m{sample_suffix}"
+        )
 
     def _required_text(self, field, label):
         value = field.text().strip()
@@ -339,6 +412,10 @@ class InspectionControls(UIControlHelper):
         self._load_selected_routine()
 
     def _load_selected_routine(self, _index=None):
+        self._reference_rgb_size = None
+        self._reference_depth_image = None
+        self._reference_camera_info = None
+        self._clear_selected_surface_point()
         routine_id = self.saved_routine_dropdown.currentData()
         if not routine_id or self._selected_definition is None:
             self.reference_view_status_label.setText(
@@ -376,12 +453,15 @@ class InspectionControls(UIControlHelper):
             f"{routine.reference_view.reference_dataset_path}"
         )
         try:
-            rgb_image, _, _ = (
+            rgb_image, depth_image, camera_info = (
                 self.object_repository.load_reference_dataset(
                     self._selected_definition.object_id,
                     routine.routine_id,
                 )
             )
+            self._reference_rgb_size = (rgb_image.width, rgb_image.height)
+            self._reference_depth_image = depth_image
+            self._reference_camera_info = camera_info
             self.reference_view_widget.set_ros_image(rgb_image)
         except Exception as exception:
             self.reference_view_status_label.setText(
