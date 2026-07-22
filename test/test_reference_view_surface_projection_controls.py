@@ -153,7 +153,8 @@ def test_selected_pixel_exposes_projected_surface_point(
     assert result is not None
     assert result.depth_m == pytest.approx(1.25)
     assert result.point_camera.x == pytest.approx(0.0125)
-    assert "z=1.250 m" in controls.reference_surface_point_label.text()
+    assert controls.reference_surface_z_value_label.text() == "1.250"
+    assert controls.reference_projection_status_label.text() == "Ready"
 
 
 def test_invalid_depth_is_reported_without_accepting_a_point(
@@ -170,8 +171,11 @@ def test_invalid_depth_is_reported_without_accepting_a_point(
     )
 
     assert controls.selected_surface_point is None
-    assert "Surface point unavailable" in (
-        controls.reference_surface_point_label.text()
+    assert controls.reference_projection_status_label.text() == (
+        "Unavailable"
+    )
+    assert "No valid depth" in (
+        controls.reference_projection_status_label.toolTip()
     )
 
 
@@ -190,6 +194,34 @@ def test_clearing_pixel_also_clears_surface_point(
     controls.reference_view_widget.clear_selection()
 
     assert controls.selected_surface_point is None
-    assert controls.reference_surface_point_label.text() == (
-        "Surface point: none"
+    assert controls.reference_surface_z_value_label.text() == "—"
+    assert controls.reference_projection_status_label.text() == "No point"
+
+
+def test_projection_readout_geometry_is_stable(application, tmp_path):
+    """Changing projection text cannot resize or move the image row."""
+    save_dataset(tmp_path, [1000, 1250])
+    controls = InspectionControls(FakeUI(tmp_path))
+    select_routine(controls)
+
+    panel_height = controls.reference_point_panel.height()
+    widths = {
+        label: (label.minimumWidth(), label.maximumWidth())
+        for label in (
+            controls.reference_pixel_value_label,
+            controls.reference_surface_frame_value_label,
+            controls.reference_surface_x_value_label,
+            controls.reference_surface_y_value_label,
+            controls.reference_surface_z_value_label,
+            controls.reference_depth_pixel_value_label,
+            controls.reference_projection_status_label,
+        )
+    }
+
+    controls.reference_view_widget._set_selected_image_point(
+        ImagePoint(u=1, v=0)
     )
+
+    assert controls.reference_point_panel.minimumHeight() == panel_height
+    assert controls.reference_point_panel.maximumHeight() == panel_height
+    assert all(minimum == maximum for minimum, maximum in widths.values())

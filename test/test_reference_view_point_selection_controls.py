@@ -78,13 +78,13 @@ def test_controls_report_and_clear_selected_pixel(
 
     point = widget.selected_image_point
     assert point is not None
-    assert controls.reference_pixel_label.text() == (
-        f"Selected pixel: u={point.u}, v={point.v}"
+    assert controls.reference_pixel_value_label.text() == (
+        f"u={point.u}, v={point.v}"
     )
     assert controls.clear_reference_pixel_button.isEnabled() is True
 
     controls.clear_reference_pixel_button.click()
 
     assert widget.selected_image_point is None
-    assert controls.reference_pixel_label.text() == "Selected pixel: none"
+    assert controls.reference_pixel_value_label.text() == "—"
     assert controls.clear_reference_pixel_button.isEnabled() is False

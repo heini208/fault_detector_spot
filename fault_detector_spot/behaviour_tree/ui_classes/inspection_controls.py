@@ -1,14 +1,18 @@
 """Inspection setup controls."""
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIntValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
 )
 
 from fault_detector_msgs.msg import ComplexCommand
@@ -196,12 +200,48 @@ class InspectionControls(UIControlHelper):
 
     def _make_reference_view_preview_row(self):
         row = QHBoxLayout()
-        row.addWidget(QLabel("Reference Image:"))
+        title = QLabel("Reference Image:")
+        title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        row.addWidget(title)
+
+        preview_column = QVBoxLayout()
         self.reference_view_widget = ReferenceViewWidget()
-        self.reference_pixel_label = QLabel("Selected pixel: none")
-        self.reference_surface_point_label = QLabel(
-            "Surface point: none"
+        preview_column.addWidget(self.reference_view_widget, 1)
+
+        self.reference_point_panel = QFrame()
+        self.reference_point_panel.setFrameShape(QFrame.StyledPanel)
+        self.reference_point_panel.setFixedHeight(96)
+        panel_layout = QGridLayout(self.reference_point_panel)
+        panel_layout.setContentsMargins(8, 6, 8, 6)
+        panel_layout.setHorizontalSpacing(10)
+        panel_layout.setVerticalSpacing(4)
+
+        self.reference_pixel_value_label = self._fixed_readout_label(
+            "—",
+            130,
         )
+        self.reference_surface_frame_value_label = (
+            self._fixed_readout_label("—", 210)
+        )
+        self.reference_surface_x_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_surface_y_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_surface_z_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_depth_pixel_value_label = (
+            self._fixed_readout_label("—", 145)
+        )
+        self.reference_projection_status_label = (
+            self._fixed_readout_label("No point", 155)
+        )
+
         self.clear_reference_pixel_button = QPushButton("Clear Point")
         self.clear_reference_pixel_button.setEnabled(False)
         self.clear_reference_pixel_button.clicked.connect(
@@ -213,21 +253,66 @@ class InspectionControls(UIControlHelper):
         self.reference_view_widget.image_point_cleared.connect(
             self._handle_reference_image_point_cleared
         )
-        row.addWidget(self.reference_view_widget, 1)
-        row.addWidget(self.reference_pixel_label)
-        row.addWidget(self.reference_surface_point_label)
-        row.addWidget(self.clear_reference_pixel_button)
+
+        panel_layout.addWidget(QLabel("Selected pixel:"), 0, 0)
+        panel_layout.addWidget(self.reference_pixel_value_label, 0, 1)
+        panel_layout.addWidget(QLabel("Frame:"), 0, 2)
+        panel_layout.addWidget(
+            self.reference_surface_frame_value_label,
+            0,
+            3,
+        )
+        panel_layout.addWidget(
+            self.clear_reference_pixel_button,
+            0,
+            4,
+        )
+
+        panel_layout.addWidget(QLabel("Position [m]:"), 1, 0)
+        panel_layout.addWidget(QLabel("x"), 1, 1)
+        panel_layout.addWidget(self.reference_surface_x_value_label, 1, 2)
+        panel_layout.addWidget(QLabel("y"), 1, 3)
+        panel_layout.addWidget(self.reference_surface_y_value_label, 1, 4)
+        panel_layout.addWidget(QLabel("z"), 1, 5)
+        panel_layout.addWidget(self.reference_surface_z_value_label, 1, 6)
+
+        panel_layout.addWidget(QLabel("Depth source:"), 2, 0)
+        panel_layout.addWidget(
+            self.reference_depth_pixel_value_label,
+            2,
+            1,
+            1,
+            2,
+        )
+        panel_layout.addWidget(QLabel("Status:"), 2, 3)
+        panel_layout.addWidget(
+            self.reference_projection_status_label,
+            2,
+            4,
+            1,
+            2,
+        )
+        panel_layout.setColumnStretch(7, 1)
+
+        preview_column.addWidget(self.reference_point_panel)
+        row.addLayout(preview_column, 1)
         return row
 
+    @staticmethod
+    def _fixed_readout_label(text, width):
+        label = QLabel(text)
+        label.setFixedWidth(width)
+        label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        return label
+
     def _handle_reference_image_point_changed(self, u, v):
-        self.reference_pixel_label.setText(
-            f"Selected pixel: u={u}, v={v}"
-        )
+        self.reference_pixel_value_label.setText(f"u={u}, v={v}")
         self.clear_reference_pixel_button.setEnabled(True)
         self._project_selected_reference_pixel(u, v)
 
     def _handle_reference_image_point_cleared(self):
-        self.reference_pixel_label.setText("Selected pixel: none")
+        self.reference_pixel_value_label.setText("—")
         self.clear_reference_pixel_button.setEnabled(False)
         self._clear_selected_surface_point()
 
@@ -238,19 +323,37 @@ class InspectionControls(UIControlHelper):
 
     def _clear_selected_surface_point(self):
         self._selected_surface_point = None
-        self.reference_surface_point_label.setText(
-            "Surface point: none"
-        )
+        self.reference_surface_frame_value_label.setText("—")
+        self.reference_surface_frame_value_label.setToolTip("")
+        self.reference_surface_x_value_label.setText("—")
+        self.reference_surface_y_value_label.setText("—")
+        self.reference_surface_z_value_label.setText("—")
+        self.reference_depth_pixel_value_label.setText("—")
+        self._set_projection_status("No point")
+
+    def _set_projection_status(self, status, detail=""):
+        self.reference_projection_status_label.setText(status)
+        self.reference_projection_status_label.setToolTip(detail)
+
+    def _set_projection_unavailable(self, status, detail):
+        self._selected_surface_point = None
+        self.reference_surface_frame_value_label.setText("—")
+        self.reference_surface_frame_value_label.setToolTip("")
+        self.reference_surface_x_value_label.setText("—")
+        self.reference_surface_y_value_label.setText("—")
+        self.reference_surface_z_value_label.setText("—")
+        self.reference_depth_pixel_value_label.setText("—")
+        self._set_projection_status(status, detail)
 
     def _project_selected_reference_pixel(self, u, v):
-        self._selected_surface_point = None
         if (
             self._reference_rgb_size is None
             or self._reference_depth_image is None
             or self._reference_camera_info is None
         ):
-            self.reference_surface_point_label.setText(
-                "Surface point: reference depth unavailable"
+            self._set_projection_unavailable(
+                "Depth unavailable",
+                "The selected routine has no reference depth dataset.",
             )
             return
         depth_size = (
@@ -258,9 +361,9 @@ class InspectionControls(UIControlHelper):
             self._reference_depth_image.height,
         )
         if self._reference_rgb_size != depth_size:
-            self.reference_surface_point_label.setText(
-                "Surface point unavailable: reference RGB and "
-                "registered depth dimensions do not match"
+            self._set_projection_unavailable(
+                "Size mismatch",
+                "Reference RGB and registered depth dimensions do not match.",
             )
             return
 
@@ -271,24 +374,28 @@ class InspectionControls(UIControlHelper):
                 self._reference_camera_info,
             )
         except ValueError as exception:
-            self.reference_surface_point_label.setText(
-                f"Surface point unavailable: {exception}"
+            self._set_projection_unavailable(
+                "Unavailable",
+                str(exception),
             )
             return
 
         self._selected_surface_point = result
         point = result.point_camera
-        sample_suffix = ""
-        if result.sampled_pixel != result.requested_pixel:
-            sample_suffix = (
-                f"; depth pixel u={result.sampled_pixel.u}, "
+        self.reference_surface_frame_value_label.setText(result.frame_id)
+        self.reference_surface_frame_value_label.setToolTip(result.frame_id)
+        self.reference_surface_x_value_label.setText(f"{point.x:.3f}")
+        self.reference_surface_y_value_label.setText(f"{point.y:.3f}")
+        self.reference_surface_z_value_label.setText(f"{point.z:.3f}")
+        if result.sampled_pixel == result.requested_pixel:
+            depth_source = "selected pixel"
+        else:
+            depth_source = (
+                f"u={result.sampled_pixel.u}, "
                 f"v={result.sampled_pixel.v}"
             )
-        self.reference_surface_point_label.setText(
-            f"Surface point [{result.frame_id}]: "
-            f"x={point.x:.3f}, y={point.y:.3f}, "
-            f"z={point.z:.3f} m{sample_suffix}"
-        )
+        self.reference_depth_pixel_value_label.setText(depth_source)
+        self._set_projection_status("Ready")
 
     def _required_text(self, field, label):
         value = field.text().strip()
