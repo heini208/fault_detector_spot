@@ -190,8 +190,32 @@ class InspectionControls(UIControlHelper):
         row = QHBoxLayout()
         row.addWidget(QLabel("Reference Image:"))
         self.reference_view_widget = ReferenceViewWidget()
+        self.reference_pixel_label = QLabel("Selected pixel: none")
+        self.clear_reference_pixel_button = QPushButton("Clear Point")
+        self.clear_reference_pixel_button.setEnabled(False)
+        self.clear_reference_pixel_button.clicked.connect(
+            self.reference_view_widget.clear_selection
+        )
+        self.reference_view_widget.image_point_changed.connect(
+            self._handle_reference_image_point_changed
+        )
+        self.reference_view_widget.image_point_cleared.connect(
+            self._handle_reference_image_point_cleared
+        )
         row.addWidget(self.reference_view_widget, 1)
+        row.addWidget(self.reference_pixel_label)
+        row.addWidget(self.clear_reference_pixel_button)
         return row
+
+    def _handle_reference_image_point_changed(self, u, v):
+        self.reference_pixel_label.setText(
+            f"Selected pixel: u={u}, v={v}"
+        )
+        self.clear_reference_pixel_button.setEnabled(True)
+
+    def _handle_reference_image_point_cleared(self):
+        self.reference_pixel_label.setText("Selected pixel: none")
+        self.clear_reference_pixel_button.setEnabled(False)
 
     def _required_text(self, field, label):
         value = field.text().strip()
