@@ -1,7 +1,9 @@
 """Inspection setup controls."""
 
 import math
+from copy import deepcopy
 
+from bosdyn.client.frame_helpers import HAND_FRAME_NAME
 from PyQt5.QtCore import QLocale, Qt, QTimer
 from PyQt5.QtGui import QDoubleValidator, QIntValidator
 from PyQt5.QtWidgets import (
@@ -18,8 +20,16 @@ from PyQt5.QtWidgets import (
 )
 
 from fault_detector_msgs.msg import ComplexCommand
+from rclpy.duration import Duration
+from rclpy.time import Time
+import tf2_ros
 
-from fault_detector_spot.inspection.models import ImagePoint
+from fault_detector_spot.inspection.models import (
+    ImagePoint,
+    PoseData,
+    QuaternionData,
+    Vector3Data,
+)
 from fault_detector_spot.inspection.object_repository import (
     ObjectRepository,
 )
@@ -38,12 +48,21 @@ from fault_detector_spot.inspection.reference_view_depth_projection import (
 from fault_detector_spot.inspection.reference_view_surface_normal import (
     estimate_reference_surface_normal,
 )
+from fault_detector_spot.inspection.reference_probe_setup import (
+    approve_probe_pose,
+    approve_safe_approach_pose,
+    approve_surface_alignment_pose,
+    compose_poses,
+    initialize_reference_probe_setup,
+    probe_pose_to_hand_pose,
+    relative_pose,
+)
 from fault_detector_spot.inspection.reference_view_surface_target import (
     quaternion_to_rpy,
     resolve_reference_surface_target,
 )
 
-from ..commands.command_ids import CommandID
+from ..commands.command_ids import CommandID, OrientationModes
 from .UIControlHelper import UIControlHelper
 from .reference_view_widget import ReferenceViewWidget
 
@@ -66,6 +85,9 @@ class InspectionControls(UIControlHelper):
         self._surface_normal_error = ""
         self._selected_approach_direction = None
         self._selected_surface_target = None
+        self._probe_setup = None
+        self._tf_buffer = None
+        self._tf_listener = None
         super().__init__(parent_ui)
         self.refresh_saved_definitions()
 
@@ -75,8 +97,14 @@ class InspectionControls(UIControlHelper):
             layout.addLayout(row)
 
     def init_ros_communication(self):
-        """Use the complex-command publisher owned by the main UI."""
+        """Use the UI publisher and create transient TF access."""
         self.complex_command_publisher = self.ui.complex_command_publisher
+        if self.node is not None:
+            self._tf_buffer = tf2_ros.Buffer()
+            self._tf_listener = tf2_ros.TransformListener(
+                self._tf_buffer,
+                self.node,
+            )
 
     def make_rows(self):
         """Create the inspection setup rows."""
@@ -233,7 +261,7 @@ class InspectionControls(UIControlHelper):
 
         self.reference_point_panel = QFrame()
         self.reference_point_panel.setFrameShape(QFrame.StyledPanel)
-        self.reference_point_panel.setFixedHeight(300)
+        self.reference_point_panel.setFixedHeight(390)
         panel_layout = QGridLayout(self.reference_point_panel)
         panel_layout.setContentsMargins(8, 6, 8, 6)
         panel_layout.setHorizontalSpacing(10)
@@ -354,6 +382,27 @@ class InspectionControls(UIControlHelper):
         self.reference_preapproach_z_value_label = (
             self._fixed_readout_label("—", 80)
         )
+        self.reference_setup_status_label = self._fixed_readout_label(
+            "No point",
+            210,
+        )
+        self.move_calculated_approach_button = QPushButton(
+            "Move to Approach Pose"
+        )
+        self.use_current_approach_button = QPushButton(
+            "Use Current as Approach"
+        )
+        self.move_aligned_pose_button = QPushButton(
+            "Move to Aligned Pose"
+        )
+        self.use_current_alignment_button = QPushButton(
+            "Use Current Alignment"
+        )
+        self.move_probe_pose_button = QPushButton("Move to Probe Pose")
+        self.use_current_probe_button = QPushButton(
+            "Use Current as Probe"
+        )
+        self._set_probe_setup_buttons_enabled(False)
 
         self.clear_reference_pixel_button = QPushButton("Clear Point")
         self.clear_reference_pixel_button.setEnabled(False)
@@ -374,6 +423,24 @@ class InspectionControls(UIControlHelper):
         )
         self.reference_preapproach_distance_field.editingFinished.connect(
             self._handle_target_distance_changed
+        )
+        self.move_calculated_approach_button.clicked.connect(
+            self.handle_move_to_approach_pose
+        )
+        self.use_current_approach_button.clicked.connect(
+            self.handle_use_current_as_approach
+        )
+        self.move_aligned_pose_button.clicked.connect(
+            self.handle_move_to_aligned_pose
+        )
+        self.use_current_alignment_button.clicked.connect(
+            self.handle_use_current_alignment
+        )
+        self.move_probe_pose_button.clicked.connect(
+            self.handle_move_to_probe_pose
+        )
+        self.use_current_probe_button.clicked.connect(
+            self.handle_use_current_as_probe
         )
 
         panel_layout.addWidget(QLabel("Selected pixel:"), 0, 0)
@@ -491,7 +558,7 @@ class InspectionControls(UIControlHelper):
         panel_layout.addWidget(QLabel("z"), 7, 5)
         panel_layout.addWidget(self.reference_target_z_value_label, 7, 6)
 
-        panel_layout.addWidget(QLabel("Target angle [deg]:"), 8, 0)
+        panel_layout.addWidget(QLabel("Target angle rel. object [deg]:"), 8, 0)
         panel_layout.addWidget(QLabel("roll"), 8, 1)
         panel_layout.addWidget(
             self.reference_target_roll_value_label,
@@ -530,11 +597,78 @@ class InspectionControls(UIControlHelper):
             9,
             6,
         )
+
+        panel_layout.addWidget(QLabel("Setup status:"), 10, 0)
+        panel_layout.addWidget(
+            self.reference_setup_status_label,
+            10,
+            1,
+            1,
+            2,
+        )
+        panel_layout.addWidget(
+            self.move_calculated_approach_button,
+            10,
+            3,
+            1,
+            2,
+        )
+        panel_layout.addWidget(
+            self.use_current_approach_button,
+            10,
+            5,
+            1,
+            2,
+        )
+
+        panel_layout.addWidget(
+            self.move_aligned_pose_button,
+            11,
+            0,
+            1,
+            2,
+        )
+        panel_layout.addWidget(
+            self.use_current_alignment_button,
+            11,
+            2,
+            1,
+            2,
+        )
+        panel_layout.addWidget(
+            self.move_probe_pose_button,
+            11,
+            4,
+            1,
+            2,
+        )
+        panel_layout.addWidget(
+            self.use_current_probe_button,
+            11,
+            6,
+        )
         panel_layout.setColumnStretch(7, 1)
 
         preview_column.addWidget(self.reference_point_panel)
         row.addLayout(preview_column, 1)
         return row
+
+    def _set_probe_setup_buttons_enabled(self, enabled):
+        setup_buttons = (
+            self.move_calculated_approach_button,
+            self.use_current_approach_button,
+            self.move_aligned_pose_button,
+            self.use_current_alignment_button,
+        )
+        for button in setup_buttons:
+            button.setEnabled(enabled)
+        probe_enabled = (
+            enabled
+            and self._probe_setup is not None
+            and self._probe_setup.surface_alignment_approved
+        )
+        self.move_probe_pose_button.setEnabled(probe_enabled)
+        self.use_current_probe_button.setEnabled(probe_enabled)
 
     @staticmethod
     def _distance_validator(parent):
@@ -602,6 +736,11 @@ class InspectionControls(UIControlHelper):
         """Return the transient target and aligned pre-approach poses."""
         return self._selected_surface_target
 
+    @property
+    def selected_probe_setup(self):
+        """Return the transient user-approved probe setup state."""
+        return self._probe_setup
+
     def _clear_selected_surface_point(self):
         self._selected_surface_point = None
         self._clear_selected_surface_normal()
@@ -634,6 +773,7 @@ class InspectionControls(UIControlHelper):
 
     def _clear_selected_surface_target(self):
         self._selected_surface_target = None
+        self._probe_setup = None
         self.reference_target_x_value_label.setText("—")
         self.reference_target_y_value_label.setText("—")
         self.reference_target_z_value_label.setText("—")
@@ -643,7 +783,13 @@ class InspectionControls(UIControlHelper):
         self.reference_preapproach_x_value_label.setText("—")
         self.reference_preapproach_y_value_label.setText("—")
         self.reference_preapproach_z_value_label.setText("—")
+        self._set_probe_setup_buttons_enabled(False)
+        self._set_setup_status("No point")
         self._set_target_status("No point")
+
+    def _set_setup_status(self, status, detail=""):
+        self.reference_setup_status_label.setText(status)
+        self.reference_setup_status_label.setToolTip(detail)
 
     def _set_target_status(self, status, detail=""):
         self.reference_target_status_label.setText(status)
@@ -856,8 +1002,16 @@ class InspectionControls(UIControlHelper):
             return
 
         self._selected_surface_target = result
-        target = result.target_pose_object
-        aligned = result.aligned_preapproach_pose_object
+        self._probe_setup = initialize_reference_probe_setup(result)
+        self._set_probe_setup_buttons_enabled(True)
+        self._display_probe_setup("Calculated")
+
+    def _display_probe_setup(self, status):
+        if self._probe_setup is None:
+            self._clear_selected_surface_target()
+            return
+        target = self._probe_setup.probe_pose_object
+        aligned = self._probe_setup.aligned_preapproach_pose_object
         self.reference_target_x_value_label.setText(
             self._format_readout_value(target.position.x, 3)
         )
@@ -886,22 +1040,233 @@ class InspectionControls(UIControlHelper):
         self.reference_preapproach_z_value_label.setText(
             self._format_readout_value(aligned.position.z, 3)
         )
-        quaternion_detail = (
-            "Object-frame sensor-tip quaternion: "
+        detail = (
+            "Object-frame probe quaternion: "
             f"x={target.orientation.x:.5f}, "
             f"y={target.orientation.y:.5f}, "
             f"z={target.orientation.z:.5f}, "
             f"w={target.orientation.w:.5f}. "
-            "The sensor local +X axis points outward, so its sensing face "
-            "points toward the surface."
+            "The probe local +X axis points outward from the surface."
         )
         for label in (
             self.reference_target_roll_value_label,
             self.reference_target_pitch_value_label,
             self.reference_target_yaw_value_label,
         ):
-            label.setToolTip(quaternion_detail)
-        self._set_target_status("Ready", quaternion_detail)
+            label.setToolTip(detail)
+        self._set_target_status("Ready", detail)
+        self._set_setup_status(status, self._probe_setup_detail())
+        self._set_probe_setup_buttons_enabled(True)
+
+    def _probe_setup_detail(self):
+        setup = self._probe_setup
+        if setup is None:
+            return "No transient probe setup is available."
+        return (
+            f"Approach approved={setup.safe_approach_approved}; "
+            f"alignment approved={setup.surface_alignment_approved}; "
+            f"probe approved={setup.probe_pose_approved}. "
+            "Nothing is persisted until a later Save Probe Point step."
+        )
+
+    def handle_move_to_approach_pose(self):
+        self._move_setup_pose("safe_approach_pose_object", "approach pose")
+
+    def handle_move_to_aligned_pose(self):
+        self._move_setup_pose(
+            "aligned_preapproach_pose_object",
+            "aligned pre-approach pose",
+        )
+
+    def handle_move_to_probe_pose(self):
+        self._move_setup_pose("probe_pose_object", "probe pose")
+
+    def _move_setup_pose(self, attribute, label):
+        try:
+            setup = self._require_probe_setup()
+            pose = getattr(setup, attribute)
+        except Exception as exception:
+            self._show_setup_error("Move Probe Setup", exception)
+            return
+        self._move_transient_probe_pose(pose, label)
+
+    def handle_use_current_as_approach(self):
+        try:
+            current = self._current_probe_pose_object()
+            self._probe_setup = approve_safe_approach_pose(
+                self._require_probe_setup(),
+                current,
+            )
+        except Exception as exception:
+            self._show_setup_error("Capture Approach Pose", exception)
+            return
+        self._display_probe_setup("Approach approved")
+        self._set_status_text("Current probe pose approved as approach pose")
+
+    def handle_use_current_alignment(self):
+        try:
+            current = self._current_probe_pose_object()
+            self._probe_setup = approve_surface_alignment_pose(
+                self._require_probe_setup(),
+                current,
+            )
+        except Exception as exception:
+            self._show_setup_error("Capture Surface Alignment", exception)
+            return
+        self._display_probe_setup("Alignment approved")
+        self._set_status_text("Current probe pose approved as alignment")
+
+    def handle_use_current_as_probe(self):
+        try:
+            current = self._current_probe_pose_object()
+            self._probe_setup = approve_probe_pose(
+                self._require_probe_setup(),
+                current,
+            )
+        except Exception as exception:
+            self._show_setup_error("Capture Probe Pose", exception)
+            return
+        self._display_probe_setup("Probe approved")
+        self._set_status_text(
+            "Current probe pose approved as final probe pose"
+        )
+
+    def _move_transient_probe_pose(self, probe_pose_object, label):
+        try:
+            command = self._build_probe_pose_command(probe_pose_object)
+        except Exception as exception:
+            self._show_setup_error("Move Probe Setup", exception)
+            return
+        self.complex_command_publisher.publish(command)
+        self._set_status_text(f"Command sent: move to {label}")
+
+    def _build_probe_pose_command(self, probe_pose_object):
+        probe_pose_object.validate()
+        tag = self._live_reference_tag()
+        body_to_object = self._pose_data_from_message(tag.pose.pose)
+        hand_to_probe = self._hand_to_probe_pose()
+        object_to_hand = probe_pose_to_hand_pose(
+            probe_pose_object,
+            hand_to_probe,
+        )
+        body_to_hand = compose_poses(body_to_object, object_to_hand)
+
+        command = self._new_command(CommandID.MOVE_ARM_TO_TAG)
+        command.tag = deepcopy(tag)
+        command.offset.header = deepcopy(tag.pose.header)
+        command.offset.header.frame_id = tag.pose.header.frame_id
+        command.offset.pose.position.x = (
+            body_to_hand.position.x - body_to_object.position.x
+        )
+        command.offset.pose.position.y = (
+            body_to_hand.position.y - body_to_object.position.y
+        )
+        command.offset.pose.position.z = (
+            body_to_hand.position.z - body_to_object.position.z
+        )
+        self._write_quaternion_message(
+            command.offset.pose.orientation,
+            body_to_hand.orientation,
+        )
+        command.orientation_mode = OrientationModes.CUSTOM_ORIENTATION.value
+        return command
+
+    def _current_probe_pose_object(self):
+        tag = self._live_reference_tag()
+        body_frame = tag.pose.header.frame_id.strip()
+        probe_frame = self.probe_frame_field.text().strip()
+        if not probe_frame:
+            raise ValueError("Probe frame must not be empty")
+        body_to_probe = self._lookup_pose(body_frame, probe_frame)
+        body_to_object = self._pose_data_from_message(tag.pose.pose)
+        return relative_pose(body_to_object, body_to_probe)
+
+    def _hand_to_probe_pose(self):
+        probe_frame = self.probe_frame_field.text().strip()
+        if not probe_frame:
+            raise ValueError("Probe frame must not be empty")
+        if probe_frame == HAND_FRAME_NAME:
+            return PoseData.identity()
+        return self._lookup_pose(HAND_FRAME_NAME, probe_frame)
+
+    def _lookup_pose(self, target_frame, source_frame):
+        if self._tf_buffer is None:
+            raise RuntimeError("TF is unavailable in the inspection UI")
+        transform = self._tf_buffer.lookup_transform(
+            target_frame,
+            source_frame,
+            Time(),
+            timeout=Duration(seconds=0.5),
+        )
+        value = transform.transform
+        pose = PoseData(
+            position=Vector3Data(
+                x=value.translation.x,
+                y=value.translation.y,
+                z=value.translation.z,
+            ),
+            orientation=QuaternionData(
+                x=value.rotation.x,
+                y=value.rotation.y,
+                z=value.rotation.z,
+                w=value.rotation.w,
+            ),
+        )
+        pose.validate()
+        return pose
+
+    def _live_reference_tag(self):
+        if self._selected_definition is None:
+            raise ValueError("No inspection object is selected")
+        tag_id = self._selected_definition.reference_tag.tag_id
+        visible_tags = getattr(self.ui, "visible_tags", {})
+        tag = visible_tags.get(tag_id)
+        if tag is None:
+            raise ValueError(
+                f"Reference tag {tag_id} must be currently visible"
+            )
+        if not tag.pose.header.frame_id.strip():
+            raise ValueError("Reference tag pose frame is empty")
+        return tag
+
+    def _require_probe_setup(self):
+        if self._probe_setup is None:
+            raise ValueError("No calculated probe setup is available")
+        return self._probe_setup
+
+    def _show_setup_error(self, title, exception):
+        self._set_setup_status("Unavailable", str(exception))
+        self.show_warning(title, str(exception))
+
+    def _set_status_text(self, text):
+        if self.status_label is not None:
+            self.status_label.setText(text)
+
+    @staticmethod
+    def _pose_data_from_message(pose):
+        result = PoseData(
+            position=Vector3Data(
+                x=pose.position.x,
+                y=pose.position.y,
+                z=pose.position.z,
+            ),
+            orientation=QuaternionData(
+                x=pose.orientation.x,
+                y=pose.orientation.y,
+                z=pose.orientation.z,
+                w=pose.orientation.w,
+            ),
+        )
+        result.validate()
+        return result
+
+    @staticmethod
+    def _write_quaternion_message(message, quaternion):
+        quaternion.validate()
+        message.x = quaternion.x
+        message.y = quaternion.y
+        message.z = quaternion.z
+        message.w = quaternion.w
 
     @staticmethod
     def _distance_value(field, label):

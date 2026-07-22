@@ -29,7 +29,7 @@ def resolve_reference_surface_target(
     target_surface_distance_m: float,
     aligned_preapproach_distance_m: float,
 ) -> ReferenceSurfaceTarget:
-    """Resolve object-frame sensor-tip poses from one selected surface point."""
+    """Resolve object-frame sensor-tip poses from a surface point."""
     if approach_direction is None:
         raise ValueError("No surface orientation is available")
     _require_positive_finite(

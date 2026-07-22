@@ -190,12 +190,16 @@ def test_distance_change_recalculates_target(application, tmp_path):
     controls = InspectionControls(FakeUI(tmp_path))
     configure_reference(controls, [1.0] * 121)
     controls._project_selected_reference_pixel(5, 5)
-    old_position = controls.selected_surface_target.target_pose_object.position.x
+    old_position = (
+        controls.selected_surface_target.target_pose_object.position.x
+    )
 
     controls.reference_target_distance_field.setText("0.08")
     controls._handle_target_distance_changed()
 
-    new_position = controls.selected_surface_target.target_pose_object.position.x
+    new_position = (
+        controls.selected_surface_target.target_pose_object.position.x
+    )
     assert new_position - old_position == pytest.approx(0.05)
 
 
@@ -209,7 +213,9 @@ def test_aligned_distance_must_be_farther_than_target(application, tmp_path):
 
     assert controls.selected_surface_target is None
     assert controls.reference_target_status_label.text() == "Unavailable"
-    assert "must be greater" in controls.reference_target_status_label.toolTip()
+    assert "must be greater" in (
+        controls.reference_target_status_label.toolTip()
+    )
 
 
 def test_reference_frame_mismatch_is_reported(application, tmp_path):
