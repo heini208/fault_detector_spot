@@ -484,6 +484,7 @@ class InspectionControls(UIControlHelper):
         self.reference_surface_y_value_label.setText("—")
         self.reference_surface_z_value_label.setText("—")
         self.reference_depth_pixel_value_label.setText("—")
+        self.reference_depth_pixel_value_label.setToolTip("")
         self._set_projection_status("No point")
 
     def _clear_selected_surface_normal(self):
@@ -527,6 +528,7 @@ class InspectionControls(UIControlHelper):
         self.reference_surface_y_value_label.setText("—")
         self.reference_surface_z_value_label.setText("—")
         self.reference_depth_pixel_value_label.setText("—")
+        self.reference_depth_pixel_value_label.setToolTip("")
         self._set_projection_status(status, detail)
 
     def _project_selected_reference_pixel(self, u, v):
@@ -540,22 +542,12 @@ class InspectionControls(UIControlHelper):
                 "The selected routine has no reference depth dataset.",
             )
             return
-        depth_size = (
-            self._reference_depth_image.width,
-            self._reference_depth_image.height,
-        )
-        if self._reference_rgb_size != depth_size:
-            self._set_projection_unavailable(
-                "Size mismatch",
-                "Reference RGB and registered depth dimensions do not match.",
-            )
-            return
-
         try:
             result = project_reference_pixel(
                 ImagePoint(u=u, v=v),
                 self._reference_depth_image,
                 self._reference_camera_info,
+                rgb_size=self._reference_rgb_size,
             )
         except ValueError as exception:
             self._set_projection_unavailable(
@@ -577,15 +569,28 @@ class InspectionControls(UIControlHelper):
         self.reference_surface_z_value_label.setText(
             self._format_readout_value(point.z, 3)
         )
-        if result.sampled_pixel == result.requested_pixel:
-            depth_source = "selected pixel"
+        mapped = result.mapped_pixel
+        sampled = result.sampled_pixel
+        if sampled == mapped:
+            depth_source = f"u={mapped.u}, v={mapped.v}"
         else:
             depth_source = (
-                f"u={result.sampled_pixel.u}, "
-                f"v={result.sampled_pixel.v}"
+                f"{mapped.u},{mapped.v} → "
+                f"{sampled.u},{sampled.v}"
             )
+        mapping_detail = (
+            f"RGB pixel u={result.requested_pixel.u}, "
+            f"v={result.requested_pixel.v} in "
+            f"{self._reference_rgb_size[0]}x"
+            f"{self._reference_rgb_size[1]} mapped to depth pixel "
+            f"u={mapped.u}, v={mapped.v} in "
+            f"{self._reference_depth_image.width}x"
+            f"{self._reference_depth_image.height}. "
+            f"Sampled depth pixel u={sampled.u}, v={sampled.v}."
+        )
         self.reference_depth_pixel_value_label.setText(depth_source)
-        self._set_projection_status("Ready")
+        self.reference_depth_pixel_value_label.setToolTip(mapping_detail)
+        self._set_projection_status("Ready", mapping_detail)
         self._estimate_selected_surface_normal(result)
 
     def _estimate_selected_surface_normal(self, projected_point):
@@ -623,7 +628,11 @@ class InspectionControls(UIControlHelper):
         self.reference_normal_rmse_value_label.setText(
             self._format_readout_value(result.plane_rmse_m, 4)
         )
-        self._set_normal_status("Ready")
+        self._set_normal_status(
+            "Ready",
+            f"Plane fit used a {result.neighborhood_radius_px} px "
+            f"depth-image radius.",
+        )
         self._resolve_selected_approach_direction(projected_point)
 
     def _resolve_selected_approach_direction(self, projected_point):

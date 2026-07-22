@@ -1,4 +1,4 @@
-"""Project selected reference-image pixels through registered depth."""
+"""Project selected RGB reference pixels through registered depth."""
 
 import math
 import struct
@@ -19,6 +19,11 @@ class ProjectedReferencePoint:
     point_camera: Vector3Data
     frame_id: str
     depth_m: float
+    mapped_pixel: Optional[ImagePoint] = None
+
+    def __post_init__(self):
+        if self.mapped_pixel is None:
+            object.__setattr__(self, "mapped_pixel", self.requested_pixel)
 
 
 def project_reference_pixel(
@@ -26,31 +31,108 @@ def project_reference_pixel(
     depth_image: Image,
     camera_info: CameraInfo,
     search_radius_px: int = 2,
+    rgb_size: Optional[Tuple[int, int]] = None,
 ) -> ProjectedReferencePoint:
-    """Resolve a selected reference pixel into a camera-frame point."""
+    """Map an RGB pixel into registered depth and back-project it."""
     if pixel is None:
         raise ValueError("No reference pixel is selected")
     pixel.validate()
     _validate_search_radius(search_radius_px)
     _validate_depth_image(depth_image)
     fx, fy, cx, cy = _camera_intrinsics(camera_info, depth_image)
-    _validate_pixel_bounds(pixel, depth_image)
+    resolved_rgb_size = _resolve_rgb_size(rgb_size, depth_image)
+    _validate_pixel_bounds(pixel, resolved_rgb_size, "RGB reference image")
+    mapped_pixel = map_rgb_pixel_to_depth(
+        pixel,
+        resolved_rgb_size,
+        (depth_image.width, depth_image.height),
+    )
     frame_id = _resolve_frame_id(depth_image, camera_info)
 
     sampled_pixel, depth_m = _nearest_valid_depth(
-        pixel,
+        mapped_pixel,
         depth_image,
         search_radius_px,
     )
-    x_m = (pixel.u - cx) * depth_m / fx
-    y_m = (pixel.v - cy) * depth_m / fy
+    x_m = (sampled_pixel.u - cx) * depth_m / fx
+    y_m = (sampled_pixel.v - cy) * depth_m / fy
     return ProjectedReferencePoint(
         requested_pixel=ImagePoint(u=pixel.u, v=pixel.v),
+        mapped_pixel=mapped_pixel,
         sampled_pixel=sampled_pixel,
         point_camera=Vector3Data(x=x_m, y=y_m, z=depth_m),
         frame_id=frame_id,
         depth_m=depth_m,
     )
+
+
+def map_rgb_pixel_to_depth(
+    pixel: ImagePoint,
+    rgb_size: Tuple[int, int],
+    depth_size: Tuple[int, int],
+) -> ImagePoint:
+    """Map one pixel center between registered image resolutions."""
+    pixel.validate()
+    rgb_width, rgb_height = _validate_image_size(
+        rgb_size,
+        "RGB image size",
+    )
+    depth_width, depth_height = _validate_image_size(
+        depth_size,
+        "Depth image size",
+    )
+    _validate_pixel_bounds(
+        pixel,
+        (rgb_width, rgb_height),
+        "RGB reference image",
+    )
+
+    mapped_u = _map_pixel_coordinate(pixel.u, rgb_width, depth_width)
+    mapped_v = _map_pixel_coordinate(pixel.v, rgb_height, depth_height)
+    return ImagePoint(u=mapped_u, v=mapped_v)
+
+
+def _map_pixel_coordinate(
+    coordinate: int,
+    source_length: int,
+    target_length: int,
+) -> int:
+    mapped = (
+        (float(coordinate) + 0.5)
+        * float(target_length)
+        / float(source_length)
+        - 0.5
+    )
+    rounded = int(math.floor(mapped + 0.5))
+    return min(max(rounded, 0), target_length - 1)
+
+
+def _resolve_rgb_size(
+    rgb_size: Optional[Tuple[int, int]],
+    depth_image: Image,
+) -> Tuple[int, int]:
+    if rgb_size is None:
+        return depth_image.width, depth_image.height
+    return _validate_image_size(rgb_size, "RGB image size")
+
+
+def _validate_image_size(
+    size: Tuple[int, int],
+    label: str,
+) -> Tuple[int, int]:
+    if not isinstance(size, (tuple, list)) or len(size) != 2:
+        raise ValueError(f"{label} must contain width and height")
+    width, height = size
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+        or width <= 0
+        or height <= 0
+    ):
+        raise ValueError(f"{label} dimensions must be positive integers")
+    return width, height
 
 
 def _validate_search_radius(search_radius_px: int) -> None:
@@ -99,9 +181,14 @@ def _camera_intrinsics(
     return fx, fy, cx, cy
 
 
-def _validate_pixel_bounds(pixel: ImagePoint, depth_image: Image) -> None:
-    if pixel.u >= depth_image.width or pixel.v >= depth_image.height:
-        raise ValueError("Reference pixel is outside the depth image")
+def _validate_pixel_bounds(
+    pixel: ImagePoint,
+    size: Tuple[int, int],
+    label: str,
+) -> None:
+    width, height = size
+    if pixel.u >= width or pixel.v >= height:
+        raise ValueError(f"Reference pixel is outside the {label}")
 
 
 def _resolve_frame_id(
@@ -134,7 +221,7 @@ def _nearest_valid_depth(
         if depth_m is not None:
             return ImagePoint(u=u, v=v), depth_m
     raise ValueError(
-        f"No valid depth within {search_radius_px} px of "
+        f"No valid depth within {search_radius_px} px of depth pixel "
         f"u={requested_pixel.u}, v={requested_pixel.v}"
     )
 

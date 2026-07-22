@@ -69,7 +69,7 @@ def validate_reference_view_inputs(
         _DEPTH_BYTES_PER_PIXEL,
     )
     _validate_camera_info(camera_info)
-    _validate_matching_geometry(
+    _validate_registered_geometry(
         rgb_image,
         depth_image,
         camera_info,
@@ -130,20 +130,20 @@ def _validate_camera_info(camera_info) -> None:
         raise ValueError("CameraInfo focal lengths must be positive")
 
 
-def _validate_matching_geometry(
+def _validate_registered_geometry(
     rgb_image,
     depth_image,
     camera_info,
 ) -> None:
-    dimensions = {
-        (rgb_image.width, rgb_image.height),
-        (depth_image.width, depth_image.height),
-        (camera_info.width, camera_info.height),
-    }
-    if len(dimensions) != 1:
+    if (
+        depth_image.width != camera_info.width
+        or depth_image.height != camera_info.height
+    ):
         raise ValueError(
-            "RGB, depth, and CameraInfo dimensions must match"
+            "Registered depth and CameraInfo dimensions must match"
         )
+    if rgb_image.width <= 0 or rgb_image.height <= 0:
+        raise ValueError("RGB image dimensions must be positive")
 
 
 def _validate_matching_frames(

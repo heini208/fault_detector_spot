@@ -22,6 +22,7 @@ class ReferenceSurfaceNormal:
     normal_camera: Vector3Data
     sample_count: int
     plane_rmse_m: float
+    neighborhood_radius_px: int = 0
 
 
 def estimate_reference_surface_normal(
@@ -29,34 +30,66 @@ def estimate_reference_surface_normal(
     depth_image: Image,
     camera_info: CameraInfo,
     neighborhood_radius_px: int = 4,
+    maximum_neighborhood_radius_px: int = 12,
     minimum_sample_count: int = 12,
-    maximum_depth_delta_m: float = 0.03,
-    maximum_plane_rmse_m: float = 0.008,
+    maximum_depth_delta_m: float = 0.05,
+    maximum_plane_rmse_m: float = 0.015,
     minimum_tangent_spread_m: float = 0.0005,
 ) -> ReferenceSurfaceNormal:
-    """Fit a local plane and return its camera-facing unit normal."""
+    """Fit a local plane around the mapped depth location."""
     _validate_inputs(
         projected_point,
         neighborhood_radius_px,
+        maximum_neighborhood_radius_px,
         minimum_sample_count,
         maximum_depth_delta_m,
         maximum_plane_rmse_m,
         minimum_tangent_spread_m,
     )
 
-    samples = _collect_surface_samples(
-        projected_point,
-        depth_image,
-        camera_info,
+    best_sample_count = 0
+    last_error = None
+    for radius in _candidate_radii(
         neighborhood_radius_px,
-        maximum_depth_delta_m,
-    )
-    if len(samples) < minimum_sample_count:
-        raise ValueError(
-            "Too few consistent depth samples for surface-normal "
-            f"estimation: {len(samples)} < {minimum_sample_count}"
+        maximum_neighborhood_radius_px,
+    ):
+        samples = _collect_surface_samples(
+            projected_point,
+            depth_image,
+            camera_info,
+            radius,
+            maximum_depth_delta_m,
         )
+        best_sample_count = max(best_sample_count, len(samples))
+        if len(samples) < minimum_sample_count:
+            continue
+        try:
+            return _fit_surface_plane(
+                projected_point,
+                samples,
+                radius,
+                maximum_plane_rmse_m,
+                minimum_tangent_spread_m,
+            )
+        except ValueError as exception:
+            last_error = exception
 
+    if last_error is not None:
+        raise last_error
+    raise ValueError(
+        "Too few consistent depth samples for surface-normal "
+        f"estimation: {best_sample_count} < {minimum_sample_count}; "
+        f"searched through radius {maximum_neighborhood_radius_px} px"
+    )
+
+
+def _fit_surface_plane(
+    projected_point,
+    samples,
+    radius,
+    maximum_plane_rmse_m,
+    minimum_tangent_spread_m,
+) -> ReferenceSurfaceNormal:
     points = np.asarray(samples, dtype=float)
     centroid = points.mean(axis=0)
     centered = points - centroid
@@ -90,7 +123,8 @@ def estimate_reference_surface_normal(
         raise ValueError(
             "Local depth is not planar enough: "
             f"RMSE {plane_rmse_m:.4f} m exceeds "
-            f"{maximum_plane_rmse_m:.4f} m"
+            f"{maximum_plane_rmse_m:.4f} m using "
+            f"{len(points)} samples"
         )
 
     result = ReferenceSurfaceNormal(
@@ -102,14 +136,24 @@ def estimate_reference_surface_normal(
         ),
         sample_count=len(points),
         plane_rmse_m=plane_rmse_m,
+        neighborhood_radius_px=radius,
     )
     result.normal_camera.validate()
     return result
 
 
+def _candidate_radii(initial_radius: int, maximum_radius: int):
+    radius = initial_radius
+    while radius < maximum_radius:
+        yield radius
+        radius += 2
+    yield maximum_radius
+
+
 def _validate_inputs(
     projected_point,
     neighborhood_radius_px,
+    maximum_neighborhood_radius_px,
     minimum_sample_count,
     maximum_depth_delta_m,
     maximum_plane_rmse_m,
@@ -118,11 +162,22 @@ def _validate_inputs(
     if projected_point is None:
         raise ValueError("No projected surface point is available")
     projected_point.requested_pixel.validate()
+    projected_point.mapped_pixel.validate()
+    projected_point.sampled_pixel.validate()
     projected_point.point_camera.validate()
     _require_non_negative_integer(
         neighborhood_radius_px,
         "Surface neighborhood radius",
     )
+    _require_non_negative_integer(
+        maximum_neighborhood_radius_px,
+        "Maximum surface neighborhood radius",
+    )
+    if maximum_neighborhood_radius_px < neighborhood_radius_px:
+        raise ValueError(
+            "Maximum surface neighborhood radius must not be smaller "
+            "than the initial radius"
+        )
     _require_positive_integer(
         minimum_sample_count,
         "Minimum surface sample count",
@@ -148,17 +203,18 @@ def _collect_surface_samples(
     radius,
     maximum_depth_delta_m,
 ) -> List[List[float]]:
-    requested = projected_point.requested_pixel
+    center = projected_point.sampled_pixel
     samples = []
+    depth_size = (depth_image.width, depth_image.height)
     for v in range(
-        max(0, requested.v - radius),
-        min(depth_image.height, requested.v + radius + 1),
+        max(0, center.v - radius),
+        min(depth_image.height, center.v + radius + 1),
     ):
         for u in range(
-            max(0, requested.u - radius),
-            min(depth_image.width, requested.u + radius + 1),
+            max(0, center.u - radius),
+            min(depth_image.width, center.u + radius + 1),
         ):
-            if (u - requested.u) ** 2 + (v - requested.v) ** 2 > radius ** 2:
+            if (u - center.u) ** 2 + (v - center.v) ** 2 > radius ** 2:
                 continue
             try:
                 candidate = project_reference_pixel(
@@ -166,6 +222,7 @@ def _collect_surface_samples(
                     depth_image,
                     camera_info,
                     search_radius_px=0,
+                    rgb_size=depth_size,
                 )
             except ValueError:
                 continue
