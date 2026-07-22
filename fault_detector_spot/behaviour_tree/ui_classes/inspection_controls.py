@@ -1,7 +1,9 @@
 """Inspection setup controls."""
 
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIntValidator
+import math
+
+from PyQt5.QtCore import QLocale, Qt, QTimer
+from PyQt5.QtGui import QDoubleValidator, QIntValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -36,6 +38,10 @@ from fault_detector_spot.inspection.reference_view_depth_projection import (
 from fault_detector_spot.inspection.reference_view_surface_normal import (
     estimate_reference_surface_normal,
 )
+from fault_detector_spot.inspection.reference_view_surface_target import (
+    quaternion_to_rpy,
+    resolve_reference_surface_target,
+)
 
 from ..commands.command_ids import CommandID
 from .UIControlHelper import UIControlHelper
@@ -59,6 +65,7 @@ class InspectionControls(UIControlHelper):
         self._selected_surface_normal = None
         self._surface_normal_error = ""
         self._selected_approach_direction = None
+        self._selected_surface_target = None
         super().__init__(parent_ui)
         self.refresh_saved_definitions()
 
@@ -226,7 +233,7 @@ class InspectionControls(UIControlHelper):
 
         self.reference_point_panel = QFrame()
         self.reference_point_panel.setFrameShape(QFrame.StyledPanel)
-        self.reference_point_panel.setFixedHeight(214)
+        self.reference_point_panel.setFixedHeight(300)
         panel_layout = QGridLayout(self.reference_point_panel)
         panel_layout.setContentsMargins(8, 6, 8, 6)
         panel_layout.setHorizontalSpacing(10)
@@ -298,17 +305,54 @@ class InspectionControls(UIControlHelper):
         self.reference_approach_status_label = (
             self._fixed_readout_label("No point", 155)
         )
-        self.reference_approach_x_value_label = self._fixed_readout_label(
+        self.reference_target_distance_field = QLineEdit("0.03")
+        self.reference_target_distance_field.setFixedWidth(90)
+        self.reference_target_distance_field.setValidator(
+            self._distance_validator(self.reference_target_distance_field)
+        )
+        self.reference_preapproach_distance_field = QLineEdit("0.15")
+        self.reference_preapproach_distance_field.setFixedWidth(90)
+        self.reference_preapproach_distance_field.setValidator(
+            self._distance_validator(
+                self.reference_preapproach_distance_field
+            )
+        )
+        self.reference_target_status_label = self._fixed_readout_label(
+            "No point",
+            155,
+        )
+        self.reference_target_x_value_label = self._fixed_readout_label(
             "—",
             80,
         )
-        self.reference_approach_y_value_label = self._fixed_readout_label(
+        self.reference_target_y_value_label = self._fixed_readout_label(
             "—",
             80,
         )
-        self.reference_approach_z_value_label = self._fixed_readout_label(
+        self.reference_target_z_value_label = self._fixed_readout_label(
             "—",
             80,
+        )
+        self.reference_target_roll_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_target_pitch_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_target_yaw_value_label = self._fixed_readout_label(
+            "—",
+            80,
+        )
+        self.reference_preapproach_x_value_label = (
+            self._fixed_readout_label("—", 80)
+        )
+        self.reference_preapproach_y_value_label = (
+            self._fixed_readout_label("—", 80)
+        )
+        self.reference_preapproach_z_value_label = (
+            self._fixed_readout_label("—", 80)
         )
 
         self.clear_reference_pixel_button = QPushButton("Clear Point")
@@ -324,6 +368,12 @@ class InspectionControls(UIControlHelper):
         )
         self.reference_approach_mode_dropdown.currentIndexChanged.connect(
             self._handle_approach_mode_changed
+        )
+        self.reference_target_distance_field.editingFinished.connect(
+            self._handle_target_distance_changed
+        )
+        self.reference_preapproach_distance_field.editingFinished.connect(
+            self._handle_target_distance_changed
         )
 
         panel_layout.addWidget(QLabel("Selected pixel:"), 0, 0)
@@ -393,7 +443,7 @@ class InspectionControls(UIControlHelper):
             6,
         )
 
-        panel_layout.addWidget(QLabel("Approach mode:"), 5, 0)
+        panel_layout.addWidget(QLabel("Surface orientation:"), 5, 0)
         panel_layout.addWidget(
             self.reference_approach_mode_dropdown,
             5,
@@ -414,18 +464,84 @@ class InspectionControls(UIControlHelper):
             6,
         )
 
-        panel_layout.addWidget(QLabel("Approach direction:"), 6, 0)
-        panel_layout.addWidget(QLabel("dx"), 6, 1)
-        panel_layout.addWidget(self.reference_approach_x_value_label, 6, 2)
-        panel_layout.addWidget(QLabel("dy"), 6, 3)
-        panel_layout.addWidget(self.reference_approach_y_value_label, 6, 4)
-        panel_layout.addWidget(QLabel("dz"), 6, 5)
-        panel_layout.addWidget(self.reference_approach_z_value_label, 6, 6)
+        panel_layout.addWidget(QLabel("Target distance [m]:"), 6, 0)
+        panel_layout.addWidget(
+            self.reference_target_distance_field,
+            6,
+            1,
+        )
+        panel_layout.addWidget(QLabel("Aligned distance [m]:"), 6, 2)
+        panel_layout.addWidget(
+            self.reference_preapproach_distance_field,
+            6,
+            3,
+        )
+        panel_layout.addWidget(QLabel("Target status:"), 6, 5)
+        panel_layout.addWidget(
+            self.reference_target_status_label,
+            6,
+            6,
+        )
+
+        panel_layout.addWidget(QLabel("Target position [m]:"), 7, 0)
+        panel_layout.addWidget(QLabel("x"), 7, 1)
+        panel_layout.addWidget(self.reference_target_x_value_label, 7, 2)
+        panel_layout.addWidget(QLabel("y"), 7, 3)
+        panel_layout.addWidget(self.reference_target_y_value_label, 7, 4)
+        panel_layout.addWidget(QLabel("z"), 7, 5)
+        panel_layout.addWidget(self.reference_target_z_value_label, 7, 6)
+
+        panel_layout.addWidget(QLabel("Target angle [deg]:"), 8, 0)
+        panel_layout.addWidget(QLabel("roll"), 8, 1)
+        panel_layout.addWidget(
+            self.reference_target_roll_value_label,
+            8,
+            2,
+        )
+        panel_layout.addWidget(QLabel("pitch"), 8, 3)
+        panel_layout.addWidget(
+            self.reference_target_pitch_value_label,
+            8,
+            4,
+        )
+        panel_layout.addWidget(QLabel("yaw"), 8, 5)
+        panel_layout.addWidget(
+            self.reference_target_yaw_value_label,
+            8,
+            6,
+        )
+
+        panel_layout.addWidget(QLabel("Aligned position [m]:"), 9, 0)
+        panel_layout.addWidget(QLabel("x"), 9, 1)
+        panel_layout.addWidget(
+            self.reference_preapproach_x_value_label,
+            9,
+            2,
+        )
+        panel_layout.addWidget(QLabel("y"), 9, 3)
+        panel_layout.addWidget(
+            self.reference_preapproach_y_value_label,
+            9,
+            4,
+        )
+        panel_layout.addWidget(QLabel("z"), 9, 5)
+        panel_layout.addWidget(
+            self.reference_preapproach_z_value_label,
+            9,
+            6,
+        )
         panel_layout.setColumnStretch(7, 1)
 
         preview_column.addWidget(self.reference_point_panel)
         row.addLayout(preview_column, 1)
         return row
+
+    @staticmethod
+    def _distance_validator(parent):
+        validator = QDoubleValidator(0.001, 10.0, 3, parent)
+        validator.setLocale(QLocale.c())
+        validator.setNotation(QDoubleValidator.StandardNotation)
+        return validator
 
     @staticmethod
     def _fixed_readout_label(text, width):
@@ -460,6 +576,12 @@ class InspectionControls(UIControlHelper):
             self._selected_surface_point
         )
 
+    def _handle_target_distance_changed(self):
+        if self._selected_approach_direction is None:
+            self._clear_selected_surface_target()
+            return
+        self._resolve_selected_surface_target()
+
     @property
     def selected_surface_point(self):
         """Return the transient projected reference surface point."""
@@ -472,8 +594,13 @@ class InspectionControls(UIControlHelper):
 
     @property
     def selected_approach_direction(self):
-        """Return the transient outward approach direction."""
+        """Return the transient outward surface direction."""
         return self._selected_approach_direction
+
+    @property
+    def selected_surface_target(self):
+        """Return the transient target and aligned pre-approach poses."""
+        return self._selected_surface_target
 
     def _clear_selected_surface_point(self):
         self._selected_surface_point = None
@@ -500,12 +627,27 @@ class InspectionControls(UIControlHelper):
 
     def _clear_selected_approach_direction(self):
         self._selected_approach_direction = None
+        self._clear_selected_surface_target()
         self.reference_approach_source_value_label.setText("—")
         self.reference_approach_source_value_label.setToolTip("")
-        self.reference_approach_x_value_label.setText("—")
-        self.reference_approach_y_value_label.setText("—")
-        self.reference_approach_z_value_label.setText("—")
         self._set_approach_status("No point")
+
+    def _clear_selected_surface_target(self):
+        self._selected_surface_target = None
+        self.reference_target_x_value_label.setText("—")
+        self.reference_target_y_value_label.setText("—")
+        self.reference_target_z_value_label.setText("—")
+        self.reference_target_roll_value_label.setText("—")
+        self.reference_target_pitch_value_label.setText("—")
+        self.reference_target_yaw_value_label.setText("—")
+        self.reference_preapproach_x_value_label.setText("—")
+        self.reference_preapproach_y_value_label.setText("—")
+        self.reference_preapproach_z_value_label.setText("—")
+        self._set_target_status("No point")
+
+    def _set_target_status(self, status, detail=""):
+        self.reference_target_status_label.setText(status)
+        self.reference_target_status_label.setToolTip(detail)
 
     def _set_approach_status(self, status, detail=""):
         self.reference_approach_status_label.setText(status)
@@ -669,16 +811,6 @@ class InspectionControls(UIControlHelper):
             return
 
         self._selected_approach_direction = result
-        direction = result.direction_camera
-        self.reference_approach_x_value_label.setText(
-            self._format_readout_value(direction.x, 3)
-        )
-        self.reference_approach_y_value_label.setText(
-            self._format_readout_value(direction.y, 3)
-        )
-        self.reference_approach_z_value_label.setText(
-            self._format_readout_value(direction.z, 3)
-        )
         source_text = {
             APPROACH_SOURCE_SURFACE_FIT: "Surface fit",
             APPROACH_SOURCE_TAG_X_FALLBACK: "Tag +X fallback",
@@ -693,6 +825,94 @@ class InspectionControls(UIControlHelper):
             )
         self.reference_approach_source_value_label.setToolTip(detail)
         self._set_approach_status("Ready", detail)
+        self._resolve_selected_surface_target()
+
+    def _resolve_selected_surface_target(self):
+        self._clear_selected_surface_target()
+        if (
+            self._selected_approach_direction is None
+            or self._reference_view is None
+        ):
+            return
+        try:
+            target_distance = self._distance_value(
+                self.reference_target_distance_field,
+                "Target surface distance",
+            )
+            preapproach_distance = self._distance_value(
+                self.reference_preapproach_distance_field,
+                "Aligned pre-approach distance",
+            )
+            result = resolve_reference_surface_target(
+                approach_direction=self._selected_approach_direction,
+                controlled_frame_pose_object=(
+                    self._reference_view.controlled_frame_pose_object
+                ),
+                target_surface_distance_m=target_distance,
+                aligned_preapproach_distance_m=preapproach_distance,
+            )
+        except ValueError as exception:
+            self._set_target_status("Unavailable", str(exception))
+            return
+
+        self._selected_surface_target = result
+        target = result.target_pose_object
+        aligned = result.aligned_preapproach_pose_object
+        self.reference_target_x_value_label.setText(
+            self._format_readout_value(target.position.x, 3)
+        )
+        self.reference_target_y_value_label.setText(
+            self._format_readout_value(target.position.y, 3)
+        )
+        self.reference_target_z_value_label.setText(
+            self._format_readout_value(target.position.z, 3)
+        )
+        roll, pitch, yaw = quaternion_to_rpy(target.orientation)
+        self.reference_target_roll_value_label.setText(
+            self._format_readout_value(math.degrees(roll), 1)
+        )
+        self.reference_target_pitch_value_label.setText(
+            self._format_readout_value(math.degrees(pitch), 1)
+        )
+        self.reference_target_yaw_value_label.setText(
+            self._format_readout_value(math.degrees(yaw), 1)
+        )
+        self.reference_preapproach_x_value_label.setText(
+            self._format_readout_value(aligned.position.x, 3)
+        )
+        self.reference_preapproach_y_value_label.setText(
+            self._format_readout_value(aligned.position.y, 3)
+        )
+        self.reference_preapproach_z_value_label.setText(
+            self._format_readout_value(aligned.position.z, 3)
+        )
+        quaternion_detail = (
+            "Object-frame sensor-tip quaternion: "
+            f"x={target.orientation.x:.5f}, "
+            f"y={target.orientation.y:.5f}, "
+            f"z={target.orientation.z:.5f}, "
+            f"w={target.orientation.w:.5f}. "
+            "The sensor local +X axis points outward, so its sensing face "
+            "points toward the surface."
+        )
+        for label in (
+            self.reference_target_roll_value_label,
+            self.reference_target_pitch_value_label,
+            self.reference_target_yaw_value_label,
+        ):
+            label.setToolTip(quaternion_detail)
+        self._set_target_status("Ready", quaternion_detail)
+
+    @staticmethod
+    def _distance_value(field, label):
+        text = field.text().strip()
+        try:
+            value = float(text)
+        except ValueError as exception:
+            raise ValueError(f"{label} must be a number") from exception
+        if value <= 0.0:
+            raise ValueError(f"{label} must be positive")
+        return value
 
     def _required_text(self, field, label):
         value = field.text().strip()
