@@ -496,9 +496,9 @@ class InspectionControls(UIControlHelper):
         self.inspection_workspace_splitter.addWidget(
             self._make_workflow_tabs()
         )
-        self.inspection_workspace_splitter.setStretchFactor(0, 3)
-        self.inspection_workspace_splitter.setStretchFactor(1, 2)
-        self.inspection_workspace_splitter.setSizes([540, 360])
+        self.inspection_workspace_splitter.setStretchFactor(0, 2)
+        self.inspection_workspace_splitter.setStretchFactor(1, 3)
+        self.inspection_workspace_splitter.setSizes([320, 500])
         return self.inspection_workspace_splitter
 
     def _make_reference_view_panel(self):
@@ -515,7 +515,23 @@ class InspectionControls(UIControlHelper):
         toolbar.addWidget(self.capture_reference_view_button)
         layout.addLayout(toolbar)
 
-        layout.addWidget(self.reference_view_widget, 1)
+        self.reference_view_widget.setMinimumSize(240, 180)
+        camera_row = QHBoxLayout()
+        camera_row.setSpacing(8)
+        self.reference_camera_slot_one = self._make_camera_slot(
+            "Camera 1 (Hand)",
+            self.reference_view_widget,
+        )
+        self.reference_camera_slot_two = self._make_camera_placeholder_slot(
+            "Camera 2"
+        )
+        self.reference_camera_slot_three = self._make_camera_placeholder_slot(
+            "Camera 3"
+        )
+        camera_row.addWidget(self.reference_camera_slot_one, 1)
+        camera_row.addWidget(self.reference_camera_slot_two, 1)
+        camera_row.addWidget(self.reference_camera_slot_three, 1)
+        layout.addLayout(camera_row, 1)
 
         selection_row = QHBoxLayout()
         selection_row.addWidget(QLabel("Selected pixel:"))
@@ -524,6 +540,36 @@ class InspectionControls(UIControlHelper):
         selection_row.addStretch()
         layout.addLayout(selection_row)
         return panel
+
+    @staticmethod
+    def _make_camera_slot(title, content):
+        slot = QFrame()
+        slot.setFrameShape(QFrame.StyledPanel)
+        slot_layout = QVBoxLayout(slot)
+        slot_layout.setContentsMargins(4, 4, 4, 4)
+        slot_layout.setSpacing(4)
+
+        title_label = QLabel(title)
+        title_label.setAlignment(Qt.AlignCenter)
+        slot_layout.addWidget(title_label)
+        slot_layout.addWidget(content, 1)
+        return slot
+
+    def _make_camera_placeholder_slot(self, title):
+        placeholder = QLabel("No camera selected")
+        placeholder.setAlignment(Qt.AlignCenter)
+        placeholder.setFrameShape(QFrame.StyledPanel)
+        placeholder.setMinimumSize(240, 180)
+        placeholder.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        slot = self._make_camera_slot(title, placeholder)
+        if title == "Camera 2":
+            self.reference_camera_two_placeholder = placeholder
+        else:
+            self.reference_camera_three_placeholder = placeholder
+        return slot
 
     def _make_workflow_tabs(self):
         self.workflow_tabs = QTabWidget()

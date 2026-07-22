@@ -49,6 +49,22 @@ def test_workspace_uses_persistent_image_and_workflow_tabs(
         Qt.Vertical
     )
     assert controls.inspection_workspace_splitter.count() == 2
+    upper_policy = (
+        controls.inspection_workspace_splitter.widget(0).sizePolicy()
+    )
+    lower_policy = (
+        controls.inspection_workspace_splitter.widget(1).sizePolicy()
+    )
+    assert upper_policy.verticalStretch() == 2
+    assert lower_policy.verticalStretch() == 3
+    assert controls.reference_view_widget.minimumWidth() == 240
+    assert controls.reference_view_widget.minimumHeight() == 180
+    assert controls.reference_camera_two_placeholder.text() == (
+        "No camera selected"
+    )
+    assert controls.reference_camera_three_placeholder.text() == (
+        "No camera selected"
+    )
     assert controls.workflow_tabs.count() == 3
     assert [
         controls.workflow_tabs.tabText(index)

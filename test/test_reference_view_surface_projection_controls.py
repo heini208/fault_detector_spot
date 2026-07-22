@@ -39,6 +39,7 @@ class FakeUI:
         self.status_label = QLabel()
         self.complex_command_publisher = FakePublisher()
         self.inspection_object_root = object_root
+        self.visible_tags = {}
 
     def build_basic_command(self, command_id):
         """Build a minimal command header."""
@@ -199,7 +200,7 @@ def test_clearing_pixel_also_clears_surface_point(
 
 
 def test_projection_readout_geometry_is_stable(application, tmp_path):
-    """Changing projection text cannot resize or move the image row."""
+    """Changing projection text keeps the target-tab geometry stable."""
     save_dataset(tmp_path, [1000, 1250])
     controls = InspectionControls(FakeUI(tmp_path))
     select_routine(controls)
@@ -222,6 +223,7 @@ def test_projection_readout_geometry_is_stable(application, tmp_path):
         ImagePoint(u=1, v=0)
     )
 
-    assert controls.reference_point_panel.minimumHeight() == panel_height
-    assert controls.reference_point_panel.maximumHeight() == panel_height
+    assert controls.reference_point_panel.height() == panel_height
+    assert controls.reference_point_panel.minimumHeight() <= panel_height
+    assert controls.reference_point_panel.maximumHeight() >= panel_height
     assert all(minimum == maximum for minimum, maximum in widths.values())

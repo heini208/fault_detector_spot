@@ -3,23 +3,38 @@ import signal
 import sys
 
 from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QFont, QFontMetrics, QColor
+from PyQt5.QtGui import QColor, QFont, QFontMetrics
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QApplication, QTabWidget
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 import rclpy
-from fault_detector_msgs.msg import ComplexCommand, BasicCommand, TagElementArray, StringArray
-from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
+from fault_detector_msgs.msg import (
+    BasicCommand,
+    ComplexCommand,
+    StringArray,
+    TagElementArray,
+)
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import (
+    COMMAND_QOS,
+    LATCHED_QOS,
+)
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
 from rclpy.node import Node
 from std_msgs.msg import Header, String
+
 from .base_movement_controls import BaseMovementControls
 from .inspection_controls import InspectionControls
 from .manipulation_controls import ManipulationControls
 from .navigation_controls import NavigationControls
 from .recording_controls import RecordingControls
+from .status_overview_panel import StatusOverviewPanel
 
 
 class Fault_Detector_UI(QWidget):
@@ -31,10 +46,11 @@ class Fault_Detector_UI(QWidget):
 
         self.status_label = QLabel("Status: Waiting for connection")
         self.buffer_label = QLabel("Buffer: []")
-        self.command_status_label = QLabel("Command Status: IDLE")
+        self.command_status_label = QLabel("Command: IDLE")
         self.visible_label = QLabel("Visible tags: []")
         self.visible_label.setTextFormat(Qt.RichText)
         self.navigation_mode_label = QLabel("Navigation: OFF")
+        self._buffer_text = "Buffer: []"
 
         self.visible_tags = {}
         self.reachable_tags = {}
@@ -44,7 +60,6 @@ class Fault_Detector_UI(QWidget):
         if self.node:
             self.init_ros_communication()
 
-        # Initialize control objects
         self.manipulation_controls = ManipulationControls(self)
         self.recording_controls = RecordingControls(self)
         self.navigation_controls = NavigationControls(self)
@@ -53,35 +68,25 @@ class Fault_Detector_UI(QWidget):
 
         self.create_user_interface()
 
-        # periodically spin ROS and refresh UI
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._spin_and_refresh)
         self.timer.start(10)
 
-
-
-    # ------ build UI
     def create_user_interface(self):
         main_layout = QVBoxLayout(self)
-        top_row = QHBoxLayout()
-        status_col = QVBoxLayout()
-        status_col.addWidget(self.status_label)
-        status_col.addWidget(self.buffer_label)
-        status_col.addWidget(self.command_status_label)
-        status_col.addWidget(self.navigation_mode_label)
+        main_layout.setSpacing(6)
 
-        self.visible_label = QLabel()
-        self.visible_label.setTextFormat(Qt.RichText)
-        self.visible_label.setText("Visible tags: []")
-        status_col.addWidget(self.visible_label)
+        self.status_overview_panel = StatusOverviewPanel(
+            self.status_label,
+            self.command_status_label,
+            self.navigation_mode_label,
+            self.visible_label,
+            self.buffer_label,
+            self._make_estop_button(),
+            self,
+        )
+        main_layout.addWidget(self.status_overview_panel)
 
-        top_row.addLayout(status_col)
-        top_row.addStretch()
-        top_row.addLayout(self._make_estop_row())
-
-        main_layout.addLayout(top_row)
-
-        # Tabs
         self.tabs = QTabWidget()
         self.tabs.currentChanged.connect(self._on_tab_changed)
         main_layout.addWidget(self.tabs)
@@ -91,6 +96,7 @@ class Fault_Detector_UI(QWidget):
         self.add_inspection_control_tab()
 
         self.recording_controls.add_rows(main_layout)
+        QTimer.singleShot(0, self._refresh_buffer_label)
 
     def set_navigation_mode(self, active: bool):
         text = "ON" if active else "OFF"
@@ -112,13 +118,15 @@ class Fault_Detector_UI(QWidget):
         value = self.node.get_parameter(parameter_name).value
         return value.strip() or None
 
-    def _make_estop_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        self.estop_button = QPushButton("EMERGENCY STOP")
+    def _make_estop_button(self) -> QPushButton:
+        if hasattr(self, "estop_button"):
+            return self.estop_button
 
-        self.estop_button.setStyleSheet("""
+        self.estop_button = QPushButton("EMERGENCY STOP")
+        self.estop_button.setStyleSheet(
+            """
             QPushButton {
-                background-color: #C62828;   /* deep red */
+                background-color: #C62828;
                 color: white;
                 font-weight: bold;
                 border: none;
@@ -131,18 +139,25 @@ class Fault_Detector_UI(QWidget):
             QPushButton:pressed {
                 background-color: #8E0000;
             }
-        """)
+            """
+        )
 
         font = QFont()
         font.setPointSize(14)
         font.setBold(True)
         self.estop_button.setFont(font)
-
         self.estop_button.clicked.connect(
-            lambda _, cid=CommandID.EMERGENCY_CANCEL: self.handle_simple_command(cid)
+            lambda _, cid=CommandID.EMERGENCY_CANCEL:
+            self.handle_simple_command(cid)
         )
+        return self.estop_button
 
-        row.addWidget(self.estop_button, alignment=Qt.AlignRight)
+    def _make_estop_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addWidget(
+            self._make_estop_button(),
+            alignment=Qt.AlignRight,
+        )
         return row
 
     def add_manipulator_control_tab(self):
@@ -170,44 +185,44 @@ class Fault_Detector_UI(QWidget):
         inspection_layout.addStretch()
         self.tabs.addTab(inspection_tab, "Inspection Control")
 
-    # ---- feedback information
-
     def init_ros_communication(self):
         self.complex_command_publisher = self.node.create_publisher(
-            ComplexCommand, "fault_detector/commands/complex_command", COMMAND_QOS
+            ComplexCommand,
+            "fault_detector/commands/complex_command",
+            COMMAND_QOS,
         )
 
         self.visible_tags_sub = self.node.create_subscription(
             TagElementArray,
             "fault_detector/state/visible_tags",
             self._process_visible_tags,
-            10
+            10,
         )
 
         self.reachable_tags_sub = self.node.create_subscription(
             TagElementArray,
             "fault_detector/state/reachable_tags",
             self._process_reachable_tags,
-            10
+            10,
         )
 
         self.buffer_sub = self.node.create_subscription(
             String,
             "fault_detector/command_buffer",
             self._process_buffer,
-            10
+            10,
         )
         self.cmd_status_sub = self.node.create_subscription(
             String,
             "fault_detector/command_tree_status",
             self._process_command_status,
-            10
+            10,
         )
         self.available_frames_sub = self.node.create_subscription(
             StringArray,
             "fault_detector/state/available_frames",
             self._process_available_frames,
-            LATCHED_QOS
+            LATCHED_QOS,
         )
 
         self.status_label.setText("Status: Connected to ROS2")
@@ -216,9 +231,11 @@ class Fault_Detector_UI(QWidget):
         if self.node:
             rclpy.spin_once(self.node, timeout_sec=0.001)
         parts = []
-        for tid in sorted(self.visible_tags.keys()):
-            color = "green" if tid in self.reachable_tags else "red"
-            parts.append(f'<span style="color:{color}">{tid}</span>')
+        for tag_id in sorted(self.visible_tags.keys()):
+            color = "green" if tag_id in self.reachable_tags else "red"
+            parts.append(
+                f'<span style="color:{color}">{tag_id}</span>'
+            )
 
         html = "Visible tags: [" + ", ".join(parts) + "]"
         self.visible_label.setText(html)
@@ -230,15 +247,25 @@ class Fault_Detector_UI(QWidget):
         self.reachable_tags = {tag.id: tag for tag in msg.elements}
 
     def _process_buffer(self, msg: String):
-        max_width = 400
-        text = f"Buffer: {msg.data}"
+        self._buffer_text = f"Buffer: {msg.data}"
+        self.buffer_label.setToolTip(self._buffer_text)
+        self._refresh_buffer_label()
+
+    def _refresh_buffer_label(self):
+        if not hasattr(self, "buffer_label"):
+            return
+        available_width = max(220, self.buffer_label.width() - 8)
         metrics = QFontMetrics(self.buffer_label.font())
-        elided = metrics.elidedText(text, Qt.ElideRight, max_width)
-        self.buffer_label.setText(elided)
-        self.buffer_label.setFixedWidth(max_width)
+        self.buffer_label.setText(
+            metrics.elidedText(
+                self._buffer_text,
+                Qt.ElideRight,
+                available_width,
+            )
+        )
 
     def _process_command_status(self, msg: String):
-        self.command_status_label.setText(f"Command Status: {msg.data}")
+        self.command_status_label.setText(f"Command: {msg.data}")
 
     def _process_available_frames(self, msg: StringArray):
         self.available_frames = list(msg.names)
@@ -263,8 +290,13 @@ class Fault_Detector_UI(QWidget):
         self.timer.stop()
         event.accept()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "buffer_label"):
+            self._refresh_buffer_label()
+
     def update_frames_dropdown(self, frames_dropdown):
-        prev_selection = frames_dropdown.currentText()
+        previous_selection = frames_dropdown.currentText()
 
         frames_dropdown.blockSignals(True)
         frames_dropdown.clear()
@@ -272,9 +304,12 @@ class Fault_Detector_UI(QWidget):
         available_frames = list(self.available_frames)
         frames = list(available_frames)
 
-        # Keep the previous selection even if it is no longer advertised
-        if prev_selection and prev_selection not in frames and prev_selection != "no frames available":
-            frames.append(prev_selection)
+        if (
+            previous_selection
+            and previous_selection not in frames
+            and previous_selection != "no frames available"
+        ):
+            frames.append(previous_selection)
 
         if not frames:
             frames = ["no frames available"]
@@ -283,26 +318,32 @@ class Fault_Detector_UI(QWidget):
 
         for frame in frames:
             frames_dropdown.addItem(frame)
-            idx = frames_dropdown.count() - 1
-            if frame not in available_frames and frame != "no frames available":
-                frames_dropdown.setItemData(idx, QColor("red"), Qt.ForegroundRole)
-                missing_indexes.add(idx)
+            index = frames_dropdown.count() - 1
+            if (
+                frame not in available_frames
+                and frame != "no frames available"
+            ):
+                frames_dropdown.setItemData(
+                    index,
+                    QColor("red"),
+                    Qt.ForegroundRole,
+                )
+                missing_indexes.add(index)
 
-        # Restore selection (fallback to first item)
-        target_idx = frames_dropdown.findText(prev_selection)
-        if target_idx < 0:
-            target_idx = 0
-        frames_dropdown.setCurrentIndex(target_idx)
+        target_index = frames_dropdown.findText(previous_selection)
+        if target_index < 0:
+            target_index = 0
+        frames_dropdown.setCurrentIndex(target_index)
 
-        # Ensure the selected item keeps its color if it’s missing
-        if target_idx in missing_indexes:
-            frames_dropdown.setItemData(target_idx, QColor("red"), Qt.ForegroundRole)
+        if target_index in missing_indexes:
+            frames_dropdown.setItemData(
+                target_index,
+                QColor("red"),
+                Qt.ForegroundRole,
+            )
 
         frames_dropdown.blockSignals(False)
 
-        # Restore selection (fallback to first item)
-        idx = frames_dropdown.findText(prev_selection)
-        frames_dropdown.setCurrentIndex(idx if idx >= 0 else 0)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -320,5 +361,6 @@ if __name__ == "__main__":
 
 
 class TagNotFound(Exception):
-    """Raised when the requested tag ID isn’t visible."""
+    """Raised when the requested tag ID is not visible."""
+
     pass

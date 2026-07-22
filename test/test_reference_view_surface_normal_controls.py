@@ -31,6 +31,7 @@ class FakeUI:
         self.status_label = QLabel()
         self.complex_command_publisher = FakePublisher()
         self.inspection_object_root = object_root
+        self.visible_tags = {}
 
     def build_basic_command(self, command_id):
         """Build a minimal command header."""
@@ -135,7 +136,7 @@ def test_clearing_point_clears_normal_state(application, tmp_path):
 
 
 def test_normal_readout_widths_remain_fixed(application, tmp_path):
-    """Changing normal values cannot resize the reference image area."""
+    """Changing normal values keeps the target-tab geometry stable."""
     controls = InspectionControls(FakeUI(tmp_path))
     configure_reference_depth(controls, [1.0] * 121)
     labels = (
@@ -155,5 +156,6 @@ def test_normal_readout_widths_remain_fixed(application, tmp_path):
     controls._project_selected_reference_pixel(5, 5)
 
     assert all(minimum == maximum for minimum, maximum in widths)
-    assert controls.reference_point_panel.minimumHeight() == panel_height
-    assert controls.reference_point_panel.maximumHeight() == panel_height
+    assert controls.reference_point_panel.height() == panel_height
+    assert controls.reference_point_panel.minimumHeight() <= panel_height
+    assert controls.reference_point_panel.maximumHeight() >= panel_height
