@@ -488,7 +488,7 @@ class InspectionControls(UIControlHelper):
         )
 
     def _make_workspace_splitter(self):
-        self.inspection_workspace_splitter = QSplitter(Qt.Horizontal)
+        self.inspection_workspace_splitter = QSplitter(Qt.Vertical)
         self.inspection_workspace_splitter.setChildrenCollapsible(False)
         self.inspection_workspace_splitter.addWidget(
             self._make_reference_view_panel()
@@ -498,7 +498,7 @@ class InspectionControls(UIControlHelper):
         )
         self.inspection_workspace_splitter.setStretchFactor(0, 3)
         self.inspection_workspace_splitter.setStretchFactor(1, 2)
-        self.inspection_workspace_splitter.setSizes([720, 520])
+        self.inspection_workspace_splitter.setSizes([540, 360])
         return self.inspection_workspace_splitter
 
     def _make_reference_view_panel(self):

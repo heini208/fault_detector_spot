@@ -46,7 +46,7 @@ def test_workspace_uses_persistent_image_and_workflow_tabs(
     controls = InspectionControls(FakeUI(tmp_path))
 
     assert controls.inspection_workspace_splitter.orientation() == (
-        Qt.Horizontal
+        Qt.Vertical
     )
     assert controls.inspection_workspace_splitter.count() == 2
     assert controls.workflow_tabs.count() == 3
