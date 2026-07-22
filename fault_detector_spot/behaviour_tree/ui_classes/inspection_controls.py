@@ -19,6 +19,7 @@ from fault_detector_spot.inspection.object_repository import (
 
 from ..commands.command_ids import CommandID
 from .UIControlHelper import UIControlHelper
+from .reference_view_widget import ReferenceViewWidget
 
 
 class InspectionControls(UIControlHelper):
@@ -52,6 +53,7 @@ class InspectionControls(UIControlHelper):
             self._make_routine_identity_row(),
             self._make_sensor_row(),
             self._make_reference_view_row(),
+            self._make_reference_view_preview_row(),
         ]
 
     def _make_saved_definitions_row(self):
@@ -184,6 +186,13 @@ class InspectionControls(UIControlHelper):
         row.addStretch()
         return row
 
+    def _make_reference_view_preview_row(self):
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Reference Image:"))
+        self.reference_view_widget = ReferenceViewWidget()
+        row.addWidget(self.reference_view_widget, 1)
+        return row
+
     def _required_text(self, field, label):
         value = field.text().strip()
         if value:
@@ -239,6 +248,9 @@ class InspectionControls(UIControlHelper):
             self.reference_view_status_label.setText(
                 "Reference view: no routine selected"
             )
+            self.reference_view_widget.clear_preview(
+                "No reference view selected"
+            )
             return
 
         try:
@@ -248,6 +260,9 @@ class InspectionControls(UIControlHelper):
             self._populate_routine_dropdown([])
             self.reference_view_status_label.setText(
                 f"Definition load failed: {exception}"
+            )
+            self.reference_view_widget.clear_preview(
+                "Reference view unavailable"
             )
             return
 
@@ -305,12 +320,18 @@ class InspectionControls(UIControlHelper):
             self.reference_view_status_label.setText(
                 "Reference view: no routine selected"
             )
+            self.reference_view_widget.clear_preview(
+                "No reference view selected"
+            )
             return
 
         routine = self._selected_definition.get_routine(routine_id)
         if routine is None:
             self.reference_view_status_label.setText(
                 "Reference view: routine no longer exists"
+            )
+            self.reference_view_widget.clear_preview(
+                "Reference view unavailable"
             )
             return
 
@@ -320,11 +341,33 @@ class InspectionControls(UIControlHelper):
         self.probe_frame_field.setText(routine.probe_frame)
         if routine.reference_view is None:
             status = "Reference view: not captured"
-        else:
-            status = (
-                "Reference view: captured, "
-                f"{routine.reference_view.reference_dataset_path}"
+            self.reference_view_status_label.setText(status)
+            self.reference_view_widget.clear_preview(
+                "No reference view captured"
             )
+            return
+
+        status = (
+            "Reference view: captured, "
+            f"{routine.reference_view.reference_dataset_path}"
+        )
+        try:
+            rgb_image, _, _ = (
+                self.object_repository.load_reference_dataset(
+                    self._selected_definition.object_id,
+                    routine.routine_id,
+                )
+            )
+            self.reference_view_widget.set_ros_image(rgb_image)
+        except Exception as exception:
+            self.reference_view_status_label.setText(
+                f"{status}; preview unavailable: {exception}"
+            )
+            self.reference_view_widget.clear_preview(
+                "Reference view unavailable"
+            )
+            return
+
         self.reference_view_status_label.setText(status)
 
     def _schedule_repository_refresh(self):
