@@ -9,14 +9,22 @@ from PyQt5.QtGui import QDoubleValidator, QIntValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QFrame,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QSplitter,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from fault_detector_msgs.msg import ComplexCommand
@@ -63,6 +71,7 @@ from fault_detector_spot.inspection.reference_view_surface_target import (
 )
 
 from ..commands.command_ids import CommandID, OrientationModes
+from .collapsible_section import CollapsibleSection
 from .UIControlHelper import UIControlHelper
 from .reference_view_widget import ReferenceViewWidget
 
@@ -88,6 +97,7 @@ class InspectionControls(UIControlHelper):
         self._probe_setup = None
         self._tf_buffer = None
         self._tf_listener = None
+        self.management_dialog = None
         super().__init__(parent_ui)
         self.refresh_saved_definitions()
 
@@ -107,29 +117,31 @@ class InspectionControls(UIControlHelper):
             )
 
     def make_rows(self):
-        """Create the inspection setup rows."""
-        return [
-            self._make_saved_definitions_row(),
-            self._make_storage_row(),
-            self._make_object_identity_row(),
-            self._make_reference_tag_row(),
-            self._make_routine_identity_row(),
-            self._make_sensor_row(),
-            self._make_reference_view_row(),
-            self._make_reference_view_preview_row(),
-        ]
+        """Create a compact inspection setup workspace."""
+        self._make_management_dialog()
+        self._create_reference_widgets()
+
+        workspace = QVBoxLayout()
+        workspace.setSpacing(6)
+        workspace.addLayout(self._make_saved_definitions_row())
+        workspace.addWidget(self._make_workspace_splitter(), 1)
+        return [workspace]
 
     def _make_saved_definitions_row(self):
         row = QHBoxLayout()
-        row.addWidget(QLabel("Saved Definitions:"))
+        row.setSpacing(6)
+        row.addWidget(QLabel("Object:"))
 
         self.saved_object_dropdown = QComboBox()
+        self.saved_object_dropdown.setMinimumWidth(170)
         self.saved_object_dropdown.currentIndexChanged.connect(
             self._load_selected_object
         )
         row.addWidget(self.saved_object_dropdown)
 
+        row.addWidget(QLabel("Routine:"))
         self.saved_routine_dropdown = QComboBox()
+        self.saved_routine_dropdown.setMinimumWidth(170)
         self.saved_routine_dropdown.currentIndexChanged.connect(
             self._load_selected_routine
         )
@@ -140,137 +152,149 @@ class InspectionControls(UIControlHelper):
             self.refresh_saved_definitions
         )
         row.addWidget(self.refresh_definitions_button)
-        return row
 
-    def _make_storage_row(self):
-        row = QHBoxLayout()
-        self.storage_path_label = QLabel(
-            f"Storage: {self.object_repository.root_dir}"
+        self.manage_definitions_button = QPushButton(
+            "Manage Objects and Routines"
         )
-        row.addWidget(self.storage_path_label)
+        self.manage_definitions_button.clicked.connect(
+            self.show_management_dialog
+        )
+        row.addWidget(self.manage_definitions_button)
+        row.addStretch()
+
         self.reference_view_status_label = QLabel(
             "Reference view: no routine selected"
         )
-        row.addWidget(self.reference_view_status_label)
-        row.addStretch()
+        self.reference_view_status_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse
+        )
         return row
 
-    def _make_object_identity_row(self):
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Inspection Object:"))
+    def _make_management_dialog(self):
+        parent = self.ui if isinstance(self.ui, QWidget) else None
+        self.management_dialog = QDialog(parent)
+        self.management_dialog.setWindowTitle(
+            "Manage Inspection Objects and Routines"
+        )
+        self.management_dialog.setModal(False)
+        self.management_dialog.resize(620, 390)
 
+        dialog_layout = QVBoxLayout(self.management_dialog)
+
+        object_group = QGroupBox("Inspection object")
+        object_layout = QFormLayout(object_group)
         self.object_id_field = QLineEdit()
         self.object_id_field.setPlaceholderText("Object ID")
-        row.addWidget(self.object_id_field)
+        object_layout.addRow("Object ID:", self.object_id_field)
 
         self.object_display_name_field = QLineEdit()
         self.object_display_name_field.setPlaceholderText("Display name")
-        row.addWidget(self.object_display_name_field)
-        return row
-
-    def _make_reference_tag_row(self):
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Reference Tag:"))
+        object_layout.addRow(
+            "Display name:",
+            self.object_display_name_field,
+        )
 
         self.reference_tag_id_field = QLineEdit()
         self.reference_tag_id_field.setPlaceholderText("Tag ID")
         self.reference_tag_id_field.setValidator(
             QIntValidator(0, 2147483647, self.reference_tag_id_field)
         )
-        row.addWidget(self.reference_tag_id_field)
+        object_layout.addRow("Reference tag ID:", self.reference_tag_id_field)
 
         self.reference_tag_family_field = QLineEdit("36h11")
         self.reference_tag_family_field.setPlaceholderText("Tag family")
-        row.addWidget(self.reference_tag_family_field)
+        object_layout.addRow(
+            "Reference tag family:",
+            self.reference_tag_family_field,
+        )
 
+        object_buttons = QHBoxLayout()
         self.create_object_button = QPushButton("Create Object")
         self.create_object_button.clicked.connect(self.handle_create_object)
-        row.addWidget(self.create_object_button)
-
+        object_buttons.addWidget(self.create_object_button)
         self.delete_object_button = QPushButton("Delete Object")
         self.delete_object_button.clicked.connect(self.handle_delete_object)
-        row.addWidget(self.delete_object_button)
-        return row
+        object_buttons.addWidget(self.delete_object_button)
+        object_buttons.addStretch()
+        object_layout.addRow(object_buttons)
+        dialog_layout.addWidget(object_group)
 
-    def _make_routine_identity_row(self):
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Inspection Routine:"))
-
+        routine_group = QGroupBox("Inspection routine")
+        routine_layout = QFormLayout(routine_group)
         self.routine_id_field = QLineEdit()
         self.routine_id_field.setPlaceholderText("Routine ID")
-        row.addWidget(self.routine_id_field)
+        routine_layout.addRow("Routine ID:", self.routine_id_field)
 
         self.routine_display_name_field = QLineEdit()
         self.routine_display_name_field.setPlaceholderText("Display name")
-        row.addWidget(self.routine_display_name_field)
-        return row
-
-    def _make_sensor_row(self):
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Sensor:"))
+        routine_layout.addRow(
+            "Display name:",
+            self.routine_display_name_field,
+        )
 
         self.sensor_id_field = QLineEdit("bmm150")
         self.sensor_id_field.setPlaceholderText("Sensor ID")
-        row.addWidget(self.sensor_id_field)
+        routine_layout.addRow("Sensor ID:", self.sensor_id_field)
 
         self.probe_frame_field = QLineEdit("sensor_tip")
         self.probe_frame_field.setPlaceholderText("Probe frame")
-        row.addWidget(self.probe_frame_field)
+        routine_layout.addRow("Probe frame:", self.probe_frame_field)
 
+        routine_buttons = QHBoxLayout()
         self.create_routine_button = QPushButton("Create Routine")
         self.create_routine_button.clicked.connect(
             self.handle_create_routine
         )
-        row.addWidget(self.create_routine_button)
-
+        routine_buttons.addWidget(self.create_routine_button)
         self.delete_routine_button = QPushButton("Delete Routine")
         self.delete_routine_button.clicked.connect(
             self.handle_delete_routine
         )
-        row.addWidget(self.delete_routine_button)
-        return row
+        routine_buttons.addWidget(self.delete_routine_button)
+        routine_buttons.addStretch()
+        routine_layout.addRow(routine_buttons)
+        dialog_layout.addWidget(routine_group)
 
-    def _make_reference_view_row(self):
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Reference View:"))
+        self.storage_path_label = QLabel(
+            f"Storage: {self.object_repository.root_dir}"
+        )
+        self.storage_path_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse
+        )
+        dialog_layout.addWidget(self.storage_path_label)
 
+        close_buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        close_buttons.rejected.connect(self.management_dialog.hide)
+        dialog_layout.addWidget(close_buttons)
+
+    def show_management_dialog(self):
+        """Show the non-modal definition management dialog."""
+        self.management_dialog.show()
+        self.management_dialog.raise_()
+        self.management_dialog.activateWindow()
+
+    def _create_reference_widgets(self):
+        self.reference_view_widget = ReferenceViewWidget()
         self.replace_reference_view_checkbox = QCheckBox(
             "Replace existing"
         )
-        row.addWidget(self.replace_reference_view_checkbox)
-
         self.capture_reference_view_button = QPushButton(
             "Capture Reference View"
         )
         self.capture_reference_view_button.clicked.connect(
             self.handle_capture_reference_view
         )
-        row.addWidget(self.capture_reference_view_button)
-        row.addStretch()
-        return row
-
-    def _make_reference_view_preview_row(self):
-        row = QHBoxLayout()
-        title = QLabel("Reference Image:")
-        title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        row.addWidget(title)
-
-        preview_column = QVBoxLayout()
-        self.reference_view_widget = ReferenceViewWidget()
-        preview_column.addWidget(self.reference_view_widget, 1)
-
-        self.reference_point_panel = QFrame()
-        self.reference_point_panel.setFrameShape(QFrame.StyledPanel)
-        self.reference_point_panel.setFixedHeight(390)
-        panel_layout = QGridLayout(self.reference_point_panel)
-        panel_layout.setContentsMargins(8, 6, 8, 6)
-        panel_layout.setHorizontalSpacing(10)
-        panel_layout.setVerticalSpacing(4)
 
         self.reference_pixel_value_label = self._fixed_readout_label(
             "—",
             130,
         )
+        self.clear_reference_pixel_button = QPushButton("Clear Point")
+        self.clear_reference_pixel_button.setEnabled(False)
+        self.clear_reference_pixel_button.clicked.connect(
+            self.reference_view_widget.clear_selection
+        )
+
         self.reference_surface_frame_value_label = (
             self._fixed_readout_label("—", 210)
         )
@@ -313,8 +337,8 @@ class InspectionControls(UIControlHelper):
         self.reference_normal_status_label = (
             self._fixed_readout_label("No point", 155)
         )
+
         self.reference_approach_mode_dropdown = QComboBox()
-        self.reference_approach_mode_dropdown.setFixedWidth(245)
         self.reference_approach_mode_dropdown.addItem(
             "Automatic (surface, then tag +X)",
             APPROACH_MODE_AUTOMATIC,
@@ -333,6 +357,7 @@ class InspectionControls(UIControlHelper):
         self.reference_approach_status_label = (
             self._fixed_readout_label("No point", 155)
         )
+
         self.reference_target_distance_field = QLineEdit("0.03")
         self.reference_target_distance_field.setFixedWidth(90)
         self.reference_target_distance_field.setValidator(
@@ -382,6 +407,7 @@ class InspectionControls(UIControlHelper):
         self.reference_preapproach_z_value_label = (
             self._fixed_readout_label("—", 80)
         )
+
         self.reference_setup_status_label = self._fixed_readout_label(
             "No point",
             210,
@@ -402,13 +428,31 @@ class InspectionControls(UIControlHelper):
         self.use_current_probe_button = QPushButton(
             "Use Current as Probe"
         )
-        self._set_probe_setup_buttons_enabled(False)
 
-        self.clear_reference_pixel_button = QPushButton("Clear Point")
-        self.clear_reference_pixel_button.setEnabled(False)
-        self.clear_reference_pixel_button.clicked.connect(
-            self.reference_view_widget.clear_selection
+        self.approach_step_status_label = QLabel("Waiting for target")
+        self.alignment_step_status_label = QLabel("Waiting for target")
+        self.probe_step_status_label = QLabel("Waiting for alignment")
+        self.save_approach_status_label = QLabel("Not approved")
+        self.save_alignment_status_label = QLabel("Not approved")
+        self.save_probe_status_label = QLabel("Not approved")
+
+        self.probe_point_id_field = QLineEdit()
+        self.probe_point_id_field.setPlaceholderText("Probe point ID")
+        self.probe_point_display_name_field = QLineEdit()
+        self.probe_point_display_name_field.setPlaceholderText(
+            "Display name"
         )
+        self.probe_position_tolerance_field = QLineEdit("0.01")
+        self.probe_orientation_tolerance_field = QLineEdit("0.087")
+        self.probe_measurement_duration_field = QLineEdit("1.0")
+        self.save_probe_point_button = QPushButton("Save Probe Point")
+        self.save_probe_point_button.setEnabled(False)
+        self.save_probe_point_status_label = QLabel(
+            "Saving will be enabled by the persistence patch."
+        )
+        self.save_probe_point_status_label.setWordWrap(True)
+
+        self._set_probe_setup_buttons_enabled(False)
         self.reference_view_widget.image_point_changed.connect(
             self._handle_reference_image_point_changed
         )
@@ -443,215 +487,348 @@ class InspectionControls(UIControlHelper):
             self.handle_use_current_as_probe
         )
 
-        panel_layout.addWidget(QLabel("Selected pixel:"), 0, 0)
-        panel_layout.addWidget(self.reference_pixel_value_label, 0, 1)
-        panel_layout.addWidget(QLabel("Frame:"), 0, 2)
-        panel_layout.addWidget(
-            self.reference_surface_frame_value_label,
+    def _make_workspace_splitter(self):
+        self.inspection_workspace_splitter = QSplitter(Qt.Horizontal)
+        self.inspection_workspace_splitter.setChildrenCollapsible(False)
+        self.inspection_workspace_splitter.addWidget(
+            self._make_reference_view_panel()
+        )
+        self.inspection_workspace_splitter.addWidget(
+            self._make_workflow_tabs()
+        )
+        self.inspection_workspace_splitter.setStretchFactor(0, 3)
+        self.inspection_workspace_splitter.setStretchFactor(1, 2)
+        self.inspection_workspace_splitter.setSizes([720, 520])
+        return self.inspection_workspace_splitter
+
+    def _make_reference_view_panel(self):
+        panel = QFrame()
+        panel.setFrameShape(QFrame.StyledPanel)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("Reference view:"))
+        toolbar.addWidget(self.reference_view_status_label, 1)
+        toolbar.addWidget(self.replace_reference_view_checkbox)
+        toolbar.addWidget(self.capture_reference_view_button)
+        layout.addLayout(toolbar)
+
+        layout.addWidget(self.reference_view_widget, 1)
+
+        selection_row = QHBoxLayout()
+        selection_row.addWidget(QLabel("Selected pixel:"))
+        selection_row.addWidget(self.reference_pixel_value_label)
+        selection_row.addWidget(self.clear_reference_pixel_button)
+        selection_row.addStretch()
+        layout.addLayout(selection_row)
+        return panel
+
+    def _make_workflow_tabs(self):
+        self.workflow_tabs = QTabWidget()
+        self.workflow_tabs.addTab(
+            self._scrollable_tab(self._make_target_tab()),
+            "Target",
+        )
+        self.workflow_tabs.addTab(
+            self._scrollable_tab(self._make_refine_tab()),
+            "Refine",
+        )
+        self.workflow_tabs.addTab(
+            self._scrollable_tab(self._make_save_tab()),
+            "Save",
+        )
+        return self.workflow_tabs
+
+    @staticmethod
+    def _scrollable_tab(content):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(content)
+        return scroll
+
+    def _make_target_tab(self):
+        self.reference_point_panel = QFrame()
+        layout = QVBoxLayout(self.reference_point_panel)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        orientation_group = QGroupBox("Surface orientation")
+        orientation_layout = QGridLayout(orientation_group)
+        orientation_layout.addWidget(QLabel("Mode:"), 0, 0)
+        orientation_layout.addWidget(
+            self.reference_approach_mode_dropdown,
+            0,
+            1,
+            1,
+            2,
+        )
+        orientation_layout.addWidget(QLabel("Used:"), 1, 0)
+        orientation_layout.addWidget(
+            self.reference_approach_source_value_label,
+            1,
+            1,
+        )
+        orientation_layout.addWidget(QLabel("Status:"), 1, 2)
+        orientation_layout.addWidget(
+            self.reference_approach_status_label,
+            1,
+            3,
+        )
+        layout.addWidget(orientation_group)
+
+        target_group = QGroupBox("Calculated poses")
+        target_layout = QGridLayout(target_group)
+        target_layout.addWidget(QLabel("Target distance [m]:"), 0, 0)
+        target_layout.addWidget(
+            self.reference_target_distance_field,
+            0,
+            1,
+        )
+        target_layout.addWidget(QLabel("Aligned distance [m]:"), 0, 2)
+        target_layout.addWidget(
+            self.reference_preapproach_distance_field,
             0,
             3,
         )
-        panel_layout.addWidget(
-            self.clear_reference_pixel_button,
+        target_layout.addWidget(QLabel("Status:"), 1, 0)
+        target_layout.addWidget(
+            self.reference_target_status_label,
+            1,
+            1,
+            1,
+            3,
+        )
+
+        target_layout.addWidget(QLabel("Target position [m]:"), 2, 0)
+        target_layout.addWidget(QLabel("x"), 2, 1)
+        target_layout.addWidget(self.reference_target_x_value_label, 2, 2)
+        target_layout.addWidget(QLabel("y"), 2, 3)
+        target_layout.addWidget(self.reference_target_y_value_label, 2, 4)
+        target_layout.addWidget(QLabel("z"), 2, 5)
+        target_layout.addWidget(self.reference_target_z_value_label, 2, 6)
+
+        target_layout.addWidget(
+            QLabel("Target angle relative to object [deg]:"),
+            3,
             0,
+        )
+        target_layout.addWidget(QLabel("roll"), 3, 1)
+        target_layout.addWidget(
+            self.reference_target_roll_value_label,
+            3,
+            2,
+        )
+        target_layout.addWidget(QLabel("pitch"), 3, 3)
+        target_layout.addWidget(
+            self.reference_target_pitch_value_label,
+            3,
             4,
         )
-
-        panel_layout.addWidget(QLabel("Position [m]:"), 1, 0)
-        panel_layout.addWidget(QLabel("x"), 1, 1)
-        panel_layout.addWidget(self.reference_surface_x_value_label, 1, 2)
-        panel_layout.addWidget(QLabel("y"), 1, 3)
-        panel_layout.addWidget(self.reference_surface_y_value_label, 1, 4)
-        panel_layout.addWidget(QLabel("z"), 1, 5)
-        panel_layout.addWidget(self.reference_surface_z_value_label, 1, 6)
-
-        panel_layout.addWidget(QLabel("Depth source:"), 2, 0)
-        panel_layout.addWidget(
-            self.reference_depth_pixel_value_label,
-            2,
-            1,
-            1,
-            2,
+        target_layout.addWidget(QLabel("yaw"), 3, 5)
+        target_layout.addWidget(
+            self.reference_target_yaw_value_label,
+            3,
+            6,
         )
-        panel_layout.addWidget(QLabel("Status:"), 2, 3)
-        panel_layout.addWidget(
-            self.reference_projection_status_label,
-            2,
+
+        target_layout.addWidget(QLabel("Aligned position [m]:"), 4, 0)
+        target_layout.addWidget(QLabel("x"), 4, 1)
+        target_layout.addWidget(
+            self.reference_preapproach_x_value_label,
             4,
-            1,
             2,
         )
+        target_layout.addWidget(QLabel("y"), 4, 3)
+        target_layout.addWidget(
+            self.reference_preapproach_y_value_label,
+            4,
+            4,
+        )
+        target_layout.addWidget(QLabel("z"), 4, 5)
+        target_layout.addWidget(
+            self.reference_preapproach_z_value_label,
+            4,
+            6,
+        )
+        target_layout.setColumnStretch(7, 1)
+        layout.addWidget(target_group)
 
-        panel_layout.addWidget(QLabel("Normal:"), 3, 0)
-        panel_layout.addWidget(QLabel("nx"), 3, 1)
-        panel_layout.addWidget(self.reference_normal_x_value_label, 3, 2)
-        panel_layout.addWidget(QLabel("ny"), 3, 3)
-        panel_layout.addWidget(self.reference_normal_y_value_label, 3, 4)
-        panel_layout.addWidget(QLabel("nz"), 3, 5)
-        panel_layout.addWidget(self.reference_normal_z_value_label, 3, 6)
+        self.geometry_details_section = CollapsibleSection(
+            "Geometry details",
+            self._make_geometry_details_widget(),
+            expanded=False,
+        )
+        layout.addWidget(self.geometry_details_section)
+        layout.addStretch()
+        return self.reference_point_panel
 
-        panel_layout.addWidget(QLabel("Plane fit:"), 4, 0)
-        panel_layout.addWidget(QLabel("samples"), 4, 1)
-        panel_layout.addWidget(
+    def _make_geometry_details_widget(self):
+        widget = QWidget()
+        layout = QGridLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        layout.addWidget(QLabel("Frame:"), 0, 0)
+        layout.addWidget(self.reference_surface_frame_value_label, 0, 1)
+        layout.addWidget(QLabel("Projection:"), 0, 2)
+        layout.addWidget(self.reference_projection_status_label, 0, 3)
+
+        layout.addWidget(QLabel("Surface point [m]:"), 1, 0)
+        layout.addWidget(QLabel("x"), 1, 1)
+        layout.addWidget(self.reference_surface_x_value_label, 1, 2)
+        layout.addWidget(QLabel("y"), 1, 3)
+        layout.addWidget(self.reference_surface_y_value_label, 1, 4)
+        layout.addWidget(QLabel("z"), 1, 5)
+        layout.addWidget(self.reference_surface_z_value_label, 1, 6)
+
+        layout.addWidget(QLabel("Depth source:"), 2, 0)
+        layout.addWidget(self.reference_depth_pixel_value_label, 2, 1, 1, 2)
+        layout.addWidget(QLabel("Normal status:"), 2, 3)
+        layout.addWidget(self.reference_normal_status_label, 2, 4, 1, 2)
+
+        layout.addWidget(QLabel("Surface normal:"), 3, 0)
+        layout.addWidget(QLabel("nx"), 3, 1)
+        layout.addWidget(self.reference_normal_x_value_label, 3, 2)
+        layout.addWidget(QLabel("ny"), 3, 3)
+        layout.addWidget(self.reference_normal_y_value_label, 3, 4)
+        layout.addWidget(QLabel("nz"), 3, 5)
+        layout.addWidget(self.reference_normal_z_value_label, 3, 6)
+
+        layout.addWidget(QLabel("Plane samples:"), 4, 0)
+        layout.addWidget(
             self.reference_normal_samples_value_label,
             4,
-            2,
+            1,
         )
-        panel_layout.addWidget(QLabel("RMSE [m]"), 4, 3)
-        panel_layout.addWidget(
-            self.reference_normal_rmse_value_label,
-            4,
-            4,
-        )
-        panel_layout.addWidget(QLabel("Normal status:"), 4, 5)
-        panel_layout.addWidget(
-            self.reference_normal_status_label,
-            4,
-            6,
-        )
+        layout.addWidget(QLabel("RMSE [m]:"), 4, 2)
+        layout.addWidget(self.reference_normal_rmse_value_label, 4, 3)
+        layout.setColumnStretch(7, 1)
+        return widget
 
-        panel_layout.addWidget(QLabel("Surface orientation:"), 5, 0)
-        panel_layout.addWidget(
-            self.reference_approach_mode_dropdown,
-            5,
-            1,
-            1,
-            2,
-        )
-        panel_layout.addWidget(QLabel("Used:"), 5, 3)
-        panel_layout.addWidget(
-            self.reference_approach_source_value_label,
-            5,
-            4,
-        )
-        panel_layout.addWidget(QLabel("Status:"), 5, 5)
-        panel_layout.addWidget(
-            self.reference_approach_status_label,
-            5,
-            6,
-        )
+    def _make_refine_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
-        panel_layout.addWidget(QLabel("Target distance [m]:"), 6, 0)
-        panel_layout.addWidget(
-            self.reference_target_distance_field,
-            6,
-            1,
-        )
-        panel_layout.addWidget(QLabel("Aligned distance [m]:"), 6, 2)
-        panel_layout.addWidget(
-            self.reference_preapproach_distance_field,
-            6,
-            3,
-        )
-        panel_layout.addWidget(QLabel("Target status:"), 6, 5)
-        panel_layout.addWidget(
-            self.reference_target_status_label,
-            6,
-            6,
-        )
+        status_row = QHBoxLayout()
+        status_row.addWidget(QLabel("Setup status:"))
+        status_row.addWidget(self.reference_setup_status_label)
+        status_row.addStretch()
+        layout.addLayout(status_row)
 
-        panel_layout.addWidget(QLabel("Target position [m]:"), 7, 0)
-        panel_layout.addWidget(QLabel("x"), 7, 1)
-        panel_layout.addWidget(self.reference_target_x_value_label, 7, 2)
-        panel_layout.addWidget(QLabel("y"), 7, 3)
-        panel_layout.addWidget(self.reference_target_y_value_label, 7, 4)
-        panel_layout.addWidget(QLabel("z"), 7, 5)
-        panel_layout.addWidget(self.reference_target_z_value_label, 7, 6)
+        layout.addWidget(
+            self._make_refine_stage_group(
+                "1. Obstacle-safe approach",
+                self.approach_step_status_label,
+                self.move_calculated_approach_button,
+                self.use_current_approach_button,
+                "Move to the calculated pose, adjust the sensor manually, "
+                "then approve the current pose.",
+            )
+        )
+        layout.addWidget(
+            self._make_refine_stage_group(
+                "2. Surface alignment",
+                self.alignment_step_status_label,
+                self.move_aligned_pose_button,
+                self.use_current_alignment_button,
+                "Move directly in front of the surface, fine-tune position "
+                "and orientation, then approve the alignment.",
+            )
+        )
+        layout.addWidget(
+            self._make_refine_stage_group(
+                "3. Probe pose",
+                self.probe_step_status_label,
+                self.move_probe_pose_button,
+                self.use_current_probe_button,
+                "Move to the final target, make small adjustments, then "
+                "approve the final probe pose.",
+            )
+        )
+        layout.addStretch()
+        return widget
 
-        panel_layout.addWidget(QLabel("Target angle rel. object [deg]:"), 8, 0)
-        panel_layout.addWidget(QLabel("roll"), 8, 1)
-        panel_layout.addWidget(
-            self.reference_target_roll_value_label,
-            8,
-            2,
-        )
-        panel_layout.addWidget(QLabel("pitch"), 8, 3)
-        panel_layout.addWidget(
-            self.reference_target_pitch_value_label,
-            8,
-            4,
-        )
-        panel_layout.addWidget(QLabel("yaw"), 8, 5)
-        panel_layout.addWidget(
-            self.reference_target_yaw_value_label,
-            8,
-            6,
-        )
+    @staticmethod
+    def _make_refine_stage_group(
+        title,
+        status_label,
+        move_button,
+        approve_button,
+        description,
+    ):
+        group = QGroupBox(title)
+        layout = QVBoxLayout(group)
+        description_label = QLabel(description)
+        description_label.setWordWrap(True)
+        layout.addWidget(description_label)
 
-        panel_layout.addWidget(QLabel("Aligned position [m]:"), 9, 0)
-        panel_layout.addWidget(QLabel("x"), 9, 1)
-        panel_layout.addWidget(
-            self.reference_preapproach_x_value_label,
-            9,
-            2,
-        )
-        panel_layout.addWidget(QLabel("y"), 9, 3)
-        panel_layout.addWidget(
-            self.reference_preapproach_y_value_label,
-            9,
-            4,
-        )
-        panel_layout.addWidget(QLabel("z"), 9, 5)
-        panel_layout.addWidget(
-            self.reference_preapproach_z_value_label,
-            9,
-            6,
-        )
+        status_row = QHBoxLayout()
+        status_row.addWidget(QLabel("Status:"))
+        status_row.addWidget(status_label)
+        status_row.addStretch()
+        layout.addLayout(status_row)
 
-        panel_layout.addWidget(QLabel("Setup status:"), 10, 0)
-        panel_layout.addWidget(
-            self.reference_setup_status_label,
-            10,
-            1,
-            1,
-            2,
-        )
-        panel_layout.addWidget(
-            self.move_calculated_approach_button,
-            10,
-            3,
-            1,
-            2,
-        )
-        panel_layout.addWidget(
-            self.use_current_approach_button,
-            10,
-            5,
-            1,
-            2,
-        )
+        buttons = QHBoxLayout()
+        buttons.addWidget(move_button)
+        buttons.addWidget(approve_button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+        return group
 
-        panel_layout.addWidget(
-            self.move_aligned_pose_button,
-            11,
-            0,
-            1,
-            2,
-        )
-        panel_layout.addWidget(
-            self.use_current_alignment_button,
-            11,
-            2,
-            1,
-            2,
-        )
-        panel_layout.addWidget(
-            self.move_probe_pose_button,
-            11,
-            4,
-            1,
-            2,
-        )
-        panel_layout.addWidget(
-            self.use_current_probe_button,
-            11,
-            6,
-        )
-        panel_layout.setColumnStretch(7, 1)
+    def _make_save_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
-        preview_column.addWidget(self.reference_point_panel)
-        row.addLayout(preview_column, 1)
-        return row
+        approval_group = QGroupBox("Approval summary")
+        approval_layout = QFormLayout(approval_group)
+        approval_layout.addRow(
+            "Approach pose:",
+            self.save_approach_status_label,
+        )
+        approval_layout.addRow(
+            "Surface alignment:",
+            self.save_alignment_status_label,
+        )
+        approval_layout.addRow(
+            "Probe pose:",
+            self.save_probe_status_label,
+        )
+        layout.addWidget(approval_group)
+
+        definition_group = QGroupBox("Probe point definition")
+        definition_layout = QFormLayout(definition_group)
+        definition_layout.addRow(
+            "Probe point ID:",
+            self.probe_point_id_field,
+        )
+        definition_layout.addRow(
+            "Display name:",
+            self.probe_point_display_name_field,
+        )
+        definition_layout.addRow(
+            "Position tolerance [m]:",
+            self.probe_position_tolerance_field,
+        )
+        definition_layout.addRow(
+            "Orientation tolerance [rad]:",
+            self.probe_orientation_tolerance_field,
+        )
+        definition_layout.addRow(
+            "Measurement duration [s]:",
+            self.probe_measurement_duration_field,
+        )
+        layout.addWidget(definition_group)
+
+        layout.addWidget(self.save_probe_point_status_label)
+        layout.addWidget(self.save_probe_point_button)
+        layout.addStretch()
+        return widget
 
     def _set_probe_setup_buttons_enabled(self, enabled):
         setup_buttons = (
@@ -669,6 +846,47 @@ class InspectionControls(UIControlHelper):
         )
         self.move_probe_pose_button.setEnabled(probe_enabled)
         self.use_current_probe_button.setEnabled(probe_enabled)
+
+    def _update_probe_setup_status_widgets(self):
+        setup = self._probe_setup
+        if setup is None:
+            self.approach_step_status_label.setText("Waiting for target")
+            self.alignment_step_status_label.setText("Waiting for target")
+            self.probe_step_status_label.setText("Waiting for alignment")
+            self.save_approach_status_label.setText("Not approved")
+            self.save_alignment_status_label.setText("Not approved")
+            self.save_probe_status_label.setText("Not approved")
+            return
+
+        approach_status = (
+            "Approved" if setup.safe_approach_approved else "Calculated"
+        )
+        alignment_status = (
+            "Approved"
+            if setup.surface_alignment_approved
+            else "Calculated"
+        )
+        if setup.probe_pose_approved:
+            probe_status = "Approved"
+        elif setup.surface_alignment_approved:
+            probe_status = "Ready for refinement"
+        else:
+            probe_status = "Waiting for alignment"
+
+        self.approach_step_status_label.setText(approach_status)
+        self.alignment_step_status_label.setText(alignment_status)
+        self.probe_step_status_label.setText(probe_status)
+        self.save_approach_status_label.setText(
+            "Approved" if setup.safe_approach_approved else "Not approved"
+        )
+        self.save_alignment_status_label.setText(
+            "Approved"
+            if setup.surface_alignment_approved
+            else "Not approved"
+        )
+        self.save_probe_status_label.setText(
+            "Approved" if setup.probe_pose_approved else "Not approved"
+        )
 
     @staticmethod
     def _distance_validator(parent):
@@ -784,6 +1002,7 @@ class InspectionControls(UIControlHelper):
         self.reference_preapproach_y_value_label.setText("—")
         self.reference_preapproach_z_value_label.setText("—")
         self._set_probe_setup_buttons_enabled(False)
+        self._update_probe_setup_status_widgets()
         self._set_setup_status("No point")
         self._set_target_status("No point")
 
@@ -1057,6 +1276,7 @@ class InspectionControls(UIControlHelper):
         self._set_target_status("Ready", detail)
         self._set_setup_status(status, self._probe_setup_detail())
         self._set_probe_setup_buttons_enabled(True)
+        self._update_probe_setup_status_widgets()
 
     def _probe_setup_detail(self):
         setup = self._probe_setup

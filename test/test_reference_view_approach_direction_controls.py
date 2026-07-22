@@ -252,10 +252,11 @@ def test_target_readouts_remain_fixed(application, tmp_path):
         (label.minimumWidth(), label.maximumWidth())
         for label in labels
     ]
-    panel_height = controls.reference_point_panel.height()
 
     controls._project_selected_reference_pixel(5, 5)
 
     assert all(minimum == maximum for minimum, maximum in widths)
-    assert controls.reference_point_panel.minimumHeight() == panel_height
-    assert controls.reference_point_panel.maximumHeight() == panel_height
+    assert controls.reference_point_panel.minimumHeight() < (
+        controls.reference_point_panel.maximumHeight()
+    )
+    assert controls.geometry_details_section.content_frame.isHidden()
