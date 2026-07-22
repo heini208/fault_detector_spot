@@ -25,10 +25,10 @@
     inspection.reference_view_camera_info_topic: '/depth_registered/hand/camera_info'
     inspection.reference_view_base_tag_topic: 'fault_detector/state/visible_tags'
 
-    inspection.reference_view_sync_queue_size: 10
-    inspection.reference_view_maximum_input_age_sec: 2.0
+    inspection.reference_view_sync_queue_size: 30
+    inspection.reference_view_maximum_input_age_sec: 5.0
     inspection.reference_view_maximum_timestamp_skew_sec: 0.05
-    inspection.reference_view_maximum_tag_timestamp_skew_sec: 0.25
+    inspection.reference_view_maximum_tag_timestamp_skew_sec: 5.0
     inspection.reference_view_fixed_frame: odom
     inspection.reference_view_transform_timeout_sec: 0.05
     inspection.reference_view_capture_timeout_sec: 3.0

@@ -21,7 +21,7 @@ _FUTURE_TOLERANCE_SEC = 0.1
 
 
 class ReferenceViewCaptureNotReady(RuntimeError):
-    """Indicate that a later sensor snapshot may be capturable."""
+    """Indicate that the completed collection has no usable capture."""
 
 
 def validate_reference_view_capture_target(
@@ -30,7 +30,7 @@ def validate_reference_view_capture_target(
     routine_id: str,
     replace_existing: bool,
 ) -> int:
-    """Validate the persistent target before waiting for sensor data."""
+    """Validate the persistent target before collecting sensor data."""
     definition = object_repository.load(object_id)
     routine = definition.get_routine(routine_id)
     if routine is None:
@@ -50,7 +50,7 @@ def capture_reference_view(
     object_id: str,
     routine_id: str,
     current_time,
-    maximum_input_age_sec: float = 0.75,
+    maximum_input_age_sec: float = 2.0,
     maximum_timestamp_skew_sec: float = 0.05,
     maximum_tag_timestamp_skew_sec: float = 0.25,
     fixed_frame: str = "odom",
@@ -58,7 +58,7 @@ def capture_reference_view(
     replace_existing: bool = False,
     minimum_image_sequence: int = 0,
 ) -> InspectionObject:
-    """Capture the selected routine's synchronized reference view."""
+    """Persist the best set from one completed collection window."""
     if (
         not math.isfinite(maximum_input_age_sec)
         or maximum_input_age_sec < 0.0
@@ -73,14 +73,14 @@ def capture_reference_view(
         routine_id,
         replace_existing,
     )
-    inputs = input_synchronizer.snapshot(
+    inputs = input_synchronizer.best_snapshot(
         reference_tag_id,
-        minimum_image_sequence=minimum_image_sequence,
+        minimum_image_sequence,
     )
     if inputs is None:
         raise ReferenceViewCaptureNotReady(
-            "Reference-view inputs are unavailable for tag "
-            f"{reference_tag_id}"
+            "No valid synchronized RGB, depth, and base-tag set was "
+            f"collected for tag {reference_tag_id}"
         )
 
     rgb_image, depth_image, camera_info, reference_tag = inputs
