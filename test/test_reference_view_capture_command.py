@@ -5,17 +5,21 @@ from types import SimpleNamespace
 import py_trees
 import pytest
 from builtin_interfaces.msg import Time
-from fault_detector_msgs.msg import InspectionCommand
+from fault_detector_msgs.msg import InspectionCommand, TagElement
 
 from fault_detector_spot.behaviour_tree.commands.command_ids import (
     CommandID,
 )
-from fault_detector_spot.behaviour_tree.commands.generic_complex_command import (
-    GenericCommand,
+from fault_detector_spot.behaviour_tree.commands import (
+    generic_complex_command,
 )
+
 from fault_detector_spot.behaviour_tree.nodes.inspection import (
     capture_inspection_object_reference_view as capture_module,
 )
+
+
+GenericCommand = generic_complex_command.GenericCommand
 
 
 CaptureInspectionObjectReferenceView = (
@@ -74,6 +78,10 @@ class FakeSynchronizer:
         self.ready = False
         self.begin_calls = []
         self.cancel_count = 0
+        self.tag_updates = []
+
+    def update_base_tag_observations(self, observations):
+        self.tag_updates.append(tuple(observations))
 
     def ready_for_collection(self, reference_tag_id):
         return self.input_ready
@@ -127,8 +135,22 @@ def create_writer(command):
     return writer
 
 
+def create_tag_writer(tag_id=23):
+    tag = TagElement()
+    tag.id = tag_id
+    tag.pose.header.stamp.sec = 10
+    tag.pose.pose.orientation.w = 1.0
+    writer = py_trees.blackboard.Client(name="BaseTagWriter")
+    writer.register_key(
+        "base_tag_observations",
+        access=py_trees.common.Access.WRITE,
+    )
+    writer.base_tag_observations = {tag_id: tag}
+    return writer
+
+
 def configure_behavior(monkeypatch, capture_error=None):
-    created = {"synchronizers": {}}
+    created = {"synchronizers": {}, "synchronizer_kwargs": {}}
     capture_calls = []
 
     monkeypatch.setattr(
@@ -146,6 +168,7 @@ def configure_behavior(monkeypatch, capture_error=None):
         camera_id = kwargs["rgb_topic"].split("/")[-2]
         synchronizer = FakeSynchronizer(camera_id)
         created["synchronizers"][camera_id] = synchronizer
+        created["synchronizer_kwargs"][camera_id] = kwargs
         return synchronizer
 
     monkeypatch.setattr(
@@ -211,19 +234,58 @@ def start_warmed_collection(behavior):
     assert behavior.update() == py_trees.common.Status.RUNNING
 
 
-def test_first_tick_creates_subscriptions_before_collection(monkeypatch):
+def test_setup_creates_persistent_camera_synchronizers(monkeypatch):
     behavior, _, created, capture_calls = configure_behavior(monkeypatch)
+
+    assert set(created["synchronizers"]) == {
+        "frontleft",
+        "frontright",
+        "left",
+        "right",
+        "back",
+        "hand",
+    }
+
     create_writer(make_command())
-
-    status = behavior.update()
-
-    assert status == py_trees.common.Status.RUNNING
-    synchronizer = created["synchronizers"]["hand"]
-    assert synchronizer.begin_calls == []
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    hand = created["synchronizers"]["hand"]
+    assert hand.begin_calls == []
     assert capture_calls == []
 
     assert behavior.update() == py_trees.common.Status.RUNNING
-    assert synchronizer.begin_calls == [(23, 1)]
+    assert hand.begin_calls == [(23, 1)]
+
+
+def test_blackboard_tags_feed_every_camera_without_topic_subscriptions(
+    monkeypatch,
+):
+    behavior, _, created, _ = configure_behavior(monkeypatch)
+    create_writer(make_command(camera_ids=(
+        "frontleft",
+        "hand",
+        "frontright",
+    )))
+    create_tag_writer()
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+
+    assert all(
+        kwargs["base_tag_topic"] is None
+        for kwargs in created["synchronizer_kwargs"].values()
+    )
+    selected = {"frontleft", "hand", "frontright"}
+    assert all(
+        created["synchronizers"][camera_id].tag_updates
+        and created["synchronizers"][camera_id]
+        .tag_updates[-1][0].id == 23
+        for camera_id in selected
+    )
+    assert all(
+        not synchronizer.tag_updates
+        for camera_id, synchronizer
+        in created["synchronizers"].items()
+        if camera_id not in selected
+    )
 
 
 def test_three_camera_slots_start_independent_collections(monkeypatch):
@@ -236,14 +298,16 @@ def test_three_camera_slots_start_independent_collections(monkeypatch):
 
     start_warmed_collection(behavior)
 
-    assert set(created["synchronizers"]) == {
-        "frontleft",
-        "hand",
-        "back",
-    }
+    selected = {"frontleft", "hand", "back"}
     assert all(
-        synchronizer.begin_calls == [(23, 1)]
-        for synchronizer in created["synchronizers"].values()
+        created["synchronizers"][camera_id].begin_calls == [(23, 1)]
+        for camera_id in selected
+    )
+    assert all(
+        not synchronizer.begin_calls
+        for camera_id, synchronizer
+        in created["synchronizers"].items()
+        if camera_id not in selected
     )
 
 
@@ -280,15 +344,18 @@ def test_invalid_completed_set_retries_all_cameras(monkeypatch):
     )
     create_writer(make_command(camera_ids=("frontleft", "hand", "")))
     start_warmed_collection(behavior)
-    for synchronizer in created["synchronizers"].values():
+    selected = ("frontleft", "hand")
+    for camera_id in selected:
+        synchronizer = created["synchronizers"][camera_id]
         synchronizer.ready = True
         synchronizer.image_sequence = 1
 
     assert behavior.update() == py_trees.common.Status.RUNNING
     assert behavior._attempt_number == 2
     assert all(
-        synchronizer.begin_calls == [(23, 1), (23, 2)]
-        for synchronizer in created["synchronizers"].values()
+        created["synchronizers"][camera_id].begin_calls
+        == [(23, 1), (23, 2)]
+        for camera_id in selected
     )
     assert len(capture_calls) == 1
     assert len(node.logger.warning_messages) == 1
@@ -303,15 +370,15 @@ def test_collection_waits_for_every_camera_to_warm_up(monkeypatch):
 
     assert behavior.update() == py_trees.common.Status.RUNNING
     assert all(
-        synchronizer.begin_calls == []
-        for synchronizer in created["synchronizers"].values()
+        created["synchronizers"][camera_id].begin_calls == []
+        for camera_id in ("left", "right")
     )
 
     created["synchronizers"]["right"].input_ready = True
     assert behavior.update() == py_trees.common.Status.RUNNING
     assert all(
-        synchronizer.begin_calls == [(23, 1)]
-        for synchronizer in created["synchronizers"].values()
+        created["synchronizers"][camera_id].begin_calls == [(23, 1)]
+        for camera_id in ("left", "right")
     )
 
 
@@ -332,7 +399,10 @@ def test_duplicate_camera_fails_before_subscribing(monkeypatch):
     create_writer(make_command(camera_ids=("hand", "hand", "")))
 
     assert behavior.update() == py_trees.common.Status.FAILURE
-    assert created["synchronizers"] == {}
+    assert all(
+        not synchronizer.begin_calls
+        for synchronizer in created["synchronizers"].values()
+    )
     assert capture_calls == []
 
 
@@ -341,7 +411,28 @@ def test_no_camera_fails_before_subscribing(monkeypatch):
     create_writer(make_command(camera_ids=("", "", "")))
 
     assert behavior.update() == py_trees.common.Status.FAILURE
-    assert created["synchronizers"] == {}
+    assert all(
+        not synchronizer.begin_calls
+        for synchronizer in created["synchronizers"].values()
+    )
+
+
+def test_initialise_keeps_persistent_camera_subscriptions(monkeypatch):
+    behavior, _, created, _ = configure_behavior(monkeypatch)
+    synchronizer_ids = {
+        camera_id: id(synchronizer)
+        for camera_id, synchronizer
+        in created["synchronizers"].items()
+    }
+
+    behavior.initialise()
+
+    assert {
+        camera_id: id(synchronizer)
+        for camera_id, synchronizer
+        in behavior._synchronizers.items()
+    } == synchronizer_ids
+
 
 
 @pytest.mark.parametrize("duration", [0.0, -1.0, float("inf")])

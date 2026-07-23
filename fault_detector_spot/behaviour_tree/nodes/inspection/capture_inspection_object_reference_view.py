@@ -11,9 +11,10 @@ from rclpy.node import Node
 from fault_detector_spot.behaviour_tree.commands.command_ids import (
     CommandID,
 )
-from fault_detector_spot.behaviour_tree.commands.generic_complex_command import (
-    GenericCommand,
+from fault_detector_spot.behaviour_tree.commands import (
+    generic_complex_command,
 )
+
 from fault_detector_spot.inspection.multi_reference_view_capture import (
     CameraCaptureRequest,
     capture_reference_views,
@@ -36,6 +37,9 @@ from fault_detector_spot.inspection.reference_view_input_synchronizer import (
 from fault_detector_spot.inspection.reference_view_validation import (
     ReferenceViewInputNotReady,
 )
+
+
+GenericCommand = generic_complex_command.GenericCommand
 
 
 CaptureRequest = Tuple[
@@ -118,15 +122,24 @@ class CaptureInspectionObjectReferenceView(
             "last_command",
             access=py_trees.common.Access.READ,
         )
+        self.blackboard.register_key(
+            "base_tag_observations",
+            access=py_trees.common.Access.READ,
+        )
+        self.blackboard.register_key(
+            "visible_tags",
+            access=py_trees.common.Access.READ,
+        )
         self.repository = MultiReferenceViewRepository(self.object_root)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(
             self.tf_buffer,
             self.node,
         )
+        self._create_persistent_synchronizers()
 
     def initialise(self) -> None:
-        self._release_synchronizers()
+        self._cancel_collections()
         self._request = None
         self._minimum_image_sequences = {}
         self._attempt_started_nanoseconds = None
@@ -137,22 +150,24 @@ class CaptureInspectionObjectReferenceView(
         try:
             if self._request is None:
                 self._begin_request()
+                self._feed_base_tag_observations()
                 return py_trees.common.Status.RUNNING
 
+            self._feed_base_tag_observations()
             current_time = self.node.get_clock().now()
             if not self._collection_started:
                 return self._wait_for_input_warmup(current_time)
 
+            object_id, routine_id, _, tag_id, selected = self._request
             if not all(
-                synchronizer.collection_ready()
-                for synchronizer in self._synchronizers.values()
+                self._synchronizers[camera_id].collection_ready()
+                for _, camera_id in selected
             ):
                 return self._wait_retry_or_timeout(
                     current_time,
                     "collecting synchronized camera and tag inputs",
                 )
 
-            object_id, routine_id, _, tag_id, selected = self._request
             requests = [
                 CameraCaptureRequest(
                     slot_index=slot_index,
@@ -206,11 +221,11 @@ class CaptureInspectionObjectReferenceView(
             f"{object_id}/{routine_id}: {camera_names}"
         )
         self.node.get_logger().info(self.feedback_message)
-        self._release_synchronizers()
+        self._cancel_collections()
         return py_trees.common.Status.SUCCESS
 
     def terminate(self, new_status: py_trees.common.Status) -> None:
-        self._release_synchronizers()
+        self._cancel_collections()
 
     def _begin_request(self) -> None:
         command = self._command()
@@ -248,16 +263,16 @@ class CaptureInspectionObjectReferenceView(
             f"{cameras}"
         )
 
-    def _create_synchronizers(self, selected) -> None:
-        self._release_synchronizers()
-        for _, camera_id in selected:
-            camera = self.camera_configs[camera_id]
+    def _create_persistent_synchronizers(self) -> None:
+        if self._synchronizers:
+            return
+        for camera_id, camera in self.camera_configs.items():
             self._synchronizers[camera_id] = ReferenceViewInputSynchronizer(
                 node=self.node,
                 rgb_topic=camera.rgb_topic,
                 depth_topic=camera.depth_topic,
                 camera_info_topic=camera.camera_info_topic,
-                base_tag_topic=self.base_tag_topic,
+                base_tag_topic=None,
                 queue_size=self.synchronization_queue_size,
                 maximum_timestamp_skew_sec=(
                     self.maximum_timestamp_skew_sec
@@ -267,6 +282,42 @@ class CaptureInspectionObjectReferenceView(
                 ),
                 collection_duration_sec=self.collection_duration_sec,
             )
+
+    def _create_synchronizers(self, selected) -> None:
+        missing = [
+            camera_id
+            for _, camera_id in selected
+            if camera_id not in self._synchronizers
+        ]
+        if missing:
+            raise RuntimeError(
+                "Reference camera synchronizers are unavailable: "
+                + ", ".join(missing)
+            )
+
+    def _feed_base_tag_observations(self) -> None:
+        observations = self._current_base_tag_observations()
+        values = tuple(observations.values())
+        selected_camera_ids = (
+            tuple(camera_id for _, camera_id in self._request[4])
+            if self._request is not None
+            else tuple(self._synchronizers)
+        )
+        for camera_id in selected_camera_ids:
+            self._synchronizers[camera_id].update_base_tag_observations(
+                values
+            )
+
+    def _current_base_tag_observations(self):
+        empty_value = {}
+        for key in ("base_tag_observations", "visible_tags"):
+            if not self.blackboard.exists(key):
+                continue
+            value = getattr(self.blackboard, key)
+            if value:
+                return value
+            empty_value = value or {}
+        return empty_value
 
     def _start_attempt(self, current_time) -> None:
         _, _, _, reference_tag_id, selected = self._request
@@ -367,51 +418,13 @@ class CaptureInspectionObjectReferenceView(
         )
         if self.node is not None:
             self.node.get_logger().error(self.feedback_message)
-        self._release_synchronizers()
+        self._cancel_collections()
         return py_trees.common.Status.FAILURE
 
-    def _release_synchronizers(self) -> None:
+    def _cancel_collections(self) -> None:
         for synchronizer in self._synchronizers.values():
             synchronizer.cancel_collection()
-            rgb_subscription = getattr(
-                synchronizer,
-                "rgb_subscription",
-                None,
-            )
-            depth_subscription = getattr(
-                synchronizer,
-                "depth_subscription",
-                None,
-            )
-            if rgb_subscription is not None:
-                self._destroy_filter_subscription(rgb_subscription)
-            if depth_subscription is not None:
-                self._destroy_filter_subscription(depth_subscription)
-            if (
-                self.node is not None
-                and hasattr(self.node, "destroy_subscription")
-            ):
-                for attribute in (
-                    "camera_info_subscription",
-                    "base_tag_subscription",
-                ):
-                    subscription = getattr(
-                        synchronizer,
-                        attribute,
-                        None,
-                    )
-                    if subscription is not None:
-                        self.node.destroy_subscription(subscription)
-        self._synchronizers = {}
         self._collection_started = False
-
-    def _destroy_filter_subscription(self, subscription) -> None:
-        if hasattr(subscription, "unsubscribe"):
-            subscription.unsubscribe()
-            return
-        underlying = getattr(subscription, "sub", None)
-        if underlying is not None and self.node is not None:
-            self.node.destroy_subscription(underlying)
 
     def _command(self) -> GenericCommand:
         if (

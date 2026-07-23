@@ -6,7 +6,7 @@ from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
 from threading import Lock
-from typing import Deque, Dict, Optional, Set, Tuple
+from typing import Deque, Dict, Iterable, Optional, Set, Tuple
 
 from fault_detector_msgs.msg import TagElement, TagElementArray
 from message_filters import ApproximateTimeSynchronizer, Subscriber
@@ -42,13 +42,13 @@ class ReferenceViewInputSynchronizer:
         rgb_topic: str,
         depth_topic: str,
         camera_info_topic: str,
-        base_tag_topic: str,
+        base_tag_topic: Optional[str],
         queue_size: int = 10,
         maximum_timestamp_skew_sec: float = 0.05,
         maximum_tag_timestamp_skew_sec: float = 0.25,
         collection_duration_sec: float = 1.0,
     ):
-        """Subscribe to one RGB/depth pair and the shared tag topic."""
+        """Subscribe to one camera and optionally the shared tag topic."""
         if (
             isinstance(queue_size, bool)
             or not isinstance(queue_size, int)
@@ -71,14 +71,16 @@ class ReferenceViewInputSynchronizer:
             allow_zero=False,
         )
 
-        history_size = max(queue_size, 60)
+        collection_history_size = max(queue_size, 60)
         self._lock = Lock()
         self._camera_info: Optional[CameraInfo] = None
         self._image_sequence = 0
+        self._idle_image_history_size = 2
+        self._collection_history_size = collection_history_size
         self._image_history: Deque[ImagePair] = deque(
-            maxlen=history_size
+            maxlen=self._idle_image_history_size
         )
-        self._tag_history_size = history_size
+        self._tag_history_size = collection_history_size
         self._base_tags: Dict[int, Deque[TagElement]] = {}
         self._visible_tag_ids: Set[int] = set()
         self._maximum_timestamp_skew_nanoseconds = int(
@@ -110,12 +112,14 @@ class ReferenceViewInputSynchronizer:
             self._camera_info_callback,
             qos_profile_sensor_data,
         )
-        self.base_tag_subscription = node.create_subscription(
-            TagElementArray,
-            base_tag_topic,
-            self._base_tags_callback,
-            qos_profile_sensor_data,
-        )
+        self.base_tag_subscription = None
+        if base_tag_topic:
+            self.base_tag_subscription = node.create_subscription(
+                TagElementArray,
+                base_tag_topic,
+                self._base_tags_callback,
+                qos_profile_sensor_data,
+            )
         self.image_synchronizer = ApproximateTimeSynchronizer(
             [self.rgb_subscription, self.depth_subscription],
             queue_size,
@@ -153,13 +157,18 @@ class ReferenceViewInputSynchronizer:
                     "A reference-view collection is already active"
                 )
 
+            collection_history_size = getattr(
+                self,
+                "_collection_history_size",
+                self._image_history.maxlen,
+            )
             image_pairs = deque(
                 (
                     pair
                     for pair in self._image_history
                     if pair[0] >= minimum_image_sequence
                 ),
-                maxlen=self._image_history.maxlen,
+                maxlen=collection_history_size,
             )
             tag_observations = deque(
                 (
@@ -321,14 +330,16 @@ class ReferenceViewInputSynchronizer:
         with self._lock:
             self._camera_info = deepcopy(camera_info)
 
-    def _base_tags_callback(
+    def update_base_tag_observations(
         self,
-        observations: TagElementArray,
+        observations: Iterable[TagElement],
     ) -> None:
+        """Add the current shared base-tag snapshot to this camera."""
+        values = tuple(observations)
         now_nanoseconds = time.monotonic_ns()
         with self._lock:
             visible_tag_ids = set()
-            for observation in observations.elements:
+            for observation in values:
                 tag_id = int(observation.id)
                 visible_tag_ids.add(tag_id)
                 history = self._base_tags.setdefault(
@@ -353,6 +364,12 @@ class ReferenceViewInputSynchronizer:
                     )
 
             self._visible_tag_ids = visible_tag_ids
+
+    def _base_tags_callback(
+        self,
+        observations: TagElementArray,
+    ) -> None:
+        self.update_base_tag_observations(observations.elements)
 
     def _synchronized_images_callback(
         self,
