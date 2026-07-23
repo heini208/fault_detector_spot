@@ -130,7 +130,7 @@ def test_collection_excludes_images_before_minimum_sequence(
     assert snapshot[0].header.stamp.nanosec == 500_000_000
 
 
-def test_collection_requires_tag_to_remain_visible(monkeypatch):
+def test_collection_uses_tag_observed_during_window(monkeypatch):
     clock = [1_000_000_000]
     monkeypatch.setattr(
         synchronizer_module.time,
@@ -150,7 +150,12 @@ def test_collection_requires_tag_to_remain_visible(monkeypatch):
 
     clock[0] += 1_000_000_000
 
-    assert synchronizer.best_snapshot(7, 1) is None
+    snapshot = synchronizer.best_snapshot(7, 1)
+
+    assert snapshot is not None
+    assert snapshot[0].header.stamp.nanosec == 100_000_000
+    assert snapshot[1].header.stamp.nanosec == 105_000_000
+    assert snapshot[3].pose.header.stamp.nanosec == 100_000_000
 
 
 def test_collection_freezes_after_window_end(monkeypatch):

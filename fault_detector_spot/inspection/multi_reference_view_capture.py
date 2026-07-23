@@ -81,10 +81,14 @@ def capture_reference_views(
             request.minimum_image_sequence,
         )
         if inputs is None:
+            diagnostics = request.input_synchronizer.collection_diagnostics(
+                reference_tag_id,
+                request.minimum_image_sequence,
+            )
             raise ReferenceViewCaptureNotReady(
                 "No valid synchronized RGB, depth, and base-tag set was "
                 f"collected for camera {request.camera_id} and tag "
-                f"{reference_tag_id}"
+                f"{reference_tag_id}: {diagnostics}"
             )
         rgb_image, depth_image, camera_info, reference_tag = inputs
         _require_fresh(
@@ -103,7 +107,7 @@ def capture_reference_views(
             current_time,
             reference_tag.pose.header.stamp,
             "Base-camera tag observation",
-            maximum_input_age_sec,
+            maximum_tag_timestamp_skew_sec,
         )
         reference_view = resolve_reference_view_pose(
             tf_buffer,

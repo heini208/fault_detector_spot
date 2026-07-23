@@ -107,6 +107,7 @@ class CaptureInspectionObjectReferenceView(
         self._minimum_image_sequences: Dict[str, int] = {}
         self._attempt_started_nanoseconds: Optional[int] = None
         self._attempt_number = 0
+        self._collection_started = False
         self.blackboard = self.attach_blackboard_client()
 
     def setup(self, **kwargs: Any) -> None:
@@ -130,6 +131,7 @@ class CaptureInspectionObjectReferenceView(
         self._minimum_image_sequences = {}
         self._attempt_started_nanoseconds = None
         self._attempt_number = 0
+        self._collection_started = False
 
     def update(self) -> py_trees.common.Status:
         try:
@@ -138,6 +140,9 @@ class CaptureInspectionObjectReferenceView(
                 return py_trees.common.Status.RUNNING
 
             current_time = self.node.get_clock().now()
+            if not self._collection_started:
+                return self._wait_for_input_warmup(current_time)
+
             if not all(
                 synchronizer.collection_ready()
                 for synchronizer in self._synchronizers.values()
@@ -231,7 +236,17 @@ class CaptureInspectionObjectReferenceView(
         )
         self._create_synchronizers(selected)
         self._attempt_number = 1
-        self._start_attempt(self.node.get_clock().now())
+        self._collection_started = False
+        self._attempt_started_nanoseconds = (
+            self.node.get_clock().now().nanoseconds
+        )
+        cameras = ", ".join(
+            camera_id for _, camera_id in selected
+        )
+        self.feedback_message = (
+            "Waiting for reference-view inputs from "
+            f"{cameras}"
+        )
 
     def _create_synchronizers(self, selected) -> None:
         self._release_synchronizers()
@@ -256,6 +271,7 @@ class CaptureInspectionObjectReferenceView(
     def _start_attempt(self, current_time) -> None:
         _, _, _, reference_tag_id, selected = self._request
         self._attempt_started_nanoseconds = current_time.nanoseconds
+        self._collection_started = True
         self._minimum_image_sequences = {}
         for _, camera_id in selected:
             synchronizer = self._synchronizers[camera_id]
@@ -271,6 +287,52 @@ class CaptureInspectionObjectReferenceView(
             "Collecting reference-view inputs for "
             f"{cameras}, attempt {self._attempt_number}/"
             f"{self.capture_max_attempts}"
+        )
+
+    def _wait_for_input_warmup(self, current_time):
+        _, _, _, reference_tag_id, selected = self._request
+        missing = []
+        for _, camera_id in selected:
+            synchronizer = self._synchronizers[camera_id]
+            if not synchronizer.ready_for_collection(reference_tag_id):
+                missing.append(camera_id)
+
+        if not missing:
+            self._start_attempt(current_time)
+            return py_trees.common.Status.RUNNING
+
+        elapsed_sec = (
+            current_time.nanoseconds
+            - self._attempt_started_nanoseconds
+        ) / 1_000_000_000
+        details = ", ".join(
+            self._camera_input_diagnostics(
+                camera_id,
+                reference_tag_id,
+            )
+            for camera_id in missing
+        )
+        if elapsed_sec < self.capture_timeout_sec:
+            self.feedback_message = (
+                "Waiting for camera subscriptions to warm up: "
+                f"{details}"
+            )
+            return py_trees.common.Status.RUNNING
+
+        return self._failure(RuntimeError(
+            "Camera inputs did not become ready before capture: "
+            f"{details}"
+        ))
+
+    def _camera_input_diagnostics(
+        self,
+        camera_id,
+        reference_tag_id,
+    ):
+        synchronizer = self._synchronizers[camera_id]
+        return (
+            f"{camera_id}: "
+            f"{synchronizer.input_diagnostics(reference_tag_id)}"
         )
 
     def _wait_retry_or_timeout(self, current_time, reason):
@@ -341,6 +403,7 @@ class CaptureInspectionObjectReferenceView(
                     if subscription is not None:
                         self.node.destroy_subscription(subscription)
         self._synchronizers = {}
+        self._collection_started = False
 
     def _destroy_filter_subscription(self, subscription) -> None:
         if hasattr(subscription, "unsubscribe"):

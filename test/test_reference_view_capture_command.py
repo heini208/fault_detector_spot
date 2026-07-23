@@ -70,9 +70,16 @@ class FakeSynchronizer:
     def __init__(self, camera_id):
         self.camera_id = camera_id
         self.image_sequence = 0
+        self.input_ready = True
         self.ready = False
         self.begin_calls = []
         self.cancel_count = 0
+
+    def ready_for_collection(self, reference_tag_id):
+        return self.input_ready
+
+    def input_diagnostics(self, reference_tag_id):
+        return "camera_info=yes, rgb_depth_pairs=1, tag_samples=1"
 
     def begin_collection(self, reference_tag_id, minimum_image_sequence):
         self.begin_calls.append(
@@ -199,7 +206,12 @@ def teardown_function():
     py_trees.blackboard.Blackboard.clear()
 
 
-def test_first_tick_starts_selected_camera_collection(monkeypatch):
+def start_warmed_collection(behavior):
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert behavior.update() == py_trees.common.Status.RUNNING
+
+
+def test_first_tick_creates_subscriptions_before_collection(monkeypatch):
     behavior, _, created, capture_calls = configure_behavior(monkeypatch)
     create_writer(make_command())
 
@@ -207,8 +219,11 @@ def test_first_tick_starts_selected_camera_collection(monkeypatch):
 
     assert status == py_trees.common.Status.RUNNING
     synchronizer = created["synchronizers"]["hand"]
-    assert synchronizer.begin_calls == [(23, 1)]
+    assert synchronizer.begin_calls == []
     assert capture_calls == []
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert synchronizer.begin_calls == [(23, 1)]
 
 
 def test_three_camera_slots_start_independent_collections(monkeypatch):
@@ -219,7 +234,7 @@ def test_three_camera_slots_start_independent_collections(monkeypatch):
         "back",
     )))
 
-    assert behavior.update() == py_trees.common.Status.RUNNING
+    start_warmed_collection(behavior)
 
     assert set(created["synchronizers"]) == {
         "frontleft",
@@ -235,7 +250,7 @@ def test_three_camera_slots_start_independent_collections(monkeypatch):
 def test_capture_waits_for_every_selected_camera(monkeypatch):
     behavior, _, created, capture_calls = configure_behavior(monkeypatch)
     create_writer(make_command(camera_ids=("left", "right", "")))
-    assert behavior.update() == py_trees.common.Status.RUNNING
+    start_warmed_collection(behavior)
 
     created["synchronizers"]["left"].ready = True
     assert behavior.update() == py_trees.common.Status.RUNNING
@@ -244,7 +259,10 @@ def test_capture_waits_for_every_selected_camera(monkeypatch):
     created["synchronizers"]["right"].ready = True
     assert behavior.update() == py_trees.common.Status.SUCCESS
     requests = capture_calls[0][0][1]
-    assert [(request.slot_index, request.camera_id) for request in requests] == [
+    assert [
+        (request.slot_index, request.camera_id)
+        for request in requests
+    ] == [
         (0, "left"),
         (1, "right"),
     ]
@@ -261,7 +279,7 @@ def test_invalid_completed_set_retries_all_cameras(monkeypatch):
         capture_error=errors,
     )
     create_writer(make_command(camera_ids=("frontleft", "hand", "")))
-    assert behavior.update() == py_trees.common.Status.RUNNING
+    start_warmed_collection(behavior)
     for synchronizer in created["synchronizers"].values():
         synchronizer.ready = True
         synchronizer.image_sequence = 1
@@ -274,6 +292,39 @@ def test_invalid_completed_set_retries_all_cameras(monkeypatch):
     )
     assert len(capture_calls) == 1
     assert len(node.logger.warning_messages) == 1
+
+
+def test_collection_waits_for_every_camera_to_warm_up(monkeypatch):
+    behavior, _, created, _ = configure_behavior(monkeypatch)
+    create_writer(make_command(camera_ids=("left", "right", "")))
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    created["synchronizers"]["right"].input_ready = False
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert all(
+        synchronizer.begin_calls == []
+        for synchronizer in created["synchronizers"].values()
+    )
+
+    created["synchronizers"]["right"].input_ready = True
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert all(
+        synchronizer.begin_calls == [(23, 1)]
+        for synchronizer in created["synchronizers"].values()
+    )
+
+
+def test_warmup_timeout_reports_missing_camera_inputs(monkeypatch):
+    behavior, node, created, _ = configure_behavior(monkeypatch)
+    create_writer(make_command())
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    created["synchronizers"]["hand"].input_ready = False
+    node.clock.advance(3.1)
+
+    assert behavior.update() == py_trees.common.Status.FAILURE
+    assert "did not become ready" in behavior.feedback_message
 
 
 def test_duplicate_camera_fails_before_subscribing(monkeypatch):

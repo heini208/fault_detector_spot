@@ -1,4 +1,4 @@
-"""Synchronized hand-camera and base-tag reference-view inputs."""
+"""Synchronized camera and base-tag reference-view inputs."""
 
 import math
 import time
@@ -34,7 +34,7 @@ class _CollectionWindow:
 
 
 class ReferenceViewInputSynchronizer:
-    """Buffer sensor inputs and select one synchronized capture set."""
+    """Buffer one camera's inputs and select its best capture set."""
 
     def __init__(
         self,
@@ -48,7 +48,7 @@ class ReferenceViewInputSynchronizer:
         maximum_tag_timestamp_skew_sec: float = 0.25,
         collection_duration_sec: float = 1.0,
     ):
-        """Subscribe to all inputs required for reference-view capture."""
+        """Subscribe to one RGB/depth pair and the shared tag topic."""
         if (
             isinstance(queue_size, bool)
             or not isinstance(queue_size, int)
@@ -125,12 +125,23 @@ class ReferenceViewInputSynchronizer:
             self._synchronized_images_callback
         )
 
+    def ready_for_collection(self, reference_tag_id: int) -> bool:
+        """Return whether this camera has warmed RGB/depth/tag inputs."""
+        if reference_tag_id < 0:
+            raise ValueError("Reference tag ID must not be negative")
+        with self._lock:
+            return (
+                self._camera_info is not None
+                and self._image_sequence > 0
+                and bool(self._base_tags.get(reference_tag_id))
+            )
+
     def begin_collection(
         self,
         reference_tag_id: int,
         minimum_image_sequence: int,
     ) -> None:
-        """Start one bounded reference-view collection transaction."""
+        """Start one bounded camera-specific capture transaction."""
         self._validate_request(
             reference_tag_id,
             minimum_image_sequence,
@@ -172,7 +183,7 @@ class ReferenceViewInputSynchronizer:
             )
 
     def collection_ready(self) -> bool:
-        """Return whether the active collection window has completed."""
+        """Return whether the active one-second window has completed."""
         now_nanoseconds = time.monotonic_ns()
         with self._lock:
             return (
@@ -186,7 +197,7 @@ class ReferenceViewInputSynchronizer:
         reference_tag_id: int,
         minimum_image_sequence: int,
     ) -> Optional[ReferenceViewInputs]:
-        """Return the best valid set from the completed collection."""
+        """Return this camera's best RGB/depth/tag combination."""
         self._validate_request(
             reference_tag_id,
             minimum_image_sequence,
@@ -210,10 +221,7 @@ class ReferenceViewInputSynchronizer:
                 raise RuntimeError(
                     "Reference-view collection is not complete"
                 )
-            if (
-                self._camera_info is None
-                or reference_tag_id not in self._visible_tag_ids
-            ):
+            if self._camera_info is None:
                 return None
 
             image_pairs = tuple(collection.image_pairs)
@@ -237,20 +245,72 @@ class ReferenceViewInputSynchronizer:
             deepcopy(reference_tag),
         )
 
+    def input_diagnostics(self, reference_tag_id: int) -> str:
+        """Describe currently warmed inputs for one tag and camera."""
+        with self._lock:
+            return self._format_diagnostics(
+                camera_info_available=self._camera_info is not None,
+                image_pairs=tuple(self._image_history),
+                tag_observations=tuple(
+                    self._base_tags.get(reference_tag_id, ())
+                ),
+                tag_visible_at_end=(
+                    reference_tag_id in self._visible_tag_ids
+                ),
+            )
+
+    def collection_diagnostics(
+        self,
+        reference_tag_id: int,
+        minimum_image_sequence: int,
+    ) -> str:
+        """Describe why one completed camera collection had no result."""
+        with self._lock:
+            collection = self._collection
+            if collection is None:
+                return self._format_diagnostics(
+                    camera_info_available=(
+                        self._camera_info is not None
+                    ),
+                    image_pairs=tuple(self._image_history),
+                    tag_observations=tuple(
+                        self._base_tags.get(reference_tag_id, ())
+                    ),
+                    tag_visible_at_end=(
+                        reference_tag_id in self._visible_tag_ids
+                    ),
+                )
+            if (
+                collection.reference_tag_id != reference_tag_id
+                or collection.minimum_image_sequence
+                != minimum_image_sequence
+            ):
+                return "active collection does not match the request"
+            return self._format_diagnostics(
+                camera_info_available=self._camera_info is not None,
+                image_pairs=tuple(collection.image_pairs),
+                tag_observations=tuple(
+                    collection.tag_observations
+                ),
+                tag_visible_at_end=(
+                    reference_tag_id in self._visible_tag_ids
+                ),
+            )
+
     def cancel_collection(self) -> None:
-        """Discard the active collection transaction."""
+        """Discard the active camera-specific collection."""
         with self._lock:
             self._collection = None
 
     @property
     def image_sequence(self) -> int:
-        """Return the number of synchronized image pairs received."""
+        """Return the number of synchronized RGB/depth pairs received."""
         with self._lock:
             return self._image_sequence
 
     @property
     def collection_active(self) -> bool:
-        """Return whether a collection transaction is active."""
+        """Return whether one camera collection is active."""
         with self._lock:
             return self._collection is not None
 
@@ -369,6 +429,66 @@ class ReferenceViewInputSynchronizer:
                     best_score = score
 
         return best_candidate
+
+    def _format_diagnostics(
+        self,
+        camera_info_available,
+        image_pairs,
+        tag_observations,
+        tag_visible_at_end,
+    ) -> str:
+        candidate = self._select_best_candidate(
+            image_pairs,
+            tag_observations,
+        )
+        closest_image_skew = self._closest_image_skew(image_pairs)
+        closest_tag_skew = self._closest_tag_skew(
+            image_pairs,
+            tag_observations,
+        )
+        return (
+            f"camera_info={'yes' if camera_info_available else 'no'}, "
+            f"rgb_depth_pairs={len(image_pairs)}, "
+            f"tag_samples={len(tag_observations)}, "
+            f"tag_visible_at_end="
+            f"{'yes' if tag_visible_at_end else 'no'}, "
+            f"closest_rgb_depth_skew="
+            f"{self._format_skew(closest_image_skew)}, "
+            f"closest_rgb_tag_skew="
+            f"{self._format_skew(closest_tag_skew)}, "
+            f"valid_candidate={'yes' if candidate else 'no'}"
+        )
+
+    def _closest_image_skew(self, image_pairs) -> Optional[int]:
+        skews = []
+        for _, rgb_image, depth_image in image_pairs:
+            rgb_stamp = self._image_stamp_nanoseconds(rgb_image)
+            depth_stamp = self._image_stamp_nanoseconds(depth_image)
+            if rgb_stamp > 0 and depth_stamp > 0:
+                skews.append(abs(rgb_stamp - depth_stamp))
+        return min(skews) if skews else None
+
+    def _closest_tag_skew(
+        self,
+        image_pairs,
+        tag_observations,
+    ) -> Optional[int]:
+        skews = []
+        for _, rgb_image, _ in image_pairs:
+            rgb_stamp = self._image_stamp_nanoseconds(rgb_image)
+            if rgb_stamp <= 0:
+                continue
+            for observation in tag_observations:
+                tag_stamp = self._tag_stamp_nanoseconds(observation)
+                if tag_stamp > 0:
+                    skews.append(abs(rgb_stamp - tag_stamp))
+        return min(skews) if skews else None
+
+    @staticmethod
+    def _format_skew(skew_nanoseconds: Optional[int]) -> str:
+        if skew_nanoseconds is None:
+            return "n/a"
+        return f"{skew_nanoseconds / 1_000_000:.1f}ms"
 
     @staticmethod
     def _append_tag_observation(
