@@ -323,6 +323,14 @@ class ReferenceViewInputSynchronizer:
         with self._lock:
             return self._collection is not None
 
+    @property
+    def latest_rgb_frame_id(self) -> str:
+        """Return the newest synchronized RGB frame ID."""
+        with self._lock:
+            if not self._image_history:
+                return ""
+            return self._image_history[-1][1].header.frame_id
+
     def _camera_info_callback(
         self,
         camera_info: CameraInfo,

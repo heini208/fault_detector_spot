@@ -6,7 +6,9 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import py_trees
 import tf2_ros
+from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.time import Time
 
 from fault_detector_spot.behaviour_tree.commands.command_ids import (
     CommandID,
@@ -347,6 +349,9 @@ class CaptureInspectionObjectReferenceView(
             synchronizer = self._synchronizers[camera_id]
             if not synchronizer.ready_for_collection(reference_tag_id):
                 missing.append(camera_id)
+                continue
+            if not self._camera_transform_ready(synchronizer):
+                missing.append(camera_id)
 
         if not missing:
             self._start_attempt(current_time)
@@ -384,6 +389,19 @@ class CaptureInspectionObjectReferenceView(
         return (
             f"{camera_id}: "
             f"{synchronizer.input_diagnostics(reference_tag_id)}"
+        )
+
+    def _camera_transform_ready(self, synchronizer) -> bool:
+        frame_id = synchronizer.latest_rgb_frame_id
+        if not frame_id:
+            return False
+        if not hasattr(self.tf_buffer, "can_transform"):
+            return True
+        return self.tf_buffer.can_transform(
+            self.fixed_frame,
+            frame_id,
+            Time(),
+            timeout=Duration(seconds=self.transform_timeout_sec),
         )
 
     def _wait_retry_or_timeout(self, current_time, reason):

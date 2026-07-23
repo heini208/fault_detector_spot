@@ -103,12 +103,6 @@ def capture_reference_views(
             f"{request.camera_id} depth image",
             maximum_input_age_sec,
         )
-        _require_fresh(
-            current_time,
-            reference_tag.pose.header.stamp,
-            "Base-camera tag observation",
-            maximum_tag_timestamp_skew_sec,
-        )
         reference_view = resolve_reference_view_pose(
             tf_buffer,
             rgb_image,
