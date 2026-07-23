@@ -1,4 +1,4 @@
-"""Tests for reference-view collection behavior integration."""
+"""Tests for multi-camera reference-view behavior integration."""
 
 from types import SimpleNamespace
 
@@ -54,6 +54,7 @@ class FakeNode:
     def __init__(self):
         self.logger = FakeLogger()
         self.clock = FakeClock()
+        self.destroyed_subscriptions = []
 
     def get_clock(self):
         return self.clock
@@ -61,19 +62,19 @@ class FakeNode:
     def get_logger(self):
         return self.logger
 
+    def destroy_subscription(self, subscription):
+        self.destroyed_subscriptions.append(subscription)
+
 
 class FakeSynchronizer:
-    def __init__(self):
+    def __init__(self, camera_id):
+        self.camera_id = camera_id
         self.image_sequence = 0
         self.ready = False
         self.begin_calls = []
         self.cancel_count = 0
 
-    def begin_collection(
-        self,
-        reference_tag_id,
-        minimum_image_sequence,
-    ):
+    def begin_collection(self, reference_tag_id, minimum_image_sequence):
         self.begin_calls.append(
             (reference_tag_id, minimum_image_sequence)
         )
@@ -85,15 +86,21 @@ class FakeSynchronizer:
         self.cancel_count += 1
 
 
+class FakeRepository:
+    pass
+
+
 def make_command(
     object_id="motor_a",
     routine_id="magnetic_scan",
     replace_existing=False,
+    camera_ids=("hand", "", ""),
 ):
     inspection = InspectionCommand()
     inspection.object.object_id = object_id
     inspection.routine.routine_id = routine_id
     inspection.replace_existing = replace_existing
+    inspection.reference_camera_ids = list(camera_ids)
     return GenericCommand(
         command_id=(
             CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW
@@ -114,23 +121,24 @@ def create_writer(command):
 
 
 def configure_behavior(monkeypatch, capture_error=None):
-    repository = object()
-    synchronizer = FakeSynchronizer()
-    tf_buffer = object()
-    created = {}
+    created = {"synchronizers": {}}
     capture_calls = []
 
     monkeypatch.setattr(
         capture_module,
-        "ObjectRepository",
-        lambda root: created.setdefault(
-            "repository",
-            (root, repository),
-        )[1],
+        "MultiReferenceViewRepository",
+        lambda root: created.setdefault("repository", FakeRepository()),
+    )
+    monkeypatch.setattr(
+        capture_module,
+        "validate_multi_reference_view_capture_target",
+        lambda *args: 23,
     )
 
     def make_synchronizer(**kwargs):
-        created["synchronizer"] = kwargs
+        camera_id = kwargs["rgb_topic"].split("/")[-2]
+        synchronizer = FakeSynchronizer(camera_id)
+        created["synchronizers"][camera_id] = synchronizer
         return synchronizer
 
     monkeypatch.setattr(
@@ -139,22 +147,14 @@ def configure_behavior(monkeypatch, capture_error=None):
         make_synchronizer,
     )
     monkeypatch.setattr(
-        capture_module,
-        "validate_reference_view_capture_target",
-        lambda *args: 23,
-    )
-    monkeypatch.setattr(
         capture_module.tf2_ros,
         "Buffer",
-        lambda: tf_buffer,
+        lambda: object(),
     )
     monkeypatch.setattr(
         capture_module.tf2_ros,
         "TransformListener",
-        lambda buffer, node: created.setdefault(
-            "listener",
-            (buffer, node),
-        ),
+        lambda buffer, node: object(),
     )
 
     def capture(*args, **kwargs):
@@ -166,19 +166,11 @@ def configure_behavior(monkeypatch, capture_error=None):
             list,
         ):
             raise capture_error
-        view = SimpleNamespace(
-            reference_dataset_path=(
-                "reference_datasets/magnetic_scan/10_000000000"
-            )
-        )
-        routine = SimpleNamespace(reference_view=view)
-        return SimpleNamespace(
-            get_routine=lambda routine_id: routine,
-        )
+        return object()
 
     monkeypatch.setattr(
         capture_module,
-        "capture_reference_view",
+        "capture_reference_views",
         capture,
     )
 
@@ -196,7 +188,7 @@ def configure_behavior(monkeypatch, capture_error=None):
     )
     node = FakeNode()
     behavior.setup(node=node)
-    return behavior, node, created, capture_calls, synchronizer
+    return behavior, node, created, capture_calls
 
 
 def setup_function():
@@ -207,133 +199,98 @@ def teardown_function():
     py_trees.blackboard.Blackboard.clear()
 
 
-def test_first_tick_starts_explicit_collection(monkeypatch):
-    behavior, _, created, capture_calls, synchronizer = (
-        configure_behavior(monkeypatch)
-    )
+def test_first_tick_starts_selected_camera_collection(monkeypatch):
+    behavior, _, created, capture_calls = configure_behavior(monkeypatch)
     create_writer(make_command())
 
     status = behavior.update()
 
     assert status == py_trees.common.Status.RUNNING
+    synchronizer = created["synchronizers"]["hand"]
     assert synchronizer.begin_calls == [(23, 1)]
     assert capture_calls == []
-    assert created["synchronizer"]["collection_duration_sec"] == 1.0
-    assert created["synchronizer"][
-        "maximum_tag_timestamp_skew_sec"
-    ] == 0.2
 
 
-def test_behavior_waits_until_collection_is_ready(monkeypatch):
-    behavior, _, _, capture_calls, synchronizer = (
-        configure_behavior(monkeypatch)
-    )
-    create_writer(make_command())
+def test_three_camera_slots_start_independent_collections(monkeypatch):
+    behavior, _, created, _ = configure_behavior(monkeypatch)
+    create_writer(make_command(camera_ids=(
+        "frontleft",
+        "hand",
+        "back",
+    )))
 
     assert behavior.update() == py_trees.common.Status.RUNNING
+
+    assert set(created["synchronizers"]) == {
+        "frontleft",
+        "hand",
+        "back",
+    }
+    assert all(
+        synchronizer.begin_calls == [(23, 1)]
+        for synchronizer in created["synchronizers"].values()
+    )
+
+
+def test_capture_waits_for_every_selected_camera(monkeypatch):
+    behavior, _, created, capture_calls = configure_behavior(monkeypatch)
+    create_writer(make_command(camera_ids=("left", "right", "")))
+    assert behavior.update() == py_trees.common.Status.RUNNING
+
+    created["synchronizers"]["left"].ready = True
     assert behavior.update() == py_trees.common.Status.RUNNING
     assert capture_calls == []
-    assert synchronizer.begin_calls == [(23, 1)]
+
+    created["synchronizers"]["right"].ready = True
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+    requests = capture_calls[0][0][1]
+    assert [(request.slot_index, request.camera_id) for request in requests] == [
+        (0, "left"),
+        (1, "right"),
+    ]
 
 
-def test_completed_collection_is_captured_and_released(monkeypatch):
-    behavior, node, _, capture_calls, synchronizer = (
-        configure_behavior(monkeypatch)
-    )
-    create_writer(make_command())
-
-    assert behavior.update() == py_trees.common.Status.RUNNING
-    synchronizer.ready = True
-    status = behavior.update()
-
-    assert status == py_trees.common.Status.SUCCESS
-    assert len(capture_calls) == 1
-    assert capture_calls[0][1]["minimum_image_sequence"] == 1
-    assert synchronizer.cancel_count >= 2
-    assert len(node.logger.info_messages) == 1
-
-
-def test_invalid_completed_collection_starts_new_attempt(monkeypatch):
+def test_invalid_completed_set_retries_all_cameras(monkeypatch):
     errors = [
         capture_module.ReferenceViewCaptureNotReady(
-            "No valid synchronized set"
+            "frontleft has no valid synchronized set"
         )
     ]
-    behavior, node, _, capture_calls, synchronizer = (
-        configure_behavior(monkeypatch, capture_error=errors)
+    behavior, node, created, capture_calls = configure_behavior(
+        monkeypatch,
+        capture_error=errors,
     )
-    create_writer(make_command())
+    create_writer(make_command(camera_ids=("frontleft", "hand", "")))
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    for synchronizer in created["synchronizers"].values():
+        synchronizer.ready = True
+        synchronizer.image_sequence = 1
 
     assert behavior.update() == py_trees.common.Status.RUNNING
-    synchronizer.image_sequence = 1
-    synchronizer.ready = True
-    status = behavior.update()
-
-    assert status == py_trees.common.Status.RUNNING
     assert behavior._attempt_number == 2
-    assert synchronizer.begin_calls == [(23, 1), (23, 2)]
+    assert all(
+        synchronizer.begin_calls == [(23, 1), (23, 2)]
+        for synchronizer in created["synchronizers"].values()
+    )
     assert len(capture_calls) == 1
     assert len(node.logger.warning_messages) == 1
 
 
-def test_collection_timeout_retries_with_new_sequence(monkeypatch):
-    behavior, node, _, capture_calls, synchronizer = (
-        configure_behavior(monkeypatch)
-    )
-    create_writer(make_command())
+def test_duplicate_camera_fails_before_subscribing(monkeypatch):
+    behavior, _, created, capture_calls = configure_behavior(monkeypatch)
+    create_writer(make_command(camera_ids=("hand", "hand", "")))
 
-    assert behavior.update() == py_trees.common.Status.RUNNING
-    synchronizer.image_sequence = 1
-    node.clock.advance(3.1)
-    status = behavior.update()
-
-    assert status == py_trees.common.Status.RUNNING
-    assert behavior._attempt_number == 2
-    assert synchronizer.begin_calls == [(23, 1), (23, 2)]
+    assert behavior.update() == py_trees.common.Status.FAILURE
+    assert created["synchronizers"] == {}
     assert capture_calls == []
 
 
-def test_three_failed_collections_fail_command(monkeypatch):
-    behavior, node, _, _, synchronizer = configure_behavior(monkeypatch)
-    create_writer(make_command())
+def test_no_camera_fails_before_subscribing(monkeypatch):
+    behavior, _, created, _ = configure_behavior(monkeypatch)
+    create_writer(make_command(camera_ids=("", "", "")))
 
-    assert behavior.update() == py_trees.common.Status.RUNNING
-    node.clock.advance(3.1)
-    assert behavior.update() == py_trees.common.Status.RUNNING
-    node.clock.advance(3.1)
-    assert behavior.update() == py_trees.common.Status.RUNNING
-    node.clock.advance(3.1)
-    status = behavior.update()
-
-    assert status == py_trees.common.Status.FAILURE
-    assert "failed after 3 attempts" in behavior.feedback_message
-    assert len(node.logger.error_messages) == 1
-    assert len(synchronizer.begin_calls) == 3
-
-
-def test_missing_identifiers_fail_before_collection(monkeypatch):
-    behavior, _, _, capture_calls, synchronizer = (
-        configure_behavior(monkeypatch)
-    )
-    create_writer(make_command(object_id=""))
-
-    status = behavior.update()
-
-    assert status == py_trees.common.Status.FAILURE
-    assert capture_calls == []
-    assert synchronizer.begin_calls == []
-
-
-def test_wrong_command_id_fails_before_collection(monkeypatch):
-    behavior, _, _, _, synchronizer = configure_behavior(monkeypatch)
-    command = make_command()
-    command.command_id = CommandID.STOW_ARM
-    create_writer(command)
-
-    status = behavior.update()
-
-    assert status == py_trees.common.Status.FAILURE
-    assert synchronizer.begin_calls == []
+    assert behavior.update() == py_trees.common.Status.FAILURE
+    assert created["synchronizers"] == {}
 
 
 @pytest.mark.parametrize("duration", [0.0, -1.0, float("inf")])

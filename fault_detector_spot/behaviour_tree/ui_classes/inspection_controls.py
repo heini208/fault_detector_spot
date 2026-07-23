@@ -38,8 +38,12 @@ from fault_detector_spot.inspection.models import (
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.object_repository import (
-    ObjectRepository,
+from fault_detector_spot.inspection.multi_reference_view_repository import (
+    MultiReferenceViewRepository,
+)
+from fault_detector_spot.inspection.reference_camera_registry import (
+    REFERENCE_CAMERAS,
+    REFERENCE_CAMERA_BY_ID,
 )
 from fault_detector_spot.inspection.reference_view_approach_direction import (
     APPROACH_MODE_AUTOMATIC,
@@ -81,14 +85,24 @@ class InspectionControls(UIControlHelper):
 
     def __init__(self, parent_ui):
         """Create controls backed by the configured object repository."""
-        self.object_repository = ObjectRepository(
-            getattr(parent_ui, "inspection_object_root", None)
+        object_root = getattr(
+            parent_ui,
+            "inspection_object_root",
+            None,
+        )
+        self.reference_view_repository = MultiReferenceViewRepository(
+            object_root
+        )
+        self.object_repository = (
+            self.reference_view_repository.object_repository
         )
         self._selected_definition = None
         self._reference_rgb_size = None
         self._reference_depth_image = None
         self._reference_camera_info = None
         self._reference_view = None
+        self._reference_slot_captures = [None, None, None]
+        self._active_reference_slot = None
         self._selected_surface_point = None
         self._selected_surface_normal = None
         self._surface_normal_error = ""
@@ -274,7 +288,13 @@ class InspectionControls(UIControlHelper):
         self.management_dialog.activateWindow()
 
     def _create_reference_widgets(self):
-        self.reference_view_widget = ReferenceViewWidget()
+        self.reference_view_widgets = [
+            ReferenceViewWidget(),
+            ReferenceViewWidget(),
+            ReferenceViewWidget(),
+        ]
+        self.reference_view_widget = self.reference_view_widgets[0]
+        self.reference_camera_dropdowns = []
         self.replace_reference_view_checkbox = QCheckBox(
             "Replace existing"
         )
@@ -292,7 +312,7 @@ class InspectionControls(UIControlHelper):
         self.clear_reference_pixel_button = QPushButton("Clear Point")
         self.clear_reference_pixel_button.setEnabled(False)
         self.clear_reference_pixel_button.clicked.connect(
-            self.reference_view_widget.clear_selection
+            self._clear_all_reference_selections
         )
 
         self.reference_surface_frame_value_label = (
@@ -453,12 +473,15 @@ class InspectionControls(UIControlHelper):
         self.save_probe_point_status_label.setWordWrap(True)
 
         self._set_probe_setup_buttons_enabled(False)
-        self.reference_view_widget.image_point_changed.connect(
-            self._handle_reference_image_point_changed
-        )
-        self.reference_view_widget.image_point_cleared.connect(
-            self._handle_reference_image_point_cleared
-        )
+        for slot_index, widget in enumerate(self.reference_view_widgets):
+            widget.image_point_changed.connect(
+                lambda u, v, slot=slot_index:
+                self._handle_reference_slot_point_changed(slot, u, v)
+            )
+            widget.image_point_cleared.connect(
+                lambda slot=slot_index:
+                self._handle_reference_slot_point_cleared(slot)
+            )
         self.reference_approach_mode_dropdown.currentIndexChanged.connect(
             self._handle_approach_mode_changed
         )
@@ -515,22 +538,14 @@ class InspectionControls(UIControlHelper):
         toolbar.addWidget(self.capture_reference_view_button)
         layout.addLayout(toolbar)
 
-        self.reference_view_widget.setMinimumSize(240, 180)
         camera_row = QHBoxLayout()
         camera_row.setSpacing(8)
-        self.reference_camera_slot_one = self._make_camera_slot(
-            "Camera 1 (Hand)",
-            self.reference_view_widget,
-        )
-        self.reference_camera_slot_two = self._make_camera_placeholder_slot(
-            "Camera 2"
-        )
-        self.reference_camera_slot_three = self._make_camera_placeholder_slot(
-            "Camera 3"
-        )
-        camera_row.addWidget(self.reference_camera_slot_one, 1)
-        camera_row.addWidget(self.reference_camera_slot_two, 1)
-        camera_row.addWidget(self.reference_camera_slot_three, 1)
+        self.reference_camera_slots = []
+        for slot_index, widget in enumerate(self.reference_view_widgets):
+            widget.setMinimumSize(240, 180)
+            slot = self._make_camera_slot(slot_index, widget)
+            self.reference_camera_slots.append(slot)
+            camera_row.addWidget(slot, 1)
         layout.addLayout(camera_row, 1)
 
         selection_row = QHBoxLayout()
@@ -541,34 +556,31 @@ class InspectionControls(UIControlHelper):
         layout.addLayout(selection_row)
         return panel
 
-    @staticmethod
-    def _make_camera_slot(title, content):
+    def _make_camera_slot(self, slot_index, content):
         slot = QFrame()
         slot.setFrameShape(QFrame.StyledPanel)
         slot_layout = QVBoxLayout(slot)
         slot_layout.setContentsMargins(4, 4, 4, 4)
         slot_layout.setSpacing(4)
 
-        title_label = QLabel(title)
-        title_label.setAlignment(Qt.AlignCenter)
-        slot_layout.addWidget(title_label)
-        slot_layout.addWidget(content, 1)
-        return slot
-
-    def _make_camera_placeholder_slot(self, title):
-        placeholder = QLabel("No camera selected")
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.setFrameShape(QFrame.StyledPanel)
-        placeholder.setMinimumSize(240, 180)
-        placeholder.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Expanding,
+        selector_row = QHBoxLayout()
+        selector_row.addWidget(QLabel(f"Camera {slot_index + 1}:"))
+        dropdown = QComboBox()
+        dropdown.addItem("None", "")
+        for camera in REFERENCE_CAMERAS:
+            dropdown.addItem(camera.display_name, camera.camera_id)
+        default_id = "hand" if slot_index == 0 else ""
+        dropdown.setCurrentIndex(dropdown.findData(default_id))
+        dropdown.currentIndexChanged.connect(
+            lambda _index, slot=slot_index:
+            self._handle_reference_camera_selection_changed(slot)
         )
-        slot = self._make_camera_slot(title, placeholder)
-        if title == "Camera 2":
-            self.reference_camera_two_placeholder = placeholder
-        else:
-            self.reference_camera_three_placeholder = placeholder
+        self.reference_camera_dropdowns.append(dropdown)
+        selector_row.addWidget(dropdown, 1)
+        slot_layout.addLayout(selector_row)
+        slot_layout.addWidget(content, 1)
+        if not default_id:
+            content.clear_preview("No camera selected")
         return slot
 
     def _make_workflow_tabs(self):
@@ -955,6 +967,110 @@ class InspectionControls(UIControlHelper):
         if abs(value) < rounding_threshold:
             value = 0.0
         return f"{value:.{decimals}f}"
+
+    def _handle_reference_slot_point_changed(self, slot_index, u, v):
+        capture = self._reference_slot_captures[slot_index]
+        for candidate_index, widget in enumerate(
+            self.reference_view_widgets
+        ):
+            if candidate_index == slot_index:
+                continue
+            widget.blockSignals(True)
+            widget.clear_selection()
+            widget.blockSignals(False)
+        self._active_reference_slot = slot_index
+        if capture is not None:
+            self._reference_rgb_size = (
+                capture.rgb_image.width,
+                capture.rgb_image.height,
+            )
+            self._reference_depth_image = capture.depth_image
+            self._reference_camera_info = capture.camera_info
+            self._reference_view = capture.reference_view
+            camera_name = REFERENCE_CAMERA_BY_ID[
+                capture.camera_id
+            ].display_name
+            self.reference_pixel_value_label.setToolTip(camera_name)
+        else:
+            self._reference_rgb_size = None
+            self._reference_depth_image = None
+            self._reference_camera_info = None
+            self._reference_view = None
+            self.reference_pixel_value_label.setToolTip(
+                f"Camera slot {slot_index + 1}"
+            )
+        self._handle_reference_image_point_changed(u, v)
+
+    def _handle_reference_slot_point_cleared(self, slot_index):
+        if self._active_reference_slot == slot_index:
+            self._handle_reference_image_point_cleared()
+            self._active_reference_slot = None
+
+    def _clear_all_reference_selections(self):
+        for widget in self.reference_view_widgets:
+            widget.blockSignals(True)
+            widget.clear_selection()
+            widget.blockSignals(False)
+        self._active_reference_slot = None
+        self._handle_reference_image_point_cleared()
+
+    def _handle_reference_camera_selection_changed(self, slot_index):
+        if slot_index >= len(self.reference_camera_dropdowns):
+            return
+        camera_id = (
+            self.reference_camera_dropdowns[slot_index].currentData() or ""
+        )
+        self._reference_slot_captures[slot_index] = None
+        widget = self.reference_view_widgets[slot_index]
+        widget.clear_preview(
+            f"Capture {REFERENCE_CAMERA_BY_ID[camera_id].display_name}"
+            if camera_id
+            else "No camera selected"
+        )
+        if self._active_reference_slot == slot_index:
+            self._active_reference_slot = None
+            self._reference_rgb_size = None
+            self._reference_depth_image = None
+            self._reference_camera_info = None
+            self._reference_view = None
+            self._handle_reference_image_point_cleared()
+
+    def _set_reference_camera_defaults(self):
+        for slot_index, dropdown in enumerate(
+            self.reference_camera_dropdowns
+        ):
+            dropdown.blockSignals(True)
+            default_id = "hand" if slot_index == 0 else ""
+            dropdown.setCurrentIndex(dropdown.findData(default_id))
+            dropdown.blockSignals(False)
+
+    def _clear_reference_camera_selections(self):
+        for dropdown in self.reference_camera_dropdowns:
+            dropdown.blockSignals(True)
+            dropdown.setCurrentIndex(dropdown.findData(""))
+            dropdown.blockSignals(False)
+
+    def _selected_reference_camera_ids(self):
+        return [
+            str(dropdown.currentData() or "")
+            for dropdown in self.reference_camera_dropdowns
+        ]
+
+    def _clear_reference_previews(self, message):
+        self._reference_slot_captures = [None, None, None]
+        self._active_reference_slot = None
+        for slot_index, widget in enumerate(self.reference_view_widgets):
+            camera_id = (
+                self.reference_camera_dropdowns[slot_index].currentData()
+                if slot_index < len(self.reference_camera_dropdowns)
+                else ""
+            )
+            widget.clear_preview(message if camera_id else "No camera selected")
+        self._reference_rgb_size = None
+        self._reference_depth_image = None
+        self._reference_camera_info = None
+        self._reference_view = None
+        self._handle_reference_image_point_cleared()
 
     def _handle_reference_image_point_changed(self, u, v):
         self.reference_pixel_value_label.setText(f"u={u}, v={v}")
@@ -1600,7 +1716,7 @@ class InspectionControls(UIControlHelper):
             self.reference_view_status_label.setText(
                 "Reference view: no routine selected"
             )
-            self.reference_view_widget.clear_preview(
+            self._clear_reference_previews(
                 "No reference view selected"
             )
             return
@@ -1613,7 +1729,7 @@ class InspectionControls(UIControlHelper):
             self.reference_view_status_label.setText(
                 f"Definition load failed: {exception}"
             )
-            self.reference_view_widget.clear_preview(
+            self._clear_reference_previews(
                 "Reference view unavailable"
             )
             return
@@ -1667,18 +1783,11 @@ class InspectionControls(UIControlHelper):
         self._load_selected_routine()
 
     def _load_selected_routine(self, _index=None):
-        self._reference_rgb_size = None
-        self._reference_depth_image = None
-        self._reference_camera_info = None
-        self._reference_view = None
-        self._clear_selected_surface_point()
+        self._clear_reference_previews("No reference view selected")
         routine_id = self.saved_routine_dropdown.currentData()
         if not routine_id or self._selected_definition is None:
             self.reference_view_status_label.setText(
                 "Reference view: no routine selected"
-            )
-            self.reference_view_widget.clear_preview(
-                "No reference view selected"
             )
             return
 
@@ -1687,7 +1796,7 @@ class InspectionControls(UIControlHelper):
             self.reference_view_status_label.setText(
                 "Reference view: routine no longer exists"
             )
-            self.reference_view_widget.clear_preview(
+            self._clear_reference_previews(
                 "Reference view unavailable"
             )
             return
@@ -1696,40 +1805,91 @@ class InspectionControls(UIControlHelper):
         self.routine_display_name_field.setText(routine.display_name)
         self.sensor_id_field.setText(routine.sensor_id)
         self.probe_frame_field.setText(routine.probe_frame)
-        if routine.reference_view is None:
-            status = "Reference view: not captured"
-            self.reference_view_status_label.setText(status)
-            self.reference_view_widget.clear_preview(
-                "No reference view captured"
-            )
-            return
 
-        self._reference_view = routine.reference_view
-        status = (
-            "Reference view: captured, "
-            f"{routine.reference_view.reference_dataset_path}"
-        )
         try:
-            rgb_image, depth_image, camera_info = (
-                self.object_repository.load_reference_dataset(
-                    self._selected_definition.object_id,
-                    routine.routine_id,
-                )
+            captures = self.reference_view_repository.load_reference_views(
+                self._selected_definition.object_id,
+                routine.routine_id,
             )
-            self._reference_rgb_size = (rgb_image.width, rgb_image.height)
-            self._reference_depth_image = depth_image
-            self._reference_camera_info = camera_info
-            self.reference_view_widget.set_ros_image(rgb_image)
         except Exception as exception:
-            self.reference_view_status_label.setText(
-                f"{status}; preview unavailable: {exception}"
-            )
-            self.reference_view_widget.clear_preview(
+            if routine.reference_view is not None:
+                dataset_path = (
+                    routine.reference_view.reference_dataset_path or
+                    "unknown dataset"
+                )
+                self.reference_view_status_label.setText(
+                    "Reference view: captured "
+                    f"({dataset_path}); preview unavailable: {exception}"
+                )
+            else:
+                self.reference_view_status_label.setText(
+                    f"Reference view preview unavailable: {exception}"
+                )
+            self._clear_reference_previews(
                 "Reference view unavailable"
             )
             return
 
-        self.reference_view_status_label.setText(status)
+        if not captures:
+            self._set_reference_camera_defaults()
+            self.reference_view_status_label.setText(
+                "Reference view: not captured"
+            )
+            self._clear_reference_previews(
+                "No reference view captured"
+            )
+            return
+
+        self._clear_reference_camera_selections()
+        self._reference_slot_captures = [None, None, None]
+        camera_names = []
+        for capture in captures:
+            slot_index = capture.slot_index
+            if slot_index < 0 or slot_index > 2:
+                continue
+            dropdown = self.reference_camera_dropdowns[slot_index]
+            dropdown.blockSignals(True)
+            camera_index = dropdown.findData(capture.camera_id)
+            dropdown.setCurrentIndex(camera_index)
+            dropdown.blockSignals(False)
+            self._reference_slot_captures[slot_index] = capture
+            self.reference_view_widgets[slot_index].set_ros_image(
+                capture.rgb_image
+            )
+            camera_names.append(
+                REFERENCE_CAMERA_BY_ID[capture.camera_id].display_name
+            )
+
+        for slot_index, capture in enumerate(
+            self._reference_slot_captures
+        ):
+            if capture is not None:
+                continue
+            camera_id = (
+                self.reference_camera_dropdowns[slot_index].currentData()
+                or ""
+            )
+            self.reference_view_widgets[slot_index].clear_preview(
+                f"Capture {REFERENCE_CAMERA_BY_ID[camera_id].display_name}"
+                if camera_id
+                else "No camera selected"
+            )
+
+        first_capture = next(
+            capture
+            for capture in self._reference_slot_captures
+            if capture is not None
+        )
+        self._reference_rgb_size = (
+            first_capture.rgb_image.width,
+            first_capture.rgb_image.height,
+        )
+        self._reference_depth_image = first_capture.depth_image
+        self._reference_camera_info = first_capture.camera_info
+        self._reference_view = first_capture.reference_view
+        self.reference_view_status_label.setText(
+            "Reference view: captured " + ", ".join(camera_names)
+        )
 
     def _schedule_repository_refresh(self):
         if self.node is None:
@@ -1822,7 +1982,7 @@ class InspectionControls(UIControlHelper):
         return True
 
     def handle_capture_reference_view(self):
-        """Publish a reference-view capture command."""
+        """Publish one capture request for up to three camera slots."""
         object_id = self._required_text(
             self.object_id_field,
             "an object ID",
@@ -1834,11 +1994,26 @@ class InspectionControls(UIControlHelper):
         if None in (object_id, routine_id):
             return False
 
+        camera_ids = self._selected_reference_camera_ids()
+        selected = [camera_id for camera_id in camera_ids if camera_id]
+        if not selected:
+            self.show_warning(
+                "No Camera Selected",
+                "Select at least one reference camera.",
+            )
+            return False
+        if len(selected) != len(set(selected)):
+            self.show_warning(
+                "Duplicate Camera",
+                "Each reference camera can only be selected once.",
+            )
+            return False
+
         replace_existing = self.replace_reference_view_checkbox.isChecked()
         if replace_existing and not self.ask_question(
-            "Replace Reference View",
+            "Replace Reference Views",
             (
-                f"Replace the saved reference view for "
+                f"Replace all saved reference views for "
                 f"'{object_id}/{routine_id}'?"
             ),
         ):
@@ -1850,6 +2025,7 @@ class InspectionControls(UIControlHelper):
         command.inspection.object.object_id = object_id
         command.inspection.routine.routine_id = routine_id
         command.inspection.replace_existing = replace_existing
+        command.inspection.reference_camera_ids = camera_ids
         self._publish(command)
         return True
 

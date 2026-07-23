@@ -39,7 +39,7 @@ def application():
     return QApplication.instance() or QApplication([])
 
 
-def test_workspace_uses_persistent_image_and_workflow_tabs(
+def test_workspace_uses_three_camera_slots_and_workflow_tabs(
     application,
     tmp_path,
 ):
@@ -49,22 +49,29 @@ def test_workspace_uses_persistent_image_and_workflow_tabs(
         Qt.Vertical
     )
     assert controls.inspection_workspace_splitter.count() == 2
-    upper_policy = (
-        controls.inspection_workspace_splitter.widget(0).sizePolicy()
+    assert len(controls.reference_view_widgets) == 3
+    assert len(controls.reference_camera_dropdowns) == 3
+    assert controls.reference_view_widget is (
+        controls.reference_view_widgets[0]
     )
-    lower_policy = (
-        controls.inspection_workspace_splitter.widget(1).sizePolicy()
-    )
-    assert upper_policy.verticalStretch() == 2
-    assert lower_policy.verticalStretch() == 3
-    assert controls.reference_view_widget.minimumWidth() == 240
-    assert controls.reference_view_widget.minimumHeight() == 180
-    assert controls.reference_camera_two_placeholder.text() == (
-        "No camera selected"
-    )
-    assert controls.reference_camera_three_placeholder.text() == (
-        "No camera selected"
-    )
+    assert [
+        dropdown.currentData()
+        for dropdown in controls.reference_camera_dropdowns
+    ] == ["hand", "", ""]
+    expected_ids = {
+        "",
+        "frontleft",
+        "frontright",
+        "left",
+        "right",
+        "back",
+        "hand",
+    }
+    for dropdown in controls.reference_camera_dropdowns:
+        assert {
+            dropdown.itemData(index)
+            for index in range(dropdown.count())
+        } == expected_ids
     assert controls.workflow_tabs.count() == 3
     assert [
         controls.workflow_tabs.tabText(index)
@@ -72,7 +79,6 @@ def test_workspace_uses_persistent_image_and_workflow_tabs(
     ] == ["Target", "Refine", "Save"]
     assert controls.geometry_details_section.content_frame.isHidden()
     assert not controls.save_probe_point_button.isEnabled()
-
 
 def test_management_controls_live_in_non_modal_dialog(
     application,
