@@ -50,12 +50,12 @@ from fault_detector_spot.inspection.reference_view_approach_direction import (
     APPROACH_MODE_SURFACE_FIT,
     APPROACH_MODE_TAG_X,
     APPROACH_SOURCE_SURFACE_FIT,
-    APPROACH_SOURCE_TAG_X_FALLBACK,
     APPROACH_SOURCE_TAG_X_SELECTED,
     resolve_reference_approach_direction,
 )
 from fault_detector_spot.inspection.reference_view_depth_projection import (
     project_reference_pixel,
+    rgb_depth_overlap_region,
 )
 from fault_detector_spot.inspection.reference_view_surface_normal import (
     estimate_reference_surface_normal,
@@ -99,6 +99,7 @@ class InspectionControls(UIControlHelper):
         self._selected_definition = None
         self._reference_rgb_size = None
         self._reference_depth_image = None
+        self._reference_rgb_camera_info = None
         self._reference_camera_info = None
         self._reference_view = None
         self._reference_slot_captures = [None, None, None]
@@ -360,7 +361,7 @@ class InspectionControls(UIControlHelper):
 
         self.reference_approach_mode_dropdown = QComboBox()
         self.reference_approach_mode_dropdown.addItem(
-            "Automatic (surface, then tag +X)",
+            "Automatic surface fit",
             APPROACH_MODE_AUTOMATIC,
         )
         self.reference_approach_mode_dropdown.addItem(
@@ -368,7 +369,7 @@ class InspectionControls(UIControlHelper):
             APPROACH_MODE_SURFACE_FIT,
         )
         self.reference_approach_mode_dropdown.addItem(
-            "Tag +X",
+            "Tag +X (calibrated mount only)",
             APPROACH_MODE_TAG_X,
         )
         self.reference_approach_source_value_label = (
@@ -985,7 +986,10 @@ class InspectionControls(UIControlHelper):
                 capture.rgb_image.height,
             )
             self._reference_depth_image = capture.depth_image
-            self._reference_camera_info = capture.camera_info
+            self._reference_rgb_camera_info = (
+                capture.rgb_camera_info
+            )
+            self._reference_camera_info = capture.depth_camera_info
             self._reference_view = capture.reference_view
             camera_name = REFERENCE_CAMERA_BY_ID[
                 capture.camera_id
@@ -994,6 +998,7 @@ class InspectionControls(UIControlHelper):
         else:
             self._reference_rgb_size = None
             self._reference_depth_image = None
+            self._reference_rgb_camera_info = None
             self._reference_camera_info = None
             self._reference_view = None
             self.reference_pixel_value_label.setToolTip(
@@ -1031,6 +1036,7 @@ class InspectionControls(UIControlHelper):
             self._active_reference_slot = None
             self._reference_rgb_size = None
             self._reference_depth_image = None
+            self._reference_rgb_camera_info = None
             self._reference_camera_info = None
             self._reference_view = None
             self._handle_reference_image_point_cleared()
@@ -1065,9 +1071,12 @@ class InspectionControls(UIControlHelper):
                 if slot_index < len(self.reference_camera_dropdowns)
                 else ""
             )
-            widget.clear_preview(message if camera_id else "No camera selected")
+            widget.clear_preview(
+                message if camera_id else "No camera selected"
+            )
         self._reference_rgb_size = None
         self._reference_depth_image = None
+        self._reference_rgb_camera_info = None
         self._reference_camera_info = None
         self._reference_view = None
         self._handle_reference_image_point_cleared()
@@ -1204,6 +1213,7 @@ class InspectionControls(UIControlHelper):
         if (
             self._reference_rgb_size is None
             or self._reference_depth_image is None
+            or self._reference_rgb_camera_info is None
             or self._reference_camera_info is None
         ):
             self._set_projection_unavailable(
@@ -1217,6 +1227,7 @@ class InspectionControls(UIControlHelper):
                 self._reference_depth_image,
                 self._reference_camera_info,
                 rgb_size=self._reference_rgb_size,
+                rgb_camera_info=self._reference_rgb_camera_info,
             )
         except ValueError as exception:
             self._set_projection_unavailable(
@@ -1340,16 +1351,15 @@ class InspectionControls(UIControlHelper):
         self._selected_approach_direction = result
         source_text = {
             APPROACH_SOURCE_SURFACE_FIT: "Surface fit",
-            APPROACH_SOURCE_TAG_X_FALLBACK: "Tag +X fallback",
-            APPROACH_SOURCE_TAG_X_SELECTED: "Tag +X selected",
+            APPROACH_SOURCE_TAG_X_SELECTED: "Calibrated tag +X",
         }[result.source]
         self.reference_approach_source_value_label.setText(source_text)
-        detail = ""
-        if result.fallback_reason:
-            detail = (
-                "Surface fit was unavailable. Using object/tag-frame +X. "
-                f"Reason: {result.fallback_reason}"
-            )
+        detail = (
+            "Tag +X is valid only when the tag mount is calibrated "
+            "with +X pointing out of the inspected surface."
+            if result.source == APPROACH_SOURCE_TAG_X_SELECTED
+            else ""
+        )
         self.reference_approach_source_value_label.setToolTip(detail)
         self._set_approach_status("Ready", detail)
         self._resolve_selected_surface_target()
@@ -1812,9 +1822,9 @@ class InspectionControls(UIControlHelper):
                 routine.routine_id,
             )
         except Exception as exception:
-            if routine.reference_view is not None:
+            if routine.reference_views:
                 dataset_path = (
-                    routine.reference_view.reference_dataset_path or
+                    routine.reference_views[0].reference_dataset_path or
                     "unknown dataset"
                 )
                 self.reference_view_status_label.setText(
@@ -1853,8 +1863,21 @@ class InspectionControls(UIControlHelper):
             dropdown.setCurrentIndex(camera_index)
             dropdown.blockSignals(False)
             self._reference_slot_captures[slot_index] = capture
+            valid_region = rgb_depth_overlap_region(
+                (
+                    capture.rgb_image.width,
+                    capture.rgb_image.height,
+                ),
+                (
+                    capture.depth_image.width,
+                    capture.depth_image.height,
+                ),
+                capture.rgb_camera_info,
+                capture.depth_camera_info,
+            )
             self.reference_view_widgets[slot_index].set_ros_image(
-                capture.rgb_image
+                capture.rgb_image,
+                valid_region=valid_region,
             )
             camera_names.append(
                 REFERENCE_CAMERA_BY_ID[capture.camera_id].display_name
@@ -1885,7 +1908,12 @@ class InspectionControls(UIControlHelper):
             first_capture.rgb_image.height,
         )
         self._reference_depth_image = first_capture.depth_image
-        self._reference_camera_info = first_capture.camera_info
+        self._reference_rgb_camera_info = (
+            first_capture.rgb_camera_info
+        )
+        self._reference_camera_info = (
+            first_capture.depth_camera_info
+        )
         self._reference_view = first_capture.reference_view
         self.reference_view_status_label.setText(
             "Reference view: captured " + ", ".join(camera_names)

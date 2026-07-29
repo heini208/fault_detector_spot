@@ -8,6 +8,9 @@ from PyQt5.QtWidgets import QFrame, QLabel, QSizePolicy
 from sensor_msgs.msg import Image
 
 from fault_detector_spot.inspection.models import ImagePoint
+from fault_detector_spot.inspection.reference_view_depth_projection import (
+    ImageRegion,
+)
 from fault_detector_spot.inspection.ros_image_conversion import (
     ros_image_to_qimage,
 )
@@ -23,6 +26,7 @@ class ReferenceViewWidget(QLabel):
         """Create an expanding preview with transient point selection."""
         super().__init__(parent)
         self._source_pixmap = None
+        self._source_offset = ImagePoint(u=0, v=0)
         self._displayed_image_rect = QRect()
         self._selected_image_point = None
         self._dragging_marker = False
@@ -55,16 +59,49 @@ class ReferenceViewWidget(QLabel):
         """Return the widget rectangle occupied by the scaled image."""
         return QRect(self._displayed_image_rect)
 
-    def set_ros_image(self, image: Image) -> None:
+    def set_ros_image(
+        self,
+        image: Image,
+        valid_region: Optional[ImageRegion] = None,
+    ) -> None:
         """Convert and display a ROS image message."""
-        self.set_qimage(ros_image_to_qimage(image))
+        self.set_qimage(
+            ros_image_to_qimage(image),
+            valid_region=valid_region,
+        )
 
-    def set_qimage(self, image: QImage) -> None:
+    def set_qimage(
+        self,
+        image: QImage,
+        valid_region: Optional[ImageRegion] = None,
+    ) -> None:
         """Display an independently owned Qt image and clear selection."""
         if image.isNull():
             raise ValueError("Reference image must not be null")
+        source = image
+        offset = ImagePoint(u=0, v=0)
+        if valid_region is not None:
+            valid_region.validate()
+            if (
+                valid_region.x + valid_region.width > image.width()
+                or valid_region.y + valid_region.height > image.height()
+            ):
+                raise ValueError(
+                    "Reference image region exceeds the source image"
+                )
+            source = image.copy(
+                valid_region.x,
+                valid_region.y,
+                valid_region.width,
+                valid_region.height,
+            )
+            offset = ImagePoint(
+                u=valid_region.x,
+                v=valid_region.y,
+            )
         self.clear_selection()
-        self._source_pixmap = QPixmap.fromImage(image.copy())
+        self._source_offset = offset
+        self._source_pixmap = QPixmap.fromImage(source.copy())
         self.setText("")
         self.setCursor(Qt.CrossCursor)
         self._update_display_pixmap()
@@ -76,6 +113,7 @@ class ReferenceViewWidget(QLabel):
         """Remove the image, selection, and show an empty-state message."""
         self.clear_selection()
         self._source_pixmap = None
+        self._source_offset = ImagePoint(u=0, v=0)
         self._displayed_image_rect = QRect()
         self.setPixmap(QPixmap())
         self.setText(message)
@@ -188,11 +226,11 @@ class ReferenceViewWidget(QLabel):
         u = min(
             source_width - 1,
             int(relative_x * source_width / image_rect.width()),
-        )
+        ) + self._source_offset.u
         v = min(
             source_height - 1,
             int(relative_y * source_height / image_rect.height()),
-        )
+        ) + self._source_offset.v
         return ImagePoint(u=u, v=v)
 
     def _selected_marker_center(self) -> Optional[QPointF]:
@@ -206,12 +244,20 @@ class ReferenceViewWidget(QLabel):
         source_width = self._source_pixmap.width()
         source_height = self._source_pixmap.height()
         x = image_rect.left() + (
-            (self._selected_image_point.u + 0.5)
+            (
+                self._selected_image_point.u
+                - self._source_offset.u
+                + 0.5
+            )
             * image_rect.width()
             / source_width
         )
         y = image_rect.top() + (
-            (self._selected_image_point.v + 0.5)
+            (
+                self._selected_image_point.v
+                - self._source_offset.v
+                + 0.5
+            )
             * image_rect.height()
             / source_height
         )

@@ -99,40 +99,27 @@ class FakeNode:
 class FakeSynchronizer:
     def __init__(self, camera_id):
         self.camera_id = camera_id
-        self.image_sequence = 0
+        self.input_sequence = 0
         self.input_ready = False
         self.ready = False
         self.begin_calls = []
         self.cancel_count = 0
-        self.tag_updates = []
         self.rgb_subscription = FakeFilterSubscription()
         self.depth_subscription = FakeFilterSubscription()
-        self.camera_info_subscription = object()
-        self.base_tag_subscription = None
+        self.rgb_camera_info_subscription = object()
+        self.depth_camera_info_subscription = object()
 
-    def update_base_tag_observations(self, observations):
-        values = tuple(observations)
-        self.tag_updates.append(values)
-        if values:
-            self.input_ready = True
-
-    def ready_for_collection(self, reference_tag_id):
+    def ready_for_collection(self):
         return self.input_ready
 
-    def input_diagnostics(self, reference_tag_id):
+    def input_diagnostics(self):
         return (
-            "camera_info=yes, rgb_depth_pairs=1, "
-            f"tag_samples={sum(len(value) for value in self.tag_updates)}"
+            "rgb_camera_info=yes, depth_camera_info=yes, "
+            "rgb_frames=1, depth_frames=1"
         )
 
-    def begin_collection(
-        self,
-        reference_tag_id,
-        minimum_image_sequence,
-    ):
-        self.begin_calls.append(
-            (reference_tag_id, minimum_image_sequence)
-        )
+    def begin_collection(self, minimum_input_sequence):
+        self.begin_calls.append((minimum_input_sequence,))
 
     def collection_ready(self):
         return self.ready
@@ -258,8 +245,8 @@ def configure_behavior(monkeypatch, capture_error=None):
         object_root="/tmp/objects",
         synchronization_queue_size=7,
         maximum_input_age_sec=5.0,
+        maximum_tag_age_sec=1.5,
         maximum_timestamp_skew_sec=0.03,
-        maximum_tag_timestamp_skew_sec=5.0,
         collection_duration_sec=1.0,
         fixed_frame="odom",
         transform_timeout_sec=0.1,
@@ -303,7 +290,7 @@ def test_setup_keeps_one_shared_tag_subscription(monkeypatch):
     ]
 
 
-def test_hand_capture_is_seeded_from_retained_tag_history(monkeypatch):
+def test_camera_collector_does_not_receive_retained_tags(monkeypatch):
     behavior, _, created, capture_calls = configure_behavior(monkeypatch)
     behavior._base_tags_callback(
         make_tag_array(make_tag())
@@ -314,16 +301,13 @@ def test_hand_capture_is_seeded_from_retained_tag_history(monkeypatch):
 
     synchronizer = created["synchronizers"]["hand"]
     assert set(created["synchronizers"]) == {"hand"}
-    assert synchronizer.tag_updates
-    assert synchronizer.tag_updates[0][0].id == 23
-    assert (
-        created["synchronizer_kwargs"]["hand"]["base_tag_topic"]
-        is None
+    assert "base_tag_topic" not in (
+        created["synchronizer_kwargs"]["hand"]
     )
     assert capture_calls == []
 
 
-def test_new_tag_messages_are_fanned_to_selected_cameras(monkeypatch):
+def test_new_tag_messages_stay_in_shared_history(monkeypatch):
     behavior, _, created, _ = configure_behavior(monkeypatch)
     selected = ("frontleft", "hand", "back")
     create_writer(make_command(camera_ids=selected))
@@ -333,10 +317,22 @@ def test_new_tag_messages_are_fanned_to_selected_cameras(monkeypatch):
         make_tag_array(make_tag())
     )
 
-    assert all(
-        created["synchronizers"][camera_id].tag_updates
-        for camera_id in selected
-    )
+    assert behavior._base_tag_history[23][-1].id == 23
+    assert behavior._visible_tag_ids == {23}
+
+
+def test_empty_latest_tag_snapshot_blocks_collection(monkeypatch):
+    behavior, _, created, _ = configure_behavior(monkeypatch)
+    create_writer(make_command())
+    behavior._base_tags_callback(make_tag_array(make_tag()))
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    created["synchronizers"]["hand"].input_ready = True
+    behavior._base_tags_callback(make_tag_array())
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert created["synchronizers"]["hand"].begin_calls == []
+    assert "not visible" in behavior.feedback_message
 
 
 def test_warm_inputs_start_independent_selected_windows(monkeypatch):
@@ -349,7 +345,7 @@ def test_warm_inputs_start_independent_selected_windows(monkeypatch):
     assert set(created["synchronizers"]) == set(selected)
     assert all(
         created["synchronizers"][camera_id].begin_calls
-        == [(23, 1)]
+        == [(1,)]
         for camera_id in selected
     )
 
@@ -395,8 +391,8 @@ def test_tf_retry_reuses_completed_attempt_validation_time(monkeypatch):
     node.clock.advance(1.0)
     assert behavior.update() == py_trees.common.Status.SUCCESS
 
-    assert capture_calls[0][0][6] is first_time
-    assert capture_calls[1][0][6] is first_time
+    assert capture_calls[0][0][5] is first_time
+    assert capture_calls[1][0][5] is first_time
 
 
 def test_backward_bag_time_clears_retained_history(monkeypatch):
@@ -447,7 +443,7 @@ def test_initialise_releases_camera_but_keeps_tag_subscription(
 
     assert synchronizer.rgb_subscription.unsubscribed is True
     assert synchronizer.depth_subscription.unsubscribed is True
-    assert len(node.destroyed_subscriptions) == 1
+    assert len(node.destroyed_subscriptions) == 2
     assert shared_subscription not in node.destroyed_subscriptions
     assert behavior._synchronizers == {}
 

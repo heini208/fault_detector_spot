@@ -1,29 +1,21 @@
-"""Repository for portable inspection objects and their datasets."""
+"""Repository for portable inspection object definitions."""
 
-import json
 import os
 import shutil
-import tempfile
 from dataclasses import replace
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
 import yaml
-from rclpy.serialization import deserialize_message, serialize_message
-from sensor_msgs.msg import CameraInfo, Image
 
 from .models import (
     InspectionObject,
     InspectionRoutine,
-    ReferenceView,
 )
 from .repository_utils import (
     atomic_write_text,
     validate_storage_name,
 )
-
-
-ReferenceDataset = Tuple[Image, Image, CameraInfo]
 
 
 class ObjectRepository:
@@ -160,197 +152,6 @@ class ObjectRepository:
         self.save(stored_definition)
         return stored_definition
 
-    def save_reference_dataset(
-        self,
-        object_id: str,
-        routine_id: str,
-        reference_view: ReferenceView,
-        rgb_image: Image,
-        depth_image: Image,
-        camera_info: CameraInfo,
-    ) -> InspectionObject:
-        """Save a routine dataset and update its object definition."""
-        validate_storage_name(object_id, "object ID")
-        validate_storage_name(routine_id, "routine ID")
-        reference_view.validate()
-        if reference_view.reference_dataset_path is not None:
-            raise ValueError(
-                "New reference view already has a dataset path"
-            )
-
-        definition = self.load(object_id)
-        routine = definition.get_routine(routine_id)
-        if routine is None:
-            raise KeyError(f"Routine does not exist: {routine_id}")
-
-        old_dataset_path = None
-        if (
-            routine.reference_view is not None
-            and routine.reference_view.reference_dataset_path is not None
-        ):
-            old_dataset_path = self._reference_dataset_path(
-                object_id,
-                routine_id,
-                routine.reference_view,
-            )
-
-        dataset_id = _capture_id(rgb_image)
-        relative_path = (
-            Path(self.REFERENCE_DATASET_DIRECTORY)
-            / routine_id
-            / dataset_id
-        )
-        dataset_path = (
-            self.get_object_dir(object_id)
-            / relative_path
-        )
-        if dataset_path.exists():
-            raise FileExistsError(
-                f"Reference dataset already exists: {dataset_path}"
-            )
-
-        stored_view = replace(
-            reference_view,
-            reference_dataset_path=relative_path.as_posix(),
-        )
-        stored_routine = replace(
-            routine,
-            reference_view=stored_view,
-        )
-        stored_definition = replace(
-            definition,
-            routines=[
-                stored_routine
-                if candidate.routine_id == routine_id
-                else candidate
-                for candidate in definition.routines
-            ],
-        )
-        stored_definition.validate()
-
-        files = {
-            "rgb.cdr": bytes(serialize_message(rgb_image)),
-            "depth.cdr": bytes(serialize_message(depth_image)),
-            "camera_info.cdr": bytes(
-                serialize_message(camera_info)
-            ),
-        }
-        metadata = json.dumps(
-            {
-                "object_id": object_id,
-                "routine_id": routine_id,
-                "capture_timestamp": {
-                    "sec": rgb_image.header.stamp.sec,
-                    "nanosec": rgb_image.header.stamp.nanosec,
-                },
-            },
-            indent=2,
-        ) + "\n"
-
-        dataset_path.parent.mkdir(parents=True, exist_ok=True)
-        staging_path = Path(tempfile.mkdtemp(
-            prefix=f".{dataset_id}.",
-            suffix=".tmp",
-            dir=str(dataset_path.parent),
-        ))
-        published = False
-        try:
-            for name, content in files.items():
-                _write_bytes(staging_path / name, content)
-            atomic_write_text(
-                staging_path / "metadata.json",
-                metadata,
-            )
-            os.replace(staging_path, dataset_path)
-            published = True
-            self.save(stored_definition)
-        except Exception:
-            shutil.rmtree(staging_path, ignore_errors=True)
-            if published:
-                shutil.rmtree(dataset_path, ignore_errors=True)
-            raise
-
-        if (
-            old_dataset_path is not None
-            and old_dataset_path != dataset_path
-        ):
-            shutil.rmtree(old_dataset_path, ignore_errors=True)
-
-        return stored_definition
-
-    def load_reference_dataset(
-        self,
-        object_id: str,
-        routine_id: str,
-    ) -> ReferenceDataset:
-        """Load the sensor dataset owned by an object's routine."""
-        validate_storage_name(routine_id, "routine ID")
-        definition = self.load(object_id)
-        routine = definition.get_routine(routine_id)
-        if routine is None:
-            raise KeyError(f"Routine does not exist: {routine_id}")
-        if routine.reference_view is None:
-            raise ValueError(
-                "Routine does not have a captured reference view"
-            )
-
-        dataset_path = self._reference_dataset_path(
-            object_id,
-            routine_id,
-            routine.reference_view,
-        )
-        metadata = json.loads(
-            (dataset_path / "metadata.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        if metadata.get("object_id") != object_id:
-            raise ValueError(
-                "Reference dataset object ID does not match"
-            )
-        if metadata.get("routine_id") != routine_id:
-            raise ValueError(
-                "Reference dataset routine ID does not match"
-            )
-
-        return (
-            deserialize_message(
-                (dataset_path / "rgb.cdr").read_bytes(),
-                Image,
-            ),
-            deserialize_message(
-                (dataset_path / "depth.cdr").read_bytes(),
-                Image,
-            ),
-            deserialize_message(
-                (dataset_path / "camera_info.cdr").read_bytes(),
-                CameraInfo,
-            ),
-        )
-
-    def _reference_dataset_path(
-        self,
-        object_id: str,
-        routine_id: str,
-        reference_view: ReferenceView,
-    ) -> Path:
-        value = reference_view.reference_dataset_path
-        if value is None:
-            raise ValueError(
-                "Reference view does not have a dataset path"
-            )
-        relative_path = Path(value)
-        if (
-            relative_path.is_absolute()
-            or len(relative_path.parts) != 3
-            or relative_path.parts[:2]
-            != (self.REFERENCE_DATASET_DIRECTORY, routine_id)
-        ):
-            raise ValueError(
-                "Reference dataset path is outside the selected routine"
-            )
-        return self.get_object_dir(object_id) / relative_path
-
     def list_object_ids(self) -> List[str]:
         """List stored object IDs."""
         if not self.root_dir.is_dir():
@@ -409,16 +210,3 @@ class ObjectRepository:
     def delete(self, object_id: str) -> bool:
         """Delete an object through the retained repository API."""
         return self.delete_object(object_id)
-
-
-def _capture_id(rgb_image: Image) -> str:
-    stamp = rgb_image.header.stamp
-    if stamp.sec < 0 or not 0 <= stamp.nanosec < 1_000_000_000:
-        raise ValueError("RGB image timestamp is invalid")
-    if stamp.sec == 0 and stamp.nanosec == 0:
-        raise ValueError("RGB image timestamp must not be zero")
-    return f"{stamp.sec}_{stamp.nanosec:09d}"
-
-
-def _write_bytes(path: Path, content: bytes) -> None:
-    path.write_bytes(content)

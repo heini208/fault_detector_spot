@@ -9,6 +9,9 @@ from fault_detector_spot.inspection.models import (
     ReferenceView,
     Vector3Data,
 )
+from fault_detector_spot.inspection.reference_view_depth_projection import (
+    rgb_depth_overlap_region,
+)
 
 if TYPE_CHECKING:
     from fault_detector_msgs.msg import TagElement
@@ -40,7 +43,7 @@ def validate_reference_view_inputs(
     controlled_frame_pose_object: PoseData,
     controlled_frame: str,
     maximum_timestamp_skew_sec: float = 0.05,
-    maximum_tag_timestamp_skew_sec: float = 0.25,
+    rgb_camera_info: "CameraInfo" = None,
 ) -> None:
     """Reject inputs that cannot produce a valid reference view."""
     if (
@@ -50,14 +53,6 @@ def validate_reference_view_inputs(
         raise ValueError(
             "Maximum timestamp skew must be finite and non-negative"
         )
-    if (
-        not math.isfinite(maximum_tag_timestamp_skew_sec)
-        or maximum_tag_timestamp_skew_sec < 0.0
-    ):
-        raise ValueError(
-            "Maximum tag timestamp skew must be finite and non-negative"
-        )
-
     _validate_image(
         rgb_image,
         "RGB image",
@@ -68,16 +63,28 @@ def validate_reference_view_inputs(
         "Depth image",
         _DEPTH_BYTES_PER_PIXEL,
     )
-    _validate_camera_info(camera_info)
+    _validate_camera_info(
+        camera_info,
+        depth_image,
+        "Depth CameraInfo",
+    )
+    if rgb_camera_info is not None:
+        _validate_camera_info(
+            rgb_camera_info,
+            rgb_image,
+            "RGB CameraInfo",
+        )
     _validate_registered_geometry(
         rgb_image,
         depth_image,
         camera_info,
+        rgb_camera_info,
     )
     _validate_matching_frames(
         rgb_image,
         depth_image,
         camera_info,
+        rgb_camera_info,
     )
     _validate_timestamps(
         rgb_image,
@@ -87,8 +94,6 @@ def validate_reference_view_inputs(
     _validate_reference_tag(
         reference_tag_observation,
         expected_reference_tag_id,
-        rgb_image,
-        maximum_tag_timestamp_skew_sec,
     )
     if controlled_frame != rgb_image.header.frame_id:
         raise ValueError(
@@ -119,43 +124,51 @@ def _validate_image(image, name, bytes_per_pixel) -> None:
         raise ValueError(f"{name} data is incomplete")
 
 
-def _validate_camera_info(camera_info) -> None:
+def _validate_camera_info(camera_info, image, name) -> None:
     if camera_info.width <= 0 or camera_info.height <= 0:
-        raise ValueError("CameraInfo dimensions must be positive")
+        raise ValueError(f"{name} dimensions must be positive")
+    if (
+        camera_info.width != image.width
+        or camera_info.height != image.height
+    ):
+        raise ValueError(f"{name} dimensions must match its image")
     if len(camera_info.k) != 9:
-        raise ValueError("CameraInfo K must contain nine values")
+        raise ValueError(f"{name} K must contain nine values")
     if not all(math.isfinite(value) for value in camera_info.k):
-        raise ValueError("CameraInfo K contains a non-finite value")
+        raise ValueError(f"{name} K contains a non-finite value")
     if camera_info.k[0] <= 0.0 or camera_info.k[4] <= 0.0:
-        raise ValueError("CameraInfo focal lengths must be positive")
+        raise ValueError(f"{name} focal lengths must be positive")
 
 
 def _validate_registered_geometry(
     rgb_image,
     depth_image,
-    camera_info,
+    depth_camera_info,
+    rgb_camera_info,
 ) -> None:
-    if (
-        depth_image.width != camera_info.width
-        or depth_image.height != camera_info.height
-    ):
-        raise ValueError(
-            "Registered depth and CameraInfo dimensions must match"
-        )
-    if rgb_image.width <= 0 or rgb_image.height <= 0:
-        raise ValueError("RGB image dimensions must be positive")
+    if rgb_camera_info is None:
+        return
+    rgb_depth_overlap_region(
+        (rgb_image.width, rgb_image.height),
+        (depth_image.width, depth_image.height),
+        rgb_camera_info,
+        depth_camera_info,
+    )
 
 
 def _validate_matching_frames(
     rgb_image,
     depth_image,
-    camera_info,
+    depth_camera_info,
+    rgb_camera_info,
 ) -> None:
     frames = {
         rgb_image.header.frame_id,
         depth_image.header.frame_id,
-        camera_info.header.frame_id,
+        depth_camera_info.header.frame_id,
     }
+    if rgb_camera_info is not None:
+        frames.add(rgb_camera_info.header.frame_id)
     if "" in frames:
         raise ValueError("Reference-view frame IDs must not be empty")
     if len(frames) != 1:
@@ -183,8 +196,6 @@ def _validate_timestamps(
 def _validate_reference_tag(
     observation,
     expected_tag_id,
-    rgb_image,
-    maximum_skew_sec,
 ) -> None:
     if expected_tag_id < 0:
         raise ValueError("Expected reference tag ID must not be negative")
@@ -212,19 +223,10 @@ def _validate_reference_tag(
         ),
     ).validate()
 
-    rgb_stamp = _stamp_nanoseconds(
-        rgb_image.header.stamp,
-        "RGB image",
-    )
-    tag_stamp = _stamp_nanoseconds(
+    _stamp_nanoseconds(
         observation.pose.header.stamp,
         "Base-camera tag observation",
     )
-    skew_sec = abs(tag_stamp - rgb_stamp) / 1_000_000_000
-    if skew_sec > maximum_skew_sec:
-        raise ReferenceViewInputNotReady(
-            "Base-camera tag and RGB timestamps exceed the allowed skew"
-        )
 
 
 def _stamp_nanoseconds(stamp, name) -> int:

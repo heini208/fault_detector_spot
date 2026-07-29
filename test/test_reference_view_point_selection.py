@@ -12,6 +12,10 @@ from PyQt5.QtWidgets import QApplication, QFrame
 from fault_detector_spot.behaviour_tree.ui_classes import (
     reference_view_widget,
 )
+from fault_detector_spot.inspection.reference_view_depth_projection import (
+    ImageRegion,
+)
+from fault_detector_spot.inspection.models import ImagePoint
 
 ReferenceViewWidget = reference_view_widget.ReferenceViewWidget
 
@@ -187,3 +191,42 @@ def test_loading_another_image_clears_selection(application):
     widget.set_qimage(QImage(200, 100, QImage.Format_RGB888))
 
     assert widget.selected_image_point is None
+
+
+def test_cropped_preview_reports_original_rgb_coordinates(application):
+    widget = ReferenceViewWidget()
+    widget.setFrameShape(QFrame.NoFrame)
+    widget.resize(500, 300)
+    widget.set_qimage(
+        QImage(400, 200, QImage.Format_RGB888),
+        valid_region=ImageRegion(
+            x=100,
+            y=50,
+            width=200,
+            height=100,
+        ),
+    )
+    widget.show()
+    application.processEvents()
+    rect = widget.displayed_image_rect
+    position = QPoint(
+        int(rect.left() + 0.5 * rect.width() / 200),
+        int(rect.top() + 0.5 * rect.height() / 100),
+    )
+
+    send_mouse(
+        widget,
+        QEvent.MouseButtonPress,
+        position,
+        Qt.LeftButton,
+        Qt.LeftButton,
+    )
+    send_mouse(
+        widget,
+        QEvent.MouseButtonRelease,
+        position,
+        Qt.LeftButton,
+        Qt.NoButton,
+    )
+
+    assert widget.selected_image_point == ImagePoint(u=100, v=50)

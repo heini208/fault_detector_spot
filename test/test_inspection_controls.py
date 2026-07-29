@@ -1,6 +1,7 @@
 """Tests for inspection setup controls."""
 
 import os
+from dataclasses import replace
 
 import pytest
 from fault_detector_msgs.msg import BasicCommand
@@ -79,7 +80,8 @@ def save_definition(controls, captured=False):
             controlled_frame_pose_object=PoseData.identity(),
             controlled_frame="hand_color_image_sensor",
             reference_dataset_path=(
-                "reference_datasets/magnetic_scan/10_200000000"
+                "reference_datasets/magnetic_scan/"
+                "set_10_200000000/slot1_hand"
             ),
         )
     definition = InspectionObject(
@@ -95,7 +97,16 @@ def save_definition(controls, captured=False):
                 display_name="Magnetic scan",
                 sensor_id="bmm150",
                 probe_frame="sensor_tip",
-                reference_view=reference_view,
+                reference_views=(
+                    [replace(
+                        reference_view,
+                        view_id="slot1_hand",
+                        camera_id="hand",
+                        slot_index=0,
+                    )]
+                    if reference_view is not None
+                    else []
+                ),
             )
         ],
     )

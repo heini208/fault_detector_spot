@@ -4,7 +4,7 @@ import math
 from collections import deque
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Deque, Dict, Optional, Tuple, Union
+from typing import Any, Deque, Dict, Optional, Set, Tuple, Union
 
 import py_trees
 import tf2_ros
@@ -63,13 +63,16 @@ class CaptureInspectionObjectReferenceView(
         self,
         rgb_topic: str = "/camera/hand/image",
         depth_topic: str = "/depth_registered/hand/image",
-        camera_info_topic: str = "/depth_registered/hand/camera_info",
+        rgb_camera_info_topic: str = "/camera/hand/camera_info",
+        depth_camera_info_topic: str = (
+            "/depth_registered/hand/camera_info"
+        ),
         base_tag_topic: str = "fault_detector/state/visible_tags",
         object_root: Optional[Union[str, Path]] = None,
         synchronization_queue_size: int = 10,
         maximum_input_age_sec: float = 2.0,
+        maximum_tag_age_sec: float = 1.5,
         maximum_timestamp_skew_sec: float = 0.05,
-        maximum_tag_timestamp_skew_sec: float = 0.25,
         collection_duration_sec: float = 1.0,
         fixed_frame: str = "odom",
         transform_timeout_sec: float = 0.05,
@@ -82,6 +85,8 @@ class CaptureInspectionObjectReferenceView(
             collection_duration_sec,
             capture_timeout_sec,
             capture_max_attempts,
+            maximum_input_age_sec,
+            maximum_tag_age_sec,
         )
         self.camera_configs = dict(REFERENCE_CAMERA_BY_ID)
         self.camera_configs["hand"] = ReferenceCameraConfig(
@@ -89,16 +94,15 @@ class CaptureInspectionObjectReferenceView(
             display_name="Hand",
             rgb_topic=rgb_topic,
             depth_topic=depth_topic,
-            camera_info_topic=camera_info_topic,
+            rgb_camera_info_topic=rgb_camera_info_topic,
+            depth_camera_info_topic=depth_camera_info_topic,
         )
         self.base_tag_topic = base_tag_topic
         self.object_root = object_root
         self.synchronization_queue_size = synchronization_queue_size
         self.maximum_input_age_sec = maximum_input_age_sec
+        self.maximum_tag_age_sec = maximum_tag_age_sec
         self.maximum_timestamp_skew_sec = maximum_timestamp_skew_sec
-        self.maximum_tag_timestamp_skew_sec = (
-            maximum_tag_timestamp_skew_sec
-        )
         self.collection_duration_sec = collection_duration_sec
         self.fixed_frame = fixed_frame
         self.transform_timeout_sec = transform_timeout_sec
@@ -115,7 +119,7 @@ class CaptureInspectionObjectReferenceView(
             str,
             ReferenceViewInputSynchronizer,
         ] = {}
-        self._minimum_image_sequences: Dict[str, int] = {}
+        self._minimum_input_sequences: Dict[str, int] = {}
         self._tag_history_size = max(
             synchronization_queue_size,
             60,
@@ -124,6 +128,7 @@ class CaptureInspectionObjectReferenceView(
             int,
             Deque[TagElement],
         ] = {}
+        self._visible_tag_ids: Set[int] = set()
         self._latest_tag_stamp_nanoseconds: Optional[int] = None
         self._warmup_started_nanoseconds: Optional[int] = None
         self._attempt_started_nanoseconds: Optional[int] = None
@@ -156,7 +161,7 @@ class CaptureInspectionObjectReferenceView(
     def initialise(self) -> None:
         self._release_synchronizers()
         self._request = None
-        self._minimum_image_sequences = {}
+        self._minimum_input_sequences = {}
         self._warmup_started_nanoseconds = None
         self._attempt_started_nanoseconds = None
         self._capture_validation_time = None
@@ -191,12 +196,16 @@ class CaptureInspectionObjectReferenceView(
                     slot_index=slot_index,
                     camera_id=camera_id,
                     input_synchronizer=self._synchronizers[camera_id],
-                    minimum_image_sequence=(
-                        self._minimum_image_sequences[camera_id]
+                    minimum_input_sequence=(
+                        self._minimum_input_sequences[camera_id]
                     ),
                 )
                 for slot_index, camera_id in selected
             ]
+            reference_tag = self._fresh_reference_tag(
+                tag_id,
+                self._capture_validation_time,
+            )
             capture_reference_views(
                 self.repository,
                 requests,
@@ -205,12 +214,11 @@ class CaptureInspectionObjectReferenceView(
                 routine_id,
                 self._capture_validation_time,
                 tag_id,
+                reference_tag,
                 maximum_input_age_sec=self.maximum_input_age_sec,
+                maximum_tag_age_sec=self.maximum_tag_age_sec,
                 maximum_timestamp_skew_sec=(
                     self.maximum_timestamp_skew_sec
-                ),
-                maximum_tag_timestamp_skew_sec=(
-                    self.maximum_tag_timestamp_skew_sec
                 ),
                 fixed_frame=self.fixed_frame,
                 transform_timeout_sec=self.transform_timeout_sec,
@@ -269,7 +277,6 @@ class CaptureInspectionObjectReferenceView(
         )
         self._create_selected_synchronizers(
             selected,
-            reference_tag_id,
         )
         self._attempt_number = 1
         self._warmup_started_nanoseconds = (
@@ -286,7 +293,6 @@ class CaptureInspectionObjectReferenceView(
     def _create_selected_synchronizers(
         self,
         selected,
-        reference_tag_id,
     ) -> None:
         self._release_synchronizers()
         for _, camera_id in selected:
@@ -295,14 +301,15 @@ class CaptureInspectionObjectReferenceView(
                 node=self.node,
                 rgb_topic=camera.rgb_topic,
                 depth_topic=camera.depth_topic,
-                camera_info_topic=camera.camera_info_topic,
-                base_tag_topic=None,
+                rgb_camera_info_topic=(
+                    camera.rgb_camera_info_topic
+                ),
+                depth_camera_info_topic=(
+                    camera.depth_camera_info_topic
+                ),
                 queue_size=self.synchronization_queue_size,
                 maximum_timestamp_skew_sec=(
                     self.maximum_timestamp_skew_sec
-                ),
-                maximum_tag_timestamp_skew_sec=(
-                    self.maximum_tag_timestamp_skew_sec
                 ),
                 collection_duration_sec=(
                     self.collection_duration_sec
@@ -310,19 +317,15 @@ class CaptureInspectionObjectReferenceView(
             )
             self._synchronizers[camera_id] = synchronizer
 
-        history = tuple(
-            self._base_tag_history.get(reference_tag_id, ())
-        )
-        if history:
-            for synchronizer in self._synchronizers.values():
-                synchronizer.update_base_tag_observations(history)
-
     def _base_tags_callback(
         self,
         observations: TagElementArray,
     ) -> None:
         values = tuple(observations.elements)
         self._reset_history_on_backward_time_jump(values)
+        self._visible_tag_ids = {
+            int(observation.id) for observation in values
+        }
 
         for observation in values:
             tag_id = int(observation.id)
@@ -334,9 +337,10 @@ class CaptureInspectionObjectReferenceView(
                 history,
                 observation,
             )
-
-        for synchronizer in tuple(self._synchronizers.values()):
-            synchronizer.update_base_tag_observations(values)
+        if self.node is not None:
+            self._prune_tag_history(
+                self.node.get_clock().now().nanoseconds
+            )
 
     def _reset_history_on_backward_time_jump(
         self,
@@ -368,6 +372,52 @@ class CaptureInspectionObjectReferenceView(
             or newest_stamp + 100_000_000 < previous_stamp
         ):
             self._latest_tag_stamp_nanoseconds = newest_stamp
+
+    def _prune_tag_history(self, current_nanoseconds: int) -> None:
+        retention_nanoseconds = int(
+            self.maximum_tag_age_sec * 1_000_000_000
+        )
+        cutoff = current_nanoseconds - retention_nanoseconds
+        for tag_id, history in tuple(self._base_tag_history.items()):
+            while (
+                history
+                and self._tag_stamp_nanoseconds(history[0]) < cutoff
+            ):
+                history.popleft()
+            if not history:
+                del self._base_tag_history[tag_id]
+
+    def _fresh_reference_tag(self, tag_id: int, current_time):
+        if tag_id not in self._visible_tag_ids:
+            raise ReferenceViewCaptureNotReady(
+                f"Reference tag {tag_id} is not visible in the latest "
+                "base-tag snapshot"
+            )
+        history = self._base_tag_history.get(tag_id)
+        if not history:
+            raise ReferenceViewCaptureNotReady(
+                f"No observation is available for reference tag {tag_id}"
+            )
+        observation = history[-1]
+        stamp_nanoseconds = self._tag_stamp_nanoseconds(observation)
+        if stamp_nanoseconds <= 0:
+            raise ValueError(
+                "Base-camera tag observation timestamp must not be zero"
+            )
+        age_sec = (
+            current_time.nanoseconds - stamp_nanoseconds
+        ) / 1_000_000_000
+        if age_sec < -0.1:
+            raise ValueError(
+                "Base-camera tag observation timestamp is in the future: "
+                f"{age_sec:.3f} s"
+            )
+        if age_sec > self.maximum_tag_age_sec:
+            raise ReferenceViewCaptureNotReady(
+                "Base-camera tag observation is stale: "
+                f"{age_sec:.3f} s"
+            )
+        return deepcopy(observation)
 
     @staticmethod
     def _append_tag_observation(
@@ -403,9 +453,14 @@ class CaptureInspectionObjectReferenceView(
             for _, camera_id in selected
             if not self._synchronizers[
                 camera_id
-            ].ready_for_collection(reference_tag_id)
+            ].ready_for_collection()
         ]
-        if not missing:
+        tag_error = ""
+        try:
+            self._fresh_reference_tag(reference_tag_id, current_time)
+        except (ReferenceViewCaptureNotReady, ValueError) as exception:
+            tag_error = str(exception)
+        if not missing and not tag_error:
             self._start_attempt(current_time)
             return py_trees.common.Status.RUNNING
 
@@ -416,10 +471,17 @@ class CaptureInspectionObjectReferenceView(
         details = ", ".join(
             self._camera_input_diagnostics(
                 camera_id,
-                reference_tag_id,
             )
             for camera_id in missing
         )
+        if tag_error:
+            details = ", ".join(
+                detail for detail in (
+                    details,
+                    f"tag {reference_tag_id}: {tag_error}",
+                )
+                if detail
+            )
         if elapsed_sec < self.capture_timeout_sec:
             self.feedback_message = (
                 "Waiting for selected camera subscriptions: "
@@ -435,27 +497,25 @@ class CaptureInspectionObjectReferenceView(
     def _camera_input_diagnostics(
         self,
         camera_id,
-        reference_tag_id,
     ):
         synchronizer = self._synchronizers[camera_id]
         return (
             f"{camera_id}: "
-            f"{synchronizer.input_diagnostics(reference_tag_id)}"
+            f"{synchronizer.input_diagnostics()}"
         )
 
     def _start_attempt(self, current_time) -> None:
-        _, _, _, reference_tag_id, selected = self._request
+        _, _, _, _, selected = self._request
         self._attempt_started_nanoseconds = current_time.nanoseconds
         self._capture_validation_time = None
         self._collection_started = True
-        self._minimum_image_sequences = {}
+        self._minimum_input_sequences = {}
         for _, camera_id in selected:
             synchronizer = self._synchronizers[camera_id]
             synchronizer.cancel_collection()
-            minimum_sequence = synchronizer.image_sequence + 1
-            self._minimum_image_sequences[camera_id] = minimum_sequence
+            minimum_sequence = synchronizer.input_sequence + 1
+            self._minimum_input_sequences[camera_id] = minimum_sequence
             synchronizer.begin_collection(
-                reference_tag_id,
                 minimum_sequence,
             )
         cameras = ", ".join(
@@ -516,15 +576,19 @@ class CaptureInspectionObjectReferenceView(
                 self.node is not None
                 and hasattr(self.node, "destroy_subscription")
             ):
-                subscription = getattr(
-                    synchronizer,
-                    "camera_info_subscription",
-                    None,
-                )
-                if subscription is not None:
-                    self.node.destroy_subscription(subscription)
+                for attribute in (
+                    "rgb_camera_info_subscription",
+                    "depth_camera_info_subscription",
+                ):
+                    subscription = getattr(
+                        synchronizer,
+                        attribute,
+                        None,
+                    )
+                    if subscription is not None:
+                        self.node.destroy_subscription(subscription)
         self._synchronizers = {}
-        self._minimum_image_sequences = {}
+        self._minimum_input_sequences = {}
         self._capture_validation_time = None
         self._collection_started = False
 
@@ -541,6 +605,12 @@ class CaptureInspectionObjectReferenceView(
             and hasattr(self.node, "destroy_subscription")
         ):
             self.node.destroy_subscription(underlying)
+            return
+        if (
+            self.node is not None
+            and hasattr(self.node, "destroy_subscription")
+        ):
+            self.node.destroy_subscription(subscription)
 
     def _command(self) -> GenericCommand:
         if (
@@ -573,6 +643,8 @@ class CaptureInspectionObjectReferenceView(
         collection_duration_sec,
         capture_timeout_sec,
         capture_max_attempts,
+        maximum_input_age_sec,
+        maximum_tag_age_sec,
     ) -> None:
         if (
             not math.isfinite(collection_duration_sec)
@@ -596,3 +668,11 @@ class CaptureInspectionObjectReferenceView(
             raise ValueError(
                 "Capture maximum attempts must be a positive integer"
             )
+        for value, name in (
+            (maximum_input_age_sec, "Maximum input age"),
+            (maximum_tag_age_sec, "Maximum tag age"),
+        ):
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"{name} must be finite and non-negative"
+                )

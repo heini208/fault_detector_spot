@@ -29,7 +29,7 @@ class CameraCaptureRequest:
     slot_index: int
     camera_id: str
     input_synchronizer: object
-    minimum_image_sequence: int
+    minimum_input_sequence: int
 
 
 def validate_multi_reference_view_capture_target(
@@ -43,7 +43,7 @@ def validate_multi_reference_view_capture_target(
     routine = definition.get_routine(routine_id)
     if routine is None:
         raise KeyError(f"Routine does not exist: {routine_id}")
-    if routine.reference_view is not None and not replace_existing:
+    if routine.reference_views and not replace_existing:
         raise FileExistsError(
             "Routine already has captured reference views: "
             f"{object_id}/{routine_id}"
@@ -59,9 +59,10 @@ def capture_reference_views(
     routine_id: str,
     current_time,
     reference_tag_id: int,
+    reference_tag,
     maximum_input_age_sec: float = 2.0,
+    maximum_tag_age_sec: float = 1.5,
     maximum_timestamp_skew_sec: float = 0.05,
-    maximum_tag_timestamp_skew_sec: float = 0.25,
     fixed_frame: str = "odom",
     transform_timeout_sec: float = 0.05,
 ):
@@ -73,24 +74,39 @@ def capture_reference_views(
         raise ValueError(
             "Maximum input age must be finite and non-negative"
         )
+    if (
+        not math.isfinite(maximum_tag_age_sec)
+        or maximum_tag_age_sec < 0.0
+    ):
+        raise ValueError(
+            "Maximum tag age must be finite and non-negative"
+        )
+    _require_fresh(
+        current_time,
+        reference_tag.pose.header.stamp,
+        "Base-camera tag observation",
+        maximum_tag_age_sec,
+    )
 
     captures = []
     for request in requests:
         inputs = request.input_synchronizer.best_snapshot(
-            reference_tag_id,
-            request.minimum_image_sequence,
+            request.minimum_input_sequence,
         )
         if inputs is None:
             diagnostics = request.input_synchronizer.collection_diagnostics(
-                reference_tag_id,
-                request.minimum_image_sequence,
+                request.minimum_input_sequence,
             )
             raise ReferenceViewCaptureNotReady(
-                "No valid synchronized RGB, depth, and base-tag set was "
-                f"collected for camera {request.camera_id} and tag "
-                f"{reference_tag_id}: {diagnostics}"
+                "No valid synchronized RGB and registered-depth pair was "
+                f"collected for camera {request.camera_id}: {diagnostics}"
             )
-        rgb_image, depth_image, camera_info, reference_tag = inputs
+        (
+            rgb_image,
+            depth_image,
+            rgb_camera_info,
+            depth_camera_info,
+        ) = inputs
         _require_fresh(
             current_time,
             rgb_image.header.stamp,
@@ -113,15 +129,13 @@ def capture_reference_views(
         validate_reference_view_inputs(
             rgb_image,
             depth_image,
-            camera_info,
+            depth_camera_info,
             reference_tag,
             reference_tag_id,
             reference_view.controlled_frame_pose_object,
             reference_view.controlled_frame,
             maximum_timestamp_skew_sec=maximum_timestamp_skew_sec,
-            maximum_tag_timestamp_skew_sec=(
-                maximum_tag_timestamp_skew_sec
-            ),
+            rgb_camera_info=rgb_camera_info,
         )
         captures.append(CapturedReferenceView(
             slot_index=request.slot_index,
@@ -129,13 +143,17 @@ def capture_reference_views(
             reference_view=reference_view,
             rgb_image=rgb_image,
             depth_image=depth_image,
-            camera_info=camera_info,
+            rgb_camera_info=rgb_camera_info,
+            depth_camera_info=depth_camera_info,
+            reference_tag=reference_tag,
+            fixed_frame=fixed_frame,
         ))
 
     return repository.save_reference_views(
         object_id,
         routine_id,
         captures,
+        maximum_timestamp_skew_sec=maximum_timestamp_skew_sec,
     )
 
 

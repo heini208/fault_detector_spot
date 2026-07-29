@@ -1,11 +1,13 @@
-"""Tests for persistent shared tag-topic subscriptions."""
+"""Tests for separation of shared tags from camera collection."""
 
-from fault_detector_spot.inspection import (
-    reference_view_input_synchronizer as synchronizer_module,
+from fault_detector_spot.inspection.reference_view_input_synchronizer import (
+    ReferenceViewInputSynchronizer,
 )
 
 
 class FakeNode:
+    """Record direct subscriptions."""
+
     def __init__(self):
         self.subscriptions = []
 
@@ -15,46 +17,22 @@ class FakeNode:
         return subscription
 
 
-class FakeFilterSubscriber:
-    def __init__(self, *args, **kwargs):
-        self.args = args
-        self.kwargs = kwargs
-
-
-class FakeApproximateSynchronizer:
-    def __init__(self, subscribers, queue_size, slop):
-        self.subscribers = subscribers
-        self.queue_size = queue_size
-        self.slop = slop
-        self.callback = None
-
-    def registerCallback(self, callback):
-        self.callback = callback
-
-
-def test_synchronizer_subscribes_to_shared_tag_topic(monkeypatch):
-    monkeypatch.setattr(
-        synchronizer_module,
-        "Subscriber",
-        FakeFilterSubscriber,
-    )
-    monkeypatch.setattr(
-        synchronizer_module,
-        "ApproximateTimeSynchronizer",
-        FakeApproximateSynchronizer,
-    )
+def test_camera_collector_does_not_subscribe_to_shared_tags():
     node = FakeNode()
 
-    synchronizer = synchronizer_module.ReferenceViewInputSynchronizer(
+    ReferenceViewInputSynchronizer(
         node=node,
         rgb_topic="/camera/hand/image",
         depth_topic="/depth_registered/hand/image",
-        camera_info_topic="/depth_registered/hand/camera_info",
-        base_tag_topic="fault_detector/state/visible_tags",
+        rgb_camera_info_topic="/camera/hand/camera_info",
+        depth_camera_info_topic=(
+            "/depth_registered/hand/camera_info"
+        ),
     )
 
-    assert synchronizer.base_tag_subscription is not None
     assert [subscription[1] for subscription in node.subscriptions] == [
+        "/camera/hand/image",
+        "/depth_registered/hand/image",
+        "/camera/hand/camera_info",
         "/depth_registered/hand/camera_info",
-        "fault_detector/state/visible_tags",
     ]

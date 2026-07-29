@@ -22,7 +22,10 @@ def test_registry_matches_spot_camera_topic_families():
         assert camera.depth_topic == (
             f"/depth_registered/{camera_id}/image"
         )
-        assert camera.camera_info_topic == (
+        assert camera.rgb_camera_info_topic == (
+            f"/camera/{camera_id}/camera_info"
+        )
+        assert camera.depth_camera_info_topic == (
             f"/depth_registered/{camera_id}/camera_info"
         )
 

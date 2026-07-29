@@ -386,9 +386,14 @@ def build_capture_reference_view_behavior(
             "inspection.reference_view_depth_topic",
             "/depth_registered/hand/image",
         ),
-        camera_info_topic=read_parameter(
+        rgb_camera_info_topic=read_parameter(
             node,
-            "inspection.reference_view_camera_info_topic",
+            "inspection.reference_view_rgb_camera_info_topic",
+            "/camera/hand/camera_info",
+        ),
+        depth_camera_info_topic=read_parameter(
+            node,
+            "inspection.reference_view_depth_camera_info_topic",
             "/depth_registered/hand/camera_info",
         ),
         base_tag_topic=read_parameter(
@@ -405,17 +410,22 @@ def build_capture_reference_view_behavior(
         maximum_input_age_sec=float(read_parameter(
             node,
             "inspection.reference_view_maximum_input_age_sec",
-            0.75,
+            1.5,
+        )),
+        maximum_tag_age_sec=float(read_parameter(
+            node,
+            "inspection.reference_view_maximum_tag_age_sec",
+            1.5,
         )),
         maximum_timestamp_skew_sec=float(read_parameter(
             node,
             "inspection.reference_view_maximum_timestamp_skew_sec",
             0.05,
         )),
-        maximum_tag_timestamp_skew_sec=float(read_parameter(
+        collection_duration_sec=float(read_parameter(
             node,
-            "inspection.reference_view_maximum_tag_timestamp_skew_sec",
-            0.25,
+            "inspection.reference_view_collection_duration_sec",
+            1.0,
         )),
         fixed_frame=read_parameter(
             node,

@@ -31,11 +31,11 @@ def make_inputs():
     depth.step = 8
     depth.data = bytes(depth.step * depth.height)
 
-    camera_info = CameraInfo()
-    camera_info.header.frame_id = "hand_color_image_sensor"
-    camera_info.width = 4
-    camera_info.height = 3
-    camera_info.k = [
+    depth_camera_info = CameraInfo()
+    depth_camera_info.header.frame_id = "hand_color_image_sensor"
+    depth_camera_info.width = 4
+    depth_camera_info.height = 3
+    depth_camera_info.k = [
         100.0,
         0.0,
         1.5,
@@ -46,42 +46,59 @@ def make_inputs():
         0.0,
         1.0,
     ]
+    rgb_camera_info = CameraInfo()
+    rgb_camera_info.header.frame_id = "hand_color_image_sensor"
+    rgb_camera_info.width = 8
+    rgb_camera_info.height = 6
+    rgb_camera_info.k = [
+        200.0,
+        0.0,
+        3.5,
+        0.0,
+        200.0,
+        2.5,
+        0.0,
+        0.0,
+        1.0,
+    ]
 
     tag = TagElement()
     tag.id = 23
     tag.pose.header.frame_id = "body"
     tag.pose.header.stamp.sec = 10
     tag.pose.pose.orientation.w = 1.0
-    return rgb, depth, camera_info, tag
+    return rgb, depth, rgb_camera_info, depth_camera_info, tag
 
 
 def test_registered_depth_may_use_a_different_resolution():
     """Only depth and its CameraInfo must share dimensions."""
-    rgb, depth, camera_info, tag = make_inputs()
+    rgb, depth, rgb_camera_info, depth_camera_info, tag = make_inputs()
 
     validate_reference_view_inputs(
         rgb,
         depth,
-        camera_info,
+        depth_camera_info,
         tag,
         expected_reference_tag_id=23,
         controlled_frame_pose_object=PoseData.identity(),
         controlled_frame="hand_color_image_sensor",
+        rgb_camera_info=rgb_camera_info,
     )
 
 
 def test_depth_and_camera_info_dimensions_still_must_match():
     """Back-projection cannot use calibration from another depth size."""
-    rgb, depth, camera_info, tag = make_inputs()
-    camera_info.width = 5
+    rgb, depth, rgb_camera_info, depth_camera_info, tag = make_inputs()
+    depth_camera_info.width = 5
 
-    with pytest.raises(ValueError, match="Registered depth"):
+    with pytest.raises(ValueError, match="Depth CameraInfo"):
         validate_reference_view_inputs(
             rgb,
             depth,
-            camera_info,
+            depth_camera_info,
             tag,
             expected_reference_tag_id=23,
             controlled_frame_pose_object=PoseData.identity(),
             controlled_frame="hand_color_image_sensor",
+            rgb_camera_info=rgb_camera_info,
         )

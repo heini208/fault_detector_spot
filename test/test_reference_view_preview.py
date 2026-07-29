@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from fault_detector_msgs.msg import BasicCommand
+from fault_detector_msgs.msg import BasicCommand, TagElement
 from PyQt5.QtWidgets import QApplication, QLabel
 from sensor_msgs.msg import CameraInfo, Image
 
@@ -20,6 +20,10 @@ from fault_detector_spot.inspection.models import (
     ReferenceView,
 )
 from fault_detector_spot.inspection.object_repository import ObjectRepository
+from fault_detector_spot.inspection.multi_reference_view_repository import (
+    CapturedReferenceView,
+    MultiReferenceViewRepository,
+)
 
 
 class FakePublisher:
@@ -99,7 +103,12 @@ def make_reference_dataset():
     camera_info.width = 2
     camera_info.height = 1
     camera_info.k = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-    return rgb, depth, camera_info
+    tag = TagElement()
+    tag.id = 23
+    tag.pose.header.frame_id = "body"
+    tag.pose.header.stamp.sec = 10
+    tag.pose.pose.orientation.w = 1.0
+    return rgb, depth, camera_info, tag
 
 
 def select_routine(controls):
@@ -115,19 +124,26 @@ def select_routine(controls):
 
 def test_captured_routine_loads_rgb_preview(application, tmp_path):
     """Selecting a captured routine displays its persisted RGB image."""
-    repository = ObjectRepository(tmp_path)
-    repository.create(make_definition())
-    rgb, depth, camera_info = make_reference_dataset()
-    repository.save_reference_dataset(
+    repository = MultiReferenceViewRepository(tmp_path)
+    repository.object_repository.create(make_definition())
+    rgb, depth, camera_info, tag = make_reference_dataset()
+    repository.save_reference_views(
         "motor_a",
         "magnetic_scan",
-        ReferenceView(
-            controlled_frame_pose_object=PoseData.identity(),
-            controlled_frame="hand_color_image_sensor",
-        ),
-        rgb,
-        depth,
-        camera_info,
+        [CapturedReferenceView(
+            slot_index=0,
+            camera_id="hand",
+            reference_view=ReferenceView(
+                controlled_frame_pose_object=PoseData.identity(),
+                controlled_frame="hand_color_image_sensor",
+            ),
+            rgb_image=rgb,
+            depth_image=depth,
+            rgb_camera_info=camera_info,
+            depth_camera_info=camera_info,
+            reference_tag=tag,
+            fixed_frame="odom",
+        )],
     )
     controls = InspectionControls(FakeUI(tmp_path))
 
@@ -159,13 +175,17 @@ def test_missing_dataset_reports_load_failure(application, tmp_path):
     """A broken dataset path does not crash routine selection."""
     repository = ObjectRepository(tmp_path)
     definition = make_definition()
-    definition.routines[0].reference_view = ReferenceView(
+    definition.routines[0].reference_views = [ReferenceView(
         controlled_frame_pose_object=PoseData.identity(),
         controlled_frame="hand_color_image_sensor",
         reference_dataset_path=(
-            "reference_datasets/magnetic_scan/10_200000000"
+            "reference_datasets/magnetic_scan/"
+            "set_10_200000000/slot1_hand"
         ),
-    )
+        view_id="slot1_hand",
+        camera_id="hand",
+        slot_index=0,
+    )]
     repository.create(definition)
     controls = InspectionControls(FakeUI(tmp_path))
 

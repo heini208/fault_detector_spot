@@ -27,6 +27,7 @@ def make_probe(probe_point_id="point_a") -> ProbePoint:
         orientation_tolerance_rad=0.05,
         measurement_duration_sec=1.0,
         reference_pixel=ImagePoint(u=100, v=200),
+        reference_view_id="slot1_hand",
     )
 
 
@@ -39,11 +40,14 @@ def make_routine(
         display_name=routine_id,
         sensor_id="bmm150",
         probe_frame="sensor_tip",
-        reference_view=ReferenceView(
+        reference_views=[ReferenceView(
             controlled_frame_pose_object=PoseData.identity(),
             controlled_frame="hand_color_image_sensor",
             reference_dataset_path="reference/magnetic_scan",
-        ),
+            view_id="slot1_hand",
+            camera_id="hand",
+            slot_index=0,
+        )],
         probe_points=[make_probe()],
     )
 
@@ -81,7 +85,7 @@ def test_inspection_object_round_trip_preserves_routine_order():
     )
 
 
-def test_uncaptured_routine_round_trip_preserves_null_reference_view():
+def test_uncaptured_routine_round_trip_preserves_empty_reference_views():
     """A new routine is valid before its first reference capture."""
     routine = InspectionRoutine(
         routine_id="magnetic_scan",
@@ -94,7 +98,7 @@ def test_uncaptured_routine_round_trip_preserves_null_reference_view():
 
     restored.validate()
     assert restored == routine
-    assert restored.to_dict()["reference_view"] is None
+    assert restored.to_dict()["reference_views"] == []
 
 
 def test_probe_points_require_a_captured_reference_view():
@@ -108,6 +112,15 @@ def test_probe_points_require_a_captured_reference_view():
     )
 
     with pytest.raises(ValueError, match="requires a reference view"):
+        routine.validate()
+
+
+def test_routine_reference_view_requires_persisted_dataset():
+    """Authoritative routine views cannot be metadata-only entries."""
+    routine = make_routine()
+    routine.reference_views[0].reference_dataset_path = None
+
+    with pytest.raises(ValueError, match="requires a dataset path"):
         routine.validate()
 
 
@@ -135,10 +148,10 @@ def test_duplicate_probe_point_id_is_rejected():
 def test_non_normalized_quaternion_is_rejected():
     """Stored transforms require normalized quaternions."""
     routine = make_routine()
-    routine.reference_view.controlled_frame_pose_object = (
+    routine.reference_views[0].controlled_frame_pose_object = (
         PoseData.identity()
     )
-    pose = routine.reference_view.controlled_frame_pose_object
+    pose = routine.reference_views[0].controlled_frame_pose_object
     pose.orientation.w = 2.0
 
     with pytest.raises(

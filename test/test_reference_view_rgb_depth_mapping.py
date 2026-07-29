@@ -9,6 +9,7 @@ from fault_detector_spot.inspection.models import ImagePoint
 from fault_detector_spot.inspection.reference_view_depth_projection import (
     map_rgb_pixel_to_depth,
     project_reference_pixel,
+    rgb_depth_overlap_region,
 )
 from fault_detector_spot.inspection.reference_view_surface_normal import (
     estimate_reference_surface_normal,
@@ -126,4 +127,42 @@ def test_rgb_bounds_are_checked_before_depth_mapping():
             make_depth([1.0] * 12, 4, 3),
             make_camera_info(4, 3),
             rgb_size=(8, 6),
+        )
+
+
+def test_calibration_distinguishes_crop_from_lower_resolution():
+    """Equal focal lengths reveal a smaller centered depth field."""
+    rgb_info = make_camera_info(8, 6, focal_length=100.0)
+    depth_info = make_camera_info(4, 3, focal_length=100.0)
+
+    region = rgb_depth_overlap_region(
+        (8, 6),
+        (4, 3),
+        rgb_info,
+        depth_info,
+    )
+
+    assert region.x == 2
+    assert region.width == 4
+    assert region.y == 1
+    assert region.height == 3
+
+
+def test_calibrated_mapping_rejects_rgb_border_outside_depth_crop():
+    """A visible RGB pixel without a registered-depth ray is rejected."""
+    with pytest.raises(ValueError, match="field of view"):
+        map_rgb_pixel_to_depth(
+            ImagePoint(u=0, v=2),
+            rgb_size=(8, 6),
+            depth_size=(4, 3),
+            rgb_camera_info=make_camera_info(
+                8,
+                6,
+                focal_length=100.0,
+            ),
+            depth_camera_info=make_camera_info(
+                4,
+                3,
+                focal_length=100.0,
+            ),
         )

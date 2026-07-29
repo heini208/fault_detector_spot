@@ -24,7 +24,6 @@ from fault_detector_spot.inspection.reference_view_approach_direction import (
     APPROACH_MODE_SURFACE_FIT,
     APPROACH_MODE_TAG_X,
     APPROACH_SOURCE_SURFACE_FIT,
-    APPROACH_SOURCE_TAG_X_FALLBACK,
     APPROACH_SOURCE_TAG_X_SELECTED,
 )
 
@@ -100,6 +99,7 @@ def configure_reference(controls, values, frame_id="hand_color_image_sensor"):
     controls._reference_rgb_size = (depth.width, depth.height)
     controls._reference_depth_image = depth
     controls._reference_camera_info = camera_info
+    controls._reference_rgb_camera_info = camera_info
     controls._reference_view = make_reference_view(frame_id)
 
 
@@ -123,7 +123,7 @@ def test_automatic_mode_generates_surface_target(application, tmp_path):
     assert controls.reference_target_yaw_value_label.text() == "0.0"
 
 
-def test_automatic_mode_falls_back_and_still_generates_target(
+def test_automatic_mode_rejects_uncalibrated_tag_fallback(
     application,
     tmp_path,
 ):
@@ -134,16 +134,10 @@ def test_automatic_mode_falls_back_and_still_generates_target(
 
     controls._project_selected_reference_pixel(5, 5)
 
-    direction = controls.selected_approach_direction
-    target = controls.selected_surface_target
     assert controls.selected_surface_normal is None
-    assert direction is not None
-    assert direction.source == APPROACH_SOURCE_TAG_X_FALLBACK
-    assert target is not None
-    assert controls.reference_approach_source_value_label.text() == (
-        "Tag +X fallback"
-    )
-    assert controls.reference_target_status_label.text() == "Ready"
+    assert controls.selected_approach_direction is None
+    assert controls.selected_surface_target is None
+    assert controls.reference_approach_status_label.text() == "Unavailable"
     assert "Too few consistent depth" in (
         controls.reference_approach_status_label.toolTip()
     )

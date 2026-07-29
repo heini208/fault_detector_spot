@@ -26,12 +26,43 @@ class ProjectedReferencePoint:
             object.__setattr__(self, "mapped_pixel", self.requested_pixel)
 
 
+@dataclass(frozen=True)
+class ImageRegion:
+    """Inclusive source-image region covered by registered depth."""
+
+    x: int
+    y: int
+    width: int
+    height: int
+
+    def validate(self) -> None:
+        """Validate a positive image region."""
+        values = (self.x, self.y, self.width, self.height)
+        if any(isinstance(value, bool) or not isinstance(value, int)
+               for value in values):
+            raise ValueError("Image region values must be integers")
+        if self.x < 0 or self.y < 0:
+            raise ValueError("Image region origin must not be negative")
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("Image region dimensions must be positive")
+
+    def to_dict(self):
+        """Serialize the image region."""
+        return {
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+        }
+
+
 def project_reference_pixel(
     pixel: ImagePoint,
     depth_image: Image,
-    camera_info: CameraInfo,
+    depth_camera_info: CameraInfo,
     search_radius_px: int = 2,
     rgb_size: Optional[Tuple[int, int]] = None,
+    rgb_camera_info: Optional[CameraInfo] = None,
 ) -> ProjectedReferencePoint:
     """Map an RGB pixel into registered depth and back-project it."""
     if pixel is None:
@@ -39,15 +70,22 @@ def project_reference_pixel(
     pixel.validate()
     _validate_search_radius(search_radius_px)
     _validate_depth_image(depth_image)
-    fx, fy, cx, cy = _camera_intrinsics(camera_info, depth_image)
+    depth_size = (depth_image.width, depth_image.height)
+    fx, fy, cx, cy = _camera_intrinsics(
+        depth_camera_info,
+        depth_size,
+        "Depth CameraInfo",
+    )
     resolved_rgb_size = _resolve_rgb_size(rgb_size, depth_image)
     _validate_pixel_bounds(pixel, resolved_rgb_size, "RGB reference image")
     mapped_pixel = map_rgb_pixel_to_depth(
         pixel,
         resolved_rgb_size,
-        (depth_image.width, depth_image.height),
+        depth_size,
+        rgb_camera_info=rgb_camera_info,
+        depth_camera_info=depth_camera_info,
     )
-    frame_id = _resolve_frame_id(depth_image, camera_info)
+    frame_id = _resolve_frame_id(depth_image, depth_camera_info)
 
     sampled_pixel, depth_m = _nearest_valid_depth(
         mapped_pixel,
@@ -70,8 +108,10 @@ def map_rgb_pixel_to_depth(
     pixel: ImagePoint,
     rgb_size: Tuple[int, int],
     depth_size: Tuple[int, int],
+    rgb_camera_info: Optional[CameraInfo] = None,
+    depth_camera_info: Optional[CameraInfo] = None,
 ) -> ImagePoint:
-    """Map one pixel center between registered image resolutions."""
+    """Map an RGB ray into the registered-depth raster."""
     pixel.validate()
     rgb_width, rgb_height = _validate_image_size(
         rgb_size,
@@ -87,9 +127,114 @@ def map_rgb_pixel_to_depth(
         "RGB reference image",
     )
 
-    mapped_u = _map_pixel_coordinate(pixel.u, rgb_width, depth_width)
-    mapped_v = _map_pixel_coordinate(pixel.v, rgb_height, depth_height)
+    if (rgb_camera_info is None) != (depth_camera_info is None):
+        raise ValueError(
+            "RGB and depth CameraInfo must be provided together"
+        )
+    if rgb_camera_info is None:
+        mapped_u = _map_pixel_coordinate(
+            pixel.u,
+            rgb_width,
+            depth_width,
+        )
+        mapped_v = _map_pixel_coordinate(
+            pixel.v,
+            rgb_height,
+            depth_height,
+        )
+        return ImagePoint(u=mapped_u, v=mapped_v)
+
+    rgb_intrinsics = _camera_intrinsics(
+        rgb_camera_info,
+        (rgb_width, rgb_height),
+        "RGB CameraInfo",
+    )
+    depth_intrinsics = _camera_intrinsics(
+        depth_camera_info,
+        (depth_width, depth_height),
+        "Depth CameraInfo",
+    )
+    mapped_u = _map_calibrated_coordinate(
+        pixel.u,
+        rgb_intrinsics[0],
+        rgb_intrinsics[2],
+        depth_intrinsics[0],
+        depth_intrinsics[2],
+    )
+    mapped_v = _map_calibrated_coordinate(
+        pixel.v,
+        rgb_intrinsics[1],
+        rgb_intrinsics[3],
+        depth_intrinsics[1],
+        depth_intrinsics[3],
+    )
+    if not (
+        0 <= mapped_u < depth_width
+        and 0 <= mapped_v < depth_height
+    ):
+        raise ValueError(
+            "Reference pixel is outside the registered-depth field of view"
+        )
     return ImagePoint(u=mapped_u, v=mapped_v)
+
+
+def rgb_depth_overlap_region(
+    rgb_size: Tuple[int, int],
+    depth_size: Tuple[int, int],
+    rgb_camera_info: CameraInfo,
+    depth_camera_info: CameraInfo,
+) -> ImageRegion:
+    """Return the RGB region whose rays land inside registered depth."""
+    rgb_width, rgb_height = _validate_image_size(
+        rgb_size,
+        "RGB image size",
+    )
+    depth_width, depth_height = _validate_image_size(
+        depth_size,
+        "Depth image size",
+    )
+    rgb_intrinsics = _camera_intrinsics(
+        rgb_camera_info,
+        (rgb_width, rgb_height),
+        "RGB CameraInfo",
+    )
+    depth_intrinsics = _camera_intrinsics(
+        depth_camera_info,
+        (depth_width, depth_height),
+        "Depth CameraInfo",
+    )
+    valid_u = [
+        u for u in range(rgb_width)
+        if 0 <= _map_calibrated_coordinate(
+            u,
+            rgb_intrinsics[0],
+            rgb_intrinsics[2],
+            depth_intrinsics[0],
+            depth_intrinsics[2],
+        ) < depth_width
+    ]
+    valid_v = [
+        v for v in range(rgb_height)
+        if 0 <= _map_calibrated_coordinate(
+            v,
+            rgb_intrinsics[1],
+            rgb_intrinsics[3],
+            depth_intrinsics[1],
+            depth_intrinsics[3],
+        ) < depth_height
+    ]
+    if not valid_u or not valid_v:
+        raise ValueError(
+            "RGB and registered depth CameraInfo have no common field of view"
+        )
+    region = ImageRegion(
+        x=valid_u[0],
+        y=valid_v[0],
+        width=valid_u[-1] - valid_u[0] + 1,
+        height=valid_v[-1] - valid_v[0] + 1,
+    )
+    region.validate()
+    return region
 
 
 def _map_pixel_coordinate(
@@ -105,6 +250,23 @@ def _map_pixel_coordinate(
     )
     rounded = int(math.floor(mapped + 0.5))
     return min(max(rounded, 0), target_length - 1)
+
+
+def _map_calibrated_coordinate(
+    coordinate: int,
+    source_focal_length: float,
+    source_principal_point: float,
+    target_focal_length: float,
+    target_principal_point: float,
+) -> int:
+    normalized = (
+        float(coordinate) - source_principal_point
+    ) / source_focal_length
+    mapped = (
+        normalized * target_focal_length
+        + target_principal_point
+    )
+    return int(math.floor(mapped + 0.5))
 
 
 def _resolve_rgb_size(
@@ -162,22 +324,24 @@ def _validate_depth_image(depth_image: Image) -> None:
 
 def _camera_intrinsics(
     camera_info: CameraInfo,
-    depth_image: Image,
+    expected_size: Tuple[int, int],
+    label: str,
 ) -> Tuple[float, float, float, float]:
     if len(camera_info.k) != 9:
-        raise ValueError("Camera matrix must contain nine values")
-    if camera_info.width not in (0, depth_image.width):
-        raise ValueError("Camera info width does not match depth image")
-    if camera_info.height not in (0, depth_image.height):
-        raise ValueError("Camera info height does not match depth image")
+        raise ValueError(f"{label} matrix must contain nine values")
+    expected_width, expected_height = expected_size
+    if camera_info.width not in (0, expected_width):
+        raise ValueError(f"{label} width does not match its image")
+    if camera_info.height not in (0, expected_height):
+        raise ValueError(f"{label} height does not match its image")
     fx = float(camera_info.k[0])
     fy = float(camera_info.k[4])
     cx = float(camera_info.k[2])
     cy = float(camera_info.k[5])
     if not all(math.isfinite(value) for value in (fx, fy, cx, cy)):
-        raise ValueError("Camera intrinsics contain a non-finite value")
+        raise ValueError(f"{label} contains a non-finite intrinsic")
     if fx <= 0.0 or fy <= 0.0:
-        raise ValueError("Camera focal lengths must be positive")
+        raise ValueError(f"{label} focal lengths must be positive")
     return fx, fy, cx, cy
 
 

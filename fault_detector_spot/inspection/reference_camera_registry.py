@@ -12,7 +12,8 @@ class ReferenceCameraConfig:
     display_name: str
     rgb_topic: str
     depth_topic: str
-    camera_info_topic: str
+    rgb_camera_info_topic: str
+    depth_camera_info_topic: str
 
 
 REFERENCE_CAMERAS: Tuple[ReferenceCameraConfig, ...] = (
@@ -21,42 +22,48 @@ REFERENCE_CAMERAS: Tuple[ReferenceCameraConfig, ...] = (
         display_name="Front Left",
         rgb_topic="/camera/frontleft/image",
         depth_topic="/depth_registered/frontleft/image",
-        camera_info_topic="/depth_registered/frontleft/camera_info",
+        rgb_camera_info_topic="/camera/frontleft/camera_info",
+        depth_camera_info_topic="/depth_registered/frontleft/camera_info",
     ),
     ReferenceCameraConfig(
         camera_id="frontright",
         display_name="Front Right",
         rgb_topic="/camera/frontright/image",
         depth_topic="/depth_registered/frontright/image",
-        camera_info_topic="/depth_registered/frontright/camera_info",
+        rgb_camera_info_topic="/camera/frontright/camera_info",
+        depth_camera_info_topic="/depth_registered/frontright/camera_info",
     ),
     ReferenceCameraConfig(
         camera_id="left",
         display_name="Left",
         rgb_topic="/camera/left/image",
         depth_topic="/depth_registered/left/image",
-        camera_info_topic="/depth_registered/left/camera_info",
+        rgb_camera_info_topic="/camera/left/camera_info",
+        depth_camera_info_topic="/depth_registered/left/camera_info",
     ),
     ReferenceCameraConfig(
         camera_id="right",
         display_name="Right",
         rgb_topic="/camera/right/image",
         depth_topic="/depth_registered/right/image",
-        camera_info_topic="/depth_registered/right/camera_info",
+        rgb_camera_info_topic="/camera/right/camera_info",
+        depth_camera_info_topic="/depth_registered/right/camera_info",
     ),
     ReferenceCameraConfig(
         camera_id="back",
         display_name="Back",
         rgb_topic="/camera/back/image",
         depth_topic="/depth_registered/back/image",
-        camera_info_topic="/depth_registered/back/camera_info",
+        rgb_camera_info_topic="/camera/back/camera_info",
+        depth_camera_info_topic="/depth_registered/back/camera_info",
     ),
     ReferenceCameraConfig(
         camera_id="hand",
         display_name="Hand",
         rgb_topic="/camera/hand/image",
         depth_topic="/depth_registered/hand/image",
-        camera_info_topic="/depth_registered/hand/camera_info",
+        rgb_camera_info_topic="/camera/hand/camera_info",
+        depth_camera_info_topic="/depth_registered/hand/camera_info",
     ),
 )
 

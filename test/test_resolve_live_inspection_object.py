@@ -71,10 +71,17 @@ def make_routine() -> InspectionRoutine:
         display_name="Phase 3",
         sensor_id="bmm150",
         probe_frame="sensor_tip",
-        reference_view=ReferenceView(
+        reference_views=[ReferenceView(
             controlled_frame_pose_object=PoseData.identity(),
             controlled_frame="hand_color_image_sensor",
-        ),
+            reference_dataset_path=(
+                "reference_datasets/phase3/set_10_000000000/"
+                "slot1_hand"
+            ),
+            view_id="slot1_hand",
+            camera_id="hand",
+            slot_index=0,
+        )],
     )
 
 

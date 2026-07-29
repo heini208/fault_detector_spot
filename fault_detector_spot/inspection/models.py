@@ -208,11 +208,14 @@ class ReferenceTag:
 
 @dataclass
 class ReferenceView:
-    """Saved routine overview pose and synchronized dataset."""
+    """Saved camera view and its pose in the inspection-object frame."""
 
     controlled_frame_pose_object: PoseData
     controlled_frame: str
     reference_dataset_path: Optional[str] = None
+    view_id: Optional[str] = None
+    camera_id: Optional[str] = None
+    slot_index: Optional[int] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ReferenceView":
@@ -229,6 +232,9 @@ class ReferenceView:
                 if dataset_path is not None
                 else None
             ),
+            view_id=str(data["view_id"]),
+            camera_id=str(data["camera_id"]),
+            slot_index=int(data["slot_index"]),
         )
 
     def validate(self) -> None:
@@ -245,6 +251,30 @@ class ReferenceView:
             raise ValueError(
                 "Reference dataset path must not be empty"
             )
+        identity = (self.view_id, self.camera_id, self.slot_index)
+        if any(value is not None for value in identity):
+            if any(value is None for value in identity):
+                raise ValueError(
+                    "Reference view identity must be complete"
+                )
+            _require_text(self.view_id, "Reference view ID")
+            _require_text(self.camera_id, "Reference camera ID")
+            if (
+                isinstance(self.slot_index, bool)
+                or not isinstance(self.slot_index, int)
+                or self.slot_index < 0
+                or self.slot_index > 2
+            ):
+                raise ValueError(
+                    "Reference view slot must be between 0 and 2"
+                )
+        if (
+            self.reference_dataset_path is not None
+            and self.view_id is None
+        ):
+            raise ValueError(
+                "Stored reference view requires camera identity"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the reference view."""
@@ -257,6 +287,10 @@ class ReferenceView:
             result["reference_dataset_path"] = (
                 self.reference_dataset_path
             )
+        if self.view_id is not None:
+            result["view_id"] = self.view_id
+            result["camera_id"] = self.camera_id
+            result["slot_index"] = self.slot_index
         return result
 
 
@@ -272,6 +306,7 @@ class ProbePoint:
     orientation_tolerance_rad: float
     measurement_duration_sec: float
     reference_pixel: Optional[ImagePoint] = None
+    reference_view_id: Optional[str] = None
     sensor_path: Optional[str] = None
 
     @classmethod
@@ -279,6 +314,7 @@ class ProbePoint:
         """Create a probe point from serialized data."""
         data = _require_dict(data, "probe_point")
         pixel = data.get("reference_pixel")
+        reference_view_id = data.get("reference_view_id")
         sensor_path = data.get("sensor_path")
         return cls(
             probe_point_id=str(data["probe_point_id"]),
@@ -301,6 +337,11 @@ class ProbePoint:
             reference_pixel=(
                 ImagePoint.from_dict(pixel)
                 if pixel is not None
+                else None
+            ),
+            reference_view_id=(
+                str(reference_view_id)
+                if reference_view_id is not None
                 else None
             ),
             sensor_path=(
@@ -346,6 +387,15 @@ class ProbePoint:
             )
         if self.reference_pixel is not None:
             self.reference_pixel.validate()
+            if self.reference_view_id is None:
+                raise ValueError(
+                    "Reference pixel requires a reference view ID"
+                )
+        if self.reference_view_id is not None:
+            _require_text(
+                self.reference_view_id,
+                "Probe point reference view ID",
+            )
         if self.sensor_path is not None:
             _require_text(self.sensor_path, "Sensor path")
 
@@ -368,6 +418,8 @@ class ProbePoint:
             result["reference_pixel"] = (
                 self.reference_pixel.to_dict()
             )
+        if self.reference_view_id is not None:
+            result["reference_view_id"] = self.reference_view_id
         if self.sensor_path is not None:
             result["sensor_path"] = self.sensor_path
         return result
@@ -375,14 +427,24 @@ class ProbePoint:
 
 @dataclass
 class InspectionRoutine:
-    """Ordered probe procedure for one sensor and reference view."""
+    """Ordered probe procedure for one sensor and up to three views."""
 
     routine_id: str
     display_name: str
     sensor_id: str
     probe_frame: str
-    reference_view: Optional[ReferenceView] = None
+    reference_views: List[ReferenceView] = field(default_factory=list)
     probe_points: List[ProbePoint] = field(default_factory=list)
+
+    @property
+    def reference_view(self) -> Optional[ReferenceView]:
+        """Return the first display view, if one exists."""
+        return self.reference_views[0] if self.reference_views else None
+
+    @reference_view.setter
+    def reference_view(self, value: Optional[ReferenceView]) -> None:
+        """Replace the complete view list with one display view."""
+        self.reference_views = [] if value is None else [value]
 
     @classmethod
     def from_dict(
@@ -395,16 +457,19 @@ class InspectionRoutine:
             data["probe_points"],
             "probe_points",
         )
+        reference_views = _require_list(
+            data["reference_views"],
+            "reference_views",
+        )
         return cls(
             routine_id=str(data["routine_id"]),
             display_name=str(data["display_name"]),
             sensor_id=str(data["sensor_id"]),
             probe_frame=str(data["probe_frame"]),
-            reference_view=(
-                ReferenceView.from_dict(data["reference_view"])
-                if data["reference_view"] is not None
-                else None
-            ),
+            reference_views=[
+                ReferenceView.from_dict(view)
+                for view in reference_views
+            ],
             probe_points=[
                 ProbePoint.from_dict(point)
                 for point in probe_points
@@ -417,9 +482,50 @@ class InspectionRoutine:
         _require_text(self.display_name, "Routine display name")
         _require_text(self.sensor_id, "Sensor ID")
         _require_text(self.probe_frame, "Probe frame")
-        if self.reference_view is not None:
-            self.reference_view.validate()
-        elif self.probe_points:
+        if not 0 <= len(self.reference_views) <= 3:
+            raise ValueError(
+                "Routine must contain at most three reference views"
+            )
+        view_ids: Set[str] = set()
+        camera_ids: Set[str] = set()
+        slot_indices: Set[int] = set()
+        for reference_view in self.reference_views:
+            reference_view.validate()
+            if reference_view.reference_dataset_path is None:
+                raise ValueError(
+                    "Routine reference view requires a dataset path"
+                )
+            if reference_view.view_id is None:
+                raise ValueError(
+                    "Routine reference view requires an ID"
+                )
+            if reference_view.camera_id is None:
+                raise ValueError(
+                    "Routine reference view requires a camera ID"
+                )
+            if reference_view.slot_index is None:
+                raise ValueError(
+                    "Routine reference view requires a slot"
+                )
+            if reference_view.view_id in view_ids:
+                raise ValueError(
+                    f"Duplicate reference view ID: "
+                    f"{reference_view.view_id}"
+                )
+            if reference_view.camera_id in camera_ids:
+                raise ValueError(
+                    f"Duplicate reference camera ID: "
+                    f"{reference_view.camera_id}"
+                )
+            if reference_view.slot_index in slot_indices:
+                raise ValueError(
+                    f"Duplicate reference view slot: "
+                    f"{reference_view.slot_index}"
+                )
+            view_ids.add(reference_view.view_id)
+            camera_ids.add(reference_view.camera_id)
+            slot_indices.add(reference_view.slot_index)
+        if not self.reference_views and self.probe_points:
             raise ValueError(
                 "Routine with probe points requires a reference view"
             )
@@ -427,6 +533,14 @@ class InspectionRoutine:
         probe_ids: Set[str] = set()
         for probe_point in self.probe_points:
             probe_point.validate()
+            if (
+                probe_point.reference_view_id is not None
+                and probe_point.reference_view_id not in view_ids
+            ):
+                raise ValueError(
+                    "Probe point references an unknown reference view: "
+                    f"{probe_point.reference_view_id}"
+                )
             if probe_point.probe_point_id in probe_ids:
                 raise ValueError(
                     "Duplicate probe point ID: "
@@ -455,11 +569,9 @@ class InspectionRoutine:
             "display_name": self.display_name,
             "sensor_id": self.sensor_id,
             "probe_frame": self.probe_frame,
-            "reference_view": (
-                self.reference_view.to_dict()
-                if self.reference_view is not None
-                else None
-            ),
+            "reference_views": [
+                view.to_dict() for view in self.reference_views
+            ],
             "probe_points": [
                 point.to_dict() for point in self.probe_points
             ],

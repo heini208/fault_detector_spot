@@ -71,10 +71,26 @@ def configure_reference(controls):
         0.0,
         1.0,
     ]
+    rgb_camera_info = CameraInfo()
+    rgb_camera_info.header.frame_id = "hand_color_image_sensor"
+    rgb_camera_info.width = 22
+    rgb_camera_info.height = 22
+    rgb_camera_info.k = [
+        200.0,
+        0.0,
+        10.5,
+        0.0,
+        200.0,
+        10.5,
+        0.0,
+        0.0,
+        1.0,
+    ]
 
     controls._reference_rgb_size = (22, 22)
     controls._reference_depth_image = depth
     controls._reference_camera_info = camera_info
+    controls._reference_rgb_camera_info = rgb_camera_info
     controls._reference_view = ReferenceView(
         controlled_frame_pose_object=PoseData.identity(),
         controlled_frame="hand_color_image_sensor",

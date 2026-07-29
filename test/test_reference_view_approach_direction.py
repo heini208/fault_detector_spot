@@ -15,7 +15,6 @@ from fault_detector_spot.inspection.reference_view_approach_direction import (
     APPROACH_MODE_SURFACE_FIT,
     APPROACH_MODE_TAG_X,
     APPROACH_SOURCE_SURFACE_FIT,
-    APPROACH_SOURCE_TAG_X_FALLBACK,
     APPROACH_SOURCE_TAG_X_SELECTED,
     resolve_reference_approach_direction,
 )
@@ -57,10 +56,10 @@ def make_surface_normal(projected_point, x, y, z):
     )
 
 
-def test_surface_fit_is_aligned_with_object_positive_x():
-    """A fitted normal is sign-aligned with tag/object-frame +X."""
+def test_surface_fit_is_aligned_toward_the_reference_camera():
+    """A fitted normal points toward the camera viewing the surface."""
     point = make_projected_point()
-    normal = make_surface_normal(point, -1.0, 0.0, 0.0)
+    normal = make_surface_normal(point, 0.0, 0.0, 1.0)
 
     result = resolve_reference_approach_direction(
         point,
@@ -70,28 +69,24 @@ def test_surface_fit_is_aligned_with_object_positive_x():
     )
 
     assert result.source == APPROACH_SOURCE_SURFACE_FIT
-    assert result.direction_camera.x == pytest.approx(1.0)
+    assert result.direction_camera.x == pytest.approx(0.0)
     assert result.direction_camera.y == pytest.approx(0.0)
-    assert result.direction_camera.z == pytest.approx(0.0)
+    assert result.direction_camera.z == pytest.approx(-1.0)
     assert result.surface_normal is normal
 
 
-def test_automatic_mode_uses_tag_x_when_surface_fit_is_missing():
-    """Automatic mode preserves a usable direction after fit failure."""
+def test_automatic_mode_rejects_missing_surface_fit():
+    """Automatic mode never assumes a tag mounting direction."""
     point = make_projected_point()
 
-    result = resolve_reference_approach_direction(
-        point,
-        None,
-        make_pose(),
-        mode=APPROACH_MODE_AUTOMATIC,
-        surface_normal_unavailable_reason="surface is uneven",
-    )
-
-    assert result.source == APPROACH_SOURCE_TAG_X_FALLBACK
-    assert result.direction_camera.x == pytest.approx(1.0)
-    assert result.fallback_reason == "surface is uneven"
-    assert result.surface_normal is None
+    with pytest.raises(ValueError, match="surface is uneven"):
+        resolve_reference_approach_direction(
+            point,
+            None,
+            make_pose(),
+            mode=APPROACH_MODE_AUTOMATIC,
+            surface_normal_unavailable_reason="surface is uneven",
+        )
 
 
 def test_tag_x_is_transformed_into_the_camera_frame():

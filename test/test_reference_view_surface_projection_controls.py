@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from fault_detector_msgs.msg import BasicCommand
+from fault_detector_msgs.msg import BasicCommand, TagElement
 from PyQt5.QtWidgets import QApplication, QLabel
 from sensor_msgs.msg import CameraInfo, Image
 
@@ -20,7 +20,10 @@ from fault_detector_spot.inspection.models import (
     ReferenceTag,
     ReferenceView,
 )
-from fault_detector_spot.inspection.object_repository import ObjectRepository
+from fault_detector_spot.inspection.multi_reference_view_repository import (
+    CapturedReferenceView,
+    MultiReferenceViewRepository,
+)
 
 
 class FakePublisher:
@@ -73,8 +76,8 @@ def make_definition():
 
 def save_dataset(root, depth_values):
     """Persist a small registered reference dataset."""
-    repository = ObjectRepository(root)
-    repository.create(make_definition())
+    repository = MultiReferenceViewRepository(root)
+    repository.object_repository.create(make_definition())
     rgb = Image()
     rgb.header.frame_id = "hand_color_image_sensor"
     rgb.header.stamp.sec = 10
@@ -113,16 +116,29 @@ def save_dataset(root, depth_values):
         0.0,
         1.0,
     ]
-    repository.save_reference_dataset(
+    tag = TagElement()
+    tag.id = 23
+    tag.pose.header.frame_id = "body"
+    tag.pose.header.stamp.sec = 10
+    tag.pose.header.stamp.nanosec = 200_000_000
+    tag.pose.pose.orientation.w = 1.0
+    repository.save_reference_views(
         "motor_a",
         "magnetic_scan",
-        ReferenceView(
-            controlled_frame_pose_object=PoseData.identity(),
-            controlled_frame="hand_color_image_sensor",
-        ),
-        rgb,
-        depth,
-        camera_info,
+        [CapturedReferenceView(
+            slot_index=0,
+            camera_id="hand",
+            reference_view=ReferenceView(
+                controlled_frame_pose_object=PoseData.identity(),
+                controlled_frame="hand_color_image_sensor",
+            ),
+            rgb_image=rgb,
+            depth_image=depth,
+            rgb_camera_info=camera_info,
+            depth_camera_info=camera_info,
+            reference_tag=tag,
+            fixed_frame="odom",
+        )],
     )
 
 

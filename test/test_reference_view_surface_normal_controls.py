@@ -80,6 +80,7 @@ def configure_reference_depth(controls, values):
     controls._reference_rgb_size = (depth.width, depth.height)
     controls._reference_depth_image = depth
     controls._reference_camera_info = camera_info
+    controls._reference_rgb_camera_info = camera_info
 
 
 def test_controls_expose_surface_normal_and_quality(application, tmp_path):

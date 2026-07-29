@@ -1,5 +1,9 @@
 """Tests for atomic camera-specific reference-view persistence."""
 
+import json
+
+import pytest
+from fault_detector_msgs.msg import TagElement
 from sensor_msgs.msg import CameraInfo, Image
 
 from fault_detector_spot.inspection.models import (
@@ -53,6 +57,12 @@ def make_capture(slot_index, camera_id, nanosec):
     camera_info.width = 2
     camera_info.height = 1
     camera_info.k = [100.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 1.0]
+    tag = TagElement()
+    tag.id = 23
+    tag.pose.header.frame_id = "body"
+    tag.pose.header.stamp.sec = 10
+    tag.pose.header.stamp.nanosec = 50
+    tag.pose.pose.orientation.w = 1.0
 
     return CapturedReferenceView(
         slot_index=slot_index,
@@ -63,7 +73,10 @@ def make_capture(slot_index, camera_id, nanosec):
         ),
         rgb_image=rgb,
         depth_image=depth,
-        camera_info=camera_info,
+        rgb_camera_info=camera_info,
+        depth_camera_info=camera_info,
+        reference_tag=tag,
+        fixed_frame="odom",
     )
 
 
@@ -92,10 +105,25 @@ def test_save_and_reload_three_reference_views(tmp_path):
     ]
     definition = repository.object_repository.load("motor_a")
     routine = definition.get_routine("magnetic_scan")
-    assert routine.reference_view.controlled_frame == (
+    assert routine.reference_views[0].controlled_frame == (
         "frontleft_image_sensor"
     )
+    assert [
+        (view.view_id, view.camera_id, view.slot_index)
+        for view in routine.reference_views
+    ] == [
+        ("slot1_frontleft", "frontleft", 0),
+        ("slot2_hand", "hand", 1),
+        ("slot3_back", "back", 2),
+    ]
     assert all(item.reference_view.reference_dataset_path for item in loaded)
+    routine_root = (
+        tmp_path
+        / "motor_a"
+        / "reference_datasets"
+        / "magnetic_scan"
+    )
+    assert not (routine_root / "reference_views.yaml").exists()
 
 
 def test_replacement_removes_old_camera_directories(tmp_path):
@@ -129,4 +157,103 @@ def test_replacement_removes_old_camera_directories(tmp_path):
         child.name for child in routine_root.iterdir() if child.is_dir()
     ]
     assert len(dataset_directories) == 1
-    assert "right" in dataset_directories[0]
+    view_directories = [
+        child.name
+        for child in (routine_root / dataset_directories[0]).iterdir()
+        if child.is_dir()
+    ]
+    assert view_directories == ["slot2_right"]
+
+
+def test_failed_object_update_preserves_previous_complete_set(
+    tmp_path,
+    monkeypatch,
+):
+    repository = MultiReferenceViewRepository(tmp_path)
+    repository.object_repository.create(make_object())
+    repository.save_reference_views(
+        "motor_a",
+        "magnetic_scan",
+        [make_capture(0, "hand", 100)],
+    )
+    previous = repository.object_repository.load("motor_a")
+
+    def fail_save(*args, **kwargs):
+        raise OSError("object write failed")
+
+    monkeypatch.setattr(
+        repository.object_repository,
+        "save",
+        fail_save,
+    )
+    with pytest.raises(OSError, match="object write failed"):
+        repository.save_reference_views(
+            "motor_a",
+            "magnetic_scan",
+            [make_capture(1, "right", 200)],
+        )
+
+    restored = MultiReferenceViewRepository(
+        tmp_path
+    ).object_repository.load("motor_a")
+    assert restored == previous
+    routine_root = (
+        tmp_path
+        / "motor_a"
+        / "reference_datasets"
+        / "magnetic_scan"
+    )
+    capture_sets = [
+        child.name for child in routine_root.iterdir()
+        if child.is_dir() and not child.name.startswith(".")
+    ]
+    assert len(capture_sets) == 1
+    assert "000000100" in capture_sets[0]
+
+
+def test_reload_rejects_calibration_metadata_mismatch(tmp_path):
+    repository = MultiReferenceViewRepository(tmp_path)
+    repository.object_repository.create(make_object())
+    definition = repository.save_reference_views(
+        "motor_a",
+        "magnetic_scan",
+        [make_capture(0, "hand", 100)],
+    )
+    view = definition.get_routine(
+        "magnetic_scan"
+    ).reference_views[0]
+    metadata_path = (
+        tmp_path
+        / "motor_a"
+        / view.reference_dataset_path
+        / "metadata.json"
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["rgb_depth_overlap_region"]["x"] += 1
+    metadata_path.write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="overlap does not match"):
+        repository.load_reference_views(
+            "motor_a",
+            "magnetic_scan",
+        )
+
+
+def test_save_rejects_different_tag_observations_between_cameras(
+    tmp_path,
+):
+    repository = MultiReferenceViewRepository(tmp_path)
+    repository.object_repository.create(make_object())
+    first = make_capture(0, "frontleft", 100)
+    second = make_capture(1, "hand", 200)
+    second.reference_tag.pose.header.stamp.nanosec = 51
+
+    with pytest.raises(ValueError, match="shared tag observation"):
+        repository.save_reference_views(
+            "motor_a",
+            "magnetic_scan",
+            [first, second],
+        )

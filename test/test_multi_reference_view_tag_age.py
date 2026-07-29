@@ -16,19 +16,25 @@ class FakeSynchronizer:
     def __init__(self, inputs):
         self.inputs = inputs
 
-    def best_snapshot(self, reference_tag_id, minimum_image_sequence):
+    def best_snapshot(self, minimum_input_sequence):
         return self.inputs
 
-    def collection_diagnostics(self, reference_tag_id, minimum_sequence):
+    def collection_diagnostics(self, minimum_sequence):
         return "valid"
 
 
 class FakeRepository:
-    def save_reference_views(self, object_id, routine_id, captures):
+    def save_reference_views(
+        self,
+        object_id,
+        routine_id,
+        captures,
+        **kwargs,
+    ):
         return captures
 
 
-def make_inputs(rgb_sec=15, tag_sec=10):
+def make_inputs(rgb_sec=15, tag_sec=14):
     rgb = Image()
     rgb.header.frame_id = "camera_frame"
     rgb.header.stamp.sec = rgb_sec
@@ -58,7 +64,7 @@ def make_inputs(rgb_sec=15, tag_sec=10):
     tag.pose.header.frame_id = "body"
     tag.pose.header.stamp.sec = tag_sec
     tag.pose.pose.orientation.w = 1.0
-    return rgb, depth, info, tag
+    return (rgb, depth, info, info), tag
 
 
 def make_request(inputs):
@@ -66,7 +72,7 @@ def make_request(inputs):
         slot_index=0,
         camera_id="hand",
         input_synchronizer=FakeSynchronizer(inputs),
-        minimum_image_sequence=1,
+        minimum_input_sequence=1,
     )
 
 
@@ -82,19 +88,21 @@ def patch_pose_resolver(monkeypatch):
     )
 
 
-def test_tag_at_five_second_limit_is_accepted(monkeypatch):
+def test_tag_at_freshness_limit_is_accepted(monkeypatch):
     patch_pose_resolver(monkeypatch)
+    inputs, tag = make_inputs(tag_sec=14)
 
     result = capture_module.capture_reference_views(
         FakeRepository(),
-        [make_request(make_inputs())],
+        [make_request(inputs)],
         object(),
         "object",
         "routine",
         SimpleNamespace(nanoseconds=15_000_000_000),
         2,
+        tag,
         maximum_input_age_sec=5.0,
-        maximum_tag_timestamp_skew_sec=5.0,
+        maximum_tag_age_sec=1.0,
     )
 
     assert len(result) == 1
@@ -102,6 +110,7 @@ def test_tag_at_five_second_limit_is_accepted(monkeypatch):
 
 def test_tag_older_than_input_age_is_rejected(monkeypatch):
     patch_pose_resolver(monkeypatch)
+    inputs, tag = make_inputs(tag_sec=13)
 
     with pytest.raises(
         capture_module.ReferenceViewCaptureNotReady,
@@ -109,12 +118,67 @@ def test_tag_older_than_input_age_is_rejected(monkeypatch):
     ):
         capture_module.capture_reference_views(
             FakeRepository(),
-            [make_request(make_inputs())],
+            [make_request(inputs)],
             object(),
             "object",
             "routine",
             SimpleNamespace(nanoseconds=15_100_000_000),
             2,
+            tag,
             maximum_input_age_sec=5.0,
-            maximum_tag_timestamp_skew_sec=6.0,
+            maximum_tag_age_sec=1.5,
+        )
+
+
+@pytest.mark.parametrize(
+    "input_index,label",
+    [
+        (0, "hand RGB image is stale"),
+        (1, "hand depth image is stale"),
+    ],
+)
+def test_stale_camera_image_is_rejected(
+    monkeypatch,
+    input_index,
+    label,
+):
+    patch_pose_resolver(monkeypatch)
+    inputs, tag = make_inputs()
+    inputs = list(inputs)
+    inputs[input_index].header.stamp.sec = 13
+
+    with pytest.raises(
+        capture_module.ReferenceViewCaptureNotReady,
+        match=label,
+    ):
+        capture_module.capture_reference_views(
+            FakeRepository(),
+            [make_request(tuple(inputs))],
+            object(),
+            "object",
+            "routine",
+            SimpleNamespace(nanoseconds=15_000_000_000),
+            2,
+            tag,
+            maximum_input_age_sec=1.5,
+            maximum_tag_age_sec=1.5,
+        )
+
+
+def test_future_camera_image_is_rejected(monkeypatch):
+    patch_pose_resolver(monkeypatch)
+    inputs, tag = make_inputs(rgb_sec=16, tag_sec=15)
+
+    with pytest.raises(ValueError, match="timestamp is in the future"):
+        capture_module.capture_reference_views(
+            FakeRepository(),
+            [make_request(inputs)],
+            object(),
+            "object",
+            "routine",
+            SimpleNamespace(nanoseconds=15_000_000_000),
+            2,
+            tag,
+            maximum_input_age_sec=1.5,
+            maximum_tag_age_sec=1.5,
         )

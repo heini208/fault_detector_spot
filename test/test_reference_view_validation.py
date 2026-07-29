@@ -78,15 +78,12 @@ def make_inputs():
 def validate(
     inputs,
     maximum_timestamp_skew_sec=0.05,
-    maximum_tag_timestamp_skew_sec=0.25,
 ) -> None:
     """Validate one mutable test input set."""
     validate_reference_view_inputs(
         *inputs,
         maximum_timestamp_skew_sec=maximum_timestamp_skew_sec,
-        maximum_tag_timestamp_skew_sec=(
-            maximum_tag_timestamp_skew_sec
-        ),
+        rgb_camera_info=inputs[2],
     )
 
 
@@ -186,19 +183,10 @@ def test_wrong_reference_tag_is_rejected():
         validate(inputs)
 
 
-def test_tag_timestamp_skew_is_rejected():
-    """An old base tag cannot anchor a newer camera dataset."""
+def test_tag_timestamp_skew_is_not_camera_pairing_criterion():
+    """TF resolves the tag and camera at their own timestamps."""
     inputs = list(make_inputs())
     inputs[3].pose.header.stamp.nanosec = 300_000_000
-
-    with pytest.raises(ValueError, match="tag and RGB timestamps"):
-        validate(inputs)
-
-
-def test_tag_timestamp_skew_boundary_is_accepted():
-    """A base tag at the configured timing limit is accepted."""
-    inputs = list(make_inputs())
-    inputs[3].pose.header.stamp.nanosec = 250_000_000
 
     validate(inputs)
 
@@ -284,16 +272,6 @@ def test_invalid_controlled_frame_pose_is_rejected():
 
     with pytest.raises(ValueError, match="normalized"):
         validate(inputs)
-
-
-@pytest.mark.parametrize("maximum_skew", [-0.01, float("inf")])
-def test_invalid_tag_timestamp_limit_is_rejected(maximum_skew):
-    """The tag timing tolerance must be finite and non-negative."""
-    with pytest.raises(ValueError, match="tag timestamp skew"):
-        validate(
-            make_inputs(),
-            maximum_tag_timestamp_skew_sec=maximum_skew,
-        )
 
 
 def test_validation_does_not_modify_inputs():
