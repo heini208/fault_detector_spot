@@ -10,6 +10,10 @@ from sensor_msgs.msg import CameraInfo, Image
 from .models import ImagePoint, Vector3Data
 
 
+class RegisteredDepthSupportNotReady(ValueError):
+    """Indicate that a later depth frame may provide usable support."""
+
+
 @dataclass(frozen=True)
 class ProjectedReferencePoint:
     """One selected surface point expressed in the depth optical frame."""
@@ -83,7 +87,11 @@ def project_reference_pixel(
         resolved_rgb_size,
         depth_size,
         rgb_camera_info=rgb_camera_info,
-        depth_camera_info=depth_camera_info,
+        depth_camera_info=(
+            depth_camera_info
+            if rgb_camera_info is not None
+            else None
+        ),
     )
     frame_id = _resolve_frame_id(depth_image, depth_camera_info)
 
@@ -232,6 +240,107 @@ def rgb_depth_overlap_region(
         y=valid_v[0],
         width=valid_u[-1] - valid_u[0] + 1,
         height=valid_v[-1] - valid_v[0] + 1,
+    )
+    region.validate()
+    return region
+
+
+def rgb_depth_selectable_region(
+    rgb_size: Tuple[int, int],
+    depth_image: Image,
+    rgb_camera_info: CameraInfo,
+    depth_camera_info: CameraInfo,
+) -> ImageRegion:
+    """Return the RGB region backed by calibrated, non-empty depth."""
+    rgb_width, rgb_height = _validate_image_size(
+        rgb_size,
+        "RGB image size",
+    )
+    _validate_depth_image(depth_image)
+    depth_size = (depth_image.width, depth_image.height)
+    rgb_intrinsics = _camera_intrinsics(
+        rgb_camera_info,
+        (rgb_width, rgb_height),
+        "RGB CameraInfo",
+    )
+    depth_intrinsics = _camera_intrinsics(
+        depth_camera_info,
+        depth_size,
+        "Depth CameraInfo",
+    )
+    depth_support = _depth_valid_support_region(depth_image)
+    valid_u = [
+        u for u in range(rgb_width)
+        if depth_support.x <= _map_calibrated_coordinate(
+            u,
+            rgb_intrinsics[0],
+            rgb_intrinsics[2],
+            depth_intrinsics[0],
+            depth_intrinsics[2],
+        ) < depth_support.x + depth_support.width
+    ]
+    valid_v = [
+        v for v in range(rgb_height)
+        if depth_support.y <= _map_calibrated_coordinate(
+            v,
+            rgb_intrinsics[1],
+            rgb_intrinsics[3],
+            depth_intrinsics[1],
+            depth_intrinsics[3],
+        ) < depth_support.y + depth_support.height
+    ]
+    if not valid_u or not valid_v:
+        raise RegisteredDepthSupportNotReady(
+            "RGB image has no selectable region with valid registered depth"
+        )
+    region = ImageRegion(
+        x=valid_u[0],
+        y=valid_v[0],
+        width=valid_u[-1] - valid_u[0] + 1,
+        height=valid_v[-1] - valid_v[0] + 1,
+    )
+    region.validate()
+    return region
+
+
+def _depth_valid_support_region(depth_image: Image) -> ImageRegion:
+    row_counts = [0] * depth_image.height
+    column_counts = [0] * depth_image.width
+    data = memoryview(depth_image.data)
+    for v in range(depth_image.height):
+        for u in range(depth_image.width):
+            if _read_depth_m(depth_image, data, u, v) is None:
+                continue
+            row_counts[v] += 1
+            column_counts[u] += 1
+
+    minimum_column_count = max(
+        1,
+        int(math.ceil(depth_image.height * 0.01)),
+    )
+    minimum_row_count = max(
+        1,
+        int(math.ceil(depth_image.width * 0.01)),
+    )
+    supported_columns = [
+        index
+        for index, count in enumerate(column_counts)
+        if count >= minimum_column_count
+    ]
+    supported_rows = [
+        index
+        for index, count in enumerate(row_counts)
+        if count >= minimum_row_count
+    ]
+    if not supported_columns or not supported_rows:
+        raise RegisteredDepthSupportNotReady(
+            "Registered depth image does not contain valid depth support"
+        )
+    region = ImageRegion(
+        x=supported_columns[0],
+        y=supported_rows[0],
+        width=supported_columns[-1] - supported_columns[0] + 1,
+        height=supported_rows[-1] - supported_rows[0] + 1,
     )
     region.validate()
     return region

@@ -121,3 +121,31 @@ def test_collection_freezes_after_window_end(monkeypatch):
     snapshot = synchronizer.best_snapshot(1)
 
     assert snapshot[0].header.stamp.nanosec == 100_000_000
+
+
+def test_collection_freezes_both_calibrations_at_start(monkeypatch):
+    clock = [1_000_000_000]
+    monkeypatch.setattr(
+        synchronizer_module.time,
+        "monotonic_ns",
+        lambda: clock[0],
+    )
+    synchronizer = make_synchronizer()
+    synchronizer._rgb_camera_info.k[0] = 100.0
+    synchronizer._depth_camera_info.k[0] = 200.0
+    synchronizer.begin_collection(1)
+
+    newer_rgb_info = make_camera_info()
+    newer_depth_info = make_camera_info()
+    newer_rgb_info.k[0] = 300.0
+    newer_depth_info.k[0] = 400.0
+    synchronizer._rgb_camera_info_callback(newer_rgb_info)
+    synchronizer._depth_camera_info_callback(newer_depth_info)
+    synchronizer._rgb_callback(make_image(100_000_000))
+    synchronizer._depth_callback(make_image(105_000_000))
+
+    clock[0] += 1_000_000_000
+    snapshot = synchronizer.best_snapshot(1)
+
+    assert snapshot[2].k[0] == 100.0
+    assert snapshot[3].k[0] == 200.0

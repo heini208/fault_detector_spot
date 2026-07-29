@@ -29,7 +29,10 @@ def make_inputs():
     depth.height = 3
     depth.encoding = "16UC1"
     depth.step = 8
-    depth.data = bytes(depth.step * depth.height)
+    depth.data = b"".join(
+        (1000).to_bytes(2, byteorder="little")
+        for _ in range(depth.width * depth.height)
+    )
 
     depth_camera_info = CameraInfo()
     depth_camera_info.header.frame_id = "hand_color_image_sensor"

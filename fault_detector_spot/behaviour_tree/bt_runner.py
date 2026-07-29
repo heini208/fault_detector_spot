@@ -412,11 +412,6 @@ def build_capture_reference_view_behavior(
             "inspection.reference_view_maximum_input_age_sec",
             1.5,
         )),
-        maximum_tag_age_sec=float(read_parameter(
-            node,
-            "inspection.reference_view_maximum_tag_age_sec",
-            1.5,
-        )),
         maximum_timestamp_skew_sec=float(read_parameter(
             node,
             "inspection.reference_view_maximum_timestamp_skew_sec",

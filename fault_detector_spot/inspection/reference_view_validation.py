@@ -10,7 +10,9 @@ from fault_detector_spot.inspection.models import (
     Vector3Data,
 )
 from fault_detector_spot.inspection.reference_view_depth_projection import (
+    RegisteredDepthSupportNotReady,
     rgb_depth_overlap_region,
+    rgb_depth_selectable_region,
 )
 
 if TYPE_CHECKING:
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
 _RGB_BYTES_PER_PIXEL = {
     "bgr8": 3,
     "bgra8": 4,
+    "mono8": 1,
     "rgb8": 3,
     "rgba8": 4,
 }
@@ -154,6 +157,15 @@ def _validate_registered_geometry(
         rgb_camera_info,
         depth_camera_info,
     )
+    try:
+        rgb_depth_selectable_region(
+            (rgb_image.width, rgb_image.height),
+            depth_image,
+            rgb_camera_info,
+            depth_camera_info,
+        )
+    except RegisteredDepthSupportNotReady as exception:
+        raise ReferenceViewInputNotReady(str(exception)) from exception
 
 
 def _validate_matching_frames(

@@ -55,7 +55,7 @@ from fault_detector_spot.inspection.reference_view_approach_direction import (
 )
 from fault_detector_spot.inspection.reference_view_depth_projection import (
     project_reference_pixel,
-    rgb_depth_overlap_region,
+    rgb_depth_selectable_region,
 )
 from fault_detector_spot.inspection.reference_view_surface_normal import (
     estimate_reference_surface_normal,
@@ -1863,15 +1863,12 @@ class InspectionControls(UIControlHelper):
             dropdown.setCurrentIndex(camera_index)
             dropdown.blockSignals(False)
             self._reference_slot_captures[slot_index] = capture
-            valid_region = rgb_depth_overlap_region(
+            valid_region = rgb_depth_selectable_region(
                 (
                     capture.rgb_image.width,
                     capture.rgb_image.height,
                 ),
-                (
-                    capture.depth_image.width,
-                    capture.depth_image.height,
-                ),
+                capture.depth_image,
                 capture.rgb_camera_info,
                 capture.depth_camera_info,
             )

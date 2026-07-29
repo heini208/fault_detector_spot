@@ -1,5 +1,6 @@
 """Tests for shared-tag and selected-camera capture integration."""
 
+from copy import deepcopy
 from types import SimpleNamespace
 
 import py_trees
@@ -108,6 +109,9 @@ class FakeSynchronizer:
         self.depth_subscription = FakeFilterSubscription()
         self.rgb_camera_info_subscription = object()
         self.depth_camera_info_subscription = object()
+        self.latest_rgb_frame_id = (
+            f"{camera_id}_color_image_sensor"
+        )
 
     def ready_for_collection(self):
         return self.input_ready
@@ -130,6 +134,27 @@ class FakeSynchronizer:
 
 class FakeRepository:
     pass
+
+
+class FakeTFBuffer:
+    def __init__(self):
+        self.lookup_error = None
+
+    def transform(self, pose, target_frame, timeout=None):
+        transformed = deepcopy(pose)
+        transformed.header.frame_id = target_frame
+        return transformed
+
+    def lookup_transform(
+        self,
+        target_frame,
+        source_frame,
+        time,
+        timeout=None,
+    ):
+        if self.lookup_error is not None:
+            raise self.lookup_error
+        return object()
 
 
 def make_tag(tag_id=23, sec=10, nanosec=0):
@@ -216,7 +241,7 @@ def configure_behavior(monkeypatch, capture_error=None):
     monkeypatch.setattr(
         capture_module.tf2_ros,
         "Buffer",
-        lambda: object(),
+        FakeTFBuffer,
     )
     monkeypatch.setattr(
         capture_module.tf2_ros,
@@ -245,7 +270,6 @@ def configure_behavior(monkeypatch, capture_error=None):
         object_root="/tmp/objects",
         synchronization_queue_size=7,
         maximum_input_age_sec=5.0,
-        maximum_tag_age_sec=1.5,
         maximum_timestamp_skew_sec=0.03,
         collection_duration_sec=1.0,
         fixed_frame="odom",
@@ -278,6 +302,9 @@ def begin_with_retained_tag(
     for camera_id in camera_ids:
         created["synchronizers"][camera_id].input_ready = True
     assert behavior.update() == py_trees.common.Status.RUNNING
+    behavior._base_tags_callback(
+        make_tag_array(make_tag(nanosec=100_000_000))
+    )
 
 
 def test_setup_keeps_one_shared_tag_subscription(monkeypatch):
@@ -299,7 +326,6 @@ def test_camera_collector_does_not_receive_retained_tags(monkeypatch):
 
     assert behavior.update() == py_trees.common.Status.RUNNING
 
-    synchronizer = created["synchronizers"]["hand"]
     assert set(created["synchronizers"]) == {"hand"}
     assert "base_tag_topic" not in (
         created["synchronizer_kwargs"]["hand"]
@@ -391,8 +417,14 @@ def test_tf_retry_reuses_completed_attempt_validation_time(monkeypatch):
     node.clock.advance(1.0)
     assert behavior.update() == py_trees.common.Status.SUCCESS
 
-    assert capture_calls[0][0][5] is first_time
-    assert capture_calls[1][0][5] is first_time
+    assert (
+        capture_calls[0][0][5].nanoseconds
+        == first_time.nanoseconds
+    )
+    assert (
+        capture_calls[1][0][5].nanoseconds
+        == first_time.nanoseconds
+    )
 
 
 def test_backward_bag_time_clears_retained_history(monkeypatch):
@@ -417,13 +449,58 @@ def test_warmup_timeout_reports_selected_camera(monkeypatch):
     create_writer(make_command())
 
     assert behavior.update() == py_trees.common.Status.RUNNING
-    node.clock.advance(3.1)
-
-    assert behavior.update() == py_trees.common.Status.FAILURE
+    for expected_status in (
+        py_trees.common.Status.RUNNING,
+        py_trees.common.Status.RUNNING,
+        py_trees.common.Status.FAILURE,
+    ):
+        node.clock.advance(3.1)
+        assert behavior.update() == expected_status
     assert "hand:" in behavior.feedback_message
     assert created["synchronizers"]["hand"].begin_calls == []
     assert capture_calls == []
     assert behavior._synchronizers == {}
+
+
+def test_completed_window_accepts_fresh_pre_window_tag(monkeypatch):
+    behavior, _, created, capture_calls = configure_behavior(monkeypatch)
+    create_writer(make_command())
+    behavior._base_tags_callback(make_tag_array(make_tag()))
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    created["synchronizers"]["hand"].input_ready = True
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    created["synchronizers"]["hand"].ready = True
+
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+    assert len(capture_calls) == 1
+    reference_tags = capture_calls[0][0][7]
+    assert len(reference_tags) == 1
+    assert reference_tags[0].id == 23
+    assert reference_tags[0].pose.header.frame_id == "odom"
+
+
+def test_retry_reuses_tag_while_it_remains_fresh(monkeypatch):
+    error = capture_module.ReferenceViewCaptureNotReady(
+        "camera pair missing"
+    )
+    behavior, _, created, _ = configure_behavior(
+        monkeypatch,
+        capture_error=[error],
+    )
+    create_writer(make_command())
+    behavior._base_tags_callback(make_tag_array(make_tag()))
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    synchronizer = created["synchronizers"]["hand"]
+    synchronizer.input_ready = True
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    synchronizer.ready = True
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert synchronizer.begin_calls == [(1,)]
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert synchronizer.begin_calls == [(1,), (1,)]
 
 
 def test_initialise_releases_camera_but_keeps_tag_subscription(
@@ -496,3 +573,23 @@ def test_invalid_capture_attempt_count_is_rejected(attempts):
         CaptureInspectionObjectReferenceView(
             capture_max_attempts=attempts,
         )
+
+
+def test_missing_camera_tf_blocks_collection(monkeypatch):
+    behavior, _, created, capture_calls = configure_behavior(monkeypatch)
+    create_writer(make_command())
+    behavior._base_tags_callback(make_tag_array(make_tag()))
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    synchronizer = created["synchronizers"]["hand"]
+    synchronizer.input_ready = True
+    behavior.tf_buffer.lookup_error = (
+        capture_module.tf2_ros.TransformException(
+            "source frame does not exist"
+        )
+    )
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert synchronizer.begin_calls == []
+    assert "source frame does not exist" in behavior.feedback_message
+    assert capture_calls == []

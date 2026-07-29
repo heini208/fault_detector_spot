@@ -113,8 +113,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.pending_msgs.append((stamp, msg))
 
     def fire_command(self, msg: [ComplexCommand, BasicCommand]):
-        if self.is_last_command(msg):
-            return
         if isinstance(msg, BasicCommand):
             self.received_command = SimpleCommand(msg.command_id, msg.header.stamp)
             self.fire_basic_command(msg)
@@ -171,18 +169,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.command_buffer.append(
             SimpleCommand(command_id=CommandID.EMERGENCY_CANCEL, stamp=self._create_command_stamp()))
         self.logger.info("Emergency stop command received, clearing command buffer")
-
-    def is_last_command(self, msg) -> bool:
-        if self.received_command is None:
-            return False
-        stamp = self._extract_timestamp(msg)
-        if stamp is None:
-            self.logger.warning(
-                f"Could not extract timestamp from message of type {type(msg).__name__}"
-            )
-            return False
-        last_stamp = self.received_command.stamp
-        return stamp.sec == last_stamp.sec and stamp.nanosec == last_stamp.nanosec
 
     def _extract_timestamp(self, msg):
         if hasattr(msg, 'command'):

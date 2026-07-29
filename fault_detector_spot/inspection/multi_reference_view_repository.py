@@ -16,7 +16,10 @@ from sensor_msgs.msg import CameraInfo, Image
 from .models import InspectionObject, ReferenceView
 from .object_repository import ObjectRepository
 from .reference_camera_registry import REFERENCE_CAMERA_BY_ID
-from .reference_view_depth_projection import rgb_depth_overlap_region
+from .reference_view_depth_projection import (
+    rgb_depth_overlap_region,
+    rgb_depth_selectable_region,
+)
 from .reference_view_validation import validate_reference_view_inputs
 from .repository_utils import atomic_write_text, validate_storage_name
 
@@ -307,10 +310,6 @@ class MultiReferenceViewRepository:
                 raise ValueError(
                     "New reference view already has a dataset path"
                 )
-            image_skew_sec = abs(
-                _message_stamp_nanoseconds(capture.rgb_image)
-                - _message_stamp_nanoseconds(capture.depth_image)
-            ) / 1_000_000_000
             validate_reference_view_inputs(
                 capture.rgb_image,
                 capture.depth_image,
@@ -415,6 +414,15 @@ class MultiReferenceViewRepository:
             capture.rgb_camera_info,
             capture.depth_camera_info,
         )
+        selectable = rgb_depth_selectable_region(
+            (
+                capture.rgb_image.width,
+                capture.rgb_image.height,
+            ),
+            capture.depth_image,
+            capture.rgb_camera_info,
+            capture.depth_camera_info,
+        )
         metadata = {
             "object_id": object_id,
             "routine_id": routine_id,
@@ -457,6 +465,7 @@ class MultiReferenceViewRepository:
                 - _stamp_nanoseconds(tag_stamp)
             ) / 1_000_000_000,
             "rgb_depth_overlap_region": overlap.to_dict(),
+            "rgb_depth_selectable_region": selectable.to_dict(),
         }
         atomic_write_text(
             path / "metadata.json",
@@ -582,6 +591,19 @@ class MultiReferenceViewRepository:
         ):
             raise ValueError(
                 "Reference dataset RGB-depth overlap does not match"
+            )
+        selectable = rgb_depth_selectable_region(
+            (rgb_image.width, rgb_image.height),
+            depth_image,
+            rgb_camera_info,
+            depth_camera_info,
+        )
+        if (
+            metadata.get("rgb_depth_selectable_region")
+            != selectable.to_dict()
+        ):
+            raise ValueError(
+                "Reference dataset selectable depth region does not match"
             )
         fixed_frame = metadata.get("fixed_frame")
         if not isinstance(fixed_frame, str) or not fixed_frame.strip():

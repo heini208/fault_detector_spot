@@ -10,6 +10,7 @@ from fault_detector_spot.inspection.reference_view_depth_projection import (
     map_rgb_pixel_to_depth,
     project_reference_pixel,
     rgb_depth_overlap_region,
+    rgb_depth_selectable_region,
 )
 from fault_detector_spot.inspection.reference_view_surface_normal import (
     estimate_reference_surface_normal,
@@ -165,4 +166,35 @@ def test_calibrated_mapping_rejects_rgb_border_outside_depth_crop():
                 3,
                 focal_length=100.0,
             ),
+        )
+
+
+def test_selectable_region_excludes_zero_depth_border():
+    """A registered-depth border without returns is not selectable."""
+    values = []
+    for _ in range(4):
+        values.extend([0.0, 0.0, 1.0, 1.0, 1.0, 1.0])
+    depth = make_depth(values, 6, 4)
+
+    region = rgb_depth_selectable_region(
+        (6, 4),
+        depth,
+        make_camera_info(6, 4),
+        make_camera_info(6, 4),
+    )
+
+    assert region.x == 2
+    assert region.y == 0
+    assert region.width == 4
+    assert region.height == 4
+
+
+def test_selectable_region_rejects_empty_registered_depth():
+    """A capture without any depth cannot define a surface."""
+    with pytest.raises(ValueError, match="valid depth support"):
+        rgb_depth_selectable_region(
+            (4, 3),
+            make_depth([0.0] * 12, 4, 3),
+            make_camera_info(4, 3),
+            make_camera_info(4, 3),
         )

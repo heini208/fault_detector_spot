@@ -24,6 +24,9 @@ from fault_detector_spot.inspection.multi_reference_view_repository import (
     CapturedReferenceView,
     MultiReferenceViewRepository,
 )
+from fault_detector_spot.inspection.reference_view_validation import (
+    ReferenceViewInputNotReady,
+)
 
 
 class FakePublisher:
@@ -174,26 +177,13 @@ def test_selected_pixel_exposes_projected_surface_point(
     assert controls.reference_projection_status_label.text() == "Ready"
 
 
-def test_invalid_depth_is_reported_without_accepting_a_point(
-    application,
-    tmp_path,
-):
-    """A selected pixel with no local depth remains visibly invalid."""
-    save_dataset(tmp_path, [0, 0])
-    controls = InspectionControls(FakeUI(tmp_path))
-    select_routine(controls)
-
-    controls.reference_view_widget._set_selected_image_point(
-        ImagePoint(u=1, v=0)
-    )
-
-    assert controls.selected_surface_point is None
-    assert controls.reference_projection_status_label.text() == (
-        "Unavailable"
-    )
-    assert "No valid depth" in (
-        controls.reference_projection_status_label.toolTip()
-    )
+def test_capture_rejects_dataset_without_any_valid_depth(tmp_path):
+    """A reference dataset requires usable registered-depth support."""
+    with pytest.raises(
+        ReferenceViewInputNotReady,
+        match="does not contain valid depth support",
+    ):
+        save_dataset(tmp_path, [0, 0])
 
 
 def test_clearing_pixel_also_clears_surface_point(

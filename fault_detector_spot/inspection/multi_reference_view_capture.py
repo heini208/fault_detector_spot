@@ -59,9 +59,8 @@ def capture_reference_views(
     routine_id: str,
     current_time,
     reference_tag_id: int,
-    reference_tag,
+    reference_tags,
     maximum_input_age_sec: float = 2.0,
-    maximum_tag_age_sec: float = 1.5,
     maximum_timestamp_skew_sec: float = 0.05,
     fixed_frame: str = "odom",
     transform_timeout_sec: float = 0.05,
@@ -74,21 +73,7 @@ def capture_reference_views(
         raise ValueError(
             "Maximum input age must be finite and non-negative"
         )
-    if (
-        not math.isfinite(maximum_tag_age_sec)
-        or maximum_tag_age_sec < 0.0
-    ):
-        raise ValueError(
-            "Maximum tag age must be finite and non-negative"
-        )
-    _require_fresh(
-        current_time,
-        reference_tag.pose.header.stamp,
-        "Base-camera tag observation",
-        maximum_tag_age_sec,
-    )
-
-    captures = []
+    snapshots = []
     for request in requests:
         inputs = request.input_synchronizer.best_snapshot(
             request.minimum_input_sequence,
@@ -119,6 +104,27 @@ def capture_reference_views(
             f"{request.camera_id} depth image",
             maximum_input_age_sec,
         )
+        snapshots.append((
+            request,
+            rgb_image,
+            depth_image,
+            rgb_camera_info,
+            depth_camera_info,
+        ))
+
+    reference_tag = _select_reference_tag(
+        reference_tags,
+        reference_tag_id,
+    )
+
+    captures = []
+    for (
+        request,
+        rgb_image,
+        depth_image,
+        rgb_camera_info,
+        depth_camera_info,
+    ) in snapshots:
         reference_view = resolve_reference_view_pose(
             tf_buffer,
             rgb_image,
@@ -157,6 +163,28 @@ def capture_reference_views(
     )
 
 
+def _select_reference_tag(
+    reference_tags,
+    reference_tag_id: int,
+):
+    candidates = tuple(
+        reference_tag
+        for reference_tag in reference_tags
+        if int(reference_tag.id) == reference_tag_id
+    )
+    if not candidates:
+        raise ReferenceViewCaptureNotReady(
+            "No capture anchor is available for "
+            f"reference tag {reference_tag_id}"
+        )
+    return max(
+        candidates,
+        key=lambda reference_tag: _stamp_nanoseconds(
+            reference_tag.pose.header.stamp
+        ),
+    )
+
+
 def _require_fresh(
     current_time,
     stamp,
@@ -179,3 +207,12 @@ def _require_fresh(
         raise ReferenceViewCaptureNotReady(
             f"{name} is stale: {age_sec:.3f} s"
         )
+
+
+def _stamp_nanoseconds(stamp) -> int:
+    if stamp.sec < 0 or not 0 <= stamp.nanosec < 1_000_000_000:
+        raise ValueError("Sensor input timestamp is invalid")
+    nanoseconds = stamp.sec * 1_000_000_000 + stamp.nanosec
+    if nanoseconds == 0:
+        raise ValueError("Sensor input timestamp must not be zero")
+    return nanoseconds

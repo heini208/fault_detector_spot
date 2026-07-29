@@ -1,4 +1,4 @@
-"""Tests for known-good tag freshness and RGB skew validation."""
+"""Tests for fixed-frame tag anchors and camera freshness."""
 
 from types import SimpleNamespace
 
@@ -100,34 +100,31 @@ def test_tag_at_freshness_limit_is_accepted(monkeypatch):
         "routine",
         SimpleNamespace(nanoseconds=15_000_000_000),
         2,
-        tag,
+        [tag],
         maximum_input_age_sec=5.0,
-        maximum_tag_age_sec=1.0,
     )
 
     assert len(result) == 1
 
 
-def test_tag_older_than_input_age_is_rejected(monkeypatch):
+def test_old_fixed_frame_tag_anchor_is_accepted(monkeypatch):
     patch_pose_resolver(monkeypatch)
     inputs, tag = make_inputs(tag_sec=13)
+    tag.pose.header.frame_id = "odom"
 
-    with pytest.raises(
-        capture_module.ReferenceViewCaptureNotReady,
-        match="Base-camera tag observation is stale",
-    ):
-        capture_module.capture_reference_views(
-            FakeRepository(),
-            [make_request(inputs)],
-            object(),
-            "object",
-            "routine",
-            SimpleNamespace(nanoseconds=15_100_000_000),
-            2,
-            tag,
-            maximum_input_age_sec=5.0,
-            maximum_tag_age_sec=1.5,
-        )
+    result = capture_module.capture_reference_views(
+        FakeRepository(),
+        [make_request(inputs)],
+        object(),
+        "object",
+        "routine",
+        SimpleNamespace(nanoseconds=15_100_000_000),
+        2,
+        [tag],
+        maximum_input_age_sec=5.0,
+    )
+
+    assert result[0].reference_tag is tag
 
 
 @pytest.mark.parametrize(
@@ -159,9 +156,8 @@ def test_stale_camera_image_is_rejected(
             "routine",
             SimpleNamespace(nanoseconds=15_000_000_000),
             2,
-            tag,
+            [tag],
             maximum_input_age_sec=1.5,
-            maximum_tag_age_sec=1.5,
         )
 
 
@@ -178,7 +174,49 @@ def test_future_camera_image_is_rejected(monkeypatch):
             "routine",
             SimpleNamespace(nanoseconds=15_000_000_000),
             2,
-            tag,
+            [tag],
             maximum_input_age_sec=1.5,
-            maximum_tag_age_sec=1.5,
         )
+
+
+def test_closest_shared_tag_is_selected_after_camera_pairing(
+    monkeypatch,
+):
+    patch_pose_resolver(monkeypatch)
+    inputs, older_tag = make_inputs(rgb_sec=15, tag_sec=14)
+    _, closer_tag = make_inputs(rgb_sec=15, tag_sec=15)
+
+    result = capture_module.capture_reference_views(
+        FakeRepository(),
+        [make_request(inputs)],
+        object(),
+        "object",
+        "routine",
+        SimpleNamespace(nanoseconds=15_200_000_000),
+        2,
+        [older_tag, closer_tag],
+        maximum_input_age_sec=1.5,
+    )
+
+    assert result[0].reference_tag is closer_tag
+
+
+def test_latest_available_anchor_is_used_without_image_skew_gate(
+    monkeypatch,
+):
+    patch_pose_resolver(monkeypatch)
+    inputs, tag = make_inputs(rgb_sec=15, tag_sec=14)
+
+    result = capture_module.capture_reference_views(
+        FakeRepository(),
+        [make_request(inputs)],
+        object(),
+        "object",
+        "routine",
+        SimpleNamespace(nanoseconds=15_000_000_000),
+        2,
+        [tag],
+        maximum_input_age_sec=1.5,
+    )
+
+    assert result[0].reference_tag is tag

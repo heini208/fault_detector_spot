@@ -28,6 +28,8 @@ class _CollectionWindow:
     ends_at_nanoseconds: int
     rgb_images: Deque[ImageSample]
     depth_images: Deque[ImageSample]
+    rgb_camera_info: Optional[CameraInfo] = None
+    depth_camera_info: Optional[CameraInfo] = None
 
 
 class ReferenceViewInputSynchronizer:
@@ -146,6 +148,8 @@ class ReferenceViewInputSynchronizer:
                     ),
                     maxlen=self._collection_history_size,
                 ),
+                rgb_camera_info=deepcopy(self._rgb_camera_info),
+                depth_camera_info=deepcopy(self._depth_camera_info),
             )
 
     def collection_ready(self) -> bool:
@@ -183,14 +187,14 @@ class ReferenceViewInputSynchronizer:
                     "Reference-view collection is not complete"
                 )
             if (
-                self._rgb_camera_info is None
-                or self._depth_camera_info is None
+                collection.rgb_camera_info is None
+                or collection.depth_camera_info is None
             ):
                 return None
             rgb_images = tuple(collection.rgb_images)
             depth_images = tuple(collection.depth_images)
-            rgb_camera_info = deepcopy(self._rgb_camera_info)
-            depth_camera_info = deepcopy(self._depth_camera_info)
+            rgb_camera_info = deepcopy(collection.rgb_camera_info)
+            depth_camera_info = deepcopy(collection.depth_camera_info)
 
         selected = self._select_best_pair(rgb_images, depth_images)
         if selected is None:
@@ -242,10 +246,10 @@ class ReferenceViewInputSynchronizer:
                 return "active collection does not match the request"
             return self._format_diagnostics(
                 rgb_camera_info_available=(
-                    self._rgb_camera_info is not None
+                    collection.rgb_camera_info is not None
                 ),
                 depth_camera_info_available=(
-                    self._depth_camera_info is not None
+                    collection.depth_camera_info is not None
                 ),
                 rgb_images=tuple(collection.rgb_images),
                 depth_images=tuple(collection.depth_images),

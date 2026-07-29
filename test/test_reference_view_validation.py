@@ -13,6 +13,7 @@ from fault_detector_spot.inspection.models import (
     Vector3Data,
 )
 from fault_detector_spot.inspection.reference_view_validation import (
+    ReferenceViewInputNotReady,
     validate_reference_view_inputs,
 )
 
@@ -64,9 +65,13 @@ def make_tag() -> TagElement:
 
 def make_inputs():
     """Create one valid reference-view input set."""
+    depth = make_image("16UC1", 2)
+    depth.data = array("B", [232, 3]) * (
+        depth.width * depth.height
+    )
     return (
         make_image("rgb8", 3),
-        make_image("16UC1", 2),
+        depth,
         make_camera_info(),
         make_tag(),
         7,
@@ -92,7 +97,7 @@ def test_valid_reference_view_inputs_pass():
     validate(make_inputs())
 
 
-@pytest.mark.parametrize("encoding", ["mono8", "yuv422"])
+@pytest.mark.parametrize("encoding", ["yuv422"])
 def test_unsupported_rgb_encoding_is_rejected(encoding):
     """The reference image must use a supported color encoding."""
     inputs = list(make_inputs())
@@ -100,6 +105,14 @@ def test_unsupported_rgb_encoding_is_rejected(encoding):
 
     with pytest.raises(ValueError, match="RGB image encoding"):
         validate(inputs)
+
+
+def test_mono8_reference_image_is_accepted():
+    """Spot body-camera grayscale images remain selectable."""
+    inputs = list(make_inputs())
+    inputs[0] = make_image("mono8", 1)
+
+    validate(inputs)
 
 
 def test_unsupported_depth_encoding_is_rejected():
@@ -117,6 +130,20 @@ def test_incomplete_image_data_is_rejected():
     inputs[1].data = inputs[1].data[:-1]
 
     with pytest.raises(ValueError, match="Depth image data"):
+        validate(inputs)
+
+
+def test_empty_registered_depth_is_temporarily_not_ready():
+    """A later depth frame may provide the required surface support."""
+    inputs = list(make_inputs())
+    inputs[1].data = array("B", [0]) * (
+        inputs[1].step * inputs[1].height
+    )
+
+    with pytest.raises(
+        ReferenceViewInputNotReady,
+        match="valid depth support",
+    ):
         validate(inputs)
 
 
