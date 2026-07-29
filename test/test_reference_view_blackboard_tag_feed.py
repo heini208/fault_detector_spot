@@ -1,57 +1,60 @@
-"""Tests for direct shared-tag injection into camera synchronizers."""
+"""Tests for persistent shared tag-topic subscriptions."""
 
-from collections import deque
-from threading import Lock
-
-from fault_detector_msgs.msg import TagElement
-from sensor_msgs.msg import CameraInfo
-
-from fault_detector_spot.inspection.reference_view_input_synchronizer import (
-    ReferenceViewInputSynchronizer,
+from fault_detector_spot.inspection import (
+    reference_view_input_synchronizer as synchronizer_module,
 )
 
 
-def make_synchronizer():
-    synchronizer = ReferenceViewInputSynchronizer.__new__(
-        ReferenceViewInputSynchronizer
+class FakeNode:
+    def __init__(self):
+        self.subscriptions = []
+
+    def create_subscription(self, message_type, topic, callback, qos):
+        subscription = (message_type, topic, callback, qos)
+        self.subscriptions.append(subscription)
+        return subscription
+
+
+class FakeFilterSubscriber:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+
+class FakeApproximateSynchronizer:
+    def __init__(self, subscribers, queue_size, slop):
+        self.subscribers = subscribers
+        self.queue_size = queue_size
+        self.slop = slop
+        self.callback = None
+
+    def registerCallback(self, callback):
+        self.callback = callback
+
+
+def test_synchronizer_subscribes_to_shared_tag_topic(monkeypatch):
+    monkeypatch.setattr(
+        synchronizer_module,
+        "Subscriber",
+        FakeFilterSubscriber,
     )
-    synchronizer._lock = Lock()
-    synchronizer._camera_info = CameraInfo()
-    synchronizer._image_sequence = 1
-    synchronizer._image_history = deque(maxlen=60)
-    synchronizer._tag_history_size = 60
-    synchronizer._base_tags = {}
-    synchronizer._visible_tag_ids = set()
-    synchronizer._maximum_timestamp_skew_nanoseconds = 50_000_000
-    synchronizer._maximum_tag_timestamp_skew_nanoseconds = 250_000_000
-    synchronizer._collection = None
-    return synchronizer
+    monkeypatch.setattr(
+        synchronizer_module,
+        "ApproximateTimeSynchronizer",
+        FakeApproximateSynchronizer,
+    )
+    node = FakeNode()
 
-
-def test_direct_tag_snapshot_warms_camera_synchronizer():
-    synchronizer = make_synchronizer()
-    tag = TagElement()
-    tag.id = 7
-    tag.pose.header.stamp.sec = 10
-    tag.pose.pose.orientation.w = 1.0
-
-    synchronizer.update_base_tag_observations([tag])
-
-    assert synchronizer.ready_for_collection(7) is True
-    assert synchronizer.input_diagnostics(7).startswith(
-        "camera_info=yes, rgb_depth_pairs=0, tag_samples=1"
+    synchronizer = synchronizer_module.ReferenceViewInputSynchronizer(
+        node=node,
+        rgb_topic="/camera/hand/image",
+        depth_topic="/depth_registered/hand/image",
+        camera_info_topic="/depth_registered/hand/camera_info",
+        base_tag_topic="fault_detector/state/visible_tags",
     )
 
-
-def test_empty_snapshot_does_not_delete_collected_tag_history():
-    synchronizer = make_synchronizer()
-    tag = TagElement()
-    tag.id = 7
-    tag.pose.header.stamp.sec = 10
-    tag.pose.pose.orientation.w = 1.0
-
-    synchronizer.update_base_tag_observations([tag])
-    synchronizer.update_base_tag_observations([])
-
-    assert synchronizer.ready_for_collection(7) is True
-    assert "tag_visible_at_end=no" in synchronizer.input_diagnostics(7)
+    assert synchronizer.base_tag_subscription is not None
+    assert [subscription[1] for subscription in node.subscriptions] == [
+        "/depth_registered/hand/camera_info",
+        "fault_detector/state/visible_tags",
+    ]
