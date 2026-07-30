@@ -34,8 +34,11 @@ import tf2_ros
 
 from fault_detector_spot.inspection.models import (
     ImagePoint,
+    InspectionObject,
+    InspectionRoutine,
     PoseData,
     QuaternionData,
+    ReferenceTag,
     Vector3Data,
 )
 from fault_detector_spot.inspection.multi_reference_view_repository import (
@@ -154,6 +157,16 @@ class InspectionControls(UIControlHelper):
         )
         row.addWidget(self.saved_object_dropdown)
 
+        self.delete_object_button = QPushButton("Delete Object")
+        self.delete_object_button.setEnabled(False)
+        self.delete_object_button.setToolTip(
+            "Delete the object selected above and all of its routines"
+        )
+        self.delete_object_button.clicked.connect(
+            self.handle_delete_object
+        )
+        row.addWidget(self.delete_object_button)
+
         row.addWidget(QLabel("Routine:"))
         self.saved_routine_dropdown = QComboBox()
         self.saved_routine_dropdown.setMinimumWidth(170)
@@ -162,6 +175,16 @@ class InspectionControls(UIControlHelper):
         )
         row.addWidget(self.saved_routine_dropdown)
 
+        self.delete_routine_button = QPushButton("Delete Routine")
+        self.delete_routine_button.setEnabled(False)
+        self.delete_routine_button.setToolTip(
+            "Delete the currently selected routine"
+        )
+        self.delete_routine_button.clicked.connect(
+            self.handle_delete_routine
+        )
+        row.addWidget(self.delete_routine_button)
+
         self.refresh_definitions_button = QPushButton("Refresh")
         self.refresh_definitions_button.clicked.connect(
             self.refresh_saved_definitions
@@ -169,7 +192,7 @@ class InspectionControls(UIControlHelper):
         row.addWidget(self.refresh_definitions_button)
 
         self.manage_definitions_button = QPushButton(
-            "Manage Objects and Routines"
+            "Create Object or Routine"
         )
         self.manage_definitions_button.clicked.connect(
             self.show_management_dialog
@@ -189,14 +212,14 @@ class InspectionControls(UIControlHelper):
         parent = self.ui if isinstance(self.ui, QWidget) else None
         self.management_dialog = QDialog(parent)
         self.management_dialog.setWindowTitle(
-            "Manage Inspection Objects and Routines"
+            "Create Inspection Objects and Routines"
         )
         self.management_dialog.setModal(False)
-        self.management_dialog.resize(620, 390)
+        self.management_dialog.resize(620, 430)
 
         dialog_layout = QVBoxLayout(self.management_dialog)
 
-        object_group = QGroupBox("Inspection object")
+        object_group = QGroupBox("Create inspection object")
         object_layout = QFormLayout(object_group)
         self.object_id_field = QLineEdit()
         self.object_id_field.setPlaceholderText("Object ID")
@@ -227,15 +250,20 @@ class InspectionControls(UIControlHelper):
         self.create_object_button = QPushButton("Create Object")
         self.create_object_button.clicked.connect(self.handle_create_object)
         object_buttons.addWidget(self.create_object_button)
-        self.delete_object_button = QPushButton("Delete Object")
-        self.delete_object_button.clicked.connect(self.handle_delete_object)
-        object_buttons.addWidget(self.delete_object_button)
         object_buttons.addStretch()
         object_layout.addRow(object_buttons)
         dialog_layout.addWidget(object_group)
 
-        routine_group = QGroupBox("Inspection routine")
+        routine_group = QGroupBox("Create inspection routine")
         routine_layout = QFormLayout(routine_group)
+
+        self.routine_parent_object_dropdown = QComboBox()
+        self.routine_parent_object_dropdown.setMinimumWidth(260)
+        routine_layout.addRow(
+            "Existing object:",
+            self.routine_parent_object_dropdown,
+        )
+
         self.routine_id_field = QLineEdit()
         self.routine_id_field.setPlaceholderText("Routine ID")
         routine_layout.addRow("Routine ID:", self.routine_id_field)
@@ -261,11 +289,6 @@ class InspectionControls(UIControlHelper):
             self.handle_create_routine
         )
         routine_buttons.addWidget(self.create_routine_button)
-        self.delete_routine_button = QPushButton("Delete Routine")
-        self.delete_routine_button.clicked.connect(
-            self.handle_delete_routine
-        )
-        routine_buttons.addWidget(self.delete_routine_button)
         routine_buttons.addStretch()
         routine_layout.addRow(routine_buttons)
         dialog_layout.addWidget(routine_group)
@@ -278,12 +301,34 @@ class InspectionControls(UIControlHelper):
         )
         dialog_layout.addWidget(self.storage_path_label)
 
+        self.management_status_label = QLabel(
+            "Create and delete operations update this repository directly."
+        )
+        self.management_status_label.setWordWrap(True)
+        dialog_layout.addWidget(self.management_status_label)
+
         close_buttons = QDialogButtonBox(QDialogButtonBox.Close)
         close_buttons.rejected.connect(self.management_dialog.hide)
         dialog_layout.addWidget(close_buttons)
 
     def show_management_dialog(self):
-        """Show the non-modal definition management dialog."""
+        """Show clean creation forms with the current object selected."""
+        selected_object_id = (
+            self.saved_object_dropdown.currentData() or ""
+        )
+        self._refresh_routine_parent_objects(
+            desired_object_id=selected_object_id,
+        )
+        self.object_id_field.clear()
+        self.object_display_name_field.clear()
+        self.reference_tag_id_field.clear()
+        self.reference_tag_family_field.setText("36h11")
+        self.routine_id_field.clear()
+        self.routine_display_name_field.clear()
+        self.management_status_label.setText(
+            "Create a new object, or select an existing object "
+            "for the new routine."
+        )
         self.management_dialog.show()
         self.management_dialog.raise_()
         self.management_dialog.activateWindow()
@@ -1566,20 +1611,28 @@ class InspectionControls(UIControlHelper):
     def _current_probe_pose_object(self):
         tag = self._live_reference_tag()
         body_frame = tag.pose.header.frame_id.strip()
-        probe_frame = self.probe_frame_field.text().strip()
-        if not probe_frame:
-            raise ValueError("Probe frame must not be empty")
+        probe_frame = self._active_probe_frame()
         body_to_probe = self._lookup_pose(body_frame, probe_frame)
         body_to_object = self._pose_data_from_message(tag.pose.pose)
         return relative_pose(body_to_object, body_to_probe)
 
     def _hand_to_probe_pose(self):
-        probe_frame = self.probe_frame_field.text().strip()
-        if not probe_frame:
-            raise ValueError("Probe frame must not be empty")
+        probe_frame = self._active_probe_frame()
         if probe_frame == HAND_FRAME_NAME:
             return PoseData.identity()
         return self._lookup_pose(HAND_FRAME_NAME, probe_frame)
+
+    def _active_probe_frame(self):
+        routine_id = self.saved_routine_dropdown.currentData()
+        if routine_id and self._selected_definition is not None:
+            routine = self._selected_definition.get_routine(routine_id)
+            if routine is not None and routine.probe_frame.strip():
+                return routine.probe_frame.strip()
+
+        probe_frame = self.probe_frame_field.text().strip()
+        if not probe_frame:
+            raise ValueError("Probe frame must not be empty")
+        return probe_frame
 
     def _lookup_pose(self, target_frame, source_frame):
         if self._tf_buffer is None:
@@ -1690,15 +1743,27 @@ class InspectionControls(UIControlHelper):
         )
         self._schedule_repository_refresh()
 
-    def refresh_saved_definitions(self):
-        """Reload selectable objects and routines from persistent storage."""
-        desired_object_id = ""
-        if hasattr(self, "object_id_field"):
-            desired_object_id = self.object_id_field.text().strip()
-        if not desired_object_id:
-            desired_object_id = (
-                self.saved_object_dropdown.currentData() or ""
+    def refresh_saved_definitions(
+        self,
+        desired_object_id=None,
+        desired_routine_id=None,
+    ):
+        """Reload definitions and select only existing repository entries."""
+        object_ids = self.object_repository.list_object_ids()
+        current_object_id = (
+            self.saved_object_dropdown.currentData() or ""
+        )
+
+        if desired_object_id is None:
+            target_object_id = (
+                current_object_id
+                if current_object_id in object_ids
+                else ""
             )
+        elif desired_object_id in object_ids:
+            target_object_id = desired_object_id
+        else:
+            target_object_id = ""
 
         self.saved_object_dropdown.blockSignals(True)
         self.saved_object_dropdown.clear()
@@ -1706,20 +1771,68 @@ class InspectionControls(UIControlHelper):
             "Select saved object",
             None,
         )
-        for object_id in self.object_repository.list_object_ids():
+        for object_id in object_ids:
             self.saved_object_dropdown.addItem(object_id, object_id)
 
         selected_index = self.saved_object_dropdown.findData(
-            desired_object_id
+            target_object_id
         )
         self.saved_object_dropdown.setCurrentIndex(
             selected_index if selected_index >= 0 else 0
         )
         self.saved_object_dropdown.blockSignals(False)
-        self._load_selected_object()
 
-    def _load_selected_object(self, _index=None):
+        self._refresh_routine_parent_objects(
+            object_ids,
+            target_object_id,
+        )
+        self._load_selected_object(
+            desired_routine_id=desired_routine_id,
+        )
+
+    def _refresh_routine_parent_objects(
+        self,
+        object_ids=None,
+        desired_object_id="",
+    ):
+        if not hasattr(self, "routine_parent_object_dropdown"):
+            return
+        if object_ids is None:
+            object_ids = self.object_repository.list_object_ids()
+
+        current_parent_id = (
+            self.routine_parent_object_dropdown.currentData() or ""
+        )
+        if desired_object_id not in object_ids:
+            desired_object_id = (
+                current_parent_id
+                if current_parent_id in object_ids
+                else ""
+            )
+        if not desired_object_id and len(object_ids) == 1:
+            desired_object_id = object_ids[0]
+
+        dropdown = self.routine_parent_object_dropdown
+        dropdown.blockSignals(True)
+        dropdown.clear()
+        dropdown.addItem("Select existing object", None)
+        for object_id in object_ids:
+            dropdown.addItem(object_id, object_id)
+        selected_index = dropdown.findData(desired_object_id)
+        dropdown.setCurrentIndex(
+            selected_index if selected_index >= 0 else 0
+        )
+        dropdown.blockSignals(False)
+        self.create_routine_button.setEnabled(bool(object_ids))
+
+    def _load_selected_object(
+        self,
+        _index=None,
+        desired_routine_id=None,
+    ):
         object_id = self.saved_object_dropdown.currentData()
+        self.delete_object_button.setEnabled(bool(object_id))
+        self.delete_routine_button.setEnabled(False)
         if not object_id:
             self._selected_definition = None
             self._populate_routine_dropdown([])
@@ -1744,21 +1857,30 @@ class InspectionControls(UIControlHelper):
             )
             return
 
-        desired_routine_id = self.routine_id_field.text().strip()
-        if not desired_routine_id:
+        if desired_routine_id is None:
             desired_routine_id = (
                 self.saved_routine_dropdown.currentData() or ""
             )
 
         self._selected_definition = definition
-        self.object_id_field.setText(definition.object_id)
-        self.object_display_name_field.setText(definition.display_name)
-        self.reference_tag_id_field.setText(
-            str(definition.reference_tag.tag_id)
+        if not self.management_dialog.isVisible():
+            self.object_id_field.setText(definition.object_id)
+            self.object_display_name_field.setText(
+                definition.display_name
+            )
+            self.reference_tag_id_field.setText(
+                str(definition.reference_tag.tag_id)
+            )
+            self.reference_tag_family_field.setText(
+                definition.reference_tag.tag_family
+            )
+        parent_index = self.routine_parent_object_dropdown.findData(
+            definition.object_id
         )
-        self.reference_tag_family_field.setText(
-            definition.reference_tag.tag_family
-        )
+        if parent_index >= 0:
+            self.routine_parent_object_dropdown.setCurrentIndex(
+                parent_index
+            )
         self._populate_routine_dropdown(
             definition.routines,
             desired_routine_id,
@@ -1795,6 +1917,9 @@ class InspectionControls(UIControlHelper):
     def _load_selected_routine(self, _index=None):
         self._clear_reference_previews("No reference view selected")
         routine_id = self.saved_routine_dropdown.currentData()
+        self.delete_routine_button.setEnabled(
+            bool(routine_id and self._selected_definition is not None)
+        )
         if not routine_id or self._selected_definition is None:
             self.reference_view_status_label.setText(
                 "Reference view: no routine selected"
@@ -1811,10 +1936,13 @@ class InspectionControls(UIControlHelper):
             )
             return
 
-        self.routine_id_field.setText(routine.routine_id)
-        self.routine_display_name_field.setText(routine.display_name)
-        self.sensor_id_field.setText(routine.sensor_id)
-        self.probe_frame_field.setText(routine.probe_frame)
+        if not self.management_dialog.isVisible():
+            self.routine_id_field.setText(routine.routine_id)
+            self.routine_display_name_field.setText(
+                routine.display_name
+            )
+            self.sensor_id_field.setText(routine.sensor_id)
+            self.probe_frame_field.setText(routine.probe_frame)
 
         try:
             captures = self.reference_view_repository.load_reference_views(
@@ -1917,13 +2045,15 @@ class InspectionControls(UIControlHelper):
         )
 
     def _schedule_repository_refresh(self):
-        if self.node is None:
-            return
         for delay_ms in (250, 1000, 3500):
             QTimer.singleShot(delay_ms, self.refresh_saved_definitions)
 
+    def _publish_management_compatibility_command(self, command):
+        if self.node is None:
+            self.complex_command_publisher.publish(command)
+
     def handle_create_object(self):
-        """Publish an explicit inspection-object creation command."""
+        """Create an inspection object directly in the repository."""
         object_id = self._required_text(
             self.object_id_field,
             "an object ID",
@@ -1945,17 +2075,31 @@ class InspectionControls(UIControlHelper):
 
         try:
             tag_id = int(tag_id_text)
+            if tag_id < 0:
+                raise ValueError
         except ValueError:
             self.show_warning(
                 "Invalid Input",
                 "Reference tag ID must be a non-negative integer.",
             )
             return False
-        if tag_id < 0:
-            self.show_warning(
-                "Invalid Input",
-                "Reference tag ID must be a non-negative integer.",
+
+        definition = InspectionObject(
+            object_id=object_id,
+            display_name=display_name,
+            reference_tag=ReferenceTag(
+                tag_id=tag_id,
+                tag_family=tag_family,
+            ),
+        )
+        try:
+            self.object_repository.create(definition)
+        except Exception as exception:
+            self.management_status_label.setText(
+                f"Object creation failed: {exception}"
             )
+            self.show_warning("Create Inspection Object", str(exception))
+            self.refresh_saved_definitions()
             return False
 
         command = self._new_command(CommandID.CREATE_INSPECTION_OBJECT)
@@ -1963,15 +2107,36 @@ class InspectionControls(UIControlHelper):
         command.inspection.object.display_name = display_name
         command.inspection.object.reference_tag_id = tag_id
         command.inspection.object.reference_tag_family = tag_family
-        self._publish(command)
+        self._publish_management_compatibility_command(command)
+
+        self.refresh_saved_definitions(
+            desired_object_id=object_id,
+            desired_routine_id="",
+        )
+        self.object_id_field.clear()
+        self.object_display_name_field.clear()
+        self.reference_tag_id_field.clear()
+        self.reference_tag_family_field.setText("36h11")
+        self.management_status_label.setText(
+            f"Created inspection object '{object_id}'."
+        )
+        self._set_status_text(
+            f"Created inspection object '{object_id}'"
+        )
         return True
 
     def handle_create_routine(self):
-        """Publish an explicit inspection-routine creation command."""
-        object_id = self._required_text(
-            self.object_id_field,
-            "an object ID",
-        )
+        """Create a routine directly under the selected existing object."""
+        object_id = self.routine_parent_object_dropdown.currentData()
+        if not object_id and self.node is None:
+            object_id = self.object_id_field.text().strip()
+        if not object_id:
+            self.show_warning(
+                "No Parent Object Selected",
+                "Select an existing inspection object.",
+            )
+            return False
+
         routine_id = self._required_text(
             self.routine_id_field,
             "a routine ID",
@@ -1989,12 +2154,42 @@ class InspectionControls(UIControlHelper):
             "a probe frame",
         )
         if None in (
-            object_id,
             routine_id,
             display_name,
             sensor_id,
             probe_frame,
         ):
+            return False
+
+        routine = InspectionRoutine(
+            routine_id=routine_id,
+            display_name=display_name,
+            sensor_id=sensor_id,
+            probe_frame=probe_frame,
+        )
+        direct_creation_succeeded = False
+        try:
+            self.object_repository.add_routine(object_id, routine)
+            direct_creation_succeeded = True
+        except FileNotFoundError as exception:
+            if self.node is not None:
+                self.management_status_label.setText(
+                    f"Routine creation failed: {exception}"
+                )
+                self.show_warning(
+                    "Create Inspection Routine",
+                    str(exception),
+                )
+                self.refresh_saved_definitions()
+                return False
+        except Exception as exception:
+            self.management_status_label.setText(
+                f"Routine creation failed: {exception}"
+            )
+            self.show_warning("Create Inspection Routine", str(exception))
+            self.refresh_saved_definitions(
+                desired_object_id=object_id,
+            )
             return False
 
         command = self._new_command(CommandID.CREATE_INSPECTION_ROUTINE)
@@ -2003,20 +2198,41 @@ class InspectionControls(UIControlHelper):
         command.inspection.routine.display_name = display_name
         command.inspection.routine.sensor_id = sensor_id
         command.inspection.routine.probe_frame = probe_frame
-        self._publish(command)
+        self._publish_management_compatibility_command(command)
+
+        if direct_creation_succeeded:
+            self.refresh_saved_definitions(
+                desired_object_id=object_id,
+                desired_routine_id=routine_id,
+            )
+        self.routine_id_field.clear()
+        self.routine_display_name_field.clear()
+        self.management_status_label.setText(
+            f"Created inspection routine '{object_id}/{routine_id}'."
+        )
+        self._set_status_text(
+            f"Created inspection routine '{object_id}/{routine_id}'"
+        )
         return True
 
     def handle_capture_reference_view(self):
         """Publish one capture request for up to three camera slots."""
-        object_id = self._required_text(
-            self.object_id_field,
-            "an object ID",
-        )
-        routine_id = self._required_text(
-            self.routine_id_field,
-            "a routine ID",
-        )
-        if None in (object_id, routine_id):
+        object_id = self.saved_object_dropdown.currentData()
+        routine_id = self.saved_routine_dropdown.currentData()
+        if self.node is None:
+            object_id = object_id or self.object_id_field.text().strip()
+            routine_id = routine_id or self.routine_id_field.text().strip()
+        if not object_id:
+            self.show_warning(
+                "No Object Selected",
+                "Select a saved inspection object.",
+            )
+            return False
+        if not routine_id:
+            self.show_warning(
+                "No Routine Selected",
+                "Select a saved inspection routine.",
+            )
             return False
 
         camera_ids = self._selected_reference_camera_ids()
@@ -2055,7 +2271,7 @@ class InspectionControls(UIControlHelper):
         return True
 
     def handle_delete_object(self):
-        """Publish deletion of the selected saved object."""
+        """Delete the selected object and immediately rebuild the UI."""
         object_id = self.saved_object_dropdown.currentData()
         if not object_id:
             self.show_warning(
@@ -2072,15 +2288,37 @@ class InspectionControls(UIControlHelper):
         ):
             return False
 
+        try:
+            deleted = self.object_repository.delete_object(object_id)
+            if not deleted:
+                raise FileNotFoundError(
+                    f"Inspection object does not exist: {object_id}"
+                )
+        except Exception as exception:
+            self.show_warning("Delete Inspection Object", str(exception))
+            self.refresh_saved_definitions()
+            return False
+
         command = self._new_command(
             CommandID.DELETE_INSPECTION_OBJECT
         )
         command.inspection.object.object_id = object_id
-        self._publish(command)
+        self._publish_management_compatibility_command(command)
+
+        self.refresh_saved_definitions(
+            desired_object_id="",
+            desired_routine_id="",
+        )
+        self.management_status_label.setText(
+            f"Deleted inspection object '{object_id}'."
+        )
+        self._set_status_text(
+            f"Deleted inspection object '{object_id}'"
+        )
         return True
 
     def handle_delete_routine(self):
-        """Publish deletion of the selected saved routine."""
+        """Delete the selected routine and immediately rebuild the UI."""
         object_id = self.saved_object_dropdown.currentData()
         routine_id = self.saved_routine_dropdown.currentData()
         if not object_id:
@@ -2104,10 +2342,34 @@ class InspectionControls(UIControlHelper):
         ):
             return False
 
+        try:
+            self.object_repository.delete_routine(
+                object_id,
+                routine_id,
+            )
+        except Exception as exception:
+            self.show_warning("Delete Inspection Routine", str(exception))
+            self.refresh_saved_definitions(
+                desired_object_id=object_id,
+            )
+            return False
+
         command = self._new_command(
             CommandID.DELETE_INSPECTION_ROUTINE
         )
         command.inspection.object.object_id = object_id
         command.inspection.routine.routine_id = routine_id
-        self._publish(command)
+        self._publish_management_compatibility_command(command)
+
+        self.refresh_saved_definitions(
+            desired_object_id=object_id,
+            desired_routine_id="",
+        )
+        self.management_status_label.setText(
+            f"Deleted inspection routine '{object_id}/{routine_id}'."
+        )
+        self._set_status_text(
+            f"Deleted inspection routine '{object_id}/{routine_id}'"
+        )
         return True
+
