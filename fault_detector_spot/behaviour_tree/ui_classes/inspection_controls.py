@@ -1,5 +1,6 @@
 """Inspection setup controls."""
 
+import json
 import math
 from copy import deepcopy
 
@@ -27,9 +28,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from fault_detector_msgs.msg import ComplexCommand
+from fault_detector_msgs.msg import ComplexCommand, TagElement
 from rclpy.duration import Duration
+from rclpy.serialization import deserialize_message
 from rclpy.time import Time
+from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
 from fault_detector_spot.inspection.models import (
@@ -42,6 +45,7 @@ from fault_detector_spot.inspection.models import (
     Vector3Data,
 )
 from fault_detector_spot.inspection.multi_reference_view_repository import (
+    CapturedReferenceView,
     MultiReferenceViewRepository,
 )
 from fault_detector_spot.inspection.reference_camera_registry import (
@@ -1924,6 +1928,7 @@ class InspectionControls(UIControlHelper):
             self.reference_view_status_label.setText(
                 "Reference view: no routine selected"
             )
+            self.reference_view_status_label.setToolTip("")
             return
 
         routine = self._selected_definition.get_routine(routine_id)
@@ -1931,6 +1936,7 @@ class InspectionControls(UIControlHelper):
             self.reference_view_status_label.setText(
                 "Reference view: routine no longer exists"
             )
+            self.reference_view_status_label.setToolTip("")
             self._clear_reference_previews(
                 "Reference view unavailable"
             )
@@ -1944,35 +1950,12 @@ class InspectionControls(UIControlHelper):
             self.sensor_id_field.setText(routine.sensor_id)
             self.probe_frame_field.setText(routine.probe_frame)
 
-        try:
-            captures = self.reference_view_repository.load_reference_views(
-                self._selected_definition.object_id,
-                routine.routine_id,
-            )
-        except Exception as exception:
-            if routine.reference_views:
-                dataset_path = (
-                    routine.reference_views[0].reference_dataset_path or
-                    "unknown dataset"
-                )
-                self.reference_view_status_label.setText(
-                    "Reference view: captured "
-                    f"({dataset_path}); preview unavailable: {exception}"
-                )
-            else:
-                self.reference_view_status_label.setText(
-                    f"Reference view preview unavailable: {exception}"
-                )
-            self._clear_reference_previews(
-                "Reference view unavailable"
-            )
-            return
-
-        if not captures:
+        if not routine.reference_views:
             self._set_reference_camera_defaults()
             self.reference_view_status_label.setText(
                 "Reference view: not captured"
             )
+            self.reference_view_status_label.setToolTip("")
             self._clear_reference_previews(
                 "No reference view captured"
             )
@@ -1981,32 +1964,70 @@ class InspectionControls(UIControlHelper):
         self._clear_reference_camera_selections()
         self._reference_slot_captures = [None, None, None]
         camera_names = []
-        for capture in captures:
-            slot_index = capture.slot_index
+        unavailable = []
+        object_id = self._selected_definition.object_id
+        reference_tag_id = self._selected_definition.reference_tag.tag_id
+
+        for reference_view in sorted(
+            routine.reference_views,
+            key=lambda view: view.slot_index,
+        ):
+            slot_index = reference_view.slot_index
+            camera_id = reference_view.camera_id
             if slot_index < 0 or slot_index > 2:
+                unavailable.append(
+                    f"Invalid slot {slot_index + 1}: {camera_id}"
+                )
                 continue
+            camera_config = REFERENCE_CAMERA_BY_ID.get(camera_id)
+            widget = self.reference_view_widgets[slot_index]
+            if camera_config is None:
+                unavailable.append(
+                    f"Slot {slot_index + 1}: unknown camera {camera_id}"
+                )
+                widget.clear_preview("Unknown camera")
+                continue
+
             dropdown = self.reference_camera_dropdowns[slot_index]
             dropdown.blockSignals(True)
-            camera_index = dropdown.findData(capture.camera_id)
-            dropdown.setCurrentIndex(camera_index)
+            dropdown.setCurrentIndex(dropdown.findData(camera_id))
             dropdown.blockSignals(False)
+
+            try:
+                capture = self._load_reference_view_capture(
+                    object_id,
+                    routine.routine_id,
+                    reference_tag_id,
+                    reference_view,
+                )
+                valid_region = rgb_depth_selectable_region(
+                    (
+                        capture.rgb_image.width,
+                        capture.rgb_image.height,
+                    ),
+                    capture.depth_image,
+                    capture.rgb_camera_info,
+                    capture.depth_camera_info,
+                )
+            except Exception as exception:
+                detail = (
+                    f"Slot {slot_index + 1} {camera_config.display_name}: "
+                    f"{exception}"
+                )
+                unavailable.append(detail)
+                widget.clear_preview(
+                    f"{camera_config.display_name} unavailable"
+                )
+                widget.setToolTip(detail)
+                continue
+
             self._reference_slot_captures[slot_index] = capture
-            valid_region = rgb_depth_selectable_region(
-                (
-                    capture.rgb_image.width,
-                    capture.rgb_image.height,
-                ),
-                capture.depth_image,
-                capture.rgb_camera_info,
-                capture.depth_camera_info,
-            )
-            self.reference_view_widgets[slot_index].set_ros_image(
+            widget.setToolTip("")
+            widget.set_ros_image(
                 capture.rgb_image,
                 valid_region=valid_region,
             )
-            camera_names.append(
-                REFERENCE_CAMERA_BY_ID[capture.camera_id].display_name
-            )
+            camera_names.append(camera_config.display_name)
 
         for slot_index, capture in enumerate(
             self._reference_slot_captures
@@ -2017,17 +2038,34 @@ class InspectionControls(UIControlHelper):
                 self.reference_camera_dropdowns[slot_index].currentData()
                 or ""
             )
-            self.reference_view_widgets[slot_index].clear_preview(
-                f"Capture {REFERENCE_CAMERA_BY_ID[camera_id].display_name}"
-                if camera_id
-                else "No camera selected"
-            )
+            widget = self.reference_view_widgets[slot_index]
+            if camera_id and not widget.text():
+                widget.clear_preview(
+                    f"Capture {REFERENCE_CAMERA_BY_ID[camera_id].display_name}"
+                )
+            elif not camera_id:
+                widget.clear_preview("No camera selected")
 
-        first_capture = next(
+        captures = [
             capture
             for capture in self._reference_slot_captures
             if capture is not None
-        )
+        ]
+        if not captures:
+            self._reference_rgb_size = None
+            self._reference_depth_image = None
+            self._reference_rgb_camera_info = None
+            self._reference_camera_info = None
+            self._reference_view = None
+            self.reference_view_status_label.setText(
+                "Reference view: captured datasets unavailable"
+            )
+            self.reference_view_status_label.setToolTip(
+                "\n".join(unavailable)
+            )
+            return
+
+        first_capture = captures[0]
         self._reference_rgb_size = (
             first_capture.rgb_image.width,
             first_capture.rgb_image.height,
@@ -2040,8 +2078,79 @@ class InspectionControls(UIControlHelper):
             first_capture.depth_camera_info
         )
         self._reference_view = first_capture.reference_view
-        self.reference_view_status_label.setText(
-            "Reference view: captured " + ", ".join(camera_names)
+
+        status = "Reference view: captured " + ", ".join(camera_names)
+        if unavailable:
+            status += f"; {len(unavailable)} unavailable"
+        self.reference_view_status_label.setText(status)
+        self.reference_view_status_label.setToolTip(
+            "\n".join(unavailable)
+        )
+
+    def _load_reference_view_capture(
+        self,
+        object_id,
+        routine_id,
+        reference_tag_id,
+        reference_view,
+    ):
+        repository = self.reference_view_repository
+        dataset_path = repository._dataset_path(
+            object_id,
+            routine_id,
+            reference_view,
+        )
+        metadata = json.loads(
+            (dataset_path / "metadata.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        repository._validate_metadata(
+            metadata,
+            object_id,
+            routine_id,
+            reference_view,
+        )
+        rgb_image = deserialize_message(
+            (dataset_path / "rgb.cdr").read_bytes(),
+            Image,
+        )
+        depth_image = deserialize_message(
+            (dataset_path / "depth.cdr").read_bytes(),
+            Image,
+        )
+        rgb_camera_info = deserialize_message(
+            (dataset_path / "rgb_camera_info.cdr").read_bytes(),
+            CameraInfo,
+        )
+        depth_camera_info = deserialize_message(
+            (dataset_path / "depth_camera_info.cdr").read_bytes(),
+            CameraInfo,
+        )
+        reference_tag = deserialize_message(
+            (dataset_path / "reference_tag.cdr").read_bytes(),
+            TagElement,
+        )
+        repository._validate_loaded_dataset(
+            metadata,
+            reference_view,
+            reference_tag_id,
+            rgb_image,
+            depth_image,
+            rgb_camera_info,
+            depth_camera_info,
+            reference_tag,
+        )
+        return CapturedReferenceView(
+            slot_index=reference_view.slot_index,
+            camera_id=reference_view.camera_id,
+            reference_view=reference_view,
+            rgb_image=rgb_image,
+            depth_image=depth_image,
+            rgb_camera_info=rgb_camera_info,
+            depth_camera_info=depth_camera_info,
+            reference_tag=reference_tag,
+            fixed_frame=str(metadata["fixed_frame"]),
         )
 
     def _schedule_repository_refresh(self):

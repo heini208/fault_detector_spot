@@ -220,3 +220,99 @@ def test_cancelled_deletion_preserves_repository(controls):
 
     assert controls.handle_delete_object() is False
     assert controls.object_repository.exists("motor_a")
+
+
+def test_missing_view_dataset_does_not_hide_available_preview(
+    controls,
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from sensor_msgs.msg import CameraInfo, Image
+
+    from fault_detector_spot.behaviour_tree.ui_classes import (
+        inspection_controls as controls_module,
+    )
+    from fault_detector_spot.inspection.models import (
+        PoseData,
+        ReferenceView,
+    )
+
+    hand_view = ReferenceView(
+        controlled_frame_pose_object=PoseData.identity(),
+        controlled_frame="hand_color_image_sensor",
+        reference_dataset_path=(
+            "reference_datasets/scan/set_1/slot1_hand"
+        ),
+        view_id="slot1_hand",
+        camera_id="hand",
+        slot_index=0,
+    )
+    left_view = ReferenceView(
+        controlled_frame_pose_object=PoseData.identity(),
+        controlled_frame="left_image_sensor",
+        reference_dataset_path=(
+            "reference_datasets/scan/set_1/slot2_left"
+        ),
+        view_id="slot2_left",
+        camera_id="left",
+        slot_index=1,
+    )
+    routine = InspectionRoutine(
+        routine_id="scan",
+        display_name="Scan",
+        sensor_id="bmm150",
+        probe_frame="sensor_tip",
+        reference_views=[hand_view, left_view],
+    )
+    save_object(controls, routines=[routine])
+
+    rgb_image = Image()
+    rgb_image.width = 2
+    rgb_image.height = 2
+    rgb_image.encoding = "rgb8"
+    rgb_image.step = 6
+    rgb_image.data = [0] * 12
+    depth_image = Image()
+    depth_image.width = 2
+    depth_image.height = 2
+    capture = SimpleNamespace(
+        slot_index=0,
+        camera_id="hand",
+        reference_view=hand_view,
+        rgb_image=rgb_image,
+        depth_image=depth_image,
+        rgb_camera_info=CameraInfo(),
+        depth_camera_info=CameraInfo(),
+    )
+
+    def load_capture(
+        object_id,
+        routine_id,
+        reference_tag_id,
+        reference_view,
+    ):
+        if reference_view.camera_id == "left":
+            raise FileNotFoundError("slot2_left/metadata.json")
+        return capture
+
+    monkeypatch.setattr(
+        controls,
+        "_load_reference_view_capture",
+        load_capture,
+    )
+    monkeypatch.setattr(
+        controls_module,
+        "rgb_depth_selectable_region",
+        lambda *args: None,
+    )
+
+    select_object(controls, "motor_a")
+    select_routine(controls, "scan")
+
+    assert controls.reference_view_widgets[0].has_image is True
+    assert controls.reference_view_widgets[1].text() == (
+        "Left unavailable"
+    )
+    assert "Hand" in controls.reference_view_status_label.text()
+    assert "1 unavailable" in controls.reference_view_status_label.text()

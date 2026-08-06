@@ -23,7 +23,9 @@ REFERENCE_CAMERAS: Tuple[ReferenceCameraConfig, ...] = (
         rgb_topic="/camera/frontleft/image",
         depth_topic="/depth_registered/frontleft/image",
         rgb_camera_info_topic="/camera/frontleft/camera_info",
-        depth_camera_info_topic="/depth_registered/frontleft/camera_info",
+        depth_camera_info_topic=(
+            "/depth_registered/frontleft/camera_info"
+        ),
     ),
     ReferenceCameraConfig(
         camera_id="frontright",
@@ -31,7 +33,9 @@ REFERENCE_CAMERAS: Tuple[ReferenceCameraConfig, ...] = (
         rgb_topic="/camera/frontright/image",
         depth_topic="/depth_registered/frontright/image",
         rgb_camera_info_topic="/camera/frontright/camera_info",
-        depth_camera_info_topic="/depth_registered/frontright/camera_info",
+        depth_camera_info_topic=(
+            "/depth_registered/frontright/camera_info"
+        ),
     ),
     ReferenceCameraConfig(
         camera_id="left",
@@ -84,7 +88,9 @@ def get_reference_camera(camera_id: str) -> ReferenceCameraConfig:
         ) from exception
 
 
-def validate_reference_camera_slots(camera_ids) -> Tuple[Tuple[int, str], ...]:
+def validate_reference_camera_slots(
+    camera_ids,
+) -> Tuple[Tuple[int, str], ...]:
     """Validate three command slots and return selected slot-camera pairs."""
     if len(camera_ids) != 3:
         raise ValueError("Exactly three reference camera slots are required")
