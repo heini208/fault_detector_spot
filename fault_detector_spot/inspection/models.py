@@ -296,15 +296,20 @@ class ReferenceView:
 
 @dataclass
 class ProbePoint:
-    """One ordered target within an inspection routine."""
+    """One ordered target with local positive X facing outward.
+
+    The pre-approach distance adds outward clearance to the probe pose.
+    """
 
     probe_point_id: str
     display_name: str
     safe_approach_pose_object: PoseData
+    probe_pose_object: PoseData
     target_surface_distance_m: float
     position_tolerance_m: float
     orientation_tolerance_rad: float
     measurement_duration_sec: float
+    preapproach_distance_m: float = 0.05
     reference_pixel: Optional[ImagePoint] = None
     reference_view_id: Optional[str] = None
     sensor_path: Optional[str] = None
@@ -322,6 +327,9 @@ class ProbePoint:
             safe_approach_pose_object=PoseData.from_dict(
                 data["safe_approach_pose_object"]
             ),
+            probe_pose_object=PoseData.from_dict(
+                data["probe_pose_object"]
+            ),
             target_surface_distance_m=float(
                 data["target_surface_distance_m"]
             ),
@@ -333,6 +341,9 @@ class ProbePoint:
             ),
             measurement_duration_sec=float(
                 data["measurement_duration_sec"]
+            ),
+            preapproach_distance_m=float(
+                data["preapproach_distance_m"]
             ),
             reference_pixel=(
                 ImagePoint.from_dict(pixel)
@@ -356,12 +367,14 @@ class ProbePoint:
         _require_text(self.probe_point_id, "Probe point ID")
         _require_text(self.display_name, "Probe point display name")
         self.safe_approach_pose_object.validate()
+        self.probe_pose_object.validate()
 
         numeric_values = (
             self.target_surface_distance_m,
             self.position_tolerance_m,
             self.orientation_tolerance_rad,
             self.measurement_duration_sec,
+            self.preapproach_distance_m,
         )
         if not all(
             math.isfinite(value) for value in numeric_values
@@ -385,6 +398,10 @@ class ProbePoint:
             raise ValueError(
                 "Measurement duration must be positive"
             )
+        if self.preapproach_distance_m <= 0.0:
+            raise ValueError(
+                "Pre-approach distance must be positive"
+            )
         if self.reference_pixel is not None:
             self.reference_pixel.validate()
             if self.reference_view_id is None:
@@ -406,6 +423,7 @@ class ProbePoint:
             "display_name": self.display_name,
             "safe_approach_pose_object":
                 self.safe_approach_pose_object.to_dict(),
+            "probe_pose_object": self.probe_pose_object.to_dict(),
             "target_surface_distance_m":
                 self.target_surface_distance_m,
             "position_tolerance_m": self.position_tolerance_m,
@@ -413,6 +431,7 @@ class ProbePoint:
                 self.orientation_tolerance_rad,
             "measurement_duration_sec":
                 self.measurement_duration_sec,
+            "preapproach_distance_m": self.preapproach_distance_m,
         }
         if self.reference_pixel is not None:
             result["reference_pixel"] = (

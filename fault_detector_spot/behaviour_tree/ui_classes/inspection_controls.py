@@ -40,6 +40,7 @@ from fault_detector_spot.inspection.models import (
     InspectionObject,
     InspectionRoutine,
     PoseData,
+    ProbePoint,
     QuaternionData,
     ReferenceTag,
     Vector3Data,
@@ -433,7 +434,7 @@ class InspectionControls(UIControlHelper):
         self.reference_target_distance_field.setValidator(
             self._distance_validator(self.reference_target_distance_field)
         )
-        self.reference_preapproach_distance_field = QLineEdit("0.15")
+        self.reference_preapproach_distance_field = QLineEdit("0.05")
         self.reference_preapproach_distance_field.setFixedWidth(90)
         self.reference_preapproach_distance_field.setValidator(
             self._distance_validator(
@@ -518,7 +519,7 @@ class InspectionControls(UIControlHelper):
         self.save_probe_point_button = QPushButton("Save Probe Point")
         self.save_probe_point_button.setEnabled(False)
         self.save_probe_point_status_label = QLabel(
-            "Saving will be enabled by the persistence patch."
+            "Approve all three poses and complete the definition."
         )
         self.save_probe_point_status_label.setWordWrap(True)
 
@@ -559,6 +560,19 @@ class InspectionControls(UIControlHelper):
         self.use_current_probe_button.clicked.connect(
             self.handle_use_current_as_probe
         )
+        self.save_probe_point_button.clicked.connect(
+            self.handle_save_probe_point
+        )
+        for field in (
+            self.probe_point_id_field,
+            self.probe_point_display_name_field,
+            self.probe_position_tolerance_field,
+            self.probe_orientation_tolerance_field,
+            self.probe_measurement_duration_field,
+        ):
+            field.textChanged.connect(
+                self._update_save_probe_point_state
+            )
 
     def _make_workspace_splitter(self):
         self.inspection_workspace_splitter = QSplitter(Qt.Vertical)
@@ -695,7 +709,11 @@ class InspectionControls(UIControlHelper):
             0,
             1,
         )
-        target_layout.addWidget(QLabel("Aligned distance [m]:"), 0, 2)
+        target_layout.addWidget(
+            QLabel("Standoff clearance [m]:"),
+            0,
+            2,
+        )
         target_layout.addWidget(
             self.reference_preapproach_distance_field,
             0,
@@ -964,6 +982,7 @@ class InspectionControls(UIControlHelper):
             self.save_approach_status_label.setText("Not approved")
             self.save_alignment_status_label.setText("Not approved")
             self.save_probe_status_label.setText("Not approved")
+            self._update_save_probe_point_state()
             return
 
         approach_status = (
@@ -995,6 +1014,92 @@ class InspectionControls(UIControlHelper):
         self.save_probe_status_label.setText(
             "Approved" if setup.probe_pose_approved else "Not approved"
         )
+        self._update_save_probe_point_state()
+
+    def _update_save_probe_point_state(self, _value=None):
+        if not hasattr(self, "save_probe_point_button"):
+            return
+
+        setup = self._probe_setup
+        approvals_complete = (
+            setup is not None
+            and setup.safe_approach_approved
+            and setup.surface_alignment_approved
+            and setup.probe_pose_approved
+        )
+        object_id = (
+            self.saved_object_dropdown.currentData()
+            if hasattr(self, "saved_object_dropdown")
+            else None
+        )
+        routine_id = (
+            self.saved_routine_dropdown.currentData()
+            if hasattr(self, "saved_routine_dropdown")
+            else None
+        )
+        routine = None
+        if (
+            object_id
+            and routine_id
+            and self._selected_definition is not None
+            and self._selected_definition.object_id == object_id
+        ):
+            routine = self._selected_definition.get_routine(routine_id)
+
+        point_id = self.probe_point_id_field.text().strip()
+        display_name = self.probe_point_display_name_field.text().strip()
+        numeric_ready = all(
+            self._is_positive_number(field.text())
+            for field in (
+                self.probe_position_tolerance_field,
+                self.probe_orientation_tolerance_field,
+                self.probe_measurement_duration_field,
+            )
+        )
+        provenance_ready = (
+            self._selected_surface_point is not None
+            and self._reference_view is not None
+            and self._reference_view.view_id is not None
+        )
+        duplicate = (
+            routine is not None
+            and bool(point_id)
+            and routine.get_probe_point(point_id) is not None
+        )
+        ready = (
+            approvals_complete
+            and routine is not None
+            and bool(point_id)
+            and bool(display_name)
+            and numeric_ready
+            and provenance_ready
+            and not duplicate
+        )
+        self.save_probe_point_button.setEnabled(ready)
+
+        if not approvals_complete:
+            status = "Approve all three poses before saving."
+        elif routine is None:
+            status = "Select a saved object and routine."
+        elif not provenance_ready:
+            status = "Select a point in a captured reference view."
+        elif not point_id or not display_name:
+            status = "Enter a probe point ID and display name."
+        elif duplicate:
+            status = f"Probe point '{point_id}' already exists."
+        elif not numeric_ready:
+            status = "Enter positive tolerances and measurement duration."
+        else:
+            status = "Ready to save the approved probe point."
+        self.save_probe_point_status_label.setText(status)
+
+    @staticmethod
+    def _is_positive_number(text):
+        try:
+            value = float(text.strip())
+        except ValueError:
+            return False
+        return math.isfinite(value) and value > 0.0
 
     @staticmethod
     def _distance_validator(parent):
@@ -1425,9 +1530,9 @@ class InspectionControls(UIControlHelper):
                 self.reference_target_distance_field,
                 "Target surface distance",
             )
-            preapproach_distance = self._distance_value(
+            preapproach_clearance = self._distance_value(
                 self.reference_preapproach_distance_field,
-                "Aligned pre-approach distance",
+                "Standoff clearance",
             )
             result = resolve_reference_surface_target(
                 approach_direction=self._selected_approach_direction,
@@ -1435,7 +1540,9 @@ class InspectionControls(UIControlHelper):
                     self._reference_view.controlled_frame_pose_object
                 ),
                 target_surface_distance_m=target_distance,
-                aligned_preapproach_distance_m=preapproach_distance,
+                aligned_preapproach_distance_m=(
+                    target_distance + preapproach_clearance
+                ),
             )
         except ValueError as exception:
             self._set_target_status("Unavailable", str(exception))
@@ -1507,8 +1614,108 @@ class InspectionControls(UIControlHelper):
             f"Approach approved={setup.safe_approach_approved}; "
             f"alignment approved={setup.surface_alignment_approved}; "
             f"probe approved={setup.probe_pose_approved}. "
-            "Nothing is persisted until a later Save Probe Point step."
+            "Nothing is persisted until Save Probe Point is pressed."
         )
+
+    def handle_save_probe_point(self):
+        """Persist the fully approved transient probe setup."""
+        object_id = self.saved_object_dropdown.currentData()
+        routine_id = self.saved_routine_dropdown.currentData()
+        try:
+            if not object_id or not routine_id:
+                raise ValueError(
+                    "Select a saved object and routine before saving"
+                )
+            setup = self._require_probe_setup()
+            if not (
+                setup.safe_approach_approved
+                and setup.surface_alignment_approved
+                and setup.probe_pose_approved
+            ):
+                raise ValueError(
+                    "Approve the approach, alignment, and probe poses"
+                )
+            if (
+                self._selected_surface_point is None
+                or self._reference_view is None
+                or self._reference_view.view_id is None
+            ):
+                raise ValueError(
+                    "Select a point in a captured reference view"
+                )
+
+            probe_point_id = self.probe_point_id_field.text().strip()
+            display_name = (
+                self.probe_point_display_name_field.text().strip()
+            )
+            if not probe_point_id:
+                raise ValueError("Probe point ID must not be empty")
+            if not display_name:
+                raise ValueError(
+                    "Probe point display name must not be empty"
+                )
+
+            surface_target = setup.surface_target
+            preapproach_distance = (
+                surface_target.aligned_preapproach_distance_m
+                - surface_target.target_surface_distance_m
+            )
+            probe_point = ProbePoint(
+                probe_point_id=probe_point_id,
+                display_name=display_name,
+                safe_approach_pose_object=deepcopy(
+                    setup.safe_approach_pose_object
+                ),
+                probe_pose_object=deepcopy(setup.probe_pose_object),
+                target_surface_distance_m=(
+                    surface_target.target_surface_distance_m
+                ),
+                position_tolerance_m=self._distance_value(
+                    self.probe_position_tolerance_field,
+                    "Position tolerance",
+                ),
+                orientation_tolerance_rad=self._distance_value(
+                    self.probe_orientation_tolerance_field,
+                    "Orientation tolerance",
+                ),
+                measurement_duration_sec=self._distance_value(
+                    self.probe_measurement_duration_field,
+                    "Measurement duration",
+                ),
+                preapproach_distance_m=preapproach_distance,
+                reference_pixel=deepcopy(
+                    self._selected_surface_point.requested_pixel
+                ),
+                reference_view_id=self._reference_view.view_id,
+            )
+            stored_definition = self.object_repository.add_probe_point(
+                object_id,
+                routine_id,
+                probe_point,
+            )
+        except Exception as exception:
+            self.save_probe_point_status_label.setText(
+                f"Save failed: {exception}"
+            )
+            self.show_warning("Save Probe Point", str(exception))
+            return False
+
+        self._selected_definition = stored_definition
+        self.refresh_saved_definitions(
+            desired_object_id=object_id,
+            desired_routine_id=routine_id,
+        )
+        self.probe_point_id_field.clear()
+        self.probe_point_display_name_field.clear()
+        self._clear_all_reference_selections()
+        self.save_probe_point_status_label.setText(
+            f"Saved probe point '{probe_point_id}'."
+        )
+        self._set_status_text(
+            f"Saved probe point '{object_id}/{routine_id}/"
+            f"{probe_point_id}'"
+        )
+        return True
 
     def handle_move_to_approach_pose(self):
         self._move_setup_pose("safe_approach_pose_object", "approach pose")
@@ -2057,8 +2264,23 @@ class InspectionControls(UIControlHelper):
             self._reference_rgb_camera_info = None
             self._reference_camera_info = None
             self._reference_view = None
+            for reference_view in routine.reference_views:
+                if 0 <= reference_view.slot_index <= 2:
+                    self.reference_view_widgets[
+                        reference_view.slot_index
+                    ].clear_preview("Reference view unavailable")
+            dataset_paths = [
+                reference_view.reference_dataset_path
+                or reference_view.view_id
+                or f"slot{reference_view.slot_index + 1}"
+                for reference_view in sorted(
+                    routine.reference_views,
+                    key=lambda view: view.slot_index,
+                )
+            ]
             self.reference_view_status_label.setText(
-                "Reference view: captured datasets unavailable"
+                "Reference view: captured "
+                f"({', '.join(dataset_paths)}); preview unavailable"
             )
             self.reference_view_status_label.setToolTip(
                 "\n".join(unavailable)
@@ -2481,4 +2703,3 @@ class InspectionControls(UIControlHelper):
             f"Deleted inspection routine '{object_id}/{routine_id}'"
         )
         return True
-

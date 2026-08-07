@@ -8,13 +8,16 @@ from fault_detector_spot.inspection.map_repository import (
     MapRepository,
 )
 from fault_detector_spot.inspection.models import (
+    ImagePoint,
     InspectionObject,
     InspectionRoutine,
     LocalizationLandmark,
     MapDefinition,
     ObjectApproach,
     PoseData,
+    ProbePoint,
     ReferenceTag,
+    ReferenceView,
     Waypoint,
 )
 from fault_detector_spot.inspection.object_repository import (
@@ -71,6 +74,23 @@ def make_map() -> MapDefinition:
                 waypoint_id="motor_front",
             )
         ],
+    )
+
+
+def make_probe_point(probe_point_id: str) -> ProbePoint:
+    """Create one valid image-taught probe point."""
+    return ProbePoint(
+        probe_point_id=probe_point_id,
+        display_name=probe_point_id,
+        safe_approach_pose_object=PoseData.identity(),
+        probe_pose_object=PoseData.identity(),
+        target_surface_distance_m=0.03,
+        position_tolerance_m=0.01,
+        orientation_tolerance_rad=0.087,
+        measurement_duration_sec=1.0,
+        preapproach_distance_m=0.05,
+        reference_pixel=ImagePoint(u=20, v=30),
+        reference_view_id="slot1_hand",
     )
 
 
@@ -148,6 +168,56 @@ def test_object_repository_requires_object_before_routine(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         ObjectRepository(tmp_path).add_routine("missing", routine)
+
+
+def test_object_repository_appends_probe_points_without_overwrite(
+    tmp_path,
+):
+    """Probe insertion preserves order and rejects replacement."""
+    repository = ObjectRepository(tmp_path)
+    definition = make_object()
+    routine = definition.get_routine("magnetic_scan")
+    routine.reference_views = [ReferenceView(
+        controlled_frame_pose_object=PoseData.identity(),
+        controlled_frame="hand_color_image_sensor",
+        reference_dataset_path=(
+            "reference_datasets/magnetic_scan/set_1/slot1_hand"
+        ),
+        view_id="slot1_hand",
+        camera_id="hand",
+        slot_index=0,
+    )]
+    repository.save(definition)
+
+    repository.add_probe_point(
+        "motor_a",
+        "magnetic_scan",
+        make_probe_point("point_b"),
+    )
+    stored = repository.add_probe_point(
+        "motor_a",
+        "magnetic_scan",
+        make_probe_point("point_a"),
+    )
+
+    assert [
+        point.probe_point_id
+        for point in stored.get_routine("magnetic_scan").probe_points
+    ] == ["point_b", "point_a"]
+    assert repository.load("motor_a") == stored
+
+    before_duplicate = repository.get_object_path(
+        "motor_a"
+    ).read_text(encoding="utf-8")
+    with pytest.raises(FileExistsError, match="already exists"):
+        repository.add_probe_point(
+            "motor_a",
+            "magnetic_scan",
+            make_probe_point("point_a"),
+        )
+    assert repository.get_object_path("motor_a").read_text(
+        encoding="utf-8"
+    ) == before_duplicate
 
 
 def test_object_repository_deletes_routine_and_owned_datasets(tmp_path):

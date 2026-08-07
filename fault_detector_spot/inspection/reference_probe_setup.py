@@ -59,8 +59,8 @@ def approve_safe_approach_pose(
             orientation=orientation,
         ),
         safe_approach_approved=True,
-        surface_alignment_approved=setup.surface_alignment_approved,
-        probe_pose_approved=setup.probe_pose_approved,
+        surface_alignment_approved=False,
+        probe_pose_approved=False,
     )
 
 
@@ -83,10 +83,7 @@ def approve_surface_alignment_pose(
     orientation = current_probe_pose_object.orientation
     return ReferenceProbeSetup(
         surface_target=setup.surface_target,
-        safe_approach_pose_object=PoseData(
-            position=setup.safe_approach_pose_object.position,
-            orientation=orientation,
-        ),
+        safe_approach_pose_object=setup.safe_approach_pose_object,
         aligned_preapproach_pose_object=current_probe_pose_object,
         probe_pose_object=PoseData(
             position=probe_position,
@@ -117,10 +114,7 @@ def approve_probe_pose(
     orientation = current_probe_pose_object.orientation
     return ReferenceProbeSetup(
         surface_target=setup.surface_target,
-        safe_approach_pose_object=PoseData(
-            position=setup.safe_approach_pose_object.position,
-            orientation=orientation,
-        ),
+        safe_approach_pose_object=setup.safe_approach_pose_object,
         aligned_preapproach_pose_object=PoseData(
             position=aligned_position,
             orientation=orientation,

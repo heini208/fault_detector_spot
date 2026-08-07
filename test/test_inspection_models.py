@@ -22,6 +22,7 @@ def make_probe(probe_point_id="point_a") -> ProbePoint:
         probe_point_id=probe_point_id,
         display_name=probe_point_id,
         safe_approach_pose_object=PoseData.identity(),
+        probe_pose_object=PoseData.identity(),
         target_surface_distance_m=0.01,
         position_tolerance_m=0.005,
         orientation_tolerance_rad=0.05,
@@ -113,6 +114,56 @@ def test_probe_points_require_a_captured_reference_view():
 
     with pytest.raises(ValueError, match="requires a reference view"):
         routine.validate()
+
+
+def test_probe_point_round_trip_preserves_execution_geometry():
+    """The approved pose and pre-approach distance are authoritative."""
+    original = make_probe()
+    original.safe_approach_pose_object.position.x = 0.30
+    original.probe_pose_object.position.x = 0.02
+
+    restored = ProbePoint.from_dict(original.to_dict())
+
+    restored.validate()
+    assert restored == original
+    assert restored.safe_approach_pose_object.position.x == 0.30
+    assert restored.probe_pose_object.position.x == 0.02
+    assert restored.preapproach_distance_m == 0.05
+
+
+@pytest.mark.parametrize(
+    "distance",
+    [0.0, -0.01, float("inf"), float("nan")],
+)
+def test_probe_point_requires_positive_preapproach_distance(distance):
+    """A standoff must add positive clearance beyond the target."""
+    probe_point = make_probe()
+    probe_point.preapproach_distance_m = distance
+
+    with pytest.raises(ValueError):
+        probe_point.validate()
+
+
+def test_probe_point_rejects_invalid_approved_pose():
+    """The authoritative approved probe pose must be valid."""
+    probe_point = make_probe()
+    probe_point.probe_pose_object.orientation.w = 2.0
+
+    with pytest.raises(ValueError, match="Quaternion must be normalized"):
+        probe_point.validate()
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["probe_pose_object", "preapproach_distance_m"],
+)
+def test_obsolete_probe_point_format_is_rejected(field_name):
+    """Probe definitions without authoritative geometry are invalid."""
+    serialized = make_probe().to_dict()
+    serialized.pop(field_name)
+
+    with pytest.raises(KeyError):
+        ProbePoint.from_dict(serialized)
 
 
 def test_routine_reference_view_requires_persisted_dataset():

@@ -73,6 +73,8 @@ def test_approach_capture_preserves_positions_and_shares_orientation():
     )
     assert approved.probe_pose_object.orientation == current.orientation
     assert approved.safe_approach_approved
+    assert not approved.surface_alignment_approved
+    assert not approved.probe_pose_approved
 
 
 def test_alignment_capture_rebuilds_probe_along_local_positive_x():
@@ -102,6 +104,41 @@ def test_probe_capture_rebuilds_aligned_pose():
     )
     assert approved.surface_alignment_approved
     assert approved.probe_pose_approved
+
+
+def test_later_approvals_preserve_the_approved_safe_pose():
+    """Later stages cannot rewrite a previously approved safe pose."""
+    setup = initialize_reference_probe_setup(target())
+    safe_pose = pose(
+        x=0.4,
+        y=0.2,
+        z=0.5,
+        orientation=yaw_quaternion(30.0),
+    )
+    setup = approve_safe_approach_pose(setup, safe_pose)
+    setup = approve_surface_alignment_pose(
+        setup,
+        pose(x=0.20, orientation=yaw_quaternion(15.0)),
+    )
+    setup = approve_probe_pose(
+        setup,
+        pose(x=0.04, orientation=yaw_quaternion(10.0)),
+    )
+
+    assert setup.safe_approach_pose_object == safe_pose
+
+
+def test_reapproving_approach_invalidates_later_approvals():
+    """Changing an early stage requires downstream reapproval."""
+    setup = initialize_reference_probe_setup(target())
+    setup = approve_surface_alignment_pose(setup, pose(x=0.20))
+    setup = approve_probe_pose(setup, pose(x=0.04))
+
+    updated = approve_safe_approach_pose(setup, pose(x=0.40))
+
+    assert updated.safe_approach_approved
+    assert not updated.surface_alignment_approved
+    assert not updated.probe_pose_approved
 
 
 def test_probe_pose_is_converted_to_required_hand_pose():

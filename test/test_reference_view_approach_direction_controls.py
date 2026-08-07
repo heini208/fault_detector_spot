@@ -197,7 +197,8 @@ def test_distance_change_recalculates_target(application, tmp_path):
     assert new_position - old_position == pytest.approx(0.05)
 
 
-def test_aligned_distance_must_be_farther_than_target(application, tmp_path):
+def test_standoff_clearance_is_added_to_target(application, tmp_path):
+    """The per-point clearance is added to target surface distance."""
     controls = InspectionControls(FakeUI(tmp_path))
     configure_reference(controls, [1.0] * 121)
     controls.reference_target_distance_field.setText("0.10")
@@ -205,10 +206,11 @@ def test_aligned_distance_must_be_farther_than_target(application, tmp_path):
 
     controls._project_selected_reference_pixel(5, 5)
 
-    assert controls.selected_surface_target is None
-    assert controls.reference_target_status_label.text() == "Unavailable"
-    assert "must be greater" in (
-        controls.reference_target_status_label.toolTip()
+    target = controls.selected_surface_target
+    assert target is not None
+    assert target.target_surface_distance_m == pytest.approx(0.10)
+    assert target.aligned_preapproach_distance_m == pytest.approx(
+        0.15
     )
 
 

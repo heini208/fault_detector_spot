@@ -141,6 +141,14 @@ class MultiReferenceViewRepository:
             stored_routine = replace(
                 routine,
                 reference_views=stored_views,
+                probe_points=[
+                    replace(
+                        probe_point,
+                        reference_pixel=None,
+                        reference_view_id=None,
+                    )
+                    for probe_point in routine.probe_points
+                ],
             )
             stored_definition = replace(
                 definition,

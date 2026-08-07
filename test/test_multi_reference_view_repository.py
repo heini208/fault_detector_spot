@@ -1,15 +1,18 @@
 """Tests for atomic camera-specific reference-view persistence."""
 
 import json
+from dataclasses import replace
 
 import pytest
 from fault_detector_msgs.msg import TagElement
 from sensor_msgs.msg import CameraInfo, Image
 
 from fault_detector_spot.inspection.models import (
+    ImagePoint,
     InspectionObject,
     InspectionRoutine,
     PoseData,
+    ProbePoint,
     ReferenceTag,
     ReferenceView,
 )
@@ -163,6 +166,55 @@ def test_replacement_removes_old_camera_directories(tmp_path):
         if child.is_dir()
     ]
     assert view_directories == ["slot2_right"]
+
+
+def test_recapture_preserves_probe_geometry_and_clears_provenance(
+    tmp_path,
+):
+    repository = MultiReferenceViewRepository(tmp_path)
+    repository.object_repository.create(make_object())
+    repository.save_reference_views(
+        "motor_a",
+        "magnetic_scan",
+        [make_capture(0, "hand", 100)],
+    )
+    definition = repository.object_repository.load("motor_a")
+    routine = definition.get_routine("magnetic_scan")
+    safe_approach_pose = PoseData.identity()
+    safe_approach_pose.position.x = 0.30
+    probe_pose = PoseData.identity()
+    probe_pose.position.x = 0.02
+    original_probe = ProbePoint(
+        probe_point_id="point_a",
+        display_name="Point A",
+        safe_approach_pose_object=safe_approach_pose,
+        probe_pose_object=probe_pose,
+        target_surface_distance_m=0.01,
+        position_tolerance_m=0.005,
+        orientation_tolerance_rad=0.05,
+        measurement_duration_sec=1.0,
+        preapproach_distance_m=0.05,
+        reference_pixel=ImagePoint(u=1, v=0),
+        reference_view_id="slot1_hand",
+        sensor_path="magnetic/field",
+    )
+    routine.probe_points.append(original_probe)
+    repository.object_repository.save(definition)
+
+    stored = repository.save_reference_views(
+        "motor_a",
+        "magnetic_scan",
+        [make_capture(0, "hand", 200)],
+    )
+
+    stored_probe = stored.get_routine(
+        "magnetic_scan"
+    ).probe_points[0]
+    assert stored_probe == replace(
+        original_probe,
+        reference_pixel=None,
+        reference_view_id=None,
+    )
 
 
 def test_failed_object_update_preserves_previous_complete_set(

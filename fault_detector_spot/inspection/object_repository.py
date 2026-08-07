@@ -11,6 +11,7 @@ import yaml
 from .models import (
     InspectionObject,
     InspectionRoutine,
+    ProbePoint,
 )
 from .repository_utils import (
     atomic_write_text,
@@ -148,6 +149,47 @@ class ObjectRepository:
         stored_definition = replace(
             definition,
             routines=[*definition.routines, routine],
+        )
+        self.save(stored_definition)
+        return stored_definition
+
+    def add_probe_point(
+        self,
+        object_id: str,
+        routine_id: str,
+        probe_point: ProbePoint,
+    ) -> InspectionObject:
+        """Append one new probe point to an existing routine."""
+        validate_storage_name(object_id, "object ID")
+        validate_storage_name(routine_id, "routine ID")
+        probe_point.validate()
+
+        definition = self.load(object_id)
+        routine = definition.get_routine(routine_id)
+        if routine is None:
+            raise KeyError(
+                "Inspection routine does not exist: "
+                f"{object_id}/{routine_id}"
+            )
+        if routine.get_probe_point(probe_point.probe_point_id) is not None:
+            raise FileExistsError(
+                "Probe point already exists: "
+                f"{object_id}/{routine_id}/"
+                f"{probe_point.probe_point_id}"
+            )
+
+        stored_routine = replace(
+            routine,
+            probe_points=[*routine.probe_points, probe_point],
+        )
+        stored_definition = replace(
+            definition,
+            routines=[
+                stored_routine
+                if candidate.routine_id == routine_id
+                else candidate
+                for candidate in definition.routines
+            ],
         )
         self.save(stored_definition)
         return stored_definition
