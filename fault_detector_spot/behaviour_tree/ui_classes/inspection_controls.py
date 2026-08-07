@@ -6,7 +6,7 @@ from copy import deepcopy
 
 from bosdyn.client.frame_helpers import HAND_FRAME_NAME
 from PyQt5.QtCore import QLocale, Qt, QTimer
-from PyQt5.QtGui import QDoubleValidator, QIntValidator
+from PyQt5.QtGui import QColor, QDoubleValidator, QIntValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,13 +28,19 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from fault_detector_msgs.msg import ComplexCommand, TagElement
+from fault_detector_msgs.msg import (
+    ComplexCommand,
+    SensorDefinitionArray,
+    TagElement,
+)
+from fault_detector_msgs.srv import AddSensor
 from rclpy.duration import Duration
 from rclpy.serialization import deserialize_message
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
+from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
 from fault_detector_spot.inspection.models import (
     ImagePoint,
     InspectionObject,
@@ -81,6 +87,11 @@ from fault_detector_spot.inspection.reference_view_surface_target import (
     quaternion_to_rpy,
     resolve_reference_surface_target,
 )
+from fault_detector_spot.inspection.sensor_models import (
+    SensorDefinition,
+    sensor_definition_from_values,
+    sensor_probe_frame,
+)
 
 from ..commands.command_ids import CommandID, OrientationModes
 from .collapsible_section import CollapsibleSection
@@ -120,8 +131,15 @@ class InspectionControls(UIControlHelper):
         self._probe_setup = None
         self._tf_buffer = None
         self._tf_listener = None
+        self._sensor_definitions = {}
+        self._pending_sensor_selection = ""
+        self.sensor_add_client = None
+        self.sensor_list_subscription = None
         self.management_dialog = None
         super().__init__(parent_ui)
+        initial_sensors = getattr(parent_ui, "sensor_definitions", [])
+        if initial_sensors:
+            self.set_sensor_definitions(initial_sensors)
         self.refresh_saved_definitions()
 
     def add_rows(self, layout):
@@ -137,6 +155,18 @@ class InspectionControls(UIControlHelper):
             self._tf_listener = tf2_ros.TransformListener(
                 self._tf_buffer,
                 self.node,
+            )
+            self.sensor_add_client = self.node.create_client(
+                AddSensor,
+                "fault_detector/add_sensor",
+            )
+            self.sensor_list_subscription = (
+                self.node.create_subscription(
+                    SensorDefinitionArray,
+                    "fault_detector/sensors",
+                    self._process_sensor_definitions,
+                    LATCHED_QOS,
+                )
             )
 
     def make_rows(self):
@@ -220,7 +250,7 @@ class InspectionControls(UIControlHelper):
             "Create Inspection Objects and Routines"
         )
         self.management_dialog.setModal(False)
-        self.management_dialog.resize(620, 430)
+        self.management_dialog.resize(680, 680)
 
         dialog_layout = QVBoxLayout(self.management_dialog)
 
@@ -259,6 +289,56 @@ class InspectionControls(UIControlHelper):
         object_layout.addRow(object_buttons)
         dialog_layout.addWidget(object_group)
 
+        sensor_group = QGroupBox("Add hand-mounted sensor")
+        sensor_layout = QFormLayout(sensor_group)
+        self.new_sensor_id_field = QLineEdit()
+        self.new_sensor_id_field.setPlaceholderText("Unique mounting ID")
+        sensor_layout.addRow("Sensor ID:", self.new_sensor_id_field)
+
+        self.new_sensor_display_name_field = QLineEdit()
+        self.new_sensor_display_name_field.setPlaceholderText(
+            "Display name"
+        )
+        sensor_layout.addRow(
+            "Display name:",
+            self.new_sensor_display_name_field,
+        )
+
+        translation_row = QHBoxLayout()
+        self.sensor_translation_fields = []
+        for axis in ("X", "Y", "Z"):
+            translation_row.addWidget(QLabel(f"{axis}:"))
+            field = QLineEdit("0.0")
+            field.setFixedWidth(78)
+            field.setValidator(self._signed_number_validator(field))
+            self.sensor_translation_fields.append(field)
+            translation_row.addWidget(field)
+        translation_row.addStretch()
+        sensor_layout.addRow("Hand to probe [m]:", translation_row)
+
+        rotation_row = QHBoxLayout()
+        self.sensor_rotation_fields = []
+        for axis in ("Roll", "Pitch", "Yaw"):
+            rotation_row.addWidget(QLabel(f"{axis}:"))
+            field = QLineEdit("0.0")
+            field.setFixedWidth(78)
+            field.setValidator(self._signed_number_validator(field))
+            self.sensor_rotation_fields.append(field)
+            rotation_row.addWidget(field)
+        rotation_row.addStretch()
+        sensor_layout.addRow("Rotation [deg]:", rotation_row)
+
+        sensor_buttons = QHBoxLayout()
+        self.add_sensor_button = QPushButton("Add Sensor")
+        self.add_sensor_button.clicked.connect(self.handle_add_sensor)
+        sensor_buttons.addWidget(self.add_sensor_button)
+        self.sensor_creation_status_label = QLabel(
+            "Calibration is fixed after saving."
+        )
+        sensor_buttons.addWidget(self.sensor_creation_status_label, 1)
+        sensor_layout.addRow(sensor_buttons)
+        dialog_layout.addWidget(sensor_group)
+
         routine_group = QGroupBox("Create inspection routine")
         routine_layout = QFormLayout(routine_group)
 
@@ -280,13 +360,21 @@ class InspectionControls(UIControlHelper):
             self.routine_display_name_field,
         )
 
-        self.sensor_id_field = QLineEdit("bmm150")
-        self.sensor_id_field.setPlaceholderText("Sensor ID")
-        routine_layout.addRow("Sensor ID:", self.sensor_id_field)
+        self.sensor_id_field = QComboBox()
+        self.sensor_id_field.setMinimumWidth(260)
+        self.sensor_id_field.currentIndexChanged.connect(
+            self._handle_routine_sensor_changed
+        )
+        routine_layout.addRow("Sensor mounting:", self.sensor_id_field)
 
-        self.probe_frame_field = QLineEdit("sensor_tip")
-        self.probe_frame_field.setPlaceholderText("Probe frame")
-        routine_layout.addRow("Probe frame:", self.probe_frame_field)
+        self.probe_frame_value_label = QLabel("No sensor selected")
+        self.probe_frame_value_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse
+        )
+        routine_layout.addRow(
+            "Derived probe frame:",
+            self.probe_frame_value_label,
+        )
 
         routine_buttons = QHBoxLayout()
         self.create_routine_button = QPushButton("Create Routine")
@@ -297,6 +385,7 @@ class InspectionControls(UIControlHelper):
         routine_buttons.addStretch()
         routine_layout.addRow(routine_buttons)
         dialog_layout.addWidget(routine_group)
+        self._populate_sensor_dropdown()
 
         self.storage_path_label = QLabel(
             f"Storage: {self.object_repository.root_dir}"
@@ -330,6 +419,16 @@ class InspectionControls(UIControlHelper):
         self.reference_tag_family_field.setText("36h11")
         self.routine_id_field.clear()
         self.routine_display_name_field.clear()
+        self.new_sensor_id_field.clear()
+        self.new_sensor_display_name_field.clear()
+        for field in (
+            *self.sensor_translation_fields,
+            *self.sensor_rotation_fields,
+        ):
+            field.setText("0.0")
+        self.sensor_creation_status_label.setText(
+            "Calibration is fixed after saving."
+        )
         self.management_status_label.setText(
             "Create a new object, or select an existing object "
             "for the new routine."
@@ -337,6 +436,229 @@ class InspectionControls(UIControlHelper):
         self.management_dialog.show()
         self.management_dialog.raise_()
         self.management_dialog.activateWindow()
+
+    def _process_sensor_definitions(self, message):
+        definitions = []
+        for sensor_message in message.sensors:
+            definition = SensorDefinition(
+                sensor_id=sensor_message.sensor_id,
+                display_name=sensor_message.display_name,
+                hand_to_probe=PoseData(
+                    position=Vector3Data(
+                        x=sensor_message.hand_to_probe.position.x,
+                        y=sensor_message.hand_to_probe.position.y,
+                        z=sensor_message.hand_to_probe.position.z,
+                    ),
+                    orientation=QuaternionData(
+                        x=sensor_message.hand_to_probe.orientation.x,
+                        y=sensor_message.hand_to_probe.orientation.y,
+                        z=sensor_message.hand_to_probe.orientation.z,
+                        w=sensor_message.hand_to_probe.orientation.w,
+                    ),
+                ),
+            )
+            try:
+                definition.validate()
+            except Exception as exception:
+                self._set_status_text(
+                    "Ignored invalid sensor definition "
+                    f"'{definition.sensor_id}': {exception}"
+                )
+                continue
+            definitions.append(definition)
+        self.set_sensor_definitions(definitions)
+
+    def set_sensor_definitions(self, definitions):
+        """Replace the UI sensor list with validated registry data."""
+        validated = {}
+        for definition in definitions:
+            definition.validate()
+            if definition.sensor_id in validated:
+                raise ValueError(
+                    f"Duplicate sensor ID: {definition.sensor_id}"
+                )
+            validated[definition.sensor_id] = definition
+        self._sensor_definitions = validated
+        desired_sensor_id = (
+            self._pending_sensor_selection
+            or self.sensor_id_field.currentData()
+            or ""
+        )
+        self._populate_sensor_dropdown(desired_sensor_id)
+        if (
+            self._pending_sensor_selection
+            and self._pending_sensor_selection in validated
+        ):
+            self._pending_sensor_selection = ""
+
+    def _populate_sensor_dropdown(self, desired_sensor_id=""):
+        if not hasattr(self, "sensor_id_field"):
+            return
+        dropdown = self.sensor_id_field
+        dropdown.blockSignals(True)
+        dropdown.clear()
+        dropdown.addItem("Select registered sensor", None)
+        for sensor_id in sorted(self._sensor_definitions):
+            definition = self._sensor_definitions[sensor_id]
+            dropdown.addItem(
+                f"{definition.display_name} [{sensor_id}]",
+                sensor_id,
+            )
+        selected_index = dropdown.findData(desired_sensor_id)
+        if desired_sensor_id and selected_index < 0:
+            dropdown.addItem(
+                f"Unavailable sensor [{desired_sensor_id}]",
+                desired_sensor_id,
+            )
+            selected_index = dropdown.count() - 1
+            dropdown.setItemData(
+                selected_index,
+                QColor("red"),
+                Qt.ForegroundRole,
+            )
+        dropdown.setCurrentIndex(
+            selected_index if selected_index >= 0 else 0
+        )
+        dropdown.blockSignals(False)
+        self._handle_routine_sensor_changed()
+
+    def _handle_routine_sensor_changed(self, _index=None):
+        sensor_id = self.sensor_id_field.currentData()
+        if not sensor_id:
+            self.probe_frame_value_label.setText("No sensor selected")
+        elif sensor_id not in self._sensor_definitions:
+            self.probe_frame_value_label.setText(
+                f"{sensor_probe_frame(sensor_id)} (sensor unavailable)"
+            )
+        else:
+            self.probe_frame_value_label.setText(
+                sensor_probe_frame(sensor_id)
+            )
+        if hasattr(self, "create_routine_button"):
+            has_parent = bool(
+                self.routine_parent_object_dropdown.currentData()
+            )
+            self.create_routine_button.setEnabled(
+                has_parent and sensor_id in self._sensor_definitions
+            )
+
+    def handle_add_sensor(self):
+        """Submit one immutable sensor mounting to the registry."""
+        sensor_id = self._required_text(
+            self.new_sensor_id_field,
+            "a unique sensor ID",
+        )
+        display_name = self._required_text(
+            self.new_sensor_display_name_field,
+            "a sensor display name",
+        )
+        if sensor_id is None or display_name is None:
+            return False
+        try:
+            translation = [
+                self._signed_number_value(field, axis)
+                for field, axis in zip(
+                    self.sensor_translation_fields,
+                    ("Translation X", "Translation Y", "Translation Z"),
+                )
+            ]
+            rotation = [
+                self._signed_number_value(field, axis)
+                for field, axis in zip(
+                    self.sensor_rotation_fields,
+                    ("Roll", "Pitch", "Yaw"),
+                )
+            ]
+            definition = sensor_definition_from_values(
+                sensor_id,
+                display_name,
+                *translation,
+                *rotation,
+            )
+        except Exception as exception:
+            self.sensor_creation_status_label.setText(str(exception))
+            self.show_warning("Add Sensor", str(exception))
+            return False
+
+        if self.sensor_add_client is None:
+            message = "Sensor registry is unavailable"
+            self.sensor_creation_status_label.setText(message)
+            self.show_warning("Add Sensor", message)
+            return False
+        if not self.sensor_add_client.service_is_ready():
+            message = "Sensor registry service is not ready"
+            self.sensor_creation_status_label.setText(message)
+            self.show_warning("Add Sensor", message)
+            return False
+
+        request = AddSensor.Request()
+        request.sensor.sensor_id = definition.sensor_id
+        request.sensor.display_name = definition.display_name
+        request.sensor.hand_to_probe.position.x = (
+            definition.hand_to_probe.position.x
+        )
+        request.sensor.hand_to_probe.position.y = (
+            definition.hand_to_probe.position.y
+        )
+        request.sensor.hand_to_probe.position.z = (
+            definition.hand_to_probe.position.z
+        )
+        request.sensor.hand_to_probe.orientation.x = (
+            definition.hand_to_probe.orientation.x
+        )
+        request.sensor.hand_to_probe.orientation.y = (
+            definition.hand_to_probe.orientation.y
+        )
+        request.sensor.hand_to_probe.orientation.z = (
+            definition.hand_to_probe.orientation.z
+        )
+        request.sensor.hand_to_probe.orientation.w = (
+            definition.hand_to_probe.orientation.w
+        )
+        self._pending_sensor_selection = definition.sensor_id
+        self.add_sensor_button.setEnabled(False)
+        self.sensor_creation_status_label.setText(
+            f"Adding sensor '{definition.sensor_id}'..."
+        )
+        future = self.sensor_add_client.call_async(request)
+        future.add_done_callback(self._handle_add_sensor_response)
+        return True
+
+    def _handle_add_sensor_response(self, future):
+        self.add_sensor_button.setEnabled(True)
+        try:
+            response = future.result()
+        except Exception as exception:
+            self._pending_sensor_selection = ""
+            self.sensor_creation_status_label.setText(
+                f"Sensor creation failed: {exception}"
+            )
+            return
+        self.sensor_creation_status_label.setText(response.message)
+        if not response.success:
+            self._pending_sensor_selection = ""
+            return
+        self._set_status_text(response.message)
+        self.new_sensor_id_field.clear()
+        self.new_sensor_display_name_field.clear()
+
+    @staticmethod
+    def _signed_number_value(field, label):
+        text = field.text().strip()
+        try:
+            value = float(text)
+        except ValueError as exception:
+            raise ValueError(f"{label} must be a number") from exception
+        if not math.isfinite(value):
+            raise ValueError(f"{label} must be finite")
+        return value
+
+    @staticmethod
+    def _signed_number_validator(parent):
+        validator = QDoubleValidator(-1000.0, 1000.0, 9, parent)
+        validator.setNotation(QDoubleValidator.StandardNotation)
+        validator.setLocale(QLocale.c())
+        return validator
 
     def _create_reference_widgets(self):
         self.reference_view_widgets = [
@@ -1837,13 +2159,13 @@ class InspectionControls(UIControlHelper):
         routine_id = self.saved_routine_dropdown.currentData()
         if routine_id and self._selected_definition is not None:
             routine = self._selected_definition.get_routine(routine_id)
-            if routine is not None and routine.probe_frame.strip():
-                return routine.probe_frame.strip()
+            if routine is not None:
+                return sensor_probe_frame(routine.sensor_id)
 
-        probe_frame = self.probe_frame_field.text().strip()
-        if not probe_frame:
-            raise ValueError("Probe frame must not be empty")
-        return probe_frame
+        sensor_id = self.sensor_id_field.currentData()
+        if not sensor_id:
+            raise ValueError("Sensor mounting must be selected")
+        return sensor_probe_frame(sensor_id)
 
     def _lookup_pose(self, target_frame, source_frame):
         if self._tf_buffer is None:
@@ -2034,7 +2356,11 @@ class InspectionControls(UIControlHelper):
             selected_index if selected_index >= 0 else 0
         )
         dropdown.blockSignals(False)
-        self.create_routine_button.setEnabled(bool(object_ids))
+        selected_sensor_id = self.sensor_id_field.currentData()
+        self.create_routine_button.setEnabled(
+            bool(object_ids)
+            and selected_sensor_id in self._sensor_definitions
+        )
 
     def _load_selected_object(
         self,
@@ -2154,8 +2480,7 @@ class InspectionControls(UIControlHelper):
             self.routine_display_name_field.setText(
                 routine.display_name
             )
-            self.sensor_id_field.setText(routine.sensor_id)
-            self.probe_frame_field.setText(routine.probe_frame)
+            self._populate_sensor_dropdown(routine.sensor_id)
 
         if not routine.reference_views:
             self._set_reference_camera_defaults()
@@ -2476,19 +2801,17 @@ class InspectionControls(UIControlHelper):
             self.routine_display_name_field,
             "a routine display name",
         )
-        sensor_id = self._required_text(
-            self.sensor_id_field,
-            "a sensor ID",
-        )
-        probe_frame = self._required_text(
-            self.probe_frame_field,
-            "a probe frame",
-        )
+        sensor_id = self.sensor_id_field.currentData()
+        if sensor_id not in self._sensor_definitions:
+            self.show_warning(
+                "No Sensor Selected",
+                "Select a registered sensor mounting.",
+            )
+            return False
         if None in (
             routine_id,
             display_name,
             sensor_id,
-            probe_frame,
         ):
             return False
 
@@ -2496,7 +2819,6 @@ class InspectionControls(UIControlHelper):
             routine_id=routine_id,
             display_name=display_name,
             sensor_id=sensor_id,
-            probe_frame=probe_frame,
         )
         direct_creation_succeeded = False
         try:
@@ -2528,7 +2850,6 @@ class InspectionControls(UIControlHelper):
         command.inspection.routine.routine_id = routine_id
         command.inspection.routine.display_name = display_name
         command.inspection.routine.sensor_id = sensor_id
-        command.inspection.routine.probe_frame = probe_frame
         self._publish_management_compatibility_command(command)
 
         if direct_creation_succeeded:

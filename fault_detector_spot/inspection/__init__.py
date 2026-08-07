@@ -31,6 +31,15 @@ from fault_detector_spot.inspection.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
 )
+from fault_detector_spot.inspection.sensor_models import (
+    SENSOR_PARENT_FRAME,
+    SensorDefinition,
+    sensor_definition_from_values,
+    sensor_probe_frame,
+)
+from fault_detector_spot.inspection.sensor_repository import (
+    SensorRepository,
+)
 from fault_detector_spot.inspection.transform_utils import (
     compose_poses,
     inverse_pose,
@@ -58,6 +67,9 @@ __all__ = [
     "ReferenceTag",
     "ReferenceView",
     "ResolvedObjectPose",
+    "SENSOR_PARENT_FRAME",
+    "SensorDefinition",
+    "SensorRepository",
     "Vector3Data",
     "Waypoint",
     "compose_poses",
@@ -68,4 +80,6 @@ __all__ = [
     "pose_to_matrix",
     "pose_to_pose_data",
     "relative_pose",
+    "sensor_definition_from_values",
+    "sensor_probe_frame",
 ]

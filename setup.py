@@ -36,6 +36,7 @@ setup(
             'rest_api_bridge = fault_detector_spot.behaviour_tree.rest_bridge:main',
             'available_frames_publisher = fault_detector_spot.behaviour_tree.ui_classes.available_frames_publisher:main',
             'lidar_self_filter = fault_detector_spot.behaviour_tree.nodes.mapping.lidar_self_filter:main',
+            'sensor_registry = fault_detector_spot.inspection.sensor_registry_node:main',
         ],
     },
 )

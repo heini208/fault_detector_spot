@@ -20,6 +20,7 @@ from fault_detector_spot.inspection.models import (
     QuaternionData,
     Vector3Data,
 )
+from fault_detector_spot.inspection.sensor_models import SensorDefinition
 
 
 class FakePublisher:
@@ -37,6 +38,13 @@ class FakeUI:
         self.complex_command_publisher = FakePublisher()
         self.inspection_object_root = object_root
         self.visible_tags = {}
+        self.sensor_definitions = [
+            SensorDefinition(
+                sensor_id="bmm150",
+                display_name="BMM150 Hall sensor",
+                hand_to_probe=PoseData.identity(),
+            )
+        ]
 
     def build_basic_command(self, command_id):
         command = BasicCommand()
@@ -103,7 +111,9 @@ def test_current_probe_pose_is_expressed_relative_to_live_tag(
     ui = FakeUI(tmp_path)
     controls = InspectionControls(ui)
     configure_live_tag(controls, ui)
-    controls.probe_frame_field.setText("sensor_tip")
+    controls.sensor_id_field.setCurrentIndex(
+        controls.sensor_id_field.findData("bmm150")
+    )
     controls._lookup_pose = lambda target, source: pose(x=1.30)
 
     current = controls._current_probe_pose_object()

@@ -38,7 +38,6 @@ def make_object() -> InspectionObject:
             routine_id="magnetic_scan",
             display_name="Magnetic scan",
             sensor_id="bmm150",
-            probe_frame="sensor_tip",
         )],
     )
 
@@ -145,7 +144,6 @@ def test_object_repository_adds_uncaptured_routine_once(tmp_path):
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
         sensor_id="bmm150",
-        probe_frame="sensor_tip",
     )
 
     stored = repository.add_routine("motor_b", routine)
@@ -163,7 +161,6 @@ def test_object_repository_requires_object_before_routine(tmp_path):
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
         sensor_id="bmm150",
-        probe_frame="sensor_tip",
     )
 
     with pytest.raises(FileNotFoundError):

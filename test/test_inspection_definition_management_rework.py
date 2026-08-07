@@ -12,11 +12,13 @@ from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
 from fault_detector_spot.inspection.models import (
     InspectionObject,
     InspectionRoutine,
+    PoseData,
     ReferenceTag,
 )
 from fault_detector_spot.inspection.object_repository import (
     ObjectRepository,
 )
+from fault_detector_spot.inspection.sensor_models import SensorDefinition
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -40,6 +42,18 @@ class FakeUI:
         self.status_label = QLabel()
         self.complex_command_publisher = FakePublisher()
         self.inspection_object_root = object_root
+        self.sensor_definitions = [
+            SensorDefinition(
+                sensor_id="mlx90640",
+                display_name="MLX90640 thermal sensor",
+                hand_to_probe=PoseData.identity(),
+            ),
+            SensorDefinition(
+                sensor_id="bmm150",
+                display_name="BMM150 Hall sensor",
+                hand_to_probe=PoseData.identity(),
+            ),
+        ]
 
     def build_basic_command(self, command_id):
         command = BasicCommand()
@@ -101,8 +115,9 @@ def set_object_form(controls, object_id="motor_a"):
 def set_routine_form(controls, routine_id="thermal_scan"):
     controls.routine_id_field.setText(routine_id)
     controls.routine_display_name_field.setText("Thermal scan")
-    controls.sensor_id_field.setText("mlx90640")
-    controls.probe_frame_field.setText("sensor_tip")
+    controls.sensor_id_field.setCurrentIndex(
+        controls.sensor_id_field.findData("mlx90640")
+    )
 
 
 def test_delete_buttons_are_outside_creation_dialog(controls):
@@ -154,7 +169,6 @@ def test_delete_routine_removes_repository_and_dropdown_entry(controls):
         routine_id="thermal_scan",
         display_name="Thermal scan",
         sensor_id="mlx90640",
-        probe_frame="sensor_tip",
     )
     save_object(controls, routines=[routine])
     select_object(controls, "motor_a")
@@ -262,7 +276,6 @@ def test_missing_view_dataset_does_not_hide_available_preview(
         routine_id="scan",
         display_name="Scan",
         sensor_id="bmm150",
-        probe_frame="sensor_tip",
         reference_views=[hand_view, left_view],
     )
     save_object(controls, routines=[routine])

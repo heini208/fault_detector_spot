@@ -123,7 +123,6 @@ class CreateInspectionDefinition(py_trees.behaviour.Behaviour):
             routine_id=routine_definition.routine_id,
             display_name=routine_definition.display_name,
             sensor_id=routine_definition.sensor_id,
-            probe_frame=routine_definition.probe_frame,
         )
         self.object_repository.add_routine(
             object_definition.object_id,

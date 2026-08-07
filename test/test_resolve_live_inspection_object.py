@@ -70,7 +70,6 @@ def make_routine() -> InspectionRoutine:
         routine_id="phase3",
         display_name="Phase 3",
         sensor_id="bmm150",
-        probe_frame="sensor_tip",
         reference_views=[ReferenceView(
             controlled_frame_pose_object=PoseData.identity(),
             controlled_frame="hand_color_image_sensor",

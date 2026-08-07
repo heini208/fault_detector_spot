@@ -451,7 +451,6 @@ class InspectionRoutine:
     routine_id: str
     display_name: str
     sensor_id: str
-    probe_frame: str
     reference_views: List[ReferenceView] = field(default_factory=list)
     probe_points: List[ProbePoint] = field(default_factory=list)
 
@@ -484,7 +483,6 @@ class InspectionRoutine:
             routine_id=str(data["routine_id"]),
             display_name=str(data["display_name"]),
             sensor_id=str(data["sensor_id"]),
-            probe_frame=str(data["probe_frame"]),
             reference_views=[
                 ReferenceView.from_dict(view)
                 for view in reference_views
@@ -500,7 +498,6 @@ class InspectionRoutine:
         _require_text(self.routine_id, "Routine ID")
         _require_text(self.display_name, "Routine display name")
         _require_text(self.sensor_id, "Sensor ID")
-        _require_text(self.probe_frame, "Probe frame")
         if not 0 <= len(self.reference_views) <= 3:
             raise ValueError(
                 "Routine must contain at most three reference views"
@@ -587,7 +584,6 @@ class InspectionRoutine:
             "routine_id": self.routine_id,
             "display_name": self.display_name,
             "sensor_id": self.sensor_id,
-            "probe_frame": self.probe_frame,
             "reference_views": [
                 view.to_dict() for view in self.reference_views
             ],

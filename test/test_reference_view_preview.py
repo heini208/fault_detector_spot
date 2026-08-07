@@ -70,7 +70,6 @@ def make_definition() -> InspectionObject:
                 routine_id="magnetic_scan",
                 display_name="Magnetic scan",
                 sensor_id="bmm150",
-                probe_frame="sensor_tip",
             )
         ],
     )

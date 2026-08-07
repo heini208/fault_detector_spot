@@ -91,7 +91,6 @@ def routine_command(**values):
         "routine_id": "magnetic_scan",
         "display_name": "Magnetic scan",
         "sensor_id": "bmm150",
-        "probe_frame": "sensor_tip",
     }
     fields.update(values)
     inspection = InspectionCommand()
@@ -164,7 +163,6 @@ def test_create_routine_command_persists_uncaptured_routine(tmp_path):
     assert status == py_trees.common.Status.SUCCESS
     assert routine.display_name == "Magnetic scan"
     assert routine.sensor_id == "bmm150"
-    assert routine.probe_frame == "sensor_tip"
     assert routine.reference_view is None
     assert behavior.feedback_message == (
         "Created inspection routine motor_a/magnetic_scan"

@@ -92,7 +92,13 @@ def test_management_controls_live_in_non_modal_dialog(
         controls.management_dialog
     )
     assert controls.routine_id_field.window() is controls.management_dialog
-    assert controls.probe_frame_field.window() is controls.management_dialog
+    assert controls.sensor_id_field.window() is controls.management_dialog
+    assert controls.probe_frame_value_label.window() is (
+        controls.management_dialog
+    )
+    assert controls.new_sensor_id_field.window() is (
+        controls.management_dialog
+    )
 
 
 def test_transient_approval_statuses_update_all_tabs(

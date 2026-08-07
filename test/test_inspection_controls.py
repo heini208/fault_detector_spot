@@ -23,6 +23,7 @@ from fault_detector_spot.inspection.models import (
 from fault_detector_spot.inspection.object_repository import (
     ObjectRepository,
 )
+from fault_detector_spot.inspection.sensor_models import SensorDefinition
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -48,6 +49,13 @@ class FakeUI:
         self.status_label = QLabel()
         self.complex_command_publisher = FakePublisher()
         self.inspection_object_root = inspection_object_root
+        self.sensor_definitions = [
+            SensorDefinition(
+                sensor_id="bmm150",
+                display_name="BMM150 Hall sensor",
+                hand_to_probe=PoseData.identity(),
+            )
+        ]
 
     def build_basic_command(self, command_id):
         """Build the command header used by controls."""
@@ -96,7 +104,6 @@ def save_definition(controls, captured=False):
                 routine_id="magnetic_scan",
                 display_name="Magnetic scan",
                 sensor_id="bmm150",
-                probe_frame="sensor_tip",
                 reference_views=(
                     [replace(
                         reference_view,
@@ -129,8 +136,9 @@ def set_routine_fields(controls):
     controls.object_id_field.setText("motor_a")
     controls.routine_id_field.setText("magnetic_scan")
     controls.routine_display_name_field.setText("Magnetic scan")
-    controls.sensor_id_field.setText("bmm150")
-    controls.probe_frame_field.setText("sensor_tip")
+    controls.sensor_id_field.setCurrentIndex(
+        controls.sensor_id_field.findData("bmm150")
+    )
 
 
 def test_create_object_publishes_nested_definition(controls):
@@ -159,7 +167,6 @@ def test_create_routine_publishes_nested_definition(controls):
     assert message.inspection.routine.routine_id == "magnetic_scan"
     assert message.inspection.routine.display_name == "Magnetic scan"
     assert message.inspection.routine.sensor_id == "bmm150"
-    assert message.inspection.routine.probe_frame == "sensor_tip"
 
 
 def test_capture_publishes_identifiers_without_replacement(controls):
@@ -307,8 +314,8 @@ def test_saved_routine_selection_loads_fields_and_capture_state(
     assert controls.routine_display_name_field.text() == (
         "Magnetic scan"
     )
-    assert controls.sensor_id_field.text() == "bmm150"
-    assert controls.probe_frame_field.text() == "sensor_tip"
+    assert controls.sensor_id_field.currentData() == "bmm150"
+    assert controls.probe_frame_value_label.text() == "bmm150_probe"
     assert "Reference view: captured" in (
         controls.reference_view_status_label.text()
     )
@@ -376,8 +383,6 @@ def test_object_creation_rejects_negative_tag_id(controls):
         "object_id_field",
         "routine_id_field",
         "routine_display_name_field",
-        "sensor_id_field",
-        "probe_frame_field",
     ],
 )
 def test_routine_creation_rejects_missing_required_input(
@@ -387,6 +392,14 @@ def test_routine_creation_rejects_missing_required_input(
     """Incomplete routine definitions are not published."""
     set_routine_fields(controls)
     getattr(controls, field_name).clear()
+
+    assert controls.handle_create_routine() is False
+    assert controls.complex_command_publisher.messages == []
+
+
+def test_routine_creation_requires_registered_sensor(controls):
+    set_routine_fields(controls)
+    controls.sensor_id_field.setCurrentIndex(0)
 
     assert controls.handle_create_routine() is False
     assert controls.complex_command_publisher.messages == []
