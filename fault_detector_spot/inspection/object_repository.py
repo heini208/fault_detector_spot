@@ -206,6 +206,51 @@ class ObjectRepository:
             and (directory / self.FILE_NAME).is_file()
         )
 
+    def find_sensor_references(self, sensor_id: str) -> List[str]:
+        """List saved object and routine paths using a sensor ID."""
+        validate_storage_name(sensor_id, "sensor ID")
+        references = []
+        for object_id in self.list_object_ids():
+            path = self.get_object_path(object_id)
+            try:
+                with path.open("r", encoding="utf-8") as object_file:
+                    data = yaml.safe_load(object_file)
+            except yaml.YAMLError as exception:
+                raise ValueError(
+                    f"Invalid object YAML in {path}: {exception}"
+                ) from exception
+            if not isinstance(data, dict):
+                raise ValueError(
+                    f"Object root must be an object: {path}"
+                )
+            routines = data.get("routines")
+            if not isinstance(routines, list):
+                raise ValueError(
+                    f"Object routines must be a list: {path}"
+                )
+            for index, routine in enumerate(routines):
+                if not isinstance(routine, dict):
+                    raise ValueError(
+                        "Inspection routine must be an object: "
+                        f"{path} at index {index}"
+                    )
+                stored_sensor_id = routine.get("sensor_id")
+                if not isinstance(stored_sensor_id, str):
+                    raise ValueError(
+                        "Inspection routine requires a sensor ID: "
+                        f"{path} at index {index}"
+                    )
+                if stored_sensor_id != sensor_id:
+                    continue
+                routine_id = routine.get("routine_id")
+                if not isinstance(routine_id, str) or not routine_id.strip():
+                    raise ValueError(
+                        "Referenced inspection routine requires an ID: "
+                        f"{path} at index {index}"
+                    )
+                references.append(f"{object_id}/{routine_id}")
+        return references
+
     def delete_object(self, object_id: str) -> bool:
         """Delete an object and every dataset owned by it."""
         object_dir = self.get_object_dir(object_id)

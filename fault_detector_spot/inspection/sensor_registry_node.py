@@ -8,7 +8,7 @@ from fault_detector_msgs.msg import (
     SensorDefinition as SensorDefinitionMessage,
     SensorDefinitionArray,
 )
-from fault_detector_msgs.srv import AddSensor
+from fault_detector_msgs.srv import AddSensor, RetireSensor
 from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
 from synchros2.static_transform_broadcaster import (
@@ -21,6 +21,7 @@ from fault_detector_spot.inspection.models import (
     QuaternionData,
     Vector3Data,
 )
+from fault_detector_spot.inspection.object_repository import ObjectRepository
 from fault_detector_spot.inspection.sensor_models import (
     SENSOR_PARENT_FRAME,
     SensorDefinition,
@@ -33,19 +34,40 @@ class SensorRegistryNode(Node):
 
     SENSOR_LIST_TOPIC = "fault_detector/sensors"
     ADD_SENSOR_SERVICE = "fault_detector/add_sensor"
+    RETIRE_SENSOR_SERVICE = "fault_detector/retire_sensor"
 
     def __init__(
         self,
         sensor_root: Optional[Path] = None,
+        object_root: Optional[Path] = None,
+        retired_sensor_root: Optional[Path] = None,
     ):
         """Load stored definitions and publish their static transforms."""
         super().__init__("sensor_registry")
-        configured_root = ""
+        configured_sensor_root = ""
         if sensor_root is None:
             self.declare_parameter("sensor.root", "")
-            configured_root = self.get_parameter("sensor.root").value.strip()
+            configured_sensor_root = (
+                self.get_parameter("sensor.root").value.strip()
+            )
+        configured_retired_root = ""
+        if retired_sensor_root is None:
+            self.declare_parameter("sensor.retired_root", "")
+            configured_retired_root = (
+                self.get_parameter("sensor.retired_root").value.strip()
+            )
+        configured_object_root = ""
+        if object_root is None:
+            self.declare_parameter("inspection.object_root", "")
+            configured_object_root = (
+                self.get_parameter("inspection.object_root").value.strip()
+            )
         self.repository = SensorRepository(
-            sensor_root or configured_root or None
+            sensor_root or configured_sensor_root or None,
+            retired_sensor_root or configured_retired_root or None,
+        )
+        self.object_repository = ObjectRepository(
+            object_root or configured_object_root or None
         )
         self._definitions: Dict[str, SensorDefinition] = {}
         self._static_broadcaster = StaticTransformBroadcaster(self)
@@ -58,6 +80,11 @@ class SensorRegistryNode(Node):
             AddSensor,
             self.ADD_SENSOR_SERVICE,
             self._handle_add_sensor,
+        )
+        self._retire_sensor_service = self.create_service(
+            RetireSensor,
+            self.RETIRE_SENSOR_SERVICE,
+            self._handle_retire_sensor,
         )
         self._load_stored_definitions()
         self._publish_sensor_list()
@@ -101,6 +128,37 @@ class SensorRegistryNode(Node):
         )
         self.get_logger().info(response.message)
         return response
+
+    def _handle_retire_sensor(self, request, response):
+        try:
+            definition = self._retire_sensor(request.sensor_id)
+            self._publish_sensor_list()
+        except Exception as exception:
+            response.success = False
+            response.message = str(exception)
+            self.get_logger().error(
+                f"Sensor retirement failed: {exception}"
+            )
+            return response
+
+        response.success = True
+        response.message = (
+            f"Retired sensor '{definition.sensor_id}'. Restart the complete "
+            "system to clear its static TF. The sensor ID remains reserved."
+        )
+        self.get_logger().info(response.message)
+        return response
+
+    def _retire_sensor(self, sensor_id: str) -> SensorDefinition:
+        references = self.object_repository.find_sensor_references(sensor_id)
+        if references:
+            raise ValueError(
+                f"Sensor '{sensor_id}' is referenced by saved routines: "
+                + ", ".join(references)
+            )
+        definition = self.repository.retire(sensor_id)
+        self._definitions.pop(sensor_id, None)
+        return definition
 
     def _publish_sensor_list(self) -> None:
         message = SensorDefinitionArray()

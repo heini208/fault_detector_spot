@@ -70,3 +70,25 @@ def test_load_all_is_sorted_by_sensor_id(tmp_path):
     assert [
         item.sensor_id for item in repository.load_all()
     ] == ["sensor_a", "sensor_b"]
+
+
+def test_retire_moves_definition_and_permanently_reserves_id(tmp_path):
+    repository = SensorRepository(
+        tmp_path / "sensors",
+        tmp_path / "retired_sensors",
+    )
+    repository.create(definition("retired_mount"))
+
+    retired = repository.retire("retired_mount")
+
+    assert retired.sensor_id == "retired_mount"
+    assert repository.list_sensor_ids() == []
+    assert repository.list_retired_sensor_ids() == ["retired_mount"]
+    assert repository.is_retired("retired_mount") is True
+    assert repository.get_retired_sensor_path(
+        "retired_mount"
+    ).is_file()
+    with pytest.raises(FileExistsError, match="cannot be reused"):
+        repository.create(definition("retired_mount"))
+    with pytest.raises(FileNotFoundError, match="already retired"):
+        repository.retire("retired_mount")

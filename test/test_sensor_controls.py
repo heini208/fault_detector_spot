@@ -125,3 +125,30 @@ def test_add_sensor_submits_normalized_calibration_request(
         2 ** -0.5
     )
     assert controls.sensor_creation_status_label.text() == "created"
+
+
+def test_retire_sensor_uses_registry_and_removes_local_selection(
+    application,
+    tmp_path,
+):
+    controls = InspectionControls(FakeUI(tmp_path, [sensor()]))
+    controls.show_warning = lambda title, message: None
+    controls.ask_question = lambda title, message: True
+    response = SimpleNamespace(
+        success=True,
+        message="retired; restart required",
+    )
+    client = FakeClient(response)
+    controls.sensor_retire_client = client
+    index = controls.retire_sensor_dropdown.findData("bmm150_01")
+    controls.retire_sensor_dropdown.setCurrentIndex(index)
+
+    assert controls.handle_retire_sensor() is True
+
+    assert client.requests[0].sensor_id == "bmm150_01"
+    assert "bmm150_01" not in controls._sensor_definitions
+    assert controls.retire_sensor_dropdown.findData("bmm150_01") == -1
+    assert controls.sensor_id_field.findData("bmm150_01") == -1
+    assert controls.sensor_creation_status_label.text() == (
+        "retired; restart required"
+    )

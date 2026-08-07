@@ -33,7 +33,7 @@ from fault_detector_msgs.msg import (
     SensorDefinitionArray,
     TagElement,
 )
-from fault_detector_msgs.srv import AddSensor
+from fault_detector_msgs.srv import AddSensor, RetireSensor
 from rclpy.duration import Duration
 from rclpy.serialization import deserialize_message
 from rclpy.time import Time
@@ -133,7 +133,9 @@ class InspectionControls(UIControlHelper):
         self._tf_listener = None
         self._sensor_definitions = {}
         self._pending_sensor_selection = ""
+        self._pending_sensor_retirement = ""
         self.sensor_add_client = None
+        self.sensor_retire_client = None
         self.sensor_list_subscription = None
         self.management_dialog = None
         super().__init__(parent_ui)
@@ -159,6 +161,10 @@ class InspectionControls(UIControlHelper):
             self.sensor_add_client = self.node.create_client(
                 AddSensor,
                 "fault_detector/add_sensor",
+            )
+            self.sensor_retire_client = self.node.create_client(
+                RetireSensor,
+                "fault_detector/retire_sensor",
             )
             self.sensor_list_subscription = (
                 self.node.create_subscription(
@@ -289,7 +295,7 @@ class InspectionControls(UIControlHelper):
         object_layout.addRow(object_buttons)
         dialog_layout.addWidget(object_group)
 
-        sensor_group = QGroupBox("Add hand-mounted sensor")
+        sensor_group = QGroupBox("Manage hand-mounted sensors")
         sensor_layout = QFormLayout(sensor_group)
         self.new_sensor_id_field = QLineEdit()
         self.new_sensor_id_field.setPlaceholderText("Unique mounting ID")
@@ -337,6 +343,26 @@ class InspectionControls(UIControlHelper):
         )
         sensor_buttons.addWidget(self.sensor_creation_status_label, 1)
         sensor_layout.addRow(sensor_buttons)
+
+        self.retire_sensor_dropdown = QComboBox()
+        self.retire_sensor_dropdown.setMinimumWidth(260)
+        self.retire_sensor_dropdown.currentIndexChanged.connect(
+            self._handle_retire_sensor_changed
+        )
+        sensor_layout.addRow(
+            "Registered sensor:",
+            self.retire_sensor_dropdown,
+        )
+
+        retire_sensor_buttons = QHBoxLayout()
+        self.retire_sensor_button = QPushButton("Retire Sensor")
+        self.retire_sensor_button.setEnabled(False)
+        self.retire_sensor_button.clicked.connect(
+            self.handle_retire_sensor
+        )
+        retire_sensor_buttons.addWidget(self.retire_sensor_button)
+        retire_sensor_buttons.addStretch()
+        sensor_layout.addRow(retire_sensor_buttons)
         dialog_layout.addWidget(sensor_group)
 
         routine_group = QGroupBox("Create inspection routine")
@@ -470,6 +496,11 @@ class InspectionControls(UIControlHelper):
 
     def set_sensor_definitions(self, definitions):
         """Replace the UI sensor list with validated registry data."""
+        desired_retired_sensor_id = ""
+        if hasattr(self, "retire_sensor_dropdown"):
+            desired_retired_sensor_id = (
+                self.retire_sensor_dropdown.currentData() or ""
+            )
         validated = {}
         for definition in definitions:
             definition.validate()
@@ -490,6 +521,9 @@ class InspectionControls(UIControlHelper):
             and self._pending_sensor_selection in validated
         ):
             self._pending_sensor_selection = ""
+        self._populate_retire_sensor_dropdown(
+            desired_retired_sensor_id
+        )
 
     def _populate_sensor_dropdown(self, desired_sensor_id=""):
         if not hasattr(self, "sensor_id_field"):
@@ -521,6 +555,32 @@ class InspectionControls(UIControlHelper):
         )
         dropdown.blockSignals(False)
         self._handle_routine_sensor_changed()
+
+    def _populate_retire_sensor_dropdown(self, desired_sensor_id=""):
+        if not hasattr(self, "retire_sensor_dropdown"):
+            return
+        dropdown = self.retire_sensor_dropdown
+        dropdown.blockSignals(True)
+        dropdown.clear()
+        dropdown.addItem("Select registered sensor", None)
+        for sensor_id in sorted(self._sensor_definitions):
+            definition = self._sensor_definitions[sensor_id]
+            dropdown.addItem(
+                f"{definition.display_name} [{sensor_id}]",
+                sensor_id,
+            )
+        selected_index = dropdown.findData(desired_sensor_id)
+        dropdown.setCurrentIndex(
+            selected_index if selected_index >= 0 else 0
+        )
+        dropdown.blockSignals(False)
+        self._handle_retire_sensor_changed()
+
+    def _handle_retire_sensor_changed(self, _index=None):
+        sensor_id = self.retire_sensor_dropdown.currentData()
+        self.retire_sensor_button.setEnabled(
+            sensor_id in self._sensor_definitions
+        )
 
     def _handle_routine_sensor_changed(self, _index=None):
         sensor_id = self.sensor_id_field.currentData()
@@ -641,6 +701,71 @@ class InspectionControls(UIControlHelper):
         self._set_status_text(response.message)
         self.new_sensor_id_field.clear()
         self.new_sensor_display_name_field.clear()
+
+    def handle_retire_sensor(self):
+        """Retire one unreferenced sensor mounting through the registry."""
+        sensor_id = self.retire_sensor_dropdown.currentData()
+        if sensor_id not in self._sensor_definitions:
+            self.show_warning(
+                "Retire Sensor",
+                "Select a registered sensor mounting.",
+            )
+            return False
+        if not self.ask_question(
+            "Retire Sensor",
+            (
+                f"Retire sensor '{sensor_id}'? Its ID cannot be reused. "
+                "The complete system must be restarted to clear its "
+                "static TF."
+            ),
+        ):
+            return False
+        if self.sensor_retire_client is None:
+            message = "Sensor registry is unavailable"
+            self.sensor_creation_status_label.setText(message)
+            self.show_warning("Retire Sensor", message)
+            return False
+        if not self.sensor_retire_client.service_is_ready():
+            message = "Sensor registry service is not ready"
+            self.sensor_creation_status_label.setText(message)
+            self.show_warning("Retire Sensor", message)
+            return False
+
+        request = RetireSensor.Request()
+        request.sensor_id = sensor_id
+        self._pending_sensor_retirement = sensor_id
+        self.retire_sensor_button.setEnabled(False)
+        self.create_routine_button.setEnabled(False)
+        self.sensor_creation_status_label.setText(
+            f"Retiring sensor '{sensor_id}'..."
+        )
+        future = self.sensor_retire_client.call_async(request)
+        future.add_done_callback(self._handle_retire_sensor_response)
+        return True
+
+    def _handle_retire_sensor_response(self, future):
+        try:
+            response = future.result()
+        except Exception as exception:
+            self._pending_sensor_retirement = ""
+            self._handle_retire_sensor_changed()
+            self._handle_routine_sensor_changed()
+            self.sensor_creation_status_label.setText(
+                f"Sensor retirement failed: {exception}"
+            )
+            return
+        self.sensor_creation_status_label.setText(response.message)
+        if not response.success:
+            self._pending_sensor_retirement = ""
+            self._handle_retire_sensor_changed()
+            self._handle_routine_sensor_changed()
+            return
+        retired_sensor_id = self._pending_sensor_retirement
+        self._pending_sensor_retirement = ""
+        self._sensor_definitions.pop(retired_sensor_id, None)
+        self._populate_sensor_dropdown()
+        self._populate_retire_sensor_dropdown()
+        self._set_status_text(response.message)
 
     @staticmethod
     def _signed_number_value(field, label):
