@@ -1,0 +1,119 @@
+"""Resolve saved probe geometry into one local execution frame."""
+
+from copy import deepcopy
+from dataclasses import dataclass
+
+from .models import InspectionObject, PoseData, Vector3Data
+from .reference_probe_setup import (
+    compose_poses,
+    probe_pose_to_hand_pose,
+    rotate_vector,
+)
+from .sensor_models import SensorDefinition
+
+
+@dataclass(frozen=True)
+class ProbeExecutionTarget:
+    """Validated probe and hand targets for one saved point."""
+
+    object_id: str
+    routine_id: str
+    probe_point_id: str
+    sensor_id: str
+    probe_frame: str
+    execution_frame: str
+    safe_approach_probe_pose_execution: PoseData
+    safe_approach_hand_pose_execution: PoseData
+    nominal_probe_pose_execution: PoseData
+    nominal_hand_pose_execution: PoseData
+    inward_direction_execution: Vector3Data
+    target_surface_distance_m: float
+    position_tolerance_m: float
+    orientation_tolerance_rad: float
+    measurement_duration_sec: float
+    preapproach_distance_m: float
+    sensor_path: str | None
+
+
+def resolve_probe_execution_target(
+    inspection_object: InspectionObject,
+    routine_id: str,
+    probe_point_id: str,
+    sensor_definition: SensorDefinition,
+    object_pose_execution: PoseData,
+    execution_frame: str = "odom",
+) -> ProbeExecutionTarget:
+    """Compose one saved probe point with a live object pose."""
+    inspection_object.validate()
+    sensor_definition.validate()
+    object_pose_execution.validate()
+
+    if not execution_frame or execution_frame != execution_frame.strip():
+        raise ValueError("Execution frame must not be empty or padded")
+
+    routine = inspection_object.get_routine(routine_id)
+    if routine is None:
+        raise ValueError(
+            f"Unknown routine {routine_id} for object "
+            f"{inspection_object.object_id}"
+        )
+
+    if routine.sensor_id != sensor_definition.sensor_id:
+        raise ValueError(
+            "Routine sensor does not match loaded calibration: "
+            f"{routine.sensor_id} != {sensor_definition.sensor_id}"
+        )
+
+    probe_point = routine.get_probe_point(probe_point_id)
+    if probe_point is None:
+        raise ValueError(
+            f"Unknown probe point {probe_point_id} for routine "
+            f"{routine_id}"
+        )
+
+    safe_probe_pose = compose_poses(
+        object_pose_execution,
+        probe_point.safe_approach_pose_object,
+    )
+    nominal_probe_pose = compose_poses(
+        object_pose_execution,
+        probe_point.probe_pose_object,
+    )
+    safe_hand_pose = probe_pose_to_hand_pose(
+        safe_probe_pose,
+        sensor_definition.hand_to_probe,
+    )
+    nominal_hand_pose = probe_pose_to_hand_pose(
+        nominal_probe_pose,
+        sensor_definition.hand_to_probe,
+    )
+    inward_direction = rotate_vector(
+        nominal_probe_pose.orientation,
+        Vector3Data(x=-1.0, y=0.0, z=0.0),
+    )
+
+    return ProbeExecutionTarget(
+        object_id=inspection_object.object_id,
+        routine_id=routine.routine_id,
+        probe_point_id=probe_point.probe_point_id,
+        sensor_id=sensor_definition.sensor_id,
+        probe_frame=sensor_definition.probe_frame,
+        execution_frame=execution_frame,
+        safe_approach_probe_pose_execution=deepcopy(safe_probe_pose),
+        safe_approach_hand_pose_execution=deepcopy(safe_hand_pose),
+        nominal_probe_pose_execution=deepcopy(nominal_probe_pose),
+        nominal_hand_pose_execution=deepcopy(nominal_hand_pose),
+        inward_direction_execution=deepcopy(inward_direction),
+        target_surface_distance_m=(
+            probe_point.target_surface_distance_m
+        ),
+        position_tolerance_m=probe_point.position_tolerance_m,
+        orientation_tolerance_rad=(
+            probe_point.orientation_tolerance_rad
+        ),
+        measurement_duration_sec=(
+            probe_point.measurement_duration_sec
+        ),
+        preapproach_distance_m=probe_point.preapproach_distance_m,
+        sensor_path=probe_point.sensor_path,
+    )

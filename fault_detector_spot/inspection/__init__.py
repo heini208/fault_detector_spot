@@ -27,6 +27,10 @@ from fault_detector_spot.inspection.models import (
 from fault_detector_spot.inspection.object_repository import (
     ObjectRepository,
 )
+from fault_detector_spot.inspection.probe_execution_target import (
+    ProbeExecutionTarget,
+    resolve_probe_execution_target,
+)
 from fault_detector_spot.inspection.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
@@ -62,6 +66,7 @@ __all__ = [
     "ObjectPoseState",
     "ObjectRepository",
     "PoseData",
+    "ProbeExecutionTarget",
     "ProbePoint",
     "QuaternionData",
     "ReferenceTag",
@@ -80,6 +85,7 @@ __all__ = [
     "pose_to_matrix",
     "pose_to_pose_data",
     "relative_pose",
+    "resolve_probe_execution_target",
     "sensor_definition_from_values",
     "sensor_probe_frame",
 ]
