@@ -87,7 +87,7 @@ def make_probe_point(probe_point_id: str) -> ProbePoint:
         position_tolerance_m=0.01,
         orientation_tolerance_rad=0.087,
         measurement_duration_sec=1.0,
-        preapproach_distance_m=0.05,
+        aligned_preapproach_distance_m=0.10,
         reference_pixel=ImagePoint(u=20, v=30),
         reference_view_id="slot1_hand",
     )

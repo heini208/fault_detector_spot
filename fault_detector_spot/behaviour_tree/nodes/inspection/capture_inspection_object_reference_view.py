@@ -69,7 +69,7 @@ class CaptureInspectionObjectReferenceView(
         depth_camera_info_topic: str = (
             "/depth_registered/hand/camera_info"
         ),
-        base_tag_topic: str = "fault_detector/state/visible_tags",
+        base_tag_topic: str = "fault_detector/state/base_tags",
         object_root: Optional[Union[str, Path]] = None,
         synchronization_queue_size: int = 10,
         maximum_input_age_sec: float = 2.0,

@@ -24,7 +24,7 @@
     inspection.reference_view_depth_topic: '/depth_registered/hand/image'
     inspection.reference_view_rgb_camera_info_topic: '/camera/hand/camera_info'
     inspection.reference_view_depth_camera_info_topic: '/depth_registered/hand/camera_info'
-    inspection.reference_view_base_tag_topic: 'fault_detector/state/visible_tags'
+    inspection.reference_view_base_tag_topic: 'fault_detector/state/base_tags'
 
     inspection.reference_view_sync_queue_size: 30
     inspection.reference_view_maximum_input_age_sec: 1.5

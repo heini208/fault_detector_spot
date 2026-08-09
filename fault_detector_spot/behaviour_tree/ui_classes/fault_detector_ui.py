@@ -53,6 +53,7 @@ class Fault_Detector_UI(QWidget):
         self._buffer_text = "Buffer: []"
 
         self.visible_tags = {}
+        self.base_tags = {}
         self.reachable_tags = {}
         self.available_frames = []
         self.inspection_object_root = self._inspection_root_parameter()
@@ -199,6 +200,13 @@ class Fault_Detector_UI(QWidget):
             10,
         )
 
+        self.base_tags_sub = self.node.create_subscription(
+            TagElementArray,
+            "fault_detector/state/base_tags",
+            self._process_base_tags,
+            10,
+        )
+
         self.reachable_tags_sub = self.node.create_subscription(
             TagElementArray,
             "fault_detector/state/reachable_tags",
@@ -243,6 +251,11 @@ class Fault_Detector_UI(QWidget):
     def _process_visible_tags(self, msg: TagElementArray):
         self.visible_tags = {tag.id: tag for tag in msg.elements}
 
+    def _process_base_tags(self, msg: TagElementArray):
+        self.base_tags = {tag.id: tag for tag in msg.elements}
+        if hasattr(self, "inspection_controls"):
+            self.inspection_controls.handle_base_tags(msg.elements)
+
     def _process_reachable_tags(self, msg: TagElementArray):
         self.reachable_tags = {tag.id: tag for tag in msg.elements}
 
@@ -266,6 +279,7 @@ class Fault_Detector_UI(QWidget):
 
     def _process_command_status(self, msg: String):
         self.command_status_label.setText(f"Command: {msg.data}")
+        self.inspection_controls.handle_command_status(msg.data)
 
     def _process_available_frames(self, msg: StringArray):
         self.available_frames = list(msg.names)

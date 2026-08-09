@@ -2,6 +2,8 @@
 
 import math
 
+import pytest
+
 from fault_detector_spot.inspection.models import (
     PoseData,
     QuaternionData,
@@ -12,8 +14,11 @@ from fault_detector_spot.inspection.reference_probe_setup import (
     approve_safe_approach_pose,
     approve_surface_alignment_pose,
     compose_poses,
+    derive_aligned_preapproach_pose,
     initialize_reference_probe_setup,
+    invalidate_probe_setup_approvals,
     probe_pose_to_hand_pose,
+    refine_probe_pose,
     relative_pose,
 )
 from fault_detector_spot.inspection.reference_view_surface_target import (
@@ -59,7 +64,7 @@ def test_initial_setup_uses_calculated_poses():
     assert not setup.safe_approach_approved
 
 
-def test_approach_capture_preserves_positions_and_shares_orientation():
+def test_approach_capture_changes_only_the_independent_safe_pose():
     setup = initialize_reference_probe_setup(target())
     current = pose(x=0.4, y=0.2, z=0.5, orientation=yaw_quaternion(30.0))
 
@@ -69,9 +74,11 @@ def test_approach_capture_preserves_positions_and_shares_orientation():
     assert approved.aligned_preapproach_pose_object.position.x == 0.15
     assert approved.probe_pose_object.position.x == 0.03
     assert approved.aligned_preapproach_pose_object.orientation == (
-        current.orientation
+        QuaternionData.identity()
     )
-    assert approved.probe_pose_object.orientation == current.orientation
+    assert approved.probe_pose_object.orientation == (
+        QuaternionData.identity()
+    )
     assert approved.safe_approach_approved
     assert not approved.surface_alignment_approved
     assert not approved.probe_pose_approved
@@ -106,6 +113,26 @@ def test_probe_capture_rebuilds_aligned_pose():
     assert approved.probe_pose_approved
 
 
+def test_aligned_pose_is_derived_in_probe_local_positive_x():
+    probe = pose(
+        x=0.04,
+        y=0.10,
+        z=0.20,
+        orientation=yaw_quaternion(90.0),
+    )
+
+    aligned = derive_aligned_preapproach_pose(
+        probe,
+        target_surface_distance_m=0.04,
+        aligned_preapproach_distance_m=0.14,
+    )
+
+    assert aligned.position.x == pytest.approx(0.04)
+    assert aligned.position.y == pytest.approx(0.20)
+    assert aligned.position.z == pytest.approx(0.20)
+    assert aligned.orientation == probe.orientation
+
+
 def test_later_approvals_preserve_the_approved_safe_pose():
     """Later stages cannot rewrite a previously approved safe pose."""
     setup = initialize_reference_probe_setup(target())
@@ -128,8 +155,8 @@ def test_later_approvals_preserve_the_approved_safe_pose():
     assert setup.safe_approach_pose_object == safe_pose
 
 
-def test_reapproving_approach_invalidates_later_approvals():
-    """Changing an early stage requires downstream reapproval."""
+def test_reapproving_approach_preserves_independent_later_approvals():
+    """Changing the independent safe pose cannot rewrite geometry."""
     setup = initialize_reference_probe_setup(target())
     setup = approve_surface_alignment_pose(setup, pose(x=0.20))
     setup = approve_probe_pose(setup, pose(x=0.04))
@@ -137,8 +164,8 @@ def test_reapproving_approach_invalidates_later_approvals():
     updated = approve_safe_approach_pose(setup, pose(x=0.40))
 
     assert updated.safe_approach_approved
-    assert not updated.surface_alignment_approved
-    assert not updated.probe_pose_approved
+    assert updated.surface_alignment_approved
+    assert updated.probe_pose_approved
 
 
 def test_probe_pose_is_converted_to_required_hand_pose():
@@ -170,3 +197,59 @@ def test_relative_pose_round_trip():
     assert math.isclose(recovered.position.x, 0.2, abs_tol=1e-9)
     assert math.isclose(recovered.position.y, -0.1, abs_tol=1e-9)
     assert math.isclose(recovered.position.z, 0.3, abs_tol=1e-9)
+
+
+def test_refinement_translation_uses_fixed_surface_axes():
+    current = pose(x=0.4, y=0.2, z=0.5)
+
+    refined = refine_probe_pose(
+        current,
+        yaw_quaternion(90.0),
+        local_translation=Vector3Data(x=0.0, y=0.01, z=0.02),
+    )
+
+    assert refined.position.x == pytest.approx(0.39)
+    assert refined.position.y == pytest.approx(0.20)
+    assert refined.position.z == pytest.approx(0.52)
+
+
+def test_refinement_rotation_keeps_the_sensor_tip_position_fixed():
+    refined = refine_probe_pose(
+        pose(),
+        QuaternionData.identity(),
+        pitch_rad=math.radians(-5.0),
+        yaw_rad=math.radians(3.0),
+    )
+
+    assert refined.orientation != QuaternionData.identity()
+    assert refined.position == Vector3Data.zero()
+    assert math.isclose(
+        math.sqrt(
+            refined.orientation.x ** 2
+            + refined.orientation.y ** 2
+            + refined.orientation.z ** 2
+            + refined.orientation.w ** 2
+        ),
+        1.0,
+        abs_tol=1e-9,
+    )
+
+
+def test_refinement_invalidates_stage_and_dependent_approvals():
+    setup = initialize_reference_probe_setup(target())
+    setup = approve_safe_approach_pose(setup, pose(x=0.30))
+    setup = approve_surface_alignment_pose(setup, pose(x=0.15))
+    setup = approve_probe_pose(setup, pose(x=0.03))
+
+    alignment_changed = invalidate_probe_setup_approvals(
+        setup,
+        "alignment",
+    )
+    probe_changed = invalidate_probe_setup_approvals(setup, "probe")
+
+    assert alignment_changed.safe_approach_approved
+    assert not alignment_changed.surface_alignment_approved
+    assert not alignment_changed.probe_pose_approved
+    assert probe_changed.safe_approach_approved
+    assert probe_changed.surface_alignment_approved
+    assert not probe_changed.probe_pose_approved

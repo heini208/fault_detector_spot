@@ -5,6 +5,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 
+MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M = 0.05
+
+
 def _require_dict(data: Any, field_name: str) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"{field_name} must be an object")
@@ -296,10 +299,7 @@ class ReferenceView:
 
 @dataclass
 class ProbePoint:
-    """One ordered target with local positive X facing outward.
-
-    The pre-approach distance adds outward clearance to the probe pose.
-    """
+    """One ordered target with local positive X facing outward."""
 
     probe_point_id: str
     display_name: str
@@ -309,7 +309,7 @@ class ProbePoint:
     position_tolerance_m: float
     orientation_tolerance_rad: float
     measurement_duration_sec: float
-    preapproach_distance_m: float = 0.05
+    aligned_preapproach_distance_m: float
     reference_pixel: Optional[ImagePoint] = None
     reference_view_id: Optional[str] = None
     sensor_path: Optional[str] = None
@@ -342,8 +342,8 @@ class ProbePoint:
             measurement_duration_sec=float(
                 data["measurement_duration_sec"]
             ),
-            preapproach_distance_m=float(
-                data["preapproach_distance_m"]
+            aligned_preapproach_distance_m=float(
+                data["aligned_preapproach_distance_m"]
             ),
             reference_pixel=(
                 ImagePoint.from_dict(pixel)
@@ -374,7 +374,7 @@ class ProbePoint:
             self.position_tolerance_m,
             self.orientation_tolerance_rad,
             self.measurement_duration_sec,
-            self.preapproach_distance_m,
+            self.aligned_preapproach_distance_m,
         )
         if not all(
             math.isfinite(value) for value in numeric_values
@@ -398,9 +398,26 @@ class ProbePoint:
             raise ValueError(
                 "Measurement duration must be positive"
             )
-        if self.preapproach_distance_m <= 0.0:
+        if self.aligned_preapproach_distance_m <= 0.0:
             raise ValueError(
-                "Pre-approach distance must be positive"
+                "Aligned pre-approach distance must be positive"
+            )
+        separation = (
+            self.aligned_preapproach_distance_m
+            - self.target_surface_distance_m
+        )
+        if (
+            separation < MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M
+            and not math.isclose(
+                separation,
+                MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError(
+                "Aligned pre-approach distance must be at least 0.05 m "
+                "greater than the target surface distance"
             )
         if self.reference_pixel is not None:
             self.reference_pixel.validate()
@@ -431,7 +448,8 @@ class ProbePoint:
                 self.orientation_tolerance_rad,
             "measurement_duration_sec":
                 self.measurement_duration_sec,
-            "preapproach_distance_m": self.preapproach_distance_m,
+            "aligned_preapproach_distance_m":
+                self.aligned_preapproach_distance_m,
         }
         if self.reference_pixel is not None:
             result["reference_pixel"] = (

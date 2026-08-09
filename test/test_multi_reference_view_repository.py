@@ -192,7 +192,7 @@ def test_recapture_preserves_probe_geometry_and_clears_provenance(
         position_tolerance_m=0.005,
         orientation_tolerance_rad=0.05,
         measurement_duration_sec=1.0,
-        preapproach_distance_m=0.05,
+        aligned_preapproach_distance_m=0.08,
         reference_pixel=ImagePoint(u=1, v=0),
         reference_view_id="slot1_hand",
         sensor_path="magnetic/field",

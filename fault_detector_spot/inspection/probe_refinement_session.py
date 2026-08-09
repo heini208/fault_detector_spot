@@ -1,0 +1,370 @@
+"""State and safety rules for supervised probe-point refinement."""
+
+import math
+from copy import deepcopy
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Dict, Optional
+
+from .models import PoseData, Vector3Data
+from .reference_probe_setup import (
+    ReferenceProbeSetup,
+    derive_aligned_preapproach_pose,
+    rotate_vector,
+    scale_vector,
+    subtract_vectors,
+)
+
+
+class RefinementStage(str, Enum):
+    """Ordered probe refinement stages."""
+
+    SAFE_APPROACH = "safe_approach"
+    ALIGNMENT = "alignment"
+    PROBE = "probe"
+
+
+class RefinementMotionState(str, Enum):
+    """Observable state of one required movement."""
+
+    NOT_TESTED = "Not Tested"
+    MOVING = "Moving"
+    REACHED = "Reached"
+    FAILED = "Failed"
+
+
+@dataclass(frozen=True)
+class PendingRefinementMotion:
+    """One correlated movement awaiting a terminal result."""
+
+    stage: RefinementStage
+    purpose: str
+    target_pose_object: PoseData
+    updates_candidate: bool = True
+    axial_correction_m: float = 0.0
+
+
+@dataclass
+class ProbeRefinementSession:
+    """Hold draft geometry without changing a persisted probe point."""
+
+    calculated_setup: ReferenceProbeSetup
+    approved_setup: ReferenceProbeSetup
+    candidate_poses: Dict[RefinementStage, PoseData] = field(
+        default_factory=dict
+    )
+    approved_poses: Dict[RefinementStage, Optional[PoseData]] = field(
+        default_factory=dict
+    )
+    draft_approved: Dict[RefinementStage, bool] = field(
+        default_factory=dict
+    )
+    motion_states: Dict[RefinementStage, RefinementMotionState] = field(
+        default_factory=dict
+    )
+    active_stage: RefinementStage = RefinementStage.SAFE_APPROACH
+    pending_motion: Optional[PendingRefinementMotion] = None
+    surface_distance_verified: bool = False
+    recovery_required: bool = False
+    recovery_message: str = ""
+    cumulative_inward_travel_m: float = 0.0
+    saved: bool = False
+
+    @classmethod
+    def create(
+        cls,
+        calculated_setup: ReferenceProbeSetup,
+        approved_setup: Optional[ReferenceProbeSetup] = None,
+    ) -> "ProbeRefinementSession":
+        """Create a draft from calculated and previously approved poses."""
+        approved = approved_setup or calculated_setup
+        calculated = deepcopy(calculated_setup)
+        approved = deepcopy(approved)
+        candidate_poses = {
+            RefinementStage.SAFE_APPROACH: deepcopy(
+                approved.safe_approach_pose_object
+            ),
+            RefinementStage.ALIGNMENT: deepcopy(
+                approved.aligned_preapproach_pose_object
+            ),
+            RefinementStage.PROBE: deepcopy(
+                approved.probe_pose_object
+            ),
+        }
+        approved_poses = {
+            RefinementStage.SAFE_APPROACH: (
+                deepcopy(approved.safe_approach_pose_object)
+                if approved.safe_approach_approved
+                else None
+            ),
+            RefinementStage.ALIGNMENT: (
+                deepcopy(approved.aligned_preapproach_pose_object)
+                if approved.surface_alignment_approved
+                else None
+            ),
+            RefinementStage.PROBE: (
+                deepcopy(approved.probe_pose_object)
+                if approved.probe_pose_approved
+                else None
+            ),
+        }
+        active_stage = cls._first_incomplete_stage(approved_poses)
+        return cls(
+            calculated_setup=calculated,
+            approved_setup=approved,
+            candidate_poses=candidate_poses,
+            approved_poses=approved_poses,
+            draft_approved={
+                stage: approved_poses[stage] is not None
+                for stage in RefinementStage
+            },
+            motion_states={
+                stage: RefinementMotionState.NOT_TESTED
+                for stage in RefinementStage
+            },
+            active_stage=active_stage,
+        )
+
+    @staticmethod
+    def _first_incomplete_stage(approved_poses):
+        for stage in RefinementStage:
+            if approved_poses.get(stage) is None:
+                return stage
+        return RefinementStage.SAFE_APPROACH
+
+    def calculated_pose(self, stage: RefinementStage) -> PoseData:
+        """Return the immutable calculated pose for a stage."""
+        values = {
+            RefinementStage.SAFE_APPROACH: (
+                self.calculated_setup.safe_approach_pose_object
+            ),
+            RefinementStage.ALIGNMENT: (
+                self.calculated_setup.aligned_preapproach_pose_object
+            ),
+            RefinementStage.PROBE: self.calculated_setup.probe_pose_object,
+        }
+        return deepcopy(values[stage])
+
+    def candidate_pose(self, stage: RefinementStage) -> PoseData:
+        """Return the current unpersisted candidate pose."""
+        return deepcopy(self.candidate_poses[stage])
+
+    def approved_pose(
+        self,
+        stage: RefinementStage,
+    ) -> Optional[PoseData]:
+        """Return the last explicitly approved pose, if one exists."""
+        value = self.approved_poses[stage]
+        return deepcopy(value) if value is not None else None
+
+    def set_candidate(
+        self,
+        stage: RefinementStage,
+        achieved_pose_object: PoseData,
+    ) -> None:
+        """Update draft geometry from a verified achieved tip pose."""
+        achieved_pose_object.validate()
+        self.surface_distance_verified = False
+        self.saved = False
+        if stage == RefinementStage.SAFE_APPROACH:
+            self.candidate_poses[stage] = deepcopy(achieved_pose_object)
+            self.draft_approved[stage] = False
+            return
+        if stage == RefinementStage.ALIGNMENT:
+            self.candidate_poses[stage] = deepcopy(achieved_pose_object)
+            self.candidate_poses[RefinementStage.PROBE] = (
+                self._derive_probe_pose(achieved_pose_object)
+            )
+            self.draft_approved[stage] = False
+            self.draft_approved[RefinementStage.PROBE] = False
+            return
+        self.candidate_poses[stage] = deepcopy(achieved_pose_object)
+        self.candidate_poses[RefinementStage.ALIGNMENT] = (
+            derive_aligned_preapproach_pose(
+                achieved_pose_object,
+                self.target_surface_distance_m,
+                self.aligned_preapproach_distance_m,
+            )
+        )
+        self.draft_approved[stage] = False
+
+    def approve(
+        self,
+        stage: RefinementStage,
+        achieved_pose_object: PoseData,
+    ) -> None:
+        """Approve an achieved pose without persisting partial state."""
+        self.set_candidate(stage, achieved_pose_object)
+        self.approved_poses[stage] = deepcopy(
+            self.candidate_poses[stage]
+        )
+        self.draft_approved[stage] = True
+
+    def stage_is_approved(self, stage: RefinementStage) -> bool:
+        """Return whether the current candidate was explicitly approved."""
+        return bool(self.draft_approved[stage])
+
+    def begin_motion(
+        self,
+        motion: PendingRefinementMotion,
+    ) -> None:
+        """Enter a single correlated movement state."""
+        if self.pending_motion is not None:
+            raise RuntimeError("A refinement movement is already active")
+        motion.target_pose_object.validate()
+        if (
+            motion.stage == RefinementStage.ALIGNMENT
+            and self.motion_states[RefinementStage.SAFE_APPROACH]
+            != RefinementMotionState.REACHED
+        ):
+            raise RuntimeError(
+                "Reach the safe approach during this workflow first"
+            )
+        if (
+            motion.stage == RefinementStage.PROBE
+            and self.motion_states[RefinementStage.ALIGNMENT]
+            != RefinementMotionState.REACHED
+        ):
+            raise RuntimeError(
+                "Reach the aligned pre-approach during this workflow first"
+            )
+        if motion.axial_correction_m != 0.0:
+            self._reserve_axial_correction(motion.axial_correction_m)
+        self.pending_motion = motion
+        self.motion_states[motion.stage] = RefinementMotionState.MOVING
+
+    def complete_motion(self, achieved_pose_object: PoseData) -> None:
+        """Commit a successful motion using its achieved tip pose."""
+        if self.pending_motion is None:
+            raise RuntimeError("No refinement movement is active")
+        achieved_pose_object.validate()
+        motion = self.pending_motion
+        if motion.updates_candidate:
+            if (
+                motion.stage == RefinementStage.PROBE
+                and motion.axial_correction_m != 0.0
+            ):
+                self.candidate_poses[RefinementStage.PROBE] = deepcopy(
+                    achieved_pose_object
+                )
+                self.draft_approved[RefinementStage.PROBE] = False
+                self.surface_distance_verified = False
+            else:
+                self.set_candidate(motion.stage, achieved_pose_object)
+        self.motion_states[motion.stage] = RefinementMotionState.REACHED
+        self.pending_motion = None
+
+    def fail_motion(self, message: str) -> None:
+        """Fail the current movement without changing its candidate."""
+        if self.pending_motion is None:
+            return
+        motion = self.pending_motion
+        self.motion_states[motion.stage] = RefinementMotionState.FAILED
+        if motion.axial_correction_m != 0.0:
+            self.require_recovery(message)
+        self.pending_motion = None
+
+    def mark_surface_verified(self, achieved_pose_object: PoseData) -> None:
+        """Record three stable in-tolerance post-settle measurements."""
+        if (
+            self.motion_states[RefinementStage.ALIGNMENT]
+            != RefinementMotionState.REACHED
+        ):
+            raise RuntimeError(
+                "Aligned pre-approach has not been reached"
+            )
+        self.set_candidate(RefinementStage.PROBE, achieved_pose_object)
+        self.surface_distance_verified = True
+        self.motion_states[RefinementStage.PROBE] = (
+            RefinementMotionState.REACHED
+        )
+
+    def require_recovery(self, message: str) -> None:
+        """Block refinement until a verified retraction succeeds."""
+        self.recovery_required = True
+        self.recovery_message = message.strip() or "Retraction required"
+        self.surface_distance_verified = False
+
+    def complete_retraction(self) -> None:
+        """Return the session to the aligned pre-approach state."""
+        self.recovery_required = False
+        self.recovery_message = ""
+        self.cumulative_inward_travel_m = 0.0
+        self.surface_distance_verified = False
+        self.motion_states[RefinementStage.ALIGNMENT] = (
+            RefinementMotionState.REACHED
+        )
+        self.motion_states[RefinementStage.PROBE] = (
+            RefinementMotionState.NOT_TESTED
+        )
+
+    def discard_unapproved_candidates(self) -> None:
+        """Restore approved or calculated poses without changing storage."""
+        if self.recovery_required:
+            raise RuntimeError("Retract before closing the workflow")
+        for stage in RefinementStage:
+            approved = self.approved_poses[stage]
+            self.candidate_poses[stage] = deepcopy(
+                approved
+                if approved is not None
+                else self.calculated_pose(stage)
+            )
+            self.draft_approved[stage] = approved is not None
+        self.surface_distance_verified = False
+        self.pending_motion = None
+        for stage in RefinementStage:
+            self.motion_states[stage] = RefinementMotionState.NOT_TESTED
+
+    @property
+    def target_surface_distance_m(self) -> float:
+        """Return the desired absolute probe-tip surface distance."""
+        return self.calculated_setup.surface_target.target_surface_distance_m
+
+    @property
+    def aligned_preapproach_distance_m(self) -> float:
+        """Return the absolute aligned pre-approach distance."""
+        return (
+            self.calculated_setup.surface_target
+            .aligned_preapproach_distance_m
+        )
+
+    @property
+    def maximum_inward_travel_m(self) -> float:
+        """Return the bounded setup travel from aligned pose plus margin."""
+        return (
+            self.aligned_preapproach_distance_m
+            - self.target_surface_distance_m
+            + 0.01
+        )
+
+    def _reserve_axial_correction(self, inward_correction_m: float) -> None:
+        if not math.isfinite(inward_correction_m):
+            raise ValueError("Surface correction must be finite")
+        proposed = (
+            self.cumulative_inward_travel_m + inward_correction_m
+        )
+        if proposed > self.maximum_inward_travel_m + 1e-12:
+            raise ValueError(
+                "Cumulative inward travel exceeds the configured limit"
+            )
+        self.cumulative_inward_travel_m = proposed
+        self.require_recovery(
+            "Probe moved away from the aligned pre-approach pose"
+        )
+
+    def _derive_probe_pose(self, aligned_pose_object: PoseData) -> PoseData:
+        distance_delta = (
+            self.aligned_preapproach_distance_m
+            - self.target_surface_distance_m
+        )
+        outward = rotate_vector(
+            aligned_pose_object.orientation,
+            Vector3Data(x=1.0, y=0.0, z=0.0),
+        )
+        return PoseData(
+            position=subtract_vectors(
+                aligned_pose_object.position,
+                scale_vector(outward, distance_delta),
+            ),
+            orientation=deepcopy(aligned_pose_object.orientation),
+        )

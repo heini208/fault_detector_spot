@@ -27,6 +27,7 @@ def make_probe(probe_point_id="point_a") -> ProbePoint:
         position_tolerance_m=0.005,
         orientation_tolerance_rad=0.05,
         measurement_duration_sec=1.0,
+        aligned_preapproach_distance_m=0.08,
         reference_pixel=ImagePoint(u=100, v=200),
         reference_view_id="slot1_hand",
     )
@@ -114,7 +115,7 @@ def test_probe_points_require_a_captured_reference_view():
 
 
 def test_probe_point_round_trip_preserves_execution_geometry():
-    """The approved pose and pre-approach distance are authoritative."""
+    """The approved pose and both absolute distances are authoritative."""
     original = make_probe()
     original.safe_approach_pose_object.position.x = 0.30
     original.probe_pose_object.position.x = 0.02
@@ -125,20 +126,31 @@ def test_probe_point_round_trip_preserves_execution_geometry():
     assert restored == original
     assert restored.safe_approach_pose_object.position.x == 0.30
     assert restored.probe_pose_object.position.x == 0.02
-    assert restored.preapproach_distance_m == 0.05
+    assert restored.target_surface_distance_m == 0.01
+    assert restored.aligned_preapproach_distance_m == 0.08
+    assert "preapproach_distance_m" not in restored.to_dict()
 
 
 @pytest.mark.parametrize(
     "distance",
-    [0.0, -0.01, float("inf"), float("nan")],
+    [0.0, -0.01, 0.059, float("inf"), float("nan")],
 )
-def test_probe_point_requires_positive_preapproach_distance(distance):
-    """A standoff must add positive clearance beyond the target."""
+def test_probe_point_requires_safe_absolute_preapproach_distance(distance):
+    """The absolute standoff must preserve the minimum separation."""
     probe_point = make_probe()
-    probe_point.preapproach_distance_m = distance
+    probe_point.aligned_preapproach_distance_m = distance
 
     with pytest.raises(ValueError):
         probe_point.validate()
+
+
+def test_probe_point_accepts_exact_minimum_distance_separation():
+    """Decimal input at the 5 cm boundary remains valid."""
+    probe_point = make_probe()
+    probe_point.target_surface_distance_m = 0.10
+    probe_point.aligned_preapproach_distance_m = 0.15
+
+    probe_point.validate()
 
 
 def test_probe_point_rejects_invalid_approved_pose():
@@ -152,7 +164,7 @@ def test_probe_point_rejects_invalid_approved_pose():
 
 @pytest.mark.parametrize(
     "field_name",
-    ["probe_pose_object", "preapproach_distance_m"],
+    ["probe_pose_object", "aligned_preapproach_distance_m"],
 )
 def test_obsolete_probe_point_format_is_rejected(field_name):
     """Probe definitions without authoritative geometry are invalid."""

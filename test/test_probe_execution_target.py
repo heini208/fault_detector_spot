@@ -57,7 +57,7 @@ def inspection_object(sensor_id="bmm150_01"):
         position_tolerance_m=0.005,
         orientation_tolerance_rad=0.05,
         measurement_duration_sec=1.5,
-        preapproach_distance_m=0.05,
+        aligned_preapproach_distance_m=0.10,
         reference_view_id="slot1_hand",
     )
     routine = InspectionRoutine(
@@ -107,6 +107,14 @@ def test_resolves_probe_and_hand_targets_in_execution_frame():
     assert target.safe_approach_hand_pose_execution.position.x == pytest.approx(
         1.10
     )
+    assert (
+        target.aligned_preapproach_probe_pose_execution.position.x
+        == pytest.approx(1.10)
+    )
+    assert (
+        target.aligned_preapproach_hand_pose_execution.position.x
+        == pytest.approx(0.90)
+    )
     assert target.nominal_probe_pose_execution.position.x == pytest.approx(
         1.03
     )
@@ -117,6 +125,7 @@ def test_resolves_probe_and_hand_targets_in_execution_frame():
     assert target.inward_direction_execution.y == pytest.approx(0.0)
     assert target.inward_direction_execution.z == pytest.approx(0.0)
     assert target.target_surface_distance_m == pytest.approx(0.03)
+    assert target.aligned_preapproach_distance_m == pytest.approx(0.10)
     assert target.measurement_duration_sec == pytest.approx(1.5)
 
 
@@ -135,11 +144,16 @@ def test_live_object_rotation_rotates_positions_and_approach_axis():
 
     safe_probe = target.safe_approach_probe_pose_execution.position
     safe_hand = target.safe_approach_hand_pose_execution.position
+    aligned_probe = (
+        target.aligned_preapproach_probe_pose_execution.position
+    )
     inward = target.inward_direction_execution
     assert safe_probe.x == pytest.approx(1.0)
     assert safe_probe.y == pytest.approx(2.30)
     assert safe_hand.x == pytest.approx(1.0)
     assert safe_hand.y == pytest.approx(2.10)
+    assert aligned_probe.x == pytest.approx(1.0)
+    assert aligned_probe.y == pytest.approx(2.10)
     assert inward.x == pytest.approx(0.0, abs=1e-12)
     assert inward.y == pytest.approx(-1.0)
 

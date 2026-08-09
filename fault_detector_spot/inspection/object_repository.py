@@ -194,6 +194,53 @@ class ObjectRepository:
         self.save(stored_definition)
         return stored_definition
 
+    def replace_probe_point(
+        self,
+        object_id: str,
+        routine_id: str,
+        probe_point: ProbePoint,
+    ) -> InspectionObject:
+        """Atomically replace one existing probe point in place."""
+        validate_storage_name(object_id, "object ID")
+        validate_storage_name(routine_id, "routine ID")
+        probe_point.validate()
+
+        definition = self.load(object_id)
+        routine = definition.get_routine(routine_id)
+        if routine is None:
+            raise KeyError(
+                "Inspection routine does not exist: "
+                f"{object_id}/{routine_id}"
+            )
+        if routine.get_probe_point(probe_point.probe_point_id) is None:
+            raise KeyError(
+                "Probe point does not exist: "
+                f"{object_id}/{routine_id}/"
+                f"{probe_point.probe_point_id}"
+            )
+
+        stored_routine = replace(
+            routine,
+            probe_points=[
+                probe_point
+                if candidate.probe_point_id
+                == probe_point.probe_point_id
+                else candidate
+                for candidate in routine.probe_points
+            ],
+        )
+        stored_definition = replace(
+            definition,
+            routines=[
+                stored_routine
+                if candidate.routine_id == routine_id
+                else candidate
+                for candidate in definition.routines
+            ],
+        )
+        self.save(stored_definition)
+        return stored_definition
+
     def list_object_ids(self) -> List[str]:
         """List stored object IDs."""
         if not self.root_dir.is_dir():

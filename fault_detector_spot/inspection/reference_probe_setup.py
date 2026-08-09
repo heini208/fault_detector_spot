@@ -5,7 +5,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .models import PoseData, QuaternionData, Vector3Data
+from .models import (
+    MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
+    PoseData,
+    QuaternionData,
+    Vector3Data,
+)
 from .reference_view_surface_target import ReferenceSurfaceTarget
 
 
@@ -46,21 +51,16 @@ def approve_safe_approach_pose(
     """Use the current probe pose as the obstacle-safe approach pose."""
     _validate_setup(setup)
     current_probe_pose_object.validate()
-    orientation = current_probe_pose_object.orientation
     return ReferenceProbeSetup(
         surface_target=setup.surface_target,
         safe_approach_pose_object=current_probe_pose_object,
-        aligned_preapproach_pose_object=PoseData(
-            position=setup.aligned_preapproach_pose_object.position,
-            orientation=orientation,
+        aligned_preapproach_pose_object=(
+            setup.aligned_preapproach_pose_object
         ),
-        probe_pose_object=PoseData(
-            position=setup.probe_pose_object.position,
-            orientation=orientation,
-        ),
+        probe_pose_object=setup.probe_pose_object,
         safe_approach_approved=True,
-        surface_alignment_approved=False,
-        probe_pose_approved=False,
+        surface_alignment_approved=setup.surface_alignment_approved,
+        probe_pose_approved=setup.probe_pose_approved,
     )
 
 
@@ -102,27 +102,113 @@ def approve_probe_pose(
     """Use the current probe pose and rebuild its aligned pre-approach pose."""
     _validate_setup(setup)
     current_probe_pose_object.validate()
-    distance_delta = _distance_delta(setup.surface_target)
-    outward = rotate_vector(
-        current_probe_pose_object.orientation,
-        Vector3Data(x=1.0, y=0.0, z=0.0),
+    aligned_pose = derive_aligned_preapproach_pose(
+        current_probe_pose_object,
+        setup.surface_target.target_surface_distance_m,
+        setup.surface_target.aligned_preapproach_distance_m,
     )
-    aligned_position = add_vectors(
-        current_probe_pose_object.position,
-        scale_vector(outward, distance_delta),
-    )
-    orientation = current_probe_pose_object.orientation
     return ReferenceProbeSetup(
         surface_target=setup.surface_target,
         safe_approach_pose_object=setup.safe_approach_pose_object,
-        aligned_preapproach_pose_object=PoseData(
-            position=aligned_position,
-            orientation=orientation,
-        ),
+        aligned_preapproach_pose_object=aligned_pose,
         probe_pose_object=current_probe_pose_object,
         safe_approach_approved=setup.safe_approach_approved,
         surface_alignment_approved=True,
         probe_pose_approved=True,
+    )
+
+
+def derive_aligned_preapproach_pose(
+    probe_pose_object: PoseData,
+    target_surface_distance_m: float,
+    aligned_preapproach_distance_m: float,
+) -> PoseData:
+    """Derive the aligned pose from shared alignment and two distances."""
+    probe_pose_object.validate()
+    distance_delta = _validated_distance_delta(
+        target_surface_distance_m,
+        aligned_preapproach_distance_m,
+    )
+    outward = rotate_vector(
+        probe_pose_object.orientation,
+        Vector3Data(x=1.0, y=0.0, z=0.0),
+    )
+    result = PoseData(
+        position=add_vectors(
+            probe_pose_object.position,
+            scale_vector(outward, distance_delta),
+        ),
+        orientation=probe_pose_object.orientation,
+    )
+    result.validate()
+    return result
+
+
+def refine_probe_pose(
+    current_probe_pose_object: PoseData,
+    surface_orientation_object: QuaternionData,
+    local_translation: Vector3Data = None,
+    pitch_rad: float = 0.0,
+    yaw_rad: float = 0.0,
+) -> PoseData:
+    """Translate in supplied axes and rotate about the sensor tip."""
+    current_probe_pose_object.validate()
+    surface_orientation_object.validate()
+    translation = local_translation or Vector3Data.zero()
+    translation.validate()
+    for label, value in (("Pitch", pitch_rad), ("Yaw", yaw_rad)):
+        if not math.isfinite(value):
+            raise ValueError(f"{label} refinement must be finite")
+
+    translation_object = rotate_vector(
+        surface_orientation_object,
+        translation,
+    )
+    local_rotation = _pitch_yaw_quaternion(pitch_rad, yaw_rad)
+    result = PoseData(
+        position=add_vectors(
+            current_probe_pose_object.position,
+            translation_object,
+        ),
+        orientation=multiply_quaternions(
+            current_probe_pose_object.orientation,
+            local_rotation,
+        ),
+    )
+    result.validate()
+    return result
+
+
+def invalidate_probe_setup_approvals(
+    setup: ReferenceProbeSetup,
+    stage: str,
+) -> ReferenceProbeSetup:
+    """Invalidate only geometry changed by one refinement stage."""
+    _validate_setup(setup)
+    if stage == "approach":
+        safe_approved = False
+        alignment_approved = setup.surface_alignment_approved
+        probe_approved = setup.probe_pose_approved
+    elif stage == "alignment":
+        safe_approved = setup.safe_approach_approved
+        alignment_approved = False
+        probe_approved = False
+    elif stage == "probe":
+        safe_approved = setup.safe_approach_approved
+        alignment_approved = setup.surface_alignment_approved
+        probe_approved = False
+    else:
+        raise ValueError(f"Unknown probe refinement stage: {stage}")
+    return ReferenceProbeSetup(
+        surface_target=setup.surface_target,
+        safe_approach_pose_object=setup.safe_approach_pose_object,
+        aligned_preapproach_pose_object=(
+            setup.aligned_preapproach_pose_object
+        ),
+        probe_pose_object=setup.probe_pose_object,
+        safe_approach_approved=safe_approved,
+        surface_alignment_approved=alignment_approved,
+        probe_pose_approved=probe_approved,
     )
 
 
@@ -290,12 +376,68 @@ def scale_vector(vector: Vector3Data, factor: float) -> Vector3Data:
     )
 
 
+def _pitch_yaw_quaternion(
+    pitch_rad: float,
+    yaw_rad: float,
+) -> QuaternionData:
+    half_pitch = pitch_rad * 0.5
+    half_yaw = yaw_rad * 0.5
+    pitch = QuaternionData(
+        x=0.0,
+        y=math.sin(half_pitch),
+        z=0.0,
+        w=math.cos(half_pitch),
+    )
+    yaw = QuaternionData(
+        x=0.0,
+        y=0.0,
+        z=math.sin(half_yaw),
+        w=math.cos(half_yaw),
+    )
+    return multiply_quaternions(yaw, pitch)
+
+
 def _distance_delta(surface_target: ReferenceSurfaceTarget) -> float:
     _validate_surface_target(surface_target)
-    return (
-        surface_target.aligned_preapproach_distance_m
-        - surface_target.target_surface_distance_m
+    return _validated_distance_delta(
+        surface_target.target_surface_distance_m,
+        surface_target.aligned_preapproach_distance_m,
     )
+
+
+def _validated_distance_delta(
+    target_surface_distance_m: float,
+    aligned_preapproach_distance_m: float,
+) -> float:
+    values = (
+        target_surface_distance_m,
+        aligned_preapproach_distance_m,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("Probe surface distances must be finite")
+    if target_surface_distance_m < 0.0:
+        raise ValueError("Target surface distance must not be negative")
+    if aligned_preapproach_distance_m <= 0.0:
+        raise ValueError(
+            "Aligned pre-approach distance must be positive"
+        )
+    distance_delta = (
+        aligned_preapproach_distance_m - target_surface_distance_m
+    )
+    if (
+        distance_delta < MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M
+        and not math.isclose(
+            distance_delta,
+            MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+    ):
+        raise ValueError(
+            "Aligned pre-approach distance must be at least 0.05 m "
+            "greater than the target surface distance"
+        )
+    return distance_delta
 
 
 def _validate_setup(setup: ReferenceProbeSetup) -> None:
@@ -319,11 +461,7 @@ def _validate_surface_target(surface_target: ReferenceSurfaceTarget) -> None:
         or surface_target.target_surface_distance_m <= 0.0
     ):
         raise ValueError("Target surface distance must be positive")
-    if (
-        not math.isfinite(surface_target.aligned_preapproach_distance_m)
-        or surface_target.aligned_preapproach_distance_m
-        <= surface_target.target_surface_distance_m
-    ):
-        raise ValueError(
-            "Aligned pre-approach distance must exceed target distance"
-        )
+    _validated_distance_delta(
+        surface_target.target_surface_distance_m,
+        surface_target.aligned_preapproach_distance_m,
+    )

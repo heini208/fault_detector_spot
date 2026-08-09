@@ -2,6 +2,8 @@
 
 import json
 import math
+import time
+from collections import deque
 from copy import deepcopy
 
 from bosdyn.client.frame_helpers import HAND_FRAME_NAME
@@ -35,6 +37,7 @@ from fault_detector_msgs.msg import (
 )
 from fault_detector_msgs.srv import AddSensor, RetireSensor
 from rclpy.duration import Duration
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.serialization import deserialize_message
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
@@ -45,6 +48,7 @@ from fault_detector_spot.inspection.models import (
     ImagePoint,
     InspectionObject,
     InspectionRoutine,
+    MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
     PoseData,
     ProbePoint,
     QuaternionData,
@@ -54,6 +58,16 @@ from fault_detector_spot.inspection.models import (
 from fault_detector_spot.inspection.multi_reference_view_repository import (
     CapturedReferenceView,
     MultiReferenceViewRepository,
+)
+from fault_detector_spot.inspection.live_surface_distance import (
+    aggregate_surface_distance_samples,
+    measure_probe_surface_distance,
+)
+from fault_detector_spot.inspection.probe_refinement_session import (
+    PendingRefinementMotion,
+    ProbeRefinementSession,
+    RefinementMotionState,
+    RefinementStage,
 )
 from fault_detector_spot.inspection.reference_camera_registry import (
     REFERENCE_CAMERAS,
@@ -81,6 +95,7 @@ from fault_detector_spot.inspection.reference_probe_setup import (
     compose_poses,
     initialize_reference_probe_setup,
     probe_pose_to_hand_pose,
+    refine_probe_pose,
     relative_pose,
 )
 from fault_detector_spot.inspection.reference_view_surface_target import (
@@ -92,11 +107,28 @@ from fault_detector_spot.inspection.sensor_models import (
     sensor_definition_from_values,
     sensor_probe_frame,
 )
+from fault_detector_spot.inspection.stable_tag_pose import (
+    TagPoseSample,
+    stabilize_tag_pose,
+)
 
 from ..commands.command_ids import CommandID, OrientationModes
 from .collapsible_section import CollapsibleSection
+from .probe_refinement_dialog import ProbeRefinementDialog
 from .UIControlHelper import UIControlHelper
 from .reference_view_widget import ReferenceViewWidget
+
+
+MAX_REFINEMENT_TRANSLATION_M = 0.05
+MAX_REFINEMENT_ROTATION_DEG = 15.0
+MAX_SURFACE_CORRECTION_STEP_M = 0.02
+MAX_LIVE_DEPTH_AGE_SEC = 0.5
+PROBE_MOTION_SETTLE_SEC = 0.5
+SURFACE_DISTANCE_TOLERANCE_M = 0.005
+SURFACE_DISTANCE_STABILITY_TOLERANCE_M = 0.005
+SURFACE_DISTANCE_SAMPLE_WINDOW_SEC = 0.20
+BASE_TAG_MAXIMUM_AGE_SEC = 0.25
+BASE_TAG_STABILIZATION_WINDOW_SEC = 0.10
 
 
 class InspectionControls(UIControlHelper):
@@ -128,15 +160,32 @@ class InspectionControls(UIControlHelper):
         self._surface_normal_error = ""
         self._selected_approach_direction = None
         self._selected_surface_target = None
+        self._calculated_probe_setup = None
         self._probe_setup = None
+        self._refinement_session = None
         self._tf_buffer = None
         self._tf_listener = None
         self._sensor_definitions = {}
         self._pending_sensor_selection = ""
         self._pending_sensor_retirement = ""
+        self._latest_hand_depth_image = None
+        self._latest_hand_depth_camera_info = None
+        self._latest_hand_depth_received_monotonic = 0.0
+        self._hand_depth_history = deque(maxlen=120)
+        self._base_tag_histories = {}
+        self._probe_motion_pending = False
+        self._command_status = "IDLE"
+        self._last_command_completion_monotonic = 0.0
+        self._motion_completion_generation = 0
+        self._refinement_workflow_active = False
+        self._distance_failure_requires_retraction = False
+        self._retraction_failed = False
+        self._editing_probe_point_id = None
         self.sensor_add_client = None
         self.sensor_retire_client = None
         self.sensor_list_subscription = None
+        self.hand_depth_subscription = None
+        self.hand_depth_camera_info_subscription = None
         self.management_dialog = None
         super().__init__(parent_ui)
         initial_sensors = getattr(parent_ui, "sensor_definitions", [])
@@ -172,6 +221,20 @@ class InspectionControls(UIControlHelper):
                     "fault_detector/sensors",
                     self._process_sensor_definitions,
                     LATCHED_QOS,
+                )
+            )
+            self.hand_depth_subscription = self.node.create_subscription(
+                Image,
+                "/depth_registered/hand/image",
+                self._process_live_hand_depth,
+                qos_profile_sensor_data,
+            )
+            self.hand_depth_camera_info_subscription = (
+                self.node.create_subscription(
+                    CameraInfo,
+                    "/depth_registered/hand/camera_info",
+                    self._process_live_hand_depth_camera_info,
+                    qos_profile_sensor_data,
                 )
             )
 
@@ -493,6 +556,77 @@ class InspectionControls(UIControlHelper):
                 continue
             definitions.append(definition)
         self.set_sensor_definitions(definitions)
+
+    def _process_live_hand_depth(self, message):
+        self._latest_hand_depth_image = message
+        self._latest_hand_depth_received_monotonic = time.monotonic()
+        stamp = message.header.stamp
+        stamp_key = (int(stamp.sec), int(stamp.nanosec))
+        if (
+            not self._hand_depth_history
+            or self._hand_depth_history[-1][0] != stamp_key
+        ):
+            self._hand_depth_history.append(
+                (
+                    stamp_key,
+                    self._latest_hand_depth_received_monotonic,
+                    message,
+                )
+            )
+
+    def _process_live_hand_depth_camera_info(self, message):
+        self._latest_hand_depth_camera_info = message
+
+    def handle_base_tags(self, tags):
+        """Buffer distinct authoritative base-camera tag observations."""
+        for tag in tags:
+            stamp = tag.pose.header.stamp
+            stamp_key = (int(stamp.sec), int(stamp.nanosec))
+            history = self._base_tag_histories.setdefault(
+                int(tag.id),
+                deque(maxlen=20),
+            )
+            if history and history[-1][0] == stamp_key:
+                continue
+            history.append((stamp_key, deepcopy(tag)))
+
+    def handle_command_status(self, status):
+        self._command_status = status
+        session = self._refinement_session
+        if status.startswith("Running:"):
+            if session is not None and session.pending_motion is None:
+                self._clear_refinement_execution_evidence(
+                    "An unrelated robot command started"
+                )
+            self._probe_motion_pending = (
+                session is not None and session.pending_motion is not None
+            )
+            self._refresh_refinement_dialog()
+            return
+
+        self._last_command_completion_monotonic = time.monotonic()
+        if session is None or session.pending_motion is None:
+            self._probe_motion_pending = False
+            return
+        command_id = status.partition(":")[2].strip()
+        if command_id and command_id != CommandID.MOVE_ARM_TO_TAG:
+            self._fail_pending_refinement_motion(
+                f"Unexpected terminal command status: {status}"
+            )
+            return
+        if status.startswith("SUCCESS"):
+            self._motion_completion_generation += 1
+            generation = self._motion_completion_generation
+            QTimer.singleShot(
+                int(PROBE_MOTION_SETTLE_SEC * 1000),
+                lambda: self._complete_pending_refinement_motion(
+                    generation
+                ),
+            )
+            return
+        self._fail_pending_refinement_motion(
+            f"Robot movement ended with {status}"
+        )
 
     def set_sensor_definitions(self, definitions):
         """Replace the UI sensor list with validated registry data."""
@@ -881,7 +1015,7 @@ class InspectionControls(UIControlHelper):
         self.reference_target_distance_field.setValidator(
             self._distance_validator(self.reference_target_distance_field)
         )
-        self.reference_preapproach_distance_field = QLineEdit("0.05")
+        self.reference_preapproach_distance_field = QLineEdit("0.10")
         self.reference_preapproach_distance_field.setFixedWidth(90)
         self.reference_preapproach_distance_field.setValidator(
             self._distance_validator(
@@ -931,21 +1065,23 @@ class InspectionControls(UIControlHelper):
             210,
         )
         self.move_calculated_approach_button = QPushButton(
-            "Move to Approach Pose"
+            "Move to Candidate"
         )
         self.use_current_approach_button = QPushButton(
-            "Use Current as Approach"
+            "Approve Current Pose"
         )
         self.move_aligned_pose_button = QPushButton(
-            "Move to Aligned Pose"
+            "Move to Candidate"
         )
         self.use_current_alignment_button = QPushButton(
-            "Use Current Alignment"
+            "Approve Current Pose"
         )
-        self.move_probe_pose_button = QPushButton("Move to Probe Pose")
-        self.use_current_probe_button = QPushButton(
-            "Use Current as Probe"
+        self.move_probe_pose_button = QPushButton(
+            "Direct Probe Movement Disabled"
         )
+        self.move_probe_pose_button.setEnabled(False)
+        self.use_current_probe_button = QPushButton("Approve Probe Pose")
+        self.use_current_probe_button.setEnabled(False)
 
         self.approach_step_status_label = QLabel("Waiting for target")
         self.alignment_step_status_label = QLabel("Waiting for target")
@@ -953,6 +1089,108 @@ class InspectionControls(UIControlHelper):
         self.save_approach_status_label = QLabel("Not approved")
         self.save_alignment_status_label = QLabel("Not approved")
         self.save_probe_status_label = QLabel("Not approved")
+
+        self.refine_translation_step_field = QLineEdit("0.01")
+        self.refine_translation_step_field.setFixedWidth(70)
+        self.refine_translation_step_field.setValidator(
+            self._bounded_number_validator(
+                self.refine_translation_step_field,
+                0.001,
+                MAX_REFINEMENT_TRANSLATION_M,
+                3,
+            )
+        )
+        self.refine_rotation_step_field = QLineEdit("2.0")
+        self.refine_rotation_step_field.setFixedWidth(70)
+        self.refine_rotation_step_field.setValidator(
+            self._bounded_number_validator(
+                self.refine_rotation_step_field,
+                0.1,
+                MAX_REFINEMENT_ROTATION_DEG,
+                1,
+            )
+        )
+        self.refinement_buttons = {}
+        for stage in ("approach", "alignment", "probe"):
+            actions = [
+                "up",
+                "down",
+                "left",
+                "right",
+                "pitch_up",
+                "pitch_down",
+                "yaw_left",
+                "yaw_right",
+            ]
+            if stage == "approach":
+                actions.extend(("front", "back"))
+            if stage == "probe":
+                actions = []
+            stage_buttons = {}
+            for action in actions:
+                button = QPushButton(
+                    self._refinement_button_label(action)
+                )
+                button.clicked.connect(
+                    lambda _checked=False, selected_stage=stage,
+                    selected_action=action: self.handle_refine_pose(
+                        selected_stage,
+                        selected_action,
+                    )
+                )
+                stage_buttons[action] = button
+                setattr(
+                    self,
+                    f"{stage}_refine_{action}_button",
+                    button,
+                )
+            self.refinement_buttons[stage] = stage_buttons
+
+        self.live_surface_distance_value_label = (
+            self._fixed_readout_label("—", 90)
+        )
+        self.surface_distance_delta_value_label = (
+            self._fixed_readout_label("—", 90)
+        )
+        self.test_surface_distance_button = QPushButton(
+            "Test Surface Distance"
+        )
+        self.test_surface_distance_button.setToolTip(
+            "Measure fresh hand-camera depth and command one bounded "
+            "correction along the probe axis"
+        )
+        self.surface_distance_test_status_label = QLabel(
+            "Waiting for aligned pre-approach approval"
+        )
+        self.surface_distance_test_status_label.setWordWrap(True)
+        self.surface_distance_tolerance_field = QLineEdit(
+            f"{SURFACE_DISTANCE_TOLERANCE_M:.3f}"
+        )
+        self.surface_distance_tolerance_field.setFixedWidth(90)
+        self.surface_distance_tolerance_field.setValidator(
+            self._bounded_number_validator(
+                self.surface_distance_tolerance_field,
+                0.001,
+                0.05,
+                3,
+            )
+        )
+        self.approve_and_retract_button = QPushButton(
+            "Approve and Retract"
+        )
+        self.approve_and_retract_button.setEnabled(False)
+        self.retract_without_saving_button = QPushButton(
+            "Retract Without Saving"
+        )
+        self.retract_without_saving_button.setEnabled(False)
+        self.refinement_recovery_status_label = QLabel("")
+        self.refinement_recovery_status_label.setWordWrap(True)
+        self.refinement_summary_status_label = QLabel("")
+        self.refinement_summary_status_label.setWordWrap(True)
+        self.start_probe_refinement_button = QPushButton(
+            "Start Probe Point Position Refinement Workflow"
+        )
+        self.start_probe_refinement_button.setEnabled(False)
 
         self.probe_point_id_field = QLineEdit()
         self.probe_point_id_field.setPlaceholderText("Probe point ID")
@@ -965,6 +1203,7 @@ class InspectionControls(UIControlHelper):
         self.probe_measurement_duration_field = QLineEdit("1.0")
         self.save_probe_point_button = QPushButton("Save Probe Point")
         self.save_probe_point_button.setEnabled(False)
+        self.save_probe_point_button.hide()
         self.save_probe_point_status_label = QLabel(
             "Approve all three poses and complete the definition."
         )
@@ -1001,14 +1240,20 @@ class InspectionControls(UIControlHelper):
         self.use_current_alignment_button.clicked.connect(
             self.handle_use_current_alignment
         )
-        self.move_probe_pose_button.clicked.connect(
-            self.handle_move_to_probe_pose
-        )
-        self.use_current_probe_button.clicked.connect(
-            self.handle_use_current_as_probe
+        self.test_surface_distance_button.clicked.connect(
+            self.handle_test_surface_distance
         )
         self.save_probe_point_button.clicked.connect(
             self.handle_save_probe_point
+        )
+        self.approve_and_retract_button.clicked.connect(
+            self.handle_approve_and_retract
+        )
+        self.retract_without_saving_button.clicked.connect(
+            self.handle_retract_without_saving
+        )
+        self.start_probe_refinement_button.clicked.connect(
+            self.handle_start_probe_refinement
         )
         for field in (
             self.probe_point_id_field,
@@ -1020,6 +1265,10 @@ class InspectionControls(UIControlHelper):
             field.textChanged.connect(
                 self._update_save_probe_point_state
             )
+        self.surface_distance_tolerance_field.textChanged.connect(
+            self._handle_surface_tolerance_changed
+        )
+        self.refinement_dialog = ProbeRefinementDialog(self)
 
     def _make_workspace_splitter(self):
         self.inspection_workspace_splitter = QSplitter(Qt.Vertical)
@@ -1150,21 +1399,15 @@ class InspectionControls(UIControlHelper):
 
         target_group = QGroupBox("Calculated poses")
         target_layout = QGridLayout(target_group)
-        target_layout.addWidget(QLabel("Target distance [m]:"), 0, 0)
         target_layout.addWidget(
-            self.reference_target_distance_field,
+            QLabel("Aligned pre-approach distance [m]:"),
             0,
-            1,
-        )
-        target_layout.addWidget(
-            QLabel("Standoff clearance [m]:"),
             0,
-            2,
         )
         target_layout.addWidget(
             self.reference_preapproach_distance_field,
             0,
-            3,
+            1,
         )
         target_layout.addWidget(QLabel("Status:"), 1, 0)
         target_layout.addWidget(
@@ -1207,7 +1450,11 @@ class InspectionControls(UIControlHelper):
             6,
         )
 
-        target_layout.addWidget(QLabel("Aligned position [m]:"), 4, 0)
+        target_layout.addWidget(
+            QLabel("Aligned pre-approach position [m]:"),
+            4,
+            0,
+        )
         target_layout.addWidget(QLabel("x"), 4, 1)
         target_layout.addWidget(
             self.reference_preapproach_x_value_label,
@@ -1292,64 +1539,115 @@ class InspectionControls(UIControlHelper):
         status_row.addStretch()
         layout.addLayout(status_row)
 
-        layout.addWidget(
-            self._make_refine_stage_group(
-                "1. Obstacle-safe approach",
-                self.approach_step_status_label,
-                self.move_calculated_approach_button,
-                self.use_current_approach_button,
-                "Move to the calculated pose, adjust the sensor manually, "
-                "then approve the current pose.",
-            )
+        description = QLabel(
+            "The refinement wizard enforces Safe Approach, Aligned "
+            "Pre-approach, and live Surface Distance in order. Entering a "
+            "stage never moves the robot."
         )
-        layout.addWidget(
-            self._make_refine_stage_group(
-                "2. Surface alignment",
-                self.alignment_step_status_label,
-                self.move_aligned_pose_button,
-                self.use_current_alignment_button,
-                "Move directly in front of the surface, fine-tune position "
-                "and orientation, then approve the alignment.",
-            )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        summary = QGroupBox("Workflow Summary")
+        summary_layout = QFormLayout(summary)
+        summary_layout.addRow(
+            "Safe Approach Pose:",
+            self.save_approach_status_label,
         )
-        layout.addWidget(
-            self._make_refine_stage_group(
-                "3. Probe pose",
-                self.probe_step_status_label,
-                self.move_probe_pose_button,
-                self.use_current_probe_button,
-                "Move to the final target, make small adjustments, then "
-                "approve the final probe pose.",
-            )
+        summary_layout.addRow(
+            "Aligned Pre-approach Pose:",
+            self.save_alignment_status_label,
         )
+        summary_layout.addRow(
+            "Probe Pose:",
+            self.save_probe_status_label,
+        )
+        layout.addWidget(summary)
+        layout.addWidget(self.start_probe_refinement_button)
+        layout.addWidget(self.refinement_summary_status_label)
         layout.addStretch()
         return widget
 
-    @staticmethod
     def _make_refine_stage_group(
+        self,
         title,
+        stage,
         status_label,
         move_button,
         approve_button,
         description,
     ):
         group = QGroupBox(title)
-        layout = QVBoxLayout(group)
+        layout = QHBoxLayout(group)
+
+        details = QVBoxLayout()
         description_label = QLabel(description)
         description_label.setWordWrap(True)
-        layout.addWidget(description_label)
+        details.addWidget(description_label)
 
         status_row = QHBoxLayout()
         status_row.addWidget(QLabel("Status:"))
         status_row.addWidget(status_label)
         status_row.addStretch()
-        layout.addLayout(status_row)
+        details.addLayout(status_row)
 
         buttons = QHBoxLayout()
         buttons.addWidget(move_button)
         buttons.addWidget(approve_button)
         buttons.addStretch()
-        layout.addLayout(buttons)
+        details.addLayout(buttons)
+        details.addStretch()
+        layout.addLayout(details, 2)
+        layout.addWidget(self._make_refinement_controls(stage), 1)
+        return group
+
+    def _make_refinement_controls(self, stage):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        movement_group = QGroupBox("Finite adjustments")
+        movement_layout = QGridLayout(movement_group)
+        buttons = self.refinement_buttons[stage]
+        movement_layout.addWidget(buttons["up"], 0, 1)
+        movement_layout.addWidget(buttons["left"], 1, 0)
+        movement_layout.addWidget(buttons["right"], 1, 2)
+        movement_layout.addWidget(buttons["down"], 2, 1)
+        if "back" in buttons:
+            movement_layout.addWidget(buttons["back"], 3, 0)
+            movement_layout.addWidget(buttons["front"], 3, 2)
+        movement_layout.addWidget(buttons["pitch_up"], 4, 0)
+        movement_layout.addWidget(buttons["pitch_down"], 4, 2)
+        movement_layout.addWidget(buttons["yaw_left"], 5, 0)
+        movement_layout.addWidget(buttons["yaw_right"], 5, 2)
+        layout.addWidget(movement_group)
+
+        if stage == "probe":
+            layout.addWidget(self._make_surface_distance_controls())
+        layout.addStretch()
+        return container
+
+    def _make_surface_distance_controls(self, desired_distance_field=None):
+        group = QGroupBox("Live surface distance")
+        layout = QGridLayout(group)
+        desired_distance_field = (
+            desired_distance_field or self.reference_target_distance_field
+        )
+        layout.addWidget(QLabel("Desired [m]:"), 0, 0)
+        layout.addWidget(desired_distance_field, 0, 1)
+        layout.addWidget(QLabel("Measured [m]:"), 1, 0)
+        layout.addWidget(self.live_surface_distance_value_label, 1, 1)
+        layout.addWidget(QLabel("Delta [m]:"), 2, 0)
+        layout.addWidget(self.surface_distance_delta_value_label, 2, 1)
+        layout.addWidget(QLabel("Tolerance [m]:"), 3, 0)
+        layout.addWidget(self.surface_distance_tolerance_field, 3, 1)
+        layout.addWidget(self.test_surface_distance_button, 4, 0, 1, 2)
+        layout.addWidget(
+            self.surface_distance_test_status_label,
+            5,
+            0,
+            1,
+            2,
+        )
         return group
 
     def _make_save_tab(self):
@@ -1365,7 +1663,7 @@ class InspectionControls(UIControlHelper):
             self.save_approach_status_label,
         )
         approval_layout.addRow(
-            "Surface alignment:",
+            "Aligned pre-approach pose:",
             self.save_alignment_status_label,
         )
         approval_layout.addRow(
@@ -1404,21 +1702,22 @@ class InspectionControls(UIControlHelper):
         return widget
 
     def _set_probe_setup_buttons_enabled(self, enabled):
-        setup_buttons = (
+        self.start_probe_refinement_button.setEnabled(bool(enabled))
+        for button in (
             self.move_calculated_approach_button,
             self.use_current_approach_button,
             self.move_aligned_pose_button,
             self.use_current_alignment_button,
-        )
-        for button in setup_buttons:
-            button.setEnabled(enabled)
-        probe_enabled = (
-            enabled
-            and self._probe_setup is not None
-            and self._probe_setup.surface_alignment_approved
-        )
-        self.move_probe_pose_button.setEnabled(probe_enabled)
-        self.use_current_probe_button.setEnabled(probe_enabled)
+            self.test_surface_distance_button,
+            self.approve_and_retract_button,
+            self.retract_without_saving_button,
+        ):
+            button.setEnabled(False)
+        for stage_buttons in self.refinement_buttons.values():
+            for button in stage_buttons.values():
+                button.setEnabled(False)
+        if self._refinement_workflow_active:
+            self._refresh_refinement_dialog()
 
     def _update_probe_setup_status_widgets(self):
         setup = self._probe_setup
@@ -1429,6 +1728,9 @@ class InspectionControls(UIControlHelper):
             self.save_approach_status_label.setText("Not approved")
             self.save_alignment_status_label.setText("Not approved")
             self.save_probe_status_label.setText("Not approved")
+            self.surface_distance_test_status_label.setText(
+                "Waiting for aligned pre-approach approval"
+            )
             self._update_save_probe_point_state()
             return
 
@@ -1461,6 +1763,10 @@ class InspectionControls(UIControlHelper):
         self.save_probe_status_label.setText(
             "Approved" if setup.probe_pose_approved else "Not approved"
         )
+        if not setup.surface_alignment_approved:
+            self.surface_distance_test_status_label.setText(
+                "Waiting for aligned pre-approach approval"
+            )
         self._update_save_probe_point_state()
 
     def _update_save_probe_point_state(self, _value=None):
@@ -1512,6 +1818,7 @@ class InspectionControls(UIControlHelper):
             routine is not None
             and bool(point_id)
             and routine.get_probe_point(point_id) is not None
+            and point_id != self._editing_probe_point_id
         )
         ready = (
             approvals_complete
@@ -1523,9 +1830,43 @@ class InspectionControls(UIControlHelper):
             and not duplicate
         )
         self.save_probe_point_button.setEnabled(ready)
+        session = self._refinement_session
+        workflow_ready = (
+            self._refinement_workflow_active
+            and session is not None
+            and setup is not None
+            and session.stage_is_approved(
+                RefinementStage.SAFE_APPROACH
+            )
+            and session.stage_is_approved(RefinementStage.ALIGNMENT)
+            and session.surface_distance_verified
+            and session.pending_motion is None
+            and not self._distance_failure_requires_retraction
+            and routine is not None
+            and bool(point_id)
+            and bool(display_name)
+            and numeric_ready
+            and provenance_ready
+            and not duplicate
+        )
+        self.approve_and_retract_button.setEnabled(workflow_ready)
 
-        if not approvals_complete:
-            status = "Approve all three poses before saving."
+        if session is not None and session.saved:
+            status = "Probe point saved. Complete the required retraction."
+        elif self._refinement_workflow_active and not (
+            session is not None
+            and session.stage_is_approved(
+                RefinementStage.SAFE_APPROACH
+            )
+            and session.stage_is_approved(RefinementStage.ALIGNMENT)
+        ):
+            status = "Approve the safe and aligned poses in the wizard."
+        elif self._refinement_workflow_active and not (
+            session is not None and session.surface_distance_verified
+        ):
+            status = "Verify the live surface distance in the wizard."
+        elif not approvals_complete and not self._refinement_workflow_active:
+            status = "Complete the refinement wizard before saving."
         elif routine is None:
             status = "Select a saved object and routine."
         elif not provenance_ready:
@@ -1556,12 +1897,45 @@ class InspectionControls(UIControlHelper):
         return validator
 
     @staticmethod
+    def _bounded_number_validator(
+        parent,
+        minimum,
+        maximum,
+        decimals,
+    ):
+        validator = QDoubleValidator(
+            minimum,
+            maximum,
+            decimals,
+            parent,
+        )
+        validator.setLocale(QLocale.c())
+        validator.setNotation(QDoubleValidator.StandardNotation)
+        return validator
+
+    @staticmethod
     def _fixed_readout_label(text, width):
         label = QLabel(text)
         label.setFixedWidth(width)
         label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         return label
+
+    @staticmethod
+    def _refinement_button_label(action):
+        labels = {
+            "up": "Up",
+            "down": "Down",
+            "left": "Left",
+            "right": "Right",
+            "front": "Front",
+            "back": "Back",
+            "pitch_up": "Pitch Up",
+            "pitch_down": "Pitch Down",
+            "yaw_left": "Yaw Left",
+            "yaw_right": "Yaw Right",
+        }
+        return labels[action]
 
     @staticmethod
     def _format_readout_value(value, decimals):
@@ -1701,10 +2075,98 @@ class InspectionControls(UIControlHelper):
         )
 
     def _handle_target_distance_changed(self):
+        session = self._refinement_session
+        if (
+            self._refinement_workflow_active
+            and session is not None
+            and session.recovery_required
+        ):
+            self.reference_target_distance_field.setText(
+                f"{session.target_surface_distance_m:.3f}"
+            )
+            self.reference_preapproach_distance_field.setText(
+                f"{session.aligned_preapproach_distance_m:.3f}"
+            )
+            if hasattr(self, "refinement_dialog"):
+                self.refinement_dialog.target_distance_field.setText(
+                    self.reference_target_distance_field.text()
+                )
+                self.refinement_dialog.aligned_distance_field.setText(
+                    self.reference_preapproach_distance_field.text()
+                )
+            self.refinement_recovery_status_label.setText(
+                "Retract before changing either surface distance."
+            )
+            return
         if self._selected_approach_direction is None:
             self._clear_selected_surface_target()
             return
         self._resolve_selected_surface_target()
+
+    def _handle_dialog_distances_changed(self):
+        session = self._refinement_session
+        old_target = (
+            session.target_surface_distance_m
+            if session is not None
+            else self._distance_value(
+                self.reference_target_distance_field,
+                "Target surface distance",
+            )
+        )
+        old_aligned = (
+            session.aligned_preapproach_distance_m
+            if session is not None
+            else self._distance_value(
+                self.reference_preapproach_distance_field,
+                "Aligned pre-approach distance",
+            )
+        )
+        try:
+            if session is not None and session.recovery_required:
+                raise ValueError("Retract before changing surface distances")
+            target = self._distance_value(
+                self.refinement_dialog.target_distance_field,
+                "Desired surface distance",
+            )
+            aligned = self._distance_value(
+                self.refinement_dialog.aligned_distance_field,
+                "Aligned pre-approach distance",
+            )
+            if (
+                aligned
+                < target
+                + MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M
+                - 1e-12
+            ):
+                raise ValueError(
+                    "Aligned pre-approach distance must be at least "
+                    f"{MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M:.2f} m "
+                    "greater than desired surface distance"
+                )
+        except Exception as exception:
+            self.refinement_dialog.target_distance_field.setText(
+                f"{old_target:.3f}"
+            )
+            self.refinement_dialog.aligned_distance_field.setText(
+                f"{old_aligned:.3f}"
+            )
+            self.refinement_recovery_status_label.setText(str(exception))
+            return False
+        self.reference_target_distance_field.setText(f"{target:.3f}")
+        self.reference_preapproach_distance_field.setText(
+            f"{aligned:.3f}"
+        )
+        self._handle_target_distance_changed()
+        self._refresh_refinement_dialog()
+        return True
+
+    def _handle_surface_tolerance_changed(self, _value=None):
+        session = self._refinement_session
+        if session is None:
+            return
+        session.surface_distance_verified = False
+        self._update_save_probe_point_state()
+        self._refresh_refinement_dialog()
 
     @property
     def selected_surface_point(self):
@@ -1763,7 +2225,10 @@ class InspectionControls(UIControlHelper):
 
     def _clear_selected_surface_target(self):
         self._selected_surface_target = None
+        self._calculated_probe_setup = None
         self._probe_setup = None
+        if not self._refinement_workflow_active:
+            self._refinement_session = None
         self.reference_target_x_value_label.setText("—")
         self.reference_target_y_value_label.setText("—")
         self.reference_target_z_value_label.setText("—")
@@ -1773,6 +2238,11 @@ class InspectionControls(UIControlHelper):
         self.reference_preapproach_x_value_label.setText("—")
         self.reference_preapproach_y_value_label.setText("—")
         self.reference_preapproach_z_value_label.setText("—")
+        self.live_surface_distance_value_label.setText("—")
+        self.surface_distance_delta_value_label.setText("—")
+        self.surface_distance_test_status_label.setText(
+            "Waiting for aligned pre-approach approval"
+        )
         self._set_probe_setup_buttons_enabled(False)
         self._update_probe_setup_status_widgets()
         self._set_setup_status("No point")
@@ -1966,20 +2436,21 @@ class InspectionControls(UIControlHelper):
         self._resolve_selected_surface_target()
 
     def _resolve_selected_surface_target(self):
-        self._clear_selected_surface_target()
+        previous_setup = self._probe_setup
         if (
             self._selected_approach_direction is None
             or self._reference_view is None
         ):
+            self._clear_selected_surface_target()
             return
         try:
             target_distance = self._distance_value(
                 self.reference_target_distance_field,
                 "Target surface distance",
             )
-            preapproach_clearance = self._distance_value(
+            aligned_preapproach_distance = self._distance_value(
                 self.reference_preapproach_distance_field,
-                "Standoff clearance",
+                "Aligned pre-approach distance",
             )
             result = resolve_reference_surface_target(
                 approach_direction=self._selected_approach_direction,
@@ -1988,17 +2459,40 @@ class InspectionControls(UIControlHelper):
                 ),
                 target_surface_distance_m=target_distance,
                 aligned_preapproach_distance_m=(
-                    target_distance + preapproach_clearance
+                    aligned_preapproach_distance
                 ),
             )
         except ValueError as exception:
+            self._clear_selected_surface_target()
             self._set_target_status("Unavailable", str(exception))
             return
 
         self._selected_surface_target = result
-        self._probe_setup = initialize_reference_probe_setup(result)
+        setup = initialize_reference_probe_setup(result)
+        self._calculated_probe_setup = deepcopy(setup)
+        if previous_setup is not None:
+            if previous_setup.safe_approach_approved:
+                setup = approve_safe_approach_pose(
+                    setup,
+                    previous_setup.safe_approach_pose_object,
+                )
+            self.surface_distance_test_status_label.setText(
+                "Geometry changed. Reach and verify the aligned pose again."
+            )
+        self._probe_setup = setup
+        if self._refinement_workflow_active:
+            self._refinement_session = ProbeRefinementSession.create(
+                self._calculated_probe_setup,
+                self._probe_setup,
+            )
+            self._distance_failure_requires_retraction = False
+            self._retraction_failed = False
         self._set_probe_setup_buttons_enabled(True)
         self._display_probe_setup("Calculated")
+        if self._refinement_workflow_active:
+            self.refinement_dialog.show_stage(
+                self._refinement_session.active_stage
+            )
 
     def _display_probe_setup(self, status):
         if self._probe_setup is None:
@@ -2059,20 +2553,315 @@ class InspectionControls(UIControlHelper):
             return "No transient probe setup is available."
         return (
             f"Approach approved={setup.safe_approach_approved}; "
-            f"alignment approved={setup.surface_alignment_approved}; "
+            "aligned pre-approach approved="
+            f"{setup.surface_alignment_approved}; "
             f"probe approved={setup.probe_pose_approved}. "
             "Nothing is persisted until Save Probe Point is pressed."
         )
 
+    def handle_start_probe_refinement(self):
+        """Open a new supervised draft without commanding movement."""
+        try:
+            if self._calculated_probe_setup is None:
+                raise ValueError(
+                    "Select a valid reference point before refinement"
+                )
+            setup = self._require_probe_setup()
+            self._refinement_session = ProbeRefinementSession.create(
+                self._calculated_probe_setup,
+                setup,
+            )
+        except Exception as exception:
+            self._show_setup_error(
+                "Start Probe Point Refinement",
+                exception,
+            )
+            return False
+
+        self._refinement_workflow_active = True
+        self._distance_failure_requires_retraction = False
+        self._retraction_failed = False
+        self._hand_depth_history.clear()
+        self.inspection_workspace_splitter.setEnabled(False)
+        self.refinement_dialog.open_for_stage(
+            self._refinement_session.active_stage
+        )
+        self._set_status_text("Probe refinement workflow started")
+        return True
+
+    def request_close_refinement_workflow(self):
+        """Close only when no movement or recovery remains active."""
+        session = self._refinement_session
+        if session is None:
+            self._finish_refinement_workflow_close()
+            return True
+        if session.pending_motion is not None:
+            self.refinement_recovery_status_label.setText(
+                "Wait for the active movement and settle check."
+            )
+            return False
+        if session.recovery_required:
+            self.refinement_recovery_status_label.setText(
+                "Retract Without Saving is required before closing."
+            )
+            return False
+        session.discard_unapproved_candidates()
+        self._finish_refinement_workflow_close()
+        return True
+
+    def _finish_refinement_workflow_close(self):
+        self._refinement_workflow_active = False
+        self._probe_motion_pending = False
+        self._distance_failure_requires_retraction = False
+        self._retraction_failed = False
+        if hasattr(self, "inspection_workspace_splitter"):
+            self.inspection_workspace_splitter.setEnabled(True)
+        self._refinement_session = None
+        self.refinement_summary_status_label.setText(
+            "Refinement workflow closed. Persisted data was preserved."
+        )
+        self._update_probe_setup_status_widgets()
+
+    def handle_refinement_back(self):
+        """Navigate backward without commanding movement."""
+        session = self._require_refinement_session()
+        if session.recovery_required:
+            self.refinement_recovery_status_label.setText(
+                "Retract Without Saving before navigating backward."
+            )
+            return False
+        index = ProbeRefinementDialog.STAGES.index(session.active_stage)
+        if index == 0:
+            return False
+        self.refinement_dialog.show_stage(
+            ProbeRefinementDialog.STAGES[index - 1]
+        )
+        return True
+
+    def handle_refinement_next(self):
+        """Advance only when the current pose has been approved."""
+        session = self._require_refinement_session()
+        stage = session.active_stage
+        if not session.stage_is_approved(stage):
+            self.refinement_recovery_status_label.setText(
+                "Approve the current stage before continuing."
+            )
+            return False
+        index = ProbeRefinementDialog.STAGES.index(stage)
+        if index >= len(ProbeRefinementDialog.STAGES) - 1:
+            return False
+        self.refinement_dialog.show_stage(
+            ProbeRefinementDialog.STAGES[index + 1]
+        )
+        return True
+
+    def _handle_refinement_stage_changed(self, stage):
+        session = self._refinement_session
+        if session is None:
+            return
+        session.active_stage = stage
+        self.refinement_recovery_status_label.setText("")
+
+    def _refresh_refinement_dialog(self):
+        session = self._refinement_session
+        if session is None or not hasattr(self, "refinement_dialog"):
+            return
+        for stage in RefinementStage:
+            labels = self.refinement_dialog.pose_comparison_labels[stage]
+            calculated = session.calculated_pose(stage)
+            candidate = session.candidate_pose(stage)
+            approved = session.approved_pose(stage)
+            labels["calculated"].setText(self._pose_summary(calculated))
+            labels["candidate"].setText(self._pose_summary(candidate))
+            labels["approved"].setText(
+                self._pose_summary(approved)
+                if approved is not None
+                else "Not set"
+            )
+            labels["difference"].setText(
+                self._pose_difference_summary(calculated, candidate)
+            )
+            if approved is None:
+                status = (
+                    "Not set"
+                    if self._poses_equivalent(calculated, candidate)
+                    else "Modified"
+                )
+            else:
+                status = (
+                    "Approved"
+                    if self._poses_equivalent(approved, candidate)
+                    else "Modified"
+                )
+            labels["status"].setText(status)
+
+        self.approach_step_status_label.setText(
+            session.motion_states[RefinementStage.SAFE_APPROACH].value
+        )
+        self.alignment_step_status_label.setText(
+            session.motion_states[RefinementStage.ALIGNMENT].value
+        )
+        probe_state = session.motion_states[RefinementStage.PROBE].value
+        if session.surface_distance_verified:
+            probe_state = "Surface Distance Verified"
+        self.probe_step_status_label.setText(probe_state)
+
+        pending = session.pending_motion is not None
+        current = session.active_stage
+        recovery_only = self._retraction_failed
+        safe_page = current == RefinementStage.SAFE_APPROACH
+        alignment_page = current == RefinementStage.ALIGNMENT
+        probe_page = current == RefinementStage.PROBE
+        safe_reached = (
+            session.motion_states[RefinementStage.SAFE_APPROACH]
+            == RefinementMotionState.REACHED
+        )
+        alignment_reached = (
+            session.motion_states[RefinementStage.ALIGNMENT]
+            == RefinementMotionState.REACHED
+        )
+
+        safe_enabled = safe_page and not pending and not recovery_only
+        self.move_calculated_approach_button.setEnabled(safe_enabled)
+        self.use_current_approach_button.setEnabled(safe_enabled)
+        for button in self.refinement_buttons["approach"].values():
+            button.setEnabled(safe_enabled and safe_reached)
+
+        alignment_enabled = (
+            alignment_page
+            and safe_reached
+            and not pending
+            and not recovery_only
+        )
+        self.move_aligned_pose_button.setEnabled(alignment_enabled)
+        self.use_current_alignment_button.setEnabled(alignment_enabled)
+        for button in self.refinement_buttons["alignment"].values():
+            button.setEnabled(alignment_enabled and alignment_reached)
+
+        test_enabled = (
+            probe_page
+            and alignment_reached
+            and not pending
+            and not self._distance_failure_requires_retraction
+            and not recovery_only
+        )
+        self.test_surface_distance_button.setEnabled(test_enabled)
+        self.retract_without_saving_button.setEnabled(
+            session.recovery_required and not pending
+        )
+        distances_editable = not pending and not session.recovery_required
+        self.reference_target_distance_field.setEnabled(distances_editable)
+        self.reference_preapproach_distance_field.setEnabled(
+            distances_editable
+        )
+        if not self.refinement_dialog.target_distance_field.hasFocus():
+            self.refinement_dialog.target_distance_field.setText(
+                self.reference_target_distance_field.text()
+            )
+        if not self.refinement_dialog.aligned_distance_field.hasFocus():
+            self.refinement_dialog.aligned_distance_field.setText(
+                self.reference_preapproach_distance_field.text()
+            )
+        self.refinement_dialog.target_distance_field.setEnabled(
+            distances_editable
+        )
+        self.refinement_dialog.aligned_distance_field.setEnabled(
+            distances_editable
+        )
+        self.surface_distance_tolerance_field.setEnabled(not pending)
+        self.refine_translation_step_field.setEnabled(not pending)
+        self.refine_rotation_step_field.setEnabled(not pending)
+
+        self.refinement_dialog.back_button.setEnabled(
+            current != RefinementStage.SAFE_APPROACH
+            and not pending
+            and not session.recovery_required
+        )
+        self.refinement_dialog.next_button.setVisible(not probe_page)
+        approved = session.approved_pose(current)
+        self.refinement_dialog.next_button.setEnabled(
+            session.stage_is_approved(current) and not pending
+        )
+        self.refinement_dialog.next_button.setText(
+            "Keep Existing and Continue"
+            if (
+                approved is not None
+                and self._poses_equivalent(
+                    approved,
+                    session.candidate_pose(current),
+                )
+            )
+            else "Next"
+        )
+        self.refinement_dialog.close_button.setEnabled(not pending)
+        if session.recovery_required:
+            self.refinement_recovery_status_label.setText(
+                session.recovery_message
+            )
+        self._update_save_probe_point_state()
+
+    @staticmethod
+    def _pose_summary(pose):
+        roll, pitch, yaw = quaternion_to_rpy(pose.orientation)
+        return (
+            f"p=({pose.position.x:.4f}, {pose.position.y:.4f}, "
+            f"{pose.position.z:.4f}) m; rpy=("
+            f"{math.degrees(roll):.2f}, "
+            f"{math.degrees(pitch):.2f}, "
+            f"{math.degrees(yaw):.2f}) deg"
+        )
+
+    @staticmethod
+    def _pose_difference_summary(reference, candidate):
+        reference_rpy = quaternion_to_rpy(reference.orientation)
+        candidate_rpy = quaternion_to_rpy(candidate.orientation)
+        rotation_delta = [
+            math.degrees(
+                math.atan2(
+                    math.sin(candidate_value - reference_value),
+                    math.cos(candidate_value - reference_value),
+                )
+            )
+            for reference_value, candidate_value in zip(
+                reference_rpy,
+                candidate_rpy,
+            )
+        ]
+        return (
+            f"dp=({candidate.position.x - reference.position.x:+.4f}, "
+            f"{candidate.position.y - reference.position.y:+.4f}, "
+            f"{candidate.position.z - reference.position.z:+.4f}) m; "
+            f"drpy=({rotation_delta[0]:+.2f}, "
+            f"{rotation_delta[1]:+.2f}, "
+            f"{rotation_delta[2]:+.2f}) deg"
+        )
+
+    @staticmethod
+    def _poses_equivalent(first, second):
+        position_error = math.sqrt(
+            (first.position.x - second.position.x) ** 2
+            + (first.position.y - second.position.y) ** 2
+            + (first.position.z - second.position.z) ** 2
+        )
+        dot = abs(
+            first.orientation.x * second.orientation.x
+            + first.orientation.y * second.orientation.y
+            + first.orientation.z * second.orientation.z
+            + first.orientation.w * second.orientation.w
+        )
+        dot = max(-1.0, min(1.0, dot))
+        angle_error = 2.0 * math.acos(dot)
+        return position_error <= 1e-9 and angle_error <= 1e-9
+
+    def _require_refinement_session(self):
+        session = self._refinement_session
+        if session is None or not self._refinement_workflow_active:
+            raise RuntimeError("Probe refinement workflow is not active")
+        return session
+
     def handle_save_probe_point(self):
         """Persist the fully approved transient probe setup."""
-        object_id = self.saved_object_dropdown.currentData()
-        routine_id = self.saved_routine_dropdown.currentData()
         try:
-            if not object_id or not routine_id:
-                raise ValueError(
-                    "Select a saved object and routine before saving"
-                )
             setup = self._require_probe_setup()
             if not (
                 setup.safe_approach_approved
@@ -2082,99 +2871,404 @@ class InspectionControls(UIControlHelper):
                 raise ValueError(
                     "Approve the approach, alignment, and probe poses"
                 )
-            if (
-                self._selected_surface_point is None
-                or self._reference_view is None
-                or self._reference_view.view_id is None
-            ):
-                raise ValueError(
-                    "Select a point in a captured reference view"
-                )
-
-            probe_point_id = self.probe_point_id_field.text().strip()
-            display_name = (
-                self.probe_point_display_name_field.text().strip()
-            )
-            if not probe_point_id:
-                raise ValueError("Probe point ID must not be empty")
-            if not display_name:
-                raise ValueError(
-                    "Probe point display name must not be empty"
-                )
-
-            surface_target = setup.surface_target
-            preapproach_distance = (
-                surface_target.aligned_preapproach_distance_m
-                - surface_target.target_surface_distance_m
-            )
-            probe_point = ProbePoint(
-                probe_point_id=probe_point_id,
-                display_name=display_name,
-                safe_approach_pose_object=deepcopy(
-                    setup.safe_approach_pose_object
-                ),
-                probe_pose_object=deepcopy(setup.probe_pose_object),
-                target_surface_distance_m=(
-                    surface_target.target_surface_distance_m
-                ),
-                position_tolerance_m=self._distance_value(
-                    self.probe_position_tolerance_field,
-                    "Position tolerance",
-                ),
-                orientation_tolerance_rad=self._distance_value(
-                    self.probe_orientation_tolerance_field,
-                    "Orientation tolerance",
-                ),
-                measurement_duration_sec=self._distance_value(
-                    self.probe_measurement_duration_field,
-                    "Measurement duration",
-                ),
-                preapproach_distance_m=preapproach_distance,
-                reference_pixel=deepcopy(
-                    self._selected_surface_point.requested_pixel
-                ),
-                reference_view_id=self._reference_view.view_id,
-            )
-            stored_definition = self.object_repository.add_probe_point(
-                object_id,
-                routine_id,
-                probe_point,
-            )
+            result = self._persist_probe_point(setup)
         except Exception as exception:
             self.save_probe_point_status_label.setText(
                 f"Save failed: {exception}"
             )
             self.show_warning("Save Probe Point", str(exception))
             return False
-
-        self._selected_definition = stored_definition
-        self.refresh_saved_definitions(
-            desired_object_id=object_id,
-            desired_routine_id=routine_id,
-        )
-        self.probe_point_id_field.clear()
-        self.probe_point_display_name_field.clear()
-        self._clear_all_reference_selections()
         self.save_probe_point_status_label.setText(
-            f"Saved probe point '{probe_point_id}'."
-        )
-        self._set_status_text(
-            f"Saved probe point '{object_id}/{routine_id}/"
-            f"{probe_point_id}'"
+            f"Saved probe point '{result[2]}'."
         )
         return True
 
+    def handle_approve_and_retract(self):
+        """Capture, atomically save, then command mandatory retraction."""
+        try:
+            self._require_command_path_idle(require_settled=True)
+            session = self._require_refinement_session()
+            if not session.surface_distance_verified:
+                raise ValueError("Surface Distance Verified is required")
+            if not session.stage_is_approved(
+                RefinementStage.SAFE_APPROACH
+            ):
+                raise ValueError("Safe Approach Pose is not approved")
+            if not session.stage_is_approved(
+                RefinementStage.ALIGNMENT
+            ):
+                raise ValueError(
+                    "Aligned Pre-approach Pose is not approved"
+                )
+            current = self._current_probe_pose_object()
+            session.approve(RefinementStage.PROBE, current)
+            self._probe_setup = approve_probe_pose(
+                self._require_probe_setup(),
+                current,
+            )
+            result = self._persist_probe_point(self._probe_setup)
+            session.saved = True
+            session.require_recovery(
+                "Probe point saved. Retraction to the aligned "
+                "pre-approach pose is required."
+            )
+            target = session.candidate_pose(RefinementStage.ALIGNMENT)
+            if not self._send_refinement_motion(
+                RefinementStage.ALIGNMENT,
+                "retraction",
+                target,
+                updates_candidate=False,
+            ):
+                self._retraction_failed = True
+                raise RuntimeError(
+                    "Probe point was saved, but retraction could not start"
+                )
+        except Exception as exception:
+            self.save_probe_point_status_label.setText(str(exception))
+            self.refinement_recovery_status_label.setText(str(exception))
+            self.show_warning("Approve and Retract", str(exception))
+            self._refresh_refinement_dialog()
+            return False
+
+        self.save_probe_point_status_label.setText(
+            f"Saved probe point '{result[2]}'; retracting."
+        )
+        self._refresh_refinement_dialog()
+        return True
+
+    def handle_retract_without_saving(self):
+        """Return to the current derived aligned pose without persistence."""
+        try:
+            session = self._require_refinement_session()
+            if not session.recovery_required:
+                raise ValueError("No retraction is currently required")
+            target = session.candidate_pose(RefinementStage.ALIGNMENT)
+            if not self._send_refinement_motion(
+                RefinementStage.ALIGNMENT,
+                "retraction",
+                target,
+                updates_candidate=False,
+            ):
+                return False
+        except Exception as exception:
+            self._show_setup_error("Retract Without Saving", exception)
+            return False
+        return True
+
+    def _persist_probe_point(self, setup):
+        object_id = self.saved_object_dropdown.currentData()
+        routine_id = self.saved_routine_dropdown.currentData()
+        if not object_id or not routine_id:
+            raise ValueError(
+                "Select a saved object and routine before saving"
+            )
+        probe_point = self._build_probe_point(setup)
+        if self._editing_probe_point_id is None:
+            stored_definition = self.object_repository.add_probe_point(
+                object_id,
+                routine_id,
+                probe_point,
+            )
+        else:
+            if probe_point.probe_point_id != self._editing_probe_point_id:
+                raise ValueError(
+                    "Probe point ID cannot change while replacing a point"
+                )
+            stored_definition = self.object_repository.replace_probe_point(
+                object_id,
+                routine_id,
+                probe_point,
+            )
+        self._selected_definition = stored_definition
+        self._set_status_text(
+            f"Saved probe point '{object_id}/{routine_id}/"
+            f"{probe_point.probe_point_id}'"
+        )
+        return object_id, routine_id, probe_point.probe_point_id
+
+    def _build_probe_point(self, setup):
+        if (
+            self._selected_surface_point is None
+            or self._reference_view is None
+            or self._reference_view.view_id is None
+        ):
+            raise ValueError(
+                "Select a point in a captured reference view"
+            )
+        probe_point_id = self.probe_point_id_field.text().strip()
+        display_name = self.probe_point_display_name_field.text().strip()
+        if not probe_point_id:
+            raise ValueError("Probe point ID must not be empty")
+        if not display_name:
+            raise ValueError("Probe point display name must not be empty")
+        surface_target = setup.surface_target
+        probe_point = ProbePoint(
+            probe_point_id=probe_point_id,
+            display_name=display_name,
+            safe_approach_pose_object=deepcopy(
+                setup.safe_approach_pose_object
+            ),
+            probe_pose_object=deepcopy(setup.probe_pose_object),
+            target_surface_distance_m=(
+                surface_target.target_surface_distance_m
+            ),
+            position_tolerance_m=self._distance_value(
+                self.probe_position_tolerance_field,
+                "Position tolerance",
+            ),
+            orientation_tolerance_rad=self._distance_value(
+                self.probe_orientation_tolerance_field,
+                "Orientation tolerance",
+            ),
+            measurement_duration_sec=self._distance_value(
+                self.probe_measurement_duration_field,
+                "Measurement duration",
+            ),
+            aligned_preapproach_distance_m=(
+                surface_target.aligned_preapproach_distance_m
+            ),
+            reference_pixel=deepcopy(
+                self._selected_surface_point.requested_pixel
+            ),
+            reference_view_id=self._reference_view.view_id,
+        )
+        probe_point.validate()
+        return probe_point
+
     def handle_move_to_approach_pose(self):
-        self._move_setup_pose("safe_approach_pose_object", "approach pose")
+        session = self._require_refinement_session()
+        return self._send_refinement_motion(
+            RefinementStage.SAFE_APPROACH,
+            "safe approach candidate",
+            session.candidate_pose(RefinementStage.SAFE_APPROACH),
+        )
 
     def handle_move_to_aligned_pose(self):
-        self._move_setup_pose(
-            "aligned_preapproach_pose_object",
-            "aligned pre-approach pose",
+        session = self._require_refinement_session()
+        return self._send_refinement_motion(
+            RefinementStage.ALIGNMENT,
+            "aligned pre-approach candidate",
+            session.candidate_pose(RefinementStage.ALIGNMENT),
         )
 
     def handle_move_to_probe_pose(self):
-        self._move_setup_pose("probe_pose_object", "probe pose")
+        self._show_setup_error(
+            "Move to Probe Pose",
+            ValueError(
+                "Direct probe-pose movement is disabled. Use Test Surface "
+                "Distance from the reached aligned pre-approach pose."
+            ),
+        )
+        return False
+
+    def handle_refine_pose(self, stage, action):
+        try:
+            session = self._require_refinement_session()
+            stage_value = {
+                "approach": RefinementStage.SAFE_APPROACH,
+                "alignment": RefinementStage.ALIGNMENT,
+            }.get(stage)
+            if stage_value is None:
+                raise ValueError(
+                    "Probe geometry is refined only at the aligned "
+                    "pre-approach pose"
+                )
+            if session.active_stage != stage_value:
+                raise ValueError("The requested refinement stage is inactive")
+            if (
+                session.motion_states[stage_value]
+                != RefinementMotionState.REACHED
+            ):
+                raise ValueError("Reach the current candidate before adjusting")
+            translation_step = self._bounded_positive_value(
+                self.refine_translation_step_field,
+                "Translation step",
+                MAX_REFINEMENT_TRANSLATION_M,
+            )
+            rotation_step = math.radians(
+                self._bounded_positive_value(
+                    self.refine_rotation_step_field,
+                    "Rotation step",
+                    MAX_REFINEMENT_ROTATION_DEG,
+                )
+            )
+            translation, pitch, yaw = self._refinement_delta(
+                action,
+                translation_step,
+                rotation_step,
+            )
+            current = session.candidate_pose(stage_value)
+            target = refine_probe_pose(
+                current,
+                self._require_probe_setup()
+                .surface_target.target_pose_object.orientation,
+                local_translation=translation,
+                pitch_rad=pitch,
+                yaw_rad=yaw,
+            )
+            if not self._send_refinement_motion(
+                stage_value,
+                f"{stage} {action.replace('_', ' ')} refinement",
+                target,
+            ):
+                return False
+        except Exception as exception:
+            self._show_setup_error("Refine Probe Pose", exception)
+            return False
+
+        self._set_setup_status(
+            "Refinement sent",
+            "The achieved sensor-tip pose will update the draft after "
+            "movement and settling succeed.",
+        )
+        self._refresh_refinement_dialog()
+        return True
+
+    def handle_test_surface_distance(self):
+        measurement_started = False
+        try:
+            self._require_command_path_idle(require_settled=True)
+            session = self._require_refinement_session()
+            if session.active_stage != RefinementStage.PROBE:
+                raise ValueError("Open the Probe Pose stage first")
+            if self._distance_failure_requires_retraction:
+                raise ValueError(
+                    "Retract after the failed distance measurement before "
+                    "retrying"
+                )
+            if (
+                session.motion_states[RefinementStage.ALIGNMENT]
+                != RefinementMotionState.REACHED
+            ):
+                raise ValueError(
+                    "Reach the current aligned pre-approach pose first"
+                )
+            target_distance = self._distance_value(
+                self.reference_target_distance_field,
+                "Desired surface distance",
+            )
+            tolerance = self._bounded_positive_value(
+                self.surface_distance_tolerance_field,
+                "Surface-distance tolerance",
+                0.05,
+            )
+            maximum_step = min(
+                self._bounded_positive_value(
+                    self.refine_translation_step_field,
+                    "Translation step",
+                    MAX_REFINEMENT_TRANSLATION_M,
+                ),
+                MAX_SURFACE_CORRECTION_STEP_M,
+            )
+            measurement_started = True
+            samples = self._measure_live_surface_distance_samples()
+            aggregate = aggregate_surface_distance_samples(
+                samples,
+                target_distance,
+                maximum_step,
+                tolerance_m=tolerance,
+                minimum_samples=3,
+                minimum_span_sec=SURFACE_DISTANCE_SAMPLE_WINDOW_SEC,
+                stability_tolerance_m=(
+                    SURFACE_DISTANCE_STABILITY_TOLERANCE_M
+                ),
+            )
+            correction = aggregate.correction
+            self.live_surface_distance_value_label.setText(
+                self._format_readout_value(aggregate.distance_m, 4)
+            )
+            self.surface_distance_delta_value_label.setText(
+                self._format_readout_value(correction.error_m, 4)
+            )
+            quality = (
+                f"{aggregate.sample_count} frames over "
+                f"{aggregate.sample_span_sec:.3f} s, peak-to-peak "
+                f"{aggregate.peak_to_peak_m:.4f} m"
+            )
+            if aggregate.verified:
+                current = self._current_probe_pose_object()
+                session.mark_surface_verified(current)
+                self.surface_distance_test_status_label.setText(
+                    f"Surface Distance Verified within {tolerance:.4f} m. "
+                    f"{quality}. Explicit approval is still required."
+                )
+                self._refresh_refinement_dialog()
+                return True
+
+            current = self._current_probe_pose_object()
+            target = refine_probe_pose(
+                current,
+                current.orientation,
+                local_translation=Vector3Data(
+                    x=-correction.inward_correction_m,
+                    y=0.0,
+                    z=0.0,
+                ),
+            )
+            direction = (
+                "inward"
+                if correction.inward_correction_m > 0.0
+                else "outward"
+            )
+            if not self._send_refinement_motion(
+                RefinementStage.PROBE,
+                f"surface-distance {direction} correction",
+                target,
+                axial_correction_m=correction.inward_correction_m,
+            ):
+                if session.recovery_required:
+                    self._distance_failure_requires_retraction = True
+                    self._refresh_refinement_dialog()
+                return False
+        except Exception as exception:
+            session = self._refinement_session
+            if (
+                measurement_started
+                and session is not None
+                and session.recovery_required
+            ):
+                session.require_recovery(
+                    f"Distance Measurement Failed: {exception}"
+                )
+                self._distance_failure_requires_retraction = True
+            self.surface_distance_test_status_label.setText(
+                f"Unavailable: {exception}"
+            )
+            self._show_setup_error("Test Surface Distance", exception)
+            self._refresh_refinement_dialog()
+            return False
+
+        self.surface_distance_test_status_label.setText(
+            f"Measured {aggregate.distance_m:.4f} m, target "
+            f"{target_distance:.4f} m. Sent one "
+            f"{abs(correction.inward_correction_m):.4f} m {direction} "
+            f"correction. {quality}. Measure again after settling."
+        )
+        self._refresh_refinement_dialog()
+        return True
+
+    @staticmethod
+    def _refinement_delta(action, translation_step, rotation_step):
+        translations = {
+            "up": Vector3Data(x=0.0, y=0.0, z=translation_step),
+            "down": Vector3Data(x=0.0, y=0.0, z=-translation_step),
+            "left": Vector3Data(x=0.0, y=translation_step, z=0.0),
+            "right": Vector3Data(x=0.0, y=-translation_step, z=0.0),
+            "front": Vector3Data(x=-translation_step, y=0.0, z=0.0),
+            "back": Vector3Data(x=translation_step, y=0.0, z=0.0),
+        }
+        if action in translations:
+            return translations[action], 0.0, 0.0
+        rotations = {
+            "pitch_up": (-rotation_step, 0.0),
+            "pitch_down": (rotation_step, 0.0),
+            "yaw_left": (0.0, rotation_step),
+            "yaw_right": (0.0, -rotation_step),
+        }
+        if action not in rotations:
+            raise ValueError(f"Unknown refinement action: {action}")
+        pitch, yaw = rotations[action]
+        return Vector3Data.zero(), pitch, yaw
 
     def _move_setup_pose(self, attribute, label):
         try:
@@ -2187,7 +3281,15 @@ class InspectionControls(UIControlHelper):
 
     def handle_use_current_as_approach(self):
         try:
+            self._require_command_path_idle(require_settled=True)
+            session = self._require_refinement_session()
+            if session.active_stage != RefinementStage.SAFE_APPROACH:
+                raise ValueError("Open the Safe Approach Pose stage first")
             current = self._current_probe_pose_object()
+            session.approve(RefinementStage.SAFE_APPROACH, current)
+            session.motion_states[RefinementStage.SAFE_APPROACH] = (
+                RefinementMotionState.REACHED
+            )
             self._probe_setup = approve_safe_approach_pose(
                 self._require_probe_setup(),
                 current,
@@ -2197,43 +3299,326 @@ class InspectionControls(UIControlHelper):
             return
         self._display_probe_setup("Approach approved")
         self._set_status_text("Current probe pose approved as approach pose")
+        self._refresh_refinement_dialog()
+        return True
 
     def handle_use_current_alignment(self):
         try:
+            self._require_command_path_idle(require_settled=True)
+            session = self._require_refinement_session()
+            if session.active_stage != RefinementStage.ALIGNMENT:
+                raise ValueError(
+                    "Open the Aligned Pre-approach Pose stage first"
+                )
+            if (
+                session.motion_states[RefinementStage.SAFE_APPROACH]
+                != RefinementMotionState.REACHED
+            ):
+                raise ValueError(
+                    "Reach the safe approach during this workflow first"
+                )
             current = self._current_probe_pose_object()
+            session.approve(RefinementStage.ALIGNMENT, current)
+            session.motion_states[RefinementStage.ALIGNMENT] = (
+                RefinementMotionState.REACHED
+            )
             self._probe_setup = approve_surface_alignment_pose(
                 self._require_probe_setup(),
                 current,
             )
         except Exception as exception:
-            self._show_setup_error("Capture Surface Alignment", exception)
+            self._show_setup_error(
+                "Capture Aligned Pre-approach Pose",
+                exception,
+            )
             return
-        self._display_probe_setup("Alignment approved")
-        self._set_status_text("Current probe pose approved as alignment")
+        self._display_probe_setup("Aligned pre-approach approved")
+        self._set_status_text(
+            "Current probe pose approved as aligned pre-approach"
+        )
+        self._refresh_refinement_dialog()
+        return True
 
     def handle_use_current_as_probe(self):
-        try:
-            current = self._current_probe_pose_object()
-            self._probe_setup = approve_probe_pose(
-                self._require_probe_setup(),
-                current,
-            )
-        except Exception as exception:
-            self._show_setup_error("Capture Probe Pose", exception)
-            return
-        self._display_probe_setup("Probe approved")
-        self._set_status_text(
-            "Current probe pose approved as final probe pose"
+        self._show_setup_error(
+            "Capture Probe Pose",
+            ValueError(
+                "Probe approval requires verified live surface distance "
+                "and Approve and Retract"
+            ),
         )
+        return False
 
     def _move_transient_probe_pose(self, probe_pose_object, label):
+        session = self._require_refinement_session()
+        return self._send_refinement_motion(
+            session.active_stage,
+            label,
+            probe_pose_object,
+        )
+
+    def _send_refinement_motion(
+        self,
+        stage,
+        label,
+        probe_pose_object,
+        updates_candidate=True,
+        axial_correction_m=0.0,
+    ):
         try:
+            self._require_command_path_idle()
+            session = self._require_refinement_session()
+            if self._retraction_failed and label != "retraction":
+                raise RuntimeError(
+                    "Only retraction is permitted after retraction failure"
+                )
             command = self._build_probe_pose_command(probe_pose_object)
+            motion = PendingRefinementMotion(
+                stage=stage,
+                purpose=label,
+                target_pose_object=deepcopy(probe_pose_object),
+                updates_candidate=updates_candidate,
+                axial_correction_m=axial_correction_m,
+            )
+            session.begin_motion(motion)
         except Exception as exception:
             self._show_setup_error("Move Probe Setup", exception)
-            return
-        self.complex_command_publisher.publish(command)
+            return False
+        try:
+            self.complex_command_publisher.publish(command)
+        except Exception as exception:
+            session.fail_motion(str(exception))
+            self._show_setup_error("Move Probe Setup", exception)
+            return False
+        self._probe_motion_pending = True
         self._set_status_text(f"Command sent: move to {label}")
+        self._refresh_refinement_dialog()
+        return True
+
+    def _complete_pending_refinement_motion(self, generation):
+        if generation != self._motion_completion_generation:
+            return
+        session = self._refinement_session
+        if session is None or session.pending_motion is None:
+            return
+        motion = session.pending_motion
+        try:
+            achieved = self._current_probe_pose_object()
+            position_tolerance = self._distance_value(
+                self.probe_position_tolerance_field,
+                "Position tolerance",
+            )
+            orientation_tolerance = self._distance_value(
+                self.probe_orientation_tolerance_field,
+                "Orientation tolerance",
+            )
+            position_error, orientation_error = self._pose_errors(
+                motion.target_pose_object,
+                achieved,
+            )
+            if position_error > position_tolerance:
+                raise RuntimeError(
+                    "Achieved probe position missed the target by "
+                    f"{position_error:.4f} m"
+                )
+            if orientation_error > orientation_tolerance:
+                raise RuntimeError(
+                    "Achieved probe orientation missed the target by "
+                    f"{math.degrees(orientation_error):.2f} deg"
+                )
+            session.complete_motion(achieved)
+            if motion.purpose == "retraction":
+                session.complete_retraction()
+                self._distance_failure_requires_retraction = False
+                self._retraction_failed = False
+                self.surface_distance_test_status_label.setText(
+                    "Retraction reached the aligned pre-approach pose."
+                )
+                if session.saved:
+                    self.save_probe_point_status_label.setText(
+                        "Probe point saved and retraction completed."
+                    )
+            else:
+                self.surface_distance_test_status_label.setText(
+                    "Movement reached and settled."
+                    if motion.stage == RefinementStage.PROBE
+                    else self.surface_distance_test_status_label.text()
+                )
+        except Exception as exception:
+            self._fail_pending_refinement_motion(str(exception))
+            return
+
+        self._probe_motion_pending = False
+        self._hand_depth_history.clear()
+        self._set_status_text(
+            f"Reached {motion.purpose}; achieved pose verified"
+        )
+        self._refresh_refinement_dialog()
+
+    def _fail_pending_refinement_motion(self, message):
+        session = self._refinement_session
+        motion = session.pending_motion if session is not None else None
+        if session is not None:
+            session.fail_motion(message)
+            if motion is not None and motion.purpose == "retraction":
+                session.require_recovery(
+                    f"Retraction Failed: {message}"
+                )
+                self._retraction_failed = True
+            elif (
+                motion is not None
+                and motion.stage == RefinementStage.PROBE
+            ):
+                session.require_recovery(
+                    f"Probe-axis Movement Failed: {message}"
+                )
+                self._distance_failure_requires_retraction = True
+        self._probe_motion_pending = False
+        self._motion_completion_generation += 1
+        self.refinement_recovery_status_label.setText(message)
+        self._set_status_text(f"Probe refinement movement failed: {message}")
+        self._refresh_refinement_dialog()
+
+    def _clear_refinement_execution_evidence(self, message):
+        session = self._refinement_session
+        if session is None:
+            return
+        session.surface_distance_verified = False
+        for stage in RefinementStage:
+            session.motion_states[stage] = (
+                RefinementMotionState.NOT_TESTED
+            )
+        self._hand_depth_history.clear()
+        self.refinement_recovery_status_label.setText(message)
+        self._update_save_probe_point_state()
+
+    def handle_refinement_emergency_stop(self):
+        """Cancel robot motion while keeping recovery state explicit."""
+        session = self._refinement_session
+        if session is not None:
+            pending = session.pending_motion
+            inward_or_unknown_probe_motion = (
+                session.recovery_required
+                or (
+                    pending is not None
+                    and pending.stage == RefinementStage.PROBE
+                )
+            )
+            if pending is not None:
+                session.fail_motion("Emergency stop triggered")
+            if inward_or_unknown_probe_motion:
+                session.require_recovery(
+                    "Emergency stop triggered after probe-axis motion. "
+                    "Verify clearance, then retract to the aligned "
+                    "pre-approach pose."
+                )
+            else:
+                self._clear_refinement_execution_evidence(
+                    "Emergency stop triggered. Movement evidence was "
+                    "cleared; re-establish the ordered workflow."
+                )
+        self._probe_motion_pending = False
+        self._motion_completion_generation += 1
+        self.ui.handle_simple_command(CommandID.EMERGENCY_CANCEL)
+        self._refresh_refinement_dialog()
+
+    @staticmethod
+    def _pose_errors(target, achieved):
+        position_error = math.sqrt(
+            (target.position.x - achieved.position.x) ** 2
+            + (target.position.y - achieved.position.y) ** 2
+            + (target.position.z - achieved.position.z) ** 2
+        )
+        dot = abs(
+            target.orientation.x * achieved.orientation.x
+            + target.orientation.y * achieved.orientation.y
+            + target.orientation.z * achieved.orientation.z
+            + target.orientation.w * achieved.orientation.w
+        )
+        orientation_error = 2.0 * math.acos(
+            max(-1.0, min(1.0, dot))
+        )
+        return position_error, orientation_error
+
+    def _require_command_path_idle(self, require_settled=False):
+        buffer_text = getattr(self.ui, "_buffer_text", "Buffer: []")
+        if buffer_text != "Buffer: []":
+            raise RuntimeError("Command buffer must be empty")
+        if (
+            self._probe_motion_pending
+            or self._command_status.startswith("Running:")
+        ):
+            raise RuntimeError("Wait for the current robot command to finish")
+        if require_settled:
+            elapsed = (
+                time.monotonic()
+                - self._last_command_completion_monotonic
+            )
+            if elapsed < PROBE_MOTION_SETTLE_SEC:
+                remaining = PROBE_MOTION_SETTLE_SEC - elapsed
+                raise RuntimeError(
+                    "Wait for the arm to settle for another "
+                    f"{remaining:.2f} s"
+                )
+
+    def _measure_live_surface_distance_samples(self):
+        if self.node is None:
+            raise RuntimeError("ROS is unavailable in the inspection UI")
+        camera_info = self._latest_hand_depth_camera_info
+        if camera_info is None:
+            raise ValueError("No live registered hand-depth sample is available")
+        required_receipt_time = (
+            self._last_command_completion_monotonic
+            + PROBE_MOTION_SETTLE_SEC
+        )
+        now = self.node.get_clock().now()
+        samples = []
+        errors = []
+        for _, receipt_time, depth_image in self._hand_depth_history:
+            if receipt_time < required_receipt_time:
+                continue
+            try:
+                stamp = Time.from_msg(depth_image.header.stamp)
+                if stamp.nanoseconds <= 0:
+                    raise ValueError("Live hand-depth timestamp is empty")
+                age_seconds = (now - stamp).nanoseconds * 1e-9
+                if age_seconds < -0.05:
+                    raise ValueError(
+                        "Live hand-depth timestamp is in the future"
+                    )
+                if age_seconds > MAX_LIVE_DEPTH_AGE_SEC:
+                    continue
+                depth_frame = (
+                    depth_image.header.frame_id.strip()
+                    or camera_info.header.frame_id.strip()
+                )
+                if not depth_frame:
+                    raise ValueError("Live hand-depth frame is empty")
+                probe_to_camera = self._lookup_pose(
+                    self._active_probe_frame(),
+                    depth_frame,
+                    lookup_time=stamp,
+                )
+                samples.append(
+                    measure_probe_surface_distance(
+                        depth_image,
+                        camera_info,
+                        probe_to_camera,
+                    )
+                )
+            except Exception as exception:
+                errors.append(str(exception))
+        if len(samples) < 3:
+            detail = f" Last rejection: {errors[-1]}" if errors else ""
+            raise ValueError(
+                "Fewer than three valid post-settle depth frames are "
+                f"available.{detail}"
+            )
+        return samples
+
+    def _measure_live_surface_distance(self):
+        samples = self._measure_live_surface_distance_samples()
+        return samples[-1]
 
     def _build_probe_pose_command(self, probe_pose_object):
         probe_pose_object.validate()
@@ -2292,13 +3677,18 @@ class InspectionControls(UIControlHelper):
             raise ValueError("Sensor mounting must be selected")
         return sensor_probe_frame(sensor_id)
 
-    def _lookup_pose(self, target_frame, source_frame):
+    def _lookup_pose(
+        self,
+        target_frame,
+        source_frame,
+        lookup_time=None,
+    ):
         if self._tf_buffer is None:
             raise RuntimeError("TF is unavailable in the inspection UI")
         transform = self._tf_buffer.lookup_transform(
             target_frame,
             source_frame,
-            Time(),
+            lookup_time or Time(),
             timeout=Duration(seconds=0.5),
         )
         value = transform.transform
@@ -2322,14 +3712,53 @@ class InspectionControls(UIControlHelper):
         if self._selected_definition is None:
             raise ValueError("No inspection object is selected")
         tag_id = self._selected_definition.reference_tag.tag_id
-        visible_tags = getattr(self.ui, "visible_tags", {})
-        tag = visible_tags.get(tag_id)
+        if self.node is not None:
+            return self._stable_reference_tag(tag_id)
+        base_tags = getattr(self.ui, "base_tags", None)
+        if base_tags is None:
+            base_tags = getattr(self.ui, "visible_tags", {})
+        tag = base_tags.get(tag_id)
         if tag is None:
             raise ValueError(
-                f"Reference tag {tag_id} must be currently visible"
+                f"Base-camera reference tag {tag_id} must be visible"
             )
         if not tag.pose.header.frame_id.strip():
             raise ValueError("Reference tag pose frame is empty")
+        return tag
+
+    def _stable_reference_tag(self, tag_id):
+        history = self._base_tag_histories.get(tag_id, ())
+        samples = []
+        messages_by_stamp = {}
+        for stamp_key, tag in history:
+            stamp_seconds = (
+                float(stamp_key[0]) + float(stamp_key[1]) * 1e-9
+            )
+            samples.append(
+                TagPoseSample(
+                    stamp_seconds=stamp_seconds,
+                    frame_id=tag.pose.header.frame_id.strip(),
+                    pose=self._pose_data_from_message(tag.pose.pose),
+                )
+            )
+            messages_by_stamp[stamp_seconds] = tag
+        now_seconds = self.node.get_clock().now().nanoseconds * 1e-9
+        stable = stabilize_tag_pose(
+            samples,
+            now_seconds=now_seconds,
+            maximum_age_sec=BASE_TAG_MAXIMUM_AGE_SEC,
+            minimum_samples=3,
+            minimum_span_sec=BASE_TAG_STABILIZATION_WINDOW_SEC,
+        )
+        tag = deepcopy(messages_by_stamp[stable.newest_stamp_seconds])
+        tag.pose.header.frame_id = stable.frame_id
+        tag.pose.pose.position.x = stable.pose.position.x
+        tag.pose.pose.position.y = stable.pose.position.y
+        tag.pose.pose.position.z = stable.pose.position.z
+        self._write_quaternion_message(
+            tag.pose.pose.orientation,
+            stable.pose.orientation,
+        )
         return tag
 
     def _require_probe_setup(self):
@@ -2380,6 +3809,13 @@ class InspectionControls(UIControlHelper):
             raise ValueError(f"{label} must be a number") from exception
         if value <= 0.0:
             raise ValueError(f"{label} must be positive")
+        return value
+
+    @staticmethod
+    def _bounded_positive_value(field, label, maximum):
+        value = InspectionControls._distance_value(field, label)
+        if value > maximum:
+            raise ValueError(f"{label} must not exceed {maximum:g}")
         return value
 
     def _required_text(self, field, label):

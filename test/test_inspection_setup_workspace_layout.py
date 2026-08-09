@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QLabel
+from PyQt5.QtWidgets import QApplication, QGroupBox, QLabel
 
 from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
     InspectionControls,
@@ -80,6 +80,7 @@ def test_workspace_uses_three_camera_slots_and_workflow_tabs(
     assert controls.geometry_details_section.content_frame.isHidden()
     assert not controls.save_probe_point_button.isEnabled()
 
+
 def test_management_controls_live_in_non_modal_dialog(
     application,
     tmp_path,
@@ -122,3 +123,28 @@ def test_transient_approval_statuses_update_all_tabs(
     assert controls.save_approach_status_label.text() == "Approved"
     assert controls.save_alignment_status_label.text() == "Approved"
     assert controls.save_probe_status_label.text() == "Not approved"
+
+
+def test_refine_tab_uses_stage_safe_controls(application, tmp_path):
+    controls = InspectionControls(FakeUI(tmp_path))
+
+    group_titles = {
+        group.title()
+        for group in controls.workflow_tabs.findChildren(QGroupBox)
+    }
+    assert "Workflow Summary" in group_titles
+    assert not controls.refinement_dialog.isModal()
+    assert controls.refinement_dialog.stage_stack.count() == 3
+    assert controls.move_aligned_pose_button.text() == "Move to Candidate"
+    assert controls.use_current_alignment_button.text() == (
+        "Approve Current Pose"
+    )
+    assert "front" in controls.refinement_buttons["approach"]
+    assert "back" in controls.refinement_buttons["approach"]
+    assert "front" not in controls.refinement_buttons["alignment"]
+    assert "back" not in controls.refinement_buttons["alignment"]
+    assert controls.refinement_buttons["probe"] == {}
+    assert controls.test_surface_distance_button.text() == (
+        "Test Surface Distance"
+    )
+    assert not controls.test_surface_distance_button.isEnabled()

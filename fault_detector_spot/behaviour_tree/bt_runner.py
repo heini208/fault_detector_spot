@@ -399,7 +399,7 @@ def build_capture_reference_view_behavior(
         base_tag_topic=read_parameter(
             node,
             "inspection.reference_view_base_tag_topic",
-            "fault_detector/state/visible_tags",
+            "fault_detector/state/base_tags",
         ),
         object_root=object_root or None,
         synchronization_queue_size=int(read_parameter(

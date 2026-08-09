@@ -189,6 +189,7 @@ def test_distance_change_recalculates_target(application, tmp_path):
     )
 
     controls.reference_target_distance_field.setText("0.08")
+    controls.reference_preapproach_distance_field.setText("0.15")
     controls._handle_target_distance_changed()
 
     new_position = (
@@ -197,12 +198,15 @@ def test_distance_change_recalculates_target(application, tmp_path):
     assert new_position - old_position == pytest.approx(0.05)
 
 
-def test_standoff_clearance_is_added_to_target(application, tmp_path):
-    """The per-point clearance is added to target surface distance."""
+def test_preapproach_field_uses_absolute_surface_distance(
+    application,
+    tmp_path,
+):
+    """The two UI distances remain independent absolute values."""
     controls = InspectionControls(FakeUI(tmp_path))
     configure_reference(controls, [1.0] * 121)
     controls.reference_target_distance_field.setText("0.10")
-    controls.reference_preapproach_distance_field.setText("0.05")
+    controls.reference_preapproach_distance_field.setText("0.15")
 
     controls._project_selected_reference_pixel(5, 5)
 

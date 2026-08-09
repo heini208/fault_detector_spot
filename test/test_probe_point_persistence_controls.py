@@ -148,7 +148,7 @@ def test_save_persists_the_approved_geometry_and_rgb_provenance(
     )
     assert point.probe_pose_object.position.x == pytest.approx(0.03)
     assert point.target_surface_distance_m == pytest.approx(0.03)
-    assert point.preapproach_distance_m == pytest.approx(0.05)
+    assert point.aligned_preapproach_distance_m == pytest.approx(0.08)
     assert point.position_tolerance_m == pytest.approx(0.01)
     assert point.orientation_tolerance_rad == pytest.approx(0.087)
     assert point.measurement_duration_sec == pytest.approx(1.0)

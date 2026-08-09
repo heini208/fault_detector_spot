@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from .models import InspectionObject, PoseData, Vector3Data
 from .reference_probe_setup import (
     compose_poses,
+    derive_aligned_preapproach_pose,
     probe_pose_to_hand_pose,
     rotate_vector,
 )
@@ -24,6 +25,8 @@ class ProbeExecutionTarget:
     execution_frame: str
     safe_approach_probe_pose_execution: PoseData
     safe_approach_hand_pose_execution: PoseData
+    aligned_preapproach_probe_pose_execution: PoseData
+    aligned_preapproach_hand_pose_execution: PoseData
     nominal_probe_pose_execution: PoseData
     nominal_hand_pose_execution: PoseData
     inward_direction_execution: Vector3Data
@@ -31,7 +34,7 @@ class ProbeExecutionTarget:
     position_tolerance_m: float
     orientation_tolerance_rad: float
     measurement_duration_sec: float
-    preapproach_distance_m: float
+    aligned_preapproach_distance_m: float
     sensor_path: str | None
 
 
@@ -75,12 +78,25 @@ def resolve_probe_execution_target(
         object_pose_execution,
         probe_point.safe_approach_pose_object,
     )
+    aligned_probe_pose_object = derive_aligned_preapproach_pose(
+        probe_point.probe_pose_object,
+        probe_point.target_surface_distance_m,
+        probe_point.aligned_preapproach_distance_m,
+    )
+    aligned_probe_pose = compose_poses(
+        object_pose_execution,
+        aligned_probe_pose_object,
+    )
     nominal_probe_pose = compose_poses(
         object_pose_execution,
         probe_point.probe_pose_object,
     )
     safe_hand_pose = probe_pose_to_hand_pose(
         safe_probe_pose,
+        sensor_definition.hand_to_probe,
+    )
+    aligned_hand_pose = probe_pose_to_hand_pose(
+        aligned_probe_pose,
         sensor_definition.hand_to_probe,
     )
     nominal_hand_pose = probe_pose_to_hand_pose(
@@ -101,6 +117,12 @@ def resolve_probe_execution_target(
         execution_frame=execution_frame,
         safe_approach_probe_pose_execution=deepcopy(safe_probe_pose),
         safe_approach_hand_pose_execution=deepcopy(safe_hand_pose),
+        aligned_preapproach_probe_pose_execution=deepcopy(
+            aligned_probe_pose
+        ),
+        aligned_preapproach_hand_pose_execution=deepcopy(
+            aligned_hand_pose
+        ),
         nominal_probe_pose_execution=deepcopy(nominal_probe_pose),
         nominal_hand_pose_execution=deepcopy(nominal_hand_pose),
         inward_direction_execution=deepcopy(inward_direction),
@@ -114,6 +136,8 @@ def resolve_probe_execution_target(
         measurement_duration_sec=(
             probe_point.measurement_duration_sec
         ),
-        preapproach_distance_m=probe_point.preapproach_distance_m,
+        aligned_preapproach_distance_m=(
+            probe_point.aligned_preapproach_distance_m
+        ),
         sensor_path=probe_point.sensor_path,
     )

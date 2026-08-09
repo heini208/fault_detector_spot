@@ -6,7 +6,12 @@ from typing import Tuple
 
 import numpy as np
 
-from .models import PoseData, QuaternionData, Vector3Data
+from .models import (
+    MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
+    PoseData,
+    QuaternionData,
+    Vector3Data,
+)
 from .reference_view_approach_direction import ReferenceApproachDirection
 
 
@@ -40,10 +45,21 @@ def resolve_reference_surface_target(
         aligned_preapproach_distance_m,
         "Aligned pre-approach distance",
     )
-    if aligned_preapproach_distance_m <= target_surface_distance_m:
+    separation = (
+        aligned_preapproach_distance_m - target_surface_distance_m
+    )
+    if (
+        separation < MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M
+        and not math.isclose(
+            separation,
+            MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+    ):
         raise ValueError(
-            "Aligned pre-approach distance must be greater than the "
-            "target surface distance"
+            "Aligned pre-approach distance must be at least 0.05 m "
+            "greater than the target surface distance"
         )
 
     controlled_frame_pose_object.validate()

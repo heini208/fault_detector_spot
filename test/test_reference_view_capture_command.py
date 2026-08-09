@@ -313,7 +313,7 @@ def test_setup_keeps_one_shared_tag_subscription(monkeypatch):
     assert behavior._synchronizers == {}
     assert created["synchronizers"] == {}
     assert [subscription.topic for subscription in node.subscriptions] == [
-        "fault_detector/state/visible_tags"
+        "fault_detector/state/base_tags"
     ]
 
 

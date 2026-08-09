@@ -159,8 +159,9 @@ def test_target_and_aligned_positions_use_their_own_distances():
     [
         (0.0, 0.15, "Target surface distance"),
         (0.03, 0.0, "Aligned pre-approach distance"),
-        (0.03, 0.03, "must be greater"),
-        (0.10, 0.05, "must be greater"),
+        (0.03, 0.03, "at least 0.05 m"),
+        (0.03, 0.079, "at least 0.05 m"),
+        (0.10, 0.05, "at least 0.05 m"),
     ],
 )
 def test_invalid_distances_are_rejected(
@@ -175,6 +176,17 @@ def test_invalid_distances_are_rejected(
             target_surface_distance_m=target_distance,
             aligned_preapproach_distance_m=preapproach_distance,
         )
+
+
+def test_exact_minimum_distance_separation_is_accepted():
+    result = resolve_reference_surface_target(
+        approach((0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),
+        PoseData.identity(),
+        target_surface_distance_m=0.10,
+        aligned_preapproach_distance_m=0.15,
+    )
+
+    assert result.aligned_preapproach_distance_m == pytest.approx(0.15)
 
 
 def test_quaternion_to_rpy_reports_generated_yaw():

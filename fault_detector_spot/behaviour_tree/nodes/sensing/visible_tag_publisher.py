@@ -18,6 +18,9 @@ class PublishTagStates(py_trees.behaviour.Behaviour):
         super().__init__(name)
         self.node: Optional[Node] = None
         self.tag_publisher: Optional[rclpy.publisher.Publisher] = None
+        self.base_tag_publisher: Optional[
+            rclpy.publisher.Publisher
+        ] = None
         self.reachable_tag_publisher: Optional[rclpy.publisher.Publisher] = None
         self.blackboard = self.attach_blackboard_client()
 
@@ -29,6 +32,11 @@ class PublishTagStates(py_trees.behaviour.Behaviour):
                 "fault_detector/state/visible_tags",
                 10
             )
+            self.base_tag_publisher = self.node.create_publisher(
+                TagElementArray,
+                "fault_detector/state/base_tags",
+                10,
+            )
             self.reachable_tag_publisher = self.node.create_publisher(
                 TagElementArray,
                 "fault_detector/state/reachable_tags",
@@ -37,6 +45,10 @@ class PublishTagStates(py_trees.behaviour.Behaviour):
 
             self.blackboard.register_key("visible_tags", access=py_trees.common.Access.READ)
             self.blackboard.register_key("reachable_tags", access=py_trees.common.Access.READ)
+            self.blackboard.register_key(
+                "base_tag_observations",
+                access=py_trees.common.Access.READ,
+            )
 
             self.logger.info("PublishTagStates node initialized.")
         except KeyError as e:
@@ -45,6 +57,11 @@ class PublishTagStates(py_trees.behaviour.Behaviour):
     def update(self) -> py_trees.common.Status:
         visible_tags: Dict[int, TagElement] = getattr(self.blackboard, "visible_tags", {})
         reachable_tags: Dict[int, TagElement] = getattr(self.blackboard, "reachable_tags", {})
+        base_tags: Dict[int, TagElement] = getattr(
+            self.blackboard,
+            "base_tag_observations",
+            {},
+        )
 
         visible_msg = TagElementArray()
         visible_msg.elements = list(visible_tags.values())
@@ -52,10 +69,15 @@ class PublishTagStates(py_trees.behaviour.Behaviour):
         reachable_msg = TagElementArray()
         reachable_msg.elements = list(reachable_tags.values())
 
+        base_msg = TagElementArray()
+        base_msg.elements = list(base_tags.values())
+
         if self.tag_publisher:
             self.tag_publisher.publish(visible_msg)
         if self.reachable_tag_publisher:
             self.reachable_tag_publisher.publish(reachable_msg)
+        if self.base_tag_publisher:
+            self.base_tag_publisher.publish(base_msg)
 
         self.feedback_message = (
             f"Published {len(visible_tags)} visible and {len(reachable_tags)} reachable tag(s)"
