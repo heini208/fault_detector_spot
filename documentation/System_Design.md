@@ -472,10 +472,18 @@ into behaviour tree-compatible actions.
 A *command* represents an instruction for the system to perform a specific operation, such as moving the robot base, manipulating the arm, or executing a
 scanning procedure. These commands can be broadly divided into two categories: **Basic Commands** and **Complex Commands**.
 
-Basic Commands are minimal instructions that only contain a command identifier. They represent discrete, self-contained operations like starting or stopping a
+Basic Commands are minimal instructions that contain a command identifier and a unique request ID. They represent discrete, self-contained operations like starting or stopping a
 behaviour, toggling a component state, or triggering an emergency stop. Complex Commands, in contrast, can carry additional contextual information. This may
 include spatial offsets, tag references, orientation modes, timing parameters, or mapping context. Complex commands enable parameterized control and are
 represented by separate ROS2 message types that expand on the `BasicCommand` structure.
+
+The request ID is generated for every live command and regenerated for every recorded playback. It is never persisted as part of a recording. Robot motion
+completion is accepted only when the structured result carries the same request ID. Human-readable status text is display-only and must not drive execution or
+safety decisions.
+
+Long-running, cancellable workflows use ROS2 actions instead of the generic command buffer. The saved probe-point execution contract is
+`ExecuteProbePoint.action`. Its goal contains semantic object, routine, and probe-point IDs, while the ROS2 action goal UUID provides execution correlation,
+feedback, cancellation, and terminal result state.
 
 Although multiple specialized message types could have been defined for each command variation, this approach was intentionally avoided. While having distinct
 message definitions would provide stronger type safety, it would also increase the development effort required when introducing new command types. The chosen
@@ -890,20 +898,22 @@ information in a robust, one-shot way.
 
 ## 8.2 Command and Buffer Status (BufferStatusPublisher)
 
-[`BufferStatusPublisher`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fbt_runner.py) reads the current command buffer and command-tree status from the blackboard and publishes them as simple text messages:
+[`BufferStatusPublisher`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fbt_runner.py) reads the current command buffer and command-tree status from the blackboard and publishes both structured state and display text:
 
 - `fault_detector/command_buffer`: textual representation of queued command IDs.
 - `fault_detector/command_tree_status`: high-level execution state (e.g. `IDLE`, `Running: MOVE_ARM_TO_TAG`, `SUCCESS`, `FAILURE`).
+- `fault_detector/command_status`: authoritative request ID, command ID, state, detail, and buffered-command count.
 
 Key aspects:
 
 - Reads `command_buffer`, `command_tree_status`, and `last_command` from the blackboard.
 - Publishes the buffer contents on every tick for up-to-date visualization.
-- Only republishes status when it changes, reducing unnecessary traffic.
+- Publishes structured status when the request, state, detail, or buffer count changes.
+- Keeps the two textual topics for operator display only.
 
 **Rationale:**  
-Operators and external tools should be able to see what the system is doing without inspecting internal BT structures. These two topics provide a concise,
-human-readable view of queued and running commands.
+Operators and external tools should be able to see what the system is doing without inspecting internal BT structures. Text topics provide the concise display,
+while `CommandStatus` supplies machine-readable correlation and queue state.
 
 ## 8.3 Tag State Publishing (PublishTagStates)
 
@@ -1597,8 +1607,9 @@ debug the system in real-time.
 ## 12.1 Design Rationale and Architecture
 
 The UI is intentionally loosely coupled to the rest of the system, prioritizing expandability and testability. This is achieved by ensuring all communication
-between the UI and the robot's control logic occurs exclusively through the public ROS2 topics defined by the system architecture. The UI acts as a client,
-publishing [`ComplexCommand`](https://github.com/heini208/fault_detector_msgs/blob/main/msg/ComplexCommand.msg) messages to send instructions and subscribing to various feedback topics to receive state updates.
+between the UI and the robot's control logic occurs exclusively through public ROS2 interfaces defined by the system architecture. The UI acts as a client,
+publishing [`ComplexCommand`](https://github.com/heini208/fault_detector_msgs/blob/main/msg/ComplexCommand.msg) messages for discrete instructions, using actions
+for long-running cancellable workflows, and subscribing to structured feedback topics for state updates.
 
 This architectural separation is a critical feature, as it means the UI can be modified or even completely replaced without any changes to the underlying
 behaviour tree or robot-side logic. Any alternative client-such as a command-line tool, a web-based interface, or a future AI-driven control agent-could be

@@ -3,11 +3,13 @@
 from enum import Enum
 from types import SimpleNamespace
 
+from builtin_interfaces.msg import Time
 from py_trees.common import Status
 
 from fault_detector_spot.behaviour_tree.nodes.sensing.buffer_and_status_publisher import (
     BufferStatusPublisher,
 )
+from fault_detector_spot.request_identity import new_request_id
 
 
 class FakePublisher:
@@ -26,10 +28,21 @@ def behavior(status=Status.SUCCESS, command_id="move_to_tag"):
     result.blackboard = SimpleNamespace(
         command_buffer=[],
         command_tree_status=status,
-        last_command=SimpleNamespace(command_id=command_id),
+        last_command=SimpleNamespace(
+            command_id=command_id,
+            request_id=new_request_id(),
+        ),
+    )
+    result.node = SimpleNamespace(
+        get_clock=lambda: SimpleNamespace(
+            now=lambda: SimpleNamespace(
+                to_msg=lambda: Time(sec=7, nanosec=11)
+            )
+        )
     )
     result.buffer_pub = FakePublisher()
     result.status_pub = FakePublisher()
+    result.structured_status_pub = FakePublisher()
     return result
 
 
@@ -57,7 +70,8 @@ def test_new_running_command_produces_a_new_correlated_transition():
     result.update()
     result.blackboard.command_tree_status = Status.RUNNING
     result.blackboard.last_command = SimpleNamespace(
-        command_id="cancel_all"
+        command_id="cancel_all",
+        request_id=new_request_id(),
     )
 
     result.update()

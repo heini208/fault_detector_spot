@@ -6,11 +6,11 @@ from dataclasses import dataclass
 import numpy as np
 
 from .models import (
-    MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
     PoseData,
     QuaternionData,
     Vector3Data,
 )
+from .surface_distance_validation import validate_surface_distance_pair
 from .reference_view_surface_target import ReferenceSurfaceTarget
 
 
@@ -409,35 +409,10 @@ def _validated_distance_delta(
     target_surface_distance_m: float,
     aligned_preapproach_distance_m: float,
 ) -> float:
-    values = (
+    return validate_surface_distance_pair(
         target_surface_distance_m,
         aligned_preapproach_distance_m,
     )
-    if not all(math.isfinite(value) for value in values):
-        raise ValueError("Probe surface distances must be finite")
-    if target_surface_distance_m < 0.0:
-        raise ValueError("Target surface distance must not be negative")
-    if aligned_preapproach_distance_m <= 0.0:
-        raise ValueError(
-            "Aligned pre-approach distance must be positive"
-        )
-    distance_delta = (
-        aligned_preapproach_distance_m - target_surface_distance_m
-    )
-    if (
-        distance_delta < MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M
-        and not math.isclose(
-            distance_delta,
-            MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
-            rel_tol=0.0,
-            abs_tol=1e-12,
-        )
-    ):
-        raise ValueError(
-            "Aligned pre-approach distance must be at least 0.05 m "
-            "greater than the target surface distance"
-        )
-    return distance_delta
 
 
 def _validate_setup(setup: ReferenceProbeSetup) -> None:
@@ -456,11 +431,6 @@ def _validate_surface_target(surface_target: ReferenceSurfaceTarget) -> None:
     surface_target.outward_direction_object.validate()
     surface_target.target_pose_object.validate()
     surface_target.aligned_preapproach_pose_object.validate()
-    if (
-        not math.isfinite(surface_target.target_surface_distance_m)
-        or surface_target.target_surface_distance_m <= 0.0
-    ):
-        raise ValueError("Target surface distance must be positive")
     _validated_distance_delta(
         surface_target.target_surface_distance_m,
         surface_target.aligned_preapproach_distance_m,

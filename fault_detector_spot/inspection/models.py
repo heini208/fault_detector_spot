@@ -4,8 +4,16 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
+from . import surface_distance_validation as _surface_distance_validation
 
-MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M = 0.05
+
+MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M = (
+    _surface_distance_validation.MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M
+)
+validate_surface_distance_pair = (
+    _surface_distance_validation.validate_surface_distance_pair
+)
+
 
 
 def _require_dict(data: Any, field_name: str) -> Dict[str, Any]:
@@ -382,10 +390,6 @@ class ProbePoint:
             raise ValueError(
                 "Probe point contains a non-finite numeric value"
             )
-        if self.target_surface_distance_m < 0.0:
-            raise ValueError(
-                "Target surface distance must not be negative"
-            )
         if self.position_tolerance_m <= 0.0:
             raise ValueError(
                 "Position tolerance must be positive"
@@ -398,27 +402,10 @@ class ProbePoint:
             raise ValueError(
                 "Measurement duration must be positive"
             )
-        if self.aligned_preapproach_distance_m <= 0.0:
-            raise ValueError(
-                "Aligned pre-approach distance must be positive"
-            )
-        separation = (
-            self.aligned_preapproach_distance_m
-            - self.target_surface_distance_m
+        validate_surface_distance_pair(
+            self.target_surface_distance_m,
+            self.aligned_preapproach_distance_m,
         )
-        if (
-            separation < MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M
-            and not math.isclose(
-                separation,
-                MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
-                rel_tol=0.0,
-                abs_tol=1e-12,
-            )
-        ):
-            raise ValueError(
-                "Aligned pre-approach distance must be at least 0.05 m "
-                "greater than the target surface distance"
-            )
         if self.reference_pixel is not None:
             self.reference_pixel.validate()
             if self.reference_view_id is None:

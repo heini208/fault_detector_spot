@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
 import rclpy
 from fault_detector_msgs.msg import (
     BasicCommand,
+    CommandStatus,
     ComplexCommand,
     StringArray,
     TagElementArray,
@@ -26,6 +27,7 @@ from fault_detector_spot.behaviour_tree.QOS_PROFILES import (
     LATCHED_QOS,
 )
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
+from fault_detector_spot.request_identity import new_request_id
 from rclpy.node import Node
 from std_msgs.msg import Header, String
 
@@ -226,6 +228,12 @@ class Fault_Detector_UI(QWidget):
             self._process_command_status,
             10,
         )
+        self.structured_cmd_status_sub = self.node.create_subscription(
+            CommandStatus,
+            "fault_detector/command_status",
+            self._process_structured_command_status,
+            10,
+        )
         self.available_frames_sub = self.node.create_subscription(
             StringArray,
             "fault_detector/state/available_frames",
@@ -279,7 +287,12 @@ class Fault_Detector_UI(QWidget):
 
     def _process_command_status(self, msg: String):
         self.command_status_label.setText(f"Command: {msg.data}")
-        self.inspection_controls.handle_command_status(msg.data)
+
+    def _process_structured_command_status(
+        self,
+        msg: CommandStatus,
+    ):
+        self.inspection_controls.handle_command_status(msg)
 
     def _process_available_frames(self, msg: StringArray):
         self.available_frames = list(msg.names)
@@ -291,6 +304,7 @@ class Fault_Detector_UI(QWidget):
         cmd.header = Header()
         cmd.header.stamp = self.node.get_clock().now().to_msg()
         cmd.command_id = command_id
+        cmd.request_id = new_request_id()
         return cmd
 
     def handle_simple_command(self, command_id: str):

@@ -78,7 +78,7 @@ def test_workspace_uses_three_camera_slots_and_workflow_tabs(
         for index in range(controls.workflow_tabs.count())
     ] == ["Target", "Refine", "Save"]
     assert controls.geometry_details_section.content_frame.isHidden()
-    assert not controls.save_probe_point_button.isEnabled()
+    assert not hasattr(controls, "save_probe_point_button")
 
 
 def test_management_controls_live_in_non_modal_dialog(

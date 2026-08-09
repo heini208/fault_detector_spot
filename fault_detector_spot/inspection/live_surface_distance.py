@@ -8,6 +8,7 @@ from sensor_msgs.msg import CameraInfo, Image
 
 from .models import PoseData
 from .reference_view_depth_projection import ImageRegion
+from .surface_distance_validation import require_positive_finite_distance
 
 
 @dataclass(frozen=True)
@@ -171,8 +172,7 @@ def bounded_surface_distance_correction(
         ("Maximum correction step", maximum_step_m),
         ("Surface-distance tolerance", tolerance_m),
     ):
-        if not math.isfinite(value) or value <= 0.0:
-            raise ValueError(f"{label} must be positive and finite")
+        require_positive_finite_distance(value, label)
     error_m = measured_distance_m - target_distance_m
     if abs(error_m) <= tolerance_m:
         inward_correction_m = 0.0
@@ -206,8 +206,7 @@ def aggregate_surface_distance_samples(
         ("Minimum sampling span", minimum_span_sec),
         ("Distance stability tolerance", stability_tolerance_m),
     ):
-        if not math.isfinite(value) or value <= 0.0:
-            raise ValueError(f"{label} must be positive and finite")
+        require_positive_finite_distance(value, label)
     if (
         isinstance(minimum_samples, bool)
         or not isinstance(minimum_samples, int)

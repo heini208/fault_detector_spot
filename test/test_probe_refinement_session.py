@@ -5,6 +5,7 @@ import math
 
 import pytest
 
+from fault_detector_spot.request_identity import new_request_id
 from fault_detector_spot.inspection.models import (
     PoseData,
     QuaternionData,
@@ -63,6 +64,7 @@ def calculated_setup():
 def motion(stage, target, purpose="test", correction=0.0):
     """Create a pending motion for state-machine tests."""
     return PendingRefinementMotion(
+        request_id=new_request_id(),
         stage=stage,
         purpose=purpose,
         target_pose_object=target,
@@ -72,8 +74,9 @@ def motion(stage, target, purpose="test", correction=0.0):
 
 def reach(session, stage, target):
     """Begin and complete one verified motion."""
-    session.begin_motion(motion(stage, target))
-    session.complete_motion(target)
+    pending = motion(stage, target)
+    session.begin_motion(pending)
+    session.complete_motion(pending.request_id, target)
 
 
 def test_session_starts_at_first_unapproved_stage():
@@ -142,7 +145,7 @@ def test_axial_correction_is_bounded_and_keeps_aligned_candidate():
         correction=0.02,
     )
     session.begin_motion(pending)
-    session.complete_motion(pose(x=0.06))
+    session.complete_motion(pending.request_id, pose(x=0.06))
 
     assert session.recovery_required
     assert session.cumulative_inward_travel_m == pytest.approx(0.02)
@@ -220,4 +223,21 @@ def test_successful_retraction_clears_only_recovery_evidence():
     )
     assert session.motion_states[RefinementStage.PROBE] == (
         RefinementMotionState.NOT_TESTED
+    )
+
+
+def test_stale_motion_result_cannot_complete_current_request():
+    session = ProbeRefinementSession.create(calculated_setup())
+    pending = motion(
+        RefinementStage.SAFE_APPROACH,
+        pose(x=0.30),
+    )
+    session.begin_motion(pending)
+
+    with pytest.raises(RuntimeError, match="request ID does not match"):
+        session.complete_motion(new_request_id(), pose(x=0.30))
+
+    assert session.pending_motion is pending
+    assert session.motion_states[RefinementStage.SAFE_APPROACH] == (
+        RefinementMotionState.MOVING
     )

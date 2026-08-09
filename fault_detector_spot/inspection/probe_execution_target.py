@@ -10,6 +10,11 @@ from .reference_probe_setup import (
     rotate_vector,
 )
 from .sensor_models import SensorDefinition
+from .sensor_models import sensor_probe_frame
+from .surface_distance_validation import (
+    require_positive_finite_distance,
+    validate_surface_distance_pair,
+)
 
 
 @dataclass(frozen=True)
@@ -73,14 +78,77 @@ def resolve_probe_execution_target(
             f"{routine_id}"
         )
 
+    return resolve_probe_execution_geometry(
+        object_id=inspection_object.object_id,
+        routine_id=routine.routine_id,
+        probe_point_id=probe_point.probe_point_id,
+        sensor_id=sensor_definition.sensor_id,
+        safe_approach_pose_object=probe_point.safe_approach_pose_object,
+        probe_pose_object=probe_point.probe_pose_object,
+        hand_to_probe=sensor_definition.hand_to_probe,
+        target_surface_distance_m=probe_point.target_surface_distance_m,
+        position_tolerance_m=probe_point.position_tolerance_m,
+        orientation_tolerance_rad=probe_point.orientation_tolerance_rad,
+        measurement_duration_sec=probe_point.measurement_duration_sec,
+        aligned_preapproach_distance_m=(
+            probe_point.aligned_preapproach_distance_m
+        ),
+        sensor_path=probe_point.sensor_path,
+        object_pose_execution=object_pose_execution,
+        execution_frame=execution_frame,
+    )
+
+
+def resolve_probe_execution_geometry(
+    object_id: str,
+    routine_id: str,
+    probe_point_id: str,
+    sensor_id: str,
+    safe_approach_pose_object: PoseData,
+    probe_pose_object: PoseData,
+    hand_to_probe: PoseData,
+    target_surface_distance_m: float,
+    position_tolerance_m: float,
+    orientation_tolerance_rad: float,
+    measurement_duration_sec: float,
+    aligned_preapproach_distance_m: float,
+    sensor_path: str | None,
+    object_pose_execution: PoseData,
+    execution_frame: str = "odom",
+) -> ProbeExecutionTarget:
+    """Resolve one validated immutable geometry snapshot."""
+    for value, label in (
+        (object_id, "Object ID"),
+        (routine_id, "Routine ID"),
+        (probe_point_id, "Probe point ID"),
+        (sensor_id, "Sensor ID"),
+        (execution_frame, "Execution frame"),
+    ):
+        if not value or value != value.strip():
+            raise ValueError(f"{label} must not be empty or padded")
+    safe_approach_pose_object.validate()
+    probe_pose_object.validate()
+    hand_to_probe.validate()
+    object_pose_execution.validate()
+    validate_surface_distance_pair(
+        target_surface_distance_m,
+        aligned_preapproach_distance_m,
+    )
+    for value, label in (
+        (position_tolerance_m, "Position tolerance"),
+        (orientation_tolerance_rad, "Orientation tolerance"),
+        (measurement_duration_sec, "Measurement duration"),
+    ):
+        require_positive_finite_distance(value, label)
+
     safe_probe_pose = compose_poses(
         object_pose_execution,
-        probe_point.safe_approach_pose_object,
+        safe_approach_pose_object,
     )
     aligned_probe_pose_object = derive_aligned_preapproach_pose(
-        probe_point.probe_pose_object,
-        probe_point.target_surface_distance_m,
-        probe_point.aligned_preapproach_distance_m,
+        probe_pose_object,
+        target_surface_distance_m,
+        aligned_preapproach_distance_m,
     )
     aligned_probe_pose = compose_poses(
         object_pose_execution,
@@ -88,19 +156,19 @@ def resolve_probe_execution_target(
     )
     nominal_probe_pose = compose_poses(
         object_pose_execution,
-        probe_point.probe_pose_object,
+        probe_pose_object,
     )
     safe_hand_pose = probe_pose_to_hand_pose(
         safe_probe_pose,
-        sensor_definition.hand_to_probe,
+        hand_to_probe,
     )
     aligned_hand_pose = probe_pose_to_hand_pose(
         aligned_probe_pose,
-        sensor_definition.hand_to_probe,
+        hand_to_probe,
     )
     nominal_hand_pose = probe_pose_to_hand_pose(
         nominal_probe_pose,
-        sensor_definition.hand_to_probe,
+        hand_to_probe,
     )
     inward_direction = rotate_vector(
         nominal_probe_pose.orientation,
@@ -108,11 +176,11 @@ def resolve_probe_execution_target(
     )
 
     return ProbeExecutionTarget(
-        object_id=inspection_object.object_id,
-        routine_id=routine.routine_id,
-        probe_point_id=probe_point.probe_point_id,
-        sensor_id=sensor_definition.sensor_id,
-        probe_frame=sensor_definition.probe_frame,
+        object_id=object_id,
+        routine_id=routine_id,
+        probe_point_id=probe_point_id,
+        sensor_id=sensor_id,
+        probe_frame=sensor_probe_frame(sensor_id),
         execution_frame=execution_frame,
         safe_approach_probe_pose_execution=safe_probe_pose,
         safe_approach_hand_pose_execution=safe_hand_pose,
@@ -122,17 +190,17 @@ def resolve_probe_execution_target(
         nominal_hand_pose_execution=nominal_hand_pose,
         inward_direction_execution=inward_direction,
         target_surface_distance_m=(
-            probe_point.target_surface_distance_m
+            target_surface_distance_m
         ),
-        position_tolerance_m=probe_point.position_tolerance_m,
+        position_tolerance_m=position_tolerance_m,
         orientation_tolerance_rad=(
-            probe_point.orientation_tolerance_rad
+            orientation_tolerance_rad
         ),
         measurement_duration_sec=(
-            probe_point.measurement_duration_sec
+            measurement_duration_sec
         ),
         aligned_preapproach_distance_m=(
-            probe_point.aligned_preapproach_distance_m
+            aligned_preapproach_distance_m
         ),
-        sensor_path=probe_point.sensor_path,
+        sensor_path=sensor_path,
     )

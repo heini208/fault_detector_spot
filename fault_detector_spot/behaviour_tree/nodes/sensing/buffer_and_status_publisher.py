@@ -1,6 +1,7 @@
 # In fault_detector_spot/behaviour_tree/nodes/command_status_publisher.py
 
 import py_trees
+from fault_detector_msgs.msg import CommandStatus
 from py_trees.common import Status
 from std_msgs.msg import String
 
@@ -19,6 +20,8 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         self.blackboard = None
         self.buffer_pub = None
         self.last_status = ""
+        self.last_structured_status = None
+        self.structured_status_pub = None
         self.node = None
 
     def setup(self, **kwargs) -> bool:
@@ -33,6 +36,11 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             String,
             'fault_detector/command_tree_status',
             10
+        )
+        self.structured_status_pub = self.node.create_publisher(
+            CommandStatus,
+            'fault_detector/command_status',
+            10,
         )
         # make sure keys exist
         self.blackboard.register_key("command_buffer", access=py_trees.common.Access.READ)
@@ -60,6 +68,14 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             self.status_pub.publish(stat_msg)
             self.last_status = stat_msg.data
 
+        structured_status = self.get_structured_status_message(
+            len(buffer_list)
+        )
+        signature = self._structured_status_signature(structured_status)
+        if signature != self.last_structured_status:
+            self.structured_status_pub.publish(structured_status)
+            self.last_structured_status = signature
+
         return Status.SUCCESS
 
     def get_status_message(self) -> str:
@@ -81,6 +97,40 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             )
             name.data = f"{stat.name}: {command_id}"
         return name
+
+    def get_structured_status_message(
+        self,
+        buffered_command_count=0,
+    ) -> CommandStatus:
+        """Return machine-readable state for the current request."""
+        message = CommandStatus()
+        message.header.stamp = self.node.get_clock().now().to_msg()
+        message.buffered_command_count = buffered_command_count
+        command = self.blackboard.last_command
+        if command is not None:
+            message.request_id = command.request_id
+            message.command_id = self._command_id_text(command)
+
+        status = self.blackboard.command_tree_status
+        if status == Status.RUNNING:
+            message.state = CommandStatus.STATE_RUNNING
+        elif status == Status.SUCCESS:
+            message.state = CommandStatus.STATE_SUCCEEDED
+        elif status == Status.FAILURE:
+            message.state = CommandStatus.STATE_FAILED
+        else:
+            message.state = CommandStatus.STATE_IDLE
+        return message
+
+    @staticmethod
+    def _structured_status_signature(message):
+        return (
+            message.request_id,
+            message.command_id,
+            message.state,
+            message.detail,
+            message.buffered_command_count,
+        )
 
     @staticmethod
     def _command_id_text(command) -> str:

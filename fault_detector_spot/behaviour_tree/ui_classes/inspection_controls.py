@@ -31,6 +31,7 @@ from PyQt5.QtWidgets import (
 )
 
 from fault_detector_msgs.msg import (
+    CommandStatus,
     ComplexCommand,
     SensorDefinitionArray,
     TagElement,
@@ -44,6 +45,7 @@ from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import LATCHED_QOS
+from fault_detector_spot.request_identity import new_request_id
 from fault_detector_spot.inspection.models import (
     ImagePoint,
     InspectionObject,
@@ -174,9 +176,9 @@ class InspectionControls(UIControlHelper):
         self._hand_depth_history = deque(maxlen=16)
         self._base_tag_histories = {}
         self._probe_motion_pending = False
-        self._command_status = "IDLE"
+        self._command_state = CommandStatus.STATE_IDLE
+        self._buffered_command_count = 0
         self._last_command_completion_monotonic = 0.0
-        self._motion_completion_generation = 0
         self._refinement_workflow_active = False
         self._distance_failure_requires_retraction = False
         self._retraction_failed = False
@@ -591,12 +593,20 @@ class InspectionControls(UIControlHelper):
             history.append((stamp_key, deepcopy(tag)))
 
     def handle_command_status(self, status):
-        self._command_status = status
+        self._command_state = status.state
+        self._buffered_command_count = status.buffered_command_count
         session = self._refinement_session
-        if status.startswith("Running:"):
-            if session is not None and session.pending_motion is None:
+        pending = session.pending_motion if session is not None else None
+        if status.state == CommandStatus.STATE_RUNNING:
+            if pending is None and session is not None:
                 self._clear_refinement_execution_evidence(
                     "An unrelated robot command started"
+                )
+            elif pending is not None and status.request_id != pending.request_id:
+                self._fail_pending_refinement_motion(
+                    "An unrelated robot command started during probe "
+                    "refinement",
+                    pending.request_id,
                 )
             self._probe_motion_pending = (
                 session is not None and session.pending_motion is not None
@@ -604,28 +614,31 @@ class InspectionControls(UIControlHelper):
             self._refresh_refinement_dialog()
             return
 
-        self._last_command_completion_monotonic = time.monotonic()
-        if session is None or session.pending_motion is None:
+        if pending is None:
             self._probe_motion_pending = False
             return
-        command_id = status.partition(":")[2].strip()
-        if command_id and command_id != CommandID.MOVE_ARM_TO_TAG:
+        if status.request_id != pending.request_id:
+            return
+        if status.command_id != CommandID.MOVE_ARM_TO_TAG:
             self._fail_pending_refinement_motion(
-                f"Unexpected terminal command status: {status}"
+                "Unexpected terminal command status for "
+                f"{status.command_id}",
+                status.request_id,
             )
             return
-        if status.startswith("SUCCESS"):
-            self._motion_completion_generation += 1
-            generation = self._motion_completion_generation
+        self._last_command_completion_monotonic = time.monotonic()
+        if status.state == CommandStatus.STATE_SUCCEEDED:
             QTimer.singleShot(
                 int(PROBE_MOTION_SETTLE_SEC * 1000),
                 lambda: self._complete_pending_refinement_motion(
-                    generation
+                    status.request_id
                 ),
             )
             return
         self._fail_pending_refinement_motion(
-            f"Robot movement ended with {status}"
+            f"Robot movement ended with state {status.state}: "
+            f"{status.detail}",
+            status.request_id,
         )
 
     def set_sensor_definitions(self, definitions):
@@ -1201,9 +1214,6 @@ class InspectionControls(UIControlHelper):
         self.probe_position_tolerance_field = QLineEdit("0.01")
         self.probe_orientation_tolerance_field = QLineEdit("0.087")
         self.probe_measurement_duration_field = QLineEdit("1.0")
-        self.save_probe_point_button = QPushButton("Save Probe Point")
-        self.save_probe_point_button.setEnabled(False)
-        self.save_probe_point_button.hide()
         self.save_probe_point_status_label = QLabel(
             "Approve all three poses and complete the definition."
         )
@@ -1242,9 +1252,6 @@ class InspectionControls(UIControlHelper):
         )
         self.test_surface_distance_button.clicked.connect(
             self.handle_test_surface_distance
-        )
-        self.save_probe_point_button.clicked.connect(
-            self.handle_save_probe_point
         )
         self.approve_and_retract_button.clicked.connect(
             self.handle_approve_and_retract
@@ -1697,7 +1704,6 @@ class InspectionControls(UIControlHelper):
         layout.addWidget(definition_group)
 
         layout.addWidget(self.save_probe_point_status_label)
-        layout.addWidget(self.save_probe_point_button)
         layout.addStretch()
         return widget
 
@@ -1770,9 +1776,6 @@ class InspectionControls(UIControlHelper):
         self._update_save_probe_point_state()
 
     def _update_save_probe_point_state(self, _value=None):
-        if not hasattr(self, "save_probe_point_button"):
-            return
-
         setup = self._probe_setup
         approvals_complete = (
             setup is not None
@@ -1820,16 +1823,6 @@ class InspectionControls(UIControlHelper):
             and routine.get_probe_point(point_id) is not None
             and point_id != self._editing_probe_point_id
         )
-        ready = (
-            approvals_complete
-            and routine is not None
-            and bool(point_id)
-            and bool(display_name)
-            and numeric_ready
-            and provenance_ready
-            and not duplicate
-        )
-        self.save_probe_point_button.setEnabled(ready)
         session = self._refinement_session
         workflow_ready = (
             self._refinement_workflow_active
@@ -2859,30 +2852,6 @@ class InspectionControls(UIControlHelper):
             raise RuntimeError("Probe refinement workflow is not active")
         return session
 
-    def handle_save_probe_point(self):
-        """Persist the fully approved transient probe setup."""
-        try:
-            setup = self._require_probe_setup()
-            if not (
-                setup.safe_approach_approved
-                and setup.surface_alignment_approved
-                and setup.probe_pose_approved
-            ):
-                raise ValueError(
-                    "Approve the approach, alignment, and probe poses"
-                )
-            result = self._persist_probe_point(setup)
-        except Exception as exception:
-            self.save_probe_point_status_label.setText(
-                f"Save failed: {exception}"
-            )
-            self.show_warning("Save Probe Point", str(exception))
-            return False
-        self.save_probe_point_status_label.setText(
-            f"Saved probe point '{result[2]}'."
-        )
-        return True
-
     def handle_approve_and_retract(self):
         """Capture, atomically save, then command mandatory retraction."""
         try:
@@ -3374,6 +3343,7 @@ class InspectionControls(UIControlHelper):
                 )
             command = self._build_probe_pose_command(probe_pose_object)
             motion = PendingRefinementMotion(
+                request_id=command.command.request_id,
                 stage=stage,
                 purpose=label,
                 target_pose_object=deepcopy(probe_pose_object),
@@ -3387,7 +3357,7 @@ class InspectionControls(UIControlHelper):
         try:
             self.complex_command_publisher.publish(command)
         except Exception as exception:
-            session.fail_motion(str(exception))
+            session.fail_motion(motion.request_id, str(exception))
             self._show_setup_error("Move Probe Setup", exception)
             return False
         self._probe_motion_pending = True
@@ -3395,13 +3365,13 @@ class InspectionControls(UIControlHelper):
         self._refresh_refinement_dialog()
         return True
 
-    def _complete_pending_refinement_motion(self, generation):
-        if generation != self._motion_completion_generation:
-            return
+    def _complete_pending_refinement_motion(self, request_id):
         session = self._refinement_session
         if session is None or session.pending_motion is None:
             return
         motion = session.pending_motion
+        if motion.request_id != request_id:
+            return
         try:
             achieved = self._current_probe_pose_object()
             position_tolerance = self._distance_value(
@@ -3426,7 +3396,7 @@ class InspectionControls(UIControlHelper):
                     "Achieved probe orientation missed the target by "
                     f"{math.degrees(orientation_error):.2f} deg"
                 )
-            session.complete_motion(achieved)
+            session.complete_motion(request_id, achieved)
             if motion.purpose == "retraction":
                 session.complete_retraction()
                 self._distance_failure_requires_retraction = False
@@ -3445,7 +3415,10 @@ class InspectionControls(UIControlHelper):
                     else self.surface_distance_test_status_label.text()
                 )
         except Exception as exception:
-            self._fail_pending_refinement_motion(str(exception))
+            self._fail_pending_refinement_motion(
+                str(exception),
+                request_id,
+            )
             return
 
         self._probe_motion_pending = False
@@ -3455,11 +3428,20 @@ class InspectionControls(UIControlHelper):
         )
         self._refresh_refinement_dialog()
 
-    def _fail_pending_refinement_motion(self, message):
+    def _fail_pending_refinement_motion(
+        self,
+        message,
+        request_id=None,
+    ):
         session = self._refinement_session
         motion = session.pending_motion if session is not None else None
         if session is not None:
-            session.fail_motion(message)
+            if motion is None:
+                return
+            result_request_id = request_id or motion.request_id
+            if result_request_id != motion.request_id:
+                return
+            session.fail_motion(result_request_id, message)
             if motion is not None and motion.purpose == "retraction":
                 session.require_recovery(
                     f"Retraction Failed: {message}"
@@ -3474,7 +3456,6 @@ class InspectionControls(UIControlHelper):
                 )
                 self._distance_failure_requires_retraction = True
         self._probe_motion_pending = False
-        self._motion_completion_generation += 1
         self.refinement_recovery_status_label.setText(message)
         self._set_status_text(f"Probe refinement movement failed: {message}")
         self._refresh_refinement_dialog()
@@ -3505,7 +3486,10 @@ class InspectionControls(UIControlHelper):
                 )
             )
             if pending is not None:
-                session.fail_motion("Emergency stop triggered")
+                session.fail_motion(
+                    pending.request_id,
+                    "Emergency stop triggered",
+                )
             if inward_or_unknown_probe_motion:
                 session.require_recovery(
                     "Emergency stop triggered after probe-axis motion. "
@@ -3518,7 +3502,6 @@ class InspectionControls(UIControlHelper):
                     "cleared; re-establish the ordered workflow."
                 )
         self._probe_motion_pending = False
-        self._motion_completion_generation += 1
         self.ui.handle_simple_command(CommandID.EMERGENCY_CANCEL)
         self._refresh_refinement_dialog()
 
@@ -3541,12 +3524,11 @@ class InspectionControls(UIControlHelper):
         return position_error, orientation_error
 
     def _require_command_path_idle(self, require_settled=False):
-        buffer_text = getattr(self.ui, "_buffer_text", "Buffer: []")
-        if buffer_text != "Buffer: []":
+        if self._buffered_command_count:
             raise RuntimeError("Command buffer must be empty")
         if (
             self._probe_motion_pending
-            or self._command_status.startswith("Running:")
+            or self._command_state == CommandStatus.STATE_RUNNING
         ):
             raise RuntimeError("Wait for the current robot command to finish")
         if require_settled:
@@ -3828,6 +3810,8 @@ class InspectionControls(UIControlHelper):
     def _new_command(self, command_id):
         command = ComplexCommand()
         command.command = self.ui.build_basic_command(command_id)
+        if not command.command.request_id:
+            command.command.request_id = new_request_id()
         return command
 
     def _publish(self, command):

@@ -62,6 +62,7 @@ class CommandManager(py_trees.behaviour.Behaviour):
                 self.blackboard.command_buffer.clear()
                 buffered_command.stamp = self._next_dispatch_stamp()
                 self.blackboard.last_command = buffered_command
+                self.blackboard.command_tree_status = None
                 return Status.SUCCESS
 
         tree_status = self.blackboard.command_tree_status
@@ -69,6 +70,7 @@ class CommandManager(py_trees.behaviour.Behaviour):
             next_command = self.blackboard.command_buffer.pop(0)
             next_command.stamp = self._next_dispatch_stamp()
             self.blackboard.last_command = next_command
+            self.blackboard.command_tree_status = None
 
         return Status.SUCCESS
 

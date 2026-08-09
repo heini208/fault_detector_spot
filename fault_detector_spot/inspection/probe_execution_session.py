@@ -1,17 +1,15 @@
-"""Frozen configuration and state for one probe-point execution."""
+"""Immutable configuration and ordered recovery for probe execution."""
 
-from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Optional, Tuple
 
-from .models import InspectionObject, PoseData
+from .models import PoseData, QuaternionData, Vector3Data
 from .object_repository import ObjectRepository
 from .probe_execution_target import (
     ProbeExecutionTarget,
-    resolve_probe_execution_target,
+    resolve_probe_execution_geometry,
 )
-from .sensor_models import SensorDefinition
 from .sensor_repository import SensorRepository
 
 
@@ -24,11 +22,12 @@ class ProbeExecutionStage(str, Enum):
     MOVING_ALIGNED_PREAPPROACH = "moving_aligned_preapproach"
     CONVERGING_SURFACE_DISTANCE = "converging_surface_distance"
     MEASURING = "measuring"
-    RETRACTING_ALIGNED_PREAPPROACH = (
-        "retracting_aligned_preapproach"
-    )
+    RETRACTING_ALIGNED_PREAPPROACH = "retracting_aligned_preapproach"
     RETRACTING_SAFE_APPROACH = "retracting_safe_approach"
-    RECOVERING = "recovering"
+    RECOVERING_ALIGNED_PREAPPROACH = (
+        "recovering_aligned_preapproach"
+    )
+    RECOVERING_SAFE_APPROACH = "recovering_safe_approach"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -59,15 +58,78 @@ _NORMAL_TRANSITIONS = {
     ),
 }
 
+_RECOVERY_ENTRY = {
+    ProbeExecutionStage.MOVING_SAFE_APPROACH: (
+        ProbeExecutionStage.RECOVERING_SAFE_APPROACH
+    ),
+    ProbeExecutionStage.MOVING_ALIGNED_PREAPPROACH: (
+        ProbeExecutionStage.RECOVERING_SAFE_APPROACH
+    ),
+    ProbeExecutionStage.CONVERGING_SURFACE_DISTANCE: (
+        ProbeExecutionStage.RECOVERING_ALIGNED_PREAPPROACH
+    ),
+    ProbeExecutionStage.MEASURING: (
+        ProbeExecutionStage.RECOVERING_ALIGNED_PREAPPROACH
+    ),
+    ProbeExecutionStage.RETRACTING_ALIGNED_PREAPPROACH: (
+        ProbeExecutionStage.RECOVERING_ALIGNED_PREAPPROACH
+    ),
+    ProbeExecutionStage.RETRACTING_SAFE_APPROACH: (
+        ProbeExecutionStage.RECOVERING_SAFE_APPROACH
+    ),
+}
+
+
+@dataclass(frozen=True)
+class FrozenPoseData:
+    """Tuple-backed pose that cannot be mutated through nested fields."""
+
+    position: Tuple[float, float, float]
+    orientation: Tuple[float, float, float, float]
+
+    @classmethod
+    def from_pose(cls, pose: PoseData) -> "FrozenPoseData":
+        pose.validate()
+        return cls(
+            position=(
+                float(pose.position.x),
+                float(pose.position.y),
+                float(pose.position.z),
+            ),
+            orientation=(
+                float(pose.orientation.x),
+                float(pose.orientation.y),
+                float(pose.orientation.z),
+                float(pose.orientation.w),
+            ),
+        )
+
+    def to_pose(self) -> PoseData:
+        return PoseData(
+            position=Vector3Data(*self.position),
+            orientation=QuaternionData(*self.orientation),
+        )
+
 
 @dataclass(frozen=True)
 class ProbeExecutionConfiguration:
-    """Definitions frozen when an execution command is dispatched."""
+    """Minimal immutable definition snapshot loaded for one action goal."""
 
-    inspection_object: InspectionObject
-    sensor_definition: SensorDefinition
+    object_id: str
     routine_id: str
     probe_point_id: str
+    reference_tag_id: int
+    reference_tag_family: str
+    sensor_id: str
+    safe_approach_pose_object: FrozenPoseData
+    probe_pose_object: FrozenPoseData
+    hand_to_probe: FrozenPoseData
+    target_surface_distance_m: float
+    position_tolerance_m: float
+    orientation_tolerance_rad: float
+    measurement_duration_sec: float
+    aligned_preapproach_distance_m: float
+    sensor_path: Optional[str]
 
     @classmethod
     def load(
@@ -78,27 +140,55 @@ class ProbeExecutionConfiguration:
         object_repository: ObjectRepository,
         sensor_repository: SensorRepository,
     ) -> "ProbeExecutionConfiguration":
-        """Load and validate the selected definitions exactly once."""
+        """Load and validate only the selected execution definitions."""
         inspection_object = object_repository.load(object_id)
+        inspection_object.validate()
         routine = inspection_object.get_routine(routine_id)
         if routine is None:
             raise ValueError(
                 "Unknown routine for probe execution: "
                 f"{object_id}/{routine_id}"
             )
-        if routine.get_probe_point(probe_point_id) is None:
+        probe_point = routine.get_probe_point(probe_point_id)
+        if probe_point is None:
             raise ValueError(
                 "Unknown probe point for probe execution: "
                 f"{object_id}/{routine_id}/{probe_point_id}"
             )
         sensor_definition = sensor_repository.load(routine.sensor_id)
-        inspection_object.validate()
         sensor_definition.validate()
         return cls(
-            inspection_object=deepcopy(inspection_object),
-            sensor_definition=deepcopy(sensor_definition),
-            routine_id=routine_id,
-            probe_point_id=probe_point_id,
+            object_id=inspection_object.object_id,
+            routine_id=routine.routine_id,
+            probe_point_id=probe_point.probe_point_id,
+            reference_tag_id=inspection_object.reference_tag.tag_id,
+            reference_tag_family=inspection_object.reference_tag.tag_family,
+            sensor_id=sensor_definition.sensor_id,
+            safe_approach_pose_object=FrozenPoseData.from_pose(
+                probe_point.safe_approach_pose_object
+            ),
+            probe_pose_object=FrozenPoseData.from_pose(
+                probe_point.probe_pose_object
+            ),
+            hand_to_probe=FrozenPoseData.from_pose(
+                sensor_definition.hand_to_probe
+            ),
+            target_surface_distance_m=float(
+                probe_point.target_surface_distance_m
+            ),
+            position_tolerance_m=float(
+                probe_point.position_tolerance_m
+            ),
+            orientation_tolerance_rad=float(
+                probe_point.orientation_tolerance_rad
+            ),
+            measurement_duration_sec=float(
+                probe_point.measurement_duration_sec
+            ),
+            aligned_preapproach_distance_m=float(
+                probe_point.aligned_preapproach_distance_m
+            ),
+            sensor_path=probe_point.sensor_path,
         )
 
     def resolve_target(
@@ -106,26 +196,39 @@ class ProbeExecutionConfiguration:
         object_pose_execution: PoseData,
         execution_frame: str = "odom",
     ) -> ProbeExecutionTarget:
-        """Resolve the frozen geometry against the current object pose."""
-        return resolve_probe_execution_target(
-            self.inspection_object,
-            self.routine_id,
-            self.probe_point_id,
-            self.sensor_definition,
-            object_pose_execution,
-            execution_frame,
+        """Resolve frozen geometry against the current live object pose."""
+        return resolve_probe_execution_geometry(
+            object_id=self.object_id,
+            routine_id=self.routine_id,
+            probe_point_id=self.probe_point_id,
+            sensor_id=self.sensor_id,
+            safe_approach_pose_object=(
+                self.safe_approach_pose_object.to_pose()
+            ),
+            probe_pose_object=self.probe_pose_object.to_pose(),
+            hand_to_probe=self.hand_to_probe.to_pose(),
+            target_surface_distance_m=self.target_surface_distance_m,
+            position_tolerance_m=self.position_tolerance_m,
+            orientation_tolerance_rad=self.orientation_tolerance_rad,
+            measurement_duration_sec=self.measurement_duration_sec,
+            aligned_preapproach_distance_m=(
+                self.aligned_preapproach_distance_m
+            ),
+            sensor_path=self.sensor_path,
+            object_pose_execution=object_pose_execution,
+            execution_frame=execution_frame,
         )
 
 
 @dataclass
 class ProbeExecutionSession:
-    """Apply explicit normal, failure, cancellation, and recovery rules."""
+    """Enforce normal execution and stage-derived recovery order."""
 
     configuration: ProbeExecutionConfiguration
     stage: ProbeExecutionStage = ProbeExecutionStage.LOADED
     detail: str = ""
     stopped_stage: Optional[ProbeExecutionStage] = None
-    _recovery_outcome: Optional[ProbeExecutionStage] = field(
+    _requested_outcome: Optional[ProbeExecutionStage] = field(
         default=None,
         init=False,
         repr=False,
@@ -140,7 +243,6 @@ class ProbeExecutionSession:
         object_repository: ObjectRepository,
         sensor_repository: SensorRepository,
     ) -> "ProbeExecutionSession":
-        """Create one run with an immutable definition snapshot."""
         return cls(
             configuration=ProbeExecutionConfiguration.load(
                 object_id,
@@ -153,7 +255,6 @@ class ProbeExecutionSession:
 
     @property
     def is_terminal(self) -> bool:
-        """Return whether execution has a final outcome."""
         return self.stage in {
             ProbeExecutionStage.SUCCEEDED,
             ProbeExecutionStage.FAILED,
@@ -162,11 +263,16 @@ class ProbeExecutionSession:
 
     @property
     def recovery_required(self) -> bool:
-        """Return whether retraction must finish before the outcome."""
-        return self.stage == ProbeExecutionStage.RECOVERING
+        return self.stage in {
+            ProbeExecutionStage.RECOVERING_ALIGNED_PREAPPROACH,
+            ProbeExecutionStage.RECOVERING_SAFE_APPROACH,
+        }
+
+    @property
+    def requested_outcome(self) -> Optional[ProbeExecutionStage]:
+        return self._requested_outcome
 
     def advance(self, next_stage: ProbeExecutionStage) -> None:
-        """Advance by exactly one successful execution stage."""
         if self.is_terminal or self.recovery_required:
             raise RuntimeError(
                 f"Cannot advance probe execution from {self.stage.value}"
@@ -180,44 +286,43 @@ class ProbeExecutionSession:
         self.stage = next_stage
         self.detail = ""
 
-    def fail(self, reason: str, recovery_required: bool) -> None:
-        """Fail immediately or enter recovery before reporting failure."""
+    def fail(self, reason: str) -> None:
         self._begin_terminal_transition(
             ProbeExecutionStage.FAILED,
             reason,
-            recovery_required,
         )
 
-    def cancel(self, reason: str, recovery_required: bool) -> None:
-        """Cancel immediately or enter recovery before reporting it."""
+    def cancel(self, reason: str) -> None:
         self._begin_terminal_transition(
             ProbeExecutionStage.CANCELLED,
             reason,
-            recovery_required,
         )
 
-    def complete_recovery(self) -> None:
-        """Finish recovery with the outcome that initiated it."""
-        if not self.recovery_required or self._recovery_outcome is None:
-            raise RuntimeError("Probe execution is not recovering")
-        self.stage = self._recovery_outcome
-        self._recovery_outcome = None
+    def complete_recovery_stage(self) -> None:
+        if self.stage == (
+            ProbeExecutionStage.RECOVERING_ALIGNED_PREAPPROACH
+        ):
+            self.stage = ProbeExecutionStage.RECOVERING_SAFE_APPROACH
+            return
+        if self.stage == ProbeExecutionStage.RECOVERING_SAFE_APPROACH:
+            if self._requested_outcome is None:
+                raise RuntimeError("Probe execution has no recovery outcome")
+            self.stage = self._requested_outcome
+            return
+        raise RuntimeError("Probe execution is not recovering")
 
     def recovery_failed(self, reason: str) -> None:
-        """End a failed recovery as a terminal execution failure."""
         if not self.recovery_required:
             raise RuntimeError("Probe execution is not recovering")
         self.stage = ProbeExecutionStage.FAILED
         self.detail = (
             f"{self.detail}; recovery failed: {self._reason(reason)}"
         )
-        self._recovery_outcome = None
 
     def _begin_terminal_transition(
         self,
         outcome: ProbeExecutionStage,
         reason: str,
-        recovery_required: bool,
     ) -> None:
         if self.is_terminal:
             raise RuntimeError(
@@ -227,11 +332,9 @@ class ProbeExecutionSession:
             raise RuntimeError("Probe execution is already recovering")
         self.stopped_stage = self.stage
         self.detail = self._reason(reason)
-        if recovery_required:
-            self._recovery_outcome = outcome
-            self.stage = ProbeExecutionStage.RECOVERING
-            return
-        self.stage = outcome
+        self._requested_outcome = outcome
+        recovery_stage = _RECOVERY_ENTRY.get(self.stage)
+        self.stage = recovery_stage or outcome
 
     @staticmethod
     def _reason(reason: str) -> str:

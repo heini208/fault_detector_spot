@@ -1,7 +1,5 @@
 """Tests for semantic probe-point command conversion."""
 
-from types import SimpleNamespace
-
 import pytest
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import ComplexCommand
@@ -58,25 +56,13 @@ def test_semantic_command_rejects_invalid_selection_ids(
         )
 
 
-def test_complex_message_converts_to_one_semantic_command():
+def test_topic_command_is_rejected_until_action_server_exists():
     message = ComplexCommand()
     message.command.command_id = CommandID.EXECUTE_PROBE_POINT
     message.inspection.object.object_id = "motor_a"
     message.inspection.routine.routine_id = "magnetic_scan"
     message.inspection.probe_point_id = "bearing_1"
     subscriber = CommandSubscriber()
-    subscriber.node = SimpleNamespace(
-        get_clock=lambda: SimpleNamespace(
-            now=lambda: SimpleNamespace(
-                to_msg=lambda: Time(sec=8, nanosec=12)
-            )
-        )
-    )
 
-    commands = subscriber._execute_probe_point(message)
-
-    assert len(commands) == 1
-    assert isinstance(commands[0], ExecuteProbePointCommand)
-    assert commands[0].object_id == "motor_a"
-    assert commands[0].routine_id == "magnetic_scan"
-    assert commands[0].probe_point_id == "bearing_1"
+    with pytest.raises(ValueError, match="action server"):
+        subscriber.fire_complex_command_sequence(message)

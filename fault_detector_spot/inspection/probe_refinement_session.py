@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional
 
+from fault_detector_spot.request_identity import validate_request_id
+
 from .models import PoseData, Vector3Data
 from .reference_probe_setup import (
     ReferenceProbeSetup,
@@ -37,6 +39,7 @@ class RefinementMotionState(str, Enum):
 class PendingRefinementMotion:
     """One correlated movement awaiting a terminal result."""
 
+    request_id: str
     stage: RefinementStage
     purpose: str
     target_pose_object: PoseData
@@ -211,6 +214,7 @@ class ProbeRefinementSession:
         """Enter a single correlated movement state."""
         if self.pending_motion is not None:
             raise RuntimeError("A refinement movement is already active")
+        validate_request_id(motion.request_id)
         motion.target_pose_object.validate()
         if (
             motion.stage == RefinementStage.ALIGNMENT
@@ -233,12 +237,14 @@ class ProbeRefinementSession:
         self.pending_motion = motion
         self.motion_states[motion.stage] = RefinementMotionState.MOVING
 
-    def complete_motion(self, achieved_pose_object: PoseData) -> None:
+    def complete_motion(
+        self,
+        request_id: str,
+        achieved_pose_object: PoseData,
+    ) -> None:
         """Commit a successful motion using its achieved tip pose."""
-        if self.pending_motion is None:
-            raise RuntimeError("No refinement movement is active")
+        motion = self._matching_motion(request_id)
         achieved_pose_object.validate()
-        motion = self.pending_motion
         if motion.updates_candidate:
             if (
                 motion.stage == RefinementStage.PROBE
@@ -254,15 +260,24 @@ class ProbeRefinementSession:
         self.motion_states[motion.stage] = RefinementMotionState.REACHED
         self.pending_motion = None
 
-    def fail_motion(self, message: str) -> None:
+    def fail_motion(self, request_id: str, message: str) -> None:
         """Fail the current movement without changing its candidate."""
-        if self.pending_motion is None:
-            return
-        motion = self.pending_motion
+        motion = self._matching_motion(request_id)
         self.motion_states[motion.stage] = RefinementMotionState.FAILED
         if motion.axial_correction_m != 0.0:
             self.require_recovery(message)
         self.pending_motion = None
+
+    def _matching_motion(
+        self,
+        request_id: str,
+    ) -> PendingRefinementMotion:
+        request_id = validate_request_id(request_id)
+        if self.pending_motion is None:
+            raise RuntimeError("No refinement movement is active")
+        if self.pending_motion.request_id != request_id:
+            raise RuntimeError("Motion result request ID does not match")
+        return self.pending_motion
 
     def mark_surface_verified(self, achieved_pose_object: PoseData) -> None:
         """Record three stable in-tolerance post-settle measurements."""

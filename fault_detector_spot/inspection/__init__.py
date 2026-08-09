@@ -29,9 +29,11 @@ from fault_detector_spot.inspection.object_repository import (
 )
 from fault_detector_spot.inspection.probe_execution_target import (
     ProbeExecutionTarget,
+    resolve_probe_execution_geometry,
     resolve_probe_execution_target,
 )
 from fault_detector_spot.inspection.probe_execution_session import (
+    FrozenPoseData,
     ProbeExecutionConfiguration,
     ProbeExecutionSession,
     ProbeExecutionStage,
@@ -71,6 +73,7 @@ __all__ = [
     "ObjectPoseState",
     "ObjectRepository",
     "PoseData",
+    "FrozenPoseData",
     "ProbeExecutionTarget",
     "ProbeExecutionConfiguration",
     "ProbeExecutionSession",
@@ -94,6 +97,7 @@ __all__ = [
     "pose_to_pose_data",
     "relative_pose",
     "resolve_probe_execution_target",
+    "resolve_probe_execution_geometry",
     "sensor_definition_from_values",
     "sensor_probe_frame",
 ]

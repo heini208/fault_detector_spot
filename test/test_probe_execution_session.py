@@ -1,6 +1,6 @@
 """Tests for frozen probe execution configuration and state."""
 
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 from builtin_interfaces.msg import Time
@@ -127,6 +127,18 @@ def test_loaded_configuration_is_not_changed_by_later_repository_edits(
     )
 
 
+def test_loaded_configuration_has_no_mutable_definition_graph(tmp_path):
+    session, _ = load_session(tmp_path)
+    configuration = session.configuration
+
+    assert not hasattr(configuration, "inspection_object")
+    assert configuration.reference_tag_id == 2
+    with pytest.raises(FrozenInstanceError):
+        configuration.object_id = "changed"
+    with pytest.raises(TypeError):
+        configuration.safe_approach_pose_object.position[0] = 0.8
+
+
 def test_normal_execution_order_is_explicit(tmp_path):
     session, _ = load_session(tmp_path)
     expected = [
@@ -158,17 +170,24 @@ def test_failure_reports_only_after_required_recovery(tmp_path):
     session, _ = load_session(tmp_path)
     session.advance(ProbeExecutionStage.WAITING_FOR_OBJECT)
     session.advance(ProbeExecutionStage.MOVING_SAFE_APPROACH)
+    session.advance(ProbeExecutionStage.MOVING_ALIGNED_PREAPPROACH)
+    session.advance(ProbeExecutionStage.CONVERGING_SURFACE_DISTANCE)
 
-    session.fail("arm motion failed", recovery_required=True)
+    session.fail("arm motion failed")
 
     assert session.recovery_required is True
     assert session.is_terminal is False
     assert session.detail == "arm motion failed"
     assert session.stopped_stage == (
-        ProbeExecutionStage.MOVING_SAFE_APPROACH
+        ProbeExecutionStage.CONVERGING_SURFACE_DISTANCE
+    )
+    assert session.stage == (
+        ProbeExecutionStage.RECOVERING_ALIGNED_PREAPPROACH
     )
 
-    session.complete_recovery()
+    session.complete_recovery_stage()
+    assert session.stage == ProbeExecutionStage.RECOVERING_SAFE_APPROACH
+    session.complete_recovery_stage()
 
     assert session.stage == ProbeExecutionStage.FAILED
     assert session.is_terminal is True
@@ -181,8 +200,62 @@ def test_cancel_after_contact_preserves_cancelled_outcome(tmp_path):
     session.advance(ProbeExecutionStage.MOVING_ALIGNED_PREAPPROACH)
     session.advance(ProbeExecutionStage.CONVERGING_SURFACE_DISTANCE)
 
-    session.cancel("operator cancelled", recovery_required=True)
-    session.complete_recovery()
+    session.cancel("operator cancelled")
+    assert session.requested_outcome == ProbeExecutionStage.CANCELLED
+    session.complete_recovery_stage()
+    assert session.stage == ProbeExecutionStage.RECOVERING_SAFE_APPROACH
+    assert session.requested_outcome == ProbeExecutionStage.CANCELLED
+    session.complete_recovery_stage()
 
     assert session.stage == ProbeExecutionStage.CANCELLED
     assert session.detail == "operator cancelled"
+
+
+def test_waiting_failure_does_not_command_recovery(tmp_path):
+    session, _ = load_session(tmp_path)
+    session.advance(ProbeExecutionStage.WAITING_FOR_OBJECT)
+
+    session.fail("object pose unavailable")
+
+    assert session.stage == ProbeExecutionStage.FAILED
+    assert not session.recovery_required
+
+
+def test_caller_cannot_skip_stage_derived_recovery(tmp_path):
+    session, _ = load_session(tmp_path)
+    for stage in (
+        ProbeExecutionStage.WAITING_FOR_OBJECT,
+        ProbeExecutionStage.MOVING_SAFE_APPROACH,
+        ProbeExecutionStage.MOVING_ALIGNED_PREAPPROACH,
+        ProbeExecutionStage.CONVERGING_SURFACE_DISTANCE,
+        ProbeExecutionStage.MEASURING,
+    ):
+        session.advance(stage)
+
+    session.cancel("operator cancelled")
+
+    with pytest.raises(RuntimeError, match="Cannot advance"):
+        session.advance(ProbeExecutionStage.CANCELLED)
+    assert session.stage == (
+        ProbeExecutionStage.RECOVERING_ALIGNED_PREAPPROACH
+    )
+
+
+def test_recovery_failure_preserves_original_cancel_reason(tmp_path):
+    session, _ = load_session(tmp_path)
+    for stage in (
+        ProbeExecutionStage.WAITING_FOR_OBJECT,
+        ProbeExecutionStage.MOVING_SAFE_APPROACH,
+        ProbeExecutionStage.MOVING_ALIGNED_PREAPPROACH,
+        ProbeExecutionStage.CONVERGING_SURFACE_DISTANCE,
+    ):
+        session.advance(stage)
+    session.cancel("operator cancelled")
+
+    session.recovery_failed("arm unavailable")
+
+    assert session.stage == ProbeExecutionStage.FAILED
+    assert session.requested_outcome == ProbeExecutionStage.CANCELLED
+    assert session.detail == (
+        "operator cancelled; recovery failed: arm unavailable"
+    )

@@ -70,10 +70,12 @@ def test_static_clock_dispatches_distinct_command_stamps():
 
     assert manager.update() == Status.SUCCESS
     first_command = manager.blackboard.last_command
+    assert manager.blackboard.command_tree_status is None
     manager.blackboard.command_tree_status = Status.SUCCESS
 
     assert manager.update() == Status.SUCCESS
     second_command = manager.blackboard.last_command
+    assert manager.blackboard.command_tree_status is None
 
     assert stamp_nanoseconds(second_command.stamp) == (
         stamp_nanoseconds(first_command.stamp) + 1

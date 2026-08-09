@@ -7,14 +7,15 @@ from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS
 from fault_detector_spot.behaviour_tree.commands.base_move_relative_command import BaseMoveRelativeCommand
 from fault_detector_spot.behaviour_tree.commands.base_to_tag_command import BaseToTagCommand
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
-from fault_detector_spot.behaviour_tree.commands.execute_probe_point_command import (
-    ExecuteProbePointCommand,
-)
 from fault_detector_spot.behaviour_tree.commands.generic_complex_command import GenericCommand
 from fault_detector_spot.behaviour_tree.commands.manipulator_move_relative_command import ManipulatorMoveRelativeCommand
 from fault_detector_spot.behaviour_tree.commands.manipulator_to_tag_command import ManipulatorToTagCommand
 from fault_detector_spot.behaviour_tree.commands.simple_command import SimpleCommand
 from fault_detector_spot.behaviour_tree.commands.timer_command import TimerCommand
+from fault_detector_spot.request_identity import (
+    new_request_id,
+    request_id_or_new,
+)
 
 
 class CommandSubscriber(py_trees.behaviour.Behaviour):
@@ -42,7 +43,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.MOVE_BASE_TO_TAG: self._move_base_to_tag,
             CommandID.MOVE_BASE_RELATIVE: self._move_base_with_offset,
             CommandID.ESTOP_STATE: self._return_to_estop_state,
-            CommandID.EXECUTE_PROBE_POINT: self._execute_probe_point,
         }
         self.pending_msgs = []
         self.last_received_time = None
@@ -109,12 +109,12 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def append_command_to_buffer(self, msg):
         if isinstance(msg, BasicCommand):
             if msg.command_id == CommandID.EMERGENCY_CANCEL:
-                self.trigger_estop()
+                self.trigger_estop(self._emergency_request_id(msg))
                 self.logger.warning("ESTOP triggered imediately.")
                 return
         elif isinstance(msg, ComplexCommand):
             if msg.command.command_id == CommandID.EMERGENCY_CANCEL:
-                self.trigger_estop()
+                self.trigger_estop(self._emergency_request_id(msg))
                 self.logger.warning("ESTOP triggered imediately.")
                 return
         stamp = self._extract_timestamp(msg)
@@ -124,43 +124,68 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.pending_msgs.append((stamp, msg))
 
     def fire_command(self, msg: [ComplexCommand, BasicCommand]):
-        if isinstance(msg, BasicCommand):
-            self.received_command = SimpleCommand(msg.command_id, msg.header.stamp)
-            self.fire_basic_command(msg)
-        elif isinstance(msg, ComplexCommand):
-            self.received_command = SimpleCommand(msg.command.command_id, msg.command.header.stamp)
-            self.fire_complex_command_sequence(msg)
+        command_message = (
+            msg.command if isinstance(msg, ComplexCommand) else msg
+        )
+        if command_message.command_id == CommandID.EMERGENCY_CANCEL:
+            request_id = self._emergency_request_id(msg)
         else:
-            self.logger.error(f"Unknown message type: {type(msg)}")
-            return
+            request_id = self._message_request_id(msg)
+        if isinstance(msg, BasicCommand):
+            self.received_command = SimpleCommand(
+                msg.command_id,
+                msg.header.stamp,
+                request_id,
+            )
+            commands = self.fire_basic_command(msg)
+        elif isinstance(msg, ComplexCommand):
+            self.received_command = SimpleCommand(
+                msg.command.command_id,
+                msg.command.header.stamp,
+                request_id,
+            )
+            commands = self.fire_complex_command_sequence(msg)
+        else:
+            raise TypeError(f"Unknown message type: {type(msg)}")
+        for command in commands:
+            command.request_id = request_id
+        self.blackboard.command_buffer.extend(commands)
 
     def fire_basic_command(self, msg: BasicCommand):
         if msg.command_id == CommandID.EMERGENCY_CANCEL:
-            self.trigger_estop()
-            return
+            self.trigger_estop(self._emergency_request_id(msg))
+            return []
         if msg.command_id == CommandID.EXECUTE_PROBE_POINT:
             raise ValueError(
-                "execute_probe_point requires a ComplexCommand selection"
+                "execute_probe_point is unavailable until its action "
+                "server is installed"
             )
         if msg.command_id in self._combination_command_builders:
-            command_sequence = self._combination_command_builders.get(msg.command_id)(msg)
-            self.blackboard.command_buffer.extend(command_sequence)
+            commands = self._combination_command_builders[msg.command_id](msg)
         else:
-            self.blackboard.command_buffer.append(self.received_command)
+            commands = [self.received_command]
         self.logger.info(f"Received {msg.command_id} command")
+        return commands
 
     def fire_complex_command_sequence(self, msg: ComplexCommand) -> List[SimpleCommand]:
         command_id = msg.command.command_id
+        if command_id == CommandID.EXECUTE_PROBE_POINT:
+            raise ValueError(
+                "execute_probe_point is unavailable until its action "
+                "server is installed"
+            )
         if command_id in self._combination_command_builders:
-            command_sequence = self._combination_command_builders.get(command_id)(msg)
-            self.blackboard.command_buffer.extend(command_sequence)
+            commands = self._combination_command_builders[command_id](msg)
         else:
-            generic_command = self.complex_message_to_generic_command(msg)
-            self.blackboard.command_buffer.append(generic_command)
+            commands = [self.complex_message_to_generic_command(msg)]
         self.logger.info(f"Received {command_id} command")
+        return commands
 
     def complex_message_to_generic_command(self, msg: ComplexCommand) -> GenericCommand:
-        generic_command = GenericCommand(command_id=msg.command.command_id, stamp=msg.command.header.stamp)
+        generic_command = GenericCommand(
+            command_id=msg.command.command_id,
+            stamp=msg.command.header.stamp,
+        )
         generic_command.duration = msg.wait_time
         if msg.tag is not None:
             generic_command.tag_id = msg.tag.id
@@ -177,13 +202,30 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def is_estop_command(self, command) -> bool:
         return command.command_id == CommandID.EMERGENCY_CANCEL
 
-    def trigger_estop(self):
+    def trigger_estop(self, request_id=""):
         self.blackboard.command_buffer.clear()
         self.pending_msgs = []
         self.blackboard.estop_flag = True
         self.blackboard.command_buffer.append(
-            SimpleCommand(command_id=CommandID.EMERGENCY_CANCEL, stamp=self._create_command_stamp()))
+            SimpleCommand(
+                command_id=CommandID.EMERGENCY_CANCEL,
+                stamp=self._create_command_stamp(),
+                request_id=request_id,
+            )
+        )
         self.logger.info("Emergency stop command received, clearing command buffer")
+
+    @staticmethod
+    def _message_request_id(msg):
+        command = msg.command if isinstance(msg, ComplexCommand) else msg
+        return request_id_or_new(getattr(command, "request_id", ""))
+
+    @classmethod
+    def _emergency_request_id(cls, msg):
+        try:
+            return cls._message_request_id(msg)
+        except (TypeError, ValueError):
+            return new_request_id()
 
     def _extract_timestamp(self, msg):
         if hasattr(msg, 'command'):
@@ -271,17 +313,3 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         commands.append(SimpleCommand(CommandID.STOW_ARM, self._create_command_stamp()))
         commands.append(SimpleCommand(CommandID.CLOSE_GRIPPER, self._create_command_stamp()))
         return commands
-
-    def _execute_probe_point(
-        self,
-        msg: ComplexCommand,
-    ) -> List[SimpleCommand]:
-        inspection = msg.inspection
-        return [
-            ExecuteProbePointCommand(
-                stamp=self._create_command_stamp(),
-                object_id=inspection.object.object_id,
-                routine_id=inspection.routine.routine_id,
-                probe_point_id=inspection.probe_point_id,
-            )
-        ]

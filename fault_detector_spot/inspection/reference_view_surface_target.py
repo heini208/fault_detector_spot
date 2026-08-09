@@ -7,11 +7,11 @@ from typing import Tuple
 import numpy as np
 
 from .models import (
-    MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
     PoseData,
     QuaternionData,
     Vector3Data,
 )
+from .surface_distance_validation import validate_surface_distance_pair
 from .reference_view_approach_direction import ReferenceApproachDirection
 
 
@@ -37,30 +37,10 @@ def resolve_reference_surface_target(
     """Resolve object-frame sensor-tip poses from a surface point."""
     if approach_direction is None:
         raise ValueError("No surface orientation is available")
-    _require_positive_finite(
+    validate_surface_distance_pair(
         target_surface_distance_m,
-        "Target surface distance",
-    )
-    _require_positive_finite(
         aligned_preapproach_distance_m,
-        "Aligned pre-approach distance",
     )
-    separation = (
-        aligned_preapproach_distance_m - target_surface_distance_m
-    )
-    if (
-        separation < MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M
-        and not math.isclose(
-            separation,
-            MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
-            rel_tol=0.0,
-            abs_tol=1e-12,
-        )
-    ):
-        raise ValueError(
-            "Aligned pre-approach distance must be at least 0.05 m "
-            "greater than the target surface distance"
-        )
 
     controlled_frame_pose_object.validate()
     projected_point = approach_direction.projected_point
@@ -306,8 +286,3 @@ def _vector_data(values) -> Vector3Data:
         y=float(array[1]),
         z=float(array[2]),
     )
-
-
-def _require_positive_finite(value: float, label: str) -> None:
-    if not math.isfinite(value) or value <= 0.0:
-        raise ValueError(f"{label} must be positive and finite")

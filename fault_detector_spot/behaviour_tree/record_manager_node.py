@@ -9,6 +9,7 @@ from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import ComplexCommand, BasicCommand, CommandRecordControl, StringArray
 from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS, LATCHED_QOS
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
+from fault_detector_spot.request_identity import new_request_id
 from rclpy.node import Node
 from rosidl_runtime_py import message_to_ordereddict
 from rosidl_runtime_py import set_message_fields
@@ -22,6 +23,21 @@ NON_RECORDABLE_COMPLEX_COMMANDS = {
     CommandID.DELETE_INSPECTION_ROUTINE,
     CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW,
 }
+
+
+def clear_recorded_request_id(data, is_complex):
+    """Remove transient request identity from serialized recordings."""
+    command = data.get("command", {}) if is_complex else data
+    if "request_id" in command:
+        command["request_id"] = ""
+    return data
+
+
+def assign_playback_request_id(message):
+    """Give every replayed command a fresh correlation identity."""
+    command = message.command if isinstance(message, ComplexCommand) else message
+    command.request_id = new_request_id()
+    return command.request_id
 
 
 class RecordManager(Node):
@@ -103,10 +119,15 @@ class RecordManager(Node):
             return
 
         # Convert message to dict
+        is_complex = isinstance(msg, ComplexCommand)
+        data = clear_recorded_request_id(
+            self.serialize_ros_message(msg),
+            is_complex,
+        )
         msg_dict = {
             "topic": 'complex' if isinstance(msg, ComplexCommand) else 'basic',
             "timestamp": round(time.time() - self.start_time, 2),
-            "data": self.serialize_ros_message(msg)
+            "data": data,
         }
         self.temp_data.append(msg_dict)
 
@@ -128,11 +149,13 @@ class RecordManager(Node):
                 msg = ComplexCommand()
                 self.deserialize_ros_message(entry["data"], msg)
                 msg.command.header.stamp = self.get_clock().now().to_msg()
+                assign_playback_request_id(msg)
                 self.complex_pub.publish(msg)
             else:
                 msg = BasicCommand()
                 self.deserialize_ros_message(entry["data"], msg)
                 msg.header.stamp = self.get_clock().now().to_msg()
+                assign_playback_request_id(msg)
                 self.basic_pub.publish(msg)
             # small delay
             time.sleep(self.delay)
