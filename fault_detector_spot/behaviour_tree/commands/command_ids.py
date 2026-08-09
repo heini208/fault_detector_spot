@@ -39,6 +39,7 @@ class CommandID(str, Enum):
     CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW = (
         "capture_inspection_object_reference_view"
     )
+    EXECUTE_PROBE_POINT = "execute_probe_point"
 
 
 class OrientationModes(str, Enum):

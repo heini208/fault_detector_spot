@@ -171,7 +171,7 @@ class InspectionControls(UIControlHelper):
         self._latest_hand_depth_image = None
         self._latest_hand_depth_camera_info = None
         self._latest_hand_depth_received_monotonic = 0.0
-        self._hand_depth_history = deque(maxlen=120)
+        self._hand_depth_history = deque(maxlen=16)
         self._base_tag_histories = {}
         self._probe_motion_pending = False
         self._command_status = "IDLE"

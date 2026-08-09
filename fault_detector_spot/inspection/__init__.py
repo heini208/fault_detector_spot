@@ -31,6 +31,11 @@ from fault_detector_spot.inspection.probe_execution_target import (
     ProbeExecutionTarget,
     resolve_probe_execution_target,
 )
+from fault_detector_spot.inspection.probe_execution_session import (
+    ProbeExecutionConfiguration,
+    ProbeExecutionSession,
+    ProbeExecutionStage,
+)
 from fault_detector_spot.inspection.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
@@ -67,6 +72,9 @@ __all__ = [
     "ObjectRepository",
     "PoseData",
     "ProbeExecutionTarget",
+    "ProbeExecutionConfiguration",
+    "ProbeExecutionSession",
+    "ProbeExecutionStage",
     "ProbePoint",
     "QuaternionData",
     "ReferenceTag",

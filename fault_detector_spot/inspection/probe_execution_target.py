@@ -1,6 +1,5 @@
 """Resolve saved probe geometry into one local execution frame."""
 
-from copy import deepcopy
 from dataclasses import dataclass
 
 from .models import InspectionObject, PoseData, Vector3Data
@@ -115,17 +114,13 @@ def resolve_probe_execution_target(
         sensor_id=sensor_definition.sensor_id,
         probe_frame=sensor_definition.probe_frame,
         execution_frame=execution_frame,
-        safe_approach_probe_pose_execution=deepcopy(safe_probe_pose),
-        safe_approach_hand_pose_execution=deepcopy(safe_hand_pose),
-        aligned_preapproach_probe_pose_execution=deepcopy(
-            aligned_probe_pose
-        ),
-        aligned_preapproach_hand_pose_execution=deepcopy(
-            aligned_hand_pose
-        ),
-        nominal_probe_pose_execution=deepcopy(nominal_probe_pose),
-        nominal_hand_pose_execution=deepcopy(nominal_hand_pose),
-        inward_direction_execution=deepcopy(inward_direction),
+        safe_approach_probe_pose_execution=safe_probe_pose,
+        safe_approach_hand_pose_execution=safe_hand_pose,
+        aligned_preapproach_probe_pose_execution=aligned_probe_pose,
+        aligned_preapproach_hand_pose_execution=aligned_hand_pose,
+        nominal_probe_pose_execution=nominal_probe_pose,
+        nominal_hand_pose_execution=nominal_hand_pose,
+        inward_direction_execution=inward_direction,
         target_surface_distance_m=(
             probe_point.target_surface_distance_m
         ),

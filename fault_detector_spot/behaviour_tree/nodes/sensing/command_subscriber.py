@@ -7,6 +7,9 @@ from fault_detector_spot.behaviour_tree.QOS_PROFILES import COMMAND_QOS
 from fault_detector_spot.behaviour_tree.commands.base_move_relative_command import BaseMoveRelativeCommand
 from fault_detector_spot.behaviour_tree.commands.base_to_tag_command import BaseToTagCommand
 from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
+from fault_detector_spot.behaviour_tree.commands.execute_probe_point_command import (
+    ExecuteProbePointCommand,
+)
 from fault_detector_spot.behaviour_tree.commands.generic_complex_command import GenericCommand
 from fault_detector_spot.behaviour_tree.commands.manipulator_move_relative_command import ManipulatorMoveRelativeCommand
 from fault_detector_spot.behaviour_tree.commands.manipulator_to_tag_command import ManipulatorToTagCommand
@@ -39,6 +42,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.MOVE_BASE_TO_TAG: self._move_base_to_tag,
             CommandID.MOVE_BASE_RELATIVE: self._move_base_with_offset,
             CommandID.ESTOP_STATE: self._return_to_estop_state,
+            CommandID.EXECUTE_PROBE_POINT: self._execute_probe_point,
         }
         self.pending_msgs = []
         self.last_received_time = None
@@ -61,11 +65,18 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             # Sort by timestamp
         self.pending_msgs.sort(key=lambda x: (x[0].sec, x[0].nanosec))
 
+        processed_count = 0
         for stamp, msg in self.pending_msgs:
-            self.fire_command(msg)
+            try:
+                self.fire_command(msg)
+                processed_count += 1
+            except Exception as exception:
+                self.logger.error(
+                    f"Rejected command: {exception}"
+                )
 
         self.pending_msgs.clear()
-        self.feedback_message = f"Processed {len(self.pending_msgs)} commands"
+        self.feedback_message = f"Processed {processed_count} commands"
         return py_trees.common.Status.SUCCESS
 
     def _create_ui_subscribers(self):
@@ -127,6 +138,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         if msg.command_id == CommandID.EMERGENCY_CANCEL:
             self.trigger_estop()
             return
+        if msg.command_id == CommandID.EXECUTE_PROBE_POINT:
+            raise ValueError(
+                "execute_probe_point requires a ComplexCommand selection"
+            )
         if msg.command_id in self._combination_command_builders:
             command_sequence = self._combination_command_builders.get(msg.command_id)(msg)
             self.blackboard.command_buffer.extend(command_sequence)
@@ -256,3 +271,17 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         commands.append(SimpleCommand(CommandID.STOW_ARM, self._create_command_stamp()))
         commands.append(SimpleCommand(CommandID.CLOSE_GRIPPER, self._create_command_stamp()))
         return commands
+
+    def _execute_probe_point(
+        self,
+        msg: ComplexCommand,
+    ) -> List[SimpleCommand]:
+        inspection = msg.inspection
+        return [
+            ExecuteProbePointCommand(
+                stamp=self._create_command_stamp(),
+                object_id=inspection.object.object_id,
+                routine_id=inspection.routine.routine_id,
+                probe_point_id=inspection.probe_point_id,
+            )
+        ]
