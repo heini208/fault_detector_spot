@@ -270,7 +270,7 @@ def test_relative_motion_completes_without_changing_candidate_pose():
     )
     session.begin_motion(pending)
 
-    session.complete_relative_motion(pending.request_id)
+    session.complete_motion_without_pose_capture(pending.request_id)
 
     assert session.pending_motion is None
     assert session.candidate_pose(RefinementStage.SAFE_APPROACH) == candidate

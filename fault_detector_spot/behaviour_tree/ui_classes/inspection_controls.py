@@ -3348,7 +3348,7 @@ class InspectionControls(UIControlHelper):
         stage,
         label,
         probe_pose_object,
-        updates_candidate=True,
+        updates_candidate=False,
         axial_correction_m=0.0,
     ):
         try:
@@ -3367,7 +3367,7 @@ class InspectionControls(UIControlHelper):
                 updates_candidate=updates_candidate,
                 axial_correction_m=axial_correction_m,
                 command_id=CommandID.MOVE_ARM_TO_TAG,
-                verify_achieved_pose=True,
+                verify_achieved_pose=False,
             )
             session.begin_motion(motion)
         except Exception as exception:
@@ -3474,12 +3474,23 @@ class InspectionControls(UIControlHelper):
             return
         try:
             if not motion.verify_achieved_pose:
-                session.complete_relative_motion(request_id)
+                session.complete_motion_without_pose_capture(request_id)
+                if motion.purpose == "retraction":
+                    session.complete_retraction()
+                    self._distance_failure_requires_retraction = False
+                    self._retraction_failed = False
+                    self.surface_distance_test_status_label.setText(
+                        "Retraction reached the aligned pre-approach pose."
+                    )
+                    if session.saved:
+                        self.save_probe_point_status_label.setText(
+                            "Probe point saved and retraction completed."
+                        )
                 self._probe_motion_pending = False
                 self._hand_depth_history.clear()
                 self._set_status_text(
-                    f"Reached {motion.purpose}; capture the current pose "
-                    "when approving"
+                    f"Reached {motion.purpose}; no tag verification "
+                    "required"
                 )
                 self._refresh_refinement_dialog()
                 return

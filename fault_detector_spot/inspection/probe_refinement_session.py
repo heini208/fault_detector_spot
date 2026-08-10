@@ -277,8 +277,8 @@ class ProbeRefinementSession:
         self.motion_states[motion.stage] = RefinementMotionState.REACHED
         self.pending_motion = None
 
-    def complete_relative_motion(self, request_id: str) -> None:
-        """Complete a relative adjustment without capturing object pose."""
+    def complete_motion_without_pose_capture(self, request_id: str) -> None:
+        """Complete a movement without capturing an object-relative pose."""
         motion = self._matching_motion(request_id)
         if motion.updates_candidate or motion.verify_achieved_pose:
             raise RuntimeError(

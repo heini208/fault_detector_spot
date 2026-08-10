@@ -302,6 +302,40 @@ def test_relative_refinement_completion_does_not_query_tag_pose(
     )
 
 
+def test_absolute_setup_completion_does_not_query_tag_pose(
+    application,
+    tmp_path,
+):
+    ui = FakeUI(tmp_path)
+    controls = InspectionControls(ui)
+    controls.show_warning = lambda title, message: None
+    configure_live_tag(controls, ui)
+    controls._hand_to_probe_pose = lambda: PoseData.identity()
+    setup = initialize_reference_probe_setup(surface_target())
+    session = configure_session(
+        controls,
+        setup,
+        RefinementStage.SAFE_APPROACH,
+    )
+    candidate = session.candidate_pose(RefinementStage.SAFE_APPROACH)
+
+    assert controls.handle_move_to_approach_pose() is True
+
+    pending = session.pending_motion
+    assert not pending.verify_achieved_pose
+    controls._current_probe_pose_object = lambda: (_ for _ in ()).throw(
+        AssertionError("successful setup movement queried the tag pose")
+    )
+
+    controls._complete_pending_refinement_motion(pending.request_id)
+
+    assert session.pending_motion is None
+    assert session.motion_states[RefinementStage.SAFE_APPROACH] == (
+        RefinementMotionState.REACHED
+    )
+    assert session.candidate_pose(RefinementStage.SAFE_APPROACH) == candidate
+
+
 def test_refinement_frame_selector_defaults_to_sensor_and_derives_frames(
     application,
     tmp_path,
