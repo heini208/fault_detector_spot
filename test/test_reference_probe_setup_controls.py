@@ -336,6 +336,63 @@ def test_absolute_setup_completion_does_not_query_tag_pose(
     assert session.candidate_pose(RefinementStage.SAFE_APPROACH) == candidate
 
 
+def test_failed_safe_target_keeps_relative_corrections_available(
+    application,
+    tmp_path,
+):
+    ui = FakeUI(tmp_path)
+    controls = InspectionControls(ui)
+    controls.show_warning = lambda title, message: None
+    setup = initialize_reference_probe_setup(surface_target())
+    session = configure_session(
+        controls,
+        setup,
+        RefinementStage.SAFE_APPROACH,
+    )
+    session.motion_states[RefinementStage.SAFE_APPROACH] = (
+        RefinementMotionState.REACHED
+    )
+
+    assert controls.handle_refine_pose("approach", "up") is True
+    pending = session.pending_motion
+
+    controls._fail_pending_refinement_motion(
+        "goal is blocked by the robot body",
+        pending.request_id,
+    )
+
+    assert session.motion_states[RefinementStage.SAFE_APPROACH] == (
+        RefinementMotionState.FAILED
+    )
+    assert controls.refinement_buttons["approach"]["up"].isEnabled()
+    assert controls.handle_refine_pose("approach", "down") is True
+
+
+def test_failed_alignment_target_keeps_relative_corrections_available(
+    application,
+    tmp_path,
+):
+    controls = InspectionControls(FakeUI(tmp_path))
+    controls.show_warning = lambda title, message: None
+    setup = initialize_reference_probe_setup(surface_target())
+    session = configure_session(
+        controls,
+        setup,
+        RefinementStage.ALIGNMENT,
+    )
+    session.motion_states[RefinementStage.SAFE_APPROACH] = (
+        RefinementMotionState.REACHED
+    )
+    session.motion_states[RefinementStage.ALIGNMENT] = (
+        RefinementMotionState.FAILED
+    )
+
+    controls._refresh_refinement_dialog()
+
+    assert controls.refinement_buttons["alignment"]["up"].isEnabled()
+    assert controls.move_aligned_pose_button.isEnabled()
+
+
 def test_refinement_frame_selector_defaults_to_sensor_and_derives_frames(
     application,
     tmp_path,

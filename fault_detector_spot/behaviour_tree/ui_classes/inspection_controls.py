@@ -2732,16 +2732,28 @@ class InspectionControls(UIControlHelper):
             session.motion_states[RefinementStage.SAFE_APPROACH]
             == RefinementMotionState.REACHED
         )
+        safe_adjustable = session.motion_states[
+            RefinementStage.SAFE_APPROACH
+        ] in (
+            RefinementMotionState.REACHED,
+            RefinementMotionState.FAILED,
+        )
         alignment_reached = (
             session.motion_states[RefinementStage.ALIGNMENT]
             == RefinementMotionState.REACHED
+        )
+        alignment_adjustable = session.motion_states[
+            RefinementStage.ALIGNMENT
+        ] in (
+            RefinementMotionState.REACHED,
+            RefinementMotionState.FAILED,
         )
 
         safe_enabled = safe_page and not pending and not recovery_only
         self.move_calculated_approach_button.setEnabled(safe_enabled)
         self.use_current_approach_button.setEnabled(safe_enabled)
         for button in self.refinement_buttons["approach"].values():
-            button.setEnabled(safe_enabled and safe_reached)
+            button.setEnabled(safe_enabled and safe_adjustable)
 
         alignment_enabled = (
             alignment_page
@@ -2752,7 +2764,9 @@ class InspectionControls(UIControlHelper):
         self.move_aligned_pose_button.setEnabled(alignment_enabled)
         self.use_current_alignment_button.setEnabled(alignment_enabled)
         for button in self.refinement_buttons["alignment"].values():
-            button.setEnabled(alignment_enabled and alignment_reached)
+            button.setEnabled(
+                alignment_enabled and alignment_adjustable
+            )
 
         test_enabled = (
             probe_page
@@ -3068,9 +3082,9 @@ class InspectionControls(UIControlHelper):
                 )
             if session.active_stage != stage_value:
                 raise ValueError("The requested refinement stage is inactive")
-            if (
-                session.motion_states[stage_value]
-                != RefinementMotionState.REACHED
+            if session.motion_states[stage_value] not in (
+                RefinementMotionState.REACHED,
+                RefinementMotionState.FAILED,
             ):
                 raise ValueError("Reach the current candidate before adjusting")
             translation_step = self._bounded_positive_value(
