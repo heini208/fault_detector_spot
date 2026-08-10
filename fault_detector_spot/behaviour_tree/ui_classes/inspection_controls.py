@@ -2488,15 +2488,29 @@ class InspectionControls(UIControlHelper):
                     setup,
                     previous_setup.safe_approach_pose_object,
                 )
+            if previous_setup.surface_alignment_approved:
+                setup = approve_surface_alignment_pose(
+                    setup,
+                    previous_setup.aligned_preapproach_pose_object,
+                )
             self.surface_distance_test_status_label.setText(
-                "Geometry changed. Reach and verify the aligned pose again."
+                "Distance geometry changed. Existing safe and aligned "
+                "poses were retained. Verify the surface distance again."
             )
         self._probe_setup = setup
         if self._refinement_workflow_active:
-            self._refinement_session = ProbeRefinementSession.create(
-                self._calculated_probe_setup,
-                self._probe_setup,
-            )
+            if self._refinement_session is None:
+                self._refinement_session = ProbeRefinementSession.create(
+                    self._calculated_probe_setup,
+                    self._probe_setup,
+                )
+            else:
+                self._refinement_session = (
+                    self._refinement_session.with_updated_surface_geometry(
+                        self._calculated_probe_setup,
+                        self._probe_setup,
+                    )
+                )
             self._distance_failure_requires_retraction = False
             self._retraction_failed = False
         self._set_probe_setup_buttons_enabled(True)
@@ -2546,7 +2560,7 @@ class InspectionControls(UIControlHelper):
             f"y={target.orientation.y:.5f}, "
             f"z={target.orientation.z:.5f}, "
             f"w={target.orientation.w:.5f}. "
-            "The probe local +X axis points outward from the surface."
+            "The probe local +X axis points toward the surface."
         )
         for label in (
             self.reference_target_roll_value_label,
@@ -3200,7 +3214,7 @@ class InspectionControls(UIControlHelper):
                 current,
                 current.orientation,
                 local_translation=Vector3Data(
-                    x=-correction.inward_correction_m,
+                    x=correction.inward_correction_m,
                     y=0.0,
                     z=0.0,
                 ),

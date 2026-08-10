@@ -11,6 +11,7 @@ from fault_detector_spot.request_identity import validate_request_id
 from .models import PoseData, Vector3Data
 from .reference_probe_setup import (
     ReferenceProbeSetup,
+    add_vectors,
     derive_aligned_preapproach_pose,
     rotate_vector,
     scale_vector,
@@ -208,6 +209,54 @@ class ProbeRefinementSession:
             RefinementMotionState.REACHED
         )
 
+    def with_updated_surface_geometry(
+        self,
+        calculated_setup: ReferenceProbeSetup,
+        approved_setup: ReferenceProbeSetup,
+    ) -> "ProbeRefinementSession":
+        """Replace distance geometry without resetting reached setup stages."""
+        if self.pending_motion is not None:
+            raise RuntimeError(
+                "Surface geometry cannot change during robot movement"
+            )
+        if self.recovery_required:
+            raise RuntimeError(
+                "Surface geometry cannot change before retraction"
+            )
+        updated = self.create(calculated_setup, approved_setup)
+        for stage in (
+            RefinementStage.SAFE_APPROACH,
+            RefinementStage.ALIGNMENT,
+        ):
+            updated.candidate_poses[stage] = self.candidate_pose(stage)
+            updated.motion_states[stage] = self.motion_states[stage]
+        updated.set_candidate(
+            RefinementStage.ALIGNMENT,
+            updated.candidate_poses[RefinementStage.ALIGNMENT],
+        )
+        updated.approved_poses[RefinementStage.SAFE_APPROACH] = (
+            deepcopy(
+                approved_setup.safe_approach_pose_object
+            )
+            if approved_setup.safe_approach_approved
+            else None
+        )
+        updated.approved_poses[RefinementStage.ALIGNMENT] = (
+            deepcopy(
+                approved_setup.aligned_preapproach_pose_object
+            )
+            if approved_setup.surface_alignment_approved
+            else None
+        )
+        updated.draft_approved[RefinementStage.SAFE_APPROACH] = (
+            approved_setup.safe_approach_approved
+        )
+        updated.draft_approved[RefinementStage.ALIGNMENT] = (
+            approved_setup.surface_alignment_approved
+        )
+        updated.active_stage = self.active_stage
+        return updated
+
     def approve(
         self,
         stage: RefinementStage,
@@ -399,14 +448,14 @@ class ProbeRefinementSession:
             self.aligned_preapproach_distance_m
             - self.target_surface_distance_m
         )
-        outward = rotate_vector(
+        inward = rotate_vector(
             aligned_pose_object.orientation,
             Vector3Data(x=1.0, y=0.0, z=0.0),
         )
         return PoseData(
-            position=subtract_vectors(
+            position=add_vectors(
                 aligned_pose_object.position,
-                scale_vector(outward, distance_delta),
+                scale_vector(inward, distance_delta),
             ),
             orientation=deepcopy(aligned_pose_object.orientation),
         )

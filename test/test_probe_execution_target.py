@@ -52,7 +52,10 @@ def inspection_object(sensor_id="bmm150_01"):
         probe_point_id="point_1",
         display_name="Point 1",
         safe_approach_pose_object=pose(x=0.30),
-        probe_pose_object=pose(x=0.03),
+        probe_pose_object=pose(
+            x=0.03,
+            orientation=yaw_quaternion(180.0),
+        ),
         target_surface_distance_m=0.03,
         position_tolerance_m=0.005,
         orientation_tolerance_rad=0.05,
@@ -113,13 +116,13 @@ def test_resolves_probe_and_hand_targets_in_execution_frame():
     )
     assert (
         target.aligned_preapproach_hand_pose_execution.position.x
-        == pytest.approx(0.90)
+        == pytest.approx(1.30)
     )
     assert target.nominal_probe_pose_execution.position.x == pytest.approx(
         1.03
     )
     assert target.nominal_hand_pose_execution.position.x == pytest.approx(
-        0.83
+        1.23
     )
     assert target.inward_direction_execution.x == pytest.approx(-1.0)
     assert target.inward_direction_execution.y == pytest.approx(0.0)
@@ -175,8 +178,8 @@ def test_rotated_sensor_calibration_changes_required_hand_pose():
 
     hand = target.nominal_hand_pose_execution
     assert hand.position.x == pytest.approx(0.03)
-    assert hand.position.y == pytest.approx(0.10)
-    assert hand.orientation.z == pytest.approx(-math.sqrt(0.5))
+    assert hand.position.y == pytest.approx(-0.10)
+    assert hand.orientation.z == pytest.approx(math.sqrt(0.5))
     assert hand.orientation.w == pytest.approx(math.sqrt(0.5))
 
 

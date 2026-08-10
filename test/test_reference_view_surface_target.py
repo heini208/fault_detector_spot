@@ -71,7 +71,7 @@ def quaternion_matrix(quaternion):
     )
 
 
-def test_identity_tag_geometry_produces_identity_orientation():
+def test_identity_tag_geometry_points_probe_toward_surface():
     result = resolve_reference_surface_target(
         approach((1.0, 2.0, 3.0), (1.0, 0.0, 0.0)),
         PoseData.identity(),
@@ -86,7 +86,9 @@ def test_identity_tag_geometry_produces_identity_orientation():
     assert result.aligned_preapproach_pose_object.position.x == pytest.approx(
         1.20
     )
-    assert result.target_pose_object.orientation == QuaternionData.identity()
+    rotation = quaternion_matrix(result.target_pose_object.orientation)
+    assert rotation[:, 0] == pytest.approx([-1.0, 0.0, 0.0])
+    assert rotation[:, 2] == pytest.approx([0.0, 0.0, 1.0])
     assert (
         result.aligned_preapproach_pose_object.orientation
         == result.target_pose_object.orientation
@@ -121,10 +123,10 @@ def test_camera_pose_transforms_surface_and_direction_into_object_frame():
         1.25
     )
     rotation = quaternion_matrix(result.target_pose_object.orientation)
-    assert rotation[:, 0] == pytest.approx([0.0, 1.0, 0.0])
+    assert rotation[:, 0] == pytest.approx([0.0, -1.0, 0.0])
 
 
-def test_orientation_local_x_matches_tilted_surface_outward_axis():
+def test_orientation_local_x_opposes_tilted_surface_outward_axis():
     outward = np.array([1.0, 0.0, 1.0])
     outward = outward / np.linalg.norm(outward)
     result = resolve_reference_surface_target(
@@ -135,7 +137,7 @@ def test_orientation_local_x_matches_tilted_surface_outward_axis():
     )
 
     rotation = quaternion_matrix(result.target_pose_object.orientation)
-    assert rotation[:, 0] == pytest.approx(outward)
+    assert rotation[:, 0] == pytest.approx(-outward)
     assert np.linalg.det(rotation) == pytest.approx(1.0)
     assert rotation.T @ rotation == pytest.approx(np.eye(3))
 

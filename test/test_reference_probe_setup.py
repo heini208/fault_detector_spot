@@ -91,7 +91,7 @@ def test_alignment_capture_rebuilds_probe_along_local_positive_x():
     approved = approve_surface_alignment_pose(setup, current)
 
     assert approved.aligned_preapproach_pose_object == current
-    assert math.isclose(approved.probe_pose_object.position.x, 0.08)
+    assert math.isclose(approved.probe_pose_object.position.x, 0.32)
     assert math.isclose(approved.probe_pose_object.position.y, 0.10)
     assert math.isclose(approved.probe_pose_object.position.z, 0.30)
     assert approved.surface_alignment_approved
@@ -107,13 +107,13 @@ def test_probe_capture_rebuilds_aligned_pose():
     assert approved.probe_pose_object == current
     assert math.isclose(
         approved.aligned_preapproach_pose_object.position.x,
-        0.16,
+        -0.08,
     )
     assert approved.surface_alignment_approved
     assert approved.probe_pose_approved
 
 
-def test_aligned_pose_is_derived_in_probe_local_positive_x():
+def test_aligned_pose_is_derived_opposite_probe_local_positive_x():
     probe = pose(
         x=0.04,
         y=0.10,
@@ -128,7 +128,7 @@ def test_aligned_pose_is_derived_in_probe_local_positive_x():
     )
 
     assert aligned.position.x == pytest.approx(0.04)
-    assert aligned.position.y == pytest.approx(0.20)
+    assert aligned.position.y == pytest.approx(0.0)
     assert aligned.position.z == pytest.approx(0.20)
     assert aligned.orientation == probe.orientation
 

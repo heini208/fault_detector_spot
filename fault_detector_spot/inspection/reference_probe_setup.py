@@ -72,13 +72,13 @@ def approve_surface_alignment_pose(
     _validate_setup(setup)
     current_probe_pose_object.validate()
     distance_delta = _distance_delta(setup.surface_target)
-    outward = rotate_vector(
+    inward = rotate_vector(
         current_probe_pose_object.orientation,
         Vector3Data(x=1.0, y=0.0, z=0.0),
     )
-    probe_position = subtract_vectors(
+    probe_position = add_vectors(
         current_probe_pose_object.position,
-        scale_vector(outward, distance_delta),
+        scale_vector(inward, distance_delta),
     )
     orientation = current_probe_pose_object.orientation
     return ReferenceProbeSetup(
@@ -129,14 +129,14 @@ def derive_aligned_preapproach_pose(
         target_surface_distance_m,
         aligned_preapproach_distance_m,
     )
-    outward = rotate_vector(
+    inward = rotate_vector(
         probe_pose_object.orientation,
         Vector3Data(x=1.0, y=0.0, z=0.0),
     )
     result = PoseData(
-        position=add_vectors(
+        position=subtract_vectors(
             probe_pose_object.position,
-            scale_vector(outward, distance_delta),
+            scale_vector(inward, distance_delta),
         ),
         orientation=probe_pose_object.orientation,
     )

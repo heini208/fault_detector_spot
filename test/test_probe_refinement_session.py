@@ -103,6 +103,57 @@ def test_manual_safe_approach_starts_at_live_pose_without_approval():
     assert not session.stage_is_approved(RefinementStage.SAFE_APPROACH)
 
 
+def test_distance_geometry_update_preserves_reached_setup_stages():
+    original = calculated_setup()
+    approved = approve_safe_approach_pose(original, pose(x=0.30))
+    approved = approve_surface_alignment_pose(approved, pose(x=0.08))
+    session = ProbeRefinementSession.create(original, approved)
+    session.active_stage = RefinementStage.PROBE
+    session.motion_states[RefinementStage.SAFE_APPROACH] = (
+        RefinementMotionState.REACHED
+    )
+    session.motion_states[RefinementStage.ALIGNMENT] = (
+        RefinementMotionState.REACHED
+    )
+    updated_target = ReferenceSurfaceTarget(
+        surface_point_object=Vector3Data.zero(),
+        outward_direction_object=Vector3Data(x=1.0, y=0.0, z=0.0),
+        target_pose_object=pose(x=0.02),
+        aligned_preapproach_pose_object=pose(x=0.08),
+        target_surface_distance_m=0.02,
+        aligned_preapproach_distance_m=0.08,
+        direction_source="surface_fit",
+    )
+    updated_calculated = initialize_reference_probe_setup(updated_target)
+    updated_approved = approve_safe_approach_pose(
+        updated_calculated,
+        approved.safe_approach_pose_object,
+    )
+    updated_approved = approve_surface_alignment_pose(
+        updated_approved,
+        approved.aligned_preapproach_pose_object,
+    )
+
+    updated = session.with_updated_surface_geometry(
+        updated_calculated,
+        updated_approved,
+    )
+
+    assert updated.active_stage == RefinementStage.PROBE
+    assert updated.motion_states[RefinementStage.SAFE_APPROACH] == (
+        RefinementMotionState.REACHED
+    )
+    assert updated.motion_states[RefinementStage.ALIGNMENT] == (
+        RefinementMotionState.REACHED
+    )
+    assert updated.motion_states[RefinementStage.PROBE] == (
+        RefinementMotionState.NOT_TESTED
+    )
+    assert updated.stage_is_approved(RefinementStage.SAFE_APPROACH)
+    assert updated.stage_is_approved(RefinementStage.ALIGNMENT)
+    assert not updated.surface_distance_verified
+
+
 def test_motion_requires_safe_then_aligned_in_current_workflow():
     session = ProbeRefinementSession.create(calculated_setup())
 
@@ -141,7 +192,7 @@ def test_alignment_candidate_derives_probe_with_shared_orientation():
     probe = session.candidate_pose(RefinementStage.PROBE)
 
     assert probe.position.x == pytest.approx(0.20)
-    assert probe.position.y == pytest.approx(0.05)
+    assert probe.position.y == pytest.approx(0.15)
     assert probe.position.z == pytest.approx(0.30)
     assert probe.orientation == aligned.orientation
 
@@ -192,10 +243,10 @@ def test_verified_probe_rebuilds_retraction_pose_and_requires_approval():
     assert not session.stage_is_approved(RefinementStage.PROBE)
     assert aligned.orientation == achieved.orientation
     assert aligned.position.x == pytest.approx(
-        achieved.position.x + 0.05 * math.cos(math.radians(10.0))
+        achieved.position.x - 0.05 * math.cos(math.radians(10.0))
     )
     assert aligned.position.y == pytest.approx(
-        achieved.position.y + 0.05 * math.sin(math.radians(10.0))
+        achieved.position.y - 0.05 * math.sin(math.radians(10.0))
     )
 
 

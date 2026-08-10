@@ -31,6 +31,7 @@ from fault_detector_spot.inspection.probe_refinement_session import (
 )
 from fault_detector_spot.inspection.sensor_models import SensorDefinition
 from fault_detector_spot.inspection.reference_probe_setup import (
+    approve_safe_approach_pose,
     approve_surface_alignment_pose,
     initialize_reference_probe_setup,
 )
@@ -395,6 +396,58 @@ def test_failed_alignment_target_keeps_relative_corrections_available(
     assert controls.move_aligned_pose_button.isEnabled()
 
 
+def test_distance_change_keeps_probe_stage_controls_enabled(
+    application,
+    tmp_path,
+    monkeypatch,
+):
+    controls = InspectionControls(FakeUI(tmp_path))
+    setup = initialize_reference_probe_setup(surface_target())
+    setup = approve_safe_approach_pose(setup, pose(x=0.30))
+    setup = approve_surface_alignment_pose(setup, pose(x=0.08))
+    session = configure_session(
+        controls,
+        setup,
+        RefinementStage.PROBE,
+    )
+    session.motion_states[RefinementStage.SAFE_APPROACH] = (
+        RefinementMotionState.REACHED
+    )
+    session.motion_states[RefinementStage.ALIGNMENT] = (
+        RefinementMotionState.REACHED
+    )
+    changed_target = ReferenceSurfaceTarget(
+        surface_point_object=Vector3Data.zero(),
+        outward_direction_object=Vector3Data(x=1.0, y=0.0, z=0.0),
+        target_pose_object=pose(x=0.02),
+        aligned_preapproach_pose_object=pose(x=0.08),
+        target_surface_distance_m=0.02,
+        aligned_preapproach_distance_m=0.08,
+        direction_source="surface_fit",
+    )
+    controls._selected_approach_direction = object()
+    controls._reference_view = SimpleNamespace(
+        controlled_frame_pose_object=PoseData.identity()
+    )
+    monkeypatch.setattr(
+        "fault_detector_spot.behaviour_tree.ui_classes."
+        "inspection_controls.resolve_reference_surface_target",
+        lambda **_kwargs: changed_target,
+    )
+
+    controls._resolve_selected_surface_target()
+
+    updated = controls._refinement_session
+    assert updated.active_stage == RefinementStage.PROBE
+    assert updated.motion_states[RefinementStage.SAFE_APPROACH] == (
+        RefinementMotionState.REACHED
+    )
+    assert updated.motion_states[RefinementStage.ALIGNMENT] == (
+        RefinementMotionState.REACHED
+    )
+    assert controls.test_surface_distance_button.isEnabled()
+
+
 def test_refinement_frame_selector_defaults_to_sensor_and_derives_frames(
     application,
     tmp_path,
@@ -468,7 +521,7 @@ def test_surface_distance_test_commands_only_one_bounded_axis_step(
     assert controls.handle_test_surface_distance() is True
 
     assert targets[0][0] == RefinementStage.PROBE
-    assert targets[0][1].position.x == pytest.approx(0.07)
+    assert targets[0][1].position.x == pytest.approx(0.09)
     assert "inward correction" in targets[0][2]
     assert targets[0][3]["axial_correction_m"] == pytest.approx(0.01)
     assert controls.surface_distance_delta_value_label.text() == "0.0500"

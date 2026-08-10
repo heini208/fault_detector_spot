@@ -140,8 +140,8 @@ def _surface_facing_orientation(
     outward_direction_object: np.ndarray,
 ) -> QuaternionData:
     local_x = _normalized_vector(
-        outward_direction_object,
-        "Surface outward direction",
+        -outward_direction_object,
+        "Surface inward direction",
     )
     preferred_up = np.array([0.0, 0.0, 1.0], dtype=float)
     local_z = preferred_up - np.dot(preferred_up, local_x) * local_x

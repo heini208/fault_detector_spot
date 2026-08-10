@@ -172,7 +172,7 @@ def resolve_probe_execution_geometry(
     )
     inward_direction = rotate_vector(
         nominal_probe_pose.orientation,
-        Vector3Data(x=-1.0, y=0.0, z=0.0),
+        Vector3Data(x=1.0, y=0.0, z=0.0),
     )
 
     return ProbeExecutionTarget(
