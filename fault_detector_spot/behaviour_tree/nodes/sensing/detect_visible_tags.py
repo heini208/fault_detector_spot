@@ -1,4 +1,4 @@
-"""Detect Spot base-camera fiducials from filtered TF frames."""
+"""Detect fresh Spot base-camera fiducials with stable TF geometry."""
 
 import re
 from typing import Dict, Optional
@@ -19,12 +19,13 @@ from .tag_observation_time import (
 
 
 class DetectVisibleTags(py_trees.behaviour.Behaviour):
-    """Read filtered base-camera fiducials and retain brief dropouts."""
+    """Use raw fiducials for visibility and filtered fiducials for pose."""
 
     def __init__(
         self,
         name: str = "DetectVisibleTags",
-        frame_pattern: str = r"filtered_fiducial_(\d+)",
+        frame_pattern: str = r"(?<!filtered_)fiducial_(\d+)",
+        filtered_frame_prefix: str = "filtered_fiducial_",
         target_frame: str = "body",
         max_age_sec: float = 1.5,
     ):
@@ -37,6 +38,7 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         ] = None
         self.blackboard = self.attach_blackboard_client()
         self.frame_pattern = re.compile(frame_pattern)
+        self.filtered_frame_prefix = filtered_frame_prefix
         self.target_frame = target_frame
         self.max_age_sec = max_age_sec
         self.observation_cache = TagObservationCache(
@@ -89,7 +91,7 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         self,
         current_time: Time,
     ) -> Dict[int, TagElement]:
-        """Resolve currently fresh filtered fiducial TF frames."""
+        """Resolve filtered poses for currently fresh raw fiducials."""
         if self.tf_buffer is None:
             return {}
 
@@ -105,18 +107,24 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         seen_frames = set()
 
         for match in self.frame_pattern.finditer(frame_yaml):
-            frame_name = match.group(0)
+            raw_frame_name = match.group(0)
 
-            if frame_name in seen_frames:
+            if raw_frame_name in seen_frames:
                 continue
 
-            seen_frames.add(frame_name)
+            seen_frames.add(raw_frame_name)
             tag_id = int(match.group(1))
+            filtered_frame_name = f"{self.filtered_frame_prefix}{tag_id}"
 
             try:
-                transform = self.tf_buffer.lookup_transform(
+                raw_transform = self.tf_buffer.lookup_transform(
                     self.target_frame,
-                    frame_name,
+                    raw_frame_name,
+                    Time(),
+                )
+                filtered_transform = self.tf_buffer.lookup_transform(
+                    self.target_frame,
+                    filtered_frame_name,
                     Time(),
                 )
             except (
@@ -125,21 +133,23 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
                 tf2_ros.ExtrapolationException,
             ) as exception:
                 self.logger.debug(
-                    f"Could not resolve {frame_name}: "
+                    f"Could not resolve {raw_frame_name} and "
+                    f"{filtered_frame_name}: "
                     f"{exception}"
                 )
                 continue
 
             if not is_observation_fresh(
                 current_time,
-                transform.header.stamp,
+                raw_transform.header.stamp,
                 self.max_age_sec,
             ):
                 continue
 
             observations[tag_id] = self._create_tag_element(
                 tag_id,
-                transform,
+                filtered_transform,
+                raw_transform.header.stamp,
             )
 
         return observations
@@ -147,22 +157,24 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
     @staticmethod
     def _create_tag_element(
         tag_id: int,
-        transform,
+        pose_transform,
+        observation_stamp,
     ) -> TagElement:
-        """Convert a TF transform into a tag observation."""
+        """Combine filtered geometry with the raw observation timestamp."""
         tag = TagElement()
         tag.id = tag_id
-        tag.pose.header = transform.header
+        tag.pose.header = deepcopy(pose_transform.header)
+        tag.pose.header.stamp = observation_stamp
         tag.pose.pose.position.x = (
-            transform.transform.translation.x
+            pose_transform.transform.translation.x
         )
         tag.pose.pose.position.y = (
-            transform.transform.translation.y
+            pose_transform.transform.translation.y
         )
         tag.pose.pose.position.z = (
-            transform.transform.translation.z
+            pose_transform.transform.translation.z
         )
         tag.pose.pose.orientation = (
-            transform.transform.rotation
+            pose_transform.transform.rotation
         )
         return tag
