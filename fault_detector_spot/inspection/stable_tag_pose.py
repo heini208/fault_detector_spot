@@ -35,8 +35,8 @@ class StableTagPose:
 def stabilize_tag_pose(
     samples: Iterable[TagPoseSample],
     now_seconds: float,
-    maximum_age_sec: float = 0.25,
-    stabilization_window_sec: float = 1.0,
+    maximum_age_sec: float = 1.5,
+    stabilization_window_sec: float = 3.0,
     minimum_samples: int = 3,
     minimum_span_sec: float = 0.10,
     maximum_position_deviation_m: float = 0.015,

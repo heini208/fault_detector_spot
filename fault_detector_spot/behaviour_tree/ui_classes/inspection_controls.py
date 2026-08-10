@@ -129,8 +129,9 @@ PROBE_MOTION_SETTLE_SEC = 0.5
 SURFACE_DISTANCE_TOLERANCE_M = 0.005
 SURFACE_DISTANCE_STABILITY_TOLERANCE_M = 0.005
 SURFACE_DISTANCE_SAMPLE_WINDOW_SEC = 0.20
-BASE_TAG_MAXIMUM_AGE_SEC = 0.25
-BASE_TAG_STABILIZATION_HISTORY_SEC = 1.0
+BASE_TAG_MAXIMUM_AGE_SEC = 1.5
+BASE_TAG_STABILIZATION_HISTORY_SEC = 3.0
+BASE_TAG_HISTORY_MAX_SAMPLES = 64
 BASE_TAG_MINIMUM_SPAN_SEC = 0.10
 
 
@@ -587,7 +588,7 @@ class InspectionControls(UIControlHelper):
             stamp_key = (int(stamp.sec), int(stamp.nanosec))
             history = self._base_tag_histories.setdefault(
                 int(tag.id),
-                deque(maxlen=20),
+                deque(maxlen=BASE_TAG_HISTORY_MAX_SAMPLES),
             )
             if history and history[-1][0] == stamp_key:
                 continue

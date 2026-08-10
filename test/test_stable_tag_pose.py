@@ -47,6 +47,16 @@ def test_low_rate_history_is_accepted_when_newest_sample_is_current():
     assert stable.newest_age_sec == pytest.approx(0.1)
 
 
+def test_spot_world_object_age_is_accepted_within_validity_window():
+    samples = [sample(7.2), sample(8.6), sample(9.2)]
+
+    stable = stabilize_tag_pose(samples, now_seconds=10.0)
+
+    assert stable.sample_count == 3
+    assert stable.sample_span_sec == pytest.approx(2.0)
+    assert stable.newest_age_sec == pytest.approx(0.8)
+
+
 def test_duplicate_timestamps_do_not_count_as_distinct_observations():
     samples = [
         sample(10.0),
@@ -85,9 +95,9 @@ def test_quaternion_sign_does_not_create_false_orientation_jitter():
 
 
 def test_stabilization_rejects_stale_observations():
-    samples = [sample(9.0), sample(9.1), sample(9.2)]
+    samples = [sample(7.0), sample(7.1), sample(8.4)]
 
-    with pytest.raises(ValueError, match="newest_age=0.800 s"):
+    with pytest.raises(ValueError, match="newest_age=1.600 s"):
         stabilize_tag_pose(samples, now_seconds=10.0)
 
 
