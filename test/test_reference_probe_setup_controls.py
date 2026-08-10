@@ -352,7 +352,9 @@ def test_failed_safe_target_keeps_relative_corrections_available(
     session.motion_states[RefinementStage.SAFE_APPROACH] = (
         RefinementMotionState.REACHED
     )
-
+    controls.sensor_id_field.setCurrentIndex(
+        controls.sensor_id_field.findData("bmm150")
+    )
     assert controls.handle_refine_pose("approach", "up") is True
     pending = session.pending_motion
 
