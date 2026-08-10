@@ -90,6 +90,19 @@ def test_session_starts_at_first_unapproved_stage():
     assert not session.stage_is_approved(RefinementStage.ALIGNMENT)
 
 
+def test_manual_safe_approach_starts_at_live_pose_without_approval():
+    session = ProbeRefinementSession.create(calculated_setup())
+    current = pose(x=0.42, y=0.10, z=0.30)
+
+    session.seed_safe_approach_from_current_pose(current)
+
+    assert session.candidate_pose(RefinementStage.SAFE_APPROACH) == current
+    assert session.motion_states[RefinementStage.SAFE_APPROACH] == (
+        RefinementMotionState.REACHED
+    )
+    assert not session.stage_is_approved(RefinementStage.SAFE_APPROACH)
+
+
 def test_motion_requires_safe_then_aligned_in_current_workflow():
     session = ProbeRefinementSession.create(calculated_setup())
 

@@ -130,7 +130,8 @@ SURFACE_DISTANCE_TOLERANCE_M = 0.005
 SURFACE_DISTANCE_STABILITY_TOLERANCE_M = 0.005
 SURFACE_DISTANCE_SAMPLE_WINDOW_SEC = 0.20
 BASE_TAG_MAXIMUM_AGE_SEC = 0.25
-BASE_TAG_STABILIZATION_WINDOW_SEC = 0.10
+BASE_TAG_STABILIZATION_HISTORY_SEC = 1.0
+BASE_TAG_MINIMUM_SPAN_SEC = 0.10
 
 
 class InspectionControls(UIControlHelper):
@@ -2564,6 +2565,10 @@ class InspectionControls(UIControlHelper):
                 self._calculated_probe_setup,
                 setup,
             )
+            if not setup.safe_approach_approved:
+                self._refinement_session.seed_safe_approach_from_current_pose(
+                    self._current_probe_pose_object()
+                )
         except Exception as exception:
             self._show_setup_error(
                 "Start Probe Point Refinement",
@@ -3729,8 +3734,9 @@ class InspectionControls(UIControlHelper):
             samples,
             now_seconds=now_seconds,
             maximum_age_sec=BASE_TAG_MAXIMUM_AGE_SEC,
+            stabilization_window_sec=BASE_TAG_STABILIZATION_HISTORY_SEC,
             minimum_samples=3,
-            minimum_span_sec=BASE_TAG_STABILIZATION_WINDOW_SEC,
+            minimum_span_sec=BASE_TAG_MINIMUM_SPAN_SEC,
         )
         tag = deepcopy(messages_by_stamp[stable.newest_stamp_seconds])
         tag.pose.header.frame_id = stable.frame_id

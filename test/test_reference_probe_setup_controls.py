@@ -188,11 +188,22 @@ def test_starting_wizard_never_publishes_a_robot_command(
     setup = initialize_reference_probe_setup(surface_target())
     controls._calculated_probe_setup = setup
     controls._probe_setup = setup
+    current = pose(x=0.42, y=0.10, z=0.30)
+    controls._current_probe_pose_object = lambda: current
 
     assert controls.handle_start_probe_refinement() is True
 
     assert ui.complex_command_publisher.messages == []
     assert controls._refinement_session.active_stage == (
+        RefinementStage.SAFE_APPROACH
+    )
+    assert controls._refinement_session.candidate_pose(
+        RefinementStage.SAFE_APPROACH
+    ) == current
+    assert controls._refinement_session.motion_states[
+        RefinementStage.SAFE_APPROACH
+    ] == RefinementMotionState.REACHED
+    assert not controls._refinement_session.stage_is_approved(
         RefinementStage.SAFE_APPROACH
     )
     assert controls.refinement_dialog.isVisible()

@@ -37,6 +37,16 @@ def test_high_rate_samples_use_the_whole_fresh_stabilization_window():
     assert stable.pose.position.x == pytest.approx(1.0)
 
 
+def test_low_rate_history_is_accepted_when_newest_sample_is_current():
+    samples = [sample(9.2), sample(9.6), sample(10.0)]
+
+    stable = stabilize_tag_pose(samples, now_seconds=10.1)
+
+    assert stable.sample_count == 3
+    assert stable.sample_span_sec == pytest.approx(0.8)
+    assert stable.newest_age_sec == pytest.approx(0.1)
+
+
 def test_duplicate_timestamps_do_not_count_as_distinct_observations():
     samples = [
         sample(10.0),
@@ -44,7 +54,7 @@ def test_duplicate_timestamps_do_not_count_as_distinct_observations():
         sample(10.1),
     ]
 
-    with pytest.raises(ValueError, match="three distinct"):
+    with pytest.raises(ValueError, match="distinct=2"):
         stabilize_tag_pose(samples, now_seconds=10.11)
 
 
@@ -77,5 +87,23 @@ def test_quaternion_sign_does_not_create_false_orientation_jitter():
 def test_stabilization_rejects_stale_observations():
     samples = [sample(9.0), sample(9.1), sample(9.2)]
 
-    with pytest.raises(ValueError, match="fresh"):
+    with pytest.raises(ValueError, match="newest_age=0.800 s"):
         stabilize_tag_pose(samples, now_seconds=10.0)
+
+
+def test_failure_reports_stabilization_diagnostics():
+    samples = [
+        sample(9.8, x=1.0),
+        sample(9.9, x=1.0),
+        sample(10.0, x=1.04),
+    ]
+
+    with pytest.raises(ValueError) as error:
+        stabilize_tag_pose(samples, now_seconds=10.1)
+
+    message = str(error.value)
+    assert "distinct=3" in message
+    assert "newest_age=0.100 s" in message
+    assert "span=0.200 s" in message
+    assert "max_position_deviation=" in message
+    assert "max_orientation_deviation=" in message

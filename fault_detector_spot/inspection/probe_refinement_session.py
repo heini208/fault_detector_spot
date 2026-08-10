@@ -191,6 +191,21 @@ class ProbeRefinementSession:
         )
         self.draft_approved[stage] = False
 
+    def seed_safe_approach_from_current_pose(
+        self,
+        achieved_pose_object: PoseData,
+    ) -> None:
+        """Start manual safe-pose refinement at the achieved live pose."""
+        if self.stage_is_approved(RefinementStage.SAFE_APPROACH):
+            raise RuntimeError("Safe approach is already approved")
+        self.set_candidate(
+            RefinementStage.SAFE_APPROACH,
+            achieved_pose_object,
+        )
+        self.motion_states[RefinementStage.SAFE_APPROACH] = (
+            RefinementMotionState.REACHED
+        )
+
     def approve(
         self,
         stage: RefinementStage,
