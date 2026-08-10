@@ -3240,8 +3240,8 @@ class InspectionControls(UIControlHelper):
             "down": Vector3Data(x=0.0, y=0.0, z=-translation_step),
             "left": Vector3Data(x=0.0, y=translation_step, z=0.0),
             "right": Vector3Data(x=0.0, y=-translation_step, z=0.0),
-            "front": Vector3Data(x=-translation_step, y=0.0, z=0.0),
-            "back": Vector3Data(x=translation_step, y=0.0, z=0.0),
+            "front": Vector3Data(x=translation_step, y=0.0, z=0.0),
+            "back": Vector3Data(x=-translation_step, y=0.0, z=0.0),
         }
         if action in translations:
             return translations[action], 0.0, 0.0

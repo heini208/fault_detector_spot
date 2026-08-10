@@ -330,6 +330,14 @@ def test_refinement_frame_selector_defaults_to_sensor_and_derives_frames(
         assert controls._selected_refinement_frame_id() == frame_id
 
 
+def test_refinement_front_and_back_follow_positive_and_negative_x():
+    front = InspectionControls._refinement_delta("front", 0.01, 0.1)
+    back = InspectionControls._refinement_delta("back", 0.01, 0.1)
+
+    assert front[0].x == pytest.approx(0.01)
+    assert back[0].x == pytest.approx(-0.01)
+
+
 def test_surface_distance_test_commands_only_one_bounded_axis_step(
     application,
     tmp_path,
