@@ -114,7 +114,7 @@ from fault_detector_spot.inspection.stable_tag_pose import (
     stabilize_tag_pose,
 )
 
-from ..commands.command_ids import CommandID, OrientationModes
+from ..commands.command_ids import CommandID, OrientationModes, TagFrames
 from .collapsible_section import CollapsibleSection
 from .probe_refinement_dialog import ProbeRefinementDialog
 from .UIControlHelper import UIControlHelper
@@ -133,6 +133,11 @@ BASE_TAG_MAXIMUM_AGE_SEC = 1.5
 BASE_TAG_STABILIZATION_HISTORY_SEC = 3.0
 BASE_TAG_HISTORY_MAX_SAMPLES = 64
 BASE_TAG_MINIMUM_SPAN_SEC = 0.10
+REFINEMENT_FRAME_SENSOR = "sensor"
+REFINEMENT_FRAME_HAND = "hand"
+REFINEMENT_FRAME_TAG = "tag"
+REFINEMENT_FRAME_BODY = "body"
+REFINEMENT_FRAME_MAP = "map"
 
 
 class InspectionControls(UIControlHelper):
@@ -621,7 +626,7 @@ class InspectionControls(UIControlHelper):
             return
         if status.request_id != pending.request_id:
             return
-        if status.command_id != CommandID.MOVE_ARM_TO_TAG:
+        if status.command_id != pending.command_id:
             self._fail_pending_refinement_motion(
                 "Unexpected terminal command status for "
                 f"{status.command_id}",
@@ -1124,6 +1129,18 @@ class InspectionControls(UIControlHelper):
                 MAX_REFINEMENT_ROTATION_DEG,
                 1,
             )
+        )
+        self.refine_frame_dropdown = QComboBox()
+        for label, frame in (
+            ("Sensor", REFINEMENT_FRAME_SENSOR),
+            ("Hand", REFINEMENT_FRAME_HAND),
+            ("Tag", REFINEMENT_FRAME_TAG),
+            ("Body", REFINEMENT_FRAME_BODY),
+            ("Map", REFINEMENT_FRAME_MAP),
+        ):
+            self.refine_frame_dropdown.addItem(label, frame)
+        self.refine_frame_dropdown.setToolTip(
+            "Coordinate frame used by each finite relative adjustment"
         )
         self.refinement_buttons = {}
         for stage in ("approach", "alignment", "probe"):
@@ -2770,6 +2787,7 @@ class InspectionControls(UIControlHelper):
         self.surface_distance_tolerance_field.setEnabled(not pending)
         self.refine_translation_step_field.setEnabled(not pending)
         self.refine_rotation_step_field.setEnabled(not pending)
+        self.refine_frame_dropdown.setEnabled(not pending)
 
         self.refinement_dialog.back_button.setEnabled(
             current != RefinementStage.SAFE_APPROACH
@@ -3072,19 +3090,12 @@ class InspectionControls(UIControlHelper):
                 translation_step,
                 rotation_step,
             )
-            current = session.candidate_pose(stage_value)
-            target = refine_probe_pose(
-                current,
-                self._require_probe_setup()
-                .surface_target.target_pose_object.orientation,
-                local_translation=translation,
-                pitch_rad=pitch,
-                yaw_rad=yaw,
-            )
-            if not self._send_refinement_motion(
+            if not self._send_refinement_relative_motion(
                 stage_value,
                 f"{stage} {action.replace('_', ' ')} refinement",
-                target,
+                translation,
+                pitch,
+                yaw,
             ):
                 return False
         except Exception as exception:
@@ -3355,6 +3366,8 @@ class InspectionControls(UIControlHelper):
                 target_pose_object=deepcopy(probe_pose_object),
                 updates_candidate=updates_candidate,
                 axial_correction_m=axial_correction_m,
+                command_id=CommandID.MOVE_ARM_TO_TAG,
+                verify_achieved_pose=True,
             )
             session.begin_motion(motion)
         except Exception as exception:
@@ -3371,6 +3384,87 @@ class InspectionControls(UIControlHelper):
         self._refresh_refinement_dialog()
         return True
 
+    def _send_refinement_relative_motion(
+        self,
+        stage,
+        label,
+        translation,
+        pitch_rad,
+        yaw_rad,
+    ):
+        try:
+            self._require_command_path_idle()
+            session = self._require_refinement_session()
+            if self._retraction_failed:
+                raise RuntimeError(
+                    "Only retraction is permitted after retraction failure"
+                )
+            command = self._new_command(CommandID.MOVE_ARM_RELATIVE)
+            command.offset.header.frame_id = (
+                self._selected_refinement_frame_id()
+            )
+            command.offset.pose.position.x = translation.x
+            command.offset.pose.position.y = translation.y
+            command.offset.pose.position.z = translation.z
+            self._write_quaternion_message(
+                command.offset.pose.orientation,
+                self._relative_rotation_quaternion(pitch_rad, yaw_rad),
+            )
+            motion = PendingRefinementMotion(
+                request_id=command.command.request_id,
+                stage=stage,
+                purpose=label,
+                target_pose_object=session.candidate_pose(stage),
+                updates_candidate=False,
+                command_id=CommandID.MOVE_ARM_RELATIVE,
+                verify_achieved_pose=False,
+            )
+            session.begin_motion(motion)
+        except Exception as exception:
+            self._show_setup_error("Move Probe Setup", exception)
+            return False
+        try:
+            self.complex_command_publisher.publish(command)
+        except Exception as exception:
+            session.fail_motion(motion.request_id, str(exception))
+            self._show_setup_error("Move Probe Setup", exception)
+            return False
+        self._probe_motion_pending = True
+        self._set_status_text(
+            f"Command sent: {label} in "
+            f"{command.offset.header.frame_id}"
+        )
+        self._refresh_refinement_dialog()
+        return True
+
+    def _selected_refinement_frame_id(self):
+        selection = self.refine_frame_dropdown.currentData()
+        if selection == REFINEMENT_FRAME_SENSOR:
+            return self._active_probe_frame()
+        if selection == REFINEMENT_FRAME_HAND:
+            return HAND_FRAME_NAME
+        if selection == REFINEMENT_FRAME_TAG:
+            if self._selected_definition is None:
+                raise ValueError("No inspection object is selected")
+            tag_id = self._selected_definition.reference_tag.tag_id
+            return f"{TagFrames.SPOT_FRAME_FILTERED.value}{tag_id}"
+        if selection == REFINEMENT_FRAME_BODY:
+            return "body"
+        if selection == REFINEMENT_FRAME_MAP:
+            return "map"
+        raise ValueError("Select a valid refinement frame")
+
+    @staticmethod
+    def _relative_rotation_quaternion(pitch_rad, yaw_rad):
+        half_pitch = pitch_rad * 0.5
+        half_yaw = yaw_rad * 0.5
+        return QuaternionData(
+            x=-math.sin(half_pitch) * math.sin(half_yaw),
+            y=math.sin(half_pitch) * math.cos(half_yaw),
+            z=math.cos(half_pitch) * math.sin(half_yaw),
+            w=math.cos(half_pitch) * math.cos(half_yaw),
+        )
+
     def _complete_pending_refinement_motion(self, request_id):
         session = self._refinement_session
         if session is None or session.pending_motion is None:
@@ -3379,6 +3473,16 @@ class InspectionControls(UIControlHelper):
         if motion.request_id != request_id:
             return
         try:
+            if not motion.verify_achieved_pose:
+                session.complete_relative_motion(request_id)
+                self._probe_motion_pending = False
+                self._hand_depth_history.clear()
+                self._set_status_text(
+                    f"Reached {motion.purpose}; capture the current pose "
+                    "when approving"
+                )
+                self._refresh_refinement_dialog()
+                return
             achieved = self._current_probe_pose_object()
             position_tolerance = self._distance_value(
                 self.probe_position_tolerance_field,

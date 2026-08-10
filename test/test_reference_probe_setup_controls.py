@@ -10,6 +10,7 @@ from fault_detector_msgs.msg import BasicCommand, TagElement
 from PyQt5.QtWidgets import QApplication, QLabel
 
 from fault_detector_spot.behaviour_tree.commands.command_ids import (
+    CommandID,
     OrientationModes,
 )
 from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
@@ -243,20 +244,90 @@ def test_alignment_refinement_uses_tangent_axes_and_has_no_axial_buttons(
     session.motion_states[RefinementStage.ALIGNMENT] = (
         RefinementMotionState.REACHED
     )
-    targets = []
-    controls._send_refinement_motion = (
-        lambda stage, label, target, **kwargs:
-        targets.append((stage, target, label, kwargs)) or True
+    adjustments = []
+    controls._send_refinement_relative_motion = (
+        lambda stage, label, translation, pitch, yaw:
+        adjustments.append(
+            (stage, translation, pitch, yaw, label)
+        ) or True
     )
 
     assert controls.handle_refine_pose("alignment", "up") is True
 
-    assert targets[0][0] == RefinementStage.ALIGNMENT
-    assert targets[0][1].position.z == pytest.approx(0.01)
-    assert targets[0][1].position.x == pytest.approx(0.08)
+    assert adjustments[0][0] == RefinementStage.ALIGNMENT
+    assert adjustments[0][1].z == pytest.approx(0.01)
+    assert adjustments[0][1].x == pytest.approx(0.0)
     assert "front" not in controls.refinement_buttons["alignment"]
     assert "back" not in controls.refinement_buttons["alignment"]
     assert controls.handle_refine_pose("probe", "up") is False
+
+
+def test_relative_refinement_completion_does_not_query_tag_pose(
+    application,
+    tmp_path,
+):
+    ui = FakeUI(tmp_path)
+    controls = InspectionControls(ui)
+    controls.show_warning = lambda title, message: None
+    setup = initialize_reference_probe_setup(surface_target())
+    session = configure_session(
+        controls,
+        setup,
+        RefinementStage.SAFE_APPROACH,
+    )
+    session.motion_states[RefinementStage.SAFE_APPROACH] = (
+        RefinementMotionState.REACHED
+    )
+    controls.sensor_id_field.setCurrentIndex(
+        controls.sensor_id_field.findData("bmm150")
+    )
+    controls._current_probe_pose_object = lambda: (_ for _ in ()).throw(
+        AssertionError("relative completion queried the tag pose")
+    )
+
+    assert controls.handle_refine_pose("approach", "up") is True
+
+    command = ui.complex_command_publisher.messages[-1]
+    pending = session.pending_motion
+    assert command.command.command_id == CommandID.MOVE_ARM_RELATIVE
+    assert command.offset.header.frame_id == "bmm150_probe"
+    assert command.offset.pose.position.z == pytest.approx(0.01)
+    assert not pending.verify_achieved_pose
+
+    controls._complete_pending_refinement_motion(pending.request_id)
+
+    assert session.pending_motion is None
+    assert session.motion_states[RefinementStage.SAFE_APPROACH] == (
+        RefinementMotionState.REACHED
+    )
+
+
+def test_refinement_frame_selector_defaults_to_sensor_and_derives_frames(
+    application,
+    tmp_path,
+):
+    controls = InspectionControls(FakeUI(tmp_path))
+    controls.sensor_id_field.setCurrentIndex(
+        controls.sensor_id_field.findData("bmm150")
+    )
+    controls._selected_definition = SimpleNamespace(
+        reference_tag=SimpleNamespace(tag_id=7)
+    )
+
+    assert controls.refine_frame_dropdown.currentData() == "sensor"
+    assert controls._selected_refinement_frame_id() == "bmm150_probe"
+
+    expected = {
+        "hand": "hand",
+        "tag": "filtered_fiducial_7",
+        "body": "body",
+        "map": "map",
+    }
+    for selection, frame_id in expected.items():
+        controls.refine_frame_dropdown.setCurrentIndex(
+            controls.refine_frame_dropdown.findData(selection)
+        )
+        assert controls._selected_refinement_frame_id() == frame_id
 
 
 def test_surface_distance_test_commands_only_one_bounded_axis_step(

@@ -21,6 +21,7 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         self.buffer_pub = None
         self.last_status = ""
         self.last_structured_status = None
+        self.last_terminal_request_id = ""
         self.structured_status_pub = None
         self.node = None
 
@@ -61,22 +62,36 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         buf_msg.data = f"[{','.join(ids)}]"
         self.buffer_pub.publish(buf_msg)
 
-        # Publish each state transition once. Repeated terminal messages would
-        # keep resetting the UI's post-motion settling window.
+        structured_status = self.get_structured_status_message(
+            len(buffer_list)
+        )
+        if self._follows_terminal_status(structured_status):
+            return Status.SUCCESS
+
         stat_msg = self.get_status_message()
         if stat_msg.data != self.last_status:
             self.status_pub.publish(stat_msg)
             self.last_status = stat_msg.data
 
-        structured_status = self.get_structured_status_message(
-            len(buffer_list)
-        )
         signature = self._structured_status_signature(structured_status)
         if signature != self.last_structured_status:
             self.structured_status_pub.publish(structured_status)
             self.last_structured_status = signature
+            if structured_status.state in (
+                CommandStatus.STATE_SUCCEEDED,
+                CommandStatus.STATE_FAILED,
+            ):
+                self.last_terminal_request_id = (
+                    structured_status.request_id
+                )
 
         return Status.SUCCESS
+
+    def _follows_terminal_status(self, message):
+        return bool(
+            message.request_id
+            and message.request_id == self.last_terminal_request_id
+        )
 
     def get_status_message(self) -> str:
         stat = self.blackboard.command_tree_status

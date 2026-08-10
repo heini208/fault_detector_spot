@@ -73,6 +73,9 @@ class ProbeRefinementDialog(QDialog):
         step_row.addSpacing(12)
         step_row.addWidget(QLabel("Rotation step [deg]:"))
         step_row.addWidget(self.controls.refine_rotation_step_field)
+        step_row.addSpacing(12)
+        step_row.addWidget(QLabel("Adjustment frame:"))
+        step_row.addWidget(self.controls.refine_frame_dropdown)
         step_row.addStretch()
         layout.addLayout(step_row)
 

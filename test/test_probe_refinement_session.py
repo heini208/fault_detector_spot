@@ -254,3 +254,26 @@ def test_stale_motion_result_cannot_complete_current_request():
     assert session.motion_states[RefinementStage.SAFE_APPROACH] == (
         RefinementMotionState.MOVING
     )
+
+
+def test_relative_motion_completes_without_changing_candidate_pose():
+    session = ProbeRefinementSession.create(calculated_setup())
+    candidate = session.candidate_pose(RefinementStage.SAFE_APPROACH)
+    pending = PendingRefinementMotion(
+        request_id=new_request_id(),
+        stage=RefinementStage.SAFE_APPROACH,
+        purpose="fine adjustment",
+        target_pose_object=candidate,
+        updates_candidate=False,
+        command_id="move_arm_relative",
+        verify_achieved_pose=False,
+    )
+    session.begin_motion(pending)
+
+    session.complete_relative_motion(pending.request_id)
+
+    assert session.pending_motion is None
+    assert session.candidate_pose(RefinementStage.SAFE_APPROACH) == candidate
+    assert session.motion_states[RefinementStage.SAFE_APPROACH] == (
+        RefinementMotionState.REACHED
+    )

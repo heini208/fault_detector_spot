@@ -25,6 +25,14 @@ class FakeClock:
         return SimpleNamespace(to_msg=lambda: Time(sec=7, nanosec=11))
 
 
+class FakePublisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, message):
+        self.messages.append(message)
+
+
 def test_complex_command_request_id_reaches_internal_motion():
     request_id = new_request_id()
     message = ComplexCommand()
@@ -59,6 +67,34 @@ def test_structured_status_preserves_request_and_buffer_count():
     assert message.command_id == CommandID.MOVE_ARM_TO_TAG
     assert message.state == CommandStatus.STATE_RUNNING
     assert message.buffered_command_count == 2
+
+
+def test_terminal_status_is_not_replaced_by_idle_guard_failure():
+    request_id = new_request_id()
+    command = SimpleNamespace(
+        command_id=CommandID.MOVE_ARM_TO_TAG,
+        request_id=request_id,
+    )
+    publisher = BufferStatusPublisher()
+    publisher.node = SimpleNamespace(get_clock=lambda: FakeClock())
+    publisher.blackboard = SimpleNamespace(
+        command_buffer=[],
+        last_command=command,
+        command_tree_status=Status.SUCCESS,
+    )
+    publisher.buffer_pub = FakePublisher()
+    publisher.status_pub = FakePublisher()
+    publisher.structured_status_pub = FakePublisher()
+
+    publisher.update()
+    publisher.blackboard.command_tree_status = Status.FAILURE
+    publisher.update()
+
+    messages = publisher.structured_status_pub.messages
+    assert len(messages) == 1
+    assert messages[0].request_id == request_id
+    assert messages[0].state == CommandStatus.STATE_SUCCEEDED
+    assert len(publisher.status_pub.messages) == 1
 
 
 def test_recordings_clear_and_playback_regenerates_request_id():

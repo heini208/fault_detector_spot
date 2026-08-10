@@ -45,6 +45,8 @@ class PendingRefinementMotion:
     target_pose_object: PoseData
     updates_candidate: bool = True
     axial_correction_m: float = 0.0
+    command_id: str = "move_to_tag"
+    verify_achieved_pose: bool = True
 
 
 @dataclass
@@ -272,6 +274,16 @@ class ProbeRefinementSession:
                 self.surface_distance_verified = False
             else:
                 self.set_candidate(motion.stage, achieved_pose_object)
+        self.motion_states[motion.stage] = RefinementMotionState.REACHED
+        self.pending_motion = None
+
+    def complete_relative_motion(self, request_id: str) -> None:
+        """Complete a relative adjustment without capturing object pose."""
+        motion = self._matching_motion(request_id)
+        if motion.updates_candidate or motion.verify_achieved_pose:
+            raise RuntimeError(
+                "Pose-verifying motion requires an achieved object pose"
+            )
         self.motion_states[motion.stage] = RefinementMotionState.REACHED
         self.pending_motion = None
 
