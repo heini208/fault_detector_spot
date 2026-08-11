@@ -8,6 +8,7 @@ from fault_detector_msgs.msg import ComplexCommand
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
+    CommandRequest,
     RecordingPolicy,
 )
 from fault_detector_spot.application.controllers.application_controller import (

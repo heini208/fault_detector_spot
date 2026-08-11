@@ -152,7 +152,6 @@ def test_terminal_status_is_not_replaced_by_idle_guard_failure():
         command_tree_status=Status.SUCCESS,
     )
     publisher.buffer_pub = FakePublisher()
-    publisher.status_pub = FakePublisher()
     publisher.structured_status_pub = FakePublisher()
 
     publisher.update()
@@ -163,7 +162,6 @@ def test_terminal_status_is_not_replaced_by_idle_guard_failure():
     assert len(messages) == 1
     assert messages[0].request_id == request_id
     assert messages[0].state == CommandStatus.STATE_SUCCEEDED
-    assert len(publisher.status_pub.messages) == 1
 
 
 def test_recordings_clear_transient_request_identity():
