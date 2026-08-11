@@ -167,3 +167,46 @@ def test_close_detaches_from_command_controller():
     controller.close()
 
     assert command_controller.listeners == []
+
+
+def test_application_controller_owns_shared_setup_coordinator():
+    command_controller = FakeCommandController()
+    controller = ApplicationController(command_controller)
+
+    context = controller.setup_coordinator.open_context(
+        CommandOrigin.NAVIGATION_SETUP,
+        "navigation-ui",
+    )
+
+    assert controller.setup_coordinator.is_current(context)
+
+
+def test_setup_status_is_owned_only_by_setup_coordinator():
+    command_controller = FakeCommandController()
+    controller = ApplicationController(command_controller)
+    application_statuses = []
+    setup_statuses = []
+    controller.add_status_listener(application_statuses.append)
+    context = controller.setup_coordinator.open_context(
+        CommandOrigin.NAVIGATION_SETUP,
+        "navigation-ui",
+    )
+    controller.setup_coordinator.add_operation_listener(
+        context,
+        setup_statuses.append,
+    )
+    command = ComplexCommand()
+    command.command.command_id = CommandID.STOW_ARM.value
+    operation = controller.setup_coordinator.prepare_command(
+        context,
+        command,
+    )
+    controller.setup_coordinator.submit(operation)
+
+    command_controller.emit(
+        operation.request,
+        CommandControllerState.RUNNING,
+    )
+
+    assert application_statuses == []
+    assert setup_statuses[-1].operation == operation

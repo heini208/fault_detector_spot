@@ -6,6 +6,9 @@ from typing import Callable, Dict
 
 from fault_detector_msgs.msg import OperationalIntent
 
+from fault_detector_spot.application.commanding.client_identity import (
+    required_client_id,
+)
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
@@ -20,16 +23,10 @@ from fault_detector_spot.application.controllers.command_controller import (
 from fault_detector_spot.application.ros.operational_intent_adapter import (
     operational_intent_to_command,
 )
-
-
-def required_client_id(value: str) -> str:
-    """Return one normalized, non-empty client identifier."""
-    if not isinstance(value, str):
-        raise TypeError("Client ID must be a string")
-    normalized = value.strip()
-    if not normalized:
-        raise ValueError("Client ID must not be empty")
-    return normalized
+from fault_detector_spot.application.setup.setup_coordinator import (
+    SetupCoordinator,
+)
+from fault_detector_spot.application.setup.setup_context import SETUP_ORIGINS
 
 
 @dataclass(frozen=True)
@@ -60,6 +57,7 @@ class ApplicationController:
 
     def __init__(self, command_controller: CommandController):
         self.command_controller = command_controller
+        self.setup_coordinator = SetupCoordinator(command_controller)
         self._lock = RLock()
         self._operations: Dict[str, ApplicationOperation] = {}
         self._status_listeners = []
@@ -160,6 +158,8 @@ class ApplicationController:
         with self._lock:
             operation = self._operations.get(status.request_id)
             tracked = operation is not None
+        if operation is None and status.request.origin in SETUP_ORIGINS:
+            return
         if operation is None:
             operation = ApplicationOperation(
                 intent=OperationalIntent.INTENT_UNSPECIFIED,
@@ -183,6 +183,7 @@ class ApplicationController:
 
     def close(self) -> None:
         """Detach from the command controller."""
+        self.setup_coordinator.close()
         self.command_controller.remove_status_listener(
             self._handle_command_status
         )
@@ -195,5 +196,4 @@ __all__ = [
     "ApplicationController",
     "ApplicationOperation",
     "ApplicationOperationStatus",
-    "required_client_id",
 ]
