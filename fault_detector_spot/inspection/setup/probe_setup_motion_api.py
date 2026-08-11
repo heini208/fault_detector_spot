@@ -134,6 +134,8 @@ class ProbeSetupMotionApi:
         return result
 
     def _receive_status(self, status: ProbeSetupMotionStatus) -> None:
+        if status.motion.kind is ProbeMotionKind.ADJUST_PROBE_DISTANCE:
+            return
         state = self.state_adapter.message(
             status.snapshot,
             ProbeSetupIntent.OPERATION_UNSPECIFIED,

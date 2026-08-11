@@ -1130,6 +1130,10 @@ class InspectionControls(UIControlHelper):
             f"{SURFACE_DISTANCE_TOLERANCE_M:.3f}"
         )
         self.surface_distance_tolerance_field.setFixedWidth(90)
+        self.surface_distance_tolerance_field.setReadOnly(True)
+        self.surface_distance_tolerance_field.setToolTip(
+            "Server-owned surface verification policy"
+        )
         self.surface_distance_tolerance_field.setValidator(
             self._bounded_number_validator(
                 self.surface_distance_tolerance_field,
@@ -1919,6 +1923,48 @@ class InspectionControls(UIControlHelper):
             for dropdown in self.reference_camera_dropdowns
         ]
 
+    def _render_surface_verification_state(self, state):
+        if not hasattr(self, "surface_distance_test_status_label"):
+            return
+        if state.surface_distance_tolerance_m > 0.0:
+            self.surface_distance_tolerance_field.setText(
+                f"{state.surface_distance_tolerance_m:.3f}"
+            )
+        if state.has_surface_distance_measurement:
+            self.live_surface_distance_value_label.setText(
+                self._format_readout_value(
+                    state.measured_surface_distance_m,
+                    4,
+                )
+            )
+            self.surface_distance_delta_value_label.setText(
+                self._format_readout_value(
+                    state.surface_distance_error_m,
+                    4,
+                )
+            )
+        if not state.surface_verification_request_id:
+            return
+        labels = {
+            ProbeSetupState.SURFACE_VERIFICATION_SAMPLING: "Sampling",
+            ProbeSetupState.SURFACE_VERIFICATION_MOVING: "Moving",
+            ProbeSetupState.SURFACE_VERIFICATION_SETTLING: "Settling",
+            ProbeSetupState.SURFACE_VERIFICATION_CONVERGED: "Verified",
+            ProbeSetupState.SURFACE_VERIFICATION_FAILED: "Failed",
+            ProbeSetupState.SURFACE_VERIFICATION_CANCELLED: "Cancelled",
+            ProbeSetupState.SURFACE_VERIFICATION_RECOVERY_REQUIRED: (
+                "Recovery required"
+            ),
+        }
+        label = labels.get(
+            state.surface_verification_state,
+            "Surface verification",
+        )
+        detail = state.detail.strip()
+        self.surface_distance_test_status_label.setText(
+            f"{label}: {detail}" if detail else label
+        )
+
     def _submit_probe_setup(self, intent):
         if not hasattr(self.ui, "execute_probe_setup"):
             return self.show_setup_unavailable("Probe authoring")
@@ -2636,129 +2682,21 @@ class InspectionControls(UIControlHelper):
         return True
 
     def handle_test_surface_distance(self):
-        measurement_started = False
-        try:
-            self._require_command_path_idle(require_settled=True)
-            session = self._require_refinement_session()
-            if session.active_stage != RefinementStage.PROBE:
-                raise ValueError("Open the Probe Pose stage first")
-            if self._distance_failure_requires_retraction:
-                raise ValueError(
-                    "Retract after the failed distance measurement before "
-                    "retrying"
-                )
-            if (
-                session.motion_states[RefinementStage.ALIGNMENT]
-                != RefinementMotionState.REACHED
-            ):
-                raise ValueError(
-                    "Reach the current aligned pre-approach pose first"
-                )
-            target_distance = self._distance_value(
-                self.reference_target_distance_field,
-                "Desired surface distance",
-            )
-            tolerance = self._bounded_positive_value(
-                self.surface_distance_tolerance_field,
-                "Surface-distance tolerance",
-                0.05,
-            )
-            maximum_step = min(
-                self._bounded_positive_value(
-                    self.refine_translation_step_field,
-                    "Translation step",
-                    MAX_REFINEMENT_TRANSLATION_M,
-                ),
-                MAX_SURFACE_CORRECTION_STEP_M,
-            )
-            measurement_started = True
-            samples = self._measure_live_surface_distance_samples()
-            aggregate = aggregate_surface_distance_samples(
-                samples,
-                target_distance,
-                maximum_step,
-                tolerance_m=tolerance,
-                minimum_samples=3,
-                minimum_span_sec=SURFACE_DISTANCE_SAMPLE_WINDOW_SEC,
-                stability_tolerance_m=(
-                    SURFACE_DISTANCE_STABILITY_TOLERANCE_M
-                ),
-            )
-            correction = aggregate.correction
-            self.live_surface_distance_value_label.setText(
-                self._format_readout_value(aggregate.distance_m, 4)
-            )
-            self.surface_distance_delta_value_label.setText(
-                self._format_readout_value(correction.error_m, 4)
-            )
-            quality = (
-                f"{aggregate.sample_count} frames over "
-                f"{aggregate.sample_span_sec:.3f} s, peak-to-peak "
-                f"{aggregate.peak_to_peak_m:.4f} m"
-            )
-            if aggregate.verified:
-                current = self._current_probe_pose_object()
-                session.mark_surface_verified(current)
-                self.surface_distance_test_status_label.setText(
-                    f"Surface Distance Verified within {tolerance:.4f} m. "
-                    f"{quality}. Explicit approval is still required."
-                )
-                self._refresh_refinement_dialog()
-                return True
-
-            current = self._current_probe_pose_object()
-            target = refine_probe_pose(
-                current,
-                current.orientation,
-                local_translation=Vector3Data(
-                    x=correction.inward_correction_m,
-                    y=0.0,
-                    z=0.0,
-                ),
-            )
-            direction = (
-                "inward"
-                if correction.inward_correction_m > 0.0
-                else "outward"
-            )
-            if not self._send_refinement_motion(
-                RefinementStage.PROBE,
-                f"surface-distance {direction} correction",
-                target,
-                axial_correction_m=correction.inward_correction_m,
-            ):
-                if session.recovery_required:
-                    self._distance_failure_requires_retraction = True
-                    self._refresh_refinement_dialog()
-                return False
-        except Exception as exception:
-            session = self._refinement_session
-            if (
-                measurement_started
-                and session is not None
-                and session.recovery_required
-            ):
-                session.require_recovery(
-                    f"Distance Measurement Failed: {exception}"
-                )
-                self._distance_failure_requires_retraction = True
+        if not hasattr(
+            self.ui,
+            "execute_probe_surface_verification",
+        ):
+            return self.show_setup_unavailable("Surface verification")
+        request_id = self.ui.execute_probe_surface_verification()
+        if request_id is None:
             self.surface_distance_test_status_label.setText(
-                f"Unavailable: {exception}"
+                "Surface verification action is unavailable"
             )
-            self._show_setup_error("Test Surface Distance", exception)
-            self._refresh_refinement_dialog()
             return False
-
         self.surface_distance_test_status_label.setText(
-            f"Measured {aggregate.distance_m:.4f} m, target "
-            f"{target_distance:.4f} m. Sent one "
-            f"{abs(correction.inward_correction_m):.4f} m {direction} "
-            f"correction. {quality}. Measure again after settling."
+            "Surface verification running"
         )
-        self._refresh_refinement_dialog()
         return True
-
-    @staticmethod
     def _refinement_delta(action, translation_step, rotation_step):
         translations = {
             "up": Vector3Data(x=0.0, y=0.0, z=translation_step),
@@ -3192,6 +3130,7 @@ class InspectionControls(UIControlHelper):
             state.selected_reference_tag_id
         )
         self._selected_sensor_id = state.selected_sensor_id
+        self._render_surface_verification_state(state)
         self._apply_object_and_routine_lists(state)
         self._apply_probe_setup_view(view)
         signature = (

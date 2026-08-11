@@ -5,7 +5,10 @@ from functools import partial
 from uuid import uuid4
 
 from PyQt5.QtCore import QObject, pyqtSignal
-from fault_detector_msgs.action import ExecuteProbeSetupMotion
+from fault_detector_msgs.action import (
+    ExecuteProbeSetupMotion,
+    ExecuteProbeSurfaceVerification,
+)
 from fault_detector_msgs.msg import (
     ProbeSetupIntent,
     ProbeSetupMotionIntent,
@@ -38,6 +41,7 @@ class ProbeSetupClient(QObject):
         self._last_state_fingerprint = None
         self._pending_request_id = ""
         self._motion_goal_handles = {}
+        self._surface_goal_handles = {}
         self._execute_client = node.create_client(
             ExecuteProbeSetup,
             "fault_detector/application/execute_probe_setup",
@@ -54,6 +58,11 @@ class ProbeSetupClient(QObject):
             node,
             ExecuteProbeSetupMotion,
             "fault_detector/application/execute_probe_setup_motion",
+        )
+        self._surface_client = ActionClient(
+            node,
+            ExecuteProbeSurfaceVerification,
+            "fault_detector/application/execute_probe_surface_verification",
         )
         self._state_subscription = node.create_subscription(
             ProbeSetupState,
@@ -101,11 +110,44 @@ class ProbeSetupClient(QObject):
         )
         return local_id
 
+    def execute_surface_verification(self):
+        """Request one server-owned closed-loop surface verification."""
+        if not self.context_id:
+            self.request_rejected.emit("Probe setup context is not open")
+            return None
+        if self._surface_goal_handles:
+            self.request_rejected.emit(
+                "Surface verification is already in progress"
+            )
+            return None
+        if not self._surface_client.server_is_ready():
+            return None
+        goal = ExecuteProbeSurfaceVerification.Goal()
+        goal.client_id = self.client_id
+        goal.context_id = self.context_id
+        local_id = uuid4().hex
+        self._surface_goal_handles[local_id] = None
+        future = self._surface_client.send_goal_async(
+            goal,
+            feedback_callback=partial(
+                self._receive_surface_feedback,
+                local_id,
+            ),
+        )
+        future.add_done_callback(
+            partial(self._receive_surface_goal, local_id)
+        )
+        return local_id
+
     def close(self):
         """Close the current server-owned probe setup context."""
         if not self.context_id:
             return None
-        if self._pending_request_id or self._motion_goal_handles:
+        if (
+            self._pending_request_id
+            or self._motion_goal_handles
+            or self._surface_goal_handles
+        ):
             self.close_finished.emit(
                 False,
                 "Probe setup operation is still in progress",
@@ -198,6 +240,13 @@ class ProbeSetupClient(QObject):
             int(state.state),
             int(state.revision),
             state.detail,
+            state.surface_verification_request_id,
+            int(state.surface_verification_state),
+            bool(state.has_surface_distance_measurement),
+            float(state.measured_surface_distance_m),
+            float(state.surface_distance_error_m),
+            int(state.surface_verification_iteration),
+            bool(state.surface_recovery_required),
         )
         if fingerprint == self._last_state_fingerprint:
             return
@@ -258,14 +307,45 @@ class ProbeSetupClient(QObject):
             return
         self._emit_state(result.state)
 
+    def _receive_surface_goal(self, local_id, future):
+        try:
+            goal_handle = future.result()
+        except Exception as exception:
+            self._surface_goal_handles.pop(local_id, None)
+            self.request_rejected.emit(str(exception))
+            return
+        if not goal_handle.accepted:
+            self._surface_goal_handles.pop(local_id, None)
+            self.request_rejected.emit("Surface verification was rejected")
+            return
+        self._surface_goal_handles[local_id] = goal_handle
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(
+            partial(self._receive_surface_result, local_id)
+        )
+
+    def _receive_surface_feedback(self, _local_id, feedback_message):
+        self._emit_state(feedback_message.feedback.state)
+
+    def _receive_surface_result(self, local_id, future):
+        self._surface_goal_handles.pop(local_id, None)
+        try:
+            result = future.result().result
+        except Exception as exception:
+            self.request_rejected.emit(str(exception))
+            return
+        self._emit_state(result.state)
+
     def destroy(self):
         """Destroy client-side ROS resources owned by this adapter."""
         self.node.destroy_client(self._execute_client)
         self.node.destroy_client(self._close_client)
         self.node.destroy_client(self._preview_client)
         self._motion_client.destroy()
+        self._surface_client.destroy()
         self.node.destroy_subscription(self._state_subscription)
         self._motion_goal_handles.clear()
+        self._surface_goal_handles.clear()
 
 
 __all__ = ["ProbeSetupClient"]

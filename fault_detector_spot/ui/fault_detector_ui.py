@@ -382,6 +382,17 @@ class Fault_Detector_UI(QWidget):
             self.status_label.setText("Probe setup request submitted")
         return request_id
 
+    def execute_probe_surface_verification(self):
+        if self.probe_setup_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        request_id = (
+            self.probe_setup_client.execute_surface_verification()
+        )
+        if request_id is not None:
+            self.status_label.setText("Surface verification submitted")
+        return request_id
+
     def execute_navigation_setup(self, intent):
         if self.navigation_setup_client is None:
             self._process_application_error("ROS is unavailable")

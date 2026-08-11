@@ -363,6 +363,17 @@ class ProbeSurfaceVerificationCoordinator:
         )
         self._fail(session, refinement, detail)
 
+    def abort(
+        self,
+        session: ProbeSurfaceVerificationSession,
+        refinement,
+        detail: str,
+    ) -> None:
+        """Fail any active verification without losing recovery state."""
+        if not session.active:
+            return
+        self._fail(session, refinement, detail)
+
     def cancel(
         self,
         session: ProbeSurfaceVerificationSession,

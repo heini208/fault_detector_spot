@@ -38,6 +38,7 @@ class ProbeMotionKind(str, Enum):
     MOVE_ALIGNED_PREAPPROACH = "move_aligned_preapproach"
     ADJUST_SAFE_APPROACH = "adjust_safe_approach"
     ADJUST_ALIGNED_PREAPPROACH = "adjust_aligned_preapproach"
+    ADJUST_PROBE_DISTANCE = "adjust_probe_distance"
 
 
 class ProbeMotionFrame(str, Enum):
@@ -99,6 +100,7 @@ class ProbeMotionRequest:
         return self.kind in {
             ProbeMotionKind.ADJUST_SAFE_APPROACH,
             ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH,
+            ProbeMotionKind.ADJUST_PROBE_DISTANCE,
         }
 
 
