@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from fault_detector_msgs.msg import BasicCommand
+from fault_detector_msgs.msg import ProbeSetupIntent
 from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QImage, QMouseEvent
 from PyQt5.QtWidgets import QApplication, QLabel
@@ -15,13 +15,6 @@ from fault_detector_spot.ui.inspection.controls import (
 )
 
 
-class FakePublisher:
-    """Accept commands without affecting point-selection tests."""
-
-    def publish(self, message):
-        """Discard one published command."""
-
-
 class FakeUI:
     """Provide the parent contract used by inspection controls."""
 
@@ -29,14 +22,14 @@ class FakeUI:
         """Create isolated UI dependencies."""
         self.node = None
         self.status_label = QLabel()
-        self.complex_command_publisher = FakePublisher()
-        self.inspection_object_root = object_root
+        self.requests = []
 
-    def build_basic_command(self, command_id):
-        """Build a minimal command header."""
-        command = BasicCommand()
-        command.command_id = command_id
-        return command
+    def execute_probe_setup(self, intent):
+        self.requests.append(intent)
+        return "request"
+
+    def show_setup_unavailable(self, workflow):
+        return False
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -54,6 +47,7 @@ def test_controls_report_and_clear_selected_pixel(
     widget = controls.reference_view_widget
     widget.resize(400, 240)
     widget.set_qimage(QImage(400, 200, QImage.Format_RGB888))
+    controls._reference_slot_view_ids[0] = "slot1_hand"
     widget.show()
     application.processEvents()
     image_rect = widget.displayed_image_rect
@@ -82,9 +76,16 @@ def test_controls_report_and_clear_selected_pixel(
         f"u={point.u}, v={point.v}"
     )
     assert controls.clear_reference_pixel_button.isEnabled() is True
+    assert controls.ui.requests[-1].operation == (
+        ProbeSetupIntent.OPERATION_SELECT_REFERENCE_PIXEL
+    )
+    assert controls.ui.requests[-1].reference_view_id == "slot1_hand"
 
     controls.clear_reference_pixel_button.click()
 
     assert widget.selected_image_point is None
     assert controls.reference_pixel_value_label.text() == "—"
     assert controls.clear_reference_pixel_button.isEnabled() is False
+    assert controls.ui.requests[-1].operation == (
+        ProbeSetupIntent.OPERATION_CLEAR_REFERENCE_PIXEL
+    )

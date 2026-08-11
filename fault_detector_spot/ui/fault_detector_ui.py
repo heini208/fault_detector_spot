@@ -33,6 +33,7 @@ from .navigation.controls import NavigationControls
 from .recording.controls import RecordingControls
 from .ros.application_client import ApplicationClient
 from .ros.navigation_setup_client import NavigationSetupClient
+from .ros.probe_setup_client import ProbeSetupClient
 from .shared.status_overview_panel import StatusOverviewPanel
 
 
@@ -57,6 +58,7 @@ class Fault_Detector_UI(QWidget):
         self.available_frames = []
         self.application_client = None
         self.navigation_setup_client = None
+        self.probe_setup_client = None
         self.inspection_object_root = self._inspection_root_parameter()
 
         if self.node:
@@ -78,6 +80,9 @@ class Fault_Detector_UI(QWidget):
             self._open_navigation_setup
         )
         self.navigation_setup_timer.start(500)
+        self.probe_setup_timer = QTimer(self)
+        self.probe_setup_timer.timeout.connect(self._open_probe_setup)
+        self.probe_setup_timer.start(500)
 
     def create_user_interface(self):
         main_layout = QVBoxLayout(self)
@@ -114,7 +119,7 @@ class Fault_Detector_UI(QWidget):
             self.navigation_controls._apply_map_list()
             self.navigation_controls._apply_waypoint_list()
         if self.tabs.tabText(index) == "Inspection Control":
-            self.inspection_controls.refresh_saved_definitions()
+            self.inspection_controls.refresh_setup_state()
 
     def _inspection_root_parameter(self):
         if self.node is None:
@@ -211,6 +216,22 @@ class Fault_Detector_UI(QWidget):
         )
         self.navigation_setup_client.request_rejected.connect(
             self._process_application_error
+        )
+        self.probe_setup_client = ProbeSetupClient(
+            self.node,
+            self.application_client.client_id,
+        )
+        self.probe_setup_client.state_changed.connect(
+            self._process_probe_setup_state
+        )
+        self.probe_setup_client.request_rejected.connect(
+            self._process_application_error
+        )
+        self.probe_setup_client.preview_received.connect(
+            self._process_probe_reference_preview
+        )
+        self.probe_setup_client.preview_rejected.connect(
+            self._process_probe_reference_preview_error
         )
 
         self.visible_tags_sub = self.node.create_subscription(
@@ -326,6 +347,41 @@ class Fault_Detector_UI(QWidget):
             self.navigation_controls.apply_setup_state(state)
         self.status_label.setText(state.detail)
 
+    def _open_probe_setup(self):
+        if self.probe_setup_client is None:
+            return
+        if self.probe_setup_client.context_id:
+            self.probe_setup_timer.stop()
+            return
+        if self.probe_setup_client.open() is not None:
+            self.probe_setup_timer.stop()
+
+    def _process_probe_setup_state(self, state):
+        if hasattr(self, "inspection_controls"):
+            self.inspection_controls.apply_setup_state(state)
+        self.status_label.setText(state.detail)
+
+    def _process_probe_reference_preview(self, response):
+        if hasattr(self, "inspection_controls"):
+            self.inspection_controls.apply_reference_preview(response)
+
+    def _process_probe_reference_preview_error(self, view_id, detail):
+        if hasattr(self, "inspection_controls"):
+            self.inspection_controls.apply_reference_preview_error(
+                view_id,
+                detail,
+            )
+        self.status_label.setText(detail)
+
+    def execute_probe_setup(self, intent):
+        if self.probe_setup_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        request_id = self.probe_setup_client.execute(intent)
+        if request_id is not None:
+            self.status_label.setText("Probe setup request submitted")
+        return request_id
+
     def execute_navigation_setup(self, intent):
         if self.navigation_setup_client is None:
             self._process_application_error("ROS is unavailable")
@@ -373,6 +429,10 @@ class Fault_Detector_UI(QWidget):
     def closeEvent(self, event):
         self.timer.stop()
         self.navigation_setup_timer.stop()
+        self.probe_setup_timer.stop()
+        if self.probe_setup_client is not None:
+            self.probe_setup_client.close()
+            self.probe_setup_client.destroy()
         if self.navigation_setup_client is not None:
             self.navigation_setup_client.close()
             self.navigation_setup_client.destroy()

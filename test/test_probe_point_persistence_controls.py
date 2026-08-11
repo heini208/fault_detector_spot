@@ -38,4 +38,6 @@ def test_hidden_direct_save_path_is_removed(tmp_path):
     assert application is not None
     assert not hasattr(controls, "save_probe_point_button")
     assert not hasattr(controls, "handle_save_probe_point")
+    assert not hasattr(controls, "_persist_probe_point")
+    assert not hasattr(controls, "_build_probe_point")
     assert hasattr(controls, "handle_approve_and_retract")

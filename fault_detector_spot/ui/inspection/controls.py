@@ -1,6 +1,5 @@
 """Inspection setup controls."""
 
-import json
 import math
 import time
 from collections import deque
@@ -32,13 +31,15 @@ from PyQt5.QtWidgets import (
 
 from fault_detector_msgs.msg import (
     ApplicationCommandState,
+    ProbeSetupIntent,
+    ProbeSetupMotionIntent,
+    ProbeSetupState,
     SensorDefinitionArray,
     TagElement,
 )
 from fault_detector_msgs.srv import AddSensor, RetireSensor
 from rclpy.duration import Duration
 from rclpy.qos import qos_profile_sensor_data
-from rclpy.serialization import deserialize_message
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
@@ -46,25 +47,16 @@ import tf2_ros
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
-    InspectionObject,
-    InspectionRoutine,
     MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
     PoseData,
-    ProbePoint,
     QuaternionData,
-    ReferenceTag,
     Vector3Data,
-)
-from fault_detector_spot.inspection.repository.multi_reference_view_repository import (
-    CapturedReferenceView,
-    MultiReferenceViewRepository,
 )
 from fault_detector_spot.inspection.sensing.live_surface_distance import (
     aggregate_surface_distance_samples,
     measure_probe_surface_distance,
 )
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
-    ProbeRefinementSession,
     RefinementMotionState,
     RefinementStage,
 )
@@ -78,28 +70,17 @@ from fault_detector_spot.inspection.setup.reference_view_approach_direction impo
     APPROACH_MODE_TAG_X,
     APPROACH_SOURCE_SURFACE_FIT,
     APPROACH_SOURCE_TAG_X_SELECTED,
-    resolve_reference_approach_direction,
 )
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
-    project_reference_pixel,
-    rgb_depth_selectable_region,
-)
-from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
-    estimate_reference_surface_normal,
+    ImageRegion,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
-    approve_probe_pose,
-    approve_safe_approach_pose,
-    approve_surface_alignment_pose,
-    compose_poses,
-    initialize_reference_probe_setup,
     probe_pose_to_hand_pose,
     refine_probe_pose,
     relative_pose,
 )
 from fault_detector_spot.inspection.setup.reference_view_surface_target import (
     quaternion_to_rpy,
-    resolve_reference_surface_target,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
     SensorDefinition,
@@ -111,11 +92,9 @@ from fault_detector_spot.inspection.setup.stable_tag_pose import (
     stabilize_tag_pose,
 )
 
-from fault_detector_spot.application.commanding.command_ids import (
-    TagFrames,
-)
 from .probe_refinement_dialog import ProbeRefinementDialog
 from .reference_view_widget import ReferenceViewWidget
+from ..ros.probe_setup_state_adapter import probe_setup_state_to_view
 from ..shared.collapsible_section import CollapsibleSection
 from ..shared.control_helper import UIControlHelper
 
@@ -140,28 +119,20 @@ REFINEMENT_FRAME_MAP = "map"
 
 
 class InspectionControls(UIControlHelper):
-    """Manage the transitional inspection setup interface."""
+    """Render probe setup state and submit typed user intent."""
 
     def __init__(self, parent_ui):
-        """Create controls backed by the configured object repository."""
-        object_root = getattr(
-            parent_ui,
-            "inspection_object_root",
-            None,
-        )
-        self.reference_view_repository = MultiReferenceViewRepository(
-            object_root
-        )
-        self.object_repository = (
-            self.reference_view_repository.object_repository
-        )
-        self._selected_definition = None
+        """Create controls backed by the remote probe setup API."""
+        self._probe_setup_state = None
+        self._selected_reference_tag_id = -1
+        self._selected_sensor_id = ""
         self._reference_rgb_size = None
         self._reference_depth_image = None
         self._reference_rgb_camera_info = None
         self._reference_camera_info = None
         self._reference_view = None
-        self._reference_slot_captures = [None, None, None]
+        self._reference_slot_view_ids = ["", "", ""]
+        self._preview_signature = None
         self._active_reference_slot = None
         self._selected_surface_point = None
         self._selected_surface_normal = None
@@ -199,7 +170,7 @@ class InspectionControls(UIControlHelper):
         initial_sensors = getattr(parent_ui, "sensor_definitions", [])
         if initial_sensors:
             self.set_sensor_definitions(initial_sensors)
-        self.refresh_saved_definitions()
+        self.refresh_setup_state()
 
     def add_rows(self, layout):
         """Add the rows constructed during initialization."""
@@ -484,7 +455,7 @@ class InspectionControls(UIControlHelper):
         self._populate_sensor_dropdown()
 
         self.storage_path_label = QLabel(
-            f"Storage: {self.object_repository.root_dir}"
+            "Storage: managed by the application service"
         )
         self.storage_path_label.setTextInteractionFlags(
             Qt.TextSelectableByMouse
@@ -492,7 +463,7 @@ class InspectionControls(UIControlHelper):
         dialog_layout.addWidget(self.storage_path_label)
 
         self.management_status_label = QLabel(
-            "Create and delete operations update this repository directly."
+            "Create and delete operations are server-owned transactions."
         )
         self.management_status_label.setWordWrap(True)
         dialog_layout.addWidget(self.management_status_label)
@@ -598,29 +569,9 @@ class InspectionControls(UIControlHelper):
             history.append((stamp_key, deepcopy(tag)))
 
     def handle_application_state(self, status):
-        """Track authoritative operational state for setup safety gates."""
+        """Track operational state for pending surface-workflow migration."""
         self._command_state = status.state
         self._buffered_command_count = status.buffered_command_count
-        session = self._refinement_session
-        pending = session.pending_motion if session is not None else None
-        if status.state == ApplicationCommandState.STATE_RUNNING:
-            if pending is None and session is not None:
-                self._clear_refinement_execution_evidence(
-                    "An unrelated robot command started"
-                )
-            elif pending is not None:
-                self._fail_pending_refinement_motion(
-                    "An unrelated robot command started during probe "
-                    "refinement",
-                    pending.request_id,
-                )
-            self._probe_motion_pending = (
-                session is not None and session.pending_motion is not None
-            )
-            self._refresh_refinement_dialog()
-            return
-
-        self._probe_motion_pending = pending is not None
         if status.state in {
             ApplicationCommandState.STATE_SUCCEEDED,
             ApplicationCommandState.STATE_FAILED,
@@ -944,7 +895,7 @@ class InspectionControls(UIControlHelper):
         self.clear_reference_pixel_button = QPushButton("Clear Point")
         self.clear_reference_pixel_button.setEnabled(False)
         self.clear_reference_pixel_button.clicked.connect(
-            self._clear_all_reference_selections
+            self.handle_clear_reference_pixel
         )
 
         self.reference_surface_frame_value_label = (
@@ -1775,32 +1726,7 @@ class InspectionControls(UIControlHelper):
         self._update_save_probe_point_state()
 
     def _update_save_probe_point_state(self, _value=None):
-        setup = self._probe_setup
-        approvals_complete = (
-            setup is not None
-            and setup.safe_approach_approved
-            and setup.surface_alignment_approved
-            and setup.probe_pose_approved
-        )
-        object_id = (
-            self.saved_object_dropdown.currentData()
-            if hasattr(self, "saved_object_dropdown")
-            else None
-        )
-        routine_id = (
-            self.saved_routine_dropdown.currentData()
-            if hasattr(self, "saved_routine_dropdown")
-            else None
-        )
-        routine = None
-        if (
-            object_id
-            and routine_id
-            and self._selected_definition is not None
-            and self._selected_definition.object_id == object_id
-        ):
-            routine = self._selected_definition.get_routine(routine_id)
-
+        state = self._probe_setup_state
         point_id = self.probe_point_id_field.text().strip()
         display_name = self.probe_point_display_name_field.text().strip()
         numeric_ready = all(
@@ -1811,57 +1737,15 @@ class InspectionControls(UIControlHelper):
                 self.probe_measurement_duration_field,
             )
         )
-        provenance_ready = (
-            self._selected_surface_point is not None
-            and self._reference_view is not None
-            and self._reference_view.view_id is not None
-        )
         duplicate = (
-            routine is not None
-            and bool(point_id)
-            and routine.get_probe_point(point_id) is not None
+            state is not None
+            and point_id in state.probe_point_ids
             and point_id != self._editing_probe_point_id
         )
-        session = self._refinement_session
-        workflow_ready = (
-            self._refinement_workflow_active
-            and session is not None
-            and setup is not None
-            and session.stage_is_approved(
-                RefinementStage.SAFE_APPROACH
-            )
-            and session.stage_is_approved(RefinementStage.ALIGNMENT)
-            and session.surface_distance_verified
-            and session.pending_motion is None
-            and not self._distance_failure_requires_retraction
-            and routine is not None
-            and bool(point_id)
-            and bool(display_name)
-            and numeric_ready
-            and provenance_ready
-            and not duplicate
-        )
-        self.approve_and_retract_button.setEnabled(workflow_ready)
-
-        if session is not None and session.saved:
-            status = "Probe point saved. Complete the required retraction."
-        elif self._refinement_workflow_active and not (
-            session is not None
-            and session.stage_is_approved(
-                RefinementStage.SAFE_APPROACH
-            )
-            and session.stage_is_approved(RefinementStage.ALIGNMENT)
-        ):
-            status = "Approve the safe and aligned poses in the wizard."
-        elif self._refinement_workflow_active and not (
-            session is not None and session.surface_distance_verified
-        ):
-            status = "Verify the live surface distance in the wizard."
-        elif not approvals_complete and not self._refinement_workflow_active:
-            status = "Complete the refinement wizard before saving."
-        elif routine is None:
+        self.approve_and_retract_button.setEnabled(False)
+        if state is None or not state.selected_routine_id:
             status = "Select a saved object and routine."
-        elif not provenance_ready:
+        elif not state.has_reference_pixel:
             status = "Select a point in a captured reference view."
         elif not point_id or not display_name:
             status = "Enter a probe point ID and display name."
@@ -1870,9 +1754,11 @@ class InspectionControls(UIControlHelper):
         elif not numeric_ready:
             status = "Enter positive tolerances and measurement duration."
         else:
-            status = "Ready to save the approved probe point."
+            status = (
+                "Probe save and mandatory retraction await the "
+                "coordinated execution workflow."
+            )
         self.save_probe_point_status_label.setText(status)
-
     @staticmethod
     def _is_positive_number(text):
         try:
@@ -1941,7 +1827,7 @@ class InspectionControls(UIControlHelper):
         return (value + 180.0) % 360.0 - 180.0
 
     def _handle_reference_slot_point_changed(self, slot_index, u, v):
-        capture = self._reference_slot_captures[slot_index]
+        view_id = self._reference_slot_view_ids[slot_index]
         for candidate_index, widget in enumerate(
             self.reference_view_widgets
         ):
@@ -1951,36 +1837,30 @@ class InspectionControls(UIControlHelper):
             widget.clear_selection()
             widget.blockSignals(False)
         self._active_reference_slot = slot_index
-        if capture is not None:
-            self._reference_rgb_size = (
-                capture.rgb_image.width,
-                capture.rgb_image.height,
+        if not view_id:
+            self._show_setup_error(
+                "Select Reference Point",
+                ValueError("The selected preview has no reference view ID"),
             )
-            self._reference_depth_image = capture.depth_image
-            self._reference_rgb_camera_info = (
-                capture.rgb_camera_info
-            )
-            self._reference_camera_info = capture.depth_camera_info
-            self._reference_view = capture.reference_view
-            camera_name = REFERENCE_CAMERA_BY_ID[
-                capture.camera_id
-            ].display_name
-            self.reference_pixel_value_label.setToolTip(camera_name)
-        else:
-            self._reference_rgb_size = None
-            self._reference_depth_image = None
-            self._reference_rgb_camera_info = None
-            self._reference_camera_info = None
-            self._reference_view = None
-            self.reference_pixel_value_label.setToolTip(
-                f"Camera slot {slot_index + 1}"
-            )
+            return
         self._handle_reference_image_point_changed(u, v)
+        intent = self._geometry_intent(
+            ProbeSetupIntent.OPERATION_SELECT_REFERENCE_PIXEL
+        )
+        intent.reference_view_id = view_id
+        intent.pixel_u = int(u)
+        intent.pixel_v = int(v)
+        self._submit_probe_setup(intent)
 
     def _handle_reference_slot_point_cleared(self, slot_index):
         if self._active_reference_slot == slot_index:
             self._handle_reference_image_point_cleared()
             self._active_reference_slot = None
+            intent = ProbeSetupIntent()
+            intent.operation = (
+                ProbeSetupIntent.OPERATION_CLEAR_REFERENCE_PIXEL
+            )
+            self._submit_probe_setup(intent)
 
     def _clear_all_reference_selections(self):
         for widget in self.reference_view_widgets:
@@ -1990,13 +1870,19 @@ class InspectionControls(UIControlHelper):
         self._active_reference_slot = None
         self._handle_reference_image_point_cleared()
 
+    def handle_clear_reference_pixel(self):
+        self._clear_all_reference_selections()
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_CLEAR_REFERENCE_PIXEL
+        return self._submit_probe_setup(intent)
+
     def _handle_reference_camera_selection_changed(self, slot_index):
         if slot_index >= len(self.reference_camera_dropdowns):
             return
         camera_id = (
             self.reference_camera_dropdowns[slot_index].currentData() or ""
         )
-        self._reference_slot_captures[slot_index] = None
+        self._reference_slot_view_ids[slot_index] = ""
         widget = self.reference_view_widgets[slot_index]
         widget.clear_preview(
             f"Capture {REFERENCE_CAMERA_BY_ID[camera_id].display_name}"
@@ -2033,8 +1919,39 @@ class InspectionControls(UIControlHelper):
             for dropdown in self.reference_camera_dropdowns
         ]
 
+    def _submit_probe_setup(self, intent):
+        if not hasattr(self.ui, "execute_probe_setup"):
+            return self.show_setup_unavailable("Probe authoring")
+        return self.ui.execute_probe_setup(intent)
+
+    def _geometry_intent(self, operation):
+        intent = ProbeSetupIntent()
+        intent.operation = operation
+        intent.approach_mode = (
+            self.reference_approach_mode_dropdown.currentData()
+        )
+        intent.target_surface_distance_m = self._distance_value(
+            self.reference_target_distance_field,
+            "Target surface distance",
+        )
+        intent.aligned_preapproach_distance_m = self._distance_value(
+            self.reference_preapproach_distance_field,
+            "Aligned pre-approach distance",
+        )
+        return intent
+
+    def _request_geometry_update(self):
+        try:
+            intent = self._geometry_intent(
+                ProbeSetupIntent.OPERATION_UPDATE_GEOMETRY
+            )
+        except ValueError as exception:
+            self._set_target_status("Unavailable", str(exception))
+            return False
+        return self._submit_probe_setup(intent)
+
     def _clear_reference_previews(self, message):
-        self._reference_slot_captures = [None, None, None]
+        self._reference_slot_view_ids = ["", "", ""]
         self._active_reference_slot = None
         for slot_index, widget in enumerate(self.reference_view_widgets):
             camera_id = (
@@ -2055,7 +1972,6 @@ class InspectionControls(UIControlHelper):
     def _handle_reference_image_point_changed(self, u, v):
         self.reference_pixel_value_label.setText(f"u={u}, v={v}")
         self.clear_reference_pixel_button.setEnabled(True)
-        self._project_selected_reference_pixel(u, v)
 
     def _handle_reference_image_point_cleared(self):
         self.reference_pixel_value_label.setText("—")
@@ -2063,12 +1979,9 @@ class InspectionControls(UIControlHelper):
         self._clear_selected_surface_point()
 
     def _handle_approach_mode_changed(self, _index=None):
-        if self._selected_surface_point is None:
-            self._clear_selected_approach_direction()
+        if self._probe_setup_state is None:
             return
-        self._resolve_selected_approach_direction(
-            self._selected_surface_point
-        )
+        self._request_geometry_update()
 
     def _handle_target_distance_changed(self):
         session = self._refinement_session
@@ -2094,10 +2007,9 @@ class InspectionControls(UIControlHelper):
                 "Retract before changing either surface distance."
             )
             return
-        if self._selected_approach_direction is None:
-            self._clear_selected_surface_target()
+        if self._probe_setup_state is None:
             return
-        self._resolve_selected_surface_target()
+        self._request_geometry_update()
 
     def _handle_dialog_distances_changed(self):
         session = self._refinement_session
@@ -2276,237 +2188,6 @@ class InspectionControls(UIControlHelper):
         self.reference_depth_pixel_value_label.setToolTip("")
         self._set_projection_status(status, detail)
 
-    def _project_selected_reference_pixel(self, u, v):
-        if (
-            self._reference_rgb_size is None
-            or self._reference_depth_image is None
-            or self._reference_rgb_camera_info is None
-            or self._reference_camera_info is None
-        ):
-            self._set_projection_unavailable(
-                "Depth unavailable",
-                "The selected routine has no reference depth dataset.",
-            )
-            return
-        try:
-            result = project_reference_pixel(
-                ImagePoint(u=u, v=v),
-                self._reference_depth_image,
-                self._reference_camera_info,
-                rgb_size=self._reference_rgb_size,
-                rgb_camera_info=self._reference_rgb_camera_info,
-            )
-        except ValueError as exception:
-            self._set_projection_unavailable(
-                "Unavailable",
-                str(exception),
-            )
-            return
-
-        self._selected_surface_point = result
-        point = result.point_camera
-        self.reference_surface_frame_value_label.setText(result.frame_id)
-        self.reference_surface_frame_value_label.setToolTip(result.frame_id)
-        self.reference_surface_x_value_label.setText(
-            self._format_readout_value(point.x, 3)
-        )
-        self.reference_surface_y_value_label.setText(
-            self._format_readout_value(point.y, 3)
-        )
-        self.reference_surface_z_value_label.setText(
-            self._format_readout_value(point.z, 3)
-        )
-        mapped = result.mapped_pixel
-        sampled = result.sampled_pixel
-        if sampled == mapped:
-            depth_source = f"u={mapped.u}, v={mapped.v}"
-        else:
-            depth_source = (
-                f"{mapped.u},{mapped.v} → "
-                f"{sampled.u},{sampled.v}"
-            )
-        mapping_detail = (
-            f"RGB pixel u={result.requested_pixel.u}, "
-            f"v={result.requested_pixel.v} in "
-            f"{self._reference_rgb_size[0]}x"
-            f"{self._reference_rgb_size[1]} mapped to depth pixel "
-            f"u={mapped.u}, v={mapped.v} in "
-            f"{self._reference_depth_image.width}x"
-            f"{self._reference_depth_image.height}. "
-            f"Sampled depth pixel u={sampled.u}, v={sampled.v}."
-        )
-        self.reference_depth_pixel_value_label.setText(depth_source)
-        self.reference_depth_pixel_value_label.setToolTip(mapping_detail)
-        self._set_projection_status("Ready", mapping_detail)
-        self._estimate_selected_surface_normal(result)
-
-    def _estimate_selected_surface_normal(self, projected_point):
-        self._clear_selected_surface_normal()
-        try:
-            result = estimate_reference_surface_normal(
-                projected_point,
-                self._reference_depth_image,
-                self._reference_camera_info,
-            )
-        except ValueError as exception:
-            self._surface_normal_error = str(exception)
-            self._set_normal_status(
-                "Unavailable",
-                self._surface_normal_error,
-            )
-            self._resolve_selected_approach_direction(projected_point)
-            return
-
-        self._selected_surface_normal = result
-        self._surface_normal_error = ""
-        normal = result.normal_camera
-        self.reference_normal_x_value_label.setText(
-            self._format_readout_value(normal.x, 3)
-        )
-        self.reference_normal_y_value_label.setText(
-            self._format_readout_value(normal.y, 3)
-        )
-        self.reference_normal_z_value_label.setText(
-            self._format_readout_value(normal.z, 3)
-        )
-        self.reference_normal_samples_value_label.setText(
-            str(result.sample_count)
-        )
-        self.reference_normal_rmse_value_label.setText(
-            self._format_readout_value(result.plane_rmse_m, 4)
-        )
-        self._set_normal_status(
-            "Ready",
-            f"Plane fit used a {result.neighborhood_radius_px} px "
-            f"depth-image radius.",
-        )
-        self._resolve_selected_approach_direction(projected_point)
-
-    def _resolve_selected_approach_direction(self, projected_point):
-        self._clear_selected_approach_direction()
-        if self._reference_view is None:
-            self._set_approach_status(
-                "Unavailable",
-                "The selected routine has no saved reference-view pose.",
-            )
-            return
-        if self._reference_view.controlled_frame != projected_point.frame_id:
-            self._set_approach_status(
-                "Frame mismatch",
-                "The saved reference-view frame does not match the "
-                "registered depth frame.",
-            )
-            return
-
-        mode = self.reference_approach_mode_dropdown.currentData()
-        try:
-            result = resolve_reference_approach_direction(
-                projected_point=projected_point,
-                surface_normal=self._selected_surface_normal,
-                controlled_frame_pose_object=(
-                    self._reference_view.controlled_frame_pose_object
-                ),
-                mode=mode,
-                surface_normal_unavailable_reason=(
-                    self._surface_normal_error
-                ),
-            )
-        except ValueError as exception:
-            self._set_approach_status("Unavailable", str(exception))
-            return
-
-        self._selected_approach_direction = result
-        source_text = {
-            APPROACH_SOURCE_SURFACE_FIT: "Surface fit",
-            APPROACH_SOURCE_TAG_X_SELECTED: "Calibrated tag +X",
-        }[result.source]
-        self.reference_approach_source_value_label.setText(source_text)
-        detail = (
-            "Tag +X is valid only when the tag mount is calibrated "
-            "with +X pointing out of the inspected surface."
-            if result.source == APPROACH_SOURCE_TAG_X_SELECTED
-            else ""
-        )
-        self.reference_approach_source_value_label.setToolTip(detail)
-        self._set_approach_status("Ready", detail)
-        self._resolve_selected_surface_target()
-
-    def _resolve_selected_surface_target(self):
-        previous_setup = self._probe_setup
-        if (
-            self._selected_approach_direction is None
-            or self._reference_view is None
-        ):
-            self._clear_selected_surface_target()
-            return
-        try:
-            target_distance = self._distance_value(
-                self.reference_target_distance_field,
-                "Target surface distance",
-            )
-            aligned_preapproach_distance = self._distance_value(
-                self.reference_preapproach_distance_field,
-                "Aligned pre-approach distance",
-            )
-            result = resolve_reference_surface_target(
-                approach_direction=self._selected_approach_direction,
-                controlled_frame_pose_object=(
-                    self._reference_view.controlled_frame_pose_object
-                ),
-                target_surface_distance_m=target_distance,
-                aligned_preapproach_distance_m=(
-                    aligned_preapproach_distance
-                ),
-            )
-        except ValueError as exception:
-            self._clear_selected_surface_target()
-            self._set_target_status("Unavailable", str(exception))
-            return
-
-        self._selected_surface_target = result
-        setup = initialize_reference_probe_setup(
-            result,
-            self._configured_hand_to_probe_pose(),
-        )
-        self._calculated_probe_setup = deepcopy(setup)
-        if previous_setup is not None:
-            if previous_setup.safe_approach_approved:
-                setup = approve_safe_approach_pose(
-                    setup,
-                    previous_setup.safe_approach_pose_object,
-                )
-            if previous_setup.surface_alignment_approved:
-                setup = approve_surface_alignment_pose(
-                    setup,
-                    previous_setup.aligned_preapproach_pose_object,
-                )
-            self.surface_distance_test_status_label.setText(
-                "Distance geometry changed. Existing safe and aligned "
-                "poses were retained. Verify the surface distance again."
-            )
-        self._probe_setup = setup
-        if self._refinement_workflow_active:
-            if self._refinement_session is None:
-                self._refinement_session = ProbeRefinementSession.create(
-                    self._calculated_probe_setup,
-                    self._probe_setup,
-                )
-            else:
-                self._refinement_session = (
-                    self._refinement_session.with_updated_surface_geometry(
-                        self._calculated_probe_setup,
-                        self._probe_setup,
-                    )
-                )
-            self._distance_failure_requires_retraction = False
-            self._retraction_failed = False
-        self._set_probe_setup_buttons_enabled(True)
-        self._display_probe_setup("Calculated")
-        if self._refinement_workflow_active:
-            self.refinement_dialog.show_stage(
-                self._refinement_session.active_stage
-            )
-
     def _display_probe_setup(self, status):
         if self._probe_setup is None:
             self._clear_selected_surface_target()
@@ -2583,58 +2264,27 @@ class InspectionControls(UIControlHelper):
         )
 
     def handle_start_probe_refinement(self):
-        """Open a new supervised draft without commanding movement."""
-        try:
-            if self._calculated_probe_setup is None:
-                raise ValueError(
-                    "Select a valid reference point before refinement"
-                )
-            setup = self._require_probe_setup()
-            self._refinement_session = ProbeRefinementSession.create(
-                self._calculated_probe_setup,
-                setup,
-            )
-            if not setup.safe_approach_approved:
-                self._refinement_session.seed_safe_approach_from_current_pose(
-                    self._current_probe_pose_object()
-                )
-        except Exception as exception:
-            self._show_setup_error(
-                "Start Probe Point Refinement",
-                exception,
-            )
-            return False
-
-        self._refinement_workflow_active = True
-        self._distance_failure_requires_retraction = False
-        self._retraction_failed = False
-        self._hand_depth_history.clear()
-        self.inspection_workspace_splitter.setEnabled(False)
-        self.refinement_dialog.open_for_stage(
-            self._refinement_session.active_stage
-        )
-        self._set_status_text("Probe refinement workflow started")
-        return True
+        """Request one server-owned supervised refinement session."""
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT
+        return self._submit_probe_setup(intent) is not None
 
     def request_close_refinement_workflow(self):
-        """Close only when no movement or recovery remains active."""
+        """Request closure of the server-owned refinement session."""
         session = self._refinement_session
-        if session is None:
-            self._finish_refinement_workflow_close()
-            return True
-        if session.pending_motion is not None:
+        if session is not None and session.pending_motion is not None:
             self.refinement_recovery_status_label.setText(
                 "Wait for the active movement and settle check."
             )
             return False
-        if session.recovery_required:
+        if session is not None and session.recovery_required:
             self.refinement_recovery_status_label.setText(
                 "Retract Without Saving is required before closing."
             )
             return False
-        session.discard_unapproved_candidates()
-        self._finish_refinement_workflow_close()
-        return True
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_END_REFINEMENT
+        return self._submit_probe_setup(intent) is not None
 
     def _finish_refinement_workflow_close(self):
         self._refinement_workflow_active = False
@@ -2773,7 +2423,9 @@ class InspectionControls(UIControlHelper):
             and not recovery_only
         )
         self.move_aligned_pose_button.setEnabled(alignment_enabled)
-        self.use_current_alignment_button.setEnabled(alignment_enabled)
+        self.use_current_alignment_button.setEnabled(
+            alignment_enabled and alignment_adjustable
+        )
         for button in self.refinement_buttons["alignment"].values():
             button.setEnabled(
                 alignment_enabled and alignment_adjustable
@@ -2900,158 +2552,6 @@ class InspectionControls(UIControlHelper):
         if session is None or not self._refinement_workflow_active:
             raise RuntimeError("Probe refinement workflow is not active")
         return session
-
-    def handle_approve_and_retract(self):
-        """Capture, atomically save, then command mandatory retraction."""
-        try:
-            self._require_command_path_idle(require_settled=True)
-            session = self._require_refinement_session()
-            if not session.surface_distance_verified:
-                raise ValueError("Surface Distance Verified is required")
-            if not session.stage_is_approved(
-                RefinementStage.SAFE_APPROACH
-            ):
-                raise ValueError("Safe Approach Pose is not approved")
-            if not session.stage_is_approved(
-                RefinementStage.ALIGNMENT
-            ):
-                raise ValueError(
-                    "Aligned Pre-approach Pose is not approved"
-                )
-            current = self._current_probe_pose_object()
-            session.approve(RefinementStage.PROBE, current)
-            self._probe_setup = approve_probe_pose(
-                self._require_probe_setup(),
-                current,
-            )
-            result = self._persist_probe_point(self._probe_setup)
-            session.saved = True
-            session.require_recovery(
-                "Probe point saved. Retraction to the aligned "
-                "pre-approach pose is required."
-            )
-            target = session.candidate_pose(RefinementStage.ALIGNMENT)
-            if not self._send_refinement_motion(
-                RefinementStage.ALIGNMENT,
-                "retraction",
-                target,
-                updates_candidate=False,
-            ):
-                self._retraction_failed = True
-                raise RuntimeError(
-                    "Probe point was saved, but retraction could not start"
-                )
-        except Exception as exception:
-            self.save_probe_point_status_label.setText(str(exception))
-            self.refinement_recovery_status_label.setText(str(exception))
-            self.show_warning("Approve and Retract", str(exception))
-            self._refresh_refinement_dialog()
-            return False
-
-        self.save_probe_point_status_label.setText(
-            f"Saved probe point '{result[2]}'; retracting."
-        )
-        self._refresh_refinement_dialog()
-        return True
-
-    def handle_retract_without_saving(self):
-        """Return to the current derived aligned pose without persistence."""
-        try:
-            session = self._require_refinement_session()
-            if not session.recovery_required:
-                raise ValueError("No retraction is currently required")
-            target = session.candidate_pose(RefinementStage.ALIGNMENT)
-            if not self._send_refinement_motion(
-                RefinementStage.ALIGNMENT,
-                "retraction",
-                target,
-                updates_candidate=False,
-            ):
-                return False
-        except Exception as exception:
-            self._show_setup_error("Retract Without Saving", exception)
-            return False
-        return True
-
-    def _persist_probe_point(self, setup):
-        object_id = self.saved_object_dropdown.currentData()
-        routine_id = self.saved_routine_dropdown.currentData()
-        if not object_id or not routine_id:
-            raise ValueError(
-                "Select a saved object and routine before saving"
-            )
-        probe_point = self._build_probe_point(setup)
-        if self._editing_probe_point_id is None:
-            stored_definition = self.object_repository.add_probe_point(
-                object_id,
-                routine_id,
-                probe_point,
-            )
-        else:
-            if probe_point.probe_point_id != self._editing_probe_point_id:
-                raise ValueError(
-                    "Probe point ID cannot change while replacing a point"
-                )
-            stored_definition = self.object_repository.replace_probe_point(
-                object_id,
-                routine_id,
-                probe_point,
-            )
-        self._selected_definition = stored_definition
-        self._set_status_text(
-            f"Saved probe point '{object_id}/{routine_id}/"
-            f"{probe_point.probe_point_id}'"
-        )
-        return object_id, routine_id, probe_point.probe_point_id
-
-    def _build_probe_point(self, setup):
-        if (
-            self._selected_surface_point is None
-            or self._reference_view is None
-            or self._reference_view.view_id is None
-        ):
-            raise ValueError(
-                "Select a point in a captured reference view"
-            )
-        probe_point_id = self.probe_point_id_field.text().strip()
-        display_name = self.probe_point_display_name_field.text().strip()
-        if not probe_point_id:
-            raise ValueError("Probe point ID must not be empty")
-        if not display_name:
-            raise ValueError("Probe point display name must not be empty")
-        surface_target = setup.surface_target
-        probe_point = ProbePoint(
-            probe_point_id=probe_point_id,
-            display_name=display_name,
-            safe_approach_pose_object=deepcopy(
-                setup.safe_approach_pose_object
-            ),
-            probe_pose_object=deepcopy(setup.probe_pose_object),
-            target_surface_distance_m=(
-                surface_target.target_surface_distance_m
-            ),
-            position_tolerance_m=self._distance_value(
-                self.probe_position_tolerance_field,
-                "Position tolerance",
-            ),
-            orientation_tolerance_rad=self._distance_value(
-                self.probe_orientation_tolerance_field,
-                "Orientation tolerance",
-            ),
-            measurement_duration_sec=self._distance_value(
-                self.probe_measurement_duration_field,
-                "Measurement duration",
-            ),
-            aligned_preapproach_distance_m=(
-                surface_target.aligned_preapproach_distance_m
-            ),
-            reference_pixel=deepcopy(
-                self._selected_surface_point.requested_pixel
-            ),
-            reference_view_id=self._reference_view.view_id,
-        )
-        probe_point.validate()
-        return probe_point
 
     def handle_move_to_approach_pose(self):
         session = self._require_refinement_session()
@@ -3290,66 +2790,6 @@ class InspectionControls(UIControlHelper):
             return
         self._move_transient_probe_pose(pose, label)
 
-    def handle_use_current_as_approach(self):
-        try:
-            self._require_command_path_idle(require_settled=True)
-            session = self._require_refinement_session()
-            if session.active_stage != RefinementStage.SAFE_APPROACH:
-                raise ValueError("Open the Safe Approach Pose stage first")
-            current = self._current_probe_pose_object()
-            session.approve(RefinementStage.SAFE_APPROACH, current)
-            session.motion_states[RefinementStage.SAFE_APPROACH] = (
-                RefinementMotionState.REACHED
-            )
-            self._probe_setup = approve_safe_approach_pose(
-                self._require_probe_setup(),
-                current,
-            )
-        except Exception as exception:
-            self._show_setup_error("Capture Approach Pose", exception)
-            return
-        self._display_probe_setup("Approach approved")
-        self._set_status_text("Current probe pose approved as approach pose")
-        self._refresh_refinement_dialog()
-        return True
-
-    def handle_use_current_alignment(self):
-        try:
-            self._require_command_path_idle(require_settled=True)
-            session = self._require_refinement_session()
-            if session.active_stage != RefinementStage.ALIGNMENT:
-                raise ValueError(
-                    "Open the Aligned Pre-approach Pose stage first"
-                )
-            if (
-                session.motion_states[RefinementStage.SAFE_APPROACH]
-                != RefinementMotionState.REACHED
-            ):
-                raise ValueError(
-                    "Reach the safe approach during this workflow first"
-                )
-            current = self._current_probe_pose_object()
-            session.approve(RefinementStage.ALIGNMENT, current)
-            session.motion_states[RefinementStage.ALIGNMENT] = (
-                RefinementMotionState.REACHED
-            )
-            self._probe_setup = approve_surface_alignment_pose(
-                self._require_probe_setup(),
-                current,
-            )
-        except Exception as exception:
-            self._show_setup_error(
-                "Capture Aligned Pre-approach Pose",
-                exception,
-            )
-            return
-        self._display_probe_setup("Aligned pre-approach approved")
-        self._set_status_text(
-            "Current probe pose approved as aligned pre-approach"
-        )
-        self._refresh_refinement_dialog()
-        return True
-
     def handle_use_current_as_probe(self):
         self._show_setup_error(
             "Capture Probe Pose",
@@ -3376,7 +2816,23 @@ class InspectionControls(UIControlHelper):
         updates_candidate=False,
         axial_correction_m=0.0,
     ):
-        return self.show_setup_unavailable("Probe setup motion")
+        if stage == RefinementStage.SAFE_APPROACH:
+            operation = (
+                ProbeSetupMotionIntent.OPERATION_MOVE_SAFE_APPROACH
+            )
+        elif stage == RefinementStage.ALIGNMENT:
+            operation = (
+                ProbeSetupMotionIntent.OPERATION_MOVE_ALIGNED_PREAPPROACH
+            )
+        else:
+            return self.show_setup_unavailable(
+                "Controlled probe-axis motion"
+            )
+        intent = ProbeSetupMotionIntent()
+        intent.operation = operation
+        intent.frame = ProbeSetupMotionIntent.FRAME_SENSOR
+        self._write_motion_tolerances(intent)
+        return self._submit_probe_motion(intent, label)
 
     def _send_refinement_relative_motion(
         self,
@@ -3386,214 +2842,67 @@ class InspectionControls(UIControlHelper):
         pitch_rad,
         yaw_rad,
     ):
-        return self.show_setup_unavailable("Probe refinement motion")
+        operations = {
+            RefinementStage.SAFE_APPROACH: (
+                ProbeSetupMotionIntent.OPERATION_ADJUST_SAFE_APPROACH
+            ),
+            RefinementStage.ALIGNMENT: (
+                ProbeSetupMotionIntent.OPERATION_ADJUST_ALIGNED_PREAPPROACH
+            ),
+        }
+        if stage not in operations:
+            return self.show_setup_unavailable(
+                "Controlled probe-axis adjustment"
+            )
+        intent = ProbeSetupMotionIntent()
+        intent.operation = operations[stage]
+        intent.frame = self._selected_refinement_frame_code()
+        intent.translation.x = translation.x
+        intent.translation.y = translation.y
+        intent.translation.z = translation.z
+        intent.pitch_rad = pitch_rad
+        intent.yaw_rad = yaw_rad
+        self._write_motion_tolerances(intent)
+        return self._submit_probe_motion(intent, label)
 
-    def _selected_refinement_frame_id(self):
+    def _selected_refinement_frame_code(self):
         selection = self.refine_frame_dropdown.currentData()
-        if selection == REFINEMENT_FRAME_SENSOR:
-            return self._active_probe_frame()
-        if selection == REFINEMENT_FRAME_HAND:
-            return HAND_FRAME_NAME
-        if selection == REFINEMENT_FRAME_TAG:
-            if self._selected_definition is None:
-                raise ValueError("No inspection object is selected")
-            tag_id = self._selected_definition.reference_tag.tag_id
-            return f"{TagFrames.SPOT_FRAME_FILTERED.value}{tag_id}"
-        if selection == REFINEMENT_FRAME_BODY:
-            return "body"
-        if selection == REFINEMENT_FRAME_MAP:
-            return "map"
-        raise ValueError("Select a valid refinement frame")
-
-    @staticmethod
-    def _relative_rotation_quaternion(pitch_rad, yaw_rad):
-        half_pitch = pitch_rad * 0.5
-        half_yaw = yaw_rad * 0.5
-        return QuaternionData(
-            x=-math.sin(half_pitch) * math.sin(half_yaw),
-            y=math.sin(half_pitch) * math.cos(half_yaw),
-            z=math.cos(half_pitch) * math.sin(half_yaw),
-            w=math.cos(half_pitch) * math.cos(half_yaw),
-        )
-
-    def _complete_pending_refinement_motion(self, request_id):
-        session = self._refinement_session
-        if session is None or session.pending_motion is None:
-            return
-        motion = session.pending_motion
-        if motion.request_id != request_id:
-            return
+        values = {
+            REFINEMENT_FRAME_SENSOR: ProbeSetupMotionIntent.FRAME_SENSOR,
+            REFINEMENT_FRAME_HAND: ProbeSetupMotionIntent.FRAME_HAND,
+            REFINEMENT_FRAME_TAG: ProbeSetupMotionIntent.FRAME_TAG,
+            REFINEMENT_FRAME_BODY: ProbeSetupMotionIntent.FRAME_BODY,
+            REFINEMENT_FRAME_MAP: ProbeSetupMotionIntent.FRAME_MAP,
+        }
         try:
-            if not motion.verify_achieved_pose:
-                session.complete_motion_without_pose_capture(request_id)
-                if motion.purpose == "retraction":
-                    session.complete_retraction()
-                    self._distance_failure_requires_retraction = False
-                    self._retraction_failed = False
-                    self.surface_distance_test_status_label.setText(
-                        "Retraction reached the aligned pre-approach pose."
-                    )
-                    if session.saved:
-                        self.save_probe_point_status_label.setText(
-                            "Probe point saved and retraction completed."
-                        )
-                self._probe_motion_pending = False
-                self._hand_depth_history.clear()
-                self._set_status_text(
-                    f"Reached {motion.purpose}; no tag verification "
-                    "required"
-                )
-                self._refresh_refinement_dialog()
-                return
-            achieved = self._current_probe_pose_object()
-            position_tolerance = self._distance_value(
-                self.probe_position_tolerance_field,
-                "Position tolerance",
-            )
-            orientation_tolerance = self._distance_value(
-                self.probe_orientation_tolerance_field,
-                "Orientation tolerance",
-            )
-            position_error, orientation_error = self._pose_errors(
-                motion.target_pose_object,
-                achieved,
-            )
-            if position_error > position_tolerance:
-                raise RuntimeError(
-                    "Achieved probe position missed the target by "
-                    f"{position_error:.4f} m"
-                )
-            if orientation_error > orientation_tolerance:
-                raise RuntimeError(
-                    "Achieved probe orientation missed the target by "
-                    f"{math.degrees(orientation_error):.2f} deg"
-                )
-            session.complete_motion(request_id, achieved)
-            if motion.purpose == "retraction":
-                session.complete_retraction()
-                self._distance_failure_requires_retraction = False
-                self._retraction_failed = False
-                self.surface_distance_test_status_label.setText(
-                    "Retraction reached the aligned pre-approach pose."
-                )
-                if session.saved:
-                    self.save_probe_point_status_label.setText(
-                        "Probe point saved and retraction completed."
-                    )
-            else:
-                self.surface_distance_test_status_label.setText(
-                    "Movement reached and settled."
-                    if motion.stage == RefinementStage.PROBE
-                    else self.surface_distance_test_status_label.text()
-                )
-        except Exception as exception:
-            self._fail_pending_refinement_motion(
-                str(exception),
-                request_id,
-            )
-            return
+            return values[selection]
+        except KeyError as exception:
+            raise ValueError("Select a valid refinement frame") from exception
 
-        self._probe_motion_pending = False
-        self._hand_depth_history.clear()
-        self._set_status_text(
-            f"Reached {motion.purpose}; achieved pose verified"
+    def _write_motion_tolerances(self, intent):
+        intent.position_tolerance_m = self._distance_value(
+            self.probe_position_tolerance_field,
+            "Position tolerance",
         )
-        self._refresh_refinement_dialog()
+        intent.orientation_tolerance_rad = self._distance_value(
+            self.probe_orientation_tolerance_field,
+            "Orientation tolerance",
+        )
 
-    def _fail_pending_refinement_motion(
-        self,
-        message,
-        request_id=None,
-    ):
-        session = self._refinement_session
-        motion = session.pending_motion if session is not None else None
-        if session is not None:
-            if motion is None:
-                return
-            result_request_id = request_id or motion.request_id
-            if result_request_id != motion.request_id:
-                return
-            session.fail_motion(result_request_id, message)
-            if motion is not None and motion.purpose == "retraction":
-                session.require_recovery(
-                    f"Retraction Failed: {message}"
-                )
-                self._retraction_failed = True
-            elif (
-                motion is not None
-                and motion.stage == RefinementStage.PROBE
-            ):
-                session.require_recovery(
-                    f"Probe-axis Movement Failed: {message}"
-                )
-                self._distance_failure_requires_retraction = True
-        self._probe_motion_pending = False
-        self.refinement_recovery_status_label.setText(message)
-        self._set_status_text(f"Probe refinement movement failed: {message}")
-        self._refresh_refinement_dialog()
-
-    def _clear_refinement_execution_evidence(self, message):
-        session = self._refinement_session
-        if session is None:
-            return
-        session.surface_distance_verified = False
-        for stage in RefinementStage:
-            session.motion_states[stage] = (
-                RefinementMotionState.NOT_TESTED
-            )
-        self._hand_depth_history.clear()
-        self.refinement_recovery_status_label.setText(message)
-        self._update_save_probe_point_state()
+    def _submit_probe_motion(self, intent, label):
+        client = getattr(self.ui, "probe_setup_client", None)
+        if client is None:
+            return self.show_setup_unavailable("Probe setup motion")
+        request_id = client.execute_motion(intent)
+        if request_id is None:
+            return False
+        self._probe_motion_pending = True
+        self._set_status_text(f"Probe setup motion submitted: {label}")
+        return True
 
     def handle_refinement_emergency_stop(self):
-        """Cancel robot motion while keeping recovery state explicit."""
-        session = self._refinement_session
-        if session is not None:
-            pending = session.pending_motion
-            inward_or_unknown_probe_motion = (
-                session.recovery_required
-                or (
-                    pending is not None
-                    and pending.stage == RefinementStage.PROBE
-                )
-            )
-            if pending is not None:
-                session.fail_motion(
-                    pending.request_id,
-                    "Emergency stop triggered",
-                )
-            if inward_or_unknown_probe_motion:
-                session.require_recovery(
-                    "Emergency stop triggered after probe-axis motion. "
-                    "Verify clearance, then retract to the aligned "
-                    "pre-approach pose."
-                )
-            else:
-                self._clear_refinement_execution_evidence(
-                    "Emergency stop triggered. Movement evidence was "
-                    "cleared; re-establish the ordered workflow."
-                )
-        self._probe_motion_pending = False
+        """Request the application-level emergency stop."""
         self.ui.handle_emergency_stop()
-        self._refresh_refinement_dialog()
-
-    @staticmethod
-    def _pose_errors(target, achieved):
-        position_error = math.sqrt(
-            (target.position.x - achieved.position.x) ** 2
-            + (target.position.y - achieved.position.y) ** 2
-            + (target.position.z - achieved.position.z) ** 2
-        )
-        dot = abs(
-            target.orientation.x * achieved.orientation.x
-            + target.orientation.y * achieved.orientation.y
-            + target.orientation.z * achieved.orientation.z
-            + target.orientation.w * achieved.orientation.w
-        )
-        orientation_error = 2.0 * math.acos(
-            max(-1.0, min(1.0, dot))
-        )
-        return position_error, orientation_error
 
     def _require_command_path_idle(self, require_settled=False):
         if self._buffered_command_count:
@@ -3689,12 +2998,7 @@ class InspectionControls(UIControlHelper):
         return self._lookup_pose(HAND_FRAME_NAME, probe_frame)
 
     def _configured_hand_to_probe_pose(self):
-        sensor_id = None
-        routine_id = self.saved_routine_dropdown.currentData()
-        if routine_id and self._selected_definition is not None:
-            routine = self._selected_definition.get_routine(routine_id)
-            if routine is not None:
-                sensor_id = routine.sensor_id
+        sensor_id = self._selected_sensor_id
         if not sensor_id:
             sensor_id = self.sensor_id_field.currentData()
         definition = self._sensor_definitions.get(sensor_id)
@@ -3703,11 +3007,8 @@ class InspectionControls(UIControlHelper):
         return deepcopy(definition.hand_to_probe)
 
     def _active_probe_frame(self):
-        routine_id = self.saved_routine_dropdown.currentData()
-        if routine_id and self._selected_definition is not None:
-            routine = self._selected_definition.get_routine(routine_id)
-            if routine is not None:
-                return sensor_probe_frame(routine.sensor_id)
+        if self._selected_sensor_id:
+            return sensor_probe_frame(self._selected_sensor_id)
 
         sensor_id = self.sensor_id_field.currentData()
         if not sensor_id:
@@ -3746,9 +3047,9 @@ class InspectionControls(UIControlHelper):
         return pose
 
     def _live_reference_tag(self):
-        if self._selected_definition is None:
+        if self._selected_reference_tag_id < 0:
             raise ValueError("No inspection object is selected")
-        tag_id = self._selected_definition.reference_tag.tag_id
+        tag_id = self._selected_reference_tag_id
         if self.node is not None:
             return self._stable_reference_tag(tag_id)
         base_tags = getattr(self.ui, "base_tags", None)
@@ -3863,152 +3164,382 @@ class InspectionControls(UIControlHelper):
         self.show_warning("Missing Input", f"Enter {label}.")
         return None
 
+    def refresh_setup_state(self):
+        """Request the current immutable probe setup snapshot."""
+        client = getattr(self.ui, "probe_setup_client", None)
+        if client is None or not client.context_id:
+            return False
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_REFRESH
+        return self._submit_probe_setup(intent) is not None
+
     def refresh_saved_definitions(
         self,
         desired_object_id=None,
         desired_routine_id=None,
     ):
-        """Reload definitions and select only existing repository entries."""
-        object_ids = self.object_repository.list_object_ids()
-        current_object_id = (
-            self.saved_object_dropdown.currentData() or ""
+        """Refresh definitions through the server-owned setup context."""
+        return self.refresh_setup_state()
+
+    def apply_setup_state(self, state):
+        """Render one authoritative probe setup snapshot."""
+        if not isinstance(state, ProbeSetupState):
+            raise TypeError("Expected a ProbeSetupState message")
+        view = probe_setup_state_to_view(state)
+        previous_views = tuple(self._reference_slot_view_ids)
+        self._probe_setup_state = state
+        self._selected_reference_tag_id = int(
+            state.selected_reference_tag_id
         )
-
-        if desired_object_id is None:
-            target_object_id = (
-                current_object_id
-                if current_object_id in object_ids
-                else ""
-            )
-        elif desired_object_id in object_ids:
-            target_object_id = desired_object_id
+        self._selected_sensor_id = state.selected_sensor_id
+        self._apply_object_and_routine_lists(state)
+        self._apply_probe_setup_view(view)
+        signature = (
+            state.selected_object_id,
+            state.selected_routine_id,
+            tuple(state.reference_view_ids),
+        )
+        if signature != getattr(self, "_preview_signature", None):
+            self._preview_signature = signature
+            self._request_reference_previews(state)
+        elif previous_views != tuple(self._reference_slot_view_ids):
+            self._restore_authoritative_selection()
+        if state.state == ProbeSetupState.STATE_FAILED:
+            self._set_setup_status("Unavailable", state.detail)
         else:
-            target_object_id = ""
+            self._set_status_text(state.detail)
+        return True
 
+    def _apply_object_and_routine_lists(self, state):
         self.saved_object_dropdown.blockSignals(True)
         self.saved_object_dropdown.clear()
-        self.saved_object_dropdown.addItem(
-            "Select saved object",
-            None,
-        )
-        for object_id in object_ids:
+        self.saved_object_dropdown.addItem("Select saved object", None)
+        for object_id in state.object_ids:
             self.saved_object_dropdown.addItem(object_id, object_id)
-
-        selected_index = self.saved_object_dropdown.findData(
-            target_object_id
+        object_index = self.saved_object_dropdown.findData(
+            state.selected_object_id
         )
         self.saved_object_dropdown.setCurrentIndex(
-            selected_index if selected_index >= 0 else 0
+            object_index if object_index >= 0 else 0
         )
         self.saved_object_dropdown.blockSignals(False)
 
-        self._refresh_routine_parent_objects(
-            object_ids,
-            target_object_id,
+        self.routine_parent_object_dropdown.blockSignals(True)
+        self.routine_parent_object_dropdown.clear()
+        self.routine_parent_object_dropdown.addItem(
+            "Select existing object",
+            None,
         )
-        self._load_selected_object(
-            desired_routine_id=desired_routine_id,
-        )
-
-    def _refresh_routine_parent_objects(
-        self,
-        object_ids=None,
-        desired_object_id="",
-    ):
-        if not hasattr(self, "routine_parent_object_dropdown"):
-            return
-        if object_ids is None:
-            object_ids = self.object_repository.list_object_ids()
-
-        current_parent_id = (
-            self.routine_parent_object_dropdown.currentData() or ""
-        )
-        if desired_object_id not in object_ids:
-            desired_object_id = (
-                current_parent_id
-                if current_parent_id in object_ids
-                else ""
+        for object_id in state.object_ids:
+            self.routine_parent_object_dropdown.addItem(
+                object_id,
+                object_id,
             )
-        if not desired_object_id and len(object_ids) == 1:
-            desired_object_id = object_ids[0]
-
-        dropdown = self.routine_parent_object_dropdown
-        dropdown.blockSignals(True)
-        dropdown.clear()
-        dropdown.addItem("Select existing object", None)
-        for object_id in object_ids:
-            dropdown.addItem(object_id, object_id)
-        selected_index = dropdown.findData(desired_object_id)
-        dropdown.setCurrentIndex(
-            selected_index if selected_index >= 0 else 0
+        parent_index = self.routine_parent_object_dropdown.findData(
+            state.selected_object_id
         )
-        dropdown.blockSignals(False)
-        selected_sensor_id = self.sensor_id_field.currentData()
-        self.create_routine_button.setEnabled(
-            bool(object_ids)
-            and selected_sensor_id in self._sensor_definitions
+        self.routine_parent_object_dropdown.setCurrentIndex(
+            parent_index if parent_index >= 0 else 0
         )
+        self.routine_parent_object_dropdown.blockSignals(False)
 
-    def _load_selected_object(
-        self,
-        _index=None,
-        desired_routine_id=None,
-    ):
-        object_id = self.saved_object_dropdown.currentData()
-        self.delete_object_button.setEnabled(bool(object_id))
-        self.delete_routine_button.setEnabled(False)
-        if not object_id:
-            self._selected_definition = None
-            self._populate_routine_dropdown([])
+        self.saved_routine_dropdown.blockSignals(True)
+        self.saved_routine_dropdown.clear()
+        self.saved_routine_dropdown.addItem(
+            "Select saved routine",
+            None,
+        )
+        for routine_id in state.routine_ids:
+            self.saved_routine_dropdown.addItem(routine_id, routine_id)
+        routine_index = self.saved_routine_dropdown.findData(
+            state.selected_routine_id
+        )
+        self.saved_routine_dropdown.setCurrentIndex(
+            routine_index if routine_index >= 0 else 0
+        )
+        self.saved_routine_dropdown.blockSignals(False)
+
+        self.delete_object_button.setEnabled(
+            bool(state.selected_object_id)
+        )
+        self.delete_routine_button.setEnabled(
+            bool(state.selected_object_id and state.selected_routine_id)
+        )
+        if state.selected_sensor_id:
+            self._pending_sensor_selection = state.selected_sensor_id
+            self._populate_sensor_dropdown(state.selected_sensor_id)
+
+    def _apply_probe_setup_view(self, view):
+        state = view.message
+        self._selected_surface_point = view.projected_point
+        self._selected_surface_normal = view.surface_normal
+        self._surface_normal_error = state.surface_normal_error
+        self._selected_approach_direction = view.approach_direction
+        self._selected_surface_target = view.surface_target
+        self._calculated_probe_setup = view.calculated_setup
+        self._probe_setup = view.setup
+
+        if not state.has_reference_pixel:
+            self._clear_selected_surface_point()
+            return
+        self.reference_pixel_value_label.setText(
+            f"u={state.reference_pixel_u}, v={state.reference_pixel_v}"
+        )
+        self.clear_reference_pixel_button.setEnabled(True)
+
+        if view.projected_point is None:
+            self._set_projection_unavailable(
+                "Unavailable",
+                state.validation_error or state.detail,
+            )
+            return
+        point = view.projected_point
+        self.reference_surface_frame_value_label.setText(point.frame_id)
+        self.reference_surface_frame_value_label.setToolTip(point.frame_id)
+        self.reference_surface_x_value_label.setText(
+            self._format_readout_value(point.point_camera.x, 3)
+        )
+        self.reference_surface_y_value_label.setText(
+            self._format_readout_value(point.point_camera.y, 3)
+        )
+        self.reference_surface_z_value_label.setText(
+            self._format_readout_value(point.point_camera.z, 3)
+        )
+        mapped = point.mapped_pixel
+        sampled = point.sampled_pixel
+        self.reference_depth_pixel_value_label.setText(
+            f"{sampled.u},{sampled.v}"
+            if sampled == mapped
+            else f"{mapped.u},{mapped.v} to {sampled.u},{sampled.v}"
+        )
+        self._set_projection_status("Ready")
+
+        if view.surface_normal is None:
+            self.reference_normal_x_value_label.setText("N/A")
+            self.reference_normal_y_value_label.setText("N/A")
+            self.reference_normal_z_value_label.setText("N/A")
+            self.reference_normal_samples_value_label.setText("N/A")
+            self.reference_normal_rmse_value_label.setText("N/A")
+            self._set_normal_status(
+                "Unavailable",
+                state.surface_normal_error,
+            )
+        else:
+            normal = view.surface_normal
+            self.reference_normal_x_value_label.setText(
+                self._format_readout_value(normal.normal_camera.x, 3)
+            )
+            self.reference_normal_y_value_label.setText(
+                self._format_readout_value(normal.normal_camera.y, 3)
+            )
+            self.reference_normal_z_value_label.setText(
+                self._format_readout_value(normal.normal_camera.z, 3)
+            )
+            self.reference_normal_samples_value_label.setText(
+                str(normal.sample_count)
+            )
+            self.reference_normal_rmse_value_label.setText(
+                self._format_readout_value(normal.plane_rmse_m, 4)
+            )
+            self._set_normal_status("Ready")
+
+        if view.approach_direction is None:
+            self._set_approach_status(
+                "Unavailable",
+                state.validation_error or state.detail,
+            )
+        else:
+            source_text = {
+                APPROACH_SOURCE_SURFACE_FIT: "Surface fit",
+                APPROACH_SOURCE_TAG_X_SELECTED: "Calibrated tag +X",
+            }.get(view.approach_direction.source, "Unknown")
+            self.reference_approach_source_value_label.setText(source_text)
+            self._set_approach_status("Ready")
+
+        if view.setup is None:
+            self._clear_selected_surface_target()
+            return
+        self.reference_target_distance_field.setText(
+            f"{state.target_surface_distance_m:.3f}"
+        )
+        self.reference_preapproach_distance_field.setText(
+            f"{state.aligned_preapproach_distance_m:.3f}"
+        )
+        self._display_probe_setup("Authoritative")
+        self._synchronize_refinement_session(view.refinement)
+
+    def _synchronize_refinement_session(self, refinement):
+        was_active = self._refinement_workflow_active
+        if refinement is None:
+            if was_active:
+                self._finish_refinement_workflow_close()
+            return
+        self._refinement_session = refinement
+        self._refinement_workflow_active = True
+        self._probe_motion_pending = refinement.pending_motion is not None
+        self._distance_failure_requires_retraction = (
+            refinement.recovery_required
+        )
+        self._retraction_failed = False
+        self.inspection_workspace_splitter.setEnabled(False)
+        if not was_active:
+            self._hand_depth_history.clear()
+            self.refinement_dialog.open_for_stage(
+                refinement.active_stage
+            )
+        self._refresh_refinement_dialog()
+
+    def _request_reference_previews(self, state):
+        self._clear_reference_previews("Loading reference preview")
+        self._reference_slot_view_ids = ["", "", ""]
+        if not state.selected_routine_id:
             self.reference_view_status_label.setText(
                 "Reference view: no routine selected"
             )
-            self._clear_reference_previews(
-                "No reference view selected"
-            )
+            self._set_reference_camera_defaults()
             return
-
-        try:
-            definition = self.object_repository.load(object_id)
-        except Exception as exception:
-            self._selected_definition = None
-            self._populate_routine_dropdown([])
+        if not state.reference_view_ids:
             self.reference_view_status_label.setText(
-                f"Definition load failed: {exception}"
+                "Reference view: not captured"
             )
-            self._clear_reference_previews(
-                "Reference view unavailable"
+            self._set_reference_camera_defaults()
+            return
+        client = getattr(self.ui, "probe_setup_client", None)
+        if client is None:
+            self.reference_view_status_label.setText(
+                "Reference view: remote preview unavailable"
             )
             return
+        for view_id in state.reference_view_ids:
+            client.request_preview(view_id)
 
-        if desired_routine_id is None:
-            desired_routine_id = (
-                self.saved_routine_dropdown.currentData() or ""
+    def apply_reference_preview(self, response):
+        """Render one preview only if it belongs to the current snapshot."""
+        state = self._probe_setup_state
+        if (
+            state is None
+            or response.reference_view_id not in state.reference_view_ids
+        ):
+            return False
+        slot_index = int(response.slot_index)
+        if slot_index < 0 or slot_index >= len(self.reference_view_widgets):
+            self.apply_reference_preview_error(
+                response.reference_view_id,
+                f"Invalid reference preview slot: {slot_index}",
             )
+            return False
+        region = ImageRegion(
+            x=int(response.selectable_x),
+            y=int(response.selectable_y),
+            width=int(response.selectable_width),
+            height=int(response.selectable_height),
+        )
+        widget = self.reference_view_widgets[slot_index]
+        widget.blockSignals(True)
+        widget.set_ros_image(response.image, valid_region=region)
+        widget.blockSignals(False)
+        self._reference_slot_view_ids[slot_index] = (
+            response.reference_view_id
+        )
+        dropdown = self.reference_camera_dropdowns[slot_index]
+        dropdown.blockSignals(True)
+        camera_index = dropdown.findData(response.camera_id)
+        dropdown.setCurrentIndex(camera_index if camera_index >= 0 else 0)
+        dropdown.blockSignals(False)
+        self.reference_view_status_label.setText(
+            "Reference view: remote preview ready"
+        )
+        self._restore_authoritative_selection()
+        return True
 
-        self._selected_definition = definition
-        if not self.management_dialog.isVisible():
-            self.object_id_field.setText(definition.object_id)
-            self.object_display_name_field.setText(
-                definition.display_name
-            )
-            self.reference_tag_id_field.setText(
-                str(definition.reference_tag.tag_id)
-            )
-            self.reference_tag_family_field.setText(
-                definition.reference_tag.tag_family
-            )
-        parent_index = self.routine_parent_object_dropdown.findData(
-            definition.object_id
+    def apply_reference_preview_error(self, view_id, detail):
+        state = self._probe_setup_state
+        if state is None or view_id not in state.reference_view_ids:
+            return False
+        self.reference_view_status_label.setText(
+            "Reference view: preview unavailable"
         )
-        if parent_index >= 0:
-            self.routine_parent_object_dropdown.setCurrentIndex(
-                parent_index
+        self.reference_view_status_label.setToolTip(detail)
+        return True
+
+    def _restore_authoritative_selection(self):
+        state = self._probe_setup_state
+        if state is None or not state.has_reference_pixel:
+            return
+        try:
+            slot_index = self._reference_slot_view_ids.index(
+                state.selected_reference_view_id
             )
-        self._populate_routine_dropdown(
-            definition.routines,
-            desired_routine_id,
+        except ValueError:
+            return
+        widget = self.reference_view_widgets[slot_index]
+        widget.blockSignals(True)
+        widget.set_selected_image_point(
+            ImagePoint(
+                u=int(state.reference_pixel_u),
+                v=int(state.reference_pixel_v),
+            )
         )
+        widget.blockSignals(False)
+        self._active_reference_slot = slot_index
+
+    def _load_selected_object(self, _index=None):
+        object_id = self.saved_object_dropdown.currentData()
+        state = self._probe_setup_state
+        if not object_id:
+            return False
+        if state is not None and object_id == state.selected_object_id:
+            return True
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_SELECT_OBJECT
+        intent.object_id = object_id
+        return self._submit_probe_setup(intent) is not None
+
+    def _load_selected_routine(self, _index=None):
+        object_id = self.saved_object_dropdown.currentData()
+        routine_id = self.saved_routine_dropdown.currentData()
+        state = self._probe_setup_state
+        if not object_id or not routine_id:
+            return False
+        if (
+            state is not None
+            and object_id == state.selected_object_id
+            and routine_id == state.selected_routine_id
+        ):
+            return True
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_SELECT_ROUTINE
+        intent.object_id = object_id
+        intent.routine_id = routine_id
+        return self._submit_probe_setup(intent) is not None
+
+    def _refresh_routine_parent_objects(
+        self,
+        desired_object_id="",
+        object_ids=None,
+    ):
+        state = self._probe_setup_state
+        values = list(object_ids or (
+            state.object_ids if state is not None else ()
+        ))
+        self.routine_parent_object_dropdown.blockSignals(True)
+        self.routine_parent_object_dropdown.clear()
+        self.routine_parent_object_dropdown.addItem(
+            "Select existing object",
+            None,
+        )
+        for object_id in values:
+            self.routine_parent_object_dropdown.addItem(
+                object_id,
+                object_id,
+            )
+        index = self.routine_parent_object_dropdown.findData(
+            desired_object_id
+        )
+        self.routine_parent_object_dropdown.setCurrentIndex(
+            index if index >= 0 else 0
+        )
+        self.routine_parent_object_dropdown.blockSignals(False)
 
     def _populate_routine_dropdown(
         self,
@@ -4021,278 +3552,20 @@ class InspectionControls(UIControlHelper):
             "Select saved routine",
             None,
         )
-        for routine in sorted(
-            routines,
-            key=lambda candidate: candidate.routine_id,
-        ):
-            self.saved_routine_dropdown.addItem(
-                routine.routine_id,
-                routine.routine_id,
-            )
-        selected_index = self.saved_routine_dropdown.findData(
-            desired_routine_id
-        )
+        for routine_id in routines:
+            self.saved_routine_dropdown.addItem(routine_id, routine_id)
+        index = self.saved_routine_dropdown.findData(desired_routine_id)
         self.saved_routine_dropdown.setCurrentIndex(
-            selected_index if selected_index >= 0 else 0
+            index if index >= 0 else 0
         )
         self.saved_routine_dropdown.blockSignals(False)
-        self._load_selected_routine()
-
-    def _load_selected_routine(self, _index=None):
-        self._clear_reference_previews("No reference view selected")
-        routine_id = self.saved_routine_dropdown.currentData()
-        self.delete_routine_button.setEnabled(
-            bool(routine_id and self._selected_definition is not None)
-        )
-        if not routine_id or self._selected_definition is None:
-            self.reference_view_status_label.setText(
-                "Reference view: no routine selected"
-            )
-            self.reference_view_status_label.setToolTip("")
-            return
-
-        routine = self._selected_definition.get_routine(routine_id)
-        if routine is None:
-            self.reference_view_status_label.setText(
-                "Reference view: routine no longer exists"
-            )
-            self.reference_view_status_label.setToolTip("")
-            self._clear_reference_previews(
-                "Reference view unavailable"
-            )
-            return
-
-        if not self.management_dialog.isVisible():
-            self.routine_id_field.setText(routine.routine_id)
-            self.routine_display_name_field.setText(
-                routine.display_name
-            )
-            self._populate_sensor_dropdown(routine.sensor_id)
-
-        if not routine.reference_views:
-            self._set_reference_camera_defaults()
-            self.reference_view_status_label.setText(
-                "Reference view: not captured"
-            )
-            self.reference_view_status_label.setToolTip("")
-            self._clear_reference_previews(
-                "No reference view captured"
-            )
-            return
-
-        self._clear_reference_camera_selections()
-        self._reference_slot_captures = [None, None, None]
-        camera_names = []
-        unavailable = []
-        object_id = self._selected_definition.object_id
-        reference_tag_id = self._selected_definition.reference_tag.tag_id
-
-        for reference_view in sorted(
-            routine.reference_views,
-            key=lambda view: view.slot_index,
-        ):
-            slot_index = reference_view.slot_index
-            camera_id = reference_view.camera_id
-            if slot_index < 0 or slot_index > 2:
-                unavailable.append(
-                    f"Invalid slot {slot_index + 1}: {camera_id}"
-                )
-                continue
-            camera_config = REFERENCE_CAMERA_BY_ID.get(camera_id)
-            widget = self.reference_view_widgets[slot_index]
-            if camera_config is None:
-                unavailable.append(
-                    f"Slot {slot_index + 1}: unknown camera {camera_id}"
-                )
-                widget.clear_preview("Unknown camera")
-                continue
-
-            dropdown = self.reference_camera_dropdowns[slot_index]
-            dropdown.blockSignals(True)
-            dropdown.setCurrentIndex(dropdown.findData(camera_id))
-            dropdown.blockSignals(False)
-
-            try:
-                capture = self._load_reference_view_capture(
-                    object_id,
-                    routine.routine_id,
-                    reference_tag_id,
-                    reference_view,
-                )
-                valid_region = rgb_depth_selectable_region(
-                    (
-                        capture.rgb_image.width,
-                        capture.rgb_image.height,
-                    ),
-                    capture.depth_image,
-                    capture.rgb_camera_info,
-                    capture.depth_camera_info,
-                )
-            except Exception as exception:
-                detail = (
-                    f"Slot {slot_index + 1} {camera_config.display_name}: "
-                    f"{exception}"
-                )
-                unavailable.append(detail)
-                widget.clear_preview(
-                    f"{camera_config.display_name} unavailable"
-                )
-                widget.setToolTip(detail)
-                continue
-
-            self._reference_slot_captures[slot_index] = capture
-            widget.setToolTip("")
-            widget.set_ros_image(
-                capture.rgb_image,
-                valid_region=valid_region,
-            )
-            camera_names.append(camera_config.display_name)
-
-        for slot_index, capture in enumerate(
-            self._reference_slot_captures
-        ):
-            if capture is not None:
-                continue
-            camera_id = (
-                self.reference_camera_dropdowns[slot_index].currentData()
-                or ""
-            )
-            widget = self.reference_view_widgets[slot_index]
-            if camera_id and not widget.text():
-                widget.clear_preview(
-                    f"Capture {REFERENCE_CAMERA_BY_ID[camera_id].display_name}"
-                )
-            elif not camera_id:
-                widget.clear_preview("No camera selected")
-
-        captures = [
-            capture
-            for capture in self._reference_slot_captures
-            if capture is not None
-        ]
-        if not captures:
-            self._reference_rgb_size = None
-            self._reference_depth_image = None
-            self._reference_rgb_camera_info = None
-            self._reference_camera_info = None
-            self._reference_view = None
-            for reference_view in routine.reference_views:
-                if 0 <= reference_view.slot_index <= 2:
-                    self.reference_view_widgets[
-                        reference_view.slot_index
-                    ].clear_preview("Reference view unavailable")
-            dataset_paths = [
-                reference_view.reference_dataset_path
-                or reference_view.view_id
-                or f"slot{reference_view.slot_index + 1}"
-                for reference_view in sorted(
-                    routine.reference_views,
-                    key=lambda view: view.slot_index,
-                )
-            ]
-            self.reference_view_status_label.setText(
-                "Reference view: captured "
-                f"({', '.join(dataset_paths)}); preview unavailable"
-            )
-            self.reference_view_status_label.setToolTip(
-                "\n".join(unavailable)
-            )
-            return
-
-        first_capture = captures[0]
-        self._reference_rgb_size = (
-            first_capture.rgb_image.width,
-            first_capture.rgb_image.height,
-        )
-        self._reference_depth_image = first_capture.depth_image
-        self._reference_rgb_camera_info = (
-            first_capture.rgb_camera_info
-        )
-        self._reference_camera_info = (
-            first_capture.depth_camera_info
-        )
-        self._reference_view = first_capture.reference_view
-
-        status = "Reference view: captured " + ", ".join(camera_names)
-        if unavailable:
-            status += f"; {len(unavailable)} unavailable"
-        self.reference_view_status_label.setText(status)
-        self.reference_view_status_label.setToolTip(
-            "\n".join(unavailable)
-        )
-
-    def _load_reference_view_capture(
-        self,
-        object_id,
-        routine_id,
-        reference_tag_id,
-        reference_view,
-    ):
-        repository = self.reference_view_repository
-        dataset_path = repository._dataset_path(
-            object_id,
-            routine_id,
-            reference_view,
-        )
-        metadata = json.loads(
-            (dataset_path / "metadata.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        repository._validate_metadata(
-            metadata,
-            object_id,
-            routine_id,
-            reference_view,
-        )
-        rgb_image = deserialize_message(
-            (dataset_path / "rgb.cdr").read_bytes(),
-            Image,
-        )
-        depth_image = deserialize_message(
-            (dataset_path / "depth.cdr").read_bytes(),
-            Image,
-        )
-        rgb_camera_info = deserialize_message(
-            (dataset_path / "rgb_camera_info.cdr").read_bytes(),
-            CameraInfo,
-        )
-        depth_camera_info = deserialize_message(
-            (dataset_path / "depth_camera_info.cdr").read_bytes(),
-            CameraInfo,
-        )
-        reference_tag = deserialize_message(
-            (dataset_path / "reference_tag.cdr").read_bytes(),
-            TagElement,
-        )
-        repository._validate_loaded_dataset(
-            metadata,
-            reference_view,
-            reference_tag_id,
-            rgb_image,
-            depth_image,
-            rgb_camera_info,
-            depth_camera_info,
-            reference_tag,
-        )
-        return CapturedReferenceView(
-            slot_index=reference_view.slot_index,
-            camera_id=reference_view.camera_id,
-            reference_view=reference_view,
-            rgb_image=rgb_image,
-            depth_image=depth_image,
-            rgb_camera_info=rgb_camera_info,
-            depth_camera_info=depth_camera_info,
-            reference_tag=reference_tag,
-            fixed_frame=str(metadata["fixed_frame"]),
-        )
 
     def _schedule_repository_refresh(self):
         for delay_ms in (250, 1000, 3500):
-            QTimer.singleShot(delay_ms, self.refresh_saved_definitions)
+            QTimer.singleShot(delay_ms, self.refresh_setup_state)
 
     def handle_create_object(self):
-        """Create an inspection object directly in the repository."""
+        """Submit one server-owned object creation transaction."""
         object_id = self._required_text(
             self.object_id_field,
             "an object ID",
@@ -4311,7 +3584,6 @@ class InspectionControls(UIControlHelper):
         )
         if None in (object_id, display_name, tag_id_text, tag_family):
             return False
-
         try:
             tag_id = int(tag_id_text)
             if tag_id < 0:
@@ -4322,53 +3594,29 @@ class InspectionControls(UIControlHelper):
                 "Reference tag ID must be a non-negative integer.",
             )
             return False
-
-        definition = InspectionObject(
-            object_id=object_id,
-            display_name=display_name,
-            reference_tag=ReferenceTag(
-                tag_id=tag_id,
-                tag_family=tag_family,
-            ),
-        )
-        try:
-            self.object_repository.create(definition)
-        except Exception as exception:
-            self.management_status_label.setText(
-                f"Object creation failed: {exception}"
-            )
-            self.show_warning("Create Inspection Object", str(exception))
-            self.refresh_saved_definitions()
-            return False
-
-        self.refresh_saved_definitions(
-            desired_object_id=object_id,
-            desired_routine_id="",
-        )
-        self.object_id_field.clear()
-        self.object_display_name_field.clear()
-        self.reference_tag_id_field.clear()
-        self.reference_tag_family_field.setText("36h11")
-        self.management_status_label.setText(
-            f"Created inspection object '{object_id}'."
-        )
-        self._set_status_text(
-            f"Created inspection object '{object_id}'"
-        )
-        return True
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_CREATE_OBJECT
+        intent.object_id = object_id
+        intent.object_display_name = display_name
+        intent.reference_tag_id = tag_id
+        intent.reference_tag_family = tag_family
+        submitted = self._submit_probe_setup(intent) is not None
+        if submitted:
+            self.object_id_field.clear()
+            self.object_display_name_field.clear()
+            self.reference_tag_id_field.clear()
+            self.reference_tag_family_field.setText("36h11")
+        return submitted
 
     def handle_create_routine(self):
-        """Create a routine directly under the selected existing object."""
+        """Submit one server-owned routine creation transaction."""
         object_id = self.routine_parent_object_dropdown.currentData()
-        if not object_id and self.node is None:
-            object_id = self.object_id_field.text().strip()
         if not object_id:
             self.show_warning(
                 "No Parent Object Selected",
                 "Select an existing inspection object.",
             )
             return False
-
         routine_id = self._required_text(
             self.routine_id_field,
             "a routine ID",
@@ -4378,113 +3626,26 @@ class InspectionControls(UIControlHelper):
             "a routine display name",
         )
         sensor_id = self.sensor_id_field.currentData()
-        if sensor_id not in self._sensor_definitions:
-            self.show_warning(
-                "No Sensor Selected",
-                "Select a registered sensor mounting.",
-            )
+        if None in (routine_id, display_name) or not sensor_id:
             return False
-        if None in (
-            routine_id,
-            display_name,
-            sensor_id,
-        ):
-            return False
-
-        routine = InspectionRoutine(
-            routine_id=routine_id,
-            display_name=display_name,
-            sensor_id=sensor_id,
-        )
-        direct_creation_succeeded = False
-        try:
-            self.object_repository.add_routine(object_id, routine)
-            direct_creation_succeeded = True
-        except FileNotFoundError as exception:
-            if self.node is not None:
-                self.management_status_label.setText(
-                    f"Routine creation failed: {exception}"
-                )
-                self.show_warning(
-                    "Create Inspection Routine",
-                    str(exception),
-                )
-                self.refresh_saved_definitions()
-                return False
-        except Exception as exception:
-            self.management_status_label.setText(
-                f"Routine creation failed: {exception}"
-            )
-            self.show_warning("Create Inspection Routine", str(exception))
-            self.refresh_saved_definitions(
-                desired_object_id=object_id,
-            )
-            return False
-
-        if direct_creation_succeeded:
-            self.refresh_saved_definitions(
-                desired_object_id=object_id,
-                desired_routine_id=routine_id,
-            )
-        self.routine_id_field.clear()
-        self.routine_display_name_field.clear()
-        self.management_status_label.setText(
-            f"Created inspection routine '{object_id}/{routine_id}'."
-        )
-        self._set_status_text(
-            f"Created inspection routine '{object_id}/{routine_id}'"
-        )
-        return True
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_CREATE_ROUTINE
+        intent.object_id = object_id
+        intent.routine_id = routine_id
+        intent.routine_display_name = display_name
+        intent.sensor_id = sensor_id
+        submitted = self._submit_probe_setup(intent) is not None
+        if submitted:
+            self.routine_id_field.clear()
+            self.routine_display_name_field.clear()
+        return submitted
 
     def handle_capture_reference_view(self):
-        """Publish one capture request for up to three camera slots."""
-        object_id = self.saved_object_dropdown.currentData()
-        routine_id = self.saved_routine_dropdown.currentData()
-        if self.node is None:
-            object_id = object_id or self.object_id_field.text().strip()
-            routine_id = routine_id or self.routine_id_field.text().strip()
-        if not object_id:
-            self.show_warning(
-                "No Object Selected",
-                "Select a saved inspection object.",
-            )
-            return False
-        if not routine_id:
-            self.show_warning(
-                "No Routine Selected",
-                "Select a saved inspection routine.",
-            )
-            return False
-
-        camera_ids = self._selected_reference_camera_ids()
-        selected = [camera_id for camera_id in camera_ids if camera_id]
-        if not selected:
-            self.show_warning(
-                "No Camera Selected",
-                "Select at least one reference camera.",
-            )
-            return False
-        if len(selected) != len(set(selected)):
-            self.show_warning(
-                "Duplicate Camera",
-                "Each reference camera can only be selected once.",
-            )
-            return False
-
-        replace_existing = self.replace_reference_view_checkbox.isChecked()
-        if replace_existing and not self.ask_question(
-            "Replace Reference Views",
-            (
-                f"Replace all saved reference views for "
-                f"'{object_id}/{routine_id}'?"
-            ),
-        ):
-            return False
-
+        """Keep capture unavailable until its execution action is migrated."""
         return self.show_setup_unavailable("Reference capture")
 
     def handle_delete_object(self):
-        """Delete the selected object and immediately rebuild the UI."""
+        """Submit one server-owned object deletion transaction."""
         object_id = self.saved_object_dropdown.currentData()
         if not object_id:
             self.show_warning(
@@ -4500,41 +3661,16 @@ class InspectionControls(UIControlHelper):
             ),
         ):
             return False
-
-        try:
-            deleted = self.object_repository.delete_object(object_id)
-            if not deleted:
-                raise FileNotFoundError(
-                    f"Inspection object does not exist: {object_id}"
-                )
-        except Exception as exception:
-            self.show_warning("Delete Inspection Object", str(exception))
-            self.refresh_saved_definitions()
-            return False
-
-        self.refresh_saved_definitions(
-            desired_object_id="",
-            desired_routine_id="",
-        )
-        self.management_status_label.setText(
-            f"Deleted inspection object '{object_id}'."
-        )
-        self._set_status_text(
-            f"Deleted inspection object '{object_id}'"
-        )
-        return True
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_DELETE_OBJECT
+        intent.object_id = object_id
+        return self._submit_probe_setup(intent) is not None
 
     def handle_delete_routine(self):
-        """Delete the selected routine and immediately rebuild the UI."""
+        """Submit one server-owned routine deletion transaction."""
         object_id = self.saved_object_dropdown.currentData()
         routine_id = self.saved_routine_dropdown.currentData()
-        if not object_id:
-            self.show_warning(
-                "No Object Selected",
-                "Select a saved inspection object first.",
-            )
-            return False
-        if not routine_id:
+        if not object_id or not routine_id:
             self.show_warning(
                 "No Routine Selected",
                 "Select a saved inspection routine to delete.",
@@ -4548,27 +3684,26 @@ class InspectionControls(UIControlHelper):
             ),
         ):
             return False
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_DELETE_ROUTINE
+        intent.object_id = object_id
+        intent.routine_id = routine_id
+        return self._submit_probe_setup(intent) is not None
 
-        try:
-            self.object_repository.delete_routine(
-                object_id,
-                routine_id,
-            )
-        except Exception as exception:
-            self.show_warning("Delete Inspection Routine", str(exception))
-            self.refresh_saved_definitions(
-                desired_object_id=object_id,
-            )
-            return False
+    def handle_use_current_as_approach(self):
+        """Request approval of the server-observed safe pose."""
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_APPROVE_SAFE_POSE
+        return self._submit_probe_setup(intent) is not None
 
-        self.refresh_saved_definitions(
-            desired_object_id=object_id,
-            desired_routine_id="",
+    def handle_use_current_alignment(self):
+        """Request approval of the server-observed aligned pose."""
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_APPROVE_ALIGNED_POSE
+        return self._submit_probe_setup(intent) is not None
+
+    def handle_approve_and_retract(self):
+        """Fail closed until approval, save, and retraction are coordinated."""
+        return self.show_setup_unavailable(
+            "Probe approval, persistence, and retraction"
         )
-        self.management_status_label.setText(
-            f"Deleted inspection routine '{object_id}/{routine_id}'."
-        )
-        self._set_status_text(
-            f"Deleted inspection routine '{object_id}/{routine_id}'"
-        )
-        return True

@@ -198,6 +198,19 @@ class ReferenceViewWidget(QLabel):
         if had_selection:
             self.image_point_cleared.emit()
 
+    def set_selected_image_point(self, point: ImagePoint) -> None:
+        """Render one authoritative source-image selection."""
+        if self._unrotated_source_image is None:
+            return
+        local_u = point.u - self._source_offset.u
+        local_v = point.v - self._source_offset.v
+        if not (
+            0 <= local_u < self._unrotated_source_width
+            and 0 <= local_v < self._unrotated_source_height
+        ):
+            raise ValueError("Reference point is outside the preview")
+        self._set_selected_image_point(point)
+
     def resizeEvent(self, event) -> None:
         """Rescale the displayed copy when the widget changes size."""
         super().resizeEvent(event)

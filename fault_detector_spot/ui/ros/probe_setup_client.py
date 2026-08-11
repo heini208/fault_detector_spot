@@ -5,8 +5,18 @@ from functools import partial
 from uuid import uuid4
 
 from PyQt5.QtCore import QObject, pyqtSignal
-from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
-from fault_detector_msgs.srv import CloseProbeSetup, ExecuteProbeSetup
+from fault_detector_msgs.action import ExecuteProbeSetupMotion
+from fault_detector_msgs.msg import (
+    ProbeSetupIntent,
+    ProbeSetupMotionIntent,
+    ProbeSetupState,
+)
+from fault_detector_msgs.srv import (
+    CloseProbeSetup,
+    ExecuteProbeSetup,
+    GetProbeReferencePreview,
+)
+from rclpy.action import ActionClient
 
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 
@@ -17,6 +27,8 @@ class ProbeSetupClient(QObject):
     state_changed = pyqtSignal(object)
     request_rejected = pyqtSignal(str)
     close_finished = pyqtSignal(bool, str)
+    preview_received = pyqtSignal(object)
+    preview_rejected = pyqtSignal(str, str)
 
     def __init__(self, node, client_id: str):
         super().__init__()
@@ -25,6 +37,7 @@ class ProbeSetupClient(QObject):
         self.context_id = ""
         self._last_state_fingerprint = None
         self._pending_request_id = ""
+        self._motion_goal_handles = {}
         self._execute_client = node.create_client(
             ExecuteProbeSetup,
             "fault_detector/application/execute_probe_setup",
@@ -32,6 +45,15 @@ class ProbeSetupClient(QObject):
         self._close_client = node.create_client(
             CloseProbeSetup,
             "fault_detector/application/close_probe_setup",
+        )
+        self._preview_client = node.create_client(
+            GetProbeReferencePreview,
+            "fault_detector/application/get_probe_reference_preview",
+        )
+        self._motion_client = ActionClient(
+            node,
+            ExecuteProbeSetupMotion,
+            "fault_detector/application/execute_probe_setup_motion",
         )
         self._state_subscription = node.create_subscription(
             ProbeSetupState,
@@ -53,14 +75,40 @@ class ProbeSetupClient(QObject):
             return None
         return self._send(intent, self.context_id)
 
+    def execute_motion(self, intent: ProbeSetupMotionIntent):
+        """Submit one single-step setup movement in the current context."""
+        if not isinstance(intent, ProbeSetupMotionIntent):
+            raise TypeError("Expected a ProbeSetupMotionIntent message")
+        if not self.context_id:
+            self.request_rejected.emit("Probe setup context is not open")
+            return None
+        if not self._motion_client.server_is_ready():
+            return None
+        goal = ExecuteProbeSetupMotion.Goal()
+        goal.client_id = self.client_id
+        goal.context_id = self.context_id
+        goal.intent = deepcopy(intent)
+        local_id = uuid4().hex
+        future = self._motion_client.send_goal_async(
+            goal,
+            feedback_callback=partial(
+                self._receive_motion_feedback,
+                local_id,
+            ),
+        )
+        future.add_done_callback(
+            partial(self._receive_motion_goal, local_id)
+        )
+        return local_id
+
     def close(self):
         """Close the current server-owned probe setup context."""
         if not self.context_id:
             return None
-        if self._pending_request_id:
+        if self._pending_request_id or self._motion_goal_handles:
             self.close_finished.emit(
                 False,
-                "Probe setup transaction is still in progress",
+                "Probe setup operation is still in progress",
             )
             return None
         if not self._close_client.service_is_ready():
@@ -74,6 +122,33 @@ class ProbeSetupClient(QObject):
         request.context_id = self.context_id
         future = self._close_client.call_async(request)
         future.add_done_callback(self._receive_close)
+        return future
+
+    def request_preview(self, reference_view_id: str):
+        """Request one selected context's read-only RGB preview."""
+        view_id = reference_view_id.strip()
+        if not self.context_id:
+            self.preview_rejected.emit(
+                view_id,
+                "Probe setup context is not open",
+            )
+            return None
+        if not view_id:
+            self.preview_rejected.emit(
+                view_id,
+                "Reference view ID must not be empty",
+            )
+            return None
+        if not self._preview_client.service_is_ready():
+            return None
+        request = GetProbeReferencePreview.Request()
+        request.client_id = self.client_id
+        request.context_id = self.context_id
+        request.reference_view_id = view_id
+        future = self._preview_client.call_async(request)
+        future.add_done_callback(
+            partial(self._receive_preview, view_id)
+        )
         return future
 
     def _send(self, intent, context_id):
@@ -139,11 +214,58 @@ class ProbeSetupClient(QObject):
             self.context_id = ""
         self.close_finished.emit(response.closed, response.detail)
 
+    def _receive_preview(self, view_id, future):
+        try:
+            response = future.result()
+        except Exception as exception:
+            self.preview_rejected.emit(view_id, str(exception))
+            return
+        if not response.success:
+            self.preview_rejected.emit(view_id, response.detail)
+            return
+        if response.reference_view_id != view_id:
+            self.preview_rejected.emit(
+                view_id,
+                "Reference preview response does not match its request",
+            )
+            return
+        self.preview_received.emit(response)
+
+    def _receive_motion_goal(self, local_id, future):
+        try:
+            goal_handle = future.result()
+        except Exception as exception:
+            self.request_rejected.emit(str(exception))
+            return
+        if not goal_handle.accepted:
+            self.request_rejected.emit("Probe setup motion was rejected")
+            return
+        self._motion_goal_handles[local_id] = goal_handle
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(
+            partial(self._receive_motion_result, local_id)
+        )
+
+    def _receive_motion_feedback(self, _local_id, feedback_message):
+        self._emit_state(feedback_message.feedback.state)
+
+    def _receive_motion_result(self, local_id, future):
+        self._motion_goal_handles.pop(local_id, None)
+        try:
+            result = future.result().result
+        except Exception as exception:
+            self.request_rejected.emit(str(exception))
+            return
+        self._emit_state(result.state)
+
     def destroy(self):
         """Destroy client-side ROS resources owned by this adapter."""
         self.node.destroy_client(self._execute_client)
         self.node.destroy_client(self._close_client)
+        self.node.destroy_client(self._preview_client)
+        self._motion_client.destroy()
         self.node.destroy_subscription(self._state_subscription)
+        self._motion_goal_handles.clear()
 
 
 __all__ = ["ProbeSetupClient"]

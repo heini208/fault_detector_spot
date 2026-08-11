@@ -62,6 +62,33 @@ def test_navigation_ui_does_not_own_setup_persistence_or_topics():
         assert value not in source, f"{value} remains in {path.name}"
 
 
+def test_inspection_ui_only_renders_probe_setup_state_and_intent():
+    path = UI_ROOT / "inspection" / "controls.py"
+    source = path.read_text(encoding="utf-8")
+    forbidden = (
+        "ObjectRepository",
+        "MultiReferenceViewRepository",
+        "self.object_repository",
+        "self.reference_view_repository",
+        "project_reference_pixel",
+        "estimate_reference_surface_normal",
+        "resolve_reference_approach_direction",
+        "resolve_reference_surface_target",
+        "initialize_reference_probe_setup",
+        "ProbePoint(",
+    )
+
+    for value in forbidden:
+        assert value not in source, f"{value} remains in {path.name}"
+
+    assert "ProbeSetupIntent" in source
+    assert "ProbeSetupMotionIntent" in source
+    assert "apply_setup_state" in source
+    assert "apply_reference_preview" in source
+    assert "_complete_pending_refinement_motion" not in source
+    assert "_fail_pending_refinement_motion" not in source
+
+
 def test_behaviour_tree_has_no_navigation_authoring_commands():
     root = UI_ROOT.parents[0]
     runner = root / "application" / "behaviour_tree" / "runner.py"
