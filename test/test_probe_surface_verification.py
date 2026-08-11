@@ -19,6 +19,9 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
 )
 
 
+TEST_REQUEST_ID = "12345678-1234-5678-1234-567812345678"
+
+
 class _Refinement:
     def __init__(self):
         self.active_stage = RefinementStage.PROBE
@@ -58,7 +61,7 @@ def _samples(distance_m):
 def _begin(policy=None):
     refinement = _Refinement()
     coordinator = ProbeSurfaceVerificationCoordinator(policy)
-    session = coordinator.begin(refinement, "surface-test-request")
+    session = coordinator.begin(refinement, TEST_REQUEST_ID)
     return coordinator, session, refinement
 
 
@@ -70,7 +73,7 @@ def test_begin_requires_reached_alignment():
     coordinator = ProbeSurfaceVerificationCoordinator()
 
     with pytest.raises(ValueError, match="aligned pre-approach"):
-        coordinator.begin(refinement, "surface-test-request")
+        coordinator.begin(refinement, TEST_REQUEST_ID)
 
 
 def test_verified_samples_converge_and_capture_achieved_pose():
