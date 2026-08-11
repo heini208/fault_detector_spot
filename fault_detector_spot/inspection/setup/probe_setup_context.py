@@ -81,9 +81,9 @@ class ProbeSetupSnapshot:
     geometry: Optional[ProbeGeometryResult]
     setup: Optional[ReferenceProbeSetup]
     refinement: Optional[ProbeRefinementSession]
-    surface_verification: Optional[ProbeSurfaceVerificationSession]
     dirty: bool
     validation_error: str
+    surface_verification: Optional[ProbeSurfaceVerificationSession] = None
 
     @classmethod
     def from_draft(
