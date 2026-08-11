@@ -220,6 +220,7 @@ class NavigationSetupCoordinator:
         self.setup_coordinator.require_current(context)
         self._require_idle(context)
         map_id = self._require_active_map(map_name)
+        self._require_authoring_mode()
         waypoint_id = self._name(waypoint_name, "waypoint ID")
         pose = self._map_pose(self.current_pose(), "localization pose")
         self.map_repository.add_waypoint(
@@ -242,6 +243,7 @@ class NavigationSetupCoordinator:
         self.setup_coordinator.require_current(context)
         self._require_idle(context)
         map_id = self._require_active_map(map_name)
+        self._require_authoring_mode()
         if isinstance(tag_id, bool) or not isinstance(tag_id, int):
             raise TypeError("Tag ID must be an integer")
         if tag_id < 0:
@@ -475,6 +477,14 @@ class NavigationSetupCoordinator:
                 raise RuntimeError(
                     "Navigation setup context already has an active operation"
                 )
+
+    def _require_authoring_mode(self) -> None:
+        with self._lock:
+            mode = self._mode
+        if mode not in {MODE_MAPPING, MODE_LOCALIZATION}:
+            raise RuntimeError(
+                "Mapping or localization must be active before saving poses"
+            )
 
     @staticmethod
     def _map_id(value: str) -> str:

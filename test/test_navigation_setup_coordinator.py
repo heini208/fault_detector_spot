@@ -83,17 +83,41 @@ def coordinator(tmp_path: Path):
     return navigation, command_controller
 
 
+def activate_mapping(navigation, command_controller, context, map_name):
+    statuses = []
+    listener = statuses.append
+    navigation.add_status_listener(listener)
+    operation = navigation.submit_runtime_operation(
+        context,
+        operation_code=5,
+        command_id=CommandID.START_SLAM,
+        map_name=map_name,
+    )
+    command_controller.emit(
+        operation.request,
+        CommandControllerState.SUCCEEDED,
+    )
+    navigation.remove_status_listener(listener)
+    return statuses[-1].snapshot.context
+
+
 def test_repository_transactions_are_owned_by_navigation_coordinator(
     tmp_path,
 ):
-    navigation, _ = coordinator(tmp_path)
+    navigation, command_controller = coordinator(tmp_path)
     opened = navigation.open_context("navigation-ui")
     context = opened.context
 
     created = navigation.create_map_definition(context, "plant")
     navigation.observe_active_map("plant")
-    waypoint = navigation.add_current_waypoint(
+    context = activate_mapping(
+        navigation,
+        command_controller,
         created.context,
+        "plant",
+    )
+    waypoint = navigation.add_current_waypoint(
+        context,
         "plant",
         "motor_front",
     )
@@ -117,10 +141,16 @@ def test_repository_transactions_are_owned_by_navigation_coordinator(
 def test_duplicate_and_missing_runtime_inputs_fail_without_false_success(
     tmp_path,
 ):
-    navigation, _ = coordinator(tmp_path)
+    navigation, command_controller = coordinator(tmp_path)
     context = navigation.open_context("navigation-ui").context
     context = navigation.create_map_definition(context, "plant").context
     navigation.observe_active_map("plant")
+    context = activate_mapping(
+        navigation,
+        command_controller,
+        context,
+        "plant",
+    )
     context = navigation.add_current_waypoint(
         context,
         "plant",
@@ -139,6 +169,18 @@ def test_duplicate_and_missing_runtime_inputs_fail_without_false_success(
             "plant",
             8,
         )
+
+
+def test_pose_authoring_requires_mapping_or_localization_mode(tmp_path):
+    navigation, _ = coordinator(tmp_path)
+    context = navigation.open_context("navigation-ui").context
+    context = navigation.create_map_definition(context, "plant").context
+    navigation.observe_active_map("plant")
+
+    with pytest.raises(RuntimeError, match="Mapping or localization"):
+        navigation.add_current_waypoint(context, "plant", "motor_front")
+    with pytest.raises(RuntimeError, match="Mapping or localization"):
+        navigation.add_visible_tag_landmark(context, "plant", 7)
 
 
 def test_runtime_work_uses_single_non_recordable_command_lane(tmp_path):
