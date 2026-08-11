@@ -5,7 +5,7 @@ import struct
 import pytest
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.data.models import ImagePoint
+from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     project_reference_pixel,
 )

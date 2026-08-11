@@ -8,11 +8,11 @@ from rclpy.time import Time
 from fault_detector_spot.inspection.execution.live_object_pose_resolver import (
     LiveObjectPoseResolver,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     ReferenceTag,
 )
-from fault_detector_spot.inspection.data.resolved_object_pose import (
+from fault_detector_spot.inspection.model.resolved_object_pose import (
     ObjectPoseState,
 )
 

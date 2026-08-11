@@ -1,5 +1,3 @@
-# fault_detector_spot/behaviour_tree/command_ids.py
-
 from enum import Enum
 
 

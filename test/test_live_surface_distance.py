@@ -12,7 +12,7 @@ from fault_detector_spot.inspection.sensing.live_surface_distance import (
     bounded_surface_distance_correction,
     measure_probe_surface_distance,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

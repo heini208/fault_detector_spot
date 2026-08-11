@@ -10,17 +10,17 @@ from rclpy.time import Time
 from fault_detector_spot.inspection.behaviours import (
     resolve_live_inspection_object,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
     PoseData,
     ReferenceTag,
     ReferenceView,
 )
-from fault_detector_spot.inspection.data.object_repository import (
+from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,
 )
-from fault_detector_spot.inspection.data.resolved_object_pose import (
+from fault_detector_spot.inspection.model.resolved_object_pose import (
     ObjectPoseState,
 )
 

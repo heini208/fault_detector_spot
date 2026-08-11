@@ -13,13 +13,13 @@ from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
     OrientationModes,
 )
-from fault_detector_spot.ui.controls.inspection_controls import (
+from fault_detector_spot.ui.inspection.controls import (
     InspectionControls,
 )
 from fault_detector_spot.inspection.sensing.live_surface_distance import (
     SurfaceDistanceSample,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
@@ -29,7 +29,7 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
     RefinementStage,
 )
-from fault_detector_spot.inspection.data.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     approve_safe_approach_pose,
     approve_surface_alignment_pose,
@@ -430,8 +430,8 @@ def test_distance_change_keeps_probe_stage_controls_enabled(
         controlled_frame_pose_object=PoseData.identity()
     )
     monkeypatch.setattr(
-        "fault_detector_spot.ui.controls."
-        "inspection_controls.resolve_reference_surface_target",
+        "fault_detector_spot.ui.inspection."
+        "controls.resolve_reference_surface_target",
         lambda **_kwargs: changed_target,
     )
 

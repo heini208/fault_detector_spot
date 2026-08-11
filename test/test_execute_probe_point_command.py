@@ -10,7 +10,7 @@ from fault_detector_spot.application.commanding.command_ids import (
 from fault_detector_spot.inspection.commands import (
     ExecuteProbePointCommand,
 )
-from fault_detector_spot.sensing.behaviours.command_subscriber import (
+from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
     CommandSubscriber,
 )
 

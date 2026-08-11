@@ -7,7 +7,7 @@ from typing import Iterable, Optional, Tuple
 
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.data.models import ImagePoint, Vector3Data
+from fault_detector_spot.inspection.model.models import ImagePoint, Vector3Data
 
 
 class RegisteredDepthSupportNotReady(ValueError):

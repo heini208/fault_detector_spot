@@ -15,18 +15,18 @@ from synchros2.static_transform_broadcaster import (
     StaticTransformBroadcaster,
 )
 
-from fault_detector_spot.common.ros.qos_profiles import LATCHED_QOS
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
+from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.data.object_repository import ObjectRepository
-from fault_detector_spot.inspection.data.sensor_models import (
+from fault_detector_spot.inspection.repository.object_repository import ObjectRepository
+from fault_detector_spot.inspection.model.sensor_models import (
     SENSOR_PARENT_FRAME,
     SensorDefinition,
 )
-from fault_detector_spot.inspection.data.sensor_repository import SensorRepository
+from fault_detector_spot.inspection.repository.sensor_repository import SensorRepository
 
 
 class SensorRegistryNode(Node):

@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pytest
 
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     PoseData,
     QuaternionData,

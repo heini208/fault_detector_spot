@@ -1,4 +1,3 @@
-# fault_detector_spot/behaviour_tree/generic_command.py
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import InspectionCommand
 from geometry_msgs.msg import PoseStamped, Quaternion

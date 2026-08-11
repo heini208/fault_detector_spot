@@ -34,8 +34,8 @@ from fault_detector_spot.application.behaviour_tree import (
     ResolveLiveInspectionObject, PublishLiveInspectionObject,
 )
 from fault_detector_spot.application.commanding.command_ids import CommandID
-from fault_detector_spot.sensing.behaviours.last_localization_pose import LastLocalizationPose
-from fault_detector_spot.common.behaviours.publish_initial_ui_info_once import (
+from fault_detector_spot.navigation.behaviours.last_localization_pose import LastLocalizationPose
+from fault_detector_spot.application.behaviour_tree.behaviours.publish_initial_ui_info_once import (
     PublishInitialUIInfoOnce,
 )
 from py_trees.behaviours import CheckBlackboardVariableValue

@@ -1,1 +1,0 @@
-"""Inspection definitions and persistence."""

@@ -14,18 +14,18 @@ from rclpy.node import Node
 from fault_detector_spot.inspection.execution.live_object_pose_resolver import (
     LiveObjectPoseResolver,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
 )
-from fault_detector_spot.inspection.data.object_repository import (
+from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,
 )
-from fault_detector_spot.inspection.data.resolved_object_pose import (
+from fault_detector_spot.inspection.model.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
 )
-from fault_detector_spot.sensing.data.tag_observation_time import (
+from fault_detector_spot.sensing.observations.tag_observation_time import (
     is_observation_fresh,
     observation_age_sec,
 )

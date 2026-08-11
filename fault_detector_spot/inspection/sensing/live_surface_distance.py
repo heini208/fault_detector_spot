@@ -6,9 +6,9 @@ from dataclasses import dataclass
 import numpy as np
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.data.models import PoseData
+from fault_detector_spot.inspection.model.models import PoseData
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import ImageRegion
-from fault_detector_spot.inspection.utility.surface_distance_validation import (
+from fault_detector_spot.inspection.sensing.surface_distance_validation import (
     require_positive_finite_distance,
 )
 

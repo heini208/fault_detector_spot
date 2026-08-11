@@ -2,7 +2,7 @@
 
 import pytest
 
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     InspectionObject,
     InspectionRoutine,

@@ -2,7 +2,7 @@
 
 from builtin_interfaces.msg import Time
 
-from fault_detector_spot.application.data.request_identity import request_id_or_new
+from fault_detector_spot.application.commanding.request_identity import request_id_or_new
 
 
 class SimpleCommand:

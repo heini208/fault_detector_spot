@@ -6,7 +6,7 @@ from typing import Optional
 
 import numpy as np
 
-from fault_detector_spot.inspection.data.models import PoseData, Vector3Data
+from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from .reference_view_depth_projection import ProjectedReferencePoint
 from .reference_view_surface_normal import ReferenceSurfaceNormal
 

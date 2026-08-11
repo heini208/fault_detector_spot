@@ -6,12 +6,12 @@ import numpy as np
 import pytest
 from geometry_msgs.msg import Pose
 
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.utility.transform_utils import (
+from fault_detector_spot.shared.geometry.transforms import (
     compose_poses,
     inverse_pose,
     pose_data_to_pose,

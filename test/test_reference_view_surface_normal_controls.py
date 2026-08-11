@@ -10,7 +10,7 @@ from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtWidgets import QApplication, QLabel
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.ui.controls.inspection_controls import (
+from fault_detector_spot.ui.inspection.controls import (
     InspectionControls,
 )
 

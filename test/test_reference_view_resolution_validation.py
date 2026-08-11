@@ -4,7 +4,7 @@ from fault_detector_msgs.msg import TagElement
 import pytest
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.data.models import PoseData
+from fault_detector_spot.inspection.model.models import PoseData
 from fault_detector_spot.inspection.setup.reference_view_validation import (
     validate_reference_view_inputs,
 )

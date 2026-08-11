@@ -3,7 +3,7 @@
 from fault_detector_msgs.msg import TagElement
 from rclpy.time import Time
 
-from fault_detector_spot.sensing.data import (
+from fault_detector_spot.sensing.observations import (
     tag_observation_cache,
 )
 

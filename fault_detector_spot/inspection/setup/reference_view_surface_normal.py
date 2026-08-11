@@ -7,7 +7,7 @@ from typing import List
 import numpy as np
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.data.models import ImagePoint, Vector3Data
+from fault_detector_spot.inspection.model.models import ImagePoint, Vector3Data
 from .reference_view_depth_projection import (
     ProjectedReferencePoint,
     project_reference_pixel,

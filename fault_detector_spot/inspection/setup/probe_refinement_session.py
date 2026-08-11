@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional
 
-from fault_detector_spot.application.data.request_identity import validate_request_id
+from fault_detector_spot.application.commanding.request_identity import validate_request_id
 
-from fault_detector_spot.inspection.data.models import PoseData, Vector3Data
+from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from .reference_probe_setup import (
     ReferenceProbeSetup,
     add_vectors,

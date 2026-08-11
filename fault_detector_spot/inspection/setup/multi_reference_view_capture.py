@@ -4,7 +4,7 @@ import math
 from dataclasses import dataclass
 from typing import Sequence
 
-from fault_detector_spot.inspection.data.multi_reference_view_repository import (
+from fault_detector_spot.inspection.repository.multi_reference_view_repository import (
     CapturedReferenceView,
     MultiReferenceViewRepository,
 )

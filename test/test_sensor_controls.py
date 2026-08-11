@@ -9,11 +9,11 @@ import pytest
 from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from fault_detector_spot.ui.controls.inspection_controls import (
+from fault_detector_spot.ui.inspection.controls import (
     InspectionControls,
 )
-from fault_detector_spot.inspection.data.models import PoseData
-from fault_detector_spot.inspection.data.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.model.models import PoseData
+from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
 
 
 class FakePublisher:

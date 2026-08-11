@@ -4,7 +4,7 @@ import pytest
 from PyQt5.QtGui import QColor
 from sensor_msgs.msg import Image
 
-from fault_detector_spot.ui.utility.ros_image_conversion import (
+from fault_detector_spot.ui.ros.image_conversion import (
     ros_image_to_qimage,
 )
 

@@ -8,7 +8,7 @@ import pytest
 from PyQt5.QtGui import QImage
 from PyQt5.QtWidgets import QApplication
 
-from fault_detector_spot.ui.widgets import (
+from fault_detector_spot.ui.inspection import (
     reference_view_widget,
 )
 

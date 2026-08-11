@@ -7,10 +7,10 @@ from py_trees.common import Status
 from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
 )
-from fault_detector_spot.common.behaviours.command_manager import (
+from fault_detector_spot.application.behaviour_tree.behaviours.command_manager import (
     CommandManager,
 )
-from fault_detector_spot.common.behaviours.new_command_guard import (
+from fault_detector_spot.application.behaviour_tree.behaviours.new_command_guard import (
     NewCommandGuard,
 )
 

@@ -1,7 +1,7 @@
 from builtin_interfaces.msg import Time as TimeMessage
 from rclpy.time import Time
 
-from fault_detector_spot.sensing.data.tag_observation_time import (
+from fault_detector_spot.sensing.observations.tag_observation_time import (
     is_observation_fresh,
     observation_age_sec,
 )

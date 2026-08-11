@@ -10,10 +10,10 @@ from rclpy.node import Node
 from rclpy.time import Time
 from copy import deepcopy
 
-from fault_detector_spot.sensing.data.tag_observation_cache import (
+from fault_detector_spot.sensing.observations.tag_observation_cache import (
     TagObservationCache,
 )
-from fault_detector_spot.sensing.data.tag_observation_time import (
+from fault_detector_spot.sensing.observations.tag_observation_time import (
     is_observation_fresh,
 )
 

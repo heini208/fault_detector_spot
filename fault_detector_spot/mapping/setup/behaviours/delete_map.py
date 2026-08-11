@@ -4,7 +4,7 @@ import os
 import py_trees
 from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import StringArray
-from fault_detector_spot.common.ros.qos_profiles import LATCHED_QOS
+from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 from fault_detector_spot.application.commanding.generic_complex_command import GenericCommand
 
 

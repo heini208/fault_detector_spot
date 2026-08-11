@@ -5,7 +5,7 @@ from copy import deepcopy
 from fault_detector_msgs.msg import LiveInspectionObjectState
 from std_msgs.msg import Header
 
-from fault_detector_spot.inspection.data.resolved_object_pose import (
+from fault_detector_spot.inspection.model.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
 )

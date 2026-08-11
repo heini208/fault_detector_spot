@@ -8,7 +8,7 @@ from bosdyn_msgs.conversions import convert
 from fault_detector_spot.navigation.commands.base_move_relative_command import (
     BaseMoveRelativeCommand,
 )
-from fault_detector_spot.common.behaviours.move_command_action import MoveCommandAction
+from fault_detector_spot.application.behaviour_tree.behaviours.move_command_action import MoveCommandAction
 from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
 from synchros2.utilities import namespace_with

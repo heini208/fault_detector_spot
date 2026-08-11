@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QSizePolicy
 
-from fault_detector_spot.ui.widgets.status_overview_panel import (
+from fault_detector_spot.ui.shared.status_overview_panel import (
     StatusOverviewPanel,
 )
 

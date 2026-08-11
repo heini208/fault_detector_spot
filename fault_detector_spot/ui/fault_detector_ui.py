@@ -22,21 +22,21 @@ from fault_detector_msgs.msg import (
     StringArray,
     TagElementArray,
 )
-from fault_detector_spot.common.ros.qos_profiles import (
+from fault_detector_spot.shared.ros.qos_profiles import (
     COMMAND_QOS,
     LATCHED_QOS,
 )
 from fault_detector_spot.application.commanding.command_ids import CommandID
-from fault_detector_spot.application.data.request_identity import new_request_id
+from fault_detector_spot.application.commanding.request_identity import new_request_id
 from rclpy.node import Node
 from std_msgs.msg import Header, String
 
-from .controls.base_movement_controls import BaseMovementControls
-from .controls.inspection_controls import InspectionControls
-from .controls.manipulation_controls import ManipulationControls
-from .controls.navigation_controls import NavigationControls
-from .controls.recording_controls import RecordingControls
-from .widgets.status_overview_panel import StatusOverviewPanel
+from .inspection.controls import InspectionControls
+from .manipulation.controls import ManipulationControls
+from .navigation.base_movement_controls import BaseMovementControls
+from .navigation.controls import NavigationControls
+from .recording.controls import RecordingControls
+from .shared.status_overview_panel import StatusOverviewPanel
 
 
 class Fault_Detector_UI(QWidget):

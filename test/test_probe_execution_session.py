@@ -8,7 +8,7 @@ from builtin_interfaces.msg import Time
 from fault_detector_spot.inspection.commands import (
     ExecuteProbePointCommand,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
     PoseData,
@@ -17,13 +17,13 @@ from fault_detector_spot.inspection.data.models import (
     ReferenceView,
     Vector3Data,
 )
-from fault_detector_spot.inspection.data.object_repository import ObjectRepository
+from fault_detector_spot.inspection.repository.object_repository import ObjectRepository
 from fault_detector_spot.inspection.execution.probe_execution_session import (
     ProbeExecutionSession,
     ProbeExecutionStage,
 )
-from fault_detector_spot.inspection.data.sensor_models import SensorDefinition
-from fault_detector_spot.inspection.data.sensor_repository import SensorRepository
+from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.repository.sensor_repository import SensorRepository
 
 
 def pose(x=0.0, y=0.0, z=0.0):

@@ -2,16 +2,16 @@
 
 from dataclasses import dataclass
 
-from fault_detector_spot.inspection.data.models import InspectionObject, PoseData, Vector3Data
+from fault_detector_spot.inspection.model.models import InspectionObject, PoseData, Vector3Data
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     compose_poses,
     derive_aligned_preapproach_pose,
     probe_pose_to_hand_pose,
     rotate_vector,
 )
-from fault_detector_spot.inspection.data.sensor_models import SensorDefinition
-from fault_detector_spot.inspection.data.sensor_models import sensor_probe_frame
-from fault_detector_spot.inspection.utility.surface_distance_validation import (
+from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.model.sensor_models import sensor_probe_frame
+from fault_detector_spot.inspection.sensing.surface_distance_validation import (
     require_positive_finite_distance,
     validate_surface_distance_pair,
 )

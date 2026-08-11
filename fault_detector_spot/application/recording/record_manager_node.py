@@ -7,9 +7,9 @@ from typing import List
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import ComplexCommand, BasicCommand, CommandRecordControl, StringArray
-from fault_detector_spot.common.ros.qos_profiles import COMMAND_QOS, LATCHED_QOS
+from fault_detector_spot.shared.ros.qos_profiles import COMMAND_QOS, LATCHED_QOS
 from fault_detector_spot.application.commanding.command_ids import CommandID
-from fault_detector_spot.application.data.request_identity import new_request_id
+from fault_detector_spot.application.commanding.request_identity import new_request_id
 from rclpy.node import Node
 from rosidl_runtime_py import message_to_ordereddict
 from rosidl_runtime_py import set_message_fields

@@ -6,19 +6,19 @@ import pytest
 from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton
 
-from fault_detector_spot.ui.controls.inspection_controls import (
+from fault_detector_spot.ui.inspection.controls import (
     InspectionControls,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
     PoseData,
     ReferenceTag,
 )
-from fault_detector_spot.inspection.data.object_repository import (
+from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,
 )
-from fault_detector_spot.inspection.data.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -244,10 +244,8 @@ def test_missing_view_dataset_does_not_hide_available_preview(
 
     from sensor_msgs.msg import CameraInfo, Image
 
-    from fault_detector_spot.ui.controls import (
-        inspection_controls as controls_module,
-    )
-    from fault_detector_spot.inspection.data.models import (
+    from fault_detector_spot.ui.inspection import controls as controls_module
+    from fault_detector_spot.inspection.model.models import (
         PoseData,
         ReferenceView,
     )

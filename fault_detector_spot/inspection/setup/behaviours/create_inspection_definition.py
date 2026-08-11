@@ -12,12 +12,12 @@ from fault_detector_spot.application.commanding.command_ids import (
 from fault_detector_spot.application.commanding import (
     generic_complex_command,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
     ReferenceTag,
 )
-from fault_detector_spot.inspection.data.object_repository import (
+from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,
 )
 

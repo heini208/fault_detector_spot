@@ -1,9 +1,7 @@
-# fault_detector_spot/behaviour_tree/nodes/ready_arm_action.py
-
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_msgs.conversions import convert
 from spot_msgs.action import RobotCommand
-from fault_detector_spot.common.behaviours.spot_action import SimpleSpotAction
+from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import SimpleSpotAction
 
 
 class ReadyArmActionSimple(SimpleSpotAction):

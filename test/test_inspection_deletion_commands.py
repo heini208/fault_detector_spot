@@ -14,12 +14,12 @@ from fault_detector_spot.application.commanding.generic_complex_command import (
 from fault_detector_spot.inspection.setup.behaviours import (
     DeleteInspectionDefinition,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
     ReferenceTag,
 )
-from fault_detector_spot.inspection.data.object_repository import (
+from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,
 )
 

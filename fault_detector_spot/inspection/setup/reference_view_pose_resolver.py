@@ -7,8 +7,8 @@ import tf2_geometry_msgs  # noqa: F401
 from geometry_msgs.msg import PoseStamped
 from rclpy.duration import Duration
 
-from fault_detector_spot.inspection.data.models import ReferenceView
-from fault_detector_spot.inspection.utility.transform_utils import (
+from fault_detector_spot.inspection.model.models import ReferenceView
+from fault_detector_spot.shared.geometry.transforms import (
     pose_to_pose_data,
     relative_pose,
 )

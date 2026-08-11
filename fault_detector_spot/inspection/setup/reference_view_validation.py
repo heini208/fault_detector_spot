@@ -3,7 +3,7 @@
 import math
 from typing import TYPE_CHECKING
 
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     ReferenceView,

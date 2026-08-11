@@ -7,8 +7,8 @@ from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import ComplexCommand
 from geometry_msgs.msg import PoseStamped
 
-from fault_detector_spot.mapping.data.map_repository import MapRepository
-from fault_detector_spot.inspection.utility.transform_utils import (
+from fault_detector_spot.mapping.repository.map_repository import MapRepository
+from fault_detector_spot.shared.geometry.transforms import (
     pose_data_to_pose,
 )
 

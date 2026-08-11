@@ -13,11 +13,11 @@ from fault_detector_spot.application.commanding import (
 from fault_detector_spot.inspection.setup.behaviours import (
     CreateInspectionDefinition,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     ReferenceTag,
 )
-from fault_detector_spot.inspection.data.object_repository import (
+from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,
 )
 

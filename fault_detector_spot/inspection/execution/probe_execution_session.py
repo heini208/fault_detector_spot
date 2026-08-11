@@ -4,13 +4,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Tuple
 
-from fault_detector_spot.inspection.data.models import PoseData, QuaternionData, Vector3Data
-from fault_detector_spot.inspection.data.object_repository import ObjectRepository
+from fault_detector_spot.inspection.model.models import PoseData, QuaternionData, Vector3Data
+from fault_detector_spot.inspection.repository.object_repository import ObjectRepository
 from .probe_execution_target import (
     ProbeExecutionTarget,
     resolve_probe_execution_geometry,
 )
-from fault_detector_spot.inspection.data.sensor_repository import SensorRepository
+from fault_detector_spot.inspection.repository.sensor_repository import SensorRepository
 
 
 class ProbeExecutionStage(str, Enum):

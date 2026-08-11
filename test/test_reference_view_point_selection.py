@@ -9,13 +9,13 @@ from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
 from PyQt5.QtGui import QImage, QMouseEvent
 from PyQt5.QtWidgets import QApplication, QFrame
 
-from fault_detector_spot.ui.widgets import (
+from fault_detector_spot.ui.inspection import (
     reference_view_widget,
 )
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ImageRegion,
 )
-from fault_detector_spot.inspection.data.models import ImagePoint
+from fault_detector_spot.inspection.model.models import ImagePoint
 
 ReferenceViewWidget = reference_view_widget.ReferenceViewWidget
 

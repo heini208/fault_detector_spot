@@ -12,7 +12,7 @@ from fault_detector_spot.application.commanding.command_ids import (
 from fault_detector_spot.application.commanding.generic_complex_command import (
     GenericCommand,
 )
-from fault_detector_spot.inspection.data.object_repository import (
+from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,
 )
 

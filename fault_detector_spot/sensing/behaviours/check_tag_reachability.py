@@ -1,5 +1,3 @@
-# fault_detector_spot/behaviour_tree/nodes/check_tag_reachability.py
-
 import math
 from typing import Dict, Optional
 

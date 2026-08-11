@@ -1,6 +1,6 @@
 import py_trees
 from fault_detector_spot.application.commanding.generic_complex_command import GenericCommand
-from fault_detector_spot.mapping.utility.rtab_helper import RTABHelper
+from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
 
 class InitializeEmptyMap(py_trees.behaviour.Behaviour):
     """

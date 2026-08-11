@@ -5,7 +5,7 @@ from bosdyn.client.robot_command import RobotCommandBuilder
 import tf_transformations as tf
 from bosdyn_msgs.conversions import convert
 from fault_detector_spot.navigation.commands.base_to_tag_command import BaseToTagCommand
-from fault_detector_spot.common.behaviours.move_command_action import MoveCommandAction
+from fault_detector_spot.application.behaviour_tree.behaviours.move_command_action import MoveCommandAction
 from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
 

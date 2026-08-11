@@ -1,15 +1,15 @@
 """Behavior classes composed by the main application tree."""
 
-from fault_detector_spot.common.behaviours.command_manager import CommandManager
-from fault_detector_spot.common.behaviours.helper_initializer import HelperInitializer
-from fault_detector_spot.common.behaviours.new_command_guard import NewCommandGuard
-from fault_detector_spot.common.behaviours.reset_estop_flag import ResetEstopFlag
-from fault_detector_spot.common.behaviours.spot_action import SimpleSpotAction
-from fault_detector_spot.common.behaviours.wait_for_duration import WaitForDuration
+from fault_detector_spot.application.behaviour_tree.behaviours.command_manager import CommandManager
+from fault_detector_spot.application.behaviour_tree.behaviours.helper_initializer import HelperInitializer
+from fault_detector_spot.application.behaviour_tree.behaviours.new_command_guard import NewCommandGuard
+from fault_detector_spot.application.behaviour_tree.behaviours.reset_estop_flag import ResetEstopFlag
+from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import SimpleSpotAction
+from fault_detector_spot.application.behaviour_tree.behaviours.wait_for_duration import WaitForDuration
 from fault_detector_spot.inspection.behaviours.publish_live_inspection_object import (
     PublishLiveInspectionObject,
 )
-from fault_detector_spot.inspection.behaviours.capture_inspection_object_reference_view import (
+from fault_detector_spot.inspection.setup.behaviours.capture_inspection_object_reference_view import (
     CaptureInspectionObjectReferenceView,
 )
 from fault_detector_spot.inspection.setup.behaviours.create_inspection_definition import (
@@ -64,11 +64,11 @@ from fault_detector_spot.navigation.setup.behaviours.save_current_pose_as_goal i
 )
 from fault_detector_spot.navigation.setup.behaviours.set_tag_as_goal import SetTagAsGoal
 from fault_detector_spot.navigation.behaviours.set_waypoint_as_goal import SetWaypointAsGoal
-from fault_detector_spot.sensing.behaviours.buffer_and_status_publisher import (
+from fault_detector_spot.application.behaviour_tree.behaviours.buffer_and_status_publisher import (
     BufferStatusPublisher,
 )
 from fault_detector_spot.sensing.behaviours.check_tag_reachability import CheckTagReachability
-from fault_detector_spot.sensing.behaviours.command_subscriber import CommandSubscriber
+from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import CommandSubscriber
 from fault_detector_spot.sensing.behaviours.detect_visible_tags import DetectVisibleTags
 from fault_detector_spot.sensing.behaviours.hand_camera_tag_detection import HandCameraTagDetection
 from fault_detector_spot.sensing.behaviours.visible_tag_publisher import PublishTagStates

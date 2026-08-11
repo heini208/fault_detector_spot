@@ -8,13 +8,13 @@ from fault_detector_msgs.msg import LiveInspectionObjectState
 from rclpy.node import Node
 from std_msgs.msg import Header
 
-from fault_detector_spot.common.ros.qos_profiles import (
+from fault_detector_spot.shared.ros.qos_profiles import (
     LIVE_OBJECT_QOS,
 )
 from fault_detector_spot.inspection.ros.live_object_state_adapter import (
     live_object_pose_to_msg,
 )
-from fault_detector_spot.inspection.data.resolved_object_pose import (
+from fault_detector_spot.inspection.model.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
 )

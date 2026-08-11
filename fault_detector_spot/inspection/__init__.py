@@ -6,7 +6,7 @@ from fault_detector_spot.inspection.execution.live_object_pose_resolver import (
 from fault_detector_spot.inspection.ros.live_object_state_adapter import (
     live_object_pose_to_msg,
 )
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     InspectionObject,
     InspectionRoutine,
@@ -21,7 +21,7 @@ from fault_detector_spot.inspection.data.models import (
     Vector3Data,
     Waypoint,
 )
-from fault_detector_spot.inspection.data.object_repository import (
+from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,
 )
 from fault_detector_spot.inspection.execution.probe_execution_target import (
@@ -35,20 +35,20 @@ from fault_detector_spot.inspection.execution.probe_execution_session import (
     ProbeExecutionSession,
     ProbeExecutionStage,
 )
-from fault_detector_spot.inspection.data.resolved_object_pose import (
+from fault_detector_spot.inspection.model.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
 )
-from fault_detector_spot.inspection.data.sensor_models import (
+from fault_detector_spot.inspection.model.sensor_models import (
     SENSOR_PARENT_FRAME,
     SensorDefinition,
     sensor_definition_from_values,
     sensor_probe_frame,
 )
-from fault_detector_spot.inspection.data.sensor_repository import (
+from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
 )
-from fault_detector_spot.inspection.utility.transform_utils import (
+from fault_detector_spot.shared.geometry.transforms import (
     compose_poses,
     inverse_pose,
     matrix_to_pose,
@@ -61,7 +61,7 @@ from fault_detector_spot.inspection.utility.transform_utils import (
 
 def __getattr__(name):
     if name == "MapRepository":
-        from fault_detector_spot.mapping.data.map_repository import (
+        from fault_detector_spot.mapping.repository.map_repository import (
             MapRepository,
         )
 

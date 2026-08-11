@@ -5,12 +5,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from fault_detector_spot.inspection.data.models import (
+from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.utility.surface_distance_validation import (
+from fault_detector_spot.inspection.sensing.surface_distance_validation import (
     validate_surface_distance_pair,
 )
 from .reference_view_surface_target import ReferenceSurfaceTarget

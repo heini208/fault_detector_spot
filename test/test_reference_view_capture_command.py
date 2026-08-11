@@ -18,7 +18,7 @@ from fault_detector_spot.application.commanding import (
 from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
 )
-from fault_detector_spot.inspection.behaviours import (
+from fault_detector_spot.inspection.setup.behaviours import (
     capture_inspection_object_reference_view as capture_module,
 )
 

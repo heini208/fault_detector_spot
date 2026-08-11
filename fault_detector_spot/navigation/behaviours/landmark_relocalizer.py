@@ -6,8 +6,8 @@ import numpy as np
 import py_trees
 import rclpy
 import tf2_ros
-from fault_detector_spot.mapping.utility.rtab_helper import RTABHelper
-from fault_detector_spot.inspection.utility.transform_utils import (
+from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
+from fault_detector_spot.shared.geometry.transforms import (
     pose_data_to_pose,
 )
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped

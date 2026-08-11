@@ -1,7 +1,7 @@
 import typing
 
 import py_trees
-from fault_detector_spot.mapping.utility.rtab_helper import RTABHelper
+from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
 from nav_msgs.msg import OccupancyGrid
 
 

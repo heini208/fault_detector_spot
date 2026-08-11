@@ -7,8 +7,8 @@ from typing import Optional
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
 
-from fault_detector_spot.inspection.data.models import InspectionObject
-from fault_detector_spot.inspection.data.resolved_object_pose import (
+from fault_detector_spot.inspection.model.models import InspectionObject
+from fault_detector_spot.inspection.model.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
 )

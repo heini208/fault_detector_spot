@@ -7,17 +7,17 @@ from fault_detector_msgs.msg import BasicCommand, CommandStatus, ComplexCommand
 from py_trees.common import Status
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
-from fault_detector_spot.sensing.behaviours.buffer_and_status_publisher import (
+from fault_detector_spot.application.behaviour_tree.behaviours.buffer_and_status_publisher import (
     BufferStatusPublisher,
 )
-from fault_detector_spot.sensing.behaviours.command_subscriber import (
+from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
     CommandSubscriber,
 )
 from fault_detector_spot.application.recording.record_manager_node import (
     assign_playback_request_id,
     clear_recorded_request_id,
 )
-from fault_detector_spot.application.data.request_identity import new_request_id
+from fault_detector_spot.application.commanding.request_identity import new_request_id
 
 
 class FakeClock:

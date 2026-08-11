@@ -9,7 +9,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from fault_detector_spot.inspection.setup import (
     multi_reference_view_capture as capture_module,
 )
-from fault_detector_spot.inspection.data.models import PoseData, ReferenceView
+from fault_detector_spot.inspection.model.models import PoseData, ReferenceView
 
 
 class FakeSynchronizer:

@@ -2,7 +2,7 @@
 
 from builtin_interfaces.msg import Time
 
-from fault_detector_spot.inspection.data.repository_utils import (
+from fault_detector_spot.shared.persistence.file_storage import (
     validate_storage_name,
 )
 

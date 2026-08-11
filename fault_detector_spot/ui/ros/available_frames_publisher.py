@@ -3,7 +3,7 @@ from enum import Enum
 import rclpy
 from fault_detector_msgs.msg import StringArray
 from fault_detector_msgs.msg import TagElementArray
-from fault_detector_spot.common.ros.qos_profiles import LATCHED_QOS
+from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 from rclpy.node import Node
 
 

@@ -33,7 +33,7 @@ setup(
             'pointcloud_republisher = fault_detector_spot.mapping.ros.pointcloud_republisher:main',
             'rgb_resizer = fault_detector_spot.mapping.ros.rgb_resizer:main',
             'nav2_cmd_vel_gate = fault_detector_spot.navigation.ros.nav2_cmd_vel_gate:main',
-            'rest_api_bridge = fault_detector_spot.application.adapters.rest_bridge:main',
+            'rest_api_bridge = fault_detector_spot.application.api.rest_bridge:main',
             'available_frames_publisher = '
             'fault_detector_spot.ui.ros.available_frames_publisher:main',
             'lidar_self_filter = fault_detector_spot.mapping.ros.lidar_self_filter:main',

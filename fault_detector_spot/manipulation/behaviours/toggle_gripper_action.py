@@ -2,7 +2,7 @@ from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_msgs.conversions import convert
 from py_trees.common import Access
 from spot_msgs.action import RobotCommand
-from fault_detector_spot.common.behaviours.spot_action import SimpleSpotAction
+from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import SimpleSpotAction
 from py_trees.blackboard import Blackboard
 
 
