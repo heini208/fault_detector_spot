@@ -105,7 +105,7 @@ def test_only_included_accepted_requests_are_recorded():
     manager.recording = True
     included = make_request(CommandID.STAND_UP.value)
     excluded = make_request(
-        CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW.value,
+        CommandID.STOW_ARM.value,
         origin=CommandOrigin.PROBE_SETUP,
         policy=RecordingPolicy.EXCLUDE,
     )

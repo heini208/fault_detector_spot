@@ -275,6 +275,7 @@ class ProbeSetupClient(QObject):
             or self._motion_goal_handles
             or self._surface_goal_handles
             or self._finalization_goal_handles
+            or self._capture_goal_handles
         ):
             self.close_finished.emit(
                 False,

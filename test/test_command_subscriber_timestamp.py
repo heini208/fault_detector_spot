@@ -43,18 +43,16 @@ def test_same_simulated_timestamp_does_not_drop_distinct_commands():
     subscriber.blackboard = FakeBlackboard()
 
     subscriber.fire_request(
-        make_request(CommandID.CREATE_INSPECTION_ROUTINE)
+        make_request(CommandID.STAND_UP)
     )
     subscriber.fire_request(
-        make_request(
-            CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW
-        )
+        make_request(CommandID.STOW_ARM)
     )
 
     assert [
         command.command_id
         for command in subscriber.blackboard.command_buffer
     ] == [
-        CommandID.CREATE_INSPECTION_ROUTINE,
-        CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW,
+        CommandID.STAND_UP,
+        CommandID.STOW_ARM,
     ]
