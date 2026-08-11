@@ -1,6 +1,7 @@
 """Expose the application command boundary as typed ROS interfaces."""
 
 from dataclasses import dataclass, field
+import os
 from threading import Event, RLock
 from typing import Dict, Optional
 
@@ -12,6 +13,7 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from ament_index_python.packages import get_package_share_directory
 
 from fault_detector_spot.application.controllers.application_controller import (
     ApplicationController,
@@ -24,6 +26,19 @@ from fault_detector_spot.application.controllers.command_controller import (
     UnknownCommandRequest,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
+from fault_detector_spot.mapping.repository.map_artifact_store import (
+    MapArtifactStore,
+)
+from fault_detector_spot.mapping.repository.map_repository import MapRepository
+from fault_detector_spot.navigation.setup.navigation_setup_api import (
+    NavigationSetupApi,
+)
+from fault_detector_spot.navigation.setup.navigation_setup_coordinator import (
+    NavigationSetupCoordinator,
+)
+from fault_detector_spot.navigation.setup.navigation_setup_state_source import (
+    NavigationSetupStateSource,
+)
 
 
 _TERMINAL_STATES = frozenset({
@@ -56,6 +71,37 @@ class ApplicationApiNode(Node):
         )
         self.application_controller.add_status_listener(
             self._handle_application_status
+        )
+        default_map_root = os.path.join(
+            get_package_share_directory("fault_detector_spot"),
+            "maps",
+        )
+        self.declare_parameter("navigation.map_root", default_map_root)
+        map_root = self.get_parameter(
+            "navigation.map_root"
+        ).get_parameter_value().string_value
+        self.navigation_setup_coordinator = NavigationSetupCoordinator(
+            setup_coordinator=self.application_controller.setup_coordinator,
+            map_repository=MapRepository(map_root),
+            map_artifacts=MapArtifactStore(map_root),
+            current_pose=lambda: self.navigation_setup_state.current_pose(),
+            visible_tag_pose=(
+                lambda tag_id:
+                self.navigation_setup_state.visible_tag_pose(tag_id)
+            ),
+        )
+        self.navigation_setup_state = NavigationSetupStateSource(
+            self,
+            active_map_changed=(
+                self.navigation_setup_coordinator.observe_active_map
+            ),
+        )
+        self.application_controller.attach_navigation_setup(
+            self.navigation_setup_coordinator
+        )
+        self.navigation_setup_api = NavigationSetupApi(
+            self,
+            self.application_controller.navigation_setup_coordinator,
         )
         self._state_publisher = self.create_publisher(
             ApplicationCommandState,
@@ -250,6 +296,7 @@ class ApplicationApiNode(Node):
         return values[state]
 
     def destroy_node(self):
+        self.navigation_setup_api.close()
         self.application_controller.remove_status_listener(
             self._handle_application_status
         )

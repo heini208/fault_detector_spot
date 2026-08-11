@@ -42,3 +42,55 @@ def test_operational_ui_does_not_reference_internal_command_topics():
         source = path.read_text(encoding="utf-8")
         for topic in forbidden_topics:
             assert topic not in source, f"{topic} remains in {path.name}"
+
+
+def test_navigation_ui_does_not_own_setup_persistence_or_topics():
+    path = UI_ROOT / "navigation" / "controls.py"
+    source = path.read_text(encoding="utf-8")
+    forbidden = (
+        "MapRepository",
+        "RTABHelper",
+        "ComplexCommand",
+        "'/map_list'",
+        "'/waypoint_list'",
+        "'/landmark_list'",
+        "'/active_map'",
+        "show_setup_unavailable",
+    )
+
+    for value in forbidden:
+        assert value not in source, f"{value} remains in {path.name}"
+
+
+def test_behaviour_tree_has_no_navigation_authoring_commands():
+    root = UI_ROOT.parents[0]
+    runner = root / "application" / "behaviour_tree" / "runner.py"
+    command_ids = root / "application" / "commanding" / "command_ids.py"
+    source = runner.read_text(encoding="utf-8") + command_ids.read_text(
+        encoding="utf-8"
+    )
+    forbidden = (
+        "CREATE_MAP",
+        "DELETE_MAP",
+        "ADD_CURRENT_POSITION_WAYPOINT",
+        "ADD_TAG_AS_LANDMARK",
+        "DELETE_WAYPOINT",
+        "DELETE_LANDMARK",
+        "AddGoalPoseAsWaypoint",
+        "AddGoalPoseAsLandmark",
+    )
+
+    for value in forbidden:
+        assert value not in source
+
+
+def test_legacy_navigation_state_topics_are_removed():
+    root = UI_ROOT.parents[0]
+    paths = (
+        root / "mapping" / "runtime" / "rtab_helper.py",
+        root / "application" / "behaviour_tree" / "runner.py",
+    )
+    source = "".join(path.read_text(encoding="utf-8") for path in paths)
+
+    for topic in ("map_list", "waypoint_list", "landmark_list"):
+        assert topic not in source

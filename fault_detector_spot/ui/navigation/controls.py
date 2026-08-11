@@ -1,55 +1,35 @@
-import os
-
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QComboBox, QRadioButton, QButtonGroup, QLineEdit, \
-    QSizePolicy
+from PyQt5.QtWidgets import (
+    QButtonGroup,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QRadioButton,
+    QSizePolicy,
+)
 
-from ament_index_python.packages import get_package_share_directory
-from fault_detector_msgs.msg import OperationalIntent, StringArray
-from std_msgs.msg import String
+from fault_detector_msgs.msg import (
+    NavigationSetupIntent,
+    NavigationSetupState,
+    OperationalIntent,
+)
 from ..shared.control_helper import UIControlHelper
-from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 
 
 class NavigationControls(UIControlHelper):
     def __init__(self, parent_ui):
-        self.recordings_dir = os.path.join(
-            get_package_share_directory("fault_detector_spot"),
-            "maps"
-        )
         self.poi_name_field = None
-        self.current_map = None
+        self.current_map = ""
         self._cached_map_list = []
         self._cached_waypoint_list = []
+        self._cached_landmark_list = []
 
         super().__init__(parent_ui)
 
     def init_ros_communication(self):
-        # Subscriber to current_map string topic
-        self.node.create_subscription(
-            String,
-            '/active_map',
-            self.current_map_callback,
-            LATCHED_QOS
-        )
-        self.node.create_subscription(
-            StringArray,
-            '/map_list',
-            self.map_list_callback,
-            LATCHED_QOS
-        )
-        self.node.create_subscription(
-            StringArray,
-            '/waypoint_list',
-            self.waypoint_list_callback,
-            LATCHED_QOS
-        )
-        self.node.create_subscription(
-            StringArray,
-            '/landmark_list',
-            self.landmark_list_callback,
-            LATCHED_QOS
-        )
+        return None
 
     def make_rows(self):
         rows = [
@@ -93,22 +73,50 @@ class NavigationControls(UIControlHelper):
         row.addWidget(self.current_map_label)
         return row
 
-    def current_map_callback(self, msg: String):
-        self.current_map = msg.data
-        # Update the label
-        if self.current_map_label is not None:
-            self.current_map_label.setText(f"Current Map: {self.current_map}")
+    def apply_setup_state(self, state: NavigationSetupState):
+        """Render one authoritative navigation setup snapshot."""
+        self.current_map = state.active_map
+        self._cached_map_list = list(state.map_names)
+        self._cached_waypoint_list = list(state.waypoint_names)
+        self._cached_landmark_list = list(state.landmark_names)
+        self.current_map_label.setText(
+            f"Current Map: {self.current_map or 'None'}"
+        )
+        self._apply_map_list()
+        self._apply_waypoint_list()
+        self._apply_landmark_list()
+        buttons = (
+            self.mode_none,
+            self.mode_mapping,
+            self.mode_localization,
+        )
+        for button in buttons:
+            button.blockSignals(True)
+        self.mode_none.setChecked(
+            state.mode == NavigationSetupState.MODE_NONE
+        )
+        self.mode_mapping.setChecked(
+            state.mode == NavigationSetupState.MODE_MAPPING
+        )
+        self.mode_localization.setChecked(
+            state.mode == NavigationSetupState.MODE_LOCALIZATION
+        )
+        for button in buttons:
+            button.blockSignals(False)
+        self.ui.set_navigation_mode(
+            state.mode != NavigationSetupState.MODE_NONE
+        )
 
     def _apply_map_list(self):
         self.map_dropdown.clear()
         if not self._cached_map_list:
             self.map_dropdown.addItem("no maps saved")
-            self.current_map = None
-            self.current_map_label.setText("Current Map: None")
-            self.mode_none.setChecked(True)
         else:
             for map_name in self._cached_map_list:
                 self.map_dropdown.addItem(map_name)
+            active_index = self.map_dropdown.findText(self.current_map)
+            if active_index >= 0:
+                self.map_dropdown.setCurrentIndex(active_index)
 
     def _apply_waypoint_list(self):
         self.waypoint_dropdown.clear()
@@ -145,19 +153,6 @@ class NavigationControls(UIControlHelper):
         for lm_name in self._cached_landmark_list:
             self.landmark_dropdown.addItem(lm_name)
 
-    def map_list_callback(self, msg: StringArray):
-        # Cache the latest map list
-        self._cached_map_list = msg.names
-        self._apply_map_list()
-
-    def waypoint_list_callback(self, msg: StringArray):
-        self._cached_waypoint_list = msg.names
-        self._apply_waypoint_list()
-
-    def landmark_list_callback(self, msg: StringArray):
-        self._cached_landmark_list = msg.names
-        self._apply_landmark_list()
-
     def _make_create_map_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
 
@@ -167,7 +162,7 @@ class NavigationControls(UIControlHelper):
         row.addWidget(self.new_map_name_field)
 
         # Button to create empty map
-        self.create_map_button = QPushButton("Initialize Empty Map")
+        self.create_map_button = QPushButton("Create Map Definition")
         self.create_map_button.clicked.connect(self.handle_create_empty_map)
         row.addWidget(self.create_map_button)
 
@@ -269,42 +264,40 @@ class NavigationControls(UIControlHelper):
             self.waypoint_dropdown.addItem("no waypoints saved")
             return
 
-    # --- Handlers (currently empty stubs) ---
     def handle_map_confirmed(self):
         selected_map = self.map_dropdown.currentText()
         if not selected_map or selected_map == "no maps saved":
             self.show_warning("No Map Selected", "Please select a map before confirming.")
             return
 
-        return self.show_setup_unavailable("Map loading")
+        return self._submit_setup(
+            NavigationSetupIntent.OPERATION_SELECT_MAP,
+            map_name=selected_map,
+        )
 
     def handle_mode_none(self, checked: bool):
         if checked:
-            self.ui.set_navigation_mode(False)
-            return self.show_setup_unavailable(
-                "Mapping lifecycle control"
+            return self._submit_setup(
+                NavigationSetupIntent.OPERATION_STOP_MAPPING,
+                map_name=self.current_map,
             )
 
     def handle_mode_mapping(self, checked: bool):
         if checked:
-            if not self._check_current_map_selected():
-                return
-            self.mode_none.blockSignals(True)
-            self.mode_none.setChecked(True)
-            self.mode_none.blockSignals(False)
-            return self.show_setup_unavailable("Map creation")
+            return self._submit_setup(
+                NavigationSetupIntent.OPERATION_START_MAPPING,
+                map_name=self.current_map,
+            )
 
     def handle_mode_localization(self, checked: bool):
         if checked:
-            if not self._check_current_map_selected():
-                return
-            self.mode_none.blockSignals(True)
-            self.mode_none.setChecked(True)
-            self.mode_none.blockSignals(False)
-            return self.show_setup_unavailable("Localization setup")
+            return self._submit_setup(
+                NavigationSetupIntent.OPERATION_START_LOCALIZATION,
+                map_name=self.current_map,
+            )
 
     def _check_current_map_selected(self) -> bool:
-        if self.current_map is None:
+        if not self.current_map:
             self.show_warning("No Map Selected", "Please load a map first.")
             self.mode_none.setChecked(True)  # switch to default
             return False
@@ -316,20 +309,13 @@ class NavigationControls(UIControlHelper):
             self.show_warning("Missing Name", "Please enter a waypoint name.")
             return
 
-        if self.mode_none.isChecked():
-            self.show_warning(
-                "Not in Mapping or Localization Mode",
-                "Waypoints can only be saved while in localization or mapping mode."
-            )
+        if not self._check_current_map_selected():
             return
-
-        # Check if waypoint already exists in dropdown
-        existing_waypoints = [self.waypoint_dropdown.itemText(i) for i in range(self.waypoint_dropdown.count())]
-        if name in existing_waypoints:
-            self.show_warning("Waypoint Exists", f"A waypoint named '{name}' already exists in this map.")
-            return
-
-        return self.show_setup_unavailable("Waypoint authoring")
+        return self._submit_setup(
+            NavigationSetupIntent.OPERATION_ADD_CURRENT_WAYPOINT,
+            map_name=self.current_map,
+            waypoint_name=name,
+        )
 
     def handle_add_landmark(self):
         name = self.poi_name_field.text().strip()
@@ -337,23 +323,17 @@ class NavigationControls(UIControlHelper):
             self.show_warning("Missing ID", "Please enter a valid tag ID")
             return
 
-        if self.mode_none.isChecked():
-            self.show_warning(
-                "Not in Localization Mode",
-                "Waypoints or landmarks can only be saved while in localization or mapping mode."
-            )
-            return
-
         if not name.isdigit():
             self.show_warning("Invalid Input", "Tag ID must be numeric.")
             return
 
-        tag_id = int(name)
-        if tag_id not in self.ui.visible_tags:
-            self.show_warning("Tag Not Found", f"Tag {tag_id} is not currently visible.")
+        if not self._check_current_map_selected():
             return
-
-        return self.show_setup_unavailable("Landmark authoring")
+        return self._submit_setup(
+            NavigationSetupIntent.OPERATION_ADD_VISIBLE_TAG_LANDMARK,
+            map_name=self.current_map,
+            tag_id=int(name),
+        )
 
     def handle_move_to_waypoint(self):
         selected = self.waypoint_dropdown.currentText()
@@ -384,7 +364,10 @@ class NavigationControls(UIControlHelper):
             self.show_warning("Map Name Already Taken", "Please enter a map name.")
             return
 
-        return self.show_setup_unavailable("Map creation")
+        return self._submit_setup(
+            NavigationSetupIntent.OPERATION_CREATE_MAP_DEFINITION,
+            map_name=name,
+        )
 
     def handle_delete_map(self):
         current_map = self.map_dropdown.currentText()
@@ -392,7 +375,10 @@ class NavigationControls(UIControlHelper):
             self.show_warning("No Map Selected", "Please select a map to delete.")
             return
 
-        return self.show_setup_unavailable("Map deletion")
+        return self._submit_setup(
+            NavigationSetupIntent.OPERATION_DELETE_MAP,
+            map_name=current_map,
+        )
 
     def handle_delete_waypoint(self):
         selected = self.waypoint_dropdown.currentText()
@@ -402,7 +388,11 @@ class NavigationControls(UIControlHelper):
                 "Select a waypoint to delete.",
             )
             return False
-        return self.show_setup_unavailable("Waypoint deletion")
+        return self._submit_setup(
+            NavigationSetupIntent.OPERATION_DELETE_WAYPOINT,
+            map_name=self.current_map,
+            waypoint_name=selected,
+        )
 
     def handle_delete_landmark(self):
         selected = self.landmark_dropdown.currentText()
@@ -410,4 +400,22 @@ class NavigationControls(UIControlHelper):
             self.show_warning("No Landmark Selected", "Please select a landmark to delete.")
             return
 
-        return self.show_setup_unavailable("Landmark deletion")
+        return self._submit_setup(
+            NavigationSetupIntent.OPERATION_DELETE_LANDMARK,
+            map_name=self.current_map,
+            waypoint_name=selected,
+        )
+
+    def _submit_setup(
+        self,
+        operation,
+        map_name="",
+        waypoint_name="",
+        tag_id=0,
+    ):
+        intent = NavigationSetupIntent()
+        intent.operation = operation
+        intent.map_name = map_name
+        intent.waypoint_name = waypoint_name
+        intent.tag_id = tag_id
+        return self.ui.execute_navigation_setup(intent)

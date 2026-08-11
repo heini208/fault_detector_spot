@@ -32,6 +32,7 @@ from .navigation.base_movement_controls import BaseMovementControls
 from .navigation.controls import NavigationControls
 from .recording.controls import RecordingControls
 from .ros.application_client import ApplicationClient
+from .ros.navigation_setup_client import NavigationSetupClient
 from .shared.status_overview_panel import StatusOverviewPanel
 
 
@@ -55,6 +56,7 @@ class Fault_Detector_UI(QWidget):
         self.reachable_tags = {}
         self.available_frames = []
         self.application_client = None
+        self.navigation_setup_client = None
         self.inspection_object_root = self._inspection_root_parameter()
 
         if self.node:
@@ -71,6 +73,11 @@ class Fault_Detector_UI(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._spin_and_refresh)
         self.timer.start(10)
+        self.navigation_setup_timer = QTimer(self)
+        self.navigation_setup_timer.timeout.connect(
+            self._open_navigation_setup
+        )
+        self.navigation_setup_timer.start(500)
 
     def create_user_interface(self):
         main_layout = QVBoxLayout(self)
@@ -195,6 +202,16 @@ class Fault_Detector_UI(QWidget):
         self.application_client.emergency_stop_finished.connect(
             self._process_emergency_stop_result
         )
+        self.navigation_setup_client = NavigationSetupClient(
+            self.node,
+            self.application_client.client_id,
+        )
+        self.navigation_setup_client.state_changed.connect(
+            self._process_navigation_setup_state
+        )
+        self.navigation_setup_client.request_rejected.connect(
+            self._process_application_error
+        )
 
         self.visible_tags_sub = self.node.create_subscription(
             TagElementArray,
@@ -295,6 +312,29 @@ class Fault_Detector_UI(QWidget):
     def _process_application_error(self, detail):
         self.status_label.setText(f"Operation rejected: {detail}")
 
+    def _open_navigation_setup(self):
+        if self.navigation_setup_client is None:
+            return
+        if self.navigation_setup_client.context_id:
+            self.navigation_setup_timer.stop()
+            return
+        if self.navigation_setup_client.open() is not None:
+            self.navigation_setup_timer.stop()
+
+    def _process_navigation_setup_state(self, state):
+        if hasattr(self, "navigation_controls"):
+            self.navigation_controls.apply_setup_state(state)
+        self.status_label.setText(state.detail)
+
+    def execute_navigation_setup(self, intent):
+        if self.navigation_setup_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        request_id = self.navigation_setup_client.execute(intent)
+        if request_id is not None:
+            self.status_label.setText("Navigation setup request submitted")
+        return request_id
+
     def _process_emergency_stop_result(self, accepted, detail):
         prefix = "Emergency stop accepted" if accepted else "Emergency stop failed"
         self.status_label.setText(f"{prefix}: {detail}")
@@ -332,6 +372,10 @@ class Fault_Detector_UI(QWidget):
 
     def closeEvent(self, event):
         self.timer.stop()
+        self.navigation_setup_timer.stop()
+        if self.navigation_setup_client is not None:
+            self.navigation_setup_client.close()
+            self.navigation_setup_client.destroy()
         if self.application_client is not None:
             self.application_client.destroy()
         event.accept()

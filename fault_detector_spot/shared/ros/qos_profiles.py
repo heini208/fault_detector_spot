@@ -36,3 +36,10 @@ INITIALPOSE_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     durability=DurabilityPolicy.VOLATILE,
 )
+
+LOCALIZATION_POSE_QOS = QoSProfile(
+    depth=10,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    history=HistoryPolicy.KEEP_LAST,
+    durability=DurabilityPolicy.VOLATILE,
+)

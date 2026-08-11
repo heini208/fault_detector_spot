@@ -25,9 +25,9 @@ from fault_detector_spot.application.behaviour_tree import (
     WaitForDuration,
     BufferStatusPublisher,
     ManipulatorMoveRelativeAction,
-    ToggleGripperAction, CloseGripperAction, HelperInitializer, DeleteWaypoint, StopMapping, SwapMap, DeleteMap,
-    InitializeEmptyMap, EnableLocalization, EnableSLAM, SaveCurrentPoseAsGoal, AddGoalPoseAsWaypoint, SetWaypointAsGoal,
-    NavigateToGoalPose, SetTagAsGoal, AddGoalPoseAsLandmark, VisibleTagToMap, LandmarkRelocalizer, DeleteLandmark,
+    ToggleGripperAction, CloseGripperAction, HelperInitializer, StopMapping, SwapMap,
+    EnableLocalization, EnableSLAM, SetWaypointAsGoal,
+    NavigateToGoalPose, VisibleTagToMap, LandmarkRelocalizer,
     BaseGetGoalTag, BaseMoveToTagAction, BaseMoveRelativeAction,
     CaptureInspectionObjectReferenceView, CreateInspectionDefinition,
     DeleteInspectionDefinition,
@@ -38,9 +38,6 @@ from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
 )
 from fault_detector_spot.navigation.behaviours.last_localization_pose import LastLocalizationPose
-from fault_detector_spot.application.behaviour_tree.behaviours.publish_initial_ui_info_once import (
-    PublishInitialUIInfoOnce,
-)
 from py_trees.behaviours import CheckBlackboardVariableValue
 from py_trees.common import ComparisonExpression
 from py_trees.decorators import StatusToBlackboard, EternalGuard
@@ -290,15 +287,9 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         # Mapping commands
         (CommandID.START_SLAM, lambda n: EnableSLAM(slam_helper)),
         (CommandID.START_LOCALIZATION, lambda n: EnableLocalization(slam_helper)),
-        (CommandID.CREATE_MAP, lambda n: InitializeEmptyMap(slam_helper)),
-        (CommandID.DELETE_MAP, lambda n: DeleteMap()),
         (CommandID.SWAP_MAP, lambda n: SwapMap(slam_helper)),
         (CommandID.STOP_MAPPING, lambda n: StopMapping(slam_helper)),
-        (CommandID.ADD_CURRENT_POSITION_WAYPOINT, build_current_pose_as_waypoint_tree),
-        (CommandID.ADD_TAG_AS_LANDMARK, build_tag_pose_as_landmark_tree),
-        (CommandID.DELETE_WAYPOINT, lambda n: DeleteWaypoint(slam_helper)),
         (CommandID.MOVE_TO_WAYPOINT, build_navigate_to_goal_pose_tree),
-        (CommandID.DELETE_LANDMARK, lambda n: DeleteLandmark(slam_helper)),
         (
             CommandID.CREATE_INSPECTION_OBJECT,
             lambda n: build_inspection_creation_behavior(
@@ -486,9 +477,6 @@ def build_cancelable_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.B
 
 
 def build_publisher_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
-    initial_ui_info = PublishInitialUIInfoOnce(name="PublishInitialUIInfoOnce")
-
-    # Other publishers
     cmd_pub = BufferStatusPublisher(name="CommandStatusPublisher")
 
     init_pose_pub = LandmarkRelocalizer(get_helper_container(node).slam_helper, name="InitPosePublisher")
@@ -497,7 +485,7 @@ def build_publisher_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         "PublisherTree",
         policy=py_trees.common.ParallelPolicy.SuccessOnAll()
     )
-    publisher_tree.add_children([initial_ui_info, cmd_pub, init_pose_pub])
+    publisher_tree.add_children([cmd_pub, init_pose_pub])
 
     return publisher_tree
 
@@ -569,25 +557,6 @@ def build_base_goal_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
     base_sequence.add_children([get_goal, move_base])
     return base_sequence
-
-def build_current_pose_as_waypoint_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
-    sequence = py_trees.composites.Sequence("SaveCurrentPoseAsLandmark", memory=True)
-    get_goal = SaveCurrentPoseAsGoal(name="SaveCurrentPoseAsGoal")
-
-    add_waypoint = AddGoalPoseAsWaypoint(get_helper_container(node).slam_helper, name="AddGoalPoseAsWaypoint")
-    sequence.add_children([get_goal, add_waypoint])
-    return sequence
-
-
-def build_tag_pose_as_landmark_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
-    slam_helper = get_helper_container(node).slam_helper
-    sequence = py_trees.composites.Sequence("SaveTagAsLandmark", memory=True)
-    get_goal = SetTagAsGoal(name="SetTagAsGoal")
-
-    add_waypoint = AddGoalPoseAsLandmark(slam_helper=slam_helper, name="AddGoalPoseAsLandmark")
-    sequence.add_children([get_goal, add_waypoint])
-    return sequence
-
 
 def build_navigate_to_goal_pose_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     sequence = py_trees.composites.Sequence("NavigateToWaypoint", memory=True)

@@ -35,20 +35,10 @@ from fault_detector_spot.manipulation.behaviours.ready_arm_action import ReadyAr
 from fault_detector_spot.manipulation.behaviours.stand_up_action import StandUpActionSimple
 from fault_detector_spot.manipulation.behaviours.stow_arm_action import StowArmActionSimple
 from fault_detector_spot.manipulation.behaviours.toggle_gripper_action import ToggleGripperAction
-from fault_detector_spot.navigation.setup.behaviours.delete_landmark import DeleteLandmark
-from fault_detector_spot.mapping.setup.behaviours.delete_map import DeleteMap
-from fault_detector_spot.navigation.setup.behaviours.delete_waypoint import DeleteWaypoint
 from fault_detector_spot.mapping.behaviours.enable_localization import EnableLocalization
 from fault_detector_spot.mapping.behaviours.enable_slam import EnableSLAM
-from fault_detector_spot.mapping.setup.behaviours.initialize_empty_map import InitializeEmptyMap
 from fault_detector_spot.mapping.behaviours.stop_mapping import StopMapping
 from fault_detector_spot.mapping.behaviours.swap_map import SwapMap
-from fault_detector_spot.navigation.setup.behaviours.add_goal_pose_as_landmark import (
-    AddGoalPoseAsLandmark,
-)
-from fault_detector_spot.navigation.setup.behaviours.add_goal_pose_as_waypoint import (
-    AddGoalPoseAsWaypoint,
-)
 from fault_detector_spot.navigation.behaviours.cancel_movement import PublishZeroVel
 from fault_detector_spot.navigation.behaviours.landmark_relocalizer import LandmarkRelocalizer
 from fault_detector_spot.navigation.behaviours.move_base.base_get_goal_tag import BaseGetGoalTag
@@ -59,10 +49,6 @@ from fault_detector_spot.navigation.behaviours.move_base.base_move_to_tag_action
     BaseMoveToTagAction,
 )
 from fault_detector_spot.navigation.behaviours.navigate_to_goal_pose import NavigateToGoalPose
-from fault_detector_spot.navigation.setup.behaviours.save_current_pose_as_goal import (
-    SaveCurrentPoseAsGoal,
-)
-from fault_detector_spot.navigation.setup.behaviours.set_tag_as_goal import SetTagAsGoal
 from fault_detector_spot.navigation.behaviours.set_waypoint_as_goal import SetWaypointAsGoal
 from fault_detector_spot.application.behaviour_tree.behaviours.buffer_and_status_publisher import (
     BufferStatusPublisher,
@@ -95,22 +81,14 @@ __all__ = [
   "ToggleGripperAction",
   "CloseGripperAction",
   "EnableSLAM",
-  "InitializeEmptyMap",
-  "DeleteMap",
   "SwapMap",
   "EnableLocalization",
   "StopMapping",
-  "AddGoalPoseAsWaypoint",
-  "SaveCurrentPoseAsGoal",
-  "DeleteWaypoint",
   "SetWaypointAsGoal",
   "NavigateToGoalPose",
   "HelperInitializer",
-  "SetTagAsGoal",
-  "AddGoalPoseAsLandmark",
   "VisibleTagToMap",
   "LandmarkRelocalizer",
-  "DeleteLandmark",
   "BaseGetGoalTag",
   "BaseMoveToTagAction",
   "BaseMoveRelativeAction",

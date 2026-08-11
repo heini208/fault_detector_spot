@@ -138,3 +138,72 @@ class MapRepository:
     ) -> Optional[ObjectApproach]:
         """Find an object approach by ID."""
         return self.load(map_id).get_object_approach(approach_id)
+
+    def add_waypoint(
+        self,
+        map_id: str,
+        waypoint: Waypoint,
+    ) -> MapDefinition:
+        """Append one new waypoint and save the map atomically."""
+        definition = self.load(map_id)
+        if definition.get_waypoint(waypoint.waypoint_id) is not None:
+            raise FileExistsError(
+                f"Waypoint already exists: {waypoint.waypoint_id}"
+            )
+        definition.waypoints.append(waypoint)
+        self.save(map_id, definition)
+        return definition
+
+    def add_landmark(
+        self,
+        map_id: str,
+        landmark: LocalizationLandmark,
+    ) -> MapDefinition:
+        """Append one new localization landmark and save atomically."""
+        definition = self.load(map_id)
+        if definition.get_landmark(landmark.landmark_id) is not None:
+            raise FileExistsError(
+                f"Landmark already exists: {landmark.landmark_id}"
+            )
+        definition.localization_landmarks.append(landmark)
+        self.save(map_id, definition)
+        return definition
+
+    def delete_waypoint(
+        self,
+        map_id: str,
+        waypoint_id: str,
+    ) -> MapDefinition:
+        """Delete one waypoint and dependent object approaches."""
+        definition = self.load(map_id)
+        if definition.get_waypoint(waypoint_id) is None:
+            raise KeyError(f"Unknown waypoint: {waypoint_id}")
+        definition.waypoints = [
+            waypoint
+            for waypoint in definition.waypoints
+            if waypoint.waypoint_id != waypoint_id
+        ]
+        definition.object_approaches = [
+            approach
+            for approach in definition.object_approaches
+            if approach.waypoint_id != waypoint_id
+        ]
+        self.save(map_id, definition)
+        return definition
+
+    def delete_landmark(
+        self,
+        map_id: str,
+        landmark_id: str,
+    ) -> MapDefinition:
+        """Delete one localization landmark and save atomically."""
+        definition = self.load(map_id)
+        if definition.get_landmark(landmark_id) is None:
+            raise KeyError(f"Unknown landmark: {landmark_id}")
+        definition.localization_landmarks = [
+            landmark
+            for landmark in definition.localization_landmarks
+            if landmark.landmark_id != landmark_id
+        ]
+        self.save(map_id, definition)
+        return definition

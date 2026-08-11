@@ -5,18 +5,8 @@ import time
 
 import py_trees
 from ament_index_python.packages import get_package_share_directory
-from fault_detector_msgs.msg import StringArray
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 from fault_detector_spot.navigation.runtime.nav2_helper import Nav2Helper
-from fault_detector_spot.mapping.repository.map_repository import MapRepository
-from fault_detector_spot.inspection.model.models import (
-    LocalizationLandmark,
-    ReferenceTag,
-    Waypoint,
-)
-from fault_detector_spot.shared.geometry.transforms import (
-    pose_to_pose_data,
-)
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 
@@ -35,8 +25,6 @@ class RTABHelper:
         self.bb = blackboard
         self.maps_dir = os.path.join(get_package_share_directory("fault_detector_spot"), "maps")
         os.makedirs(self.maps_dir, exist_ok=True)
-        self.map_repository = MapRepository(self.maps_dir)
-
         # Ensure blackboard keys exist
         self.init_blackboard_keys()
         self.init_ros_publishers()
@@ -64,9 +52,6 @@ class RTABHelper:
     def init_ros_publishers(self):
         # ROS publishers
         self.active_map_pub = self.node.create_publisher(String, "active_map", LATCHED_QOS)
-        self.map_list_pub = self.node.create_publisher(StringArray, "map_list", LATCHED_QOS)
-        self.waypoint_list_pub = self.node.create_publisher(StringArray, "waypoint_list", LATCHED_QOS)
-        self.landmark_list_pub = self.node.create_publisher(StringArray, "landmark_list", LATCHED_QOS)
 
     def _db_path(self, map_name: str):
         return os.path.join(self.maps_dir, f"{map_name}.db")
@@ -79,16 +64,6 @@ class RTABHelper:
             msg = String()
             msg.data = self.bb.active_map_name
             self.active_map_pub.publish(msg)
-            self.publish_waypoint_list()
-            self.publish_landmark_list()
-
-    def update_map_list(self, extra_map: str = None):
-        maps = [f[:-3] for f in os.listdir(self.maps_dir) if f.endswith(".db")]
-        if extra_map and extra_map not in maps:
-            maps.append(extra_map)
-        msg = StringArray()
-        msg.names = maps
-        self.map_list_pub.publish(msg)
 
     def save_static_map(self, path: str) -> bool:
         """
@@ -265,34 +240,6 @@ class RTABHelper:
 
         return proc
 
-    def start_mapping_from_scratch(self, map_name: str = None):
-        """
-        Start RTAB-Map mapping completely from scratch (deletes any existing map/database).
-
-        Creates a new JSON waypoint/landmark file if needed and launches RTAB-Map
-        in mapping mode with a new database file.
-        """
-        self.stop_current_process()
-
-        # Determine the map name
-        if map_name is None:
-            map_name = self.bb.active_map_name
-            if map_name is None:
-                raise RuntimeError("No active map name provided to start mapping from scratch")
-
-        # Update internal map list and ensure paths exist
-        self.update_map_list(map_name)
-        if not self.map_repository.exists(map_name):
-            self.map_repository.create_empty(map_name)
-            path = self.map_repository.get_map_path(map_name)
-            self.node.get_logger().info(
-                f"Created new JSON map file: {path}"
-            )
-
-        # Launch RTAB-Map in fresh mapping mode
-        self.node.get_logger().info(f"Starting a new RTAB-Map mapping session for '{map_name}'")
-        return self.initialize_mapping_from_existing(map_name=map_name, extend_map=True, delete_db=True, rviz=True)
-
     def start_localization(self, map_name: str = None, rviz: bool = True):
         if not self.is_rtabmap_running():
             self.init_localization(map_name, rviz)
@@ -406,152 +353,4 @@ class RTABHelper:
             proc = self.start_localization(map_name)
         self.feedback_message = f"Changed to map '{map_name}' in {current_mode} mode"
         self.node.get_logger().info(self.feedback_message)
-        return True
-
-    # --- Waypoint Management ---
-    def publish_waypoint_list(self, map_name: str = None):
-        names = self.get_list_from_json_category("waypoints", map_name)
-        msg = StringArray()
-        msg.names = names
-        self.waypoint_list_pub.publish(msg)
-
-    def publish_landmark_list(self, map_name: str = None):
-        names = self.get_list_from_json_category("landmarks", map_name)
-        msg = StringArray()
-        msg.names = names
-        self.landmark_list_pub.publish(msg)
-
-    def get_list_from_json_category(self, category: String, map_name: str = None, ):
-        map_name = map_name or self.bb.active_map_name
-        if not map_name:
-            return []
-        if not self.map_repository.exists(map_name):
-            return []
-
-        definition = self.map_repository.load(map_name)
-        if category == "waypoints":
-            return [
-                waypoint.waypoint_id
-                for waypoint in definition.waypoints
-            ]
-        if category == "landmarks":
-            return [
-                landmark.landmark_id
-                for landmark in definition.localization_landmarks
-            ]
-        raise ValueError(f"Unknown map category: {category}")
-
-    def add_pose_as_waypoint(self, waypoint_name: str, pose: PoseStamped, map_name: str = None):
-        map_name = map_name or self.bb.active_map_name
-        if not map_name:
-            raise ValueError("No active map set")
-
-        definition = self.map_repository.load(map_name)
-        waypoint = definition.get_waypoint(waypoint_name)
-        if waypoint is None:
-            definition.waypoints.append(
-                Waypoint(
-                    waypoint_id=waypoint_name,
-                    display_name=waypoint_name,
-                    pose_map=pose_to_pose_data(pose),
-                )
-            )
-        else:
-            waypoint.pose_map = pose_to_pose_data(pose)
-        self.map_repository.save(map_name, definition)
-
-        if map_name == self.bb.active_map_name:
-            self.publish_waypoint_list(map_name)
-
-    def add_pose_as_landmark(self, landmark_name: str, pose: PoseStamped, map_name: str = None):
-        map_name = map_name or self.bb.active_map_name
-        if not map_name:
-            raise ValueError("No active map set")
-
-        try:
-            tag_id = int(landmark_name.rsplit("_", 1)[1])
-        except (IndexError, ValueError) as exception:
-            raise ValueError(
-                "Landmark ID must end with its numeric tag ID"
-            ) from exception
-
-        definition = self.map_repository.load(map_name)
-        landmark = definition.get_landmark(landmark_name)
-        if landmark is None:
-            definition.localization_landmarks.append(
-                LocalizationLandmark(
-                    landmark_id=landmark_name,
-                    display_name=landmark_name,
-                    reference_tag=ReferenceTag(
-                        tag_id=tag_id,
-                        tag_family="36h11",
-                    ),
-                    pose_map=pose_to_pose_data(pose),
-                )
-            )
-        else:
-            landmark.reference_tag = ReferenceTag(
-                tag_id=tag_id,
-                tag_family="36h11",
-            )
-            landmark.pose_map = pose_to_pose_data(pose)
-        self.map_repository.save(map_name, definition)
-
-        if map_name == self.bb.active_map_name:
-            self.publish_landmark_list(map_name)
-
-    def delete_waypoint(self, waypoint_name: str, map_name: str = None):
-        map_name = map_name or self.bb.active_map_name
-        if not map_name:
-            raise ValueError("No active map set")
-
-        if not self.map_repository.exists(map_name):
-            return False
-
-        definition = self.map_repository.load(map_name)
-        new_waypoints = [
-            waypoint
-            for waypoint in definition.waypoints
-            if waypoint.waypoint_id != waypoint_name
-        ]
-        if len(new_waypoints) == len(definition.waypoints):
-            return False
-
-        definition.waypoints = new_waypoints
-        definition.object_approaches = [
-            approach
-            for approach in definition.object_approaches
-            if approach.waypoint_id != waypoint_name
-        ]
-        self.map_repository.save(map_name, definition)
-
-        if map_name == self.bb.active_map_name:
-            self.publish_waypoint_list(map_name)
-        return True
-
-    def delete_landmark(self, landmark_name: str, map_name: str = None):
-        map_name = map_name or self.bb.active_map_name
-        if not map_name:
-            raise ValueError("No active map set")
-
-        if not self.map_repository.exists(map_name):
-            return False
-
-        definition = self.map_repository.load(map_name)
-        new_landmarks = [
-            landmark
-            for landmark in definition.localization_landmarks
-            if landmark.landmark_id != landmark_name
-        ]
-        if len(new_landmarks) == len(
-            definition.localization_landmarks
-        ):
-            return False
-
-        definition.localization_landmarks = new_landmarks
-        self.map_repository.save(map_name, definition)
-
-        # Publish updated list if it's the active map
-        if map_name == self.bb.active_map_name:
-            self.publish_landmark_list(map_name)  # implement similar to publish_waypoint_list
         return True
