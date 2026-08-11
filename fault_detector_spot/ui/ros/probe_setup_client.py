@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from fault_detector_msgs.action import (
+    CaptureProbeReferenceViews,
     ExecuteProbeSetupMotion,
     ExecuteProbeSurfaceVerification,
     FinalizeProbeRefinement,
@@ -44,6 +45,7 @@ class ProbeSetupClient(QObject):
         self._motion_goal_handles = {}
         self._surface_goal_handles = {}
         self._finalization_goal_handles = {}
+        self._capture_goal_handles = {}
         self._execute_client = node.create_client(
             ExecuteProbeSetup,
             "fault_detector/application/execute_probe_setup",
@@ -70,6 +72,11 @@ class ProbeSetupClient(QObject):
             node,
             FinalizeProbeRefinement,
             "fault_detector/application/finalize_probe_refinement",
+        )
+        self._capture_client = ActionClient(
+            node,
+            CaptureProbeReferenceViews,
+            "fault_detector/application/capture_probe_reference_views",
         )
         self._state_subscription = node.create_subscription(
             ProbeSetupState,
@@ -98,6 +105,11 @@ class ProbeSetupClient(QObject):
         if not self.context_id:
             self.request_rejected.emit("Probe setup context is not open")
             return None
+        if self._capture_goal_handles:
+            self.request_rejected.emit(
+                "Reference capture is already in progress"
+            )
+            return None
         if not self._motion_client.server_is_ready():
             return None
         goal = ExecuteProbeSetupMotion.Goal()
@@ -121,6 +133,11 @@ class ProbeSetupClient(QObject):
         """Request one server-owned closed-loop surface verification."""
         if not self.context_id:
             self.request_rejected.emit("Probe setup context is not open")
+            return None
+        if self._capture_goal_handles:
+            self.request_rejected.emit(
+                "Reference capture is already in progress"
+            )
             return None
         if self._surface_goal_handles:
             self.request_rejected.emit(
@@ -161,6 +178,11 @@ class ProbeSetupClient(QObject):
         if not self.context_id:
             self.request_rejected.emit("Probe setup context is not open")
             return None
+        if self._capture_goal_handles:
+            self.request_rejected.emit(
+                "Reference capture is already in progress"
+            )
+            return None
         if self._finalization_goal_handles:
             self.request_rejected.emit(
                 "Probe refinement finalization is already in progress"
@@ -194,6 +216,53 @@ class ProbeSetupClient(QObject):
         )
         future.add_done_callback(
             partial(self._receive_finalization_goal, local_id)
+        )
+        return local_id
+
+    def capture_reference_views(
+        self,
+        reference_camera_ids,
+        replace_existing=False,
+    ):
+        """Request server-owned synchronized reference capture."""
+        camera_ids = tuple(str(value).strip() for value in reference_camera_ids)
+        if len(camera_ids) != 3:
+            raise ValueError("Exactly three reference camera slots are required")
+        if not isinstance(replace_existing, bool):
+            raise TypeError("Replace existing flag must be a boolean")
+        if not self.context_id:
+            self.request_rejected.emit("Probe setup context is not open")
+            return None
+        if (
+            self._pending_request_id
+            or self._motion_goal_handles
+            or self._surface_goal_handles
+            or self._finalization_goal_handles
+            or self._capture_goal_handles
+            or self._capture_goal_handles
+        ):
+            self.request_rejected.emit(
+                "Another probe setup operation is already in progress"
+            )
+            return None
+        if not self._capture_client.server_is_ready():
+            return None
+        goal = CaptureProbeReferenceViews.Goal()
+        goal.client_id = self.client_id
+        goal.context_id = self.context_id
+        goal.reference_camera_ids = list(camera_ids)
+        goal.replace_existing = replace_existing
+        local_id = uuid4().hex
+        self._capture_goal_handles[local_id] = None
+        future = self._capture_client.send_goal_async(
+            goal,
+            feedback_callback=partial(
+                self._receive_capture_feedback,
+                local_id,
+            ),
+        )
+        future.add_done_callback(
+            partial(self._receive_capture_goal, local_id)
         )
         return local_id
 
@@ -255,6 +324,16 @@ class ProbeSetupClient(QObject):
     def _send(self, intent, context_id):
         if not isinstance(intent, ProbeSetupIntent):
             raise TypeError("Expected a ProbeSetupIntent message")
+        if (
+            self._capture_goal_handles
+            or self._motion_goal_handles
+            or self._surface_goal_handles
+            or self._finalization_goal_handles
+        ):
+            self.request_rejected.emit(
+                "A probe setup workflow is already in progress"
+            )
+            return None
         if self._pending_request_id:
             self.request_rejected.emit(
                 "A probe setup transaction is already in progress"
@@ -432,6 +511,37 @@ class ProbeSetupClient(QObject):
             return
         self._emit_state(result.state)
 
+    def _receive_capture_goal(self, local_id, future):
+        try:
+            goal_handle = future.result()
+        except Exception as exception:
+            self._capture_goal_handles.pop(local_id, None)
+            self.request_rejected.emit(str(exception))
+            return
+        if not goal_handle.accepted:
+            self._capture_goal_handles.pop(local_id, None)
+            self.request_rejected.emit(
+                "Reference dataset capture was rejected"
+            )
+            return
+        self._capture_goal_handles[local_id] = goal_handle
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(
+            partial(self._receive_capture_result, local_id)
+        )
+
+    def _receive_capture_feedback(self, _local_id, feedback_message):
+        self._emit_state(feedback_message.feedback.state)
+
+    def _receive_capture_result(self, local_id, future):
+        self._capture_goal_handles.pop(local_id, None)
+        try:
+            result = future.result().result
+        except Exception as exception:
+            self.request_rejected.emit(str(exception))
+            return
+        self._emit_state(result.state)
+
     def destroy(self):
         """Destroy client-side ROS resources owned by this adapter."""
         self.node.destroy_client(self._execute_client)
@@ -440,10 +550,12 @@ class ProbeSetupClient(QObject):
         self._motion_client.destroy()
         self._surface_client.destroy()
         self._finalization_client.destroy()
+        self._capture_client.destroy()
         self.node.destroy_subscription(self._state_subscription)
         self._motion_goal_handles.clear()
         self._surface_goal_handles.clear()
         self._finalization_goal_handles.clear()
+        self._capture_goal_handles.clear()
 
 
 __all__ = ["ProbeSetupClient"]

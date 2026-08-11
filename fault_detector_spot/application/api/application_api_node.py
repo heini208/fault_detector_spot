@@ -37,6 +37,12 @@ from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
 )
 from fault_detector_spot.application.api.probe_setup_api import ProbeSetupApi
+from fault_detector_spot.application.api.probe_reference_capture_api import (
+    ProbeReferenceCaptureApi,
+)
+from fault_detector_spot.application.coordinators.probe_reference_capture_coordinator import (
+    ProbeReferenceCaptureCoordinator,
+)
 from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
 )
@@ -160,6 +166,23 @@ class ApplicationApiNode(Node):
         self.probe_setup_api = ProbeSetupApi(
             self,
             self.application_controller.probe_setup_coordinator,
+            self.probe_setup_state_publisher,
+            self.probe_setup_state_adapter,
+        )
+        self.probe_reference_capture_coordinator = (
+            ProbeReferenceCaptureCoordinator(
+                node=self,
+                probe_setup_coordinator=(
+                    self.application_controller.probe_setup_coordinator
+                ),
+                reference_repository=reference_repository,
+                motion_state_source=self.probe_setup_motion_state,
+            )
+        )
+        self.probe_reference_capture_api = ProbeReferenceCaptureApi(
+            self,
+            self.application_controller.probe_setup_coordinator,
+            self.probe_reference_capture_coordinator,
             self.probe_setup_state_publisher,
             self.probe_setup_state_adapter,
         )
@@ -376,6 +399,7 @@ class ApplicationApiNode(Node):
         return values[state]
 
     def destroy_node(self):
+        self.probe_reference_capture_api.close()
         self.probe_refinement_finalization_api.close()
         self.probe_surface_verification_api.close()
         self.probe_setup_motion_api.close()

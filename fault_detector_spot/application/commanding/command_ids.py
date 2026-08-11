@@ -15,7 +15,6 @@ class CommandID(str, Enum):
     CLOSE_GRIPPER = "close_gripper"
     ESTOP_STATE = "estop_state"
     STOP_BASE = "stop_base"
-    #mapping
     START_SLAM = "start_slam"
     START_LOCALIZATION = "start_localization"
     STOP_MAPPING = "stop_mapping"
@@ -24,13 +23,6 @@ class CommandID(str, Enum):
     MOVE_INTO_TAG_RANGE = "move_into_tag_range"
     MOVE_BASE_TO_TAG = "move_base_to_tag"
     MOVE_BASE_RELATIVE = "move_base_relative"
-    CREATE_INSPECTION_OBJECT = "create_inspection_object"
-    CREATE_INSPECTION_ROUTINE = "create_inspection_routine"
-    DELETE_INSPECTION_OBJECT = "delete_inspection_object"
-    DELETE_INSPECTION_ROUTINE = "delete_inspection_routine"
-    CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW = (
-        "capture_inspection_object_reference_view"
-    )
     EXECUTE_PROBE_POINT = "execute_probe_point"
 
 

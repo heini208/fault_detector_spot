@@ -61,8 +61,8 @@ def stamp_nanoseconds(stamp):
 
 def test_static_clock_dispatches_distinct_command_stamps():
     commands = [
-        make_command(CommandID.CREATE_INSPECTION_OBJECT),
-        make_command(CommandID.DELETE_INSPECTION_OBJECT),
+        make_command(CommandID.STAND_UP),
+        make_command(CommandID.READY_ARM),
     ]
     manager = CommandManager()
     manager.node = FakeNode(42_000_000_000)
@@ -85,8 +85,8 @@ def test_static_clock_dispatches_distinct_command_stamps():
 
 def test_rewound_clock_keeps_command_stamps_increasing():
     commands = [
-        make_command(CommandID.CREATE_INSPECTION_OBJECT),
-        make_command(CommandID.CREATE_INSPECTION_ROUTINE),
+        make_command(CommandID.STOW_ARM),
+        make_command(CommandID.READY_ARM),
     ]
     manager = CommandManager()
     manager.node = FakeNode(100_000_000_000)
@@ -107,8 +107,8 @@ def test_rewound_clock_keeps_command_stamps_increasing():
 
 def test_new_command_guard_accepts_static_clock_dispatches():
     commands = [
-        make_command(CommandID.CREATE_INSPECTION_OBJECT),
-        make_command(CommandID.DELETE_INSPECTION_OBJECT),
+        make_command(CommandID.STAND_UP),
+        make_command(CommandID.STOW_ARM),
     ]
     manager = CommandManager()
     manager.node = FakeNode(42_000_000_000)
@@ -145,7 +145,6 @@ def test_failure_discards_remaining_internal_commands_only():
     )
 
     assert manager.update() == Status.SUCCESS
-
     assert manager.blackboard.command_buffer == []
     assert (
         manager.blackboard.last_command.request_id

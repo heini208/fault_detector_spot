@@ -53,7 +53,6 @@ class Fault_Detector_UI(QWidget):
         self._buffer_text = "Buffer: []"
 
         self.visible_tags = {}
-        self.base_tags = {}
         self.reachable_tags = {}
         self.available_frames = []
         self.application_client = None
@@ -241,13 +240,6 @@ class Fault_Detector_UI(QWidget):
             10,
         )
 
-        self.base_tags_sub = self.node.create_subscription(
-            TagElementArray,
-            "fault_detector/state/base_tags",
-            self._process_base_tags,
-            10,
-        )
-
         self.reachable_tags_sub = self.node.create_subscription(
             TagElementArray,
             "fault_detector/state/reachable_tags",
@@ -279,11 +271,6 @@ class Fault_Detector_UI(QWidget):
 
     def _process_visible_tags(self, msg: TagElementArray):
         self.visible_tags = {tag.id: tag for tag in msg.elements}
-
-    def _process_base_tags(self, msg: TagElementArray):
-        self.base_tags = {tag.id: tag for tag in msg.elements}
-        if hasattr(self, "inspection_controls"):
-            self.inspection_controls.handle_base_tags(msg.elements)
 
     def _process_reachable_tags(self, msg: TagElementArray):
         self.reachable_tags = {tag.id: tag for tag in msg.elements}
@@ -380,6 +367,24 @@ class Fault_Detector_UI(QWidget):
         request_id = self.probe_setup_client.execute(intent)
         if request_id is not None:
             self.status_label.setText("Probe setup request submitted")
+        return request_id
+
+    def execute_probe_reference_capture(
+        self,
+        reference_camera_ids,
+        replace_existing=False,
+    ):
+        if self.probe_setup_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        request_id = self.probe_setup_client.capture_reference_views(
+            reference_camera_ids,
+            replace_existing=replace_existing,
+        )
+        if request_id is not None:
+            self.status_label.setText(
+                "Reference dataset capture submitted"
+            )
         return request_id
 
     def execute_probe_surface_verification(self):

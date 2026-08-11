@@ -2,18 +2,77 @@
 
 import math
 
-from fault_detector_msgs.msg import ProbeSetupState
+from fault_detector_msgs.msg import ProbeSetupState, SensorDefinitionArray
+from fault_detector_msgs.srv import AddSensor, RetireSensor
 
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
     RefinementStage,
 )
 
+from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
+
 from .controls import InspectionControls
 
 
 class FinalizingInspectionControls(InspectionControls):
-    """Route final probe approval and retraction through the server action."""
+    """Route physical setup workflows through server-owned APIs."""
+
+    def init_ros_communication(self):
+        """Keep only presentation-side sensor definition transport."""
+        if self.node is None:
+            return
+        self.sensor_add_client = self.node.create_client(
+            AddSensor,
+            "fault_detector/add_sensor",
+        )
+        self.sensor_retire_client = self.node.create_client(
+            RetireSensor,
+            "fault_detector/retire_sensor",
+        )
+        self.sensor_list_subscription = self.node.create_subscription(
+            SensorDefinitionArray,
+            "fault_detector/sensors",
+            self._process_sensor_definitions,
+            LATCHED_QOS,
+        )
+
+    def handle_capture_reference_view(self):
+        """Submit camera selections to the server-owned capture action."""
+        state = self._probe_setup_state
+        if state is None or not state.selected_routine_id:
+            self.show_warning(
+                "Capture Reference View",
+                "Select a saved object and routine first.",
+            )
+            return False
+        camera_ids = tuple(self._selected_reference_camera_ids())
+        try:
+            selected = tuple(value for value in camera_ids if value)
+            if not selected:
+                raise ValueError("Select at least one reference camera")
+            if len(selected) != len(set(selected)):
+                raise ValueError(
+                    "Each reference camera can only be selected once"
+                )
+        except ValueError as exception:
+            self.show_warning(
+                "Capture Reference View",
+                str(exception),
+            )
+            return False
+        request_id = self.ui.execute_probe_reference_capture(
+            camera_ids,
+            replace_existing=(
+                self.replace_reference_view_checkbox.isChecked()
+            ),
+        )
+        if request_id is None:
+            return False
+        self.reference_view_status_label.setText(
+            "Reference capture running"
+        )
+        return True
 
     def _update_save_probe_point_state(self, _value=None):
         state = self._probe_setup_state
