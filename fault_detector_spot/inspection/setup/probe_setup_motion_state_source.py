@@ -2,11 +2,15 @@
 
 from collections import deque
 from copy import deepcopy
+import math
 from threading import RLock
+import time
 
 from fault_detector_msgs.msg import TagElementArray
 from rclpy.duration import Duration
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
+from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
 from fault_detector_spot.inspection.model.models import (
@@ -16,6 +20,9 @@ from fault_detector_spot.inspection.model.models import (
 )
 from fault_detector_spot.inspection.model.sensor_models import (
     sensor_probe_frame,
+)
+from fault_detector_spot.inspection.sensing.live_surface_distance import (
+    measure_probe_surface_distance,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     relative_pose,
@@ -31,6 +38,9 @@ BASE_TAG_MAXIMUM_AGE_SEC = 1.5
 BASE_TAG_STABILIZATION_HISTORY_SEC = 3.0
 BASE_TAG_HISTORY_MAX_SAMPLES = 64
 BASE_TAG_MINIMUM_SPAN_SEC = 0.10
+HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
+MAX_HAND_DEPTH_AGE_SEC = 0.5
+MINIMUM_SURFACE_DISTANCE_SAMPLES = 3
 
 
 class ProbeSetupMotionStateSource:
@@ -40,6 +50,10 @@ class ProbeSetupMotionStateSource:
         self.node = node
         self._lock = RLock()
         self._base_tag_histories = {}
+        self._hand_depth_history = deque(
+            maxlen=HAND_DEPTH_HISTORY_MAX_SAMPLES
+        )
+        self._hand_depth_camera_info = None
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(
             self._tf_buffer,
@@ -50,6 +64,18 @@ class ProbeSetupMotionStateSource:
             "fault_detector/state/base_tags",
             self._receive_base_tags,
             10,
+        )
+        self._hand_depth_subscription = node.create_subscription(
+            Image,
+            "/depth_registered/hand/image",
+            self._receive_hand_depth,
+            qos_profile_sensor_data,
+        )
+        self._hand_depth_camera_info_subscription = node.create_subscription(
+            CameraInfo,
+            "/depth_registered/hand/camera_info",
+            self._receive_hand_depth_camera_info,
+            qos_profile_sensor_data,
         )
 
     def reference_tag(self, tag_id: int):
@@ -104,11 +130,86 @@ class ProbeSetupMotionStateSource:
         body_to_object = pose_to_pose_data(tag.pose.pose)
         return relative_pose(body_to_object, body_to_probe)
 
-    def _lookup_pose(self, target_frame: str, source_frame: str) -> PoseData:
+
+    def surface_distance_samples(
+        self,
+        sensor_id: str,
+        receipt_not_before: float = 0.0,
+        maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
+    ):
+        """Return fresh registered-depth measurements along the probe axis."""
+        if not isinstance(sensor_id, str) or not sensor_id.strip():
+            raise ValueError("Sensor ID must not be empty")
+        if not math.isfinite(float(receipt_not_before)):
+            raise ValueError("Surface sample receipt threshold must be finite")
+        if (
+            not math.isfinite(float(maximum_age_sec))
+            or maximum_age_sec <= 0.0
+        ):
+            raise ValueError("Maximum hand-depth age must be positive")
+        with self._lock:
+            camera_info = deepcopy(self._hand_depth_camera_info)
+            history = tuple(self._hand_depth_history)
+        if camera_info is None:
+            raise ValueError(
+                "No registered hand-depth camera info is available"
+            )
+
+        now = self.node.get_clock().now()
+        samples = []
+        errors = []
+        for receipt_time, depth_image in history:
+            if receipt_time + 1e-9 < receipt_not_before:
+                continue
+            try:
+                stamp = Time.from_msg(depth_image.header.stamp)
+                if stamp.nanoseconds <= 0:
+                    raise ValueError("Registered hand-depth timestamp is empty")
+                age_seconds = (now - stamp).nanoseconds * 1e-9
+                if age_seconds < -0.05:
+                    raise ValueError(
+                        "Registered hand-depth timestamp is in the future"
+                    )
+                if age_seconds > maximum_age_sec:
+                    continue
+                depth_frame = (
+                    depth_image.header.frame_id.strip()
+                    or camera_info.header.frame_id.strip()
+                )
+                if not depth_frame:
+                    raise ValueError("Registered hand-depth frame is empty")
+                probe_to_camera = self._lookup_pose(
+                    sensor_probe_frame(sensor_id.strip()),
+                    depth_frame,
+                    lookup_time=stamp,
+                )
+                samples.append(
+                    measure_probe_surface_distance(
+                        depth_image,
+                        camera_info,
+                        probe_to_camera,
+                    )
+                )
+            except Exception as exception:
+                errors.append(str(exception))
+        if len(samples) < MINIMUM_SURFACE_DISTANCE_SAMPLES:
+            detail = errors[-1] if errors else "no fresh depth frames"
+            raise ValueError(
+                "Need at least three fresh registered hand-depth samples: "
+                f"{detail}"
+            )
+        return tuple(samples)
+
+    def _lookup_pose(
+        self,
+        target_frame: str,
+        source_frame: str,
+        lookup_time=None,
+    ) -> PoseData:
         transform = self._tf_buffer.lookup_transform(
             target_frame,
             source_frame,
-            Time(),
+            lookup_time if lookup_time is not None else Time(),
             timeout=Duration(seconds=0.5),
         )
         value = transform.transform
@@ -141,11 +242,31 @@ class ProbeSetupMotionStateSource:
                     continue
                 history.append((stamp_key, deepcopy(tag)))
 
+
+    def _receive_hand_depth(self, message: Image) -> None:
+        with self._lock:
+            self._hand_depth_history.append(
+                (time.monotonic(), deepcopy(message))
+            )
+
+    def _receive_hand_depth_camera_info(
+        self,
+        message: CameraInfo,
+    ) -> None:
+        with self._lock:
+            self._hand_depth_camera_info = deepcopy(message)
+
     def close(self) -> None:
         """Destroy ROS resources owned by this state source."""
         self.node.destroy_subscription(self._base_tag_subscription)
+        self.node.destroy_subscription(self._hand_depth_subscription)
+        self.node.destroy_subscription(
+            self._hand_depth_camera_info_subscription
+        )
         with self._lock:
             self._base_tag_histories.clear()
+            self._hand_depth_history.clear()
+            self._hand_depth_camera_info = None
 
 
 __all__ = ["ProbeSetupMotionStateSource"]
