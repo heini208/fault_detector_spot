@@ -7,7 +7,7 @@ from typing import Dict, Optional
 
 import rclpy
 from fault_detector_msgs.action import ExecuteOperation
-from fault_detector_msgs.msg import ApplicationCommandState
+from fault_detector_msgs.msg import ApplicationCommandState, ProbeSetupState
 from fault_detector_msgs.srv import CancelOperation, EmergencyStop
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -39,6 +39,12 @@ from fault_detector_spot.inspection.repository.sensor_repository import (
 from fault_detector_spot.inspection.setup.probe_setup_api import ProbeSetupApi
 from fault_detector_spot.inspection.setup.probe_setup_coordinator import (
     ProbeSetupCoordinator,
+)
+from fault_detector_spot.inspection.setup.probe_setup_motion_api import (
+    ProbeSetupMotionApi,
+)
+from fault_detector_spot.inspection.setup.probe_setup_state_adapter import (
+    ProbeSetupStateAdapter,
 )
 from fault_detector_spot.inspection.setup import (
     probe_setup_motion_state_source,
@@ -137,9 +143,25 @@ class ApplicationApiNode(Node):
         self.application_controller.attach_probe_setup(
             self.probe_setup_coordinator
         )
+        self.probe_setup_state_publisher = self.create_publisher(
+            ProbeSetupState,
+            "fault_detector/application/probe_setup_state",
+            APPLICATION_STATE_QOS,
+        )
+        self.probe_setup_state_adapter = ProbeSetupStateAdapter(
+            self.get_clock()
+        )
         self.probe_setup_api = ProbeSetupApi(
             self,
             self.application_controller.probe_setup_coordinator,
+            self.probe_setup_state_publisher,
+            self.probe_setup_state_adapter,
+        )
+        self.probe_setup_motion_api = ProbeSetupMotionApi(
+            self,
+            self.application_controller.probe_setup_coordinator,
+            self.probe_setup_state_publisher,
+            self.probe_setup_state_adapter,
         )
         self._state_publisher = self.create_publisher(
             ApplicationCommandState,
@@ -334,6 +356,7 @@ class ApplicationApiNode(Node):
         return values[state]
 
     def destroy_node(self):
+        self.probe_setup_motion_api.close()
         self.probe_setup_api.close()
         self.navigation_setup_api.close()
         self.application_controller.remove_status_listener(

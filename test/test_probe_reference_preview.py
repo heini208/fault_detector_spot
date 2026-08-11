@@ -62,6 +62,7 @@ def snapshot():
         reference_pixel=None,
         geometry=None,
         setup=None,
+        refinement=None,
         dirty=False,
         validation_error="",
     )

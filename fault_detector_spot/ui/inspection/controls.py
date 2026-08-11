@@ -3707,3 +3707,7 @@ class InspectionControls(UIControlHelper):
         return self.show_setup_unavailable(
             "Probe approval, persistence, and retraction"
         )
+
+    def handle_retract_without_saving(self):
+        """Fail closed until retraction is delegated to the server."""
+        return self.show_setup_unavailable("Probe retraction")

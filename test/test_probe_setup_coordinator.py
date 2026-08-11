@@ -546,3 +546,17 @@ def test_pure_authoring_core_has_no_execution_command_dependency():
     assert "ComplexCommand" not in source
     assert "ActionServer" not in source
     assert "command_controller.submit" not in source
+
+
+def test_motion_transport_is_separate_from_authoring_transport():
+    package = Path(__file__).parents[1] / "fault_detector_spot"
+    authoring = (
+        package / "inspection/setup/probe_setup_api.py"
+    ).read_text(encoding="utf-8")
+    motion = (
+        package / "inspection/setup/probe_setup_motion_api.py"
+    ).read_text(encoding="utf-8")
+
+    assert "ActionServer" not in authoring
+    assert "create_service" not in motion
+    assert "ActionServer" in motion
