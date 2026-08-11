@@ -114,10 +114,17 @@ class ProbeRefinementFinalizationApi:
                 str(exception),
             )
 
+        cancelled = bool(goal_handle.is_cancel_requested)
+        state_code = self._terminal_state_code(phase, cancelled)
+        detail = self._terminal_detail(
+            snapshot,
+            phase,
+            cancelled,
+        )
         state = self._state_message(
             snapshot,
-            ProbeSetupState.STATE_SUCCEEDED,
-            "Probe refinement finalized",
+            state_code,
+            detail,
             request_id,
         )
         self.state_publisher.publish(state)
@@ -126,6 +133,8 @@ class ProbeRefinementFinalizationApi:
         result.state = state
         if phase is FinalizationPhase.COMPLETE:
             goal_handle.succeed()
+        elif cancelled:
+            goal_handle.canceled()
         else:
             goal_handle.abort()
         return result
@@ -138,10 +147,21 @@ class ProbeRefinementFinalizationApi:
         snapshot,
         request_id,
     ):
+        cancelled = bool(goal_handle.is_cancel_requested)
+        if phase is FinalizationPhase.RECOVERY_REQUIRED:
+            state_code = self._terminal_state_code(phase, cancelled)
+            detail = self._terminal_detail(
+                snapshot,
+                phase,
+                cancelled,
+            )
+        else:
+            state_code = ProbeSetupState.STATE_RUNNING
+            detail = phase.value.replace("_", " ")
         state = self._state_message(
             snapshot,
-            ProbeSetupState.STATE_RUNNING,
-            phase.value.replace("_", " "),
+            state_code,
+            detail,
             request_id,
         )
         self.state_publisher.publish(state)
@@ -181,14 +201,16 @@ class ProbeRefinementFinalizationApi:
         snapshot,
         detail,
     ):
+        cancelled = bool(goal_handle.is_cancel_requested)
+        state_code = (
+            ProbeSetupState.STATE_CANCELLED
+            if cancelled
+            else ProbeSetupState.STATE_FAILED
+        )
         if snapshot is not None:
             state = self._state_message(
                 snapshot,
-                (
-                    ProbeSetupState.STATE_CANCELLED
-                    if goal_handle.is_cancel_requested
-                    else ProbeSetupState.STATE_FAILED
-                ),
+                state_code,
                 detail,
                 request_id,
             )
@@ -198,14 +220,14 @@ class ProbeRefinementFinalizationApi:
             state.request_id = request_id
             state.client_id = goal.client_id.strip()
             state.context_id = goal.context_id.strip()
-            state.state = ProbeSetupState.STATE_FAILED
+            state.state = state_code
             state.detail = detail
             state.validation_error = detail
         self.state_publisher.publish(state)
         result = FinalizeProbeRefinement.Result()
         result.probe_point_saved = saved
         result.state = state
-        if goal_handle.is_cancel_requested:
+        if cancelled:
             goal_handle.canceled()
         else:
             goal_handle.abort()
@@ -219,6 +241,30 @@ class ProbeRefinementFinalizationApi:
             detail,
             request_id=request_id,
         )
+
+    @staticmethod
+    def _terminal_state_code(phase, cancelled):
+        if phase is FinalizationPhase.COMPLETE:
+            return ProbeSetupState.STATE_SUCCEEDED
+        if cancelled:
+            return ProbeSetupState.STATE_CANCELLED
+        return ProbeSetupState.STATE_FAILED
+
+    @staticmethod
+    def _terminal_detail(snapshot, phase, cancelled):
+        if phase is FinalizationPhase.COMPLETE:
+            return "Probe refinement finalized"
+        refinement = getattr(snapshot, "refinement", None)
+        if refinement is not None:
+            detail = refinement.recovery_message.strip()
+            if detail:
+                return detail
+        if cancelled:
+            return (
+                "Probe refinement finalization cancelled; "
+                "retraction is required"
+            )
+        return "Probe refinement finalization requires recovery"
 
     @staticmethod
     def _phase_code(phase):

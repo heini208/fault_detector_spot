@@ -91,12 +91,6 @@ class ProbeSetupApi:
             ProbeSetupIntent.OPERATION_APPROVE_ALIGNED_POSE: (
                 self._approve_aligned_pose
             ),
-            ProbeSetupIntent.OPERATION_APPROVE_PROBE_POSE: (
-                self._approve_probe_pose
-            ),
-            ProbeSetupIntent.OPERATION_SAVE_PROBE_POINT: (
-                self._save_probe_point
-            ),
             ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT: (
                 self._begin_refinement
             ),
@@ -213,30 +207,17 @@ class ProbeSetupApi:
             float(intent.aligned_preapproach_distance_m),
         )
 
-    def _approve_safe_pose(self, context, intent):
+    def _approve_safe_pose(self, context, _intent):
         return self.coordinator.approve_safe_pose(context)
 
-    def _approve_aligned_pose(self, context, intent):
+    def _approve_aligned_pose(self, context, _intent):
         return self.coordinator.approve_aligned_pose(context)
-
-    def _approve_probe_pose(self, context, intent):
-        return self.coordinator.approve_probe_pose(context)
 
     def _begin_refinement(self, context, _intent):
         return self.coordinator.begin_refinement(context)
 
     def _end_refinement(self, context, _intent):
         return self.coordinator.end_refinement(context)
-
-    def _save_probe_point(self, context, intent):
-        return self.coordinator.save_probe_point(
-            context,
-            intent.probe_point_id,
-            intent.probe_point_display_name,
-            float(intent.position_tolerance_m),
-            float(intent.orientation_tolerance_rad),
-            float(intent.measurement_duration_sec),
-        )
 
     def _close(self, request, response):
         try:
@@ -306,14 +287,9 @@ class ProbeSetupApi:
         self.state_publisher.publish(state)
         return state
 
-    @staticmethod
-    def _validate_operation(operation: int) -> None:
-        supported = {
-            value
-            for name, value in vars(ProbeSetupIntent).items()
-            if name.startswith("OPERATION_")
-            and name != "OPERATION_UNSPECIFIED"
-        }
+    def _validate_operation(self, operation: int) -> None:
+        supported = set(self._handlers)
+        supported.add(ProbeSetupIntent.OPERATION_OPEN)
         if int(operation) not in supported:
             raise ValueError(f"Unsupported probe setup operation: {operation}")
 
