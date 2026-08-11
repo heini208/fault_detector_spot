@@ -7,12 +7,12 @@ import pytest
 from fault_detector_msgs.msg import TagElement
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.reference_view_validation import (
+from fault_detector_spot.inspection.setup.reference_view_validation import (
     ReferenceViewInputNotReady,
     validate_reference_view_inputs,
 )

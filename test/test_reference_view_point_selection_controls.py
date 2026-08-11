@@ -10,7 +10,7 @@ from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QImage, QMouseEvent
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
+from fault_detector_spot.ui.controls.inspection_controls import (
     InspectionControls,
 )
 

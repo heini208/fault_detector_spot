@@ -5,10 +5,10 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 from builtin_interfaces.msg import Time
 
-from fault_detector_spot.behaviour_tree.commands import (
-    execute_probe_point_command,
+from fault_detector_spot.inspection.commands import (
+    ExecuteProbePointCommand,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     InspectionObject,
     InspectionRoutine,
     PoseData,
@@ -17,18 +17,13 @@ from fault_detector_spot.inspection.models import (
     ReferenceView,
     Vector3Data,
 )
-from fault_detector_spot.inspection.object_repository import ObjectRepository
-from fault_detector_spot.inspection.probe_execution_session import (
+from fault_detector_spot.inspection.data.object_repository import ObjectRepository
+from fault_detector_spot.inspection.execution.probe_execution_session import (
     ProbeExecutionSession,
     ProbeExecutionStage,
 )
-from fault_detector_spot.inspection.sensor_models import SensorDefinition
-from fault_detector_spot.inspection.sensor_repository import SensorRepository
-
-
-ExecuteProbePointCommand = (
-    execute_probe_point_command.ExecuteProbePointCommand
-)
+from fault_detector_spot.inspection.data.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.data.sensor_repository import SensorRepository
 
 
 def pose(x=0.0, y=0.0, z=0.0):

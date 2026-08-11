@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     InspectionObject,
     InspectionRoutine,
     PoseData,
@@ -14,10 +14,10 @@ from fault_detector_spot.inspection.models import (
     ReferenceView,
     Vector3Data,
 )
-from fault_detector_spot.inspection.probe_execution_target import (
+from fault_detector_spot.inspection.execution.probe_execution_target import (
     resolve_probe_execution_target,
 )
-from fault_detector_spot.inspection.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.data.sensor_models import SensorDefinition
 
 
 def pose(x=0.0, y=0.0, z=0.0, orientation=None):

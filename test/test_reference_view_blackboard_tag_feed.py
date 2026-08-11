@@ -1,6 +1,6 @@
 """Tests for separation of shared tags from camera collection."""
 
-from fault_detector_spot.inspection.reference_view_input_synchronizer import (
+from fault_detector_spot.inspection.setup.reference_view_input_synchronizer import (
     ReferenceViewInputSynchronizer,
 )
 

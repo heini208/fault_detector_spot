@@ -5,7 +5,7 @@ from threading import Lock
 
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.reference_view_input_synchronizer import (
+from fault_detector_spot.inspection.setup.reference_view_input_synchronizer import (
     ReferenceViewInputSynchronizer,
     _CollectionWindow,
 )

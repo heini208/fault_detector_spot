@@ -4,12 +4,12 @@ import math
 
 import pytest
 
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.stable_tag_pose import (
+from fault_detector_spot.inspection.setup.stable_tag_pose import (
     TagPoseSample,
     stabilize_tag_pose,
 )

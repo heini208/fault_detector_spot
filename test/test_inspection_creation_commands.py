@@ -4,20 +4,20 @@ import py_trees
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import InspectionCommand
 
-from fault_detector_spot.behaviour_tree.commands.command_ids import (
+from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
 )
-from fault_detector_spot.behaviour_tree.commands import (
+from fault_detector_spot.application.commanding import (
     generic_complex_command,
 )
-from fault_detector_spot.behaviour_tree.nodes.inspection import (
+from fault_detector_spot.inspection.setup.behaviours import (
     CreateInspectionDefinition,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     InspectionObject,
     ReferenceTag,
 )
-from fault_detector_spot.inspection.object_repository import (
+from fault_detector_spot.inspection.data.object_repository import (
     ObjectRepository,
 )
 

@@ -1,7 +1,7 @@
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import TransformStamped
 
-from fault_detector_spot.behaviour_tree.nodes.sensing.hand_camera_tag_detection import (
+from fault_detector_spot.sensing.behaviours.hand_camera_tag_detection import (
     HandCameraTagDetection,
 )
 

@@ -3,10 +3,10 @@
 import pytest
 import yaml
 
-from fault_detector_spot.inspection.sensor_models import (
+from fault_detector_spot.inspection.data.sensor_models import (
     sensor_definition_from_values,
 )
-from fault_detector_spot.inspection.sensor_repository import SensorRepository
+from fault_detector_spot.inspection.data.sensor_repository import SensorRepository
 
 
 def definition(sensor_id="bmm150_01"):

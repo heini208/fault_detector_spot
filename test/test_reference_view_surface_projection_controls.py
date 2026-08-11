@@ -9,10 +9,10 @@ from fault_detector_msgs.msg import BasicCommand, TagElement
 from PyQt5.QtWidgets import QApplication, QLabel
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
+from fault_detector_spot.ui.controls.inspection_controls import (
     InspectionControls,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     ImagePoint,
     InspectionObject,
     InspectionRoutine,
@@ -20,11 +20,11 @@ from fault_detector_spot.inspection.models import (
     ReferenceTag,
     ReferenceView,
 )
-from fault_detector_spot.inspection.multi_reference_view_repository import (
+from fault_detector_spot.inspection.data.multi_reference_view_repository import (
     CapturedReferenceView,
     MultiReferenceViewRepository,
 )
-from fault_detector_spot.inspection.reference_view_validation import (
+from fault_detector_spot.inspection.setup.reference_view_validation import (
     ReferenceViewInputNotReady,
 )
 

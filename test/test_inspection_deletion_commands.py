@@ -5,21 +5,21 @@ import pytest
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import InspectionCommand
 
-from fault_detector_spot.behaviour_tree.commands.command_ids import (
+from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
 )
-from fault_detector_spot.behaviour_tree.commands.generic_complex_command import (
+from fault_detector_spot.application.commanding.generic_complex_command import (
     GenericCommand,
 )
-from fault_detector_spot.behaviour_tree.nodes.inspection import (
+from fault_detector_spot.inspection.setup.behaviours import (
     DeleteInspectionDefinition,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     InspectionObject,
     InspectionRoutine,
     ReferenceTag,
 )
-from fault_detector_spot.inspection.object_repository import (
+from fault_detector_spot.inspection.data.object_repository import (
     ObjectRepository,
 )
 

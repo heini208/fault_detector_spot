@@ -4,12 +4,12 @@ import math
 
 import pytest
 
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.reference_probe_setup import (
+from fault_detector_spot.inspection.setup.reference_probe_setup import (
     approve_probe_pose,
     approve_safe_approach_pose,
     approve_surface_alignment_pose,
@@ -21,7 +21,7 @@ from fault_detector_spot.inspection.reference_probe_setup import (
     refine_probe_pose,
     relative_pose,
 )
-from fault_detector_spot.inspection.reference_view_surface_target import (
+from fault_detector_spot.inspection.setup.reference_view_surface_target import (
     ReferenceSurfaceTarget,
 )
 

@@ -5,10 +5,10 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Header
 
 from fault_detector_msgs.msg import LiveInspectionObjectState
-from fault_detector_spot.inspection.live_object_state_adapter import (
+from fault_detector_spot.inspection.ros.live_object_state_adapter import (
     live_object_pose_to_msg,
 )
-from fault_detector_spot.inspection.resolved_object_pose import (
+from fault_detector_spot.inspection.data.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
 )

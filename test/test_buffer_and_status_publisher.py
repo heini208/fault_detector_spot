@@ -6,10 +6,10 @@ from types import SimpleNamespace
 from builtin_interfaces.msg import Time
 from py_trees.common import Status
 
-from fault_detector_spot.behaviour_tree.nodes.sensing.buffer_and_status_publisher import (
+from fault_detector_spot.sensing.behaviours.buffer_and_status_publisher import (
     BufferStatusPublisher,
 )
-from fault_detector_spot.request_identity import new_request_id
+from fault_detector_spot.application.data.request_identity import new_request_id
 
 
 class FakePublisher:

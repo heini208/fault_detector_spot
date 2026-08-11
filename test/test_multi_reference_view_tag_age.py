@@ -6,10 +6,10 @@ import pytest
 from fault_detector_msgs.msg import TagElement
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection import (
+from fault_detector_spot.inspection.setup import (
     multi_reference_view_capture as capture_module,
 )
-from fault_detector_spot.inspection.models import PoseData, ReferenceView
+from fault_detector_spot.inspection.data.models import PoseData, ReferenceView
 
 
 class FakeSynchronizer:

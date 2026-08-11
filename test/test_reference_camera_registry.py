@@ -2,7 +2,7 @@
 
 import pytest
 
-from fault_detector_spot.inspection.reference_camera_registry import (
+from fault_detector_spot.inspection.setup.reference_camera_registry import (
     REFERENCE_CAMERA_BY_ID,
     validate_reference_camera_slots,
 )

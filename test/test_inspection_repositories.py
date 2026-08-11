@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from fault_detector_spot.inspection.map_repository import (
+from fault_detector_spot.mapping.data.map_repository import (
     MapRepository,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     ImagePoint,
     InspectionObject,
     InspectionRoutine,
@@ -20,7 +20,7 @@ from fault_detector_spot.inspection.models import (
     ReferenceView,
     Waypoint,
 )
-from fault_detector_spot.inspection.object_repository import (
+from fault_detector_spot.inspection.data.object_repository import (
     ObjectRepository,
 )
 

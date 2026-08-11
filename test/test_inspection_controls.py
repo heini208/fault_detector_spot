@@ -7,23 +7,23 @@ import pytest
 from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from fault_detector_spot.behaviour_tree.commands.command_ids import (
+from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
 )
-from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
+from fault_detector_spot.ui.controls.inspection_controls import (
     InspectionControls,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     InspectionObject,
     InspectionRoutine,
     PoseData,
     ReferenceTag,
     ReferenceView,
 )
-from fault_detector_spot.inspection.object_repository import (
+from fault_detector_spot.inspection.data.object_repository import (
     ObjectRepository,
 )
-from fault_detector_spot.inspection.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.data.sensor_models import SensorDefinition
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

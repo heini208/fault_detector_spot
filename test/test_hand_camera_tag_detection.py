@@ -10,7 +10,7 @@ from geometry_msgs.msg import TransformStamped
 from rclpy.clock import ClockType
 from rclpy.time import Time
 
-from fault_detector_spot.behaviour_tree.nodes.sensing import (
+from fault_detector_spot.sensing.behaviours import (
     hand_camera_tag_detection,
 )
 

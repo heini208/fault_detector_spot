@@ -10,7 +10,7 @@ from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QGroupBox, QLabel
 
-from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
+from fault_detector_spot.ui.controls.inspection_controls import (
     InspectionControls,
 )
 

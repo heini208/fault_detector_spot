@@ -5,14 +5,14 @@ import math
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
 
-from fault_detector_spot.inspection.live_object_pose_resolver import (
+from fault_detector_spot.inspection.execution.live_object_pose_resolver import (
     LiveObjectPoseResolver,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     InspectionObject,
     ReferenceTag,
 )
-from fault_detector_spot.inspection.resolved_object_pose import (
+from fault_detector_spot.inspection.data.resolved_object_pose import (
     ObjectPoseState,
 )
 

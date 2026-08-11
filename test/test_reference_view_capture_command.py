@@ -12,13 +12,13 @@ from fault_detector_msgs.msg import (
     TagElementArray,
 )
 
-from fault_detector_spot.behaviour_tree.commands import (
+from fault_detector_spot.application.commanding import (
     generic_complex_command,
 )
-from fault_detector_spot.behaviour_tree.commands.command_ids import (
+from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
 )
-from fault_detector_spot.behaviour_tree.nodes.inspection import (
+from fault_detector_spot.inspection.behaviours import (
     capture_inspection_object_reference_view as capture_module,
 )
 

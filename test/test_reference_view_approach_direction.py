@@ -4,13 +4,13 @@ import math
 
 import pytest
 
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     ImagePoint,
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.reference_view_approach_direction import (
+from fault_detector_spot.inspection.setup.reference_view_approach_direction import (
     APPROACH_MODE_AUTOMATIC,
     APPROACH_MODE_SURFACE_FIT,
     APPROACH_MODE_TAG_X,
@@ -18,10 +18,10 @@ from fault_detector_spot.inspection.reference_view_approach_direction import (
     APPROACH_SOURCE_TAG_X_SELECTED,
     resolve_reference_approach_direction,
 )
-from fault_detector_spot.inspection.reference_view_depth_projection import (
+from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ProjectedReferencePoint,
 )
-from fault_detector_spot.inspection.reference_view_surface_normal import (
+from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
     ReferenceSurfaceNormal,
 )
 

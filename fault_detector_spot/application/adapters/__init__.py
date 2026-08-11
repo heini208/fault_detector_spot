@@ -1,0 +1,1 @@
+"""External application transport adapters."""

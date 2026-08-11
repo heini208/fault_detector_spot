@@ -9,36 +9,36 @@ import pytest
 from fault_detector_msgs.msg import BasicCommand, TagElement
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from fault_detector_spot.behaviour_tree.commands.command_ids import (
+from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
     OrientationModes,
 )
-from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
+from fault_detector_spot.ui.controls.inspection_controls import (
     InspectionControls,
 )
-from fault_detector_spot.inspection.live_surface_distance import (
+from fault_detector_spot.inspection.sensing.live_surface_distance import (
     SurfaceDistanceSample,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.probe_refinement_session import (
+from fault_detector_spot.inspection.setup.probe_refinement_session import (
     ProbeRefinementSession,
     RefinementMotionState,
     RefinementStage,
 )
-from fault_detector_spot.inspection.sensor_models import SensorDefinition
-from fault_detector_spot.inspection.reference_probe_setup import (
+from fault_detector_spot.inspection.data.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.setup.reference_probe_setup import (
     approve_safe_approach_pose,
     approve_surface_alignment_pose,
     initialize_reference_probe_setup,
 )
-from fault_detector_spot.inspection.reference_view_surface_target import (
+from fault_detector_spot.inspection.setup.reference_view_surface_target import (
     ReferenceSurfaceTarget,
 )
-from fault_detector_spot.inspection.reference_view_depth_projection import (
+from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ImageRegion,
 )
 
@@ -430,7 +430,7 @@ def test_distance_change_keeps_probe_stage_controls_enabled(
         controlled_frame_pose_object=PoseData.identity()
     )
     monkeypatch.setattr(
-        "fault_detector_spot.behaviour_tree.ui_classes."
+        "fault_detector_spot.ui.controls."
         "inspection_controls.resolve_reference_surface_target",
         lambda **_kwargs: changed_target,
     )

@@ -1,15 +1,12 @@
-"""Inspection object, routine, and map functionality."""
+"""Inspection authoring, execution, sensing, and persistence."""
 
-from fault_detector_spot.inspection.live_object_pose_resolver import (
+from fault_detector_spot.inspection.execution.live_object_pose_resolver import (
     LiveObjectPoseResolver,
 )
-from fault_detector_spot.inspection.live_object_state_adapter import (
+from fault_detector_spot.inspection.ros.live_object_state_adapter import (
     live_object_pose_to_msg,
 )
-from fault_detector_spot.inspection.map_repository import (
-    MapRepository,
-)
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     ImagePoint,
     InspectionObject,
     InspectionRoutine,
@@ -24,34 +21,34 @@ from fault_detector_spot.inspection.models import (
     Vector3Data,
     Waypoint,
 )
-from fault_detector_spot.inspection.object_repository import (
+from fault_detector_spot.inspection.data.object_repository import (
     ObjectRepository,
 )
-from fault_detector_spot.inspection.probe_execution_target import (
+from fault_detector_spot.inspection.execution.probe_execution_target import (
     ProbeExecutionTarget,
     resolve_probe_execution_geometry,
     resolve_probe_execution_target,
 )
-from fault_detector_spot.inspection.probe_execution_session import (
+from fault_detector_spot.inspection.execution.probe_execution_session import (
     FrozenPoseData,
     ProbeExecutionConfiguration,
     ProbeExecutionSession,
     ProbeExecutionStage,
 )
-from fault_detector_spot.inspection.resolved_object_pose import (
+from fault_detector_spot.inspection.data.resolved_object_pose import (
     ObjectPoseState,
     ResolvedObjectPose,
 )
-from fault_detector_spot.inspection.sensor_models import (
+from fault_detector_spot.inspection.data.sensor_models import (
     SENSOR_PARENT_FRAME,
     SensorDefinition,
     sensor_definition_from_values,
     sensor_probe_frame,
 )
-from fault_detector_spot.inspection.sensor_repository import (
+from fault_detector_spot.inspection.data.sensor_repository import (
     SensorRepository,
 )
-from fault_detector_spot.inspection.transform_utils import (
+from fault_detector_spot.inspection.utility.transform_utils import (
     compose_poses,
     inverse_pose,
     matrix_to_pose,
@@ -60,6 +57,18 @@ from fault_detector_spot.inspection.transform_utils import (
     pose_to_pose_data,
     relative_pose,
 )
+
+
+def __getattr__(name):
+    if name == "MapRepository":
+        from fault_detector_spot.mapping.data.map_repository import (
+            MapRepository,
+        )
+
+        return MapRepository
+    raise AttributeError(
+        f"module {__name__!r} has no attribute {name!r}"
+    )
 
 __all__ = [
     "ImagePoint",

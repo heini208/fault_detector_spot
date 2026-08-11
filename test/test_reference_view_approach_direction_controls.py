@@ -11,16 +11,16 @@ from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtWidgets import QApplication, QLabel
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
+from fault_detector_spot.ui.controls.inspection_controls import (
     InspectionControls,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     PoseData,
     QuaternionData,
     ReferenceView,
     Vector3Data,
 )
-from fault_detector_spot.inspection.reference_view_approach_direction import (
+from fault_detector_spot.inspection.setup.reference_view_approach_direction import (
     APPROACH_MODE_SURFACE_FIT,
     APPROACH_MODE_TAG_X,
     APPROACH_SOURCE_SURFACE_FIT,

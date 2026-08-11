@@ -4,8 +4,8 @@ import math
 
 import pytest
 
-from fault_detector_spot.inspection.models import PoseData, Vector3Data
-from fault_detector_spot.inspection.sensor_models import (
+from fault_detector_spot.inspection.data.models import PoseData, Vector3Data
+from fault_detector_spot.inspection.data.sensor_models import (
     SensorDefinition,
     quaternion_from_rpy_degrees,
     sensor_definition_from_values,

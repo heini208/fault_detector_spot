@@ -5,7 +5,7 @@ from fault_detector_msgs.msg import TagElement
 from geometry_msgs.msg import TransformStamped
 from rclpy.time import Time
 
-from fault_detector_spot.behaviour_tree.nodes.sensing import (
+from fault_detector_spot.sensing.behaviours import (
     detect_visible_tags,
 )
 

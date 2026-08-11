@@ -7,20 +7,20 @@ import tf2_ros
 from fault_detector_msgs.msg import TagElement
 from rclpy.time import Time
 
-from fault_detector_spot.behaviour_tree.nodes.inspection import (
+from fault_detector_spot.inspection.behaviours import (
     resolve_live_inspection_object,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     InspectionObject,
     InspectionRoutine,
     PoseData,
     ReferenceTag,
     ReferenceView,
 )
-from fault_detector_spot.inspection.object_repository import (
+from fault_detector_spot.inspection.data.object_repository import (
     ObjectRepository,
 )
-from fault_detector_spot.inspection.resolved_object_pose import (
+from fault_detector_spot.inspection.data.resolved_object_pose import (
     ObjectPoseState,
 )
 

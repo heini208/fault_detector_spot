@@ -8,7 +8,7 @@ from fault_detector_msgs.msg import TagElement
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Image
 
-from fault_detector_spot.inspection.reference_view_pose_resolver import (
+from fault_detector_spot.inspection.setup.reference_view_pose_resolver import (
     resolve_reference_view_pose,
 )
 

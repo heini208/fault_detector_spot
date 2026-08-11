@@ -6,7 +6,7 @@ from threading import Lock
 import pytest
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection import (
+from fault_detector_spot.inspection.setup import (
     reference_view_input_synchronizer as synchronizer_module,
 )
 

@@ -5,18 +5,18 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     InspectionObject,
     InspectionRoutine,
     PoseData,
     ReferenceTag,
 )
-from fault_detector_spot.inspection.object_repository import ObjectRepository
-from fault_detector_spot.inspection.sensor_models import SensorDefinition
-from fault_detector_spot.inspection.sensor_registry_node import (
+from fault_detector_spot.inspection.data.object_repository import ObjectRepository
+from fault_detector_spot.inspection.data.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.ros.sensor_registry_node import (
     SensorRegistryNode,
 )
-from fault_detector_spot.inspection.sensor_repository import SensorRepository
+from fault_detector_spot.inspection.data.sensor_repository import SensorRepository
 
 
 def sensor_definition():

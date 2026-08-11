@@ -10,10 +10,10 @@ from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtWidgets import QApplication, QLabel
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.behaviour_tree.ui_classes.inspection_controls import (
+from fault_detector_spot.ui.controls.inspection_controls import (
     InspectionControls,
 )
-from fault_detector_spot.inspection.models import PoseData, ReferenceView
+from fault_detector_spot.inspection.data.models import PoseData, ReferenceView
 
 
 class FakePublisher:

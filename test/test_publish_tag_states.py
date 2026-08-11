@@ -3,7 +3,7 @@
 import py_trees
 from fault_detector_msgs.msg import TagElement, TagElementArray
 
-from fault_detector_spot.behaviour_tree.nodes.sensing.visible_tag_publisher import (
+from fault_detector_spot.sensing.behaviours.visible_tag_publisher import (
     PublishTagStates,
 )
 

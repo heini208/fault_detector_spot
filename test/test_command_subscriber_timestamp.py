@@ -2,8 +2,8 @@
 
 from fault_detector_msgs.msg import BasicCommand
 
-from fault_detector_spot.behaviour_tree.commands.command_ids import CommandID
-from fault_detector_spot.behaviour_tree.nodes.sensing.command_subscriber import (
+from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.sensing.behaviours.command_subscriber import (
     CommandSubscriber,
 )
 

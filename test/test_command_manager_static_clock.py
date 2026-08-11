@@ -4,13 +4,13 @@ from types import SimpleNamespace
 
 from py_trees.common import Status
 
-from fault_detector_spot.behaviour_tree.commands.command_ids import (
+from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
 )
-from fault_detector_spot.behaviour_tree.nodes.utility.command_manager import (
+from fault_detector_spot.common.behaviours.command_manager import (
     CommandManager,
 )
-from fault_detector_spot.behaviour_tree.nodes.utility.new_command_guard import (
+from fault_detector_spot.common.behaviours.new_command_guard import (
     NewCommandGuard,
 )
 

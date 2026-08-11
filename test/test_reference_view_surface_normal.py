@@ -6,11 +6,11 @@ import struct
 import pytest
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.models import ImagePoint
-from fault_detector_spot.inspection.reference_view_depth_projection import (
+from fault_detector_spot.inspection.data.models import ImagePoint
+from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     project_reference_pixel,
 )
-from fault_detector_spot.inspection.reference_view_surface_normal import (
+from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
     estimate_reference_surface_normal,
 )
 

@@ -6,18 +6,18 @@ import struct
 import pytest
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.live_surface_distance import (
+from fault_detector_spot.inspection.sensing.live_surface_distance import (
     SurfaceDistanceSample,
     aggregate_surface_distance_samples,
     bounded_surface_distance_correction,
     measure_probe_surface_distance,
 )
-from fault_detector_spot.inspection.models import (
+from fault_detector_spot.inspection.data.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.reference_view_depth_projection import (
+from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ImageRegion,
 )
 

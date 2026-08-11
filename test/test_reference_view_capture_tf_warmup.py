@@ -1,6 +1,6 @@
 """Tests for image-timestamp TF handling during reference capture."""
 
-from fault_detector_spot.behaviour_tree.nodes.inspection import (
+from fault_detector_spot.inspection.behaviours import (
     capture_inspection_object_reference_view as capture_module,
 )
 

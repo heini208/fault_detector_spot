@@ -4,19 +4,14 @@ import pytest
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import ComplexCommand
 
-from fault_detector_spot.behaviour_tree.commands.command_ids import (
+from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
 )
-from fault_detector_spot.behaviour_tree.commands import (
-    execute_probe_point_command,
+from fault_detector_spot.inspection.commands import (
+    ExecuteProbePointCommand,
 )
-from fault_detector_spot.behaviour_tree.nodes.sensing.command_subscriber import (
+from fault_detector_spot.sensing.behaviours.command_subscriber import (
     CommandSubscriber,
-)
-
-
-ExecuteProbePointCommand = (
-    execute_probe_point_command.ExecuteProbePointCommand
 )
 
 
