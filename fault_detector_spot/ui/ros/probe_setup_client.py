@@ -8,6 +8,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from fault_detector_msgs.action import (
     ExecuteProbeSetupMotion,
     ExecuteProbeSurfaceVerification,
+    FinalizeProbeRefinement,
 )
 from fault_detector_msgs.msg import (
     ProbeSetupIntent,
@@ -42,6 +43,7 @@ class ProbeSetupClient(QObject):
         self._pending_request_id = ""
         self._motion_goal_handles = {}
         self._surface_goal_handles = {}
+        self._finalization_goal_handles = {}
         self._execute_client = node.create_client(
             ExecuteProbeSetup,
             "fault_detector/application/execute_probe_setup",
@@ -63,6 +65,11 @@ class ProbeSetupClient(QObject):
             node,
             ExecuteProbeSurfaceVerification,
             "fault_detector/application/execute_probe_surface_verification",
+        )
+        self._finalization_client = ActionClient(
+            node,
+            FinalizeProbeRefinement,
+            "fault_detector/application/finalize_probe_refinement",
         )
         self._state_subscription = node.create_subscription(
             ProbeSetupState,
@@ -139,6 +146,57 @@ class ProbeSetupClient(QObject):
         )
         return local_id
 
+    def finalize_refinement(
+        self,
+        save_requested: bool,
+        probe_point_id: str = "",
+        probe_point_display_name: str = "",
+        position_tolerance_m: float = 0.01,
+        orientation_tolerance_rad: float = 0.087,
+        measurement_duration_sec: float = 1.0,
+    ):
+        """Request server-owned persistence and mandatory retraction."""
+        if not isinstance(save_requested, bool):
+            raise TypeError("Save requested flag must be a boolean")
+        if not self.context_id:
+            self.request_rejected.emit("Probe setup context is not open")
+            return None
+        if self._finalization_goal_handles:
+            self.request_rejected.emit(
+                "Probe refinement finalization is already in progress"
+            )
+            return None
+        if not self._finalization_client.server_is_ready():
+            return None
+        goal = FinalizeProbeRefinement.Goal()
+        goal.client_id = self.client_id
+        goal.context_id = self.context_id
+        goal.mode = (
+            FinalizeProbeRefinement.Goal.MODE_SAVE_AND_RETRACT
+            if save_requested
+            else FinalizeProbeRefinement.Goal.MODE_RETRACT_WITHOUT_SAVING
+        )
+        goal.probe_point_id = probe_point_id
+        goal.probe_point_display_name = probe_point_display_name
+        goal.position_tolerance_m = float(position_tolerance_m)
+        goal.orientation_tolerance_rad = float(
+            orientation_tolerance_rad
+        )
+        goal.measurement_duration_sec = float(measurement_duration_sec)
+        local_id = uuid4().hex
+        self._finalization_goal_handles[local_id] = None
+        future = self._finalization_client.send_goal_async(
+            goal,
+            feedback_callback=partial(
+                self._receive_finalization_feedback,
+                local_id,
+            ),
+        )
+        future.add_done_callback(
+            partial(self._receive_finalization_goal, local_id)
+        )
+        return local_id
+
     def close(self):
         """Close the current server-owned probe setup context."""
         if not self.context_id:
@@ -147,6 +205,7 @@ class ProbeSetupClient(QObject):
             self._pending_request_id
             or self._motion_goal_handles
             or self._surface_goal_handles
+            or self._finalization_goal_handles
         ):
             self.close_finished.emit(
                 False,
@@ -247,6 +306,8 @@ class ProbeSetupClient(QObject):
             float(state.surface_distance_error_m),
             int(state.surface_verification_iteration),
             bool(state.surface_recovery_required),
+            bool(state.refinement_recovery_required),
+            state.refinement_recovery_message,
         )
         if fingerprint == self._last_state_fingerprint:
             return
@@ -336,6 +397,41 @@ class ProbeSetupClient(QObject):
             return
         self._emit_state(result.state)
 
+    def _receive_finalization_goal(self, local_id, future):
+        try:
+            goal_handle = future.result()
+        except Exception as exception:
+            self._finalization_goal_handles.pop(local_id, None)
+            self.request_rejected.emit(str(exception))
+            return
+        if not goal_handle.accepted:
+            self._finalization_goal_handles.pop(local_id, None)
+            self.request_rejected.emit(
+                "Probe refinement finalization was rejected"
+            )
+            return
+        self._finalization_goal_handles[local_id] = goal_handle
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(
+            partial(self._receive_finalization_result, local_id)
+        )
+
+    def _receive_finalization_feedback(
+        self,
+        _local_id,
+        feedback_message,
+    ):
+        self._emit_state(feedback_message.feedback.state)
+
+    def _receive_finalization_result(self, local_id, future):
+        self._finalization_goal_handles.pop(local_id, None)
+        try:
+            result = future.result().result
+        except Exception as exception:
+            self.request_rejected.emit(str(exception))
+            return
+        self._emit_state(result.state)
+
     def destroy(self):
         """Destroy client-side ROS resources owned by this adapter."""
         self.node.destroy_client(self._execute_client)
@@ -343,9 +439,11 @@ class ProbeSetupClient(QObject):
         self.node.destroy_client(self._preview_client)
         self._motion_client.destroy()
         self._surface_client.destroy()
+        self._finalization_client.destroy()
         self.node.destroy_subscription(self._state_subscription)
         self._motion_goal_handles.clear()
         self._surface_goal_handles.clear()
+        self._finalization_goal_handles.clear()
 
 
 __all__ = ["ProbeSetupClient"]

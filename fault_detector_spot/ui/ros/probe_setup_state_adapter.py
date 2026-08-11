@@ -217,6 +217,14 @@ def _refinement(state, calculated, setup):
             int(state.probe_motion_state)
         ],
     }
+    refinement.recovery_required = bool(
+        state.refinement_recovery_required
+    )
+    refinement.recovery_message = state.refinement_recovery_message
+    refinement.surface_distance_verified = (
+        state.surface_verification_state
+        == ProbeSetupState.SURFACE_VERIFICATION_CONVERGED
+    )
     if state.motion_pending:
         stage = refinement.active_stage
         refinement.pending_motion = PendingRefinementMotion(

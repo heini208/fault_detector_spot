@@ -26,7 +26,7 @@ from fault_detector_spot.shared.ros.qos_profiles import (
 )
 from rclpy.node import Node
 
-from .inspection.controls import InspectionControls
+from .inspection.finalizing_controls import FinalizingInspectionControls
 from .manipulation.controls import ManipulationControls
 from .navigation.base_movement_controls import BaseMovementControls
 from .navigation.controls import NavigationControls
@@ -68,7 +68,7 @@ class Fault_Detector_UI(QWidget):
         self.recording_controls = RecordingControls(self)
         self.navigation_controls = NavigationControls(self)
         self.base_movement_controls = BaseMovementControls(self)
-        self.inspection_controls = InspectionControls(self)
+        self.inspection_controls = FinalizingInspectionControls(self)
 
         self.create_user_interface()
 
@@ -391,6 +391,17 @@ class Fault_Detector_UI(QWidget):
         )
         if request_id is not None:
             self.status_label.setText("Surface verification submitted")
+        return request_id
+
+    def execute_probe_refinement_finalization(self, **kwargs):
+        if self.probe_setup_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        request_id = self.probe_setup_client.finalize_refinement(**kwargs)
+        if request_id is not None:
+            self.status_label.setText(
+                "Probe refinement finalization submitted"
+            )
         return request_id
 
     def execute_navigation_setup(self, intent):
