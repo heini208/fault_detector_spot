@@ -1,4 +1,4 @@
-"""Tests for transient probe setup commands in inspection controls."""
+"""Tests for probe setup state in inspection controls."""
 
 import os
 from types import SimpleNamespace
@@ -6,13 +6,9 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from fault_detector_msgs.msg import BasicCommand, TagElement
+from fault_detector_msgs.msg import TagElement
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from fault_detector_spot.application.commanding.command_ids import (
-    CommandID,
-    OrientationModes,
-)
 from fault_detector_spot.ui.inspection.controls import (
     InspectionControls,
 )
@@ -43,19 +39,10 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
 )
 
 
-class FakePublisher:
-    def __init__(self):
-        self.messages = []
-
-    def publish(self, message):
-        self.messages.append(message)
-
-
 class FakeUI:
     def __init__(self, object_root):
         self.node = None
         self.status_label = QLabel()
-        self.complex_command_publisher = FakePublisher()
         self.inspection_object_root = object_root
         self.visible_tags = {}
         self.sensor_definitions = [
@@ -65,12 +52,6 @@ class FakeUI:
                 hand_to_probe=PoseData.identity(),
             )
         ]
-
-    def build_basic_command(self, command_id):
-        command = BasicCommand()
-        command.command_id = command_id
-        return command
-
 
 @pytest.fixture(scope="module", autouse=True)
 def application():
@@ -140,28 +121,6 @@ def configure_session(controls, setup, stage):
     return controls._refinement_session
 
 
-def test_probe_command_converts_sensor_tip_pose_to_hand_pose(
-    application,
-    tmp_path,
-):
-    ui = FakeUI(tmp_path)
-    controls = InspectionControls(ui)
-    configure_live_tag(controls, ui)
-    controls._hand_to_probe_pose = lambda: pose(x=0.10)
-
-    command = controls._build_probe_pose_command(pose(x=0.20))
-
-    assert command.command.command_id == "move_to_tag"
-    assert command.orientation_mode == (
-        OrientationModes.CUSTOM_ORIENTATION.value
-    )
-    assert command.offset.header.frame_id == "body"
-    assert command.offset.pose.position.x == pytest.approx(0.10)
-    assert command.offset.pose.position.y == pytest.approx(0.0)
-    assert command.offset.pose.position.z == pytest.approx(0.0)
-    assert command.offset.pose.orientation.w == pytest.approx(1.0)
-
-
 def test_current_probe_pose_is_expressed_relative_to_live_tag(
     application,
     tmp_path,
@@ -181,7 +140,7 @@ def test_current_probe_pose_is_expressed_relative_to_live_tag(
     assert current.position.z == pytest.approx(0.0)
 
 
-def test_starting_wizard_never_publishes_a_robot_command(
+def test_starting_wizard_creates_only_local_setup_state(
     application,
     tmp_path,
 ):
@@ -195,7 +154,6 @@ def test_starting_wizard_never_publishes_a_robot_command(
 
     assert controls.handle_start_probe_refinement() is True
 
-    assert ui.complex_command_publisher.messages == []
     assert controls._refinement_session.active_stage == (
         RefinementStage.SAFE_APPROACH
     )
@@ -220,7 +178,6 @@ def test_direct_probe_motion_is_disabled(application, tmp_path):
 
     assert controls.handle_move_to_probe_pose() is False
 
-    assert ui.complex_command_publisher.messages == []
     assert "Direct probe-pose movement is disabled" in (
         controls.reference_setup_status_label.toolTip()
     )
@@ -261,114 +218,6 @@ def test_alignment_refinement_uses_tangent_axes_and_has_no_axial_buttons(
     assert "front" not in controls.refinement_buttons["alignment"]
     assert "back" not in controls.refinement_buttons["alignment"]
     assert controls.handle_refine_pose("probe", "up") is False
-
-
-def test_relative_refinement_completion_does_not_query_tag_pose(
-    application,
-    tmp_path,
-):
-    ui = FakeUI(tmp_path)
-    controls = InspectionControls(ui)
-    controls.show_warning = lambda title, message: None
-    setup = initialize_reference_probe_setup(surface_target())
-    session = configure_session(
-        controls,
-        setup,
-        RefinementStage.SAFE_APPROACH,
-    )
-    session.motion_states[RefinementStage.SAFE_APPROACH] = (
-        RefinementMotionState.REACHED
-    )
-    controls.sensor_id_field.setCurrentIndex(
-        controls.sensor_id_field.findData("bmm150")
-    )
-    controls._current_probe_pose_object = lambda: (_ for _ in ()).throw(
-        AssertionError("relative completion queried the tag pose")
-    )
-
-    assert controls.handle_refine_pose("approach", "up") is True
-
-    command = ui.complex_command_publisher.messages[-1]
-    pending = session.pending_motion
-    assert command.command.command_id == CommandID.MOVE_ARM_RELATIVE
-    assert command.offset.header.frame_id == "bmm150_probe"
-    assert command.offset.pose.position.z == pytest.approx(0.01)
-    assert not pending.verify_achieved_pose
-
-    controls._complete_pending_refinement_motion(pending.request_id)
-
-    assert session.pending_motion is None
-    assert session.motion_states[RefinementStage.SAFE_APPROACH] == (
-        RefinementMotionState.REACHED
-    )
-
-
-def test_absolute_setup_completion_does_not_query_tag_pose(
-    application,
-    tmp_path,
-):
-    ui = FakeUI(tmp_path)
-    controls = InspectionControls(ui)
-    controls.show_warning = lambda title, message: None
-    configure_live_tag(controls, ui)
-    controls._hand_to_probe_pose = lambda: PoseData.identity()
-    setup = initialize_reference_probe_setup(surface_target())
-    session = configure_session(
-        controls,
-        setup,
-        RefinementStage.SAFE_APPROACH,
-    )
-    candidate = session.candidate_pose(RefinementStage.SAFE_APPROACH)
-
-    assert controls.handle_move_to_approach_pose() is True
-
-    pending = session.pending_motion
-    assert not pending.verify_achieved_pose
-    controls._current_probe_pose_object = lambda: (_ for _ in ()).throw(
-        AssertionError("successful setup movement queried the tag pose")
-    )
-
-    controls._complete_pending_refinement_motion(pending.request_id)
-
-    assert session.pending_motion is None
-    assert session.motion_states[RefinementStage.SAFE_APPROACH] == (
-        RefinementMotionState.REACHED
-    )
-    assert session.candidate_pose(RefinementStage.SAFE_APPROACH) == candidate
-
-
-def test_failed_safe_target_keeps_relative_corrections_available(
-    application,
-    tmp_path,
-):
-    ui = FakeUI(tmp_path)
-    controls = InspectionControls(ui)
-    controls.show_warning = lambda title, message: None
-    setup = initialize_reference_probe_setup(surface_target())
-    session = configure_session(
-        controls,
-        setup,
-        RefinementStage.SAFE_APPROACH,
-    )
-    session.motion_states[RefinementStage.SAFE_APPROACH] = (
-        RefinementMotionState.REACHED
-    )
-    controls.sensor_id_field.setCurrentIndex(
-        controls.sensor_id_field.findData("bmm150")
-    )
-    assert controls.handle_refine_pose("approach", "up") is True
-    pending = session.pending_motion
-
-    controls._fail_pending_refinement_motion(
-        "goal is blocked by the robot body",
-        pending.request_id,
-    )
-
-    assert session.motion_states[RefinementStage.SAFE_APPROACH] == (
-        RefinementMotionState.FAILED
-    )
-    assert controls.refinement_buttons["approach"]["up"].isEnabled()
-    assert controls.handle_refine_pose("approach", "down") is True
 
 
 def test_failed_alignment_target_keeps_relative_corrections_available(

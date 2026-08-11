@@ -2,8 +2,8 @@ import math
 
 from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QMessageBox
 
-from fault_detector_msgs.msg import ComplexCommand, TagElement
-from fault_detector_spot.application.commanding.command_ids import CommandID, OrientationModes
+from fault_detector_msgs.msg import OperationalIntent, TagElement
+from fault_detector_spot.application.commanding.command_ids import OrientationModes
 from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
 
@@ -32,7 +32,7 @@ class ManipulationControls(UIControlHelper):
         super().__init__(parent_ui)
 
     def init_ros_communication(self):
-        self.complex_command_publisher = self.ui.complex_command_publisher
+        pass
 
     def make_rows(self) -> list:
         rows = [
@@ -63,7 +63,10 @@ class ManipulationControls(UIControlHelper):
 
         self.wait_time_button = QPushButton("Wait")
         self.wait_time_button.clicked.connect(
-            lambda _, cid=CommandID.WAIT_TIME: self.handle_full_message(cid))
+            lambda _: self.handle_full_message(
+                OperationalIntent.INTENT_WAIT
+            )
+        )
         row.addWidget(self.wait_time_button)
 
         self.move_wait_button = QPushButton("Move & Wait")
@@ -72,7 +75,8 @@ class ManipulationControls(UIControlHelper):
 
         self.scan_all_button = QPushButton("Scan all in range")
         self.scan_all_button.clicked.connect(
-            lambda _, cid=CommandID.SCAN_ALL_IN_RANGE: self.handle_scan_all_in_range(cid))
+            lambda _: self.handle_scan_all_in_range()
+        )
         row.addWidget(self.scan_all_button)
         return row
 
@@ -107,7 +111,10 @@ class ManipulationControls(UIControlHelper):
 
         self.move_by_offset_button = QPushButton("Move Arm by Offset")
         self.move_by_offset_button.clicked.connect(
-            lambda _, cid=CommandID.MOVE_ARM_RELATIVE: self.handle_full_message(cid))
+            lambda _: self.handle_full_message(
+                OperationalIntent.INTENT_MOVE_ARM_RELATIVE
+            )
+        )
         row.addWidget(self.move_by_offset_button)
 
         return row
@@ -203,25 +210,30 @@ class ManipulationControls(UIControlHelper):
     def _make_control_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         buttons = [
-            ("Stand Up", CommandID.STAND_UP),
-            ("Ready Arm", CommandID.READY_ARM),
-            ("Stow Arm", CommandID.STOW_ARM),
-            ("Gripper Toggle", CommandID.TOGGLE_GRIPPER),
-            ("Reset State", CommandID.ESTOP_STATE),
+            ("Stand Up", OperationalIntent.INTENT_STAND_UP),
+            ("Ready Arm", OperationalIntent.INTENT_READY_ARM),
+            ("Stow Arm", OperationalIntent.INTENT_STOW_ARM),
+            ("Gripper Toggle", OperationalIntent.INTENT_TOGGLE_GRIPPER),
+            (
+                "Reset State",
+                OperationalIntent.INTENT_RETURN_TO_ESTOP_STATE,
+            ),
         ]
-        for label, cmd_id in buttons:
+        for label, intent_id in buttons:
             btn = QPushButton(label)
-            btn.clicked.connect(lambda _, cid=cmd_id: self.ui.handle_simple_command(cid))
+            btn.clicked.connect(
+                lambda _, value=intent_id:
+                self.ui.handle_simple_operation(value)
+            )
             row.addWidget(btn)
         return row
 
-    def build_move_to_tag_command(self) -> ComplexCommand:
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(CommandID.MOVE_ARM_TO_TAG)
-        complex_command = self.add_tag_info_to_command(complex_command)
-        return complex_command
+    def build_move_to_tag_intent(self) -> OperationalIntent:
+        intent = OperationalIntent()
+        intent.intent = OperationalIntent.INTENT_MOVE_ARM_TO_TAG
+        return self.add_tag_info_to_intent(intent)
 
-    def add_offset_to_command(self, command: ComplexCommand):
+    def add_offset_to_intent(self, intent: OperationalIntent):
         ox, oy, oz, roll_deg, pitch_deg, yaw_deg = (self._get_offset(a) for a in
                                                     ("X", "Y", "Z", "Roll", "Pitch", "Yaw"))
         omode = self.orientation_combo.currentText()
@@ -241,15 +253,15 @@ class ManipulationControls(UIControlHelper):
                 )
                 return None  # abort publishing command
 
-        command.offset.header = command.tag.pose.header
-        command.offset.header.frame_id = frame_choice
-        command.offset.pose.position.x = ox
-        command.offset.pose.position.y = oy
-        command.offset.pose.position.z = oz
-        command.offset.pose.orientation = q
+        intent.offset.header = intent.tag.pose.header
+        intent.offset.header.frame_id = frame_choice
+        intent.offset.pose.position.x = ox
+        intent.offset.pose.position.y = oy
+        intent.offset.pose.position.z = oz
+        intent.offset.pose.orientation = q
 
-        command.orientation_mode = omode
-        return command
+        intent.orientation_mode = omode
+        return intent
 
     def update_frames_dropdown(self):
         self.ui.update_frames_dropdown(self.frames_dropdown)
@@ -270,9 +282,9 @@ class ManipulationControls(UIControlHelper):
         q.z = cr * cp * sy - sr * sp * cy
         return q
 
-    def add_tag_info_to_command(self, command: ComplexCommand):
-        command = self.add_tag_element_to_command(command)
-        return self.add_offset_to_command(command)
+    def add_tag_info_to_intent(self, intent: OperationalIntent):
+        intent = self.add_tag_element_to_intent(intent)
+        return self.add_offset_to_intent(intent)
 
     def _get_offset(self, axis: str) -> float:
         try:
@@ -280,7 +292,11 @@ class ManipulationControls(UIControlHelper):
         except Exception:
             return 0.0
 
-    def add_tag_element_to_command(self, command: ComplexCommand, suppress_warnings=False):
+    def add_tag_element_to_intent(
+        self,
+        intent: OperationalIntent,
+        suppress_warnings=False,
+    ):
         text = self.input_field.text().strip()
         if not text.isdigit():
             if not suppress_warnings:
@@ -296,90 +312,90 @@ class ManipulationControls(UIControlHelper):
         tag_element = TagElement()
         tag_element.id = tag_id
         tag_element.pose = original.pose
-        command.tag = tag_element
-        return command
+        intent.tag = tag_element
+        return intent
 
-    def handle_full_message(self, command_id: str):
-        '''
-        Build the maximum possible command with available UI fields and publishes it
-        '''
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(command_id)
+    def handle_full_message(self, intent_id: int):
+        intent = OperationalIntent()
+        intent.intent = intent_id
+        if (
+            intent_id == OperationalIntent.INTENT_WAIT
+            and self.duration_input.value() <= 0.0
+        ):
+            self.show_warning(
+                "Invalid Wait",
+                "Wait duration must be positive.",
+            )
+            return
         try:
-            complex_command = self.add_tag_element_to_command(complex_command, True)
+            intent = self.add_tag_element_to_intent(intent, True)
         except TagNotFound:
             pass
-        complex_command = self.add_offset_to_command(complex_command)
-        if not complex_command:
+        intent = self.add_offset_to_intent(intent)
+        if not intent:
             return
-        complex_command.wait_time = self.duration_input.value()
-        self.complex_command_publisher.publish(complex_command)
-        self.status_label.setText(f"Command sent: {command_id}")
+        intent.duration_sec = self.duration_input.value()
+        self.ui.execute_operation(intent)
 
-    def handle_scan_all_in_range(self, command_id: str):
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(command_id)
-        complex_command.wait_time = self.duration_input.value()
-        complex_command = self.add_offset_to_command(complex_command)
-        if not complex_command:
+    def handle_scan_all_in_range(self):
+        intent = OperationalIntent()
+        intent.intent = OperationalIntent.INTENT_SCAN_ALL_IN_RANGE
+        intent.duration_sec = self.duration_input.value()
+        intent = self.add_offset_to_intent(intent)
+        if not intent:
             return
 
         reply = self.ask_question(
         "Confirm Scan",
-        f"Scan all reachable tags for {complex_command.wait_time:.1f}s?"
+        f"Scan all reachable tags for {intent.duration_sec:.1f}s?"
         )
         if reply != QMessageBox.Yes:
             self.status_label.setText("Scan canceled")
             return
 
-        self.complex_command_publisher.publish(complex_command)
-        self.status_label.setText(f"Command sent: Scan all reachable tags for {complex_command.wait_time:.1f}s")
+        self.ui.execute_operation(intent)
 
     def handle_move_and_wait(self):
         try:
-            complex_command = self.build_move_to_tag_command()
+            intent = self.build_move_to_tag_intent()
         except TagNotFound:
             return
-        complex_command.command.command_id = CommandID.MOVE_ARM_TO_TAG_AND_WAIT
-        complex_command.wait_time = self.duration_input.value()
+        intent.intent = OperationalIntent.INTENT_MOVE_ARM_TO_TAG_AND_WAIT
+        intent.duration_sec = self.duration_input.value()
 
-        pos = complex_command.tag.pose.pose.position
-        offset = complex_command.offset.pose.position
+        pos = intent.tag.pose.pose.position
+        offset = intent.offset.pose.position
 
         message = (
-            f"Move to tag {complex_command.tag.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
+            f"Move to tag {intent.tag.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
             f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
-            f"Orientation: {complex_command.orientation_mode}\n"
-            f"Then wait {complex_command.wait_time:.1f}s"
+            f"Orientation: {intent.orientation_mode}\n"
+            f"Then wait {intent.duration_sec:.1f}s"
         )
 
         reply = self.ask_question("Confirm Move & Wait", message)
         if reply != QMessageBox.Yes:
-            self.status_label.setText(f"Move & Wait to tag {complex_command.tag.id} canceled")
+            self.status_label.setText(f"Move & Wait to tag {intent.tag.id} canceled")
             return
 
-        self.complex_command_publisher.publish(complex_command)
-        self.status_label.setText(
-            f"Command sent: Move & Wait to tag {complex_command.tag.id} for {complex_command.wait_time:.1f}s"
-        )
+        self.ui.execute_operation(intent)
 
     def handle_tag_selection(self):
 
-        complex_command = self.build_move_to_tag_command()
+        intent = self.build_move_to_tag_intent()
 
-        pos = complex_command.tag.pose.pose.position
-        offset = complex_command.offset.pose.position
+        pos = intent.tag.pose.pose.position
+        offset = intent.offset.pose.position
 
         message = (
-            f"Move to tag {complex_command.tag.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
+            f"Move to tag {intent.tag.id} at X={pos.x:.2f}, Y={pos.y:.2f}?\n"
             f"Offsets (X,Y,Z): {offset.x:.2f}, {offset.y:.2f}, {offset.z:.2f}\n"
-            f"Orientation: {complex_command.orientation_mode}"
+            f"Orientation: {intent.orientation_mode}"
         )
         reply = self.ask_question("Confirm Move", message)
 
         if reply != QMessageBox.Yes:
-            self.status_label.setText(f"Move to tag {complex_command.tag.id} canceled")
+            self.status_label.setText(f"Move to tag {intent.tag.id} canceled")
             return
 
-        self.complex_command_publisher.publish(complex_command)
-        self.status_label.setText(f"Command sent: Move to tag {complex_command.tag.id}")
+        self.ui.execute_operation(intent)

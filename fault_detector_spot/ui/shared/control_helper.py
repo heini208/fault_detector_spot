@@ -36,3 +36,13 @@ class UIControlHelper(ABC):
             self.ui, title, message, QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         return reply
+
+    def show_setup_unavailable(self, workflow: str) -> bool:
+        """Report a setup workflow awaiting its coordinator API."""
+        if hasattr(self.ui, "show_setup_unavailable"):
+            return self.ui.show_setup_unavailable(workflow)
+        if self.status_label is not None:
+            self.status_label.setText(
+                f"{workflow} is pending its coordinator API"
+            )
+        return False

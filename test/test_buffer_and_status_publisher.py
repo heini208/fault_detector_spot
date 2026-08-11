@@ -40,18 +40,8 @@ def behavior(status=Status.SUCCESS, command_id="move_to_tag"):
             )
         )
     )
-    result.buffer_pub = FakePublisher()
-    result.status_pub = FakePublisher()
     result.structured_status_pub = FakePublisher()
     return result
-
-
-def test_terminal_status_contains_the_completed_command_id():
-    result = behavior(Status.SUCCESS, "move_to_tag")
-
-    message = result.get_status_message()
-
-    assert message.data == "SUCCESS: move_to_tag"
 
 
 def test_unchanged_terminal_status_is_published_only_once():
@@ -60,9 +50,7 @@ def test_unchanged_terminal_status_is_published_only_once():
     assert result.update() == Status.SUCCESS
     assert result.update() == Status.SUCCESS
 
-    assert [message.data for message in result.status_pub.messages] == [
-        "SUCCESS: move_to_tag"
-    ]
+    assert len(result.structured_status_pub.messages) == 1
 
 
 def test_new_running_command_produces_a_new_correlated_transition():
@@ -76,9 +64,10 @@ def test_new_running_command_produces_a_new_correlated_transition():
 
     result.update()
 
-    assert [message.data for message in result.status_pub.messages] == [
-        "SUCCESS: move_to_tag",
-        "Running: cancel_all",
+    messages = result.structured_status_pub.messages
+    assert [message.command_id for message in messages] == [
+        "move_to_tag",
+        "cancel_all",
     ]
 
 
@@ -88,7 +77,11 @@ def test_string_enum_command_ids_publish_their_wire_value():
 
     result = behavior(Status.SUCCESS, TestCommandID.MOVE)
 
-    assert result.get_status_message().data == "SUCCESS: move_to_tag"
+    result.update()
+
+    assert result.structured_status_pub.messages[0].command_id == (
+        "move_to_tag"
+    )
 
 
 def test_internal_success_is_running_until_request_buffer_is_empty():
@@ -110,4 +103,3 @@ def test_internal_success_is_running_until_request_buffer_is_empty():
     message = result.structured_status_pub.messages[0]
     assert message.state == message.STATE_RUNNING
     assert message.buffered_command_count == 1
-    assert result.status_pub.messages[0].data == "Running: move_to_tag"

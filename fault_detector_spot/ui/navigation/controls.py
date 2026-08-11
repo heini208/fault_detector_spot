@@ -5,11 +5,10 @@ from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QComboBox, QRadioB
     QSizePolicy
 
 from ament_index_python.packages import get_package_share_directory
-from fault_detector_msgs.msg import StringArray, ComplexCommand
+from fault_detector_msgs.msg import OperationalIntent, StringArray
 from std_msgs.msg import String
 from ..shared.control_helper import UIControlHelper
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
-from fault_detector_spot.application.commanding.command_ids import CommandID
 
 
 class NavigationControls(UIControlHelper):
@@ -27,8 +26,6 @@ class NavigationControls(UIControlHelper):
 
     def init_ros_communication(self):
         # Subscriber to current_map string topic
-        self.complex_command_publisher = self.ui.complex_command_publisher
-
         self.node.create_subscription(
             String,
             '/active_map',
@@ -279,29 +276,32 @@ class NavigationControls(UIControlHelper):
             self.show_warning("No Map Selected", "Please select a map before confirming.")
             return
 
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(CommandID.SWAP_MAP)
-        complex_command.map_name = selected_map
-        self.complex_command_publisher.publish(complex_command)
+        return self.show_setup_unavailable("Map loading")
 
     def handle_mode_none(self, checked: bool):
         if checked:
             self.ui.set_navigation_mode(False)
-            self.ui.handle_simple_command(CommandID.STOP_MAPPING)
+            return self.show_setup_unavailable(
+                "Mapping lifecycle control"
+            )
 
     def handle_mode_mapping(self, checked: bool):
         if checked:
             if not self._check_current_map_selected():
                 return
-            self.ui.set_navigation_mode(True)
-            self.ui.handle_simple_command(CommandID.START_SLAM)
+            self.mode_none.blockSignals(True)
+            self.mode_none.setChecked(True)
+            self.mode_none.blockSignals(False)
+            return self.show_setup_unavailable("Map creation")
 
     def handle_mode_localization(self, checked: bool):
         if checked:
             if not self._check_current_map_selected():
                 return
-            self.ui.set_navigation_mode(True)
-            self.ui.handle_simple_command(CommandID.START_LOCALIZATION)
+            self.mode_none.blockSignals(True)
+            self.mode_none.setChecked(True)
+            self.mode_none.blockSignals(False)
+            return self.show_setup_unavailable("Localization setup")
 
     def _check_current_map_selected(self) -> bool:
         if self.current_map is None:
@@ -329,11 +329,7 @@ class NavigationControls(UIControlHelper):
             self.show_warning("Waypoint Exists", f"A waypoint named '{name}' already exists in this map.")
             return
 
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(CommandID.ADD_CURRENT_POSITION_WAYPOINT)
-        complex_command.map_name = self.current_map
-        complex_command.waypoint_name = name
-        self.complex_command_publisher.publish(complex_command)
+        return self.show_setup_unavailable("Waypoint authoring")
 
     def handle_add_landmark(self):
         name = self.poi_name_field.text().strip()
@@ -357,28 +353,25 @@ class NavigationControls(UIControlHelper):
             self.show_warning("Tag Not Found", f"Tag {tag_id} is not currently visible.")
             return
 
-        tag_element = self.ui.visible_tags[tag_id]
-
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(CommandID.ADD_TAG_AS_LANDMARK)
-        complex_command.map_name = self.current_map
-        complex_command.waypoint_name = f"Tag_{tag_id}"
-        complex_command.tag = tag_element
-
-        self.complex_command_publisher.publish(complex_command)
-        self.show_info(
-            "Landmark Added",
-            f"Saved visible tag {tag_id} as landmark '{complex_command.waypoint_name}' in map '{self.current_map}'."
-        )
+        return self.show_setup_unavailable("Landmark authoring")
 
     def handle_move_to_waypoint(self):
         selected = self.waypoint_dropdown.currentText()
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(CommandID.MOVE_TO_WAYPOINT)
-        complex_command.map_name = self.current_map
-        complex_command.waypoint_name = selected
-        self.complex_command_publisher.publish(complex_command)
-        pass
+        if (
+            not self.current_map
+            or not selected
+            or selected == "no waypoints saved"
+        ):
+            self.show_warning(
+                "No Waypoint Selected",
+                "Select a saved waypoint before moving.",
+            )
+            return False
+        intent = OperationalIntent()
+        intent.intent = OperationalIntent.INTENT_MOVE_TO_WAYPOINT
+        intent.map_name = self.current_map
+        intent.waypoint_name = selected
+        return self.ui.execute_operation(intent)
 
     def handle_create_empty_map(self):
         name = self.new_map_name_field.text().strip()
@@ -391,16 +384,7 @@ class NavigationControls(UIControlHelper):
             self.show_warning("Map Name Already Taken", "Please enter a map name.")
             return
 
-        # Send the CREATE_MAP command
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(CommandID.CREATE_MAP)
-        complex_command.map_name = name
-        self.complex_command_publisher.publish(complex_command)
-        self.ui.set_navigation_mode(True)
-        # Switch mode to Mapping in the UI **without triggering the mapping handler**
-        self.mode_mapping.blockSignals(True)
-        self.mode_mapping.setChecked(True)
-        self.mode_mapping.blockSignals(False)
+        return self.show_setup_unavailable("Map creation")
 
     def handle_delete_map(self):
         current_map = self.map_dropdown.currentText()
@@ -408,22 +392,17 @@ class NavigationControls(UIControlHelper):
             self.show_warning("No Map Selected", "Please select a map to delete.")
             return
 
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(CommandID.DELETE_MAP)
-        complex_command.map_name = current_map
-        self.complex_command_publisher.publish(complex_command)
-
-        self.current_map = None
-        self.current_map_label.setText("Current Map: None")
-        self.mode_none.setChecked(True)
+        return self.show_setup_unavailable("Map deletion")
 
     def handle_delete_waypoint(self):
         selected = self.waypoint_dropdown.currentText()
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(CommandID.DELETE_WAYPOINT)
-        complex_command.map_name = self.current_map
-        complex_command.waypoint_name = selected
-        self.complex_command_publisher.publish(complex_command)
+        if not selected or selected == "no waypoints saved":
+            self.show_warning(
+                "No Waypoint Selected",
+                "Select a waypoint to delete.",
+            )
+            return False
+        return self.show_setup_unavailable("Waypoint deletion")
 
     def handle_delete_landmark(self):
         selected = self.landmark_dropdown.currentText()
@@ -431,8 +410,4 @@ class NavigationControls(UIControlHelper):
             self.show_warning("No Landmark Selected", "Please select a landmark to delete.")
             return
 
-        complex_command = ComplexCommand()
-        complex_command.command = self.ui.build_basic_command(CommandID.DELETE_LANDMARK)
-        complex_command.map_name = self.current_map
-        complex_command.waypoint_name = selected  # the landmark name
-        self.complex_command_publisher.publish(complex_command)
+        return self.show_setup_unavailable("Landmark deletion")

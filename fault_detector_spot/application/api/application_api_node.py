@@ -13,19 +13,15 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
-from fault_detector_spot.application.commanding.command_request import (
-    CommandOrigin,
-    CommandRequest,
-    RecordingPolicy,
+from fault_detector_spot.application.controllers.application_controller import (
+    ApplicationController,
+    ApplicationOperation,
+    ApplicationOperationStatus,
 )
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
     CommandControllerState,
-    CommandControllerStatus,
     UnknownCommandRequest,
-)
-from fault_detector_spot.application.ros.operational_intent_adapter import (
-    operational_intent_to_command,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 
@@ -37,20 +33,10 @@ _TERMINAL_STATES = frozenset({
 })
 
 
-def _required_client_id(value: str) -> str:
-    if not isinstance(value, str):
-        raise TypeError("Client ID must be a string")
-    normalized = value.strip()
-    if not normalized:
-        raise ValueError("Client ID must not be empty")
-    return normalized
-
-
 @dataclass
 class _OperationExecution:
     goal_handle: object
-    intent: int
-    request: CommandRequest
+    operation: ApplicationOperation
     finished: Event = field(default_factory=Event)
     state: Optional[ApplicationCommandState] = None
     cancellation_requested: bool = False
@@ -65,8 +51,11 @@ class ApplicationApiNode(Node):
         self._executions: Dict[str, _OperationExecution] = {}
         self._callback_group = ReentrantCallbackGroup()
         self.command_controller = CommandController(self)
-        self.command_controller.add_status_listener(
-            self._handle_controller_status
+        self.application_controller = ApplicationController(
+            self.command_controller
+        )
+        self.application_controller.add_status_listener(
+            self._handle_application_status
         )
         self._state_publisher = self.create_publisher(
             ApplicationCommandState,
@@ -97,8 +86,10 @@ class ApplicationApiNode(Node):
 
     def _accept_operation(self, goal_request):
         try:
-            _required_client_id(goal_request.client_id)
-            operational_intent_to_command(goal_request.intent)
+            self.application_controller.validate_operation(
+                intent=goal_request.intent,
+                client_id=goal_request.client_id,
+            )
         except (TypeError, ValueError) as exception:
             self.get_logger().error(
                 f"Rejected operational intent: {exception}"
@@ -112,25 +103,19 @@ class ApplicationApiNode(Node):
 
     def _execute_operation(self, goal_handle):
         goal = goal_handle.request
-        command = operational_intent_to_command(goal.intent)
-        request = CommandRequest.create(
-            command=command,
-            client_id=_required_client_id(goal.client_id),
+        operation = self.application_controller.prepare_operation(
+            intent=goal.intent,
+            client_id=goal.client_id,
             context_id=goal.context_id.strip(),
-            origin=CommandOrigin.OPERATIONAL,
-            recording_policy=(
-                RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
-            ),
         )
         execution = _OperationExecution(
             goal_handle=goal_handle,
-            intent=int(goal.intent.intent),
-            request=request,
+            operation=operation,
         )
         with self._lock:
-            self._executions[request.request_id] = execution
+            self._executions[operation.request_id] = execution
         try:
-            self.command_controller.submit(request)
+            self.application_controller.submit(operation)
         except Exception as exception:
             state = self._failure_state(execution, str(exception))
             execution.state = state
@@ -143,7 +128,10 @@ class ApplicationApiNode(Node):
             ):
                 execution.cancellation_requested = True
                 try:
-                    self.command_controller.cancel(request.request_id)
+                    self.application_controller.cancel(
+                        operation.request.client_id,
+                        operation.request_id,
+                    )
                 except UnknownCommandRequest:
                     pass
 
@@ -160,23 +148,14 @@ class ApplicationApiNode(Node):
         else:
             goal_handle.abort()
         with self._lock:
-            self._executions.pop(request.request_id, None)
+            self._executions.pop(operation.request_id, None)
         return result
 
     def _cancel_operation(self, request, response):
         try:
-            client_id = _required_client_id(request.client_id)
-            with self._lock:
-                execution = self._executions.get(request.request_id)
-            if (
-                execution is not None
-                and execution.request.client_id != client_id
-            ):
-                raise ValueError(
-                    "Client ID does not own the requested operation"
-                )
-            cancellation_id = self.command_controller.cancel(
-                request.request_id
+            cancellation_id = self.application_controller.cancel(
+                request.client_id,
+                request.request_id,
             )
         except (TypeError, ValueError, UnknownCommandRequest) as exception:
             response.accepted = False
@@ -189,8 +168,9 @@ class ApplicationApiNode(Node):
 
     def _emergency_stop(self, request, response):
         try:
-            client_id = _required_client_id(request.client_id)
-            request_id = self.command_controller.cancel_all(client_id)
+            request_id = self.application_controller.emergency_stop(
+                request.client_id
+            )
         except (TypeError, ValueError) as exception:
             response.accepted = False
             response.detail = str(exception)
@@ -200,30 +180,33 @@ class ApplicationApiNode(Node):
         response.detail = "Emergency stop accepted"
         return response
 
-    def _handle_controller_status(
+    def _handle_application_status(
         self,
-        status: CommandControllerStatus,
+        status: ApplicationOperationStatus,
     ) -> None:
+        state = self._state_message(status)
+        self._state_publisher.publish(state)
         with self._lock:
-            execution = self._executions.get(status.request_id)
+            execution = self._executions.get(
+                status.operation.request_id
+            )
         if execution is None:
             return
-        state = self._state_message(execution, status)
         execution.state = state
-        self._state_publisher.publish(state)
         feedback = ExecuteOperation.Feedback()
         feedback.state = state
         execution.goal_handle.publish_feedback(feedback)
         if status.state in _TERMINAL_STATES:
             execution.finished.set()
 
-    def _state_message(self, execution, status):
+    def _state_message(self, status):
         message = ApplicationCommandState()
         message.header.stamp = self.get_clock().now().to_msg()
-        message.request_id = status.request_id
-        message.client_id = status.request.client_id
-        message.context_id = status.request.context_id
-        message.intent = execution.intent
+        operation = status.operation
+        message.request_id = operation.request_id
+        message.client_id = operation.request.client_id
+        message.context_id = operation.request.context_id
+        message.intent = operation.intent
         message.state = self._public_state(status.state)
         message.detail = status.detail or status.state.value
         message.buffered_command_count = status.buffered_command_count
@@ -232,10 +215,11 @@ class ApplicationApiNode(Node):
     def _failure_state(self, execution, detail):
         message = ApplicationCommandState()
         message.header.stamp = self.get_clock().now().to_msg()
-        message.request_id = execution.request.request_id
-        message.client_id = execution.request.client_id
-        message.context_id = execution.request.context_id
-        message.intent = execution.intent
+        operation = execution.operation
+        message.request_id = operation.request_id
+        message.client_id = operation.request.client_id
+        message.context_id = operation.request.context_id
+        message.intent = operation.intent
         message.state = ApplicationCommandState.STATE_FAILED
         message.detail = detail
         self._state_publisher.publish(message)
@@ -266,9 +250,10 @@ class ApplicationApiNode(Node):
         return values[state]
 
     def destroy_node(self):
-        self.command_controller.remove_status_listener(
-            self._handle_controller_status
+        self.application_controller.remove_status_listener(
+            self._handle_application_status
         )
+        self.application_controller.close()
         self._operation_server.destroy()
         return super().destroy_node()
 

@@ -31,8 +31,7 @@ from PyQt5.QtWidgets import (
 )
 
 from fault_detector_msgs.msg import (
-    CommandStatus,
-    ComplexCommand,
+    ApplicationCommandState,
     SensorDefinitionArray,
     TagElement,
 )
@@ -45,7 +44,6 @@ from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
-from fault_detector_spot.application.commanding.request_identity import new_request_id
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     InspectionObject,
@@ -66,7 +64,6 @@ from fault_detector_spot.inspection.sensing.live_surface_distance import (
     measure_probe_surface_distance,
 )
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
-    PendingRefinementMotion,
     ProbeRefinementSession,
     RefinementMotionState,
     RefinementStage,
@@ -115,8 +112,6 @@ from fault_detector_spot.inspection.setup.stable_tag_pose import (
 )
 
 from fault_detector_spot.application.commanding.command_ids import (
-    CommandID,
-    OrientationModes,
     TagFrames,
 )
 from .probe_refinement_dialog import ProbeRefinementDialog
@@ -145,7 +140,7 @@ REFINEMENT_FRAME_MAP = "map"
 
 
 class InspectionControls(UIControlHelper):
-    """Build and publish inspection-definition setup commands."""
+    """Manage the transitional inspection setup interface."""
 
     def __init__(self, parent_ui):
         """Create controls backed by the configured object repository."""
@@ -187,7 +182,7 @@ class InspectionControls(UIControlHelper):
         self._hand_depth_history = deque(maxlen=16)
         self._base_tag_histories = {}
         self._probe_motion_pending = False
-        self._command_state = CommandStatus.STATE_IDLE
+        self._command_state = ApplicationCommandState.STATE_UNSPECIFIED
         self._buffered_command_count = 0
         self._last_command_completion_monotonic = 0.0
         self._refinement_workflow_active = False
@@ -212,8 +207,7 @@ class InspectionControls(UIControlHelper):
             layout.addLayout(row)
 
     def init_ros_communication(self):
-        """Use the UI publisher and create transient TF access."""
-        self.complex_command_publisher = self.ui.complex_command_publisher
+        """Create transient TF and sensing access for setup readouts."""
         if self.node is not None:
             self._tf_buffer = tf2_ros.Buffer()
             self._tf_listener = tf2_ros.TransformListener(
@@ -603,17 +597,18 @@ class InspectionControls(UIControlHelper):
                 continue
             history.append((stamp_key, deepcopy(tag)))
 
-    def handle_command_status(self, status):
+    def handle_application_state(self, status):
+        """Track authoritative operational state for setup safety gates."""
         self._command_state = status.state
         self._buffered_command_count = status.buffered_command_count
         session = self._refinement_session
         pending = session.pending_motion if session is not None else None
-        if status.state == CommandStatus.STATE_RUNNING:
+        if status.state == ApplicationCommandState.STATE_RUNNING:
             if pending is None and session is not None:
                 self._clear_refinement_execution_evidence(
                     "An unrelated robot command started"
                 )
-            elif pending is not None and status.request_id != pending.request_id:
+            elif pending is not None:
                 self._fail_pending_refinement_motion(
                     "An unrelated robot command started during probe "
                     "refinement",
@@ -625,32 +620,13 @@ class InspectionControls(UIControlHelper):
             self._refresh_refinement_dialog()
             return
 
-        if pending is None:
-            self._probe_motion_pending = False
-            return
-        if status.request_id != pending.request_id:
-            return
-        if status.command_id != pending.command_id:
-            self._fail_pending_refinement_motion(
-                "Unexpected terminal command status for "
-                f"{status.command_id}",
-                status.request_id,
-            )
-            return
-        self._last_command_completion_monotonic = time.monotonic()
-        if status.state == CommandStatus.STATE_SUCCEEDED:
-            QTimer.singleShot(
-                int(PROBE_MOTION_SETTLE_SEC * 1000),
-                lambda: self._complete_pending_refinement_motion(
-                    status.request_id
-                ),
-            )
-            return
-        self._fail_pending_refinement_motion(
-            f"Robot movement ended with state {status.state}: "
-            f"{status.detail}",
-            status.request_id,
-        )
+        self._probe_motion_pending = pending is not None
+        if status.state in {
+            ApplicationCommandState.STATE_SUCCEEDED,
+            ApplicationCommandState.STATE_FAILED,
+            ApplicationCommandState.STATE_CANCELLED,
+        }:
+            self._last_command_completion_monotonic = time.monotonic()
 
     def set_sensor_definitions(self, definitions):
         """Replace the UI sensor list with validated registry data."""
@@ -3400,38 +3376,7 @@ class InspectionControls(UIControlHelper):
         updates_candidate=False,
         axial_correction_m=0.0,
     ):
-        try:
-            self._require_command_path_idle()
-            session = self._require_refinement_session()
-            if self._retraction_failed and label != "retraction":
-                raise RuntimeError(
-                    "Only retraction is permitted after retraction failure"
-                )
-            command = self._build_probe_pose_command(probe_pose_object)
-            motion = PendingRefinementMotion(
-                request_id=command.command.request_id,
-                stage=stage,
-                purpose=label,
-                target_pose_object=deepcopy(probe_pose_object),
-                updates_candidate=updates_candidate,
-                axial_correction_m=axial_correction_m,
-                command_id=CommandID.MOVE_ARM_TO_TAG,
-                verify_achieved_pose=False,
-            )
-            session.begin_motion(motion)
-        except Exception as exception:
-            self._show_setup_error("Move Probe Setup", exception)
-            return False
-        try:
-            self.complex_command_publisher.publish(command)
-        except Exception as exception:
-            session.fail_motion(motion.request_id, str(exception))
-            self._show_setup_error("Move Probe Setup", exception)
-            return False
-        self._probe_motion_pending = True
-        self._set_status_text(f"Command sent: move to {label}")
-        self._refresh_refinement_dialog()
-        return True
+        return self.show_setup_unavailable("Probe setup motion")
 
     def _send_refinement_relative_motion(
         self,
@@ -3441,50 +3386,7 @@ class InspectionControls(UIControlHelper):
         pitch_rad,
         yaw_rad,
     ):
-        try:
-            self._require_command_path_idle()
-            session = self._require_refinement_session()
-            if self._retraction_failed:
-                raise RuntimeError(
-                    "Only retraction is permitted after retraction failure"
-                )
-            command = self._new_command(CommandID.MOVE_ARM_RELATIVE)
-            command.offset.header.frame_id = (
-                self._selected_refinement_frame_id()
-            )
-            command.offset.pose.position.x = translation.x
-            command.offset.pose.position.y = translation.y
-            command.offset.pose.position.z = translation.z
-            self._write_quaternion_message(
-                command.offset.pose.orientation,
-                self._relative_rotation_quaternion(pitch_rad, yaw_rad),
-            )
-            motion = PendingRefinementMotion(
-                request_id=command.command.request_id,
-                stage=stage,
-                purpose=label,
-                target_pose_object=session.candidate_pose(stage),
-                updates_candidate=False,
-                command_id=CommandID.MOVE_ARM_RELATIVE,
-                verify_achieved_pose=False,
-            )
-            session.begin_motion(motion)
-        except Exception as exception:
-            self._show_setup_error("Move Probe Setup", exception)
-            return False
-        try:
-            self.complex_command_publisher.publish(command)
-        except Exception as exception:
-            session.fail_motion(motion.request_id, str(exception))
-            self._show_setup_error("Move Probe Setup", exception)
-            return False
-        self._probe_motion_pending = True
-        self._set_status_text(
-            f"Command sent: {label} in "
-            f"{command.offset.header.frame_id}"
-        )
-        self._refresh_refinement_dialog()
-        return True
+        return self.show_setup_unavailable("Probe refinement motion")
 
     def _selected_refinement_frame_id(self):
         selection = self.refine_frame_dropdown.currentData()
@@ -3672,7 +3574,7 @@ class InspectionControls(UIControlHelper):
                     "cleared; re-establish the ordered workflow."
                 )
         self._probe_motion_pending = False
-        self.ui.handle_simple_command(CommandID.EMERGENCY_CANCEL)
+        self.ui.handle_emergency_stop()
         self._refresh_refinement_dialog()
 
     @staticmethod
@@ -3698,7 +3600,7 @@ class InspectionControls(UIControlHelper):
             raise RuntimeError("Command buffer must be empty")
         if (
             self._probe_motion_pending
-            or self._command_state == CommandStatus.STATE_RUNNING
+            or self._command_state == ApplicationCommandState.STATE_RUNNING
         ):
             raise RuntimeError("Wait for the current robot command to finish")
         if require_settled:
@@ -3771,37 +3673,6 @@ class InspectionControls(UIControlHelper):
     def _measure_live_surface_distance(self):
         samples = self._measure_live_surface_distance_samples()
         return samples[-1]
-
-    def _build_probe_pose_command(self, probe_pose_object):
-        probe_pose_object.validate()
-        tag = self._live_reference_tag()
-        body_to_object = self._pose_data_from_message(tag.pose.pose)
-        hand_to_probe = self._hand_to_probe_pose()
-        object_to_hand = probe_pose_to_hand_pose(
-            probe_pose_object,
-            hand_to_probe,
-        )
-        body_to_hand = compose_poses(body_to_object, object_to_hand)
-
-        command = self._new_command(CommandID.MOVE_ARM_TO_TAG)
-        command.tag = deepcopy(tag)
-        command.offset.header = deepcopy(tag.pose.header)
-        command.offset.header.frame_id = tag.pose.header.frame_id
-        command.offset.pose.position.x = (
-            body_to_hand.position.x - body_to_object.position.x
-        )
-        command.offset.pose.position.y = (
-            body_to_hand.position.y - body_to_object.position.y
-        )
-        command.offset.pose.position.z = (
-            body_to_hand.position.z - body_to_object.position.z
-        )
-        self._write_quaternion_message(
-            command.offset.pose.orientation,
-            body_to_hand.orientation,
-        )
-        command.orientation_mode = OrientationModes.CUSTOM_ORIENTATION.value
-        return command
 
     def _current_probe_pose_object(self):
         tag = self._live_reference_tag()
@@ -3991,20 +3862,6 @@ class InspectionControls(UIControlHelper):
             return value
         self.show_warning("Missing Input", f"Enter {label}.")
         return None
-
-    def _new_command(self, command_id):
-        command = ComplexCommand()
-        command.command = self.ui.build_basic_command(command_id)
-        if not command.command.request_id:
-            command.command.request_id = new_request_id()
-        return command
-
-    def _publish(self, command):
-        self.complex_command_publisher.publish(command)
-        self.status_label.setText(
-            f"Command sent: {command.command.command_id}"
-        )
-        self._schedule_repository_refresh()
 
     def refresh_saved_definitions(
         self,
@@ -4434,10 +4291,6 @@ class InspectionControls(UIControlHelper):
         for delay_ms in (250, 1000, 3500):
             QTimer.singleShot(delay_ms, self.refresh_saved_definitions)
 
-    def _publish_management_compatibility_command(self, command):
-        if self.node is None:
-            self.complex_command_publisher.publish(command)
-
     def handle_create_object(self):
         """Create an inspection object directly in the repository."""
         object_id = self._required_text(
@@ -4487,13 +4340,6 @@ class InspectionControls(UIControlHelper):
             self.show_warning("Create Inspection Object", str(exception))
             self.refresh_saved_definitions()
             return False
-
-        command = self._new_command(CommandID.CREATE_INSPECTION_OBJECT)
-        command.inspection.object.object_id = object_id
-        command.inspection.object.display_name = display_name
-        command.inspection.object.reference_tag_id = tag_id
-        command.inspection.object.reference_tag_family = tag_family
-        self._publish_management_compatibility_command(command)
 
         self.refresh_saved_definitions(
             desired_object_id=object_id,
@@ -4575,13 +4421,6 @@ class InspectionControls(UIControlHelper):
             )
             return False
 
-        command = self._new_command(CommandID.CREATE_INSPECTION_ROUTINE)
-        command.inspection.object.object_id = object_id
-        command.inspection.routine.routine_id = routine_id
-        command.inspection.routine.display_name = display_name
-        command.inspection.routine.sensor_id = sensor_id
-        self._publish_management_compatibility_command(command)
-
         if direct_creation_succeeded:
             self.refresh_saved_definitions(
                 desired_object_id=object_id,
@@ -4642,15 +4481,7 @@ class InspectionControls(UIControlHelper):
         ):
             return False
 
-        command = self._new_command(
-            CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW
-        )
-        command.inspection.object.object_id = object_id
-        command.inspection.routine.routine_id = routine_id
-        command.inspection.replace_existing = replace_existing
-        command.inspection.reference_camera_ids = camera_ids
-        self._publish(command)
-        return True
+        return self.show_setup_unavailable("Reference capture")
 
     def handle_delete_object(self):
         """Delete the selected object and immediately rebuild the UI."""
@@ -4680,12 +4511,6 @@ class InspectionControls(UIControlHelper):
             self.show_warning("Delete Inspection Object", str(exception))
             self.refresh_saved_definitions()
             return False
-
-        command = self._new_command(
-            CommandID.DELETE_INSPECTION_OBJECT
-        )
-        command.inspection.object.object_id = object_id
-        self._publish_management_compatibility_command(command)
 
         self.refresh_saved_definitions(
             desired_object_id="",
@@ -4735,13 +4560,6 @@ class InspectionControls(UIControlHelper):
                 desired_object_id=object_id,
             )
             return False
-
-        command = self._new_command(
-            CommandID.DELETE_INSPECTION_ROUTINE
-        )
-        command.inspection.object.object_id = object_id
-        command.inspection.routine.routine_id = routine_id
-        self._publish_management_compatibility_command(command)
 
         self.refresh_saved_definitions(
             desired_object_id=object_id,

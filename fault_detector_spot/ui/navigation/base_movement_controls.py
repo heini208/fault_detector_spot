@@ -4,8 +4,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QPushButton, QLabel, QLineEdit, QComboBox, QMessageBox
 )
 
-from fault_detector_msgs.msg import ComplexCommand, TagElement
-from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_msgs.msg import OperationalIntent, TagElement
 from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
 
@@ -25,7 +24,7 @@ class BaseMovementControls(UIControlHelper):
         super().__init__(parent_ui)
 
     def init_ros_communication(self):
-        self.complex_command_publisher = self.ui.complex_command_publisher
+        pass
 
     # ---------------------- UI Construction ----------------------
 
@@ -111,11 +110,16 @@ class BaseMovementControls(UIControlHelper):
     def _make_navigation_buttons_row(self):
         row = QHBoxLayout()
         for label, cid in [
-            ("Stand", CommandID.STAND_UP),
-            ("Reset State", CommandID.ESTOP_STATE),
+            ("Stand", OperationalIntent.INTENT_STAND_UP),
+            (
+                "Reset State",
+                OperationalIntent.INTENT_RETURN_TO_ESTOP_STATE,
+            ),
         ]:
             btn = QPushButton(label)
-            btn.clicked.connect(lambda _, c=cid: self.ui.handle_simple_command(c))
+            btn.clicked.connect(
+                lambda _, c=cid: self.ui.handle_simple_operation(c)
+            )
             row.addWidget(btn)
         return row
 
@@ -155,9 +159,9 @@ class BaseMovementControls(UIControlHelper):
         self.ui.update_frames_dropdown(self.frames_dropdown)
     # ---------------------- Command Builders ----------------------
 
-    def build_move_base_command(self, command_id):
-        cmd = ComplexCommand()
-        cmd.command = self.ui.build_basic_command(command_id)
+    def build_move_base_intent(self, intent_id):
+        intent = OperationalIntent()
+        intent.intent = intent_id
 
         # add tag info if available
         text = self.input_field.text().strip()
@@ -165,7 +169,7 @@ class BaseMovementControls(UIControlHelper):
             tag_element = TagElement()
             tag_element.id = int(text)
             tag_element.pose = self.ui.visible_tags[int(text)].pose
-            cmd.tag = tag_element
+            intent.tag = tag_element
 
         # offset & rotation
         x = float(self.offset_fields["X"].text())
@@ -177,35 +181,45 @@ class BaseMovementControls(UIControlHelper):
         q.w = math.cos(yaw / 2.0)
         q.z = math.sin(yaw / 2.0)
 
-        cmd.offset.pose.position.x = x
-        cmd.offset.pose.position.y = y
-        cmd.offset.pose.position.z = 0.0
-        cmd.offset.pose.orientation = q
+        intent.offset.pose.position.x = x
+        intent.offset.pose.position.y = y
+        intent.offset.pose.position.z = 0.0
+        intent.offset.pose.orientation = q
 
-        cmd.offset.header.frame_id = self.frames_dropdown.currentText()
-        return cmd
+        intent.offset.header.frame_id = self.frames_dropdown.currentText()
+        return intent
 
     # ---------------------- Button Handlers ----------------------
 
     def handle_move_base_relative(self):
-        cmd = self.build_move_base_command(CommandID.MOVE_BASE_RELATIVE)
+        intent = self.build_move_base_intent(
+            OperationalIntent.INTENT_MOVE_BASE_RELATIVE
+        )
         msg = (
-            f"Move base relative by X={cmd.offset.pose.position.x:.2f}, "
-            f"Y={cmd.offset.pose.position.y:.2f}, "
-            f"Yaw={math.degrees(2 * math.asin(cmd.offset.pose.orientation.z)):.1f}° "
-            f"in frame {cmd.offset.header.frame_id}?"
+            f"Move base relative by X={intent.offset.pose.position.x:.2f}, "
+            f"Y={intent.offset.pose.position.y:.2f}, "
+            f"Yaw={math.degrees(2 * math.asin(intent.offset.pose.orientation.z)):.1f}° "
+            f"in frame {intent.offset.header.frame_id}?"
         )
         if self.ask_question("Confirm Move Base Relative", msg) == QMessageBox.Yes:
-            self.complex_command_publisher.publish(cmd)
-            self.status_label.setText("Command sent: MOVE_BASE_RELATIVE")
+            self.ui.execute_operation(intent)
 
     def handle_move_to_tag(self):
-        cmd = self.build_move_base_command(CommandID.MOVE_BASE_TO_TAG)
+        text = self.input_field.text().strip()
+        if not text.isdigit() or int(text) not in self.ui.visible_tags:
+            self.show_warning(
+                "Tag Not Found",
+                "Enter the ID of a currently visible tag.",
+            )
+            return
+        intent = self.build_move_base_intent(
+            OperationalIntent.INTENT_MOVE_BASE_TO_TAG
+        )
         msg = (
-            f"Move base to tag {cmd.tag.id} "
-            f"with offset X={cmd.offset.pose.position.x:.2f}, Y={cmd.offset.pose.position.y:.2f}, "
-            f"Yaw={math.degrees(2 * math.asin(cmd.offset.pose.orientation.z)):.1f}°?"
+            f"Move base to tag {intent.tag.id} "
+            f"with offset X={intent.offset.pose.position.x:.2f}, "
+            f"Y={intent.offset.pose.position.y:.2f}, "
+            f"Yaw={math.degrees(2 * math.asin(intent.offset.pose.orientation.z)):.1f}°?"
         )
         if self.ask_question("Confirm Move to Tag", msg) == QMessageBox.Yes:
-            self.complex_command_publisher.publish(cmd)
-            self.status_label.setText(f"Command sent: Move base to tag {cmd.tag.id}")
+            self.ui.execute_operation(intent)

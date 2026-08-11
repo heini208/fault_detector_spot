@@ -16,26 +16,22 @@ from PyQt5.QtWidgets import (
 
 import rclpy
 from fault_detector_msgs.msg import (
-    BasicCommand,
-    CommandStatus,
-    ComplexCommand,
+    ApplicationCommandState,
+    OperationalIntent,
     StringArray,
     TagElementArray,
 )
 from fault_detector_spot.shared.ros.qos_profiles import (
-    COMMAND_QOS,
     LATCHED_QOS,
 )
-from fault_detector_spot.application.commanding.command_ids import CommandID
-from fault_detector_spot.application.commanding.request_identity import new_request_id
 from rclpy.node import Node
-from std_msgs.msg import Header, String
 
 from .inspection.controls import InspectionControls
 from .manipulation.controls import ManipulationControls
 from .navigation.base_movement_controls import BaseMovementControls
 from .navigation.controls import NavigationControls
 from .recording.controls import RecordingControls
+from .ros.application_client import ApplicationClient
 from .shared.status_overview_panel import StatusOverviewPanel
 
 
@@ -58,6 +54,7 @@ class Fault_Detector_UI(QWidget):
         self.base_tags = {}
         self.reachable_tags = {}
         self.available_frames = []
+        self.application_client = None
         self.inspection_object_root = self._inspection_root_parameter()
 
         if self.node:
@@ -150,8 +147,7 @@ class Fault_Detector_UI(QWidget):
         font.setBold(True)
         self.estop_button.setFont(font)
         self.estop_button.clicked.connect(
-            lambda _, cid=CommandID.EMERGENCY_CANCEL:
-            self.handle_simple_command(cid)
+            self.handle_emergency_stop
         )
         return self.estop_button
 
@@ -189,10 +185,15 @@ class Fault_Detector_UI(QWidget):
         self.tabs.addTab(inspection_tab, "Inspection Control")
 
     def init_ros_communication(self):
-        self.complex_command_publisher = self.node.create_publisher(
-            ComplexCommand,
-            "fault_detector/commands/complex_command",
-            COMMAND_QOS,
+        self.application_client = ApplicationClient(self.node)
+        self.application_client.state_changed.connect(
+            self._process_application_state
+        )
+        self.application_client.request_rejected.connect(
+            self._process_application_error
+        )
+        self.application_client.emergency_stop_finished.connect(
+            self._process_emergency_stop_result
         )
 
         self.visible_tags_sub = self.node.create_subscription(
@@ -216,24 +217,6 @@ class Fault_Detector_UI(QWidget):
             10,
         )
 
-        self.buffer_sub = self.node.create_subscription(
-            String,
-            "fault_detector/command_buffer",
-            self._process_buffer,
-            10,
-        )
-        self.cmd_status_sub = self.node.create_subscription(
-            String,
-            "fault_detector/command_tree_status",
-            self._process_command_status,
-            10,
-        )
-        self.structured_cmd_status_sub = self.node.create_subscription(
-            CommandStatus,
-            "fault_detector/command_status",
-            self._process_structured_command_status,
-            10,
-        )
         self.available_frames_sub = self.node.create_subscription(
             StringArray,
             "fault_detector/state/available_frames",
@@ -267,11 +250,6 @@ class Fault_Detector_UI(QWidget):
     def _process_reachable_tags(self, msg: TagElementArray):
         self.reachable_tags = {tag.id: tag for tag in msg.elements}
 
-    def _process_buffer(self, msg: String):
-        self._buffer_text = f"Buffer: {msg.data}"
-        self.buffer_label.setToolTip(self._buffer_text)
-        self._refresh_buffer_label()
-
     def _refresh_buffer_label(self):
         if not hasattr(self, "buffer_label"):
             return
@@ -285,37 +263,77 @@ class Fault_Detector_UI(QWidget):
             )
         )
 
-    def _process_command_status(self, msg: String):
-        self.command_status_label.setText(f"Command: {msg.data}")
+    def _process_application_state(self, state):
+        state_names = {
+            ApplicationCommandState.STATE_QUEUED: "QUEUED",
+            ApplicationCommandState.STATE_DISPATCHED: "DISPATCHED",
+            ApplicationCommandState.STATE_RUNNING: "RUNNING",
+            ApplicationCommandState.STATE_SUCCEEDED: "SUCCEEDED",
+            ApplicationCommandState.STATE_FAILED: "FAILED",
+            ApplicationCommandState.STATE_CANCELLED: "CANCELLED",
+        }
+        intent_names = {
+            value: name.removeprefix("INTENT_")
+            for name, value in vars(OperationalIntent).items()
+            if name.startswith("INTENT_")
+        }
+        intent_names[OperationalIntent.INTENT_UNSPECIFIED] = "INTERNAL"
+        intent_name = intent_names.get(state.intent, "INTERNAL")
+        state_name = state_names.get(state.state, "UNKNOWN")
+        self.command_status_label.setText(
+            f"Command: {intent_name} {state_name}"
+        )
+        self.command_status_label.setToolTip(state.detail)
+        self._buffer_text = (
+            f"Buffer: {state.buffered_command_count} pending"
+        )
+        self.buffer_label.setToolTip(self._buffer_text)
+        self._refresh_buffer_label()
+        if hasattr(self, "inspection_controls"):
+            self.inspection_controls.handle_application_state(state)
 
-    def _process_structured_command_status(
-        self,
-        msg: CommandStatus,
-    ):
-        self.inspection_controls.handle_command_status(msg)
+    def _process_application_error(self, detail):
+        self.status_label.setText(f"Operation rejected: {detail}")
+
+    def _process_emergency_stop_result(self, accepted, detail):
+        prefix = "Emergency stop accepted" if accepted else "Emergency stop failed"
+        self.status_label.setText(f"{prefix}: {detail}")
 
     def _process_available_frames(self, msg: StringArray):
         self.available_frames = list(msg.names)
         self.manipulation_controls.update_frames_dropdown()
         self.base_movement_controls.update_frames_dropdown()
 
-    def build_basic_command(self, command_id: str) -> BasicCommand:
-        cmd = BasicCommand()
-        cmd.header = Header()
-        cmd.header.stamp = self.node.get_clock().now().to_msg()
-        cmd.command_id = command_id
-        cmd.request_id = new_request_id()
-        return cmd
+    def execute_operation(self, intent, context_id=""):
+        if self.application_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        local_id = self.application_client.execute(intent, context_id)
+        if local_id is not None:
+            self.status_label.setText("Operational request submitted")
+        return local_id
 
-    def handle_simple_command(self, command_id: str):
-        cmd = self.build_basic_command(command_id)
-        as_complex_command = ComplexCommand()
-        as_complex_command.command = cmd
-        self.complex_command_publisher.publish(as_complex_command)
-        self.status_label.setText(f"Command sent: {command_id}")
+    def handle_simple_operation(self, intent_id):
+        intent = OperationalIntent()
+        intent.intent = intent_id
+        return self.execute_operation(intent)
+
+    def handle_emergency_stop(self):
+        if self.application_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        self.status_label.setText("Emergency stop requested")
+        return self.application_client.emergency_stop()
+
+    def show_setup_unavailable(self, workflow):
+        detail = f"{workflow} is pending its coordinator API"
+        self.status_label.setText(detail)
+        return False
 
     def closeEvent(self, event):
         self.timer.stop()
+        if self.application_client is not None:
+            self.application_client.destroy()
         event.accept()
 
     def resizeEvent(self, event):
