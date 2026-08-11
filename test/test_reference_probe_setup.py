@@ -20,6 +20,7 @@ from fault_detector_spot.inspection.setup.reference_probe_setup import (
     probe_pose_to_hand_pose,
     refine_probe_pose,
     relative_pose,
+    rotate_vector,
 )
 from fault_detector_spot.inspection.setup.reference_view_surface_target import (
     ReferenceSurfaceTarget,

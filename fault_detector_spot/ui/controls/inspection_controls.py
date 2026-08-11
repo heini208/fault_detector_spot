@@ -1960,6 +1960,10 @@ class InspectionControls(UIControlHelper):
             value = 0.0
         return f"{value:.{decimals}f}"
 
+    @staticmethod
+    def _normalize_degrees(value):
+        return (value + 180.0) % 360.0 - 180.0
+
     def _handle_reference_slot_point_changed(self, slot_index, u, v):
         capture = self._reference_slot_captures[slot_index]
         for candidate_index, widget in enumerate(
@@ -2552,7 +2556,10 @@ class InspectionControls(UIControlHelper):
             self._format_readout_value(math.degrees(pitch), 1)
         )
         self.reference_target_yaw_value_label.setText(
-            self._format_readout_value(math.degrees(yaw), 1)
+            self._format_readout_value(
+                self._normalize_degrees(math.degrees(yaw)),
+                1,
+            )
         )
         self.reference_preapproach_x_value_label.setText(
             self._format_readout_value(aligned.position.x, 3)
