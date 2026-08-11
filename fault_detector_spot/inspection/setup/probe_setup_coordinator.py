@@ -114,7 +114,15 @@ class ProbeSetupCoordinator:
         """Build an immutable snapshot from draft and repository state."""
         draft = self._draft(context)
         object_ids = tuple(self.object_repository.list_object_ids())
-        routine_ids, view_ids, camera_ids, probe_ids = (
+        (
+            routine_ids,
+            view_ids,
+            camera_ids,
+            probe_ids,
+            reference_tag_id,
+            reference_tag_family,
+            selected_sensor_id,
+        ) = (
             self._selected_definition_lists(draft, object_ids)
         )
         return ProbeSetupSnapshot.from_draft(
@@ -123,6 +131,9 @@ class ProbeSetupCoordinator:
             routine_ids=routine_ids,
             reference_view_ids=view_ids,
             reference_camera_ids=camera_ids,
+            selected_reference_tag_id=reference_tag_id,
+            selected_reference_tag_family=reference_tag_family,
+            selected_sensor_id=selected_sensor_id,
             sensor_ids=self.sensor_repository.list_sensor_ids(),
             probe_point_ids=probe_ids,
         )
@@ -156,6 +167,23 @@ class ProbeSetupCoordinator:
         with self._lock:
             draft.selected_object_id = object_name
             draft.selected_routine_id = routine_name
+            draft.selected_reference_view_id = ""
+            draft.clear_geometry()
+        return self._advance(draft)
+
+    @_serialized_transaction
+    def select_object(
+        self,
+        context: SetupContextSnapshot,
+        object_id: str,
+    ) -> ProbeSetupSnapshot:
+        """Select one existing object and clear routine dependencies."""
+        draft = self._draft(context)
+        object_name = self._name(object_id, "object ID")
+        self.object_repository.load(object_name)
+        with self._lock:
+            draft.selected_object_id = object_name
+            draft.selected_routine_id = ""
             draft.selected_reference_view_id = ""
             draft.clear_geometry()
         return self._advance(draft)
@@ -468,19 +496,30 @@ class ProbeSetupCoordinator:
 
     def _selected_definition_lists(self, draft, object_ids):
         if draft.selected_object_id not in object_ids:
-            return (), (), (), ()
+            return (), (), (), (), -1, "", ""
         definition = self.object_repository.load(draft.selected_object_id)
         routine_ids = tuple(
             routine.routine_id for routine in definition.routines
         )
         routine = definition.get_routine(draft.selected_routine_id)
         if routine is None:
-            return routine_ids, (), (), ()
+            return (
+                routine_ids,
+                (),
+                (),
+                (),
+                definition.reference_tag.tag_id,
+                definition.reference_tag.tag_family,
+                "",
+            )
         return (
             routine_ids,
             tuple(view.view_id for view in routine.reference_views),
             tuple(view.camera_id for view in routine.reference_views),
             tuple(point.probe_point_id for point in routine.probe_points),
+            definition.reference_tag.tag_id,
+            definition.reference_tag.tag_family,
+            routine.sensor_id,
         )
 
     @staticmethod

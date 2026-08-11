@@ -1,5 +1,7 @@
 """Tests for application-level operational request ownership."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from fault_detector_msgs.msg import OperationalIntent
@@ -179,6 +181,22 @@ def test_application_controller_owns_shared_setup_coordinator():
     )
 
     assert controller.setup_coordinator.is_current(context)
+
+
+def test_probe_setup_attachment_uses_shared_coordinator():
+    command_controller = FakeCommandController()
+    controller = ApplicationController(command_controller)
+    probe = SimpleNamespace(
+        setup_coordinator=controller.setup_coordinator,
+        close=lambda: None,
+    )
+
+    controller.attach_probe_setup(probe)
+
+    assert controller.probe_setup_coordinator is probe
+
+    with pytest.raises(RuntimeError, match="already attached"):
+        controller.attach_probe_setup(probe)
 
 
 def test_setup_status_is_owned_only_by_setup_coordinator():

@@ -3,7 +3,11 @@
 from uuid import uuid4
 
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
-from fault_detector_msgs.srv import CloseProbeSetup, ExecuteProbeSetup
+from fault_detector_msgs.srv import (
+    CloseProbeSetup,
+    ExecuteProbeSetup,
+    GetProbeReferencePreview,
+)
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from fault_detector_spot.application.commanding.client_identity import (
@@ -16,6 +20,9 @@ from fault_detector_spot.inspection.setup.probe_setup_coordinator import (
 from fault_detector_spot.inspection.setup.probe_setup_context import (
     ProbeSetupSnapshot,
 )
+from fault_detector_spot.inspection.setup.probe_reference_preview import (
+    ProbeReferencePreviewSource,
+)
 from fault_detector_spot.shared.geometry.transforms import (
     pose_data_to_pose,
     pose_to_pose_data,
@@ -26,9 +33,17 @@ from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 class ProbeSetupApi:
     """Own ROS transport for one probe setup coordinator."""
 
-    def __init__(self, node, coordinator: ProbeSetupCoordinator):
+    def __init__(
+        self,
+        node,
+        coordinator: ProbeSetupCoordinator,
+        preview_source=None,
+    ):
         self.node = node
         self.coordinator = coordinator
+        self.preview_source = preview_source or ProbeReferencePreviewSource(
+            coordinator.reference_repository
+        )
         self._callback_group = ReentrantCallbackGroup()
         self._handlers = self._transaction_handlers()
         self._state_publisher = node.create_publisher(
@@ -48,10 +63,17 @@ class ProbeSetupApi:
             self._close,
             callback_group=self._callback_group,
         )
+        self._preview_service = node.create_service(
+            GetProbeReferencePreview,
+            "fault_detector/application/get_probe_reference_preview",
+            self._preview,
+            callback_group=self._callback_group,
+        )
 
     def _transaction_handlers(self):
         return {
             ProbeSetupIntent.OPERATION_REFRESH: self._refresh,
+            ProbeSetupIntent.OPERATION_SELECT_OBJECT: self._select_object,
             ProbeSetupIntent.OPERATION_SELECT_ROUTINE: self._select_routine,
             ProbeSetupIntent.OPERATION_CREATE_OBJECT: self._create_object,
             ProbeSetupIntent.OPERATION_DELETE_OBJECT: self._delete_object,
@@ -131,6 +153,12 @@ class ProbeSetupApi:
             context,
             intent.object_id,
             intent.routine_id,
+        )
+
+    def _select_object(self, context, intent):
+        return self.coordinator.select_object(
+            context,
+            intent.object_id,
         )
 
     def _create_object(self, context, intent):
@@ -225,6 +253,34 @@ class ProbeSetupApi:
         response.detail = "Probe setup closed"
         return response
 
+    def _preview(self, request, response):
+        try:
+            context = self.coordinator.context(
+                request.context_id,
+                request.client_id,
+            )
+            snapshot = self.coordinator.snapshot(context)
+            preview = self.preview_source.load(
+                snapshot,
+                request.reference_view_id,
+            )
+        except Exception as exception:
+            response.success = False
+            response.detail = str(exception)
+            return response
+        region = preview.selectable_region
+        response.success = True
+        response.detail = "Reference preview loaded"
+        response.reference_view_id = preview.reference_view_id
+        response.camera_id = preview.camera_id
+        response.slot_index = preview.slot_index
+        response.image = preview.image
+        response.selectable_x = region.x
+        response.selectable_y = region.y
+        response.selectable_width = region.width
+        response.selectable_height = region.height
+        return response
+
     def _failure_state(self, goal, detail, context=None):
         if (
             context is not None
@@ -273,6 +329,13 @@ class ProbeSetupApi:
         message.selected_reference_view_id = (
             snapshot.selected_reference_view_id
         )
+        message.selected_reference_tag_id = (
+            snapshot.selected_reference_tag_id
+        )
+        message.selected_reference_tag_family = (
+            snapshot.selected_reference_tag_family
+        )
+        message.selected_sensor_id = snapshot.selected_sensor_id
         message.object_ids = list(snapshot.object_ids)
         message.routine_ids = list(snapshot.routine_ids)
         message.reference_view_ids = list(snapshot.reference_view_ids)
@@ -285,7 +348,7 @@ class ProbeSetupApi:
     @staticmethod
     def _write_geometry(message, snapshot):
         ProbeSetupApi._write_reference_geometry(message, snapshot)
-        ProbeSetupApi._write_probe_setup(message, snapshot.setup)
+        ProbeSetupApi._write_probe_setup(message, snapshot)
 
     @staticmethod
     def _write_reference_geometry(message, snapshot):
@@ -334,12 +397,25 @@ class ProbeSetupApi:
         message.approach_source = direction.source
 
     @staticmethod
-    def _write_probe_setup(message, setup):
+    def _write_probe_setup(message, snapshot):
+        setup = snapshot.setup
         if setup is None:
             return
         message.has_probe_setup = True
         target = setup.surface_target
         ProbeSetupApi._write_surface_target(message, target)
+        calculated = snapshot.geometry.probe_setup
+        message.calculated_safe_approach_pose_object = pose_data_to_pose(
+            calculated.safe_approach_pose_object
+        )
+        message.calculated_aligned_preapproach_pose_object = (
+            pose_data_to_pose(
+                calculated.aligned_preapproach_pose_object
+            )
+        )
+        message.calculated_probe_pose_object = pose_data_to_pose(
+            calculated.probe_pose_object
+        )
         ProbeSetupApi._write_approved_poses(message, setup)
         message.target_surface_distance_m = (
             target.target_surface_distance_m
@@ -395,6 +471,7 @@ class ProbeSetupApi:
         """Destroy transport resources owned by this API."""
         self.node.destroy_service(self._execute_service)
         self.node.destroy_service(self._close_service)
+        self.node.destroy_service(self._preview_service)
 
 
 __all__ = ["ProbeSetupApi"]

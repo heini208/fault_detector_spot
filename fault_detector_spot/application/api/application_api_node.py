@@ -30,6 +30,16 @@ from fault_detector_spot.mapping.repository.map_artifact_store import (
     MapArtifactStore,
 )
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
+from fault_detector_spot.inspection.repository.multi_reference_view_repository import (
+    MultiReferenceViewRepository,
+)
+from fault_detector_spot.inspection.repository.sensor_repository import (
+    SensorRepository,
+)
+from fault_detector_spot.inspection.setup.probe_setup_api import ProbeSetupApi
+from fault_detector_spot.inspection.setup.probe_setup_coordinator import (
+    ProbeSetupCoordinator,
+)
 from fault_detector_spot.navigation.setup.navigation_setup_api import (
     NavigationSetupApi,
 )
@@ -102,6 +112,27 @@ class ApplicationApiNode(Node):
         self.navigation_setup_api = NavigationSetupApi(
             self,
             self.application_controller.navigation_setup_coordinator,
+        )
+        self.declare_parameter("inspection.object_root", "")
+        self.declare_parameter("sensor.root", "")
+        object_root = self.get_parameter(
+            "inspection.object_root"
+        ).value.strip()
+        sensor_root = self.get_parameter("sensor.root").value.strip()
+        reference_repository = MultiReferenceViewRepository(
+            object_root or None
+        )
+        self.probe_setup_coordinator = ProbeSetupCoordinator(
+            setup_coordinator=self.application_controller.setup_coordinator,
+            reference_repository=reference_repository,
+            sensor_repository=SensorRepository(sensor_root or None),
+        )
+        self.application_controller.attach_probe_setup(
+            self.probe_setup_coordinator
+        )
+        self.probe_setup_api = ProbeSetupApi(
+            self,
+            self.application_controller.probe_setup_coordinator,
         )
         self._state_publisher = self.create_publisher(
             ApplicationCommandState,
@@ -296,6 +327,7 @@ class ApplicationApiNode(Node):
         return values[state]
 
     def destroy_node(self):
+        self.probe_setup_api.close()
         self.navigation_setup_api.close()
         self.application_controller.remove_status_listener(
             self._handle_application_status

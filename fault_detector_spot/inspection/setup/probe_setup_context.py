@@ -56,6 +56,9 @@ class ProbeSetupSnapshot:
     selected_object_id: str
     selected_routine_id: str
     selected_reference_view_id: str
+    selected_reference_tag_id: int
+    selected_reference_tag_family: str
+    selected_sensor_id: str
     object_ids: Tuple[str, ...]
     routine_ids: Tuple[str, ...]
     reference_view_ids: Tuple[str, ...]
@@ -76,6 +79,9 @@ class ProbeSetupSnapshot:
         routine_ids,
         reference_view_ids,
         reference_camera_ids,
+        selected_reference_tag_id,
+        selected_reference_tag_family,
+        selected_sensor_id,
         sensor_ids,
         probe_point_ids,
     ) -> "ProbeSetupSnapshot":
@@ -86,6 +92,9 @@ class ProbeSetupSnapshot:
             selected_reference_view_id=(
                 draft.selected_reference_view_id
             ),
+            selected_reference_tag_id=selected_reference_tag_id,
+            selected_reference_tag_family=selected_reference_tag_family,
+            selected_sensor_id=selected_sensor_id,
             object_ids=tuple(object_ids),
             routine_ids=tuple(routine_ids),
             reference_view_ids=tuple(reference_view_ids),

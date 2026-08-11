@@ -59,6 +59,7 @@ class ApplicationController:
         self.command_controller = command_controller
         self.setup_coordinator = SetupCoordinator(command_controller)
         self.navigation_setup_coordinator = None
+        self.probe_setup_coordinator = None
         self._lock = RLock()
         self._operations: Dict[str, ApplicationOperation] = {}
         self._status_listeners = []
@@ -154,6 +155,16 @@ class ApplicationController:
             raise RuntimeError("Navigation setup is already attached")
         self.navigation_setup_coordinator = coordinator
 
+    def attach_probe_setup(self, coordinator) -> None:
+        """Attach the specialized probe setup coordinator."""
+        if coordinator.setup_coordinator is not self.setup_coordinator:
+            raise ValueError(
+                "Probe setup must use the shared setup coordinator"
+            )
+        if self.probe_setup_coordinator is not None:
+            raise RuntimeError("Probe setup is already attached")
+        self.probe_setup_coordinator = coordinator
+
     def remove_status_listener(
         self,
         listener: Callable[[ApplicationOperationStatus], None],
@@ -194,6 +205,9 @@ class ApplicationController:
 
     def close(self) -> None:
         """Detach from the command controller."""
+        if self.probe_setup_coordinator is not None:
+            self.probe_setup_coordinator.close()
+            self.probe_setup_coordinator = None
         if self.navigation_setup_coordinator is not None:
             self.navigation_setup_coordinator.close()
             self.navigation_setup_coordinator = None

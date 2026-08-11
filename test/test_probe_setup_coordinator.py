@@ -169,6 +169,23 @@ def test_repository_transactions_do_not_enter_physical_command_lane(tmp_path):
     assert command_controller.submitted == []
 
 
+def test_selected_definition_metadata_is_server_owned(tmp_path):
+    probe, _ = coordinator(tmp_path)
+    context = probe.open_context("probe-ui").context
+    selected = create_selected_routine(probe, context)
+
+    assert selected.selected_reference_tag_id == 7
+    assert selected.selected_reference_tag_family == "36h11"
+    assert selected.selected_sensor_id == "hall_probe"
+
+    object_only = probe.select_object(selected.context, "motor")
+
+    assert object_only.selected_object_id == "motor"
+    assert object_only.selected_routine_id == ""
+    assert object_only.selected_reference_tag_id == 7
+    assert object_only.selected_sensor_id == ""
+
+
 def test_geometry_and_approvals_are_owned_by_context(tmp_path):
     probe, _ = coordinator(tmp_path)
     context = probe.open_context("probe-ui").context

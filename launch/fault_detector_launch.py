@@ -60,6 +60,7 @@ def generate_launch_description():
             name='application_api',
             output='screen',
             parameters=[
+                tag_sensing_config,
                 {'use_sim_time': use_sim_time},
             ],
         ),
@@ -105,6 +106,7 @@ def generate_launch_description():
             name='sensor_registry',
             output='screen',
             parameters=[
+                tag_sensing_config,
                 {'use_sim_time': use_sim_time},
             ],
         ),
