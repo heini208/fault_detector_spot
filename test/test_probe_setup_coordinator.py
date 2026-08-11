@@ -229,7 +229,10 @@ def test_distance_change_retains_only_safe_and_aligned_progress(tmp_path):
     assert updated.setup.surface_alignment_approved
     assert not updated.setup.probe_pose_approved
     assert updated.setup.safe_approach_pose_object == pose(0.8)
-    assert updated.setup.aligned_preapproach_pose_object == pose(0.6)
+    assert (
+        updated.setup.aligned_preapproach_pose_object
+        == state.setup.aligned_preapproach_pose_object
+    )
 
 
 def test_save_is_one_atomic_repository_transaction(tmp_path):
