@@ -370,6 +370,25 @@ class ProbeRefinementSession:
             RefinementMotionState.REACHED
         )
 
+    def approve_verified_probe(self) -> None:
+        """Approve the already verified probe candidate without resampling."""
+        if not self.surface_distance_verified:
+            raise RuntimeError(
+                "Surface distance must be verified before probe approval"
+            )
+        if (
+            self.motion_states[RefinementStage.PROBE]
+            != RefinementMotionState.REACHED
+        ):
+            raise RuntimeError(
+                "Verified probe pose has not been reached"
+            )
+        pose = self.candidate_pose(RefinementStage.PROBE)
+        pose.validate()
+        self.approved_poses[RefinementStage.PROBE] = deepcopy(pose)
+        self.draft_approved[RefinementStage.PROBE] = True
+        self.saved = False
+
     def require_recovery(self, message: str) -> None:
         """Block refinement until a verified retraction succeeds."""
         self.recovery_required = True

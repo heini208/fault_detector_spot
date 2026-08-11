@@ -9,6 +9,9 @@ from threading import RLock
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
 )
+from fault_detector_spot.application.commanding.request_identity import (
+    validate_request_id,
+)
 from fault_detector_spot.application.setup.setup_coordinator import (
     SetupCoordinator,
     SetupOperation,
@@ -50,6 +53,7 @@ from fault_detector_spot.inspection.setup.probe_setup_motion import (
 )
 from fault_detector_spot.inspection.setup.probe_surface_verification import (
     ProbeSurfaceVerificationCoordinator,
+    SurfaceVerificationState,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     approve_probe_pose,
@@ -121,6 +125,7 @@ class ProbeSetupCoordinator:
         self._drafts = {}
         self._context_locks = {}
         self._pending = {}
+        self._finalizations = {}
         self._motion_listeners = []
 
     def open_context(self, client_id: str) -> ProbeSetupSnapshot:
@@ -173,6 +178,7 @@ class ProbeSetupCoordinator:
         with self._lock:
             self._drafts.pop(draft.context.context_id, None)
             self._context_locks.pop(draft.context.context_id, None)
+            self._finalizations.pop(draft.context.context_id, None)
             self._pending = {
                 request_id: pending
                 for request_id, pending in self._pending.items()
@@ -722,11 +728,132 @@ class ProbeSetupCoordinator:
             )
             return self.snapshot(context)
 
+    def begin_finalization(
+        self,
+        context: SetupContextSnapshot,
+        request_id: str,
+        save_requested: bool,
+    ) -> ProbeSetupSnapshot:
+        """Lock one refinement for server-owned save and retraction."""
+        normalized = validate_request_id(request_id)
+        if not isinstance(save_requested, bool):
+            raise TypeError("Save requested flag must be a boolean")
+        with self._context_lock(context):
+            self.setup_coordinator.require_current(context)
+            self._require_idle(
+                context,
+                finalization_request_id=normalized,
+            )
+            self._require_physical_lane_idle()
+            draft = self._selected_draft(context)
+            refinement = self._require_refinement(draft)
+            for stage, label in (
+                (RefinementStage.SAFE_APPROACH, "safe approach"),
+                (RefinementStage.ALIGNMENT, "aligned pre-approach"),
+            ):
+                if not refinement.stage_is_approved(stage):
+                    raise ValueError(
+                        f"Approve the {label} before finalization"
+                    )
+            if save_requested:
+                verification = draft.surface_verification
+                if (
+                    verification is None
+                    or verification.state
+                    is not SurfaceVerificationState.CONVERGED
+                    or not refinement.surface_distance_verified
+                ):
+                    raise ValueError(
+                        "Verify the final surface distance before saving"
+                    )
+            with self._lock:
+                self._finalizations[context.context_id] = normalized
+            return self.snapshot(context)
+
+    def approve_verified_probe_for_finalization(
+        self,
+        context: SetupContextSnapshot,
+        request_id: str,
+    ) -> ProbeSetupSnapshot:
+        """Approve the converged probe candidate without another TF sample."""
+        with self._context_lock(context):
+            self._require_finalization(context, request_id)
+            draft = self._selected_draft(context)
+            refinement = self._require_refinement(draft)
+            refinement.approve_verified_probe()
+            pose = refinement.approved_pose(RefinementStage.PROBE)
+            with self._lock:
+                draft.setup = approve_probe_pose(draft.setup, pose)
+                draft.dirty = True
+                draft.validation_error = ""
+            return self._advance(draft)
+
+    def save_probe_point_for_finalization(
+        self,
+        context: SetupContextSnapshot,
+        request_id: str,
+        probe_point_id: str,
+        display_name: str,
+        position_tolerance_m: float,
+        orientation_tolerance_rad: float,
+        measurement_duration_sec: float,
+    ) -> ProbeSetupSnapshot:
+        """Persist the approved point while the finalization lock is held."""
+        with self._context_lock(context):
+            self._require_finalization(context, request_id)
+            draft = self._selected_draft(context)
+            refinement = self._require_refinement(draft)
+            self._persist_probe_point(
+                draft,
+                probe_point_id,
+                display_name,
+                position_tolerance_m,
+                orientation_tolerance_rad,
+                measurement_duration_sec,
+            )
+            refinement.saved = True
+            return self._advance(draft)
+
+    def complete_finalization(
+        self,
+        context: SetupContextSnapshot,
+        request_id: str,
+    ) -> ProbeSetupSnapshot:
+        """Close refinement only after both retraction motions succeeded."""
+        with self._context_lock(context):
+            self._require_finalization(context, request_id)
+            draft = self._selected_draft(context)
+            refinement = self._require_refinement(draft)
+            refinement.complete_retraction()
+            refinement.discard_unapproved_candidates()
+            with self._lock:
+                draft.refinement = None
+                draft.surface_verification = None
+                self._finalizations.pop(context.context_id, None)
+            return self._advance(draft)
+
+    def fail_finalization(
+        self,
+        context: SetupContextSnapshot,
+        request_id: str,
+        detail: str,
+    ) -> ProbeSetupSnapshot:
+        """Release the action lock while preserving mandatory recovery."""
+        with self._context_lock(context):
+            self._require_finalization(context, request_id)
+            draft = self._selected_draft(context)
+            refinement = self._require_refinement(draft)
+            refinement.require_recovery(detail)
+            with self._lock:
+                self._finalizations.pop(context.context_id, None)
+            return self._advance(draft)
+
     def prepare_motion(
         self,
         context: SetupContextSnapshot,
         motion: ProbeMotionRequest,
         surface_verification_request_id: str = "",
+        finalization_request_id: str = "",
     ) -> ProbeSetupMotionOperation:
         """Prepare one motion primitive for the shared command lane."""
         with self._context_lock(context):
@@ -734,6 +861,7 @@ class ProbeSetupCoordinator:
             self._require_idle(
                 context,
                 surface_verification_request_id,
+                finalization_request_id,
             )
             self._require_physical_lane_idle()
             motion.validate()
@@ -845,6 +973,27 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Atomically append one fully approved probe point."""
         draft = self._selected_draft(context)
+        self._persist_probe_point(
+            draft,
+            probe_point_id,
+            display_name,
+            position_tolerance_m,
+            orientation_tolerance_rad,
+            measurement_duration_sec,
+        )
+        if draft.refinement is not None:
+            draft.refinement.saved = True
+        return self._advance(draft)
+
+    def _persist_probe_point(
+        self,
+        draft,
+        probe_point_id,
+        display_name,
+        position_tolerance_m,
+        orientation_tolerance_rad,
+        measurement_duration_sec,
+    ):
         setup = draft.setup
         if setup is None:
             raise ValueError("No calculated probe setup is available")
@@ -870,7 +1019,7 @@ class ProbeSetupCoordinator:
         with self._lock:
             draft.dirty = False
             draft.validation_error = ""
-        return self._advance(draft)
+        return point
 
     def _build_probe_point(
         self,
@@ -916,6 +1065,7 @@ class ProbeSetupCoordinator:
                 self.close_context(context)
         with self._lock:
             self._pending.clear()
+            self._finalizations.clear()
             self._motion_listeners.clear()
 
     def _approve(self, context, operation, stage):
@@ -1138,6 +1288,7 @@ class ProbeSetupCoordinator:
         self,
         context: SetupContextSnapshot,
         surface_verification_request_id: str = "",
+        finalization_request_id: str = "",
     ) -> None:
         with self._lock:
             draft = self._drafts.get(context.context_id)
@@ -1154,6 +1305,28 @@ class ProbeSetupCoordinator:
             ):
                 raise RuntimeError(
                     "Probe setup context has active surface verification"
+                )
+            active_finalization = self._finalizations.get(
+                context.context_id
+            )
+            if (
+                active_finalization is not None
+                and active_finalization != finalization_request_id
+            ):
+                raise RuntimeError(
+                    "Probe setup context has active finalization"
+                )
+            if (
+                draft is not None
+                and draft.refinement is not None
+                and draft.refinement.recovery_required
+                and not (
+                    surface_verification_request_id
+                    or finalization_request_id
+                )
+            ):
+                raise RuntimeError(
+                    "Probe refinement requires retraction before editing"
                 )
             if any(
                 pending[1].context_id == context.context_id
@@ -1176,6 +1349,21 @@ class ProbeSetupCoordinator:
                 "Surface verification request ID does not match"
             )
         return verification
+
+    def _require_finalization(
+        self,
+        context: SetupContextSnapshot,
+        request_id: str,
+    ) -> str:
+        normalized = validate_request_id(request_id)
+        self.setup_coordinator.require_current(context)
+        with self._lock:
+            active = self._finalizations.get(context.context_id)
+        if active != normalized:
+            raise RuntimeError(
+                "Probe refinement finalization request does not match"
+            )
+        return normalized
 
     def _require_physical_lane_idle(self) -> None:
         controller = self.setup_coordinator.command_controller

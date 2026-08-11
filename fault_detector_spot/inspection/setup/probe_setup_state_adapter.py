@@ -111,6 +111,8 @@ class ProbeSetupStateAdapter:
         message.probe_motion_state = states[
             refinement.motion_states[RefinementStage.PROBE]
         ]
+        message.refinement_recovery_required = refinement.recovery_required
+        message.refinement_recovery_message = refinement.recovery_message
         pending = refinement.pending_motion
         if pending is not None:
             message.motion_pending = True

@@ -43,6 +43,9 @@ from fault_detector_spot.inspection.setup.probe_setup_coordinator import (
 from fault_detector_spot.inspection.setup.probe_setup_motion_api import (
     ProbeSetupMotionApi,
 )
+from fault_detector_spot.inspection.setup.probe_refinement_finalization_api import (
+    ProbeRefinementFinalizationApi,
+)
 from fault_detector_spot.inspection.setup.probe_surface_verification_api import (
     ProbeSurfaceVerificationApi,
 )
@@ -171,6 +174,14 @@ class ApplicationApiNode(Node):
             self.application_controller.probe_setup_coordinator,
             self.probe_setup_state_publisher,
             self.probe_setup_state_adapter,
+        )
+        self.probe_refinement_finalization_api = (
+            ProbeRefinementFinalizationApi(
+                self,
+                self.application_controller.probe_setup_coordinator,
+                self.probe_setup_state_publisher,
+                self.probe_setup_state_adapter,
+            )
         )
         self._state_publisher = self.create_publisher(
             ApplicationCommandState,
@@ -365,6 +376,7 @@ class ApplicationApiNode(Node):
         return values[state]
 
     def destroy_node(self):
+        self.probe_refinement_finalization_api.close()
         self.probe_surface_verification_api.close()
         self.probe_setup_motion_api.close()
         self.probe_setup_api.close()
