@@ -17,7 +17,7 @@ from fault_detector_spot.application.commanding.client_identity import (
     required_client_id,
 )
 from fault_detector_spot.inspection.model.models import ImagePoint
-from fault_detector_spot.inspection.setup.probe_setup_coordinator import (
+from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
 )
 from fault_detector_spot.inspection.setup.probe_reference_preview import (

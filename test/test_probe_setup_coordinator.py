@@ -16,7 +16,7 @@ from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
     CommandControllerStatus,
 )
-from fault_detector_spot.application.setup.setup_coordinator import (
+from fault_detector_spot.application.coordinators.setup_coordinator import (
     SetupCoordinator,
 )
 from fault_detector_spot.application.setup.setup_context import (
@@ -36,7 +36,7 @@ from fault_detector_spot.inspection.repository import (
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
 )
-from fault_detector_spot.inspection.setup.probe_setup_coordinator import (
+from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
@@ -536,8 +536,8 @@ def test_pure_authoring_core_has_no_execution_command_dependency():
     paths = (
         package / "inspection/setup/probe_setup_context.py",
         package / "inspection/setup/probe_setup_geometry.py",
-        package / "inspection/setup/probe_setup_coordinator.py",
-        package / "inspection/setup/probe_setup_api.py",
+        package / "application/coordinators/probe_setup_coordinator.py",
+        package / "application/api/probe_setup_api.py",
     )
     source = "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
@@ -551,10 +551,10 @@ def test_pure_authoring_core_has_no_execution_command_dependency():
 def test_motion_transport_is_separate_from_authoring_transport():
     package = Path(__file__).parents[1] / "fault_detector_spot"
     authoring = (
-        package / "inspection/setup/probe_setup_api.py"
+        package / "application/api/probe_setup_api.py"
     ).read_text(encoding="utf-8")
     motion = (
-        package / "inspection/setup/probe_setup_motion_api.py"
+        package / "application/api/probe_setup_motion_api.py"
     ).read_text(encoding="utf-8")
 
     assert "ActionServer" not in authoring

@@ -5,14 +5,14 @@ import inspect
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementStage,
 )
-from fault_detector_spot.inspection.setup.probe_setup_coordinator import (
+from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
     ProbeMotionKind,
     ProbeMotionRequest,
 )
-from fault_detector_spot.inspection.setup.probe_setup_motion_api import (
+from fault_detector_spot.application.api.probe_setup_motion_api import (
     ProbeSetupMotionApi,
 )
 

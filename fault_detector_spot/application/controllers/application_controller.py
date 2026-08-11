@@ -23,7 +23,7 @@ from fault_detector_spot.application.controllers.command_controller import (
 from fault_detector_spot.application.ros.operational_intent_adapter import (
     operational_intent_to_command,
 )
-from fault_detector_spot.application.setup.setup_coordinator import (
+from fault_detector_spot.application.coordinators.setup_coordinator import (
     SetupCoordinator,
 )
 from fault_detector_spot.application.setup.setup_context import SETUP_ORIGINS

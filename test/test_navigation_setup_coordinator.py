@@ -14,14 +14,14 @@ from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
     CommandControllerStatus,
 )
-from fault_detector_spot.application.setup.setup_coordinator import (
+from fault_detector_spot.application.coordinators.setup_coordinator import (
     SetupCoordinator,
 )
 from fault_detector_spot.mapping.repository.map_artifact_store import (
     MapArtifactStore,
 )
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
-from fault_detector_spot.navigation.setup.navigation_setup_coordinator import (
+from fault_detector_spot.application.coordinators.navigation_setup_coordinator import (
     MODE_MAPPING,
     NavigationSetupCoordinator,
 )

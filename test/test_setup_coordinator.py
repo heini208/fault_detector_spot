@@ -18,7 +18,7 @@ from fault_detector_spot.application.setup.setup_context import (
     SetupContextLifecycle,
     StaleSetupContext,
 )
-from fault_detector_spot.application.setup.setup_coordinator import (
+from fault_detector_spot.application.coordinators.setup_coordinator import (
     SetupCoordinator,
 )
 

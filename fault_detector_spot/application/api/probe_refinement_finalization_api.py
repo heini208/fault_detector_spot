@@ -13,9 +13,9 @@ from fault_detector_spot.application.commanding.client_identity import (
 from fault_detector_spot.application.setup.setup_context import (
     validate_context_id,
 )
-from fault_detector_spot.inspection.setup.probe_refinement_finalization import (
+from fault_detector_spot.application.coordinators.probe_refinement_finalization_coordinator import (
     FinalizationPhase,
-    ProbeRefinementFinalizationRunner,
+    ProbeRefinementFinalizationCoordinator,
     ProbeRefinementFinalizationSpec,
 )
 
@@ -34,7 +34,7 @@ class ProbeRefinementFinalizationApi:
         self.coordinator = coordinator
         self.state_publisher = state_publisher
         self.state_adapter = state_adapter
-        self.runner = ProbeRefinementFinalizationRunner(coordinator)
+        self.runner = ProbeRefinementFinalizationCoordinator(coordinator)
         self._callback_group = ReentrantCallbackGroup()
         self._action_server = ActionServer(
             node,

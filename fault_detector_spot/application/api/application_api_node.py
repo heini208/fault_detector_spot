@@ -36,17 +36,17 @@ from fault_detector_spot.inspection.repository.multi_reference_view_repository i
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
 )
-from fault_detector_spot.inspection.setup.probe_setup_api import ProbeSetupApi
-from fault_detector_spot.inspection.setup.probe_setup_coordinator import (
+from fault_detector_spot.application.api.probe_setup_api import ProbeSetupApi
+from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
 )
-from fault_detector_spot.inspection.setup.probe_setup_motion_api import (
+from fault_detector_spot.application.api.probe_setup_motion_api import (
     ProbeSetupMotionApi,
 )
-from fault_detector_spot.inspection.setup.probe_refinement_finalization_api import (
+from fault_detector_spot.application.api.probe_refinement_finalization_api import (
     ProbeRefinementFinalizationApi,
 )
-from fault_detector_spot.inspection.setup.probe_surface_verification_api import (
+from fault_detector_spot.application.api.probe_surface_verification_api import (
     ProbeSurfaceVerificationApi,
 )
 from fault_detector_spot.inspection.setup.probe_setup_state_adapter import (
@@ -55,10 +55,10 @@ from fault_detector_spot.inspection.setup.probe_setup_state_adapter import (
 from fault_detector_spot.inspection.setup import (
     probe_setup_motion_state_source,
 )
-from fault_detector_spot.navigation.setup.navigation_setup_api import (
+from fault_detector_spot.application.api.navigation_setup_api import (
     NavigationSetupApi,
 )
-from fault_detector_spot.navigation.setup.navigation_setup_coordinator import (
+from fault_detector_spot.application.coordinators.navigation_setup_coordinator import (
     NavigationSetupCoordinator,
 )
 from fault_detector_spot.navigation.setup.navigation_setup_state_source import (

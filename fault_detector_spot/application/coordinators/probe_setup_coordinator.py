@@ -12,7 +12,7 @@ from fault_detector_spot.application.commanding.command_request import (
 from fault_detector_spot.application.commanding.request_identity import (
     validate_request_id,
 )
-from fault_detector_spot.application.setup.setup_coordinator import (
+from fault_detector_spot.application.coordinators.setup_coordinator import (
     SetupCoordinator,
     SetupOperation,
     SetupOperationStatus,

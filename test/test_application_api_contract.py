@@ -9,7 +9,7 @@ from fault_detector_spot.application.api.application_api_node import (
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
 )
-from fault_detector_spot.navigation.setup.navigation_setup_api import (
+from fault_detector_spot.application.api.navigation_setup_api import (
     NavigationSetupApi,
 )
 
@@ -28,9 +28,7 @@ def test_controller_states_have_distinct_public_states():
         CommandControllerState.SUCCEEDED: (
             ApplicationCommandState.STATE_SUCCEEDED
         ),
-        CommandControllerState.FAILED: (
-            ApplicationCommandState.STATE_FAILED
-        ),
+        CommandControllerState.FAILED: ApplicationCommandState.STATE_FAILED,
         CommandControllerState.CANCELLED: (
             ApplicationCommandState.STATE_CANCELLED
         ),

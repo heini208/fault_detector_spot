@@ -20,7 +20,7 @@ from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
 )
-from fault_detector_spot.navigation.setup.navigation_setup_coordinator import (
+from fault_detector_spot.application.coordinators.navigation_setup_coordinator import (
     MODE_LOCALIZATION,
     MODE_MAPPING,
     NavigationSetupCoordinator,

@@ -5,13 +5,13 @@ import inspect
 import pytest
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
 
-from fault_detector_spot.inspection.setup.probe_refinement_finalization import (
+from fault_detector_spot.application.coordinators.probe_refinement_finalization_coordinator import (
     FinalizationPhase,
 )
-from fault_detector_spot.inspection.setup.probe_refinement_finalization_api import (
+from fault_detector_spot.application.api.probe_refinement_finalization_api import (
     ProbeRefinementFinalizationApi,
 )
-from fault_detector_spot.inspection.setup.probe_setup_api import ProbeSetupApi
+from fault_detector_spot.application.api.probe_setup_api import ProbeSetupApi
 
 
 def test_sync_probe_setup_api_does_not_expose_final_probe_persistence():

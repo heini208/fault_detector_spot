@@ -49,7 +49,7 @@ class _MotionWaiter:
     status: object = None
 
 
-class ProbeRefinementFinalizationRunner:
+class ProbeRefinementFinalizationCoordinator:
     """Execute approval, persistence, and two-stage retraction."""
 
     def __init__(self, coordinator, poll_sec: float = 0.05):
@@ -281,6 +281,6 @@ class ProbeRefinementFinalizationRunner:
 
 __all__ = [
     "FinalizationPhase",
-    "ProbeRefinementFinalizationRunner",
+    "ProbeRefinementFinalizationCoordinator",
     "ProbeRefinementFinalizationSpec",
 ]

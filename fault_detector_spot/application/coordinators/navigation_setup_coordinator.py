@@ -17,7 +17,7 @@ from fault_detector_spot.application.controllers.command_controller import (
 from fault_detector_spot.application.setup.setup_context import (
     SetupContextSnapshot,
 )
-from fault_detector_spot.application.setup.setup_coordinator import (
+from fault_detector_spot.application.coordinators.setup_coordinator import (
     SetupCoordinator,
     SetupOperation,
     SetupOperationStatus,
