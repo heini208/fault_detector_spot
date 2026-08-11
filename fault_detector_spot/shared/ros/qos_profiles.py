@@ -6,6 +6,12 @@ COMMAND_QOS = QoSProfile(
     history=HistoryPolicy.KEEP_ALL,
     durability=DurabilityPolicy.TRANSIENT_LOCAL,
 )
+COMMAND_REQUEST_QOS = QoSProfile(
+    depth=100,
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    durability=DurabilityPolicy.VOLATILE,
+)
 LATCHED_QOS = QoSProfile(
     depth=1,
     reliability=ReliabilityPolicy.RELIABLE,

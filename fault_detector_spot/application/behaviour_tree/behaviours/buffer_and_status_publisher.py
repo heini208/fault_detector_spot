@@ -60,13 +60,16 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         buf_msg.data = f"[{','.join(ids)}]"
         self.buffer_pub.publish(buf_msg)
 
+        buffered_request_count = self._current_request_buffer_count(
+            buffer_list
+        )
         structured_status = self.get_structured_status_message(
-            len(buffer_list)
+            buffered_request_count
         )
         if self._follows_terminal_status(structured_status):
             return Status.SUCCESS
 
-        stat_msg = self.get_status_message()
+        stat_msg = self.get_status_message(buffered_request_count)
         if stat_msg.data != self.last_status:
             self.status_pub.publish(stat_msg)
             self.last_status = stat_msg.data
@@ -91,12 +94,15 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             and message.request_id == self.last_terminal_request_id
         )
 
-    def get_status_message(self) -> str:
+    def get_status_message(self, buffered_command_count=0) -> str:
         stat = self.blackboard.command_tree_status
         name = String()
         if stat is None:
             name.data = "IDLE"
-        elif stat == Status.RUNNING:
+        elif stat == Status.RUNNING or (
+            stat == Status.SUCCESS
+            and buffered_command_count > 0
+        ):
             name.data = (
                 "Running: "
                 f"{self._command_id_text(self.blackboard.last_command)}"
@@ -128,12 +134,25 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         if status == Status.RUNNING:
             message.state = CommandStatus.STATE_RUNNING
         elif status == Status.SUCCESS:
-            message.state = CommandStatus.STATE_SUCCEEDED
+            if buffered_command_count > 0:
+                message.state = CommandStatus.STATE_RUNNING
+            else:
+                message.state = CommandStatus.STATE_SUCCEEDED
         elif status == Status.FAILURE:
             message.state = CommandStatus.STATE_FAILED
         else:
             message.state = CommandStatus.STATE_IDLE
         return message
+
+    def _current_request_buffer_count(self, buffer_list):
+        command = self.blackboard.last_command
+        request_id = getattr(command, "request_id", "")
+        if not request_id:
+            return 0
+        return sum(
+            getattr(buffered, "request_id", "") == request_id
+            for buffered in buffer_list
+        )
 
     @staticmethod
     def _structured_status_signature(message):

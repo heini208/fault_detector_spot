@@ -2,8 +2,16 @@ from typing import Optional, List
 
 import py_trees
 import rclpy
-from fault_detector_msgs.msg import ComplexCommand, BasicCommand
-from fault_detector_spot.shared.ros.qos_profiles import COMMAND_QOS
+from fault_detector_msgs.msg import (
+    BasicCommand,
+    CommandRequest as CommandRequestMessage,
+    CommandStatus,
+    ComplexCommand,
+)
+from fault_detector_spot.shared.ros.qos_profiles import (
+    COMMAND_QOS,
+    COMMAND_REQUEST_QOS,
+)
 from fault_detector_spot.navigation.commands.base_move_relative_command import (
     BaseMoveRelativeCommand,
 )
@@ -22,6 +30,12 @@ from fault_detector_spot.application.commanding.request_identity import (
     new_request_id,
     request_id_or_new,
 )
+from fault_detector_spot.application.commanding.command_request import (
+    CommandRequest,
+)
+from fault_detector_spot.application.ros.command_request_adapter import (
+    command_request_from_message,
+)
 
 
 class CommandSubscriber(py_trees.behaviour.Behaviour):
@@ -32,11 +46,15 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def __init__(
             self,
             name: str = "CommandSubscriber",
+            request_topic: str = "fault_detector/commands/request",
+            status_topic: str = "fault_detector/command_status",
             complex_command_topic: str = "fault_detector/commands/complex_command",
             command_topic: str = "fault_detector/commands/basic_command"
     ):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
+        self.request_topic = request_topic
+        self.status_topic = status_topic
         self.complex_command_topic = complex_command_topic
         self.command_topic = command_topic
         self.blackboard = None
@@ -53,6 +71,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.pending_msgs = []
         self.last_received_time = None
         self.process_delay_sec = 0.05
+        self._received_request_ids = set()
+        self.request_status_publisher = None
 
     def setup(self, **kwargs):
         try:
@@ -74,18 +94,34 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         processed_count = 0
         for stamp, msg in self.pending_msgs:
             try:
-                self.fire_command(msg)
+                if isinstance(msg, CommandRequest):
+                    self.fire_command(msg.command, msg)
+                else:
+                    self.fire_command(msg)
                 processed_count += 1
             except Exception as exception:
                 self.logger.error(
                     f"Rejected command: {exception}"
                 )
+                if isinstance(msg, CommandRequest):
+                    self._publish_request_failure(msg, str(exception))
 
         self.pending_msgs.clear()
         self.feedback_message = f"Processed {processed_count} commands"
         return py_trees.common.Status.SUCCESS
 
     def _create_ui_subscribers(self):
+        self.request_status_publisher = self.node.create_publisher(
+            CommandStatus,
+            self.status_topic,
+            10,
+        )
+        self.node.create_subscription(
+            CommandRequestMessage,
+            self.request_topic,
+            self.append_request_to_buffer,
+            COMMAND_REQUEST_QOS,
+        )
         self.node.create_subscription(
             ComplexCommand,
             self.complex_command_topic,
@@ -112,6 +148,28 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.command_buffer = []
         self.blackboard.estop_flag = False
 
+    def append_request_to_buffer(self, message):
+        try:
+            request = command_request_from_message(message)
+        except (TypeError, ValueError) as exception:
+            self.logger.error(f"Rejected command request: {exception}")
+            return
+        if request.request_id in self._received_request_ids:
+            self.logger.error(
+                f"Rejected duplicate request ID: {request.request_id}"
+            )
+            return
+        self._received_request_ids.add(request.request_id)
+        if self.is_estop_command(request.command.command):
+            self.trigger_estop(request.request_id, request)
+            self.logger.warning("ESTOP triggered immediately.")
+            return
+        stamp = self._extract_timestamp(request.command)
+        if stamp is None:
+            self.logger.warning("Command request without timestamp ignored.")
+            return
+        self.pending_msgs.append((stamp, request))
+
     def append_command_to_buffer(self, msg):
         if isinstance(msg, BasicCommand):
             if msg.command_id == CommandID.EMERGENCY_CANCEL:
@@ -129,7 +187,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             return
         self.pending_msgs.append((stamp, msg))
 
-    def fire_command(self, msg: [ComplexCommand, BasicCommand]):
+    def fire_command(
+        self,
+        msg: [ComplexCommand, BasicCommand],
+        request: Optional[CommandRequest] = None,
+    ):
         command_message = (
             msg.command if isinstance(msg, ComplexCommand) else msg
         )
@@ -155,6 +217,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             raise TypeError(f"Unknown message type: {type(msg)}")
         for command in commands:
             command.request_id = request_id
+            self._apply_request_metadata(command, request)
+        if request is not None and not commands:
+            raise ValueError(
+                "Command produced no executable behavior-tree commands"
+            )
         self.blackboard.command_buffer.extend(commands)
 
     def fire_basic_command(self, msg: BasicCommand):
@@ -208,18 +275,39 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def is_estop_command(self, command) -> bool:
         return command.command_id == CommandID.EMERGENCY_CANCEL
 
-    def trigger_estop(self, request_id=""):
+    def trigger_estop(self, request_id="", request=None):
         self.blackboard.command_buffer.clear()
         self.pending_msgs = []
         self.blackboard.estop_flag = True
-        self.blackboard.command_buffer.append(
-            SimpleCommand(
-                command_id=CommandID.EMERGENCY_CANCEL,
-                stamp=self._create_command_stamp(),
-                request_id=request_id,
-            )
+        command = SimpleCommand(
+            command_id=CommandID.EMERGENCY_CANCEL,
+            stamp=self._create_command_stamp(),
+            request_id=request_id,
         )
+        self._apply_request_metadata(command, request)
+        self.blackboard.command_buffer.append(command)
         self.logger.info("Emergency stop command received, clearing command buffer")
+
+    @staticmethod
+    def _apply_request_metadata(command, request):
+        if request is None:
+            return
+        command.client_id = request.client_id
+        command.context_id = request.context_id
+        command.origin = request.origin
+        command.recording_policy = request.recording_policy
+
+    def _publish_request_failure(self, request, detail):
+        if self.request_status_publisher is None:
+            return
+        message = CommandStatus()
+        message.header.stamp = self._create_command_stamp()
+        message.request_id = request.request_id
+        message.command_id = request.command.command.command_id
+        message.state = CommandStatus.STATE_FAILED
+        message.detail = detail
+        message.buffered_command_count = 0
+        self.request_status_publisher.publish(message)
 
     @staticmethod
     def _message_request_id(msg):

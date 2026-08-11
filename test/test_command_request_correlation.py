@@ -18,6 +18,11 @@ from fault_detector_spot.application.recording.record_manager_node import (
     clear_recorded_request_id,
 )
 from fault_detector_spot.application.commanding.request_identity import new_request_id
+from fault_detector_spot.application.commanding.command_request import (
+    CommandOrigin,
+    CommandRequest,
+    RecordingPolicy,
+)
 
 
 class FakeClock:
@@ -46,6 +51,62 @@ def test_complex_command_request_id_reaches_internal_motion():
 
     assert len(subscriber.blackboard.command_buffer) == 1
     assert subscriber.blackboard.command_buffer[0].request_id == request_id
+
+
+def test_request_metadata_reaches_internal_motion():
+    message = ComplexCommand()
+    message.command.command_id = CommandID.MOVE_ARM_RELATIVE
+    request = CommandRequest.create(
+        command=message,
+        client_id="probe_ui",
+        context_id="probe_setup_8",
+        origin=CommandOrigin.PROBE_SETUP,
+        recording_policy=RecordingPolicy.EXCLUDE,
+    )
+    request.command.command.request_id = request.request_id
+    subscriber = CommandSubscriber()
+    subscriber.blackboard = SimpleNamespace(command_buffer=[])
+    subscriber.node = SimpleNamespace(get_clock=lambda: FakeClock())
+
+    subscriber.fire_command(request.command, request)
+
+    command = subscriber.blackboard.command_buffer[0]
+    assert command.request_id == request.request_id
+    assert command.client_id == "probe_ui"
+    assert command.context_id == "probe_setup_8"
+    assert command.origin is CommandOrigin.PROBE_SETUP
+    assert command.recording_policy is RecordingPolicy.EXCLUDE
+
+
+def test_empty_request_translation_reports_correlated_failure():
+    message = ComplexCommand()
+    message.command.command_id = CommandID.SCAN_ALL_IN_RANGE
+    request = CommandRequest.create(
+        command=message,
+        client_id="operator_ui",
+        origin=CommandOrigin.OPERATIONAL,
+        recording_policy=(
+            RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
+        ),
+    )
+    request.command.command.request_id = request.request_id
+    subscriber = CommandSubscriber()
+    subscriber.blackboard = SimpleNamespace(
+        command_buffer=[],
+        reachable_tags={},
+    )
+    subscriber.node = SimpleNamespace(get_clock=lambda: FakeClock())
+    subscriber.request_status_publisher = FakePublisher()
+    subscriber.pending_msgs = [
+        (request.command.command.header.stamp, request)
+    ]
+
+    subscriber.update()
+
+    result = subscriber.request_status_publisher.messages[0]
+    assert result.request_id == request.request_id
+    assert result.state == CommandStatus.STATE_FAILED
+    assert "no executable" in result.detail
 
 
 def test_structured_status_preserves_request_and_buffer_count():

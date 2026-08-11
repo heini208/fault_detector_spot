@@ -47,9 +47,10 @@ class FakeGuardBlackboard:
         return getattr(self, key, None) is not None
 
 
-def make_command(command_id):
+def make_command(command_id, request_id=""):
     return SimpleNamespace(
         command_id=command_id,
+        request_id=request_id,
         stamp=None,
     )
 
@@ -125,3 +126,28 @@ def test_new_command_guard_accepts_static_clock_dispatches():
     manager.update()
     guard.blackboard.last_command = manager.blackboard.last_command
     assert guard.update() == Status.SUCCESS
+
+
+def test_failure_discards_remaining_internal_commands_only():
+    failed_request_id = "00000000-0000-4000-8000-000000000001"
+    next_request_id = "00000000-0000-4000-8000-000000000002"
+    commands = [
+        make_command(CommandID.WAIT_TIME, failed_request_id),
+        make_command(CommandID.STOW_ARM, next_request_id),
+    ]
+    manager = CommandManager()
+    manager.node = FakeNode(42_000_000_000)
+    manager.blackboard = FakeManagerBlackboard(commands)
+    manager.blackboard.command_tree_status = Status.FAILURE
+    manager.blackboard.last_command = make_command(
+        CommandID.MOVE_ARM_TO_TAG,
+        failed_request_id,
+    )
+
+    assert manager.update() == Status.SUCCESS
+
+    assert manager.blackboard.command_buffer == []
+    assert (
+        manager.blackboard.last_command.request_id
+        == next_request_id
+    )

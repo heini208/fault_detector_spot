@@ -52,6 +52,22 @@ class CommandManager(py_trees.behaviour.Behaviour):
         if not self.blackboard.command_buffer:
             return Status.SUCCESS
 
+        if self.blackboard.command_tree_status == Status.FAILURE:
+            failed_request_id = getattr(
+                self.blackboard.last_command,
+                "request_id",
+                "",
+            )
+            if failed_request_id:
+                self.blackboard.command_buffer[:] = [
+                    command
+                    for command in self.blackboard.command_buffer
+                    if getattr(command, "request_id", "")
+                    != failed_request_id
+                ]
+            if not self.blackboard.command_buffer:
+                return Status.SUCCESS
+
         for buffered_command in list(
             self.blackboard.command_buffer
         ):
