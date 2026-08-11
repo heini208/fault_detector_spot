@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 from builtin_interfaces.msg import Time
-from fault_detector_msgs.msg import BasicCommand, CommandStatus, ComplexCommand
+from fault_detector_msgs.msg import CommandStatus, ComplexCommand
 from py_trees.common import Status
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
@@ -14,8 +14,7 @@ from fault_detector_spot.application.behaviour_tree.behaviours.command_subscribe
     CommandSubscriber,
 )
 from fault_detector_spot.application.recording.record_manager_node import (
-    assign_playback_request_id,
-    clear_recorded_request_id,
+    serialize_recorded_command,
 )
 from fault_detector_spot.application.commanding.request_identity import new_request_id
 from fault_detector_spot.application.commanding.command_request import (
@@ -39,18 +38,27 @@ class FakePublisher:
 
 
 def test_complex_command_request_id_reaches_internal_motion():
-    request_id = new_request_id()
     message = ComplexCommand()
     message.command.command_id = CommandID.MOVE_ARM_TO_TAG
-    message.command.request_id = request_id
+    request = CommandRequest.create(
+        command=message,
+        client_id="operator_ui",
+        origin=CommandOrigin.OPERATIONAL,
+        recording_policy=(
+            RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
+        ),
+    )
     subscriber = CommandSubscriber()
     subscriber.blackboard = SimpleNamespace(command_buffer=[])
     subscriber.node = SimpleNamespace(get_clock=lambda: FakeClock())
 
-    subscriber.fire_command(message)
+    subscriber.fire_request(request)
 
     assert len(subscriber.blackboard.command_buffer) == 1
-    assert subscriber.blackboard.command_buffer[0].request_id == request_id
+    assert (
+        subscriber.blackboard.command_buffer[0].request_id
+        == request.request_id
+    )
 
 
 def test_request_metadata_reaches_internal_motion():
@@ -68,7 +76,7 @@ def test_request_metadata_reaches_internal_motion():
     subscriber.blackboard = SimpleNamespace(command_buffer=[])
     subscriber.node = SimpleNamespace(get_clock=lambda: FakeClock())
 
-    subscriber.fire_command(request.command, request)
+    subscriber.fire_request(request)
 
     command = subscriber.blackboard.command_buffer[0]
     assert command.request_id == request.request_id
@@ -158,21 +166,17 @@ def test_terminal_status_is_not_replaced_by_idle_guard_failure():
     assert len(publisher.status_pub.messages) == 1
 
 
-def test_recordings_clear_and_playback_regenerates_request_id():
+def test_recordings_clear_transient_request_identity():
     original_request_id = new_request_id()
-    serialized = {
-        "command": {
-            "command_id": CommandID.MOVE_ARM_TO_TAG,
-            "request_id": original_request_id,
-        }
+    message = ComplexCommand()
+    message.command.command_id = CommandID.MOVE_ARM_TO_TAG
+    message.command.request_id = original_request_id
+
+    serialized = serialize_recorded_command(message)
+
+    assert serialized["command"]["request_id"] == ""
+    assert serialized["command"]["header"]["stamp"] == {
+        "sec": 0,
+        "nanosec": 0,
     }
-
-    cleared = clear_recorded_request_id(serialized, is_complex=True)
-    assert cleared["command"]["request_id"] == ""
-
-    message = BasicCommand()
-    message.request_id = original_request_id
-    replay_request_id = assign_playback_request_id(message)
-
-    assert replay_request_id != original_request_id
-    assert message.request_id == replay_request_id
+    assert message.command.request_id == original_request_id

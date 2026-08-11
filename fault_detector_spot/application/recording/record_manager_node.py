@@ -1,189 +1,279 @@
 #!/usr/bin/env python3
+"""Record and replay accepted semantic command requests."""
+
+from collections import deque
 import json
 import os
-import time
-from typing import List
+from typing import Deque, List
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
-from fault_detector_msgs.msg import ComplexCommand, BasicCommand, CommandRecordControl, StringArray
-from fault_detector_spot.shared.ros.qos_profiles import COMMAND_QOS, LATCHED_QOS
-from fault_detector_spot.application.commanding.command_ids import CommandID
-from fault_detector_spot.application.commanding.request_identity import new_request_id
+from fault_detector_msgs.msg import (
+    CommandRecordControl,
+    CommandRequest as CommandRequestMessage,
+    CommandStatus,
+    ComplexCommand,
+    StringArray,
+)
 from rclpy.node import Node
-from rosidl_runtime_py import message_to_ordereddict
-from rosidl_runtime_py import set_message_fields
+from rosidl_runtime_py import message_to_ordereddict, set_message_fields
 from std_msgs.msg import Bool
 
+from fault_detector_spot.application.commanding.command_request import (
+    CommandOrigin,
+    CommandRequest,
+    RecordingPolicy,
+)
+from fault_detector_spot.application.ros.command_request_adapter import (
+    command_request_from_message,
+    command_request_to_message,
+)
+from fault_detector_spot.shared.ros.qos_profiles import (
+    COMMAND_REQUEST_QOS,
+    LATCHED_QOS,
+)
 
-NON_RECORDABLE_COMPLEX_COMMANDS = {
-    CommandID.CREATE_INSPECTION_OBJECT,
-    CommandID.CREATE_INSPECTION_ROUTINE,
-    CommandID.DELETE_INSPECTION_OBJECT,
-    CommandID.DELETE_INSPECTION_ROUTINE,
-    CommandID.CAPTURE_INSPECTION_OBJECT_REFERENCE_VIEW,
-}
 
-
-def clear_recorded_request_id(data, is_complex):
-    """Remove transient request identity from serialized recordings."""
-    command = data.get("command", {}) if is_complex else data
-    if "request_id" in command:
-        command["request_id"] = ""
+def serialize_recorded_command(command: ComplexCommand) -> dict:
+    """Serialize one semantic command without transient correlation data."""
+    if not isinstance(command, ComplexCommand):
+        raise TypeError("Recorded command must be a ComplexCommand")
+    data = message_to_ordereddict(command)
+    data["command"]["request_id"] = ""
+    data["command"]["header"]["stamp"] = {
+        "sec": 0,
+        "nanosec": 0,
+    }
     return data
 
 
-def assign_playback_request_id(message):
-    """Give every replayed command a fresh correlation identity."""
-    command = message.command if isinstance(message, ComplexCommand) else message
-    command.request_id = new_request_id()
-    return command.request_id
+def deserialize_recorded_command(data: dict) -> ComplexCommand:
+    """Restore one semantic command payload from recording data."""
+    if not isinstance(data, dict):
+        raise TypeError("Recorded command data must be an object")
+    command = ComplexCommand()
+    set_message_fields(command, data)
+    command.command.request_id = ""
+    return command
+
+
+def deserialize_recording(document) -> List[ComplexCommand]:
+    """Load one semantic recording document."""
+    if not isinstance(document, dict):
+        raise ValueError("Recording must be an object")
+    entries = document.get("commands")
+    if not isinstance(entries, list):
+        raise ValueError("Recording commands must be a list")
+    return [deserialize_recorded_command(entry) for entry in entries]
 
 
 class RecordManager(Node):
-    def __init__(self):
-        super().__init__('record_manager')
+    """Persist accepted commands and coordinate sequential playback."""
 
-        # Directory for recordings
+    def __init__(self):
+        super().__init__("record_manager")
         self.recordings_dir = os.path.join(
-            get_package_share_directory('fault_detector_spot'),
-            'recordings'
+            get_package_share_directory("fault_detector_spot"),
+            "recordings",
         )
         os.makedirs(self.recordings_dir, exist_ok=True)
-
-        # State
         self.recording = False
         self.current_name = None
-        self.start_time = None
         self.temp_data: List[dict] = []
-        self.delay = 0.1
+        self._recorded_request_ids = set()
+        self._playback_commands: Deque[ComplexCommand] = deque()
+        self._playback_request_id = ""
+        self._playback_name = ""
 
-        # Publishers
-        self.list_pub = self.create_publisher(StringArray, 'fault_detector/recordings_list', LATCHED_QOS)
-        self.playback_state_pub = self.create_publisher(Bool, 'fault_detector/playback_state', LATCHED_QOS)
-        self.complex_pub = self.create_publisher(ComplexCommand, 'fault_detector/commands/complex_command', COMMAND_QOS)
-        self.basic_pub = self.create_publisher(BasicCommand, 'fault_detector/commands/basic_command', COMMAND_QOS)
+        self.list_pub = self.create_publisher(
+            StringArray,
+            "fault_detector/recordings_list",
+            LATCHED_QOS,
+        )
+        self.playback_state_pub = self.create_publisher(
+            Bool,
+            "fault_detector/playback_state",
+            LATCHED_QOS,
+        )
+        self.command_submission_pub = self.create_publisher(
+            CommandRequestMessage,
+            "fault_detector/commands/submit",
+            COMMAND_REQUEST_QOS,
+        )
 
-        # Subscribers
-        self.create_subscription(CommandRecordControl, 'fault_detector/record_control', self.handle_control, 10)
-        self.create_subscription(ComplexCommand, 'fault_detector/commands/complex_command', self.capture_command, 10)
-        self.create_subscription(BasicCommand, 'fault_detector/commands/basic_command', self.capture_command, 10)
-
-        # Publish initial list
+        self.create_subscription(
+            CommandRecordControl,
+            "fault_detector/record_control",
+            self.handle_control,
+            10,
+        )
+        self.create_subscription(
+            CommandRequestMessage,
+            "fault_detector/commands/accepted",
+            self.capture_request,
+            COMMAND_REQUEST_QOS,
+        )
+        self.create_subscription(
+            CommandStatus,
+            "fault_detector/commands/status",
+            self.handle_playback_status,
+            10,
+        )
         self.publish_recordings_list()
 
-    # ----- Handle record/play/delete control -----
-    def handle_control(self, msg: CommandRecordControl):
-        mode = msg.mode.lower()
-        name = msg.name.strip()
-
-        if mode == 'start':
+    def handle_control(self, message: CommandRecordControl):
+        mode = message.mode.lower()
+        name = message.name.strip()
+        if mode == "start":
             self.start_recording(name)
-        elif mode == 'stop':
+        elif mode == "stop":
             self.stop_recording()
-        elif mode == 'play':
+        elif mode == "play":
             self.play_recording(name)
-        elif mode == 'delete':
+        elif mode == "delete":
             self.delete_recording(name)
 
-    # ----- Recording -----
     def start_recording(self, name: str):
         if not name:
-            self.get_logger().warn("Recording name is empty, ignoring.")
+            self.get_logger().warning("Recording name is empty, ignoring.")
             return
         self.delete_recording(name)
         self.recording = True
         self.current_name = name
         self.temp_data.clear()
-        self.start_time = time.time()
+        self._recorded_request_ids.clear()
         self.get_logger().info(f"Started recording: {name}")
 
     def stop_recording(self):
         if not self.recording:
             return
-        file_path = os.path.join(self.recordings_dir, f"{self.current_name}.json")
-        with open(file_path, 'w') as f:
-            json.dump(self.temp_data, f, indent=2)
+        file_path = self._recording_path(self.current_name)
+        with open(file_path, "w") as file:
+            json.dump({"commands": self.temp_data}, file, indent=2)
         self.get_logger().info(f"Saved recording: {file_path}")
         self.recording = False
         self.current_name = None
+        self._recorded_request_ids.clear()
         self.publish_recordings_list()
 
-    def capture_command(self, msg):
+    def capture_request(self, message: CommandRequestMessage) -> bool:
         if not self.recording:
-            return
+            return False
+        try:
+            request = command_request_from_message(message)
+        except (TypeError, ValueError) as exception:
+            self.get_logger().error(
+                f"Rejected accepted command request: {exception}"
+            )
+            return False
         if (
-            isinstance(msg, ComplexCommand)
-            and msg.command.command_id in NON_RECORDABLE_COMPLEX_COMMANDS
+            request.recording_policy
+            is not RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
         ):
-            return
+            return False
+        if request.request_id in self._recorded_request_ids:
+            return False
+        self._recorded_request_ids.add(request.request_id)
+        self.temp_data.append(serialize_recorded_command(request.command))
+        return True
 
-        # Convert message to dict
-        is_complex = isinstance(msg, ComplexCommand)
-        data = clear_recorded_request_id(
-            self.serialize_ros_message(msg),
-            is_complex,
-        )
-        msg_dict = {
-            "topic": 'complex' if isinstance(msg, ComplexCommand) else 'basic',
-            "timestamp": round(time.time() - self.start_time, 2),
-            "data": data,
-        }
-        self.temp_data.append(msg_dict)
-
-    # ----- Playback -----
     def play_recording(self, name: str):
-        file_path = os.path.join(self.recordings_dir, f"{name}.json")
-        if not os.path.exists(file_path):
-            self.get_logger().warn(f"Recording not found: {name}")
+        if self._playback_request_id or self._playback_commands:
+            self.get_logger().warning("Playback is already active.")
             return
-
-        self.get_logger().info(f"Playing back: {name}")
+        file_path = self._recording_path(name)
+        if not os.path.exists(file_path):
+            self.get_logger().warning(f"Recording not found: {name}")
+            return
+        try:
+            with open(file_path, "r") as file:
+                commands = deserialize_recording(json.load(file))
+        except (OSError, TypeError, ValueError) as exception:
+            self.get_logger().error(
+                f"Could not load recording {name}: {exception}"
+            )
+            return
+        self._playback_commands = deque(commands)
+        self._playback_name = name
         self.playback_state_pub.publish(Bool(data=True))
+        self.get_logger().info(f"Playing back: {name}")
+        self._dispatch_next_playback_command()
 
-        with open(file_path, 'r') as f:
-            data = json.load(f)
+    def handle_playback_status(self, message: CommandStatus) -> bool:
+        if (
+            not self._playback_request_id
+            or message.request_id != self._playback_request_id
+        ):
+            return False
+        if message.state == CommandStatus.STATE_SUCCEEDED:
+            if message.buffered_command_count > 0:
+                return True
+            self._playback_request_id = ""
+            self._dispatch_next_playback_command()
+            return True
+        if message.state in (
+            CommandStatus.STATE_FAILED,
+            CommandStatus.STATE_CANCELLED,
+        ):
+            detail = message.detail or "command did not succeed"
+            self._finish_playback(
+                f"Playback stopped after {message.command_id}: {detail}",
+                failed=True,
+            )
+            return True
+        return message.state == CommandStatus.STATE_RUNNING
 
-        for entry in data:
-            if entry["topic"] == "complex":
-                msg = ComplexCommand()
-                self.deserialize_ros_message(entry["data"], msg)
-                msg.command.header.stamp = self.get_clock().now().to_msg()
-                assign_playback_request_id(msg)
-                self.complex_pub.publish(msg)
-            else:
-                msg = BasicCommand()
-                self.deserialize_ros_message(entry["data"], msg)
-                msg.header.stamp = self.get_clock().now().to_msg()
-                assign_playback_request_id(msg)
-                self.basic_pub.publish(msg)
-            # small delay
-            time.sleep(self.delay)
+    def _dispatch_next_playback_command(self):
+        if not self._playback_commands:
+            self._finish_playback("Playback finished.")
+            return
+        command = self._playback_commands.popleft()
+        request = CommandRequest.create(
+            command=command,
+            client_id="record_manager",
+            origin=CommandOrigin.PLAYBACK,
+            recording_policy=(
+                RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
+            ),
+        )
+        self._playback_request_id = request.request_id
+        self.command_submission_pub.publish(
+            command_request_to_message(request)
+        )
 
-        self.playback_state_pub.publish(Bool(data=False))
-        self.get_logger().info("Playback finished.")
+    def _finish_playback(self, message, failed=False):
+        was_active = bool(
+            self._playback_name
+            or self._playback_request_id
+            or self._playback_commands
+        )
+        self._playback_commands.clear()
+        self._playback_request_id = ""
+        self._playback_name = ""
+        if was_active:
+            self.playback_state_pub.publish(Bool(data=False))
+        if failed:
+            self.get_logger().warning(message)
+        else:
+            self.get_logger().info(message)
 
-    # ----- Delete -----
     def delete_recording(self, name: str):
-        file_path = os.path.join(self.recordings_dir, f"{name}.json")
+        file_path = self._recording_path(name)
         if os.path.exists(file_path):
             os.remove(file_path)
             self.get_logger().info(f"Deleted recording: {name}")
             self.publish_recordings_list()
 
-    # ----- Recordings list -----
     def publish_recordings_list(self):
-        files = [f[:-5] for f in os.listdir(self.recordings_dir) if f.endswith(".json")]
+        files = [
+            file_name[:-5]
+            for file_name in os.listdir(self.recordings_dir)
+            if file_name.endswith(".json")
+        ]
         self.list_pub.publish(StringArray(names=sorted(files)))
 
-    # ----- Serialization helpers -----
-    def serialize_ros_message(self, msg):
-        """Convert ROS message to plain dict."""
-        return message_to_ordereddict(msg)
-
-    def deserialize_ros_message(self, data_dict, msg):
-        """Fill ROS message from dict."""
-        set_message_fields(msg, data_dict)
+    def _recording_path(self, name):
+        return os.path.join(self.recordings_dir, f"{name}.json")
 
 
 def main(args=None):
@@ -197,5 +287,5 @@ def main(args=None):
     rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

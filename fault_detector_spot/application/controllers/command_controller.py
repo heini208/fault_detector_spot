@@ -22,6 +22,7 @@ from fault_detector_spot.application.commanding.request_identity import (
     validate_request_id,
 )
 from fault_detector_spot.application.ros.command_request_adapter import (
+    command_request_from_message,
     command_request_to_message,
 )
 from fault_detector_spot.shared.ros.qos_profiles import (
@@ -72,8 +73,10 @@ class CommandController:
     def __init__(
         self,
         node,
+        submission_topic: str = "fault_detector/commands/submit",
         dispatch_topic: str = "fault_detector/commands/request",
         accepted_topic: str = "fault_detector/commands/accepted",
+        controller_status_topic: str = "fault_detector/commands/status",
         status_topic: str = "fault_detector/command_status",
     ):
         self.node = node
@@ -90,6 +93,17 @@ class CommandController:
         self._accepted_publisher = node.create_publisher(
             CommandRequestMessage,
             accepted_topic,
+            COMMAND_REQUEST_QOS,
+        )
+        self._controller_status_publisher = node.create_publisher(
+            CommandStatus,
+            controller_status_topic,
+            10,
+        )
+        self._submission_subscription = node.create_subscription(
+            CommandRequestMessage,
+            submission_topic,
+            self.submit_message,
             COMMAND_REQUEST_QOS,
         )
         self._status_subscription = node.create_subscription(
@@ -150,6 +164,16 @@ class CommandController:
                 )
                 self._dispatch_next_locked()
         return normalized.request_id
+
+    def submit_message(self, message: CommandRequestMessage) -> bool:
+        """Validate and submit one ROS-facing semantic request."""
+        try:
+            request = command_request_from_message(message)
+            self.submit(request)
+        except (TypeError, ValueError) as exception:
+            self._reject_message(message, str(exception))
+            return False
+        return True
 
     def cancel(self, request_id: str) -> str:
         """Cancel a queued request or globally stop an active request."""
@@ -294,6 +318,7 @@ class CommandController:
             detail=detail,
             buffered_command_count=buffered_command_count,
         )
+        self._publish_controller_status(status)
         for listener in tuple(self._listeners):
             try:
                 listener(status)
@@ -301,6 +326,56 @@ class CommandController:
                 self.node.get_logger().error(
                     f"Command status listener failed: {exception}"
                 )
+
+    def _reject_message(self, message, detail):
+        command = getattr(message, "command", None)
+        basic = getattr(command, "command", None)
+        self._publish_rejection(
+            getattr(message, "request_id", ""),
+            getattr(basic, "command_id", ""),
+            detail,
+        )
+
+    def _publish_rejection(self, request_id, command_id, detail):
+        self.node.get_logger().error(f"Rejected command request: {detail}")
+        if not request_id:
+            return
+        message = CommandStatus()
+        message.header.stamp = self.node.get_clock().now().to_msg()
+        message.request_id = request_id
+        message.command_id = command_id
+        message.state = CommandStatus.STATE_FAILED
+        message.detail = detail
+        message.buffered_command_count = 0
+        self._controller_status_publisher.publish(message)
+
+    def _publish_controller_status(self, status):
+        message = CommandStatus()
+        message.header.stamp = self.node.get_clock().now().to_msg()
+        message.request_id = status.request_id
+        message.command_id = (
+            status.request.command.command.command_id
+        )
+        message.state = self._controller_status_state(status.state)
+        message.detail = status.detail or status.state.value
+        message.buffered_command_count = status.buffered_command_count
+        self._controller_status_publisher.publish(message)
+
+    @staticmethod
+    def _controller_status_state(state):
+        if state in (
+            CommandControllerState.QUEUED,
+            CommandControllerState.DISPATCHED,
+            CommandControllerState.RUNNING,
+        ):
+            return CommandStatus.STATE_RUNNING
+        if state is CommandControllerState.SUCCEEDED:
+            return CommandStatus.STATE_SUCCEEDED
+        if state is CommandControllerState.FAILED:
+            return CommandStatus.STATE_FAILED
+        if state is CommandControllerState.CANCELLED:
+            return CommandStatus.STATE_CANCELLED
+        raise ValueError(f"Unsupported controller state: {state}")
 
     @staticmethod
     def _is_emergency(

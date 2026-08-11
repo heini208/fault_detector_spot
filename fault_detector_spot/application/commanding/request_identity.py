@@ -26,6 +26,6 @@ def validate_request_id(request_id: str) -> str:
 
 
 def request_id_or_new(request_id: str) -> str:
-    """Normalize a supplied identity or create one for legacy publishers."""
+    """Normalize a supplied identity or create one for an internal command."""
     value = request_id.strip() if isinstance(request_id, str) else ""
     return validate_request_id(value) if value else new_request_id()

@@ -17,6 +17,9 @@ from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
     DuplicateCommandRequest,
 )
+from fault_detector_spot.application.ros.command_request_adapter import (
+    command_request_to_message,
+)
 
 
 class FakePublisher:
@@ -190,6 +193,14 @@ def test_emergency_stop_clears_queue_and_bypasses_active_request():
         dispatched[-1].command.command.command_id
         == CommandID.EMERGENCY_CANCEL.value
     )
+    external_cancelled = {
+        message.request_id
+        for message in node.publishers[
+            "fault_detector/commands/status"
+        ].messages
+        if message.state == CommandStatus.STATE_CANCELLED
+    }
+    assert external_cancelled == {first.request_id, second.request_id}
 
 
 def test_dispatch_rewrites_nested_identity_and_timestamp():
@@ -207,3 +218,55 @@ def test_dispatch_rewrites_nested_identity_and_timestamp():
         sec=17,
         nanosec=23,
     )
+
+
+def test_ros_submission_topic_enters_the_serialized_queue():
+    node = FakeNode()
+    controller = CommandController(node)
+    request = make_request(CommandID.READY_ARM.value)
+
+    accepted = node.subscriptions[
+        "fault_detector/commands/submit"
+    ](command_request_to_message(request))
+
+    assert accepted is True
+    assert controller.active_request_id == request.request_id
+    assert node.publishers[
+        "fault_detector/commands/accepted"
+    ].messages[0].request_id == request.request_id
+
+
+def test_controller_exposes_only_semantic_command_input():
+    node = FakeNode()
+    CommandController(node)
+
+    assert "fault_detector/commands/submit" in node.subscriptions
+    assert "fault_detector/commands/basic_command" not in node.subscriptions
+    assert (
+        "fault_detector/commands/complex_command"
+        not in node.subscriptions
+    )
+
+
+def test_invalid_submission_is_rejected_without_dispatch():
+    node = FakeNode()
+    CommandController(node)
+    request = make_request(CommandID.STAND_UP.value)
+    message = command_request_to_message(request)
+    message.command.command.request_id = make_request(
+        CommandID.STOW_ARM.value
+    ).request_id
+
+    accepted = node.subscriptions[
+        "fault_detector/commands/submit"
+    ](message)
+
+    assert accepted is False
+    assert not node.publishers[
+        "fault_detector/commands/request"
+    ].messages
+    rejection = node.publishers[
+        "fault_detector/commands/status"
+    ].messages[0]
+    assert rejection.request_id == request.request_id
+    assert rejection.state == CommandStatus.STATE_FAILED

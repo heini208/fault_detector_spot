@@ -34,6 +34,9 @@ from fault_detector_spot.application.behaviour_tree import (
     ResolveLiveInspectionObject, PublishLiveInspectionObject,
 )
 from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.controllers.command_controller import (
+    CommandController,
+)
 from fault_detector_spot.navigation.behaviours.last_localization_pose import LastLocalizationPose
 from fault_detector_spot.application.behaviour_tree.behaviours.publish_initial_ui_info_once import (
     PublishInitialUIInfoOnce,
@@ -641,6 +644,7 @@ def main(args=None):
         rclpy.try_shutdown()
         sys.exit(1)
 
+    tree.node.command_controller = CommandController(tree.node)
 
     tree.tick_tock(period_ms=50.0)
 
