@@ -120,7 +120,7 @@ def test_automatic_mode_generates_surface_target(application, tmp_path):
     assert controls.reference_target_status_label.text() == "Ready"
     assert controls.reference_target_roll_value_label.text() == "0.0"
     assert controls.reference_target_pitch_value_label.text() == "0.0"
-    assert controls.reference_target_yaw_value_label.text() == "0.0"
+    assert controls.reference_target_yaw_value_label.text() == "-180.0"
 
 
 def test_automatic_mode_rejects_uncalibrated_tag_fallback(
@@ -177,7 +177,7 @@ def test_tag_x_selected_generates_tag_aligned_target(application, tmp_path):
     assert target is not None
     assert controls.reference_target_roll_value_label.text() == "0.0"
     assert controls.reference_target_pitch_value_label.text() == "0.0"
-    assert controls.reference_target_yaw_value_label.text() == "0.0"
+    assert controls.reference_target_yaw_value_label.text() == "-180.0"
 
 
 def test_distance_change_recalculates_target(application, tmp_path):

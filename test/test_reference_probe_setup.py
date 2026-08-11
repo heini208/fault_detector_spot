@@ -55,6 +55,16 @@ def yaw_quaternion(degrees):
     )
 
 
+def roll_quaternion(degrees):
+    radians = math.radians(degrees) * 0.5
+    return QuaternionData(
+        x=math.sin(radians),
+        y=0.0,
+        z=0.0,
+        w=math.cos(radians),
+    )
+
+
 def test_initial_setup_uses_calculated_poses():
     setup = initialize_reference_probe_setup(target())
 
@@ -62,6 +72,25 @@ def test_initial_setup_uses_calculated_poses():
     assert setup.aligned_preapproach_pose_object.position.x == 0.15
     assert setup.probe_pose_object.position.x == 0.03
     assert not setup.safe_approach_approved
+
+
+def test_initial_setup_compensates_sensor_roll_with_level_hand_pose():
+    mounting = pose(orientation=roll_quaternion(90.0))
+
+    setup = initialize_reference_probe_setup(target(), mounting)
+    hand_pose = probe_pose_to_hand_pose(
+        setup.probe_pose_object,
+        mounting,
+    )
+    inward = rotate_vector(
+        setup.probe_pose_object.orientation,
+        Vector3Data(x=1.0, y=0.0, z=0.0),
+    )
+
+    assert hand_pose.orientation == QuaternionData.identity()
+    assert inward.x == pytest.approx(1.0)
+    assert inward.y == pytest.approx(0.0)
+    assert inward.z == pytest.approx(0.0)
 
 
 def test_approach_capture_changes_only_the_independent_safe_pose():

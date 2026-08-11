@@ -1453,7 +1453,7 @@ class InspectionControls(UIControlHelper):
         target_layout.addWidget(self.reference_target_z_value_label, 2, 6)
 
         target_layout.addWidget(
-            QLabel("Target angle relative to object [deg]:"),
+            QLabel("Commanded hand angle relative to object [deg]:"),
             3,
             0,
         )
@@ -2480,7 +2480,10 @@ class InspectionControls(UIControlHelper):
             return
 
         self._selected_surface_target = result
-        setup = initialize_reference_probe_setup(result)
+        setup = initialize_reference_probe_setup(
+            result,
+            self._configured_hand_to_probe_pose(),
+        )
         self._calculated_probe_setup = deepcopy(setup)
         if previous_setup is not None:
             if previous_setup.safe_approach_approved:
@@ -2535,7 +2538,9 @@ class InspectionControls(UIControlHelper):
         self.reference_target_z_value_label.setText(
             self._format_readout_value(target.position.z, 3)
         )
-        roll, pitch, yaw = quaternion_to_rpy(target.orientation)
+        mounting = self._configured_hand_to_probe_pose()
+        hand_target = probe_pose_to_hand_pose(target, mounting)
+        roll, pitch, yaw = quaternion_to_rpy(hand_target.orientation)
         self.reference_target_roll_value_label.setText(
             self._format_readout_value(math.degrees(roll), 1)
         )
@@ -2555,6 +2560,11 @@ class InspectionControls(UIControlHelper):
             self._format_readout_value(aligned.position.z, 3)
         )
         detail = (
+            "Object-frame hand quaternion: "
+            f"x={hand_target.orientation.x:.5f}, "
+            f"y={hand_target.orientation.y:.5f}, "
+            f"z={hand_target.orientation.z:.5f}, "
+            f"w={hand_target.orientation.w:.5f}. "
             "Object-frame probe quaternion: "
             f"x={target.orientation.x:.5f}, "
             f"y={target.orientation.y:.5f}, "
@@ -3795,6 +3805,20 @@ class InspectionControls(UIControlHelper):
         if probe_frame == HAND_FRAME_NAME:
             return PoseData.identity()
         return self._lookup_pose(HAND_FRAME_NAME, probe_frame)
+
+    def _configured_hand_to_probe_pose(self):
+        sensor_id = None
+        routine_id = self.saved_routine_dropdown.currentData()
+        if routine_id and self._selected_definition is not None:
+            routine = self._selected_definition.get_routine(routine_id)
+            if routine is not None:
+                sensor_id = routine.sensor_id
+        if not sensor_id:
+            sensor_id = self.sensor_id_field.currentData()
+        definition = self._sensor_definitions.get(sensor_id)
+        if definition is None:
+            return PoseData.identity()
+        return deepcopy(definition.hand_to_probe)
 
     def _active_probe_frame(self):
         routine_id = self.saved_routine_dropdown.currentData()

@@ -29,19 +29,133 @@ class ReferenceProbeSetup:
 
 def initialize_reference_probe_setup(
     surface_target: ReferenceSurfaceTarget,
+    hand_to_probe_pose: PoseData = None,
 ) -> ReferenceProbeSetup:
     """Create transient setup state from calculated surface geometry."""
     _validate_surface_target(surface_target)
+    mounting = hand_to_probe_pose or PoseData.identity()
+    mounting.validate()
+    probe_orientation = _level_hand_probe_orientation(
+        surface_target.target_pose_object.orientation,
+        mounting.orientation,
+    )
+    aligned_pose = PoseData(
+        position=surface_target.aligned_preapproach_pose_object.position,
+        orientation=probe_orientation,
+    )
+    probe_pose = PoseData(
+        position=surface_target.target_pose_object.position,
+        orientation=probe_orientation,
+    )
     return ReferenceProbeSetup(
         surface_target=surface_target,
-        safe_approach_pose_object=(
-            surface_target.aligned_preapproach_pose_object
-        ),
-        aligned_preapproach_pose_object=(
-            surface_target.aligned_preapproach_pose_object
-        ),
-        probe_pose_object=surface_target.target_pose_object,
+        safe_approach_pose_object=aligned_pose,
+        aligned_preapproach_pose_object=aligned_pose,
+        probe_pose_object=probe_pose,
     )
+
+
+def _level_hand_probe_orientation(
+    desired_surface_orientation: QuaternionData,
+    hand_to_probe_orientation: QuaternionData,
+) -> QuaternionData:
+    desired_surface_orientation.validate()
+    hand_to_probe_orientation.validate()
+    local_x = Vector3Data(x=1.0, y=0.0, z=0.0)
+    desired_axis = rotate_vector(desired_surface_orientation, local_x)
+    mounted_axis = rotate_vector(hand_to_probe_orientation, local_x)
+    desired = np.array(
+        [desired_axis.x, desired_axis.y, desired_axis.z],
+        dtype=float,
+    )
+    mounted = np.array(
+        [mounted_axis.x, mounted_axis.y, mounted_axis.z],
+        dtype=float,
+    )
+    pitch_radius = math.hypot(mounted[0], mounted[2])
+    if pitch_radius <= 1e-10:
+        if abs(desired[2]) > 1e-8:
+            raise ValueError(
+                "A zero-roll hand pose cannot align this sensor mounting"
+            )
+        pitch_candidates = (0.0,)
+    else:
+        ratio = desired[2] / pitch_radius
+        if abs(ratio) > 1.0 + 1e-8:
+            raise ValueError(
+                "A zero-roll hand pose cannot align this sensor mounting"
+            )
+        ratio = max(-1.0, min(1.0, ratio))
+        phase = math.atan2(mounted[0], mounted[2])
+        solution = math.acos(ratio)
+        pitch_candidates = (
+            _normalize_angle(solution - phase),
+            _normalize_angle(-solution - phase),
+        )
+
+    candidates = []
+    desired_values = np.array(
+        [
+            desired_surface_orientation.x,
+            desired_surface_orientation.y,
+            desired_surface_orientation.z,
+            desired_surface_orientation.w,
+        ],
+        dtype=float,
+    )
+    for pitch in pitch_candidates:
+        pitched_x = (
+            math.cos(pitch) * mounted[0]
+            + math.sin(pitch) * mounted[2]
+        )
+        yaw = _normalize_angle(
+            math.atan2(desired[1], desired[0])
+            - math.atan2(mounted[1], pitched_x)
+        )
+        hand_orientation = _pitch_yaw_quaternion(pitch, yaw)
+        probe_orientation = multiply_quaternions(
+            hand_orientation,
+            hand_to_probe_orientation,
+        )
+        achieved_axis = rotate_vector(probe_orientation, local_x)
+        error = float(
+            np.linalg.norm(
+                np.array(
+                    [
+                        achieved_axis.x,
+                        achieved_axis.y,
+                        achieved_axis.z,
+                    ]
+                )
+                - desired
+            )
+        )
+        hand_values = np.array(
+            [
+                hand_orientation.x,
+                hand_orientation.y,
+                hand_orientation.z,
+                hand_orientation.w,
+            ],
+            dtype=float,
+        )
+        orientation_delta = 1.0 - abs(
+            float(np.dot(hand_values, desired_values))
+        )
+        candidates.append(
+            (error, orientation_delta, probe_orientation)
+        )
+
+    candidates.sort(key=lambda candidate: (candidate[0], candidate[1]))
+    if not candidates or candidates[0][0] > 1e-7:
+        raise ValueError(
+            "A zero-roll hand pose cannot align this sensor mounting"
+        )
+    return candidates[0][2]
+
+
+def _normalize_angle(angle: float) -> float:
+    return math.atan2(math.sin(angle), math.cos(angle))
 
 
 def approve_safe_approach_pose(
