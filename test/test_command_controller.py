@@ -105,10 +105,10 @@ def test_controller_dispatches_only_one_semantic_request_at_a_time():
     controller.submit(second)
 
     dispatched = node.publishers[
-        "fault_detector/commands/request"
+        "fault_detector/_internal/commands/request"
     ].messages
     accepted = node.publishers[
-        "fault_detector/commands/accepted"
+        "fault_detector/_internal/commands/accepted"
     ].messages
     assert len(accepted) == 2
     assert [message.request_id for message in dispatched] == [
@@ -149,7 +149,7 @@ def test_internal_success_does_not_release_the_next_request():
     assert controller.active_request_id == first.request_id
     assert controller.queued_request_ids == (second.request_id,)
     assert len(node.publishers[
-        "fault_detector/commands/request"
+        "fault_detector/_internal/commands/request"
     ].messages) == 1
 
 
@@ -175,7 +175,7 @@ def test_emergency_stop_clears_queue_and_bypasses_active_request():
     emergency_request_id = controller.cancel_all()
 
     dispatched = node.publishers[
-        "fault_detector/commands/request"
+        "fault_detector/_internal/commands/request"
     ].messages
     assert [message.request_id for message in dispatched] == [
         first.request_id,
@@ -196,7 +196,7 @@ def test_emergency_stop_clears_queue_and_bypasses_active_request():
     external_cancelled = {
         message.request_id
         for message in node.publishers[
-            "fault_detector/commands/status"
+            "fault_detector/_internal/commands/status"
         ].messages
         if message.state == CommandStatus.STATE_CANCELLED
     }
@@ -211,7 +211,7 @@ def test_dispatch_rewrites_nested_identity_and_timestamp():
     controller.submit(request)
 
     message = node.publishers[
-        "fault_detector/commands/request"
+        "fault_detector/_internal/commands/request"
     ].messages[0]
     assert message.command.command.request_id == request.request_id
     assert message.command.command.header.stamp == Time(
@@ -226,13 +226,13 @@ def test_ros_submission_topic_enters_the_serialized_queue():
     request = make_request(CommandID.READY_ARM.value)
 
     accepted = node.subscriptions[
-        "fault_detector/commands/submit"
+        "fault_detector/_internal/commands/submit"
     ](command_request_to_message(request))
 
     assert accepted is True
     assert controller.active_request_id == request.request_id
     assert node.publishers[
-        "fault_detector/commands/accepted"
+        "fault_detector/_internal/commands/accepted"
     ].messages[0].request_id == request.request_id
 
 
@@ -240,7 +240,7 @@ def test_controller_exposes_only_semantic_command_input():
     node = FakeNode()
     CommandController(node)
 
-    assert "fault_detector/commands/submit" in node.subscriptions
+    assert "fault_detector/_internal/commands/submit" in node.subscriptions
     assert "fault_detector/commands/basic_command" not in node.subscriptions
     assert (
         "fault_detector/commands/complex_command"
@@ -258,15 +258,15 @@ def test_invalid_submission_is_rejected_without_dispatch():
     ).request_id
 
     accepted = node.subscriptions[
-        "fault_detector/commands/submit"
+        "fault_detector/_internal/commands/submit"
     ](message)
 
     assert accepted is False
     assert not node.publishers[
-        "fault_detector/commands/request"
+        "fault_detector/_internal/commands/request"
     ].messages
     rejection = node.publishers[
-        "fault_detector/commands/status"
+        "fault_detector/_internal/commands/status"
     ].messages[0]
     assert rejection.request_id == request.request_id
     assert rejection.state == CommandStatus.STATE_FAILED

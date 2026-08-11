@@ -55,6 +55,16 @@ def generate_launch_description():
         ),
 
         Node(
+            package='fault_detector_spot',
+            executable='application_api',
+            name='application_api',
+            output='screen',
+            parameters=[
+                {'use_sim_time': use_sim_time},
+            ],
+        ),
+
+        Node(
             package='apriltag_ros',
             executable='apriltag_node',
             name='apriltag_node',

@@ -38,8 +38,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def __init__(
             self,
             name: str = "CommandSubscriber",
-            request_topic: str = "fault_detector/commands/request",
-            status_topic: str = "fault_detector/command_status",
+            request_topic: str = (
+                "fault_detector/_internal/commands/request"
+            ),
+            status_topic: str = "fault_detector/_internal/command_status",
     ):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None

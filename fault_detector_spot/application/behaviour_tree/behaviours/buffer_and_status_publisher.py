@@ -38,7 +38,7 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         )
         self.structured_status_pub = self.node.create_publisher(
             CommandStatus,
-            'fault_detector/command_status',
+            'fault_detector/_internal/command_status',
             10,
         )
         # make sure keys exist

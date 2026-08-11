@@ -97,7 +97,7 @@ class RecordManager(Node):
         )
         self.command_submission_pub = self.create_publisher(
             CommandRequestMessage,
-            "fault_detector/commands/submit",
+            "fault_detector/_internal/commands/submit",
             COMMAND_REQUEST_QOS,
         )
 
@@ -109,13 +109,13 @@ class RecordManager(Node):
         )
         self.create_subscription(
             CommandRequestMessage,
-            "fault_detector/commands/accepted",
+            "fault_detector/_internal/commands/accepted",
             self.capture_request,
             COMMAND_REQUEST_QOS,
         )
         self.create_subscription(
             CommandStatus,
-            "fault_detector/commands/status",
+            "fault_detector/_internal/commands/status",
             self.handle_playback_status,
             10,
         )

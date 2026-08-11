@@ -73,11 +73,13 @@ class CommandController:
     def __init__(
         self,
         node,
-        submission_topic: str = "fault_detector/commands/submit",
-        dispatch_topic: str = "fault_detector/commands/request",
-        accepted_topic: str = "fault_detector/commands/accepted",
-        controller_status_topic: str = "fault_detector/commands/status",
-        status_topic: str = "fault_detector/command_status",
+        submission_topic: str = "fault_detector/_internal/commands/submit",
+        dispatch_topic: str = "fault_detector/_internal/commands/request",
+        accepted_topic: str = "fault_detector/_internal/commands/accepted",
+        controller_status_topic: str = (
+            "fault_detector/_internal/commands/status"
+        ),
+        status_topic: str = "fault_detector/_internal/command_status",
     ):
         self.node = node
         self._lock = RLock()
