@@ -1,7 +1,5 @@
 """Tests for probe refinement finalization state rules."""
 
-from copy import deepcopy
-
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
@@ -14,7 +12,9 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     ReferenceProbeSetup,
-    SurfaceTarget,
+)
+from fault_detector_spot.inspection.setup.reference_view_surface_target import (
+    ReferenceSurfaceTarget,
 )
 
 
@@ -26,11 +26,14 @@ def _pose(x):
 
 
 def _setup():
-    target = SurfaceTarget(
+    target = ReferenceSurfaceTarget(
         surface_point_object=Vector3Data(x=0.0, y=0.0, z=0.0),
         outward_direction_object=Vector3Data(x=-1.0, y=0.0, z=0.0),
+        target_pose_object=_pose(-0.02),
+        aligned_preapproach_pose_object=_pose(-0.08),
         target_surface_distance_m=0.02,
         aligned_preapproach_distance_m=0.08,
+        direction_source="test",
     )
     return ReferenceProbeSetup(
         surface_target=target,
