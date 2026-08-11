@@ -3,6 +3,7 @@
 from collections import deque
 from threading import RLock
 
+from rclpy.clock import ClockType
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 
@@ -13,7 +14,7 @@ from fault_detector_spot.inspection.setup import (
 
 class _Clock:
     def now(self):
-        return Time(seconds=10.0)
+        return Time(seconds=10.0, clock_type=ClockType.ROS_TIME)
 
 
 class _Node:
