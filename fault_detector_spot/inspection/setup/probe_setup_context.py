@@ -11,6 +11,9 @@ from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.inspection.setup.probe_setup_geometry import (
     ProbeGeometryResult,
 )
+from fault_detector_spot.inspection.setup.probe_refinement_session import (
+    ProbeRefinementSession,
+)
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     ReferenceProbeSetup,
 )
@@ -27,6 +30,7 @@ class ProbeSetupDraft:
     reference_pixel: Optional[ImagePoint] = None
     geometry: Optional[ProbeGeometryResult] = None
     setup: Optional[ReferenceProbeSetup] = None
+    refinement: Optional[ProbeRefinementSession] = None
     dirty: bool = False
     validation_error: str = ""
 
@@ -37,6 +41,7 @@ class ProbeSetupDraft:
         self.reference_pixel = None
         self.geometry = None
         self.setup = None
+        self.refinement = None
         self.dirty = False
         self.validation_error = ""
 
@@ -44,6 +49,7 @@ class ProbeSetupDraft:
         self.reference_pixel = None
         self.geometry = None
         self.setup = None
+        self.refinement = None
         self.dirty = False
         self.validation_error = ""
 
@@ -68,6 +74,7 @@ class ProbeSetupSnapshot:
     reference_pixel: Optional[ImagePoint]
     geometry: Optional[ProbeGeometryResult]
     setup: Optional[ReferenceProbeSetup]
+    refinement: Optional[ProbeRefinementSession]
     dirty: bool
     validation_error: str
 
@@ -104,6 +111,7 @@ class ProbeSetupSnapshot:
             reference_pixel=deepcopy(draft.reference_pixel),
             geometry=deepcopy(draft.geometry),
             setup=deepcopy(draft.setup),
+            refinement=deepcopy(draft.refinement),
             dirty=bool(draft.dirty),
             validation_error=draft.validation_error,
         )

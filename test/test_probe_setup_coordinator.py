@@ -5,7 +5,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fault_detector_msgs.msg import ComplexCommand
 
+from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.commanding.command_request import (
+    CommandOrigin,
+    RecordingPolicy,
+)
+from fault_detector_spot.application.controllers.command_controller import (
+    CommandControllerState,
+    CommandControllerStatus,
+)
 from fault_detector_spot.application.setup.setup_coordinator import (
     SetupCoordinator,
 )
@@ -29,6 +39,14 @@ from fault_detector_spot.inspection.repository.sensor_repository import (
 from fault_detector_spot.inspection.setup.probe_setup_coordinator import (
     ProbeSetupCoordinator,
 )
+from fault_detector_spot.inspection.setup.probe_setup_motion import (
+    ProbeMotionKind,
+    ProbeMotionRequest,
+)
+from fault_detector_spot.inspection.setup.probe_refinement_session import (
+    RefinementMotionState,
+    RefinementStage,
+)
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     initialize_reference_probe_setup,
 )
@@ -42,6 +60,14 @@ class FakeCommandController:
         self.listeners = []
         self.submitted = []
 
+    @property
+    def active_request_id(self):
+        return ""
+
+    @property
+    def queued_request_ids(self):
+        return ()
+
     def add_status_listener(self, listener):
         self.listeners.append(listener)
 
@@ -51,6 +77,56 @@ class FakeCommandController:
     def submit(self, request):
         self.submitted.append(request)
         return request.request_id
+
+    def succeed(self, request):
+        status = CommandControllerStatus(
+            request=request,
+            state=CommandControllerState.SUCCEEDED,
+        )
+        for listener in tuple(self.listeners):
+            listener(status)
+
+    def cancel(self, request_id):
+        request = next(
+            request
+            for request in self.submitted
+            if request.request_id == request_id
+        )
+        status = CommandControllerStatus(
+            request=request,
+            state=CommandControllerState.CANCELLED,
+            detail="Cancelled",
+        )
+        for listener in tuple(self.listeners):
+            listener(status)
+        return request_id
+
+
+class FakeMotionStateSource:
+    def __init__(self):
+        self.pose = pose()
+
+    def current_probe_pose_object(self, _tag_id, _sensor_id):
+        return self.pose
+
+    def reference_tag(self, _tag_id):
+        return None
+
+
+class FakeMotionCommandFactory:
+    def absolute(self, _target, _mounting, _tag):
+        command = ComplexCommand()
+        command.command.command_id = CommandID.MOVE_ARM_TO_TAG.value
+        return command
+
+    def relative(self, _frame, _translation, _pitch, _yaw):
+        command = ComplexCommand()
+        command.command.command_id = CommandID.MOVE_ARM_RELATIVE.value
+        return command
+
+    @staticmethod
+    def frame_id(_frame, _sensor_id, _tag_id):
+        return "body"
 
 
 class FakeGeometry:
@@ -112,13 +188,43 @@ def coordinator(tmp_path):
         display_name="Hall probe",
         hand_to_probe=PoseData.identity(),
     ))
+    motion_state = FakeMotionStateSource()
     probe = ProbeSetupCoordinator(
         setup_coordinator=shared,
         reference_repository=references,
         sensor_repository=sensors,
         geometry=FakeGeometry(),
+        motion_state_source=motion_state,
+        motion_command_factory=FakeMotionCommandFactory(),
     )
     return probe, command_controller
+
+
+def approve_all(probe, command_controller, state):
+    probe.motion_state_source.pose = pose(0.8)
+    state = probe.begin_refinement(state.context)
+    state = probe.approve_safe_pose(state.context)
+
+    operation = probe.prepare_motion(
+        state.context,
+        ProbeMotionRequest(
+            kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+            position_tolerance_m=0.01,
+            orientation_tolerance_rad=0.10,
+        ),
+    )
+    probe.submit_motion(operation)
+    probe.motion_state_source.pose = pose(0.6)
+    command_controller.succeed(operation.operation.request)
+    context = probe.context(state.context.context_id, "probe-ui")
+    state = probe.approve_aligned_pose(context)
+
+    draft = probe._drafts[state.context.context_id]
+    draft.refinement.motion_states[RefinementStage.PROBE] = (
+        RefinementMotionState.REACHED
+    )
+    probe.motion_state_source.pose = pose(0.5)
+    return probe.approve_probe_pose(state.context)
 
 
 def create_selected_routine(probe, context):
@@ -169,6 +275,93 @@ def test_repository_transactions_do_not_enter_physical_command_lane(tmp_path):
     assert command_controller.submitted == []
 
 
+def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
+    probe, command_controller = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
+        state.context,
+        "slot1_hand",
+        ImagePoint(u=20, v=30),
+        "surface_fit",
+        0.10,
+        0.20,
+    )
+    probe.motion_state_source.pose = pose(0.8)
+    state = probe.begin_refinement(state.context)
+    operation = probe.prepare_motion(
+        state.context,
+        ProbeMotionRequest(
+            kind=ProbeMotionKind.MOVE_SAFE_APPROACH,
+            position_tolerance_m=0.01,
+            orientation_tolerance_rad=0.10,
+        ),
+    )
+
+    assert operation.operation.request.origin is CommandOrigin.PROBE_SETUP
+    assert (
+        operation.operation.request.recording_policy
+        is RecordingPolicy.EXCLUDE
+    )
+    assert operation.operation.request.context_id == state.context.context_id
+    assert (
+        operation.operation.request.command.command.command_id
+        == CommandID.MOVE_ARM_TO_TAG.value
+    )
+    with pytest.raises(RuntimeError, match="active motion"):
+        probe.prepare_motion(state.context, operation.motion)
+
+    probe.submit_motion(operation)
+    probe.motion_state_source.pose = pose(0.6)
+    command_controller.succeed(operation.operation.request)
+    current = probe.context(state.context.context_id, "probe-ui")
+    completed = probe.snapshot(current)
+
+    assert len(command_controller.submitted) == 1
+    assert completed.context.revision > state.context.revision
+    assert (
+        completed.refinement.motion_states[RefinementStage.SAFE_APPROACH]
+        is RefinementMotionState.REACHED
+    )
+
+
+def test_probe_motion_cancellation_keeps_context_state_correlated(tmp_path):
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
+        state.context,
+        "slot1_hand",
+        ImagePoint(u=20, v=30),
+        "surface_fit",
+        0.10,
+        0.20,
+    )
+    state = probe.begin_refinement(state.context)
+    operation = probe.prepare_motion(
+        state.context,
+        ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH),
+    )
+    statuses = []
+    probe.add_motion_status_listener(statuses.append)
+    probe.submit_motion(operation)
+
+    probe.cancel_motion(state.context, operation.request_id)
+
+    assert statuses[-1].request_id == operation.request_id
+    assert statuses[-1].state is CommandControllerState.CANCELLED
+    assert (
+        statuses[-1].snapshot.refinement.motion_states[
+            RefinementStage.SAFE_APPROACH
+        ]
+        is RefinementMotionState.FAILED
+    )
+
+
 def test_selected_definition_metadata_is_server_owned(tmp_path):
     probe, _ = coordinator(tmp_path)
     context = probe.open_context("probe-ui").context
@@ -187,7 +380,7 @@ def test_selected_definition_metadata_is_server_owned(tmp_path):
 
 
 def test_geometry_and_approvals_are_owned_by_context(tmp_path):
-    probe, _ = coordinator(tmp_path)
+    probe, command_controller = coordinator(tmp_path)
     context = probe.open_context("probe-ui").context
     state = create_selected_routine(probe, context)
     state = probe.select_reference_pixel(
@@ -198,18 +391,7 @@ def test_geometry_and_approvals_are_owned_by_context(tmp_path):
         0.10,
         0.20,
     )
-    state = probe.approve_safe_pose(
-        state.context,
-        pose(0.8),
-    )
-    state = probe.approve_aligned_pose(
-        state.context,
-        pose(0.6),
-    )
-    state = probe.approve_probe_pose(
-        state.context,
-        pose(0.5),
-    )
+    state = approve_all(probe, command_controller, state)
 
     assert state.reference_pixel == ImagePoint(u=20, v=30)
     assert state.setup.safe_approach_approved
@@ -218,7 +400,7 @@ def test_geometry_and_approvals_are_owned_by_context(tmp_path):
 
 
 def test_distance_change_retains_only_safe_and_aligned_progress(tmp_path):
-    probe, _ = coordinator(tmp_path)
+    probe, command_controller = coordinator(tmp_path)
     state = create_selected_routine(
         probe,
         probe.open_context("probe-ui").context,
@@ -231,9 +413,7 @@ def test_distance_change_retains_only_safe_and_aligned_progress(tmp_path):
         0.10,
         0.20,
     )
-    state = probe.approve_safe_pose(state.context, pose(0.8))
-    state = probe.approve_aligned_pose(state.context, pose(0.6))
-    state = probe.approve_probe_pose(state.context, pose(0.5))
+    state = approve_all(probe, command_controller, state)
 
     updated = probe.update_geometry(
         state.context,
@@ -253,7 +433,7 @@ def test_distance_change_retains_only_safe_and_aligned_progress(tmp_path):
 
 
 def test_save_is_one_atomic_repository_transaction(tmp_path):
-    probe, _ = coordinator(tmp_path)
+    probe, command_controller = coordinator(tmp_path)
     state = create_selected_routine(
         probe,
         probe.open_context("probe-ui").context,
@@ -266,9 +446,7 @@ def test_save_is_one_atomic_repository_transaction(tmp_path):
         0.10,
         0.20,
     )
-    state = probe.approve_safe_pose(state.context, pose(0.8))
-    state = probe.approve_aligned_pose(state.context, pose(0.6))
-    state = probe.approve_probe_pose(state.context, pose(0.5))
+    state = approve_all(probe, command_controller, state)
 
     saved = probe.save_probe_point(
         state.context,

@@ -40,6 +40,9 @@ from fault_detector_spot.inspection.setup.probe_setup_api import ProbeSetupApi
 from fault_detector_spot.inspection.setup.probe_setup_coordinator import (
     ProbeSetupCoordinator,
 )
+from fault_detector_spot.inspection.setup import (
+    probe_setup_motion_state_source,
+)
 from fault_detector_spot.navigation.setup.navigation_setup_api import (
     NavigationSetupApi,
 )
@@ -122,10 +125,14 @@ class ApplicationApiNode(Node):
         reference_repository = MultiReferenceViewRepository(
             object_root or None
         )
+        self.probe_setup_motion_state = (
+            probe_setup_motion_state_source.ProbeSetupMotionStateSource(self)
+        )
         self.probe_setup_coordinator = ProbeSetupCoordinator(
             setup_coordinator=self.application_controller.setup_coordinator,
             reference_repository=reference_repository,
             sensor_repository=SensorRepository(sensor_root or None),
+            motion_state_source=self.probe_setup_motion_state,
         )
         self.application_controller.attach_probe_setup(
             self.probe_setup_coordinator
@@ -333,6 +340,7 @@ class ApplicationApiNode(Node):
             self._handle_application_status
         )
         self.application_controller.close()
+        self.probe_setup_motion_state.close()
         self._operation_server.destroy()
         return super().destroy_node()
 
