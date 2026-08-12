@@ -31,13 +31,13 @@ from fault_detector_spot.application.setup.setup_operation_registry import (
 )
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
-    InspectionObject,
-    InspectionRoutine,
     ProbePoint,
-    ReferenceTag,
 )
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
+)
+from fault_detector_spot.inspection.setup.probe_definition_service import (
+    ProbeDefinitionService,
 )
 from fault_detector_spot.inspection.setup.probe_setup_context import (
     ProbeSetupDraft,
@@ -121,6 +121,10 @@ class ProbeSetupCoordinator:
         self.reference_repository = reference_repository
         self.object_repository = reference_repository.object_repository
         self.sensor_repository = sensor_repository
+        self.definition_service = ProbeDefinitionService(
+            self.object_repository,
+            sensor_repository,
+        )
         self.geometry = geometry or ProbeSetupGeometry(reference_repository)
         self.motion_state_source = motion_state_source
         self.motion_command_factory = (
@@ -208,7 +212,11 @@ class ProbeSetupCoordinator:
             reference_tag_family,
             selected_sensor_id,
         ) = (
-            self._selected_definition_lists(draft, object_ids)
+            self.definition_service.selected_definition_lists(
+                draft.selected_object_id,
+                draft.selected_routine_id,
+                object_ids,
+            )
         )
         return ProbeSetupSnapshot.from_draft(
             draft=draft,
@@ -241,14 +249,12 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Select one existing object and routine and reset dependencies."""
         draft = self._draft(context)
-        object_name = self._name(object_id, "object ID")
-        routine_name = self._name(routine_id, "routine ID")
-        definition = self.object_repository.load(object_name)
-        routine = definition.get_routine(routine_name)
-        if routine is None:
-            raise LookupError(
-                f"Unknown inspection routine: {object_name}/{routine_name}"
+        object_name, routine_name = (
+            self.definition_service.select_routine(
+                object_id,
+                routine_id,
             )
+        )
         with self._lock:
             draft.selected_object_id = object_name
             draft.selected_routine_id = routine_name
@@ -264,8 +270,9 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Select one existing object and clear routine dependencies."""
         draft = self._draft(context)
-        object_name = self._name(object_id, "object ID")
-        self.object_repository.load(object_name)
+        object_name = self.definition_service.select_object(
+            object_id
+        )
         with self._lock:
             draft.selected_object_id = object_name
             draft.selected_routine_id = ""
@@ -284,23 +291,12 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Create one map-independent inspection object."""
         draft = self._draft(context)
-        if (
-            isinstance(reference_tag_id, bool)
-            or not isinstance(reference_tag_id, int)
-        ):
-            raise TypeError("Reference tag ID must be an integer")
-        definition = InspectionObject(
-            object_id=self._name(object_id, "object ID"),
-            display_name=self._text(display_name, "object display name"),
-            reference_tag=ReferenceTag(
-                tag_id=reference_tag_id,
-                tag_family=self._text(
-                    reference_tag_family,
-                    "reference tag family",
-                ),
-            ),
+        definition = self.definition_service.create_object(
+            object_id,
+            display_name,
+            reference_tag_id,
+            reference_tag_family,
         )
-        self.object_repository.create(definition)
         with self._lock:
             draft.selected_object_id = definition.object_id
             draft.selected_routine_id = ""
@@ -316,11 +312,9 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Delete one object and every artifact owned by it."""
         draft = self._draft(context)
-        object_name = self._name(object_id, "object ID")
-        if not self.object_repository.delete_object(object_name):
-            raise FileNotFoundError(
-                f"Unknown inspection object: {object_name}"
-            )
+        object_name = self.definition_service.delete_object(
+            object_id
+        )
         with self._lock:
             if draft.selected_object_id == object_name:
                 draft.clear_selection()
@@ -337,15 +331,12 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Create one sensor-specific inspection routine."""
         draft = self._draft(context)
-        object_name = self._name(object_id, "object ID")
-        sensor_name = self._name(sensor_id, "sensor ID")
-        self.sensor_repository.load(sensor_name)
-        routine = InspectionRoutine(
-            routine_id=self._name(routine_id, "routine ID"),
-            display_name=self._text(display_name, "routine display name"),
-            sensor_id=sensor_name,
+        object_name, routine = self.definition_service.create_routine(
+            object_id,
+            routine_id,
+            display_name,
+            sensor_id,
         )
-        self.object_repository.add_routine(object_name, routine)
         with self._lock:
             draft.selected_object_id = object_name
             draft.selected_routine_id = routine.routine_id
@@ -362,9 +353,12 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Delete one routine and its reference datasets."""
         draft = self._draft(context)
-        object_name = self._name(object_id, "object ID")
-        routine_name = self._name(routine_id, "routine ID")
-        self.object_repository.delete_routine(object_name, routine_name)
+        object_name, routine_name = (
+            self.definition_service.delete_routine(
+                object_id,
+                routine_id,
+            )
+        )
         with self._lock:
             if (
                 draft.selected_object_id == object_name
@@ -1246,34 +1240,6 @@ class ProbeSetupCoordinator:
                 "Achieved probe orientation missed the target by "
                 f"{math.degrees(orientation_error):.2f} deg"
             )
-
-    def _selected_definition_lists(self, draft, object_ids):
-        if draft.selected_object_id not in object_ids:
-            return (), (), (), (), -1, "", ""
-        definition = self.object_repository.load(draft.selected_object_id)
-        routine_ids = tuple(
-            routine.routine_id for routine in definition.routines
-        )
-        routine = definition.get_routine(draft.selected_routine_id)
-        if routine is None:
-            return (
-                routine_ids,
-                (),
-                (),
-                (),
-                definition.reference_tag.tag_id,
-                definition.reference_tag.tag_family,
-                "",
-            )
-        return (
-            routine_ids,
-            tuple(view.view_id for view in routine.reference_views),
-            tuple(view.camera_id for view in routine.reference_views),
-            tuple(point.probe_point_id for point in routine.probe_points),
-            definition.reference_tag.tag_id,
-            definition.reference_tag.tag_family,
-            routine.sensor_id,
-        )
 
     def _require_idle(
         self,
