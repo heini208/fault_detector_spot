@@ -3,7 +3,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from threading import RLock
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 
 from geometry_msgs.msg import PoseStamped
 
@@ -14,13 +14,19 @@ from fault_detector_spot.application.commanding.command_request import (
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
 )
-from fault_detector_spot.application.setup.setup_context import (
-    SetupContextSnapshot,
-)
 from fault_detector_spot.application.coordinators.setup_coordinator import (
     SetupCoordinator,
     SetupOperation,
     SetupOperationStatus,
+)
+from fault_detector_spot.application.setup.setup_context import (
+    SetupContextSnapshot,
+)
+from fault_detector_spot.application.setup.setup_context_access import (
+    SetupContextAccess,
+)
+from fault_detector_spot.application.setup.setup_operation_registry import (
+    SetupOperationRegistry,
 )
 from fault_detector_spot.inspection.model.models import ReferenceTag
 from fault_detector_spot.mapping.model.models import (
@@ -89,9 +95,8 @@ class NavigationSetupCoordinator:
             command_factory or NavigationSetupCommandFactory()
         )
         self._lock = RLock()
-        self._contexts: Dict[str, SetupContextSnapshot] = {}
-        self._pending = {}
-        self._listeners = []
+        self._context_access = SetupContextAccess(setup_coordinator)
+        self._operations = SetupOperationRegistry()
         self._active_map = ""
         self._mode = MODE_NONE
 
@@ -101,8 +106,6 @@ class NavigationSetupCoordinator:
             CommandOrigin.NAVIGATION_SETUP,
             client_id,
         )
-        with self._lock:
-            self._contexts[context.context_id] = context
         self.setup_coordinator.add_operation_listener(
             context,
             self._handle_operation_status,
@@ -115,37 +118,37 @@ class NavigationSetupCoordinator:
         client_id: str,
     ) -> SetupContextSnapshot:
         """Resolve a current context and verify client ownership."""
-        with self._lock:
-            context = self._contexts.get(context_id.strip())
-        if context is None:
-            raise LookupError(f"Unknown navigation context: {context_id}")
-        self.setup_coordinator.require_current(context)
-        if context.client_id != client_id.strip():
-            raise ValueError("Client ID does not own the navigation context")
-        return context
+        try:
+            return self._context_access.resolve(
+                context_id,
+                client_id,
+                CommandOrigin.NAVIGATION_SETUP,
+            )
+        except LookupError as exception:
+            raise LookupError(
+                f"Unknown navigation context: {context_id}"
+            ) from exception
 
     def close_context(self, context: SetupContextSnapshot) -> None:
         """Close one navigation setup context."""
         self.setup_coordinator.require_current(context)
-        with self._lock:
-            request_ids = tuple(
-                request_id
-                for request_id, pending in self._pending.items()
-                if pending[1].context_id == context.context_id
-            )
+        request_ids = self._operations.request_ids_for(context)
         for request_id in request_ids:
             try:
                 self.setup_coordinator.command_controller.cancel(request_id)
             except LookupError:
                 pass
-        with self._lock:
-            current = self._contexts.pop(context.context_id, None)
-            self._pending = {
-                request_id: pending
-                for request_id, pending in self._pending.items()
-                if pending[1].context_id != context.context_id
-            }
-        if current is not None and self.setup_coordinator.is_current(current):
+        try:
+            current = self._context_access.resolve(
+                context.context_id,
+                context.client_id,
+                CommandOrigin.NAVIGATION_SETUP,
+            )
+        except LookupError:
+            self._operations.discard_context(context)
+            return
+        self._operations.discard_context(current)
+        if self.setup_coordinator.is_current(current):
             self.setup_coordinator.close_context(current)
 
     def observe_active_map(self, map_name: str) -> None:
@@ -369,27 +372,24 @@ class NavigationSetupCoordinator:
         command_id,
         map_name,
     ):
-        with self._lock:
-            self._pending[operation.request_id] = (
+        self._operations.register(
+            operation.request_id,
+            context,
+            (
                 int(operation_code),
-                context,
                 command_id,
                 map_name,
-            )
+            ),
+        )
         try:
             self.setup_coordinator.submit(operation)
         except Exception:
-            with self._lock:
-                self._pending.pop(operation.request_id, None)
+            self._operations.pop(operation.request_id)
             raise
 
     def add_status_listener(self, listener) -> None:
         """Register one navigation setup status listener."""
-        if not callable(listener):
-            raise TypeError("Listener must be callable")
-        with self._lock:
-            if listener not in self._listeners:
-                self._listeners.append(listener)
+        self._operations.add_listener(listener)
 
     def cancel(
         self,
@@ -398,63 +398,54 @@ class NavigationSetupCoordinator:
     ) -> str:
         """Cancel one pending runtime operation owned by a context."""
         self.setup_coordinator.require_current(context)
-        with self._lock:
-            pending = self._pending.get(request_id.strip())
-        if pending is None or pending[1] != context:
+        normalized = request_id.strip()
+        if self._operations.owned(normalized, context) is None:
             raise LookupError(
                 f"Unknown navigation setup request: {request_id}"
             )
-        return self.setup_coordinator.command_controller.cancel(
-            request_id.strip()
-        )
+        return self.setup_coordinator.command_controller.cancel(normalized)
 
     def remove_status_listener(self, listener) -> None:
         """Remove one navigation setup status listener."""
-        with self._lock:
-            if listener in self._listeners:
-                self._listeners.remove(listener)
+        self._operations.remove_listener(listener)
 
     def close(self) -> None:
         """Close all owned contexts and discard specialized state."""
-        with self._lock:
-            contexts = tuple(self._contexts.values())
+        contexts = self._context_access.contexts_for(
+            CommandOrigin.NAVIGATION_SETUP
+        )
         for context in contexts:
             if self.setup_coordinator.is_current(context):
                 self.close_context(context)
-        with self._lock:
-            self._pending.clear()
-            self._listeners.clear()
+        self._operations.clear()
 
     def _handle_operation_status(self, status: SetupOperationStatus) -> None:
-        with self._lock:
-            pending = self._pending.get(status.operation.request_id)
-        if pending is None:
+        tracked = self._operations.get(status.operation.request_id)
+        if tracked is None:
             return
-        operation_code, context, command_id, map_name = pending
+        context = tracked.context
+        operation_code, command_id, map_name = tracked.payload
         terminal = status.state in {
             CommandControllerState.SUCCEEDED,
             CommandControllerState.FAILED,
             CommandControllerState.CANCELLED,
         }
         if terminal:
-            with self._lock:
-                self._pending.pop(status.operation.request_id, None)
+            self._operations.pop(status.operation.request_id)
             if status.state == CommandControllerState.SUCCEEDED:
                 self._apply_runtime_success(command_id, map_name)
             current = self._advance(context)
         else:
             current = self.snapshot(context)
-        navigation_status = NavigationSetupStatus(
-            operation_code=operation_code,
-            request_id=status.operation.request_id,
-            state=status.state,
-            detail=status.detail,
-            snapshot=current,
+        self._operations.emit(
+            NavigationSetupStatus(
+                operation_code=operation_code,
+                request_id=status.operation.request_id,
+                state=status.state,
+                detail=status.detail,
+                snapshot=current,
+            )
         )
-        with self._lock:
-            listeners = tuple(self._listeners)
-        for listener in listeners:
-            listener(navigation_status)
 
     def _apply_runtime_success(
         self,
@@ -476,8 +467,6 @@ class NavigationSetupCoordinator:
         context: SetupContextSnapshot,
     ) -> NavigationSetupSnapshot:
         updated = self.setup_coordinator.advance_context(context)
-        with self._lock:
-            self._contexts[updated.context_id] = updated
         return self.snapshot(updated)
 
     def _require_active_map(self, map_name: str) -> str:
@@ -495,14 +484,10 @@ class NavigationSetupCoordinator:
         return map_id
 
     def _require_idle(self, context: SetupContextSnapshot) -> None:
-        with self._lock:
-            if any(
-                pending[1].context_id == context.context_id
-                for pending in self._pending.values()
-            ):
-                raise RuntimeError(
-                    "Navigation setup context already has an active operation"
-                )
+        if self._operations.has_context(context):
+            raise RuntimeError(
+                "Navigation setup context already has an active operation"
+            )
 
     def _require_authoring_mode(self) -> None:
         with self._lock:
@@ -529,7 +514,10 @@ class NavigationSetupCoordinator:
         return validate_storage_name(value.strip(), label)
 
     @staticmethod
-    def _map_pose(pose: Optional[PoseStamped], label: str) -> PoseStamped:
+    def _map_pose(
+        pose: Optional[PoseStamped],
+        label: str,
+    ) -> PoseStamped:
         if pose is None:
             raise ValueError(f"No {label} is available")
         if not isinstance(pose, PoseStamped):
