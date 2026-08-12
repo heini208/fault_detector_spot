@@ -19,14 +19,11 @@ from fault_detector_spot.inspection.setup.reference_camera_registry import (
     REFERENCE_CAMERA_BY_ID,
     validate_reference_camera_slots,
 )
-from fault_detector_spot.inspection.setup.reference_view_capture import (
-    ReferenceViewCaptureNotReady,
-)
 from fault_detector_spot.inspection.setup.reference_view_input_synchronizer import (
     ReferenceViewInputSynchronizer,
 )
 from fault_detector_spot.inspection.setup.reference_view_validation import (
-    ReferenceViewInputNotReady,
+    ReferenceViewCaptureNotReady,
 )
 
 
@@ -241,7 +238,6 @@ class ProbeReferenceCaptureCoordinator:
                     return snapshot
                 except (
                     ReferenceViewCaptureNotReady,
-                    ReferenceViewInputNotReady,
                     tf2_ros.TransformException,
                 ) as exception:
                     last_error = exception

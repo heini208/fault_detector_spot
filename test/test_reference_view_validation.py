@@ -13,7 +13,7 @@ from fault_detector_spot.inspection.model.models import (
     Vector3Data,
 )
 from fault_detector_spot.inspection.setup.reference_view_validation import (
-    ReferenceViewInputNotReady,
+    ReferenceViewCaptureNotReady,
     validate_reference_view_inputs,
 )
 
@@ -141,7 +141,7 @@ def test_empty_registered_depth_is_temporarily_not_ready():
     )
 
     with pytest.raises(
-        ReferenceViewInputNotReady,
+        ReferenceViewCaptureNotReady,
         match="valid depth support",
     ):
         validate(inputs)
@@ -167,12 +167,15 @@ def test_mismatched_frames_are_rejected():
         validate(inputs)
 
 
-def test_timestamp_skew_is_rejected():
-    """Inputs outside the synchronization tolerance are rejected."""
+def test_timestamp_skew_is_temporarily_not_ready():
+    """A later synchronized pair may satisfy the timestamp-skew gate."""
     inputs = list(make_inputs())
     inputs[1].header.stamp.nanosec = 60_000_000
 
-    with pytest.raises(ValueError, match="allowed skew"):
+    with pytest.raises(
+        ReferenceViewCaptureNotReady,
+        match="allowed skew",
+    ):
         validate(inputs)
 
 

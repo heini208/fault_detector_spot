@@ -8,13 +8,11 @@ from fault_detector_spot.inspection.repository.multi_reference_view_repository i
     CapturedReferenceView,
     MultiReferenceViewRepository,
 )
-from fault_detector_spot.inspection.setup.reference_view_capture import (
-    ReferenceViewCaptureNotReady,
-)
 from fault_detector_spot.inspection.setup.reference_view_pose_resolver import (
     resolve_reference_view_pose,
 )
 from fault_detector_spot.inspection.setup.reference_view_validation import (
+    ReferenceViewCaptureNotReady,
     validate_reference_view_inputs,
 )
 

@@ -33,8 +33,8 @@ _DEPTH_BYTES_PER_PIXEL = {
 }
 
 
-class ReferenceViewInputNotReady(ValueError):
-    """Indicate that newer temporally compatible inputs may succeed."""
+class ReferenceViewCaptureNotReady(RuntimeError):
+    """Indicate that newer capture inputs may allow the operation to succeed."""
 
 
 def validate_reference_view_inputs(
@@ -165,7 +165,7 @@ def _validate_registered_geometry(
             depth_camera_info,
         )
     except RegisteredDepthSupportNotReady as exception:
-        raise ReferenceViewInputNotReady(str(exception)) from exception
+        raise ReferenceViewCaptureNotReady(str(exception)) from exception
 
 
 def _validate_matching_frames(
@@ -200,7 +200,7 @@ def _validate_timestamps(
     ]
     skew_sec = (max(stamps) - min(stamps)) / 1_000_000_000
     if skew_sec > maximum_timestamp_skew_sec:
-        raise ReferenceViewInputNotReady(
+        raise ReferenceViewCaptureNotReady(
             "RGB and depth timestamps exceed the allowed skew"
         )
 
