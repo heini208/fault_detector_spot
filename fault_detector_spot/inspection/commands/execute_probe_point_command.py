@@ -7,12 +7,12 @@ from fault_detector_spot.shared.persistence.file_storage import (
 )
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
-from fault_detector_spot.application.commanding.simple_command import (
-    SimpleCommand,
+from fault_detector_spot.application.behaviour_tree.commands.execution_command import (
+    ExecutionCommand,
 )
 
 
-class ExecuteProbePointCommand(SimpleCommand):
+class ExecuteProbePointCommand(ExecutionCommand):
     """Identify one persisted probe point without copying its geometry."""
 
     def __init__(

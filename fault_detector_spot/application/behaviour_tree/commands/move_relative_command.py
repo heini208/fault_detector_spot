@@ -2,7 +2,9 @@
 import numpy as np
 
 from builtin_interfaces.msg import Time
-from fault_detector_spot.application.commanding.move_command import MoveCommand
+from fault_detector_spot.application.behaviour_tree.commands.move_command import (
+    MoveCommand,
+)
 from geometry_msgs.msg import PoseStamped, Quaternion
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 

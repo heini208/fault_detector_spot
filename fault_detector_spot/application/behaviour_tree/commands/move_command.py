@@ -3,12 +3,14 @@ import numpy as np
 
 import tf_transformations as tf
 from builtin_interfaces.msg import Time
-from fault_detector_spot.application.commanding.simple_command import SimpleCommand
+from fault_detector_spot.application.behaviour_tree.commands.execution_command import (
+    ExecutionCommand,
+)
 from geometry_msgs.msg import PoseStamped, Quaternion
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 
 
-class MoveCommand(SimpleCommand):
+class MoveCommand(ExecutionCommand):
     """
     Abstract base class for all move commands.
     Provides storage for goal/offset and helper methods for TF operations.

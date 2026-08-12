@@ -16,8 +16,12 @@ from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
     SemanticTag,
 )
-from fault_detector_spot.application.commanding.simple_command import SimpleCommand
-from fault_detector_spot.application.commanding.timer_command import TimerCommand
+from fault_detector_spot.application.behaviour_tree.commands.execution_command import (
+    ExecutionCommand,
+)
+from fault_detector_spot.application.behaviour_tree.commands.wait_command import (
+    WaitCommand,
+)
 from fault_detector_spot.application.ros.command_request_adapter import (
     command_request_from_message,
 )
@@ -210,7 +214,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def fire_command_sequence(
         self,
         command: SemanticCommand,
-    ) -> List[SimpleCommand]:
+    ) -> List[ExecutionCommand]:
         command_id = command.command_id
         if command_id == CommandID.EXECUTE_PROBE_POINT:
             raise ValueError(
@@ -230,14 +234,14 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.logger.info(f"Received {command_id.value} command")
         return commands
 
-    def _simple_command(self, command: SemanticCommand) -> SimpleCommand:
-        return SimpleCommand(
+    def _simple_command(self, command: SemanticCommand) -> ExecutionCommand:
+        return ExecutionCommand(
             command_id=command.command_id,
             stamp=self._create_command_stamp(),
         )
 
-    def _wait_command(self, command: SemanticCommand) -> TimerCommand:
-        return TimerCommand(
+    def _wait_command(self, command: SemanticCommand) -> WaitCommand:
+        return WaitCommand(
             command_id=CommandID.WAIT_TIME,
             stamp=self._create_command_stamp(),
             duration=command.wait_time,
@@ -265,7 +269,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.command_buffer.clear()
         self.pending_msgs = []
         self.blackboard.estop_flag = True
-        command = SimpleCommand(
+        command = ExecutionCommand(
             command_id=CommandID.EMERGENCY_CANCEL,
             stamp=self._create_command_stamp(),
             request_id=request.request_id,
@@ -344,7 +348,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def _move_to_tag(
         self,
         command: SemanticCommand,
-    ) -> List[SimpleCommand]:
+    ) -> List[ExecutionCommand]:
         tag = self._required_tag(command)
         return [
             ManipulatorToTagCommand(
@@ -381,12 +385,12 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def _move_to_tag_and_wait(
         self,
         command: SemanticCommand,
-    ) -> List[SimpleCommand]:
+    ) -> List[ExecutionCommand]:
         commands = self._move_to_tag(command)
         if command.wait_time <= 0.0:
             return commands
         commands.append(
-            TimerCommand(
+            WaitCommand(
                 CommandID.WAIT_TIME,
                 self._create_command_stamp(),
                 command.wait_time,
@@ -397,12 +401,12 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def _scan_all_in_range(
         self,
         command: SemanticCommand,
-    ) -> List[SimpleCommand]:
+    ) -> List[ExecutionCommand]:
         tags = self.blackboard.reachable_tags
         if not tags:
             return []
 
-        commands: List[SimpleCommand] = []
+        commands: List[ExecutionCommand] = []
         for _, tag in sorted(tags.items()):
             scan_command = replace(
                 command,
@@ -413,13 +417,13 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             )
             commands.extend(self._move_to_tag_and_wait(scan_command))
             commands.append(
-                SimpleCommand(
+                ExecutionCommand(
                     CommandID.STOW_ARM,
                     self._create_command_stamp(),
                 )
             )
             commands.append(
-                TimerCommand(
+                WaitCommand(
                     CommandID.WAIT_TIME,
                     self._create_command_stamp(),
                     0.2,
@@ -430,17 +434,17 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def _return_to_estop_state(
         self,
         command: SemanticCommand,
-    ) -> List[SimpleCommand]:
+    ) -> List[ExecutionCommand]:
         return [
-            SimpleCommand(
+            ExecutionCommand(
                 CommandID.STOP_BASE,
                 self._create_command_stamp(),
             ),
-            SimpleCommand(
+            ExecutionCommand(
                 CommandID.STOW_ARM,
                 self._create_command_stamp(),
             ),
-            SimpleCommand(
+            ExecutionCommand(
                 CommandID.CLOSE_GRIPPER,
                 self._create_command_stamp(),
             ),

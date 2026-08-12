@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import tf_transformations as tf
-from fault_detector_spot.application.commanding.move_relative_command import MoveRelativeCommand
+from fault_detector_spot.application.behaviour_tree.commands.move_relative_command import (
+    MoveRelativeCommand,
+)
 from geometry_msgs.msg import Quaternion, PoseStamped
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 

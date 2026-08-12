@@ -2,7 +2,9 @@
 from bosdyn.client.frame_helpers import HAND_FRAME_NAME
 
 from builtin_interfaces.msg import Time
-from fault_detector_spot.application.commanding.move_relative_command import MoveRelativeCommand
+from fault_detector_spot.application.behaviour_tree.commands.move_relative_command import (
+    MoveRelativeCommand,
+)
 from geometry_msgs.msg import PoseStamped
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 

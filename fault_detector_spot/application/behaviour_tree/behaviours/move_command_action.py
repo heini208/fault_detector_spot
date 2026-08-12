@@ -5,9 +5,11 @@ from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
 
 import rclpy
 from fault_detector_spot.application.commanding.command_ids import TagFrames
-from fault_detector_spot.application.commanding.move_command import MoveCommand
-from fault_detector_spot.application.commanding.move_to_tag_command import MoveToTagCommand
 from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import ActionClientBehaviour
+from fault_detector_spot.application.behaviour_tree.commands.move_command import MoveCommand
+from fault_detector_spot.application.behaviour_tree.commands.move_to_tag_command import (
+    MoveToTagCommand,
+)
 from geometry_msgs.msg import PoseStamped
 from py_trees.common import Status, Access
 from spot_msgs.action import RobotCommand

@@ -1,11 +1,11 @@
 from builtin_interfaces.msg import Time
 
-from fault_detector_spot.application.commanding.simple_command import (
-    SimpleCommand,
+from fault_detector_spot.application.behaviour_tree.commands.execution_command import (
+    ExecutionCommand,
 )
 
 
-class MapCommand(SimpleCommand):
+class MapCommand(ExecutionCommand):
     """Execution command carrying a selected map name."""
 
     def __init__(

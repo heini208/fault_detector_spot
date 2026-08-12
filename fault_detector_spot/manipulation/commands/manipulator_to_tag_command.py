@@ -4,7 +4,9 @@ from math import sin, cos, pi
 import tf_transformations as tf
 from builtin_interfaces.msg import Time
 from fault_detector_spot.application.commanding.command_ids import OrientationModes
-from fault_detector_spot.application.commanding.move_to_tag_command import MoveToTagCommand
+from fault_detector_spot.application.behaviour_tree.commands.move_to_tag_command import (
+    MoveToTagCommand,
+)
 from geometry_msgs.msg import PoseStamped, Quaternion
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 

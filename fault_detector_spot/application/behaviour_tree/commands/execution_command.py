@@ -5,9 +5,9 @@ from builtin_interfaces.msg import Time
 from fault_detector_spot.application.commanding.request_identity import request_id_or_new
 
 
-class SimpleCommand:
+class ExecutionCommand:
     """
-    A tiny container for a single command:
+    Base container for one behavior-tree execution command:
       - id:    the command ID string (e.g. "stow_arm")
       - stamp: a std_msgs/Header carrying the time it was received
 
@@ -28,6 +28,6 @@ class SimpleCommand:
     def __repr__(self):
         ts = f"{self.stamp.sec}.{self.stamp.nanosec:09d}"
         return (
-            f"<SimpleCommand id={self.command_id!r} "
+            f"<ExecutionCommand id={self.command_id!r} "
             f"request={self.request_id!r} at={ts}>"
         )

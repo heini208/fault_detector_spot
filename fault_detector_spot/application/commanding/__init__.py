@@ -10,7 +10,6 @@ from .semantic_command import (
     SemanticTag,
     StampedPose,
 )
-from .simple_command import SimpleCommand
 
 __all__ = [
     "CommandID",
@@ -23,7 +22,6 @@ __all__ = [
     "RecordingPolicy",
     "SemanticCommand",
     "SemanticTag",
-    "SimpleCommand",
     "StampedPose",
     "TagFrames",
 ]

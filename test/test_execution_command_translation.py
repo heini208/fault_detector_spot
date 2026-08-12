@@ -5,12 +5,16 @@ from builtin_interfaces.msg import Time
 from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
     CommandSubscriber,
 )
+from fault_detector_spot.application.behaviour_tree.commands.execution_command import (
+    ExecutionCommand,
+)
+from fault_detector_spot.application.behaviour_tree.commands.wait_command import (
+    WaitCommand,
+)
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
 )
-from fault_detector_spot.application.commanding.simple_command import SimpleCommand
-from fault_detector_spot.application.commanding.timer_command import TimerCommand
 from fault_detector_spot.mapping.commands.map_command import MapCommand
 from fault_detector_spot.navigation.commands.waypoint_command import WaypointCommand
 
@@ -32,7 +36,7 @@ def test_simple_semantic_command_becomes_simple_execution_command():
     translated = subscriber().fire_command_sequence(command)
 
     assert len(translated) == 1
-    assert type(translated[0]) is SimpleCommand
+    assert type(translated[0]) is ExecutionCommand
     assert translated[0].command_id is CommandID.STAND_UP
 
 
@@ -45,7 +49,7 @@ def test_wait_semantic_command_becomes_timer_command():
     translated = subscriber().fire_command_sequence(command)
 
     assert len(translated) == 1
-    assert isinstance(translated[0], TimerCommand)
+    assert isinstance(translated[0], WaitCommand)
     assert translated[0].duration == 2.5
 
 
@@ -82,3 +86,15 @@ def test_generic_execution_container_is_removed():
     import fault_detector_spot.application.commanding as commanding
 
     assert not hasattr(commanding, "GenericCommand")
+    assert not hasattr(commanding, "SimpleCommand")
+
+
+def test_application_commanding_contains_no_bt_execution_modules():
+    from pathlib import Path
+
+    commanding_dir = Path(__file__).parents[1] / "fault_detector_spot/application/commanding"
+    assert not (commanding_dir / "simple_command.py").exists()
+    assert not (commanding_dir / "timer_command.py").exists()
+    assert not (commanding_dir / "move_command.py").exists()
+    assert not (commanding_dir / "move_relative_command.py").exists()
+    assert not (commanding_dir / "move_to_tag_command.py").exists()
