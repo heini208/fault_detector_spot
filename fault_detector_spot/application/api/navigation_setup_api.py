@@ -9,7 +9,7 @@ from fault_detector_msgs.msg import (
     NavigationSetupIntent,
     NavigationSetupState,
 )
-from fault_detector_msgs.srv import CloseNavigationSetup
+from fault_detector_msgs.srv import CloseSetup
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 
@@ -94,7 +94,7 @@ class NavigationSetupApi:
             callback_group=self._callback_group,
         )
         self._close_service = node.create_service(
-            CloseNavigationSetup,
+            CloseSetup,
             "fault_detector/application/close_navigation_setup",
             self._close,
             callback_group=self._callback_group,

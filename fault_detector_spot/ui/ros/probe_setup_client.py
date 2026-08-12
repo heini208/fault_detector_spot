@@ -17,7 +17,7 @@ from fault_detector_msgs.msg import (
     ProbeSetupState,
 )
 from fault_detector_msgs.srv import (
-    CloseProbeSetup,
+    CloseSetup,
     ExecuteProbeSetup,
     GetProbeReferencePreview,
 )
@@ -51,7 +51,7 @@ class ProbeSetupClient(QObject):
             "fault_detector/application/execute_probe_setup",
         )
         self._close_client = node.create_client(
-            CloseProbeSetup,
+            CloseSetup,
             "fault_detector/application/close_probe_setup",
         )
         self._preview_client = node.create_client(
@@ -287,7 +287,7 @@ class ProbeSetupClient(QObject):
                 "Probe setup close service is unavailable",
             )
             return None
-        request = CloseProbeSetup.Request()
+        request = CloseSetup.Request()
         request.client_id = self.client_id
         request.context_id = self.context_id
         future = self._close_client.call_async(request)

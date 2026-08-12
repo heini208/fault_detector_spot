@@ -8,7 +8,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from fault_detector_msgs.action import ExecuteNavigationSetup
 from fault_detector_msgs.msg import NavigationSetupIntent, NavigationSetupState
-from fault_detector_msgs.srv import CloseNavigationSetup
+from fault_detector_msgs.srv import CloseSetup
 from rclpy.action import ActionClient
 
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
@@ -60,7 +60,7 @@ class NavigationSetupClient(QObject):
             "fault_detector/application/execute_navigation_setup",
         )
         self._close_client = node.create_client(
-            CloseNavigationSetup,
+            CloseSetup,
             "fault_detector/application/close_navigation_setup",
         )
         self._state_subscription = node.create_subscription(
@@ -95,7 +95,7 @@ class NavigationSetupClient(QObject):
                 "Navigation setup close service is unavailable",
             )
             return None
-        request = CloseNavigationSetup.Request()
+        request = CloseSetup.Request()
         request.client_id = self.client_id
         request.context_id = self.context_id
         future = self._close_client.call_async(request)

@@ -7,7 +7,7 @@ from fault_detector_msgs.msg import (
     ProbeSetupState,
 )
 from fault_detector_msgs.srv import (
-    CloseProbeSetup,
+    CloseSetup,
     ExecuteProbeSetup,
     GetProbeReferencePreview,
 )
@@ -55,7 +55,7 @@ class ProbeSetupApi:
             callback_group=self._callback_group,
         )
         self._close_service = node.create_service(
-            CloseProbeSetup,
+            CloseSetup,
             "fault_detector/application/close_probe_setup",
             self._close,
             callback_group=self._callback_group,
