@@ -4,7 +4,6 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtWidgets import QApplication, QLabel
 
 from fault_detector_spot.ui.inspection.controls import (
@@ -24,11 +23,6 @@ class FakeUI:
         self.complex_command_publisher = FakePublisher()
         self.inspection_object_root = object_root
         self.visible_tags = {}
-
-    def build_basic_command(self, command_id):
-        command = BasicCommand()
-        command.command_id = command_id
-        return command
 
 
 def test_hidden_direct_save_path_is_removed(tmp_path):

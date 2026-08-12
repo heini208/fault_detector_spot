@@ -6,7 +6,6 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QGroupBox, QLabel
 
@@ -27,11 +26,6 @@ class FakeUI:
         self.complex_command_publisher = FakePublisher()
         self.inspection_object_root = object_root
         self.visible_tags = {}
-
-    def build_basic_command(self, command_id):
-        command = BasicCommand()
-        command.command_id = command_id
-        return command
 
 
 @pytest.fixture(scope="module", autouse=True)

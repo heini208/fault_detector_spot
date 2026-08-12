@@ -6,7 +6,6 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from fault_detector_msgs.msg import BasicCommand
 from PyQt5.QtWidgets import QApplication, QLabel
 
 from fault_detector_spot.ui.inspection.controls import (
@@ -53,11 +52,6 @@ class FakeUI:
         self.inspection_object_root = object_root
         self.visible_tags = {}
         self.sensor_definitions = list(sensors or [])
-
-    def build_basic_command(self, command_id):
-        command = BasicCommand()
-        command.command_id = command_id
-        return command
 
 
 @pytest.fixture(scope="module", autouse=True)
