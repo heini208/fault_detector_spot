@@ -97,6 +97,7 @@ def test_legacy_command_wire_wrappers_are_removed():
     assert "CommandPayload" in semantic_source
     assert "ComplexCommand" not in semantic_source
     assert "BasicCommand" not in semantic_source
+    assert "InspectionCommand" not in semantic_source
     assert "ComplexCommand" not in request_adapter.read_text(
         encoding="utf-8"
     )

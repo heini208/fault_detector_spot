@@ -9,6 +9,7 @@ from fault_detector_spot.application.commanding.command_request import (
     RecordingPolicy,
 )
 from fault_detector_spot.application.commanding.semantic_command import (
+    InspectionSelection,
     SemanticCommand,
 )
 from fault_detector_spot.application.ros.command_request_adapter import (
@@ -49,6 +50,31 @@ def test_wire_payload_does_not_duplicate_request_identity():
 
     assert message.request_id
     assert not hasattr(message.payload, "request_id")
+
+
+def test_wire_payload_flattens_inspection_selection():
+    request = CommandRequest.create(
+        command=SemanticCommand(
+            command_id=CommandID.EXECUTE_PROBE_POINT,
+            inspection=InspectionSelection(
+                object_id="pump",
+                routine_id="bearing",
+                probe_point_id="point_1",
+            ),
+        ),
+        client_id="operator_ui",
+        origin=CommandOrigin.OPERATIONAL,
+        recording_policy=RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE,
+    )
+
+    message = command_request_to_message(request)
+    restored = command_request_from_message(message)
+
+    assert not hasattr(message.payload, "inspection")
+    assert message.payload.object_id == "pump"
+    assert message.payload.routine_id == "bearing"
+    assert message.payload.probe_point_id == "point_1"
+    assert restored.command.inspection == request.command.inspection
 
 
 def test_adapter_rejects_empty_command_id():

@@ -79,9 +79,9 @@ def semantic_command_from_message(
         map_name=message.map_name,
         waypoint_name=message.waypoint_name,
         inspection=InspectionSelection(
-            object_id=message.inspection.object_id,
-            routine_id=message.inspection.routine_id,
-            probe_point_id=message.inspection.probe_point_id,
+            object_id=message.object_id,
+            routine_id=message.routine_id,
+            probe_point_id=message.probe_point_id,
         ),
     )
 
@@ -105,11 +105,9 @@ def semantic_command_to_message(
     message.wait_time = float(command.wait_time)
     message.map_name = command.map_name
     message.waypoint_name = command.waypoint_name
-    message.inspection.object_id = command.inspection.object_id
-    message.inspection.routine_id = command.inspection.routine_id
-    message.inspection.probe_point_id = (
-        command.inspection.probe_point_id
-    )
+    message.object_id = command.inspection.object_id
+    message.routine_id = command.inspection.routine_id
+    message.probe_point_id = command.inspection.probe_point_id
     return message
 
 
