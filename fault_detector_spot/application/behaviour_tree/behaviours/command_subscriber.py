@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import List, Optional
 
 import py_trees
@@ -5,20 +6,27 @@ import rclpy
 from fault_detector_msgs.msg import (
     CommandRequest as CommandRequestMessage,
     CommandStatus,
-    ComplexCommand,
 )
-from fault_detector_spot.shared.ros.qos_profiles import (
-    COMMAND_REQUEST_QOS,
-)
-from fault_detector_spot.navigation.commands.base_move_relative_command import (
-    BaseMoveRelativeCommand,
-)
-from fault_detector_spot.navigation.commands.base_to_tag_command import (
-    BaseToTagCommand,
-)
+
 from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.commanding.command_request import (
+    CommandRequest,
+)
 from fault_detector_spot.application.commanding.generic_complex_command import (
     GenericCommand,
+)
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
+    SemanticTag,
+)
+from fault_detector_spot.application.commanding.simple_command import SimpleCommand
+from fault_detector_spot.application.commanding.timer_command import TimerCommand
+from fault_detector_spot.application.ros.command_request_adapter import (
+    semantic_command_request_from_message,
+)
+from fault_detector_spot.application.ros.semantic_command_adapter import (
+    stamped_pose_from_message,
+    stamped_pose_to_message,
 )
 from fault_detector_spot.manipulation.commands.manipulator_move_relative_command import (
     ManipulatorMoveRelativeCommand,
@@ -26,25 +34,22 @@ from fault_detector_spot.manipulation.commands.manipulator_move_relative_command
 from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import (
     ManipulatorToTagCommand,
 )
-from fault_detector_spot.application.commanding.simple_command import SimpleCommand
-from fault_detector_spot.application.commanding.timer_command import TimerCommand
-from fault_detector_spot.application.commanding.command_request import (
-    CommandRequest,
+from fault_detector_spot.navigation.commands.base_move_relative_command import (
+    BaseMoveRelativeCommand,
 )
-from fault_detector_spot.application.ros.command_request_adapter import (
-    command_request_from_message,
+from fault_detector_spot.navigation.commands.base_to_tag_command import (
+    BaseToTagCommand,
 )
+from fault_detector_spot.shared.ros.qos_profiles import COMMAND_REQUEST_QOS
 
 
 class CommandSubscriber(py_trees.behaviour.Behaviour):
-    """Translate controller-dispatched requests into tree commands."""
+    """Translate controller-dispatched semantic requests into tree commands."""
 
     def __init__(
         self,
         name: str = "CommandSubscriber",
-        request_topic: str = (
-            "fault_detector/_internal/commands/request"
-        ),
+        request_topic: str = "fault_detector/_internal/commands/request",
         status_topic: str = "fault_detector/_internal/command_status",
     ):
         super().__init__(name)
@@ -75,9 +80,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             self.blackboard = self.attach_blackboard_client()
             self._register_blackboard_keys()
         except KeyError as exception:
-            self.logger.error(
-                f"Could not retrieve node from kwargs: {exception}"
-            )
+            self.logger.error(f"Could not retrieve node from kwargs: {exception}")
 
     def update(self) -> py_trees.common.Status:
         if not self.pending_msgs:
@@ -87,7 +90,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.pending_msgs.sort(key=lambda item: (item[0].sec, item[0].nanosec))
 
         processed_count = 0
-        for stamp, request in self.pending_msgs:
+        for _, request in self.pending_msgs:
             try:
                 command_count = self.fire_request(request)
                 processed_count += 1
@@ -105,9 +108,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                     f"{detail} [{request.request_id}]"
                 )
             except Exception as exception:
-                self.logger.error(
-                    f"Rejected command: {exception}"
-                )
+                self.logger.error(f"Rejected command: {exception}")
                 self._publish_request_failure(request, str(exception))
 
         self.pending_msgs.clear()
@@ -145,7 +146,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
 
     def append_request_to_buffer(self, message):
         try:
-            request = command_request_from_message(message)
+            request = semantic_command_request_from_message(message)
+            stamp = message.command.command.header.stamp
         except (TypeError, ValueError) as exception:
             detail = f"BT rejected command envelope: {exception}"
             self.logger.error(detail)
@@ -153,39 +155,33 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             return
 
         if request.request_id in self._received_request_ids:
-            detail = (
-                f"BT rejected duplicate request ID: {request.request_id}"
-            )
+            detail = f"BT rejected duplicate request ID: {request.request_id}"
             self.logger.error(detail)
             self._publish_request_failure(request, detail)
             return
 
         self._received_request_ids.add(request.request_id)
-        command_id = request.command.command.command_id
+        command_id = request.command.command_id.value
         detail = f"BT received {command_id} request"
         self._publish_request_status(
             request,
             CommandStatus.STATE_RUNNING,
             detail,
         )
-        self.node.get_logger().info(
-            f"{detail} [{request.request_id}]"
-        )
+        self.node.get_logger().info(f"{detail} [{request.request_id}]")
 
-        if self.is_estop_command(request.command.command):
+        if self.is_estop_command(request.command):
             self.trigger_estop(request)
             self.logger.warning("ESTOP triggered immediately.")
             return
 
-        stamp = request.command.command.header.stamp
         self.pending_msgs.append((stamp, request))
 
     def fire_request(
         self,
-        request: CommandRequest[ComplexCommand],
+        request: CommandRequest[SemanticCommand],
     ) -> int:
-        """Expand one validated semantic request into tree commands."""
-        commands = self.fire_complex_command_sequence(request.command)
+        commands = self.fire_command_sequence(request.command)
         for command in commands:
             command.request_id = request.request_id
             self._apply_request_metadata(command, request)
@@ -196,48 +192,50 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.command_buffer.extend(commands)
         return len(commands)
 
-    def fire_complex_command_sequence(
+    def fire_command_sequence(
         self,
-        msg: ComplexCommand,
+        command: SemanticCommand,
     ) -> List[SimpleCommand]:
-        command_id = msg.command.command_id
+        command_id = command.command_id
         if command_id == CommandID.EXECUTE_PROBE_POINT:
             raise ValueError(
                 "execute_probe_point is unavailable until its action "
                 "server is installed"
             )
-        if command_id in self._combination_command_builders:
-            commands = self._combination_command_builders[command_id](msg)
-        else:
-            commands = [self.complex_message_to_generic_command(msg)]
-        self.logger.info(f"Received {command_id} command")
+        builder = self._combination_command_builders.get(command_id)
+        commands = (
+            builder(command)
+            if builder is not None
+            else [self.semantic_command_to_generic_command(command)]
+        )
+        self.logger.info(f"Received {command_id.value} command")
         return commands
 
-    def complex_message_to_generic_command(
+    def semantic_command_to_generic_command(
         self,
-        msg: ComplexCommand,
+        command: SemanticCommand,
     ) -> GenericCommand:
         generic_command = GenericCommand(
-            command_id=msg.command.command_id,
-            stamp=msg.command.header.stamp,
+            command_id=command.command_id,
+            stamp=self._create_command_stamp(),
         )
-        generic_command.duration = msg.wait_time
-        if msg.tag is not None:
-            generic_command.tag_id = msg.tag.id
-            generic_command.goal_pose = msg.tag.pose
+        generic_command.duration = command.wait_time
+        if command.tag is not None:
+            generic_command.tag_id = command.tag.id
+            generic_command.goal_pose = stamped_pose_to_message(command.tag.pose)
         else:
-            generic_command.goal_pose = msg.offset
-        generic_command.orientation_mode = msg.orientation_mode
-        generic_command.offset = msg.offset
-        generic_command.map_name = msg.map_name
-        generic_command.waypoint_name = msg.waypoint_name
-        generic_command.inspection = msg.inspection
+            generic_command.goal_pose = stamped_pose_to_message(command.offset)
+        generic_command.orientation_mode = command.orientation_mode
+        generic_command.offset = stamped_pose_to_message(command.offset)
+        generic_command.map_name = command.map_name
+        generic_command.waypoint_name = command.waypoint_name
+        generic_command.inspection = command.inspection
         return generic_command
 
-    def is_estop_command(self, command) -> bool:
+    def is_estop_command(self, command: SemanticCommand) -> bool:
         return command.command_id == CommandID.EMERGENCY_CANCEL
 
-    def trigger_estop(self, request: CommandRequest[ComplexCommand]):
+    def trigger_estop(self, request: CommandRequest[SemanticCommand]):
         self.blackboard.command_buffer.clear()
         self.pending_msgs = []
         self.blackboard.estop_flag = True
@@ -255,9 +253,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             detail,
             buffered_command_count=1,
         )
-        self.logger.info(
-            f"{detail} [{request.request_id}]"
-        )
+        self.logger.info(f"{detail} [{request.request_id}]")
 
     @staticmethod
     def _apply_request_metadata(command, request):
@@ -278,7 +274,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         message = CommandStatus()
         message.header.stamp = self._create_command_stamp()
         message.request_id = request.request_id
-        message.command_id = request.command.command.command_id
+        message.command_id = request.command.command_id.value
         message.state = state
         message.detail = detail
         message.buffered_command_count = int(buffered_command_count)
@@ -311,74 +307,86 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def _create_command_stamp(self):
         return self.node.get_clock().now().to_msg()
 
-    def _move_arm_command_with_offset(self, msg: ComplexCommand):
-        command = ManipulatorMoveRelativeCommand(
-            msg.command.command_id,
-            self._create_command_stamp(),
-            msg.offset,
-        )
-        return [command]
+    def _move_arm_command_with_offset(self, command: SemanticCommand):
+        return [
+            ManipulatorMoveRelativeCommand(
+                command.command_id,
+                self._create_command_stamp(),
+                stamped_pose_to_message(command.offset),
+            )
+        ]
 
     def _move_to_tag(
         self,
-        msg: ComplexCommand,
+        command: SemanticCommand,
     ) -> List[SimpleCommand]:
-        command = ManipulatorToTagCommand(
-            CommandID.MOVE_ARM_TO_TAG,
-            self._create_command_stamp(),
-            msg.tag.pose,
-            msg.tag.id,
-            msg.offset,
-            msg.orientation_mode,
-        )
-        return [command]
+        tag = self._required_tag(command)
+        return [
+            ManipulatorToTagCommand(
+                CommandID.MOVE_ARM_TO_TAG,
+                self._create_command_stamp(),
+                stamped_pose_to_message(tag.pose),
+                tag.id,
+                stamped_pose_to_message(command.offset),
+                command.orientation_mode,
+            )
+        ]
 
-    def _move_base_to_tag(self, msg: ComplexCommand):
-        command = BaseToTagCommand(
-            command_id=CommandID.MOVE_BASE_TO_TAG,
-            stamp=self._create_command_stamp(),
-            tag_pose=msg.tag.pose,
-            tag_id=msg.tag.id,
-            offset=msg.offset,
-        )
-        return [command]
+    def _move_base_to_tag(self, command: SemanticCommand):
+        tag = self._required_tag(command)
+        return [
+            BaseToTagCommand(
+                command_id=CommandID.MOVE_BASE_TO_TAG,
+                stamp=self._create_command_stamp(),
+                tag_pose=stamped_pose_to_message(tag.pose),
+                tag_id=tag.id,
+                offset=stamped_pose_to_message(command.offset),
+            )
+        ]
 
-    def _move_base_with_offset(self, msg: ComplexCommand):
-        command = BaseMoveRelativeCommand(
-            command_id=CommandID.MOVE_BASE_RELATIVE,
-            stamp=self._create_command_stamp(),
-            offset=msg.offset,
-        )
-        return [command]
+    def _move_base_with_offset(self, command: SemanticCommand):
+        return [
+            BaseMoveRelativeCommand(
+                command_id=CommandID.MOVE_BASE_RELATIVE,
+                stamp=self._create_command_stamp(),
+                offset=stamped_pose_to_message(command.offset),
+            )
+        ]
 
     def _move_to_tag_and_wait(
         self,
-        msg: ComplexCommand,
+        command: SemanticCommand,
     ) -> List[SimpleCommand]:
-        command = self._move_to_tag(msg)
-        if msg.wait_time <= 0.0:
-            return command
-        command.append(
+        commands = self._move_to_tag(command)
+        if command.wait_time <= 0.0:
+            return commands
+        commands.append(
             TimerCommand(
                 CommandID.WAIT_TIME,
                 self._create_command_stamp(),
-                msg.wait_time,
+                command.wait_time,
             )
         )
-        return command
+        return commands
 
     def _scan_all_in_range(
         self,
-        msg: ComplexCommand,
+        command: SemanticCommand,
     ) -> List[SimpleCommand]:
         tags = self.blackboard.reachable_tags
         if not tags:
             return []
 
         commands: List[SimpleCommand] = []
-        for tag_id, tag in sorted(tags.items()):
-            msg.tag = tag
-            commands.extend(self._move_to_tag_and_wait(msg))
+        for _, tag in sorted(tags.items()):
+            scan_command = replace(
+                command,
+                tag=SemanticTag(
+                    id=int(tag.id),
+                    pose=stamped_pose_from_message(tag.pose),
+                ),
+            )
+            commands.extend(self._move_to_tag_and_wait(scan_command))
             commands.append(
                 SimpleCommand(
                     CommandID.STOW_ARM,
@@ -396,7 +404,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
 
     def _return_to_estop_state(
         self,
-        msg: ComplexCommand,
+        command: SemanticCommand,
     ) -> List[SimpleCommand]:
         return [
             SimpleCommand(
@@ -412,3 +420,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 self._create_command_stamp(),
             ),
         ]
+
+    @staticmethod
+    def _required_tag(command: SemanticCommand) -> SemanticTag:
+        if command.tag is None:
+            raise ValueError(
+                f"{command.command_id.value} requires a tag target"
+            )
+        return command.tag

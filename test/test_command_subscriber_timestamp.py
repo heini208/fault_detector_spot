@@ -1,57 +1,61 @@
 """Tests for command handling when the ROS clock does not advance."""
 
-from fault_detector_msgs.msg import ComplexCommand
-
+from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
+    CommandSubscriber,
+)
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
     RecordingPolicy,
 )
-from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
-    CommandSubscriber,
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
+)
+from fault_detector_spot.application.ros.command_request_adapter import (
+    command_request_to_message,
 )
 
 
-class FakeBlackboard:
-    """Provide the command buffer used by the subscriber."""
-
-    def __init__(self):
-        """Create an empty command buffer."""
-        self.command_buffer = []
+class FakeLogger:
+    def info(self, _message):
+        pass
 
 
-def make_request(command_id):
-    """Create one request at a fixed simulated timestamp."""
-    command = ComplexCommand()
-    command.command.command_id = command_id
-    command.command.header.stamp.sec = 42
-    command.command.header.stamp.nanosec = 0
-    return CommandRequest.create(
-        command=command,
+class FakeNode:
+    def get_logger(self):
+        return FakeLogger()
+
+
+def wire_request(command_id):
+    request = CommandRequest.create(
+        command=SemanticCommand(command_id=command_id),
         client_id="test_client",
         origin=CommandOrigin.OPERATIONAL,
         recording_policy=(
             RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
         ),
     )
+    message = command_request_to_message(request)
+    message.command.command.header.stamp.sec = 42
+    return message
 
 
-def test_same_simulated_timestamp_does_not_drop_distinct_commands():
-    """A static simulation clock cannot suppress a later UI action."""
+def test_same_transport_timestamp_keeps_distinct_semantic_requests():
     subscriber = CommandSubscriber()
-    subscriber.blackboard = FakeBlackboard()
+    subscriber.node = FakeNode()
 
-    subscriber.fire_request(
-        make_request(CommandID.STAND_UP)
-    )
-    subscriber.fire_request(
-        make_request(CommandID.STOW_ARM)
-    )
+    subscriber.append_request_to_buffer(wire_request(CommandID.STAND_UP))
+    subscriber.append_request_to_buffer(wire_request(CommandID.STOW_ARM))
 
+    assert len(subscriber.pending_msgs) == 2
+    assert all(
+        isinstance(request.command, SemanticCommand)
+        for _, request in subscriber.pending_msgs
+    )
     assert [
-        command.command_id
-        for command in subscriber.blackboard.command_buffer
+        request.command.command_id
+        for _, request in subscriber.pending_msgs
     ] == [
         CommandID.STAND_UP,
         CommandID.STOW_ARM,

@@ -69,11 +69,22 @@ def test_ros_command_transport_exists_at_ros_boundary():
     assert "command_request_to_message" in source
 
 
-def test_complex_command_is_confined_to_transport_or_bt_files():
+def test_behaviour_tree_consumes_semantic_commands():
+    subscriber = (
+        ROOT
+        / "application/behaviour_tree/behaviours/command_subscriber.py"
+    ).read_text(encoding="utf-8")
+
+    assert "ComplexCommand" not in subscriber
+    assert "CommandRequest[SemanticCommand]" in subscriber
+    assert "semantic_command_request_from_message" in subscriber
+
+
+def test_complex_command_remains_only_in_current_wire_compatibility_files():
     paths = (
         ROOT / "application/ros/semantic_command_adapter.py",
         ROOT / "application/ros/command_request_adapter.py",
-        ROOT / "application/behaviour_tree/behaviours/command_subscriber.py",
         ROOT / "application/recording/record_manager_node.py",
     )
+
     assert all(path.exists() for path in paths)

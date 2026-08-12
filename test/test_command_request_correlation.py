@@ -6,21 +6,24 @@ from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import CommandStatus, ComplexCommand
 from py_trees.common import Status
 
-from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.behaviour_tree.behaviours.buffer_and_status_publisher import (
     BufferStatusPublisher,
 )
 from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
     CommandSubscriber,
 )
-from fault_detector_spot.application.recording.record_manager_node import (
-    serialize_recorded_command,
-)
-from fault_detector_spot.application.commanding.request_identity import new_request_id
+from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
     RecordingPolicy,
+)
+from fault_detector_spot.application.commanding.request_identity import new_request_id
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
+)
+from fault_detector_spot.application.recording.record_manager_node import (
+    serialize_recorded_command,
 )
 
 
@@ -37,16 +40,27 @@ class FakePublisher:
         self.messages.append(message)
 
 
-def test_complex_command_request_id_reaches_internal_motion():
-    message = ComplexCommand()
-    message.command.command_id = CommandID.MOVE_ARM_TO_TAG
-    request = CommandRequest.create(
-        command=message,
-        client_id="operator_ui",
-        origin=CommandOrigin.OPERATIONAL,
-        recording_policy=(
-            RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
-        ),
+def semantic_request(command_id, client_id, context_id="", origin=None):
+    if origin is None:
+        origin = CommandOrigin.OPERATIONAL
+    recording_policy = (
+        RecordingPolicy.EXCLUDE
+        if origin is CommandOrigin.PROBE_SETUP
+        else RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
+    )
+    return CommandRequest.create(
+        command=SemanticCommand(command_id=command_id),
+        client_id=client_id,
+        context_id=context_id,
+        origin=origin,
+        recording_policy=recording_policy,
+    )
+
+
+def test_semantic_command_request_id_reaches_internal_motion():
+    request = semantic_request(
+        CommandID.STAND_UP,
+        "operator_ui",
     )
     subscriber = CommandSubscriber()
     subscriber.blackboard = SimpleNamespace(command_buffer=[])
@@ -62,16 +76,12 @@ def test_complex_command_request_id_reaches_internal_motion():
 
 
 def test_request_metadata_reaches_internal_motion():
-    message = ComplexCommand()
-    message.command.command_id = CommandID.MOVE_ARM_RELATIVE
-    request = CommandRequest.create(
-        command=message,
-        client_id="probe_ui",
+    request = semantic_request(
+        CommandID.MOVE_ARM_RELATIVE,
+        "probe_ui",
         context_id="probe_setup_8",
         origin=CommandOrigin.PROBE_SETUP,
-        recording_policy=RecordingPolicy.EXCLUDE,
     )
-    request.command.command.request_id = request.request_id
     subscriber = CommandSubscriber()
     subscriber.blackboard = SimpleNamespace(command_buffer=[])
     subscriber.node = SimpleNamespace(get_clock=lambda: FakeClock())
@@ -87,17 +97,10 @@ def test_request_metadata_reaches_internal_motion():
 
 
 def test_empty_request_translation_reports_correlated_failure():
-    message = ComplexCommand()
-    message.command.command_id = CommandID.SCAN_ALL_IN_RANGE
-    request = CommandRequest.create(
-        command=message,
-        client_id="operator_ui",
-        origin=CommandOrigin.OPERATIONAL,
-        recording_policy=(
-            RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
-        ),
+    request = semantic_request(
+        CommandID.SCAN_ALL_IN_RANGE,
+        "operator_ui",
     )
-    request.command.command.request_id = request.request_id
     subscriber = CommandSubscriber()
     subscriber.blackboard = SimpleNamespace(
         command_buffer=[],
@@ -105,9 +108,7 @@ def test_empty_request_translation_reports_correlated_failure():
     )
     subscriber.node = SimpleNamespace(get_clock=lambda: FakeClock())
     subscriber.request_status_publisher = FakePublisher()
-    subscriber.pending_msgs = [
-        (request.command.command.header.stamp, request)
-    ]
+    subscriber.pending_msgs = [(Time(), request)]
 
     subscriber.update()
 
