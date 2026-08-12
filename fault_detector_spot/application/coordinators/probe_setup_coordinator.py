@@ -1,6 +1,5 @@
 """Coordinate probe authoring and single-step setup movement."""
 
-import math
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import wraps
@@ -26,15 +25,15 @@ from fault_detector_spot.application.setup.setup_context import (
 from fault_detector_spot.application.setup.setup_context_access import (
     SetupContextAccess,
 )
-from fault_detector_spot.application.setup.setup_operation_registry import (
-    SetupOperationRegistry,
-)
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     ProbePoint,
 )
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
+)
+from fault_detector_spot.application.coordinators.probe_refinement_controller import (
+    ProbeRefinementController,
 )
 from fault_detector_spot.inspection.setup.probe_definition_service import (
     ProbeDefinitionService,
@@ -50,13 +49,10 @@ from fault_detector_spot.inspection.setup.probe_setup_geometry import (
     ProbeSetupGeometry,
 )
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
-    PendingRefinementMotion,
-    ProbeRefinementSession,
     RefinementMotionState,
     RefinementStage,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
-    ProbeMotionKind,
     ProbeMotionRequest,
     ProbeSetupMotionCommandFactory,
 )
@@ -66,8 +62,6 @@ from fault_detector_spot.inspection.setup.probe_surface_verification import (
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     approve_probe_pose,
-    approve_safe_approach_pose,
-    approve_surface_alignment_pose,
 )
 from fault_detector_spot.shared.persistence.file_storage import (
     validate_storage_name,
@@ -141,7 +135,14 @@ class ProbeSetupCoordinator:
         self.surface_verification = ProbeSurfaceVerificationCoordinator()
         self._lock = RLock()
         self._context_access = SetupContextAccess(setup_coordinator)
-        self._operations = SetupOperationRegistry()
+        self.refinement_controller = ProbeRefinementController(
+            setup_coordinator=setup_coordinator,
+            object_repository=self.object_repository,
+            sensor_repository=sensor_repository,
+            motion_state_source=motion_state_source,
+            motion_command_factory=self.motion_command_factory,
+            state_lock=self._lock,
+        )
         self._drafts = {}
         self._context_locks = {}
         self._finalizations = {}
@@ -189,7 +190,9 @@ class ProbeSetupCoordinator:
     def close_context(self, context: SetupContextSnapshot) -> None:
         """Close one probe draft and invalidate delayed callers."""
         draft = self._draft(context)
-        request_ids = self._operations.request_ids_for(context)
+        request_ids = (
+            self.refinement_controller.request_ids_for(context)
+        )
         for request_id in request_ids:
             try:
                 self.setup_coordinator.command_controller.cancel(request_id)
@@ -199,7 +202,7 @@ class ProbeSetupCoordinator:
             self._drafts.pop(draft.context.context_id, None)
             self._context_locks.pop(draft.context.context_id, None)
             self._finalizations.pop(draft.context.context_id, None)
-        self._operations.discard_context(draft.context)
+        self.refinement_controller.discard_context(draft.context)
         if self.setup_coordinator.is_current(draft.context):
             self.setup_coordinator.close_context(draft.context)
 
@@ -433,11 +436,12 @@ class ProbeSetupCoordinator:
         context: SetupContextSnapshot,
     ) -> ProbeSetupSnapshot:
         """Approve one achieved obstacle-safe pose."""
-        return self._approve(
-            context,
-            approve_safe_approach_pose,
+        draft = self._selected_draft(context)
+        self.refinement_controller.approve(
+            draft,
             RefinementStage.SAFE_APPROACH,
         )
+        return self._advance(draft)
 
     @_serialized_transaction
     def approve_aligned_pose(
@@ -445,11 +449,12 @@ class ProbeSetupCoordinator:
         context: SetupContextSnapshot,
     ) -> ProbeSetupSnapshot:
         """Approve one achieved surface-aligned pre-approach pose."""
-        return self._approve(
-            context,
-            approve_surface_alignment_pose,
+        draft = self._selected_draft(context)
+        self.refinement_controller.approve(
+            draft,
             RefinementStage.ALIGNMENT,
         )
+        return self._advance(draft)
 
     @_serialized_transaction
     def approve_probe_pose(
@@ -457,11 +462,12 @@ class ProbeSetupCoordinator:
         context: SetupContextSnapshot,
     ) -> ProbeSetupSnapshot:
         """Approve one achieved final probe pose."""
-        return self._approve(
-            context,
-            approve_probe_pose,
+        draft = self._selected_draft(context)
+        self.refinement_controller.approve(
+            draft,
             RefinementStage.PROBE,
         )
+        return self._advance(draft)
 
     @_serialized_transaction
     def begin_refinement(
@@ -469,20 +475,8 @@ class ProbeSetupCoordinator:
         context: SetupContextSnapshot,
     ) -> ProbeSetupSnapshot:
         """Start one server-owned supervised refinement session."""
-        self._require_physical_lane_idle()
         draft = self._selected_draft(context)
-        if draft.geometry is None or draft.setup is None:
-            raise ValueError("No calculated probe setup is available")
-        if draft.refinement is not None:
-            raise RuntimeError("Probe refinement is already active")
-        refinement = ProbeRefinementSession.create(
-            draft.geometry.probe_setup,
-            draft.setup,
-        )
-        refinement.active_stage = RefinementStage.SAFE_APPROACH
-        with self._lock:
-            draft.refinement = refinement
-            draft.surface_verification = None
+        self.refinement_controller.begin(draft)
         return self._advance(draft)
 
     @_serialized_transaction
@@ -492,12 +486,8 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Discard unapproved candidates and close refinement state."""
         draft = self._selected_draft(context)
-        if draft.refinement is None:
+        if not self.refinement_controller.end(draft):
             return self.snapshot(context)
-        draft.refinement.discard_unapproved_candidates()
-        with self._lock:
-            draft.refinement = None
-            draft.surface_verification = None
         return self._advance(draft)
 
     def begin_surface_verification(
@@ -509,9 +499,9 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             self._require_idle(context)
-            self._require_physical_lane_idle()
+            self.refinement_controller.require_physical_lane_idle()
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             if not refinement.stage_is_approved(
                 RefinementStage.SAFE_APPROACH
             ):
@@ -551,7 +541,7 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             verification = self._surface_verification_session(
                 draft,
                 request_id,
@@ -573,7 +563,7 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             verification = self._surface_verification_session(
                 draft,
                 request_id,
@@ -626,7 +616,7 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             verification = self._surface_verification_session(
                 draft,
                 request_id,
@@ -648,7 +638,7 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             verification = self._surface_verification_session(
                 draft,
                 request_id,
@@ -670,7 +660,7 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             verification = self._surface_verification_session(
                 draft,
                 request_id,
@@ -691,7 +681,7 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             verification = self._surface_verification_session(
                 draft,
                 request_id,
@@ -718,9 +708,9 @@ class ProbeSetupCoordinator:
                 context,
                 finalization_request_id=normalized,
             )
-            self._require_physical_lane_idle()
+            self.refinement_controller.require_physical_lane_idle()
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             for stage, label in (
                 (RefinementStage.SAFE_APPROACH, "safe approach"),
                 (RefinementStage.ALIGNMENT, "aligned pre-approach"),
@@ -753,7 +743,7 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self._require_finalization(context, request_id)
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             refinement.approve_verified_probe()
             pose = refinement.approved_pose(RefinementStage.PROBE)
             with self._lock:
@@ -776,7 +766,7 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self._require_finalization(context, request_id)
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             self._persist_probe_point(
                 draft,
                 probe_point_id,
@@ -797,7 +787,7 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self._require_finalization(context, request_id)
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             refinement.complete_retraction()
             refinement.discard_unapproved_candidates()
             with self._lock:
@@ -816,7 +806,7 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self._require_finalization(context, request_id)
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
+            refinement = self.refinement_controller.require_refinement(draft)
             refinement.require_recovery(detail)
             with self._lock:
                 self._finalizations.pop(context.context_id, None)
@@ -837,46 +827,11 @@ class ProbeSetupCoordinator:
                 surface_verification_request_id,
                 finalization_request_id,
             )
-            self._require_physical_lane_idle()
-            motion.validate()
             draft = self._selected_draft(context)
-            refinement = self._require_refinement(draft)
-            stage = self._motion_stage(motion.kind)
-            refinement.active_stage = stage
-            surface_correction = (
-                motion.kind is ProbeMotionKind.ADJUST_PROBE_DISTANCE
-            )
-            if motion.relative:
-                command = self._relative_motion_command(draft, motion)
-                target = refinement.candidate_pose(stage)
-                purpose = (
-                    "surface-distance correction"
-                    if surface_correction
-                    else f"{stage.value} adjustment"
-                )
-            else:
-                target = refinement.candidate_pose(stage)
-                command = self._absolute_motion_command(draft, target)
-                purpose = stage.value
-            operation = self.setup_coordinator.prepare_command(
+            operation = self.refinement_controller.prepare_motion(
                 context,
-                command,
-            )
-            pending_motion = PendingRefinementMotion(
-                request_id=operation.request_id,
-                stage=stage,
-                purpose=purpose,
-                target_pose_object=deepcopy(target),
-                updates_candidate=(
-                    motion.relative and not surface_correction
-                ),
-                verify_achieved_pose=not motion.relative,
-            )
-            refinement.begin_motion(pending_motion)
-            self._operations.register(
-                operation.request_id,
-                context,
-                (motion, stage),
+                draft,
+                motion,
             )
             return ProbeSetupMotionOperation(operation, motion)
 
@@ -887,24 +842,21 @@ class ProbeSetupCoordinator:
         """Submit one prepared motion through the shared command lane."""
         if not isinstance(operation, ProbeSetupMotionOperation):
             raise TypeError("Expected a ProbeSetupMotionOperation")
-        tracked = self._operations.owned(
-            operation.request_id,
-            operation.operation.context,
+        tracked = self.refinement_controller.tracked_operation(
+            operation.operation,
+            operation.motion,
         )
-        if tracked is None or tracked.payload[0] != operation.motion:
-            raise ValueError("Probe setup motion was not prepared here")
         try:
-            return self.setup_coordinator.submit(operation.operation)
+            return self.setup_coordinator.submit(
+                operation.operation
+            )
         except Exception:
-            context = tracked.context
-            with self._context_lock(context):
-                draft = self._draft(context)
-                refinement = self._require_refinement(draft)
-                refinement.fail_motion(
+            with self._context_lock(tracked.context):
+                draft = self._draft(tracked.context)
+                self.refinement_controller.fail_submission(
                     operation.request_id,
-                    "Motion submission failed",
+                    draft,
                 )
-                self._operations.pop(operation.request_id)
             raise
 
     def cancel_motion(
@@ -913,19 +865,18 @@ class ProbeSetupCoordinator:
         request_id: str,
     ) -> str:
         """Cancel one motion owned by the current probe context."""
-        self.setup_coordinator.require_current(context)
-        normalized = request_id.strip()
-        if self._operations.owned(normalized, context) is None:
-            raise LookupError(f"Unknown probe setup motion: {request_id}")
-        return self.setup_coordinator.command_controller.cancel(normalized)
+        return self.refinement_controller.cancel_motion(
+            context,
+            request_id,
+        )
 
     def add_motion_status_listener(self, listener) -> None:
         """Register one probe motion status listener."""
-        self._operations.add_listener(listener)
+        self.refinement_controller.add_listener(listener)
 
     def remove_motion_status_listener(self, listener) -> None:
         """Remove one probe motion status listener."""
-        self._operations.remove_listener(listener)
+        self.refinement_controller.remove_listener(listener)
 
     @_serialized_transaction
     def save_probe_point(
@@ -1029,49 +980,21 @@ class ProbeSetupCoordinator:
         for context in contexts:
             if self.setup_coordinator.is_current(context):
                 self.close_context(context)
-        self._operations.clear()
+        self.refinement_controller.clear()
         with self._lock:
             self._finalizations.clear()
-
-    def _approve(self, context, operation, stage):
-        self._require_physical_lane_idle()
-        draft = self._selected_draft(context)
-        if draft.setup is None:
-            raise ValueError("No calculated probe setup is available")
-        refinement = self._require_refinement(draft)
-        if (
-            stage != RefinementStage.SAFE_APPROACH
-            and refinement.motion_states[stage]
-            != RefinementMotionState.REACHED
-        ):
-            raise RuntimeError(
-                f"Reach the {stage.value} pose before approval"
-            )
-        pose_object = self._current_probe_pose(draft)
-        if (
-            stage == RefinementStage.SAFE_APPROACH
-            and refinement.motion_states[stage]
-            != RefinementMotionState.REACHED
-        ):
-            refinement.set_candidate(stage, pose_object)
-            refinement.motion_states[stage] = RefinementMotionState.REACHED
-        refinement.approve(stage, pose_object)
-        setup = operation(draft.setup, deepcopy(pose_object))
-        with self._lock:
-            draft.setup = setup
-            draft.dirty = True
-            draft.validation_error = ""
-        return self._advance(draft)
 
     def _handle_operation_status(
         self,
         status: SetupOperationStatus,
     ) -> None:
-        tracked = self._operations.get(status.operation.request_id)
+        tracked = self.refinement_controller.tracked_status(
+            status
+        )
         if tracked is None:
             return
         context = tracked.context
-        motion, _stage = tracked.payload
+        motion = tracked.payload[0]
         terminal = status.state in {
             CommandControllerState.SUCCEEDED,
             CommandControllerState.FAILED,
@@ -1080,142 +1003,37 @@ class ProbeSetupCoordinator:
         if terminal:
             with self._context_lock(context):
                 draft = self._draft(context)
-                refinement = self._require_refinement(draft)
-                if status.state == CommandControllerState.SUCCEEDED:
-                    try:
-                        achieved = self._current_probe_pose(draft)
-                        self._verify_achieved_motion(
-                            refinement.pending_motion,
-                            motion,
-                            achieved,
-                        )
-                        refinement.complete_motion(
-                            status.operation.request_id,
-                            achieved,
-                        )
-                    except Exception as exception:
-                        refinement.fail_motion(
-                            status.operation.request_id,
-                            str(exception),
-                        )
-                        status = SetupOperationStatus(
-                            operation=status.operation,
-                            state=CommandControllerState.FAILED,
-                            detail=str(exception),
-                            buffered_command_count=(
-                                status.buffered_command_count
-                            ),
-                        )
-                else:
-                    refinement.fail_motion(
-                        status.operation.request_id,
-                        status.detail,
+                handled = (
+                    self.refinement_controller.handle_terminal_status(
+                        status,
+                        draft,
                     )
-                self._operations.pop(status.operation.request_id)
+                )
+                if handled is None:
+                    return
+                motion, status = handled
                 snapshot = self._advance(draft)
         else:
             snapshot = self.snapshot(context)
-        motion_status = ProbeSetupMotionStatus(
-            request_id=status.operation.request_id,
-            motion=motion,
-            state=status.state,
-            detail=status.detail,
-            snapshot=snapshot,
-        )
-        self._operations.emit(motion_status)
-
-    def _absolute_motion_command(self, draft, target):
-        definition = self.object_repository.load(draft.selected_object_id)
-        routine = definition.get_routine(draft.selected_routine_id)
-        sensor = self.sensor_repository.load(routine.sensor_id)
-        tag = self._motion_state_source().reference_tag(
-            definition.reference_tag.tag_id
-        )
-        return self.motion_command_factory.absolute(
-            target,
-            sensor.hand_to_probe,
-            tag,
-        )
-
-    def _relative_motion_command(self, draft, motion):
-        definition = self.object_repository.load(draft.selected_object_id)
-        routine = definition.get_routine(draft.selected_routine_id)
-        frame_id = self.motion_command_factory.frame_id(
-            motion.frame,
-            routine.sensor_id,
-            definition.reference_tag.tag_id,
-        )
-        return self.motion_command_factory.relative(
-            frame_id,
-            motion.translation,
-            motion.pitch_rad,
-            motion.yaw_rad,
-        )
-
-    def _current_probe_pose(self, draft):
-        definition = self.object_repository.load(draft.selected_object_id)
-        routine = definition.get_routine(draft.selected_routine_id)
-        return self._motion_state_source().current_probe_pose_object(
-            definition.reference_tag.tag_id,
-            routine.sensor_id,
-        )
-
-    def _motion_state_source(self):
-        if self.motion_state_source is None:
-            raise RuntimeError("Probe setup motion state is unavailable")
-        return self.motion_state_source
-
-    @staticmethod
-    def _require_refinement(draft):
-        if draft.refinement is None:
-            raise RuntimeError("Probe refinement is not active")
-        return draft.refinement
-
-    @staticmethod
-    def _motion_stage(kind):
-        if kind in {
-            ProbeMotionKind.MOVE_SAFE_APPROACH,
-            ProbeMotionKind.ADJUST_SAFE_APPROACH,
-        }:
-            return RefinementStage.SAFE_APPROACH
-        if kind in {
-            ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
-            ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH,
-        }:
-            return RefinementStage.ALIGNMENT
-        if kind is ProbeMotionKind.ADJUST_PROBE_DISTANCE:
-            return RefinementStage.PROBE
-        raise ValueError(f"Unsupported probe setup motion: {kind}")
-
-    @staticmethod
-    def _verify_achieved_motion(pending, motion, achieved):
-        if pending is None or not pending.verify_achieved_pose:
-            return
-        target = pending.target_pose_object
-        position_error = math.sqrt(
-            (target.position.x - achieved.position.x) ** 2
-            + (target.position.y - achieved.position.y) ** 2
-            + (target.position.z - achieved.position.z) ** 2
-        )
-        dot = abs(
-            target.orientation.x * achieved.orientation.x
-            + target.orientation.y * achieved.orientation.y
-            + target.orientation.z * achieved.orientation.z
-            + target.orientation.w * achieved.orientation.w
-        )
-        orientation_error = 2.0 * math.acos(
-            max(-1.0, min(1.0, dot))
-        )
-        if position_error > motion.position_tolerance_m:
-            raise RuntimeError(
-                "Achieved probe position missed the target by "
-                f"{position_error:.4f} m"
+        self.refinement_controller.emit(
+            ProbeSetupMotionStatus(
+                request_id=status.operation.request_id,
+                motion=motion,
+                state=status.state,
+                detail=status.detail,
+                snapshot=snapshot,
             )
-        if orientation_error > motion.orientation_tolerance_rad:
-            raise RuntimeError(
-                "Achieved probe orientation missed the target by "
-                f"{math.degrees(orientation_error):.2f} deg"
-            )
+        )
+
+
+
+
+
+    @staticmethod
+
+    @staticmethod
+
+    @staticmethod
 
     def _require_idle(
         self,
@@ -1261,7 +1079,7 @@ class ProbeSetupCoordinator:
                 raise RuntimeError(
                     "Probe refinement requires retraction before editing"
                 )
-        if self._operations.has_context(context):
+        if self.refinement_controller.has_context(context):
             raise RuntimeError(
                 "Probe setup context already has an active motion"
             )
@@ -1295,12 +1113,6 @@ class ProbeSetupCoordinator:
             )
         return normalized
 
-    def _require_physical_lane_idle(self) -> None:
-        controller = self.setup_coordinator.command_controller
-        if controller.active_request_id or controller.queued_request_ids:
-            raise RuntimeError(
-                "Robot command lane must be idle for probe refinement"
-            )
 
     def _selected_draft(
         self,
