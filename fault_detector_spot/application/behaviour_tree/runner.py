@@ -48,9 +48,6 @@ from fault_detector_spot.application.behaviour_tree import (
     WaitForDuration,
 )
 from fault_detector_spot.application.commanding.command_ids import CommandID
-from fault_detector_spot.application.controllers.command_controller import (
-    CommandController,
-)
 from fault_detector_spot.navigation.behaviours.last_localization_pose import (
     LastLocalizationPose,
 )
@@ -583,7 +580,6 @@ def main(args=None):
         rclpy.try_shutdown()
         sys.exit(1)
 
-    tree.node.command_controller = CommandController(tree.node)
     tree.tick_tock(period_ms=50.0)
 
     slam_helper = get_helper_container(tree.node).slam_helper

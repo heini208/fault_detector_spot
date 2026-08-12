@@ -14,6 +14,14 @@ from rclpy.action import ActionClient
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 
 
+_RUNTIME_OPERATIONS = frozenset({
+    NavigationSetupIntent.OPERATION_SELECT_MAP,
+    NavigationSetupIntent.OPERATION_START_MAPPING,
+    NavigationSetupIntent.OPERATION_START_LOCALIZATION,
+    NavigationSetupIntent.OPERATION_STOP_MAPPING,
+})
+
+
 class NavigationSetupClient(QObject):
     """Submit navigation setup intent and expose immutable state."""
 
@@ -27,6 +35,7 @@ class NavigationSetupClient(QObject):
         self.client_id = client_id
         self.context_id = ""
         self._last_state_fingerprint = None
+        self._last_map_names = []
         self._goal_handles = {}
         self._action_client = ActionClient(
             node,
@@ -134,11 +143,22 @@ class NavigationSetupClient(QObject):
             return
         if state.context_id:
             self.context_id = state.context_id
+
+        operation = int(state.operation)
+        if state.map_names:
+            self._last_map_names = list(state.map_names)
+        elif operation in _RUNTIME_OPERATIONS and self._last_map_names:
+            state = deepcopy(state)
+            state.map_names = list(self._last_map_names)
+        elif operation not in _RUNTIME_OPERATIONS:
+            self._last_map_names = []
+
         fingerprint = (
             state.request_id,
             int(state.state),
             int(state.revision),
             state.detail,
+            tuple(state.map_names),
         )
         if fingerprint == self._last_state_fingerprint:
             return
@@ -156,6 +176,7 @@ class NavigationSetupClient(QObject):
             return
         if response.closed:
             self.context_id = ""
+            self._last_map_names = []
         self.close_finished.emit(response.closed, response.detail)
 
     def destroy(self):

@@ -114,6 +114,12 @@ class CommandController:
             self.handle_command_status,
             10,
         )
+        create_timer = getattr(node, "create_timer", None)
+        self._dispatch_retry_timer = (
+            create_timer(0.1, self._retry_dispatch)
+            if callable(create_timer)
+            else None
+        )
 
     @property
     def active_request_id(self) -> str:
@@ -268,8 +274,27 @@ class CommandController:
             command=message.command,
         )
 
+    def _retry_dispatch(self) -> None:
+        with self._lock:
+            self._dispatch_next_locked()
+
+    def _dispatch_consumer_ready_locked(self) -> bool:
+        get_count = getattr(
+            self._dispatch_publisher,
+            "get_subscription_count",
+            None,
+        )
+        if not callable(get_count):
+            return True
+        try:
+            return int(get_count()) > 0
+        except Exception:
+            return False
+
     def _dispatch_next_locked(self) -> None:
         if self._active is not None or not self._queue:
+            return
+        if not self._dispatch_consumer_ready_locked():
             return
         self._active = self._queue.popleft()
         self._publish_dispatch_locked(self._active)
@@ -290,8 +315,16 @@ class CommandController:
                 CommandControllerState.CANCELLED,
                 "Interrupted by emergency stop",
             )
-        self._active = request
-        self._publish_dispatch_locked(request)
+        if self._dispatch_consumer_ready_locked():
+            self._active = request
+            self._publish_dispatch_locked(request)
+        else:
+            self._queue.appendleft(request)
+            self._emit_locked(
+                request,
+                CommandControllerState.QUEUED,
+                "Waiting for behavior-tree command consumer",
+            )
 
     def _publish_dispatch_locked(
         self,
