@@ -28,9 +28,6 @@ def command_request_from_message(
         recording_policy=message.recording_policy,
         command=semantic_command_from_message(message.command),
     )
-    nested_request_id = message.command.command.request_id.strip()
-    if nested_request_id and nested_request_id != request.request_id:
-        raise ValueError("Envelope and command request IDs must match")
     return request
 
 
@@ -50,10 +47,7 @@ def command_request_to_message(
     message.context_id = request.context_id
     message.origin = int(request.origin)
     message.recording_policy = int(request.recording_policy)
-    message.command = semantic_command_to_message(
-        request.command,
-        request.request_id,
-    )
+    message.command = semantic_command_to_message(request.command)
     return message
 
 

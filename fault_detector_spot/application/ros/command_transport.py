@@ -115,7 +115,7 @@ class RosCommandTransport:
 
     def _publish_dispatch(self, request) -> None:
         message = command_request_to_message(request)
-        message.command.command.header.stamp = self.node.get_clock().now().to_msg()
+        message.header.stamp = self.node.get_clock().now().to_msg()
         self._dispatch_publisher.publish(message)
         self._log_info(
             "Published "
@@ -142,10 +142,9 @@ class RosCommandTransport:
         self._controller_status_publisher.publish(message)
 
     def _reject_message(self, message, detail) -> None:
-        command = getattr(message, "command", None)
-        basic = getattr(command, "command", None)
         request_id = getattr(message, "request_id", "")
-        command_id = getattr(basic, "command_id", "")
+        command = getattr(message, "command", None)
+        command_id = getattr(command, "command_id", "")
         self.node.get_logger().error(
             f"Rejected command request: {detail}"
         )

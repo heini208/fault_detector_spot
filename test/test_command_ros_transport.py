@@ -134,8 +134,7 @@ def test_transport_adds_wire_identity_and_timestamp_on_dispatch():
         "fault_detector/_internal/commands/request"
     ].messages[0]
     assert message.request_id == request.request_id
-    assert message.command.command.request_id == request.request_id
-    assert message.command.command.header.stamp == Time(
+    assert message.header.stamp == Time(
         sec=17,
         nanosec=23,
     )
@@ -180,9 +179,7 @@ def test_invalid_ros_submission_is_rejected_before_queueing():
     RosCommandTransport(node, controller)
     request = make_request(CommandID.STAND_UP)
     message = command_request_to_message(request)
-    message.command.command.request_id = make_request(
-        CommandID.STOW_ARM
-    ).request_id
+    message.command.command_id = ""
 
     accepted = node.subscriptions[
         "fault_detector/_internal/commands/submit"

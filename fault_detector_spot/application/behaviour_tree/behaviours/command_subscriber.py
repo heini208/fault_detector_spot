@@ -147,7 +147,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def append_request_to_buffer(self, message):
         try:
             request = command_request_from_message(message)
-            stamp = message.command.command.header.stamp
+            stamp = message.header.stamp
         except (TypeError, ValueError) as exception:
             detail = f"BT rejected command envelope: {exception}"
             self.logger.error(detail)
@@ -293,12 +293,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         request_id = getattr(message, "request_id", "").strip()
         if not request_id:
             return
-        command = getattr(message, "command", None)
-        basic = getattr(command, "command", None)
         status = CommandStatus()
         status.header.stamp = self._create_command_stamp()
         status.request_id = request_id
-        status.command_id = getattr(basic, "command_id", "")
+        command = getattr(message, "command", None)
+        status.command_id = getattr(command, "command_id", "")
         status.state = CommandStatus.STATE_FAILED
         status.detail = detail
         status.buffered_command_count = 0

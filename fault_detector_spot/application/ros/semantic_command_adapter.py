@@ -1,6 +1,6 @@
-"""Convert semantic commands to and from the legacy ROS wire DTO."""
+"""Convert semantic commands to and from the ROS command payload."""
 
-from fault_detector_msgs.msg import ComplexCommand
+from fault_detector_msgs.msg import CommandPayload
 from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.application.commanding.semantic_command import (
@@ -54,35 +54,20 @@ def stamped_pose_to_message(value: StampedPose) -> PoseStamped:
 
 
 def semantic_command_from_message(
-    message: ComplexCommand,
+    message: CommandPayload,
 ) -> SemanticCommand:
-    """Convert the internal ROS wire DTO into a semantic command."""
-    if not isinstance(message, ComplexCommand):
-        raise TypeError("Expected a ComplexCommand message")
-    command_id = message.command.command_id.strip()
+    """Convert the ROS wire payload into a semantic command."""
+    if not isinstance(message, CommandPayload):
+        raise TypeError("Expected a CommandPayload message")
+    command_id = message.command_id.strip()
     if not command_id:
         raise ValueError("Command ID must not be empty")
 
     tag = None
-    tag_pose = message.tag.pose
-    if (
-        int(message.tag.id) != 0
-        or bool(tag_pose.header.frame_id.strip())
-        or int(tag_pose.header.stamp.sec) != 0
-        or int(tag_pose.header.stamp.nanosec) != 0
-        or any((
-            tag_pose.pose.position.x,
-            tag_pose.pose.position.y,
-            tag_pose.pose.position.z,
-            tag_pose.pose.orientation.x,
-            tag_pose.pose.orientation.y,
-            tag_pose.pose.orientation.z,
-            tag_pose.pose.orientation.w,
-        ))
-    ):
+    if message.has_tag:
         tag = SemanticTag(
             id=int(message.tag.id),
-            pose=stamped_pose_from_message(tag_pose),
+            pose=stamped_pose_from_message(message.tag.pose),
         )
 
     return SemanticCommand(
@@ -103,16 +88,15 @@ def semantic_command_from_message(
 
 def semantic_command_to_message(
     command: SemanticCommand,
-    request_id: str = "",
-) -> ComplexCommand:
-    """Convert one semantic command into the ROS wire DTO."""
+) -> CommandPayload:
+    """Convert one semantic command into the ROS wire payload."""
     if not isinstance(command, SemanticCommand):
         raise TypeError("Expected a SemanticCommand")
-    message = ComplexCommand()
-    message.command.command_id = command.command_id.value
-    message.command.request_id = request_id.strip()
+    message = CommandPayload()
+    message.command_id = command.command_id.value
 
     if command.tag is not None:
+        message.has_tag = True
         message.tag.id = command.tag.id
         message.tag.pose = stamped_pose_to_message(command.tag.pose)
 

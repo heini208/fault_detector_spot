@@ -37,7 +37,7 @@ def wire_request(command_id):
         ),
     )
     message = command_request_to_message(request)
-    message.command.command.header.stamp.sec = 42
+    message.header.stamp.sec = 42
     return message
 
 

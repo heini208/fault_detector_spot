@@ -86,13 +86,17 @@ def test_recording_storage_is_ros_independent():
     assert "SemanticCommand" in codec
 
 
-def test_complex_command_is_confined_to_semantic_ros_wire_adapter():
+def test_legacy_command_wire_wrappers_are_removed():
     semantic_adapter = ROOT / "application/ros/semantic_command_adapter.py"
     request_adapter = ROOT / "application/ros/command_request_adapter.py"
 
     assert semantic_adapter.exists()
     assert request_adapter.exists()
-    assert "ComplexCommand" in semantic_adapter.read_text(encoding="utf-8")
+    semantic_source = semantic_adapter.read_text(encoding="utf-8")
+    request_source = request_adapter.read_text(encoding="utf-8")
+    assert "CommandPayload" in semantic_source
+    assert "ComplexCommand" not in semantic_source
+    assert "BasicCommand" not in semantic_source
     assert "ComplexCommand" not in request_adapter.read_text(
         encoding="utf-8"
     )

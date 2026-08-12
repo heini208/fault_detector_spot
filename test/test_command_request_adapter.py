@@ -44,19 +44,16 @@ def test_adapter_round_trip_preserves_request_metadata():
     assert restored.command.command_id is CommandID.MOVE_ARM_RELATIVE
 
 
-def test_adapter_rejects_conflicting_nested_request_identity():
+def test_wire_payload_does_not_duplicate_request_identity():
     message = command_request_to_message(make_request())
-    message.command.command.request_id = (
-        "00000000-0000-4000-8000-000000000001"
-    )
 
-    with pytest.raises(ValueError, match="request IDs must match"):
-        command_request_from_message(message)
+    assert message.request_id
+    assert not hasattr(message.command, "request_id")
 
 
 def test_adapter_rejects_empty_command_id():
     message = command_request_to_message(make_request())
-    message.command.command.command_id = ""
+    message.command.command_id = ""
 
     with pytest.raises(ValueError, match="Command ID"):
         command_request_from_message(message)
