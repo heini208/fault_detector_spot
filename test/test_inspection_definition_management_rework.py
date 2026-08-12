@@ -82,7 +82,8 @@ def test_snapshot_populates_definition_selectors(controls):
     assert controls.saved_object_dropdown.currentData() == "motor"
     assert controls.saved_routine_dropdown.currentData() == "magnetic_scan"
     assert controls.routine_parent_object_dropdown.currentData() == "motor"
-    assert controls._selected_reference_tag_id == 7
+    assert controls._probe_setup_state.selected_reference_tag_id == 7
+    assert not hasattr(controls, "_selected_reference_tag_id")
     assert controls._selected_sensor_id == "hall_probe"
 
 
