@@ -43,6 +43,9 @@ from fault_detector_spot.inspection.setup.probe_setup_context import (
     ProbeSetupDraft,
     ProbeSetupSnapshot,
 )
+from fault_detector_spot.inspection.setup.probe_geometry_editor import (
+    ProbeGeometryEditor,
+)
 from fault_detector_spot.inspection.setup.probe_setup_geometry import (
     ProbeSetupGeometry,
 )
@@ -126,6 +129,11 @@ class ProbeSetupCoordinator:
             sensor_repository,
         )
         self.geometry = geometry or ProbeSetupGeometry(reference_repository)
+        self.geometry_editor = ProbeGeometryEditor(
+            self.object_repository,
+            sensor_repository,
+            self.geometry,
+        )
         self.motion_state_source = motion_state_source
         self.motion_command_factory = (
             motion_command_factory or ProbeSetupMotionCommandFactory()
@@ -381,23 +389,14 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Calculate a complete draft from one original-image pixel."""
         draft = self._selected_draft(context)
-        pixel.validate()
-        view_id = self._text(reference_view_id, "reference view ID")
-        geometry = self._resolve_geometry(
+        self.geometry_editor.select_reference_pixel(
             draft,
-            view_id,
+            reference_view_id,
             pixel,
             approach_mode,
             target_surface_distance_m,
             aligned_preapproach_distance_m,
         )
-        with self._lock:
-            draft.selected_reference_view_id = view_id
-            draft.reference_pixel = deepcopy(pixel)
-            draft.geometry = geometry
-            draft.setup = deepcopy(geometry.probe_setup)
-            draft.dirty = True
-            draft.validation_error = ""
         return self._advance(draft)
 
     @_serialized_transaction
@@ -407,9 +406,7 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Clear the selected pixel and every geometry dependency."""
         draft = self._selected_draft(context)
-        with self._lock:
-            draft.selected_reference_view_id = ""
-            draft.clear_geometry()
+        self.geometry_editor.clear_reference_pixel(draft)
         return self._advance(draft)
 
     @_serialized_transaction
@@ -422,33 +419,12 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Recalculate distances while retaining safe and aligned approval."""
         draft = self._selected_draft(context)
-        if draft.reference_pixel is None:
-            raise ValueError("No reference pixel is selected")
-        previous = deepcopy(draft.setup)
-        geometry = self._resolve_geometry(
+        self.geometry_editor.update_geometry(
             draft,
-            draft.selected_reference_view_id,
-            draft.reference_pixel,
             approach_mode,
             target_surface_distance_m,
             aligned_preapproach_distance_m,
         )
-        setup = self._retained_distance_approvals(
-            geometry.probe_setup,
-            previous,
-        )
-        with self._lock:
-            draft.geometry = geometry
-            draft.setup = setup
-            if draft.refinement is not None:
-                draft.refinement = (
-                    draft.refinement.with_updated_surface_geometry(
-                        geometry.probe_setup,
-                        setup,
-                    )
-                )
-            draft.dirty = True
-            draft.validation_error = ""
         return self._advance(draft)
 
     @_serialized_transaction
@@ -1326,23 +1302,6 @@ class ProbeSetupCoordinator:
                 "Robot command lane must be idle for probe refinement"
             )
 
-    @staticmethod
-    def _retained_distance_approvals(setup, previous):
-        setup = deepcopy(setup)
-        if previous is None:
-            return setup
-        if previous.safe_approach_approved:
-            setup = approve_safe_approach_pose(
-                setup,
-                previous.safe_approach_pose_object,
-            )
-        if previous.surface_alignment_approved:
-            setup = approve_surface_alignment_pose(
-                setup,
-                previous.aligned_preapproach_pose_object,
-            )
-        return setup
-
     def _selected_draft(
         self,
         context: SetupContextSnapshot,
@@ -1354,31 +1313,6 @@ class ProbeSetupCoordinator:
         if definition.get_routine(draft.selected_routine_id) is None:
             raise LookupError("Selected inspection routine no longer exists")
         return draft
-
-    def _resolve_geometry(
-        self,
-        draft,
-        reference_view_id,
-        pixel,
-        approach_mode,
-        target_surface_distance_m,
-        aligned_preapproach_distance_m,
-    ):
-        definition = self.object_repository.load(draft.selected_object_id)
-        routine = definition.get_routine(draft.selected_routine_id)
-        sensor = self.sensor_repository.load(routine.sensor_id)
-        return self.geometry.resolve(
-            object_id=draft.selected_object_id,
-            routine_id=draft.selected_routine_id,
-            reference_view_id=reference_view_id,
-            pixel=deepcopy(pixel),
-            approach_mode=approach_mode,
-            target_surface_distance_m=target_surface_distance_m,
-            aligned_preapproach_distance_m=(
-                aligned_preapproach_distance_m
-            ),
-            hand_to_probe_pose=sensor.hand_to_probe,
-        )
 
     def _draft(
         self,
