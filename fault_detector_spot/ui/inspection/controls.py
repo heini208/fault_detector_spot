@@ -1,7 +1,6 @@
 """Inspection setup controls."""
 
 import math
-import time
 from copy import deepcopy
 
 from PyQt5.QtCore import QLocale, Qt, QTimer
@@ -28,7 +27,6 @@ from PyQt5.QtWidgets import (
 )
 
 from fault_detector_msgs.msg import (
-    ApplicationCommandState,
     ProbeSetupIntent,
     ProbeSetupMotionIntent,
     ProbeSetupState,
@@ -83,7 +81,6 @@ from ..shared.control_helper import UIControlHelper
 
 MAX_REFINEMENT_TRANSLATION_M = 0.05
 MAX_REFINEMENT_ROTATION_DEG = 15.0
-PROBE_MOTION_SETTLE_SEC = 0.5
 SURFACE_DISTANCE_TOLERANCE_M = 0.005
 REFINEMENT_FRAME_SENSOR = "sensor"
 REFINEMENT_FRAME_HAND = "hand"
@@ -118,10 +115,6 @@ class InspectionControls(UIControlHelper):
         self._sensor_definitions = {}
         self._pending_sensor_selection = ""
         self._pending_sensor_retirement = ""
-        self._probe_motion_pending = False
-        self._command_state = ApplicationCommandState.STATE_UNSPECIFIED
-        self._buffered_command_count = 0
-        self._last_command_completion_monotonic = 0.0
         self._distance_failure_requires_retraction = False
         self._retraction_failed = False
         self._editing_probe_point_id = None
@@ -479,16 +472,9 @@ class InspectionControls(UIControlHelper):
         self.set_sensor_definitions(definitions)
 
 
-    def handle_application_state(self, status):
-        """Track operational state for pending surface-workflow migration."""
-        self._command_state = status.state
-        self._buffered_command_count = status.buffered_command_count
-        if status.state in {
-            ApplicationCommandState.STATE_SUCCEEDED,
-            ApplicationCommandState.STATE_FAILED,
-            ApplicationCommandState.STATE_CANCELLED,
-        }:
-            self._last_command_completion_monotonic = time.monotonic()
+    def handle_application_state(self, _status):
+        """Keep the top-level application-state callback presentation-only."""
+        return None
 
     def set_sensor_definitions(self, definitions):
         """Replace the UI sensor list with validated registry data."""
@@ -2230,7 +2216,6 @@ class InspectionControls(UIControlHelper):
         return self._submit_probe_setup(intent) is not None
 
     def _finish_refinement_workflow_close(self):
-        self._probe_motion_pending = False
         self._distance_failure_requires_retraction = False
         self._retraction_failed = False
         if hasattr(self, "inspection_workspace_splitter"):
@@ -2715,34 +2700,12 @@ class InspectionControls(UIControlHelper):
         request_id = client.execute_motion(intent)
         if request_id is None:
             return False
-        self._probe_motion_pending = True
         self._set_status_text(f"Probe setup motion submitted: {label}")
         return True
 
     def handle_refinement_emergency_stop(self):
         """Request the application-level emergency stop."""
         self.ui.handle_emergency_stop()
-
-    def _require_command_path_idle(self, require_settled=False):
-        if self._buffered_command_count:
-            raise RuntimeError("Command buffer must be empty")
-        if (
-            self._probe_motion_pending
-            or self._command_state == ApplicationCommandState.STATE_RUNNING
-        ):
-            raise RuntimeError("Wait for the current robot command to finish")
-        if require_settled:
-            elapsed = (
-                time.monotonic()
-                - self._last_command_completion_monotonic
-            )
-            if elapsed < PROBE_MOTION_SETTLE_SEC:
-                remaining = PROBE_MOTION_SETTLE_SEC - elapsed
-                raise RuntimeError(
-                    "Wait for the arm to settle for another "
-                    f"{remaining:.2f} s"
-                )
-
 
     def _configured_hand_to_probe_pose(self):
         sensor_id = self._selected_sensor_id
@@ -3013,7 +2976,6 @@ class InspectionControls(UIControlHelper):
         if previous is not None:
             presentation.active_stage = previous.active_stage
         self._refinement_presentation = presentation
-        self._probe_motion_pending = presentation.pending_motion is not None
         self._distance_failure_requires_retraction = (
             presentation.recovery_required
         )
