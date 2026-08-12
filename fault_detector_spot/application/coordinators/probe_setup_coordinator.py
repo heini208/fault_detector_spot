@@ -8,9 +8,6 @@ from threading import RLock
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
 )
-from fault_detector_spot.application.commanding.request_identity import (
-    validate_request_id,
-)
 from fault_detector_spot.application.coordinators.setup_coordinator import (
     SetupCoordinator,
     SetupOperation,
@@ -25,15 +22,18 @@ from fault_detector_spot.application.setup.setup_context import (
 from fault_detector_spot.application.setup.setup_context_access import (
     SetupContextAccess,
 )
-from fault_detector_spot.inspection.model.models import (
-    ImagePoint,
-    ProbePoint,
-)
+from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
 )
+from fault_detector_spot.application.coordinators.probe_finalization_controller import (
+    ProbeFinalizationController,
+)
 from fault_detector_spot.application.coordinators.probe_refinement_controller import (
     ProbeRefinementController,
+)
+from fault_detector_spot.application.coordinators.probe_surface_verification_controller import (
+    ProbeSurfaceVerificationController,
 )
 from fault_detector_spot.inspection.setup.probe_definition_service import (
     ProbeDefinitionService,
@@ -55,16 +55,6 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
     ProbeMotionRequest,
     ProbeSetupMotionCommandFactory,
-)
-from fault_detector_spot.inspection.setup.probe_surface_verification import (
-    ProbeSurfaceVerificationCoordinator,
-    SurfaceVerificationState,
-)
-from fault_detector_spot.inspection.setup.reference_probe_setup import (
-    approve_probe_pose,
-)
-from fault_detector_spot.shared.persistence.file_storage import (
-    validate_storage_name,
 )
 
 
@@ -132,7 +122,6 @@ class ProbeSetupCoordinator:
         self.motion_command_factory = (
             motion_command_factory or ProbeSetupMotionCommandFactory()
         )
-        self.surface_verification = ProbeSurfaceVerificationCoordinator()
         self._lock = RLock()
         self._context_access = SetupContextAccess(setup_coordinator)
         self.refinement_controller = ProbeRefinementController(
@@ -143,9 +132,17 @@ class ProbeSetupCoordinator:
             motion_command_factory=self.motion_command_factory,
             state_lock=self._lock,
         )
+        self.surface_controller = ProbeSurfaceVerificationController(
+            self.refinement_controller,
+            self._lock,
+        )
+        self.finalization_controller = ProbeFinalizationController(
+            self.object_repository,
+            self.refinement_controller,
+            self._lock,
+        )
         self._drafts = {}
         self._context_locks = {}
-        self._finalizations = {}
 
     def open_context(self, client_id: str) -> ProbeSetupSnapshot:
         """Open one independent server-owned probe setup draft."""
@@ -201,8 +198,8 @@ class ProbeSetupCoordinator:
         with self._lock:
             self._drafts.pop(draft.context.context_id, None)
             self._context_locks.pop(draft.context.context_id, None)
-            self._finalizations.pop(draft.context.context_id, None)
         self.refinement_controller.discard_context(draft.context)
+        self.finalization_controller.discard_context(draft.context)
         if self.setup_coordinator.is_current(draft.context):
             self.setup_coordinator.close_context(draft.context)
 
@@ -501,33 +498,7 @@ class ProbeSetupCoordinator:
             self._require_idle(context)
             self.refinement_controller.require_physical_lane_idle()
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            if not refinement.stage_is_approved(
-                RefinementStage.SAFE_APPROACH
-            ):
-                raise ValueError(
-                    "Approve the safe approach before surface verification"
-                )
-            if not refinement.stage_is_approved(RefinementStage.ALIGNMENT):
-                raise ValueError(
-                    "Approve the aligned pre-approach before "
-                    "surface verification"
-                )
-            if (
-                refinement.motion_states[RefinementStage.ALIGNMENT]
-                != RefinementMotionState.REACHED
-            ):
-                raise ValueError(
-                    "Reach the aligned pre-approach before "
-                    "surface verification"
-                )
-            refinement.active_stage = RefinementStage.PROBE
-            verification = self.surface_verification.begin(
-                refinement,
-                request_id,
-            )
-            with self._lock:
-                draft.surface_verification = verification
+            self.surface_controller.begin(draft, request_id)
             return self.snapshot(context)
 
     def evaluate_surface_verification(
@@ -541,16 +512,11 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            verification = self._surface_verification_session(
+            decision = self.surface_controller.evaluate(
                 draft,
                 request_id,
-            )
-            decision = self.surface_verification.evaluate_samples(
-                verification,
-                refinement,
                 samples,
-                achieved_pose_object=achieved_pose_object,
+                achieved_pose_object,
             )
             return decision, self.snapshot(context)
 
@@ -563,14 +529,9 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            verification = self._surface_verification_session(
+            self.surface_controller.mark_correction_started(
                 draft,
                 request_id,
-            )
-            self.surface_verification.mark_correction_started(
-                verification,
-                refinement,
             )
             return self.snapshot(context)
 
@@ -583,11 +544,10 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            verification = self._surface_verification_session(
+            self.surface_controller.mark_correction_succeeded(
                 draft,
                 request_id,
             )
-            self.surface_verification.mark_correction_succeeded(verification)
             return self.snapshot(context)
 
     def resume_surface_sampling(
@@ -599,11 +559,10 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            verification = self._surface_verification_session(
+            self.surface_controller.resume_sampling(
                 draft,
                 request_id,
             )
-            self.surface_verification.resume_sampling(verification)
             return self.snapshot(context)
 
     def fail_surface_sampling(
@@ -616,14 +575,9 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            verification = self._surface_verification_session(
+            self.surface_controller.fail_sampling(
                 draft,
                 request_id,
-            )
-            self.surface_verification.mark_sampling_failed(
-                verification,
-                refinement,
                 detail,
             )
             return self.snapshot(context)
@@ -638,14 +592,9 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            verification = self._surface_verification_session(
+            self.surface_controller.fail_correction(
                 draft,
                 request_id,
-            )
-            self.surface_verification.mark_correction_failed(
-                verification,
-                refinement,
                 detail,
             )
             return self.snapshot(context)
@@ -660,14 +609,9 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            verification = self._surface_verification_session(
+            self.surface_controller.abort(
                 draft,
                 request_id,
-            )
-            self.surface_verification.abort(
-                verification,
-                refinement,
                 detail,
             )
             return self.snapshot(context)
@@ -681,14 +625,9 @@ class ProbeSetupCoordinator:
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            verification = self._surface_verification_session(
+            self.surface_controller.cancel(
                 draft,
                 request_id,
-            )
-            self.surface_verification.cancel(
-                verification,
-                refinement,
             )
             return self.snapshot(context)
 
@@ -699,39 +638,19 @@ class ProbeSetupCoordinator:
         save_requested: bool,
     ) -> ProbeSetupSnapshot:
         """Lock one refinement for server-owned save and retraction."""
-        normalized = validate_request_id(request_id)
-        if not isinstance(save_requested, bool):
-            raise TypeError("Save requested flag must be a boolean")
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             self._require_idle(
                 context,
-                finalization_request_id=normalized,
+                finalization_request_id=request_id,
             )
-            self.refinement_controller.require_physical_lane_idle()
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            for stage, label in (
-                (RefinementStage.SAFE_APPROACH, "safe approach"),
-                (RefinementStage.ALIGNMENT, "aligned pre-approach"),
-            ):
-                if not refinement.stage_is_approved(stage):
-                    raise ValueError(
-                        f"Approve the {label} before finalization"
-                    )
-            if save_requested:
-                verification = draft.surface_verification
-                if (
-                    verification is None
-                    or verification.state
-                    is not SurfaceVerificationState.CONVERGED
-                    or not refinement.surface_distance_verified
-                ):
-                    raise ValueError(
-                        "Verify the final surface distance before saving"
-                    )
-            with self._lock:
-                self._finalizations[context.context_id] = normalized
+            self.finalization_controller.begin(
+                context,
+                draft,
+                request_id,
+                save_requested,
+            )
             return self.snapshot(context)
 
     def approve_verified_probe_for_finalization(
@@ -741,15 +660,13 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Approve the converged probe candidate without another TF sample."""
         with self._context_lock(context):
-            self._require_finalization(context, request_id)
+            self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            refinement.approve_verified_probe()
-            pose = refinement.approved_pose(RefinementStage.PROBE)
-            with self._lock:
-                draft.setup = approve_probe_pose(draft.setup, pose)
-                draft.dirty = True
-                draft.validation_error = ""
+            self.finalization_controller.approve_verified_probe(
+                context,
+                draft,
+                request_id,
+            )
             return self._advance(draft)
 
     def save_probe_point_for_finalization(
@@ -764,18 +681,18 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Persist the approved point while the finalization lock is held."""
         with self._context_lock(context):
-            self._require_finalization(context, request_id)
+            self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            self._persist_probe_point(
+            self.finalization_controller.save_for_finalization(
+                context,
                 draft,
+                request_id,
                 probe_point_id,
                 display_name,
                 position_tolerance_m,
                 orientation_tolerance_rad,
                 measurement_duration_sec,
             )
-            refinement.saved = True
             return self._advance(draft)
 
     def complete_finalization(
@@ -785,15 +702,13 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Close refinement only after both retraction motions succeeded."""
         with self._context_lock(context):
-            self._require_finalization(context, request_id)
+            self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            refinement.complete_retraction()
-            refinement.discard_unapproved_candidates()
-            with self._lock:
-                draft.refinement = None
-                draft.surface_verification = None
-                self._finalizations.pop(context.context_id, None)
+            self.finalization_controller.complete(
+                context,
+                draft,
+                request_id,
+            )
             return self._advance(draft)
 
     def fail_finalization(
@@ -804,12 +719,14 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Release the action lock while preserving mandatory recovery."""
         with self._context_lock(context):
-            self._require_finalization(context, request_id)
+            self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            refinement = self.refinement_controller.require_refinement(draft)
-            refinement.require_recovery(detail)
-            with self._lock:
-                self._finalizations.pop(context.context_id, None)
+            self.finalization_controller.fail(
+                context,
+                draft,
+                request_id,
+                detail,
+            )
             return self._advance(draft)
 
     def prepare_motion(
@@ -879,6 +796,7 @@ class ProbeSetupCoordinator:
         self.refinement_controller.remove_listener(listener)
 
     @_serialized_transaction
+    @_serialized_transaction
     def save_probe_point(
         self,
         context: SetupContextSnapshot,
@@ -890,7 +808,7 @@ class ProbeSetupCoordinator:
     ) -> ProbeSetupSnapshot:
         """Atomically append one fully approved probe point."""
         draft = self._selected_draft(context)
-        self._persist_probe_point(
+        self.finalization_controller.save_probe_point(
             draft,
             probe_point_id,
             display_name,
@@ -898,91 +816,22 @@ class ProbeSetupCoordinator:
             orientation_tolerance_rad,
             measurement_duration_sec,
         )
-        if draft.refinement is not None:
-            draft.refinement.saved = True
         return self._advance(draft)
 
-    def _persist_probe_point(
-        self,
-        draft,
-        probe_point_id,
-        display_name,
-        position_tolerance_m,
-        orientation_tolerance_rad,
-        measurement_duration_sec,
-    ):
-        setup = draft.setup
-        if setup is None:
-            raise ValueError("No calculated probe setup is available")
-        if not all((
-            setup.safe_approach_approved,
-            setup.surface_alignment_approved,
-            setup.probe_pose_approved,
-        )):
-            raise ValueError("All three probe poses must be approved")
-        point = self._build_probe_point(
-            draft,
-            probe_point_id,
-            display_name,
-            position_tolerance_m,
-            orientation_tolerance_rad,
-            measurement_duration_sec,
-        )
-        self.object_repository.add_probe_point(
-            draft.selected_object_id,
-            draft.selected_routine_id,
-            point,
-        )
-        with self._lock:
-            draft.dirty = False
-            draft.validation_error = ""
-        return point
 
-    def _build_probe_point(
-        self,
-        draft,
-        probe_point_id,
-        display_name,
-        position_tolerance_m,
-        orientation_tolerance_rad,
-        measurement_duration_sec,
-    ):
-        setup = draft.setup
-        point = ProbePoint(
-            probe_point_id=self._name(probe_point_id, "probe point ID"),
-            display_name=self._text(
-                display_name,
-                "probe point display name",
-            ),
-            safe_approach_pose_object=deepcopy(
-                setup.safe_approach_pose_object
-            ),
-            probe_pose_object=deepcopy(setup.probe_pose_object),
-            target_surface_distance_m=(
-                setup.surface_target.target_surface_distance_m
-            ),
-            position_tolerance_m=float(position_tolerance_m),
-            orientation_tolerance_rad=float(orientation_tolerance_rad),
-            measurement_duration_sec=float(measurement_duration_sec),
-            aligned_preapproach_distance_m=(
-                setup.surface_target.aligned_preapproach_distance_m
-            ),
-            reference_pixel=deepcopy(draft.reference_pixel),
-            reference_view_id=draft.selected_reference_view_id,
-        )
-        point.validate()
-        return point
 
     def close(self) -> None:
         """Close every probe context owned by this coordinator."""
         with self._lock:
-            contexts = tuple(draft.context for draft in self._drafts.values())
+            contexts = tuple(
+                draft.context
+                for draft in self._drafts.values()
+            )
         for context in contexts:
             if self.setup_coordinator.is_current(context):
                 self.close_context(context)
         self.refinement_controller.clear()
-        with self._lock:
-            self._finalizations.clear()
+        self.finalization_controller.clear()
 
     def _handle_operation_status(
         self,
@@ -1037,26 +886,28 @@ class ProbeSetupCoordinator:
     ) -> None:
         with self._lock:
             draft = self._drafts.get(context.context_id)
-            verification = (
-                draft.surface_verification
+            verification_request_id = (
+                self.surface_controller.active_request_id(draft)
                 if draft is not None
-                else None
+                else ""
             )
             if (
-                verification is not None
-                and verification.active
-                and verification.request_id
+                verification_request_id
+                and verification_request_id
                 != surface_verification_request_id
             ):
                 raise RuntimeError(
                     "Probe setup context has active surface verification"
                 )
-            active_finalization = self._finalizations.get(
-                context.context_id
+            active_finalization = (
+                self.finalization_controller.active_request_id(
+                    context
+                )
             )
             if (
-                active_finalization is not None
-                and active_finalization != finalization_request_id
+                active_finalization
+                and active_finalization
+                != finalization_request_id
             ):
                 raise RuntimeError(
                     "Probe setup context has active finalization"
@@ -1078,34 +929,7 @@ class ProbeSetupCoordinator:
                 "Probe setup context already has an active motion"
             )
 
-    def _surface_verification_session(
-        self,
-        draft: ProbeSetupDraft,
-        request_id: str,
-    ):
-        verification = draft.surface_verification
-        if verification is None:
-            raise RuntimeError("Surface verification is not active")
-        if verification.request_id != request_id:
-            raise RuntimeError(
-                "Surface verification request ID does not match"
-            )
-        return verification
 
-    def _require_finalization(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-    ) -> str:
-        normalized = validate_request_id(request_id)
-        self.setup_coordinator.require_current(context)
-        with self._lock:
-            active = self._finalizations.get(context.context_id)
-        if active != normalized:
-            raise RuntimeError(
-                "Probe refinement finalization request does not match"
-            )
-        return normalized
 
 
     def _selected_draft(
@@ -1146,22 +970,7 @@ class ProbeSetupCoordinator:
             draft.context = updated
         return self.snapshot(updated)
 
-    @staticmethod
-    def _name(value: str, label: str) -> str:
-        return validate_storage_name(value.strip(), label)
 
-    @staticmethod
-    def _text(value: str, label: str) -> str:
-        if not isinstance(value, str):
-            raise TypeError(f"{label.title()} must be text")
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError(f"{label.title()} must not be empty")
-        if normalized != value:
-            raise ValueError(
-                f"{label.title()} must not contain surrounding whitespace"
-            )
-        return normalized
 
 
 __all__ = [
