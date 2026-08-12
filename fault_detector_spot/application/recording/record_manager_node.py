@@ -180,8 +180,6 @@ class RecordManager(Node):
         ):
             return False
         if message.state == CommandStatus.STATE_SUCCEEDED:
-            if message.buffered_command_count > 0:
-                return True
             self._playback_request_id = ""
             self._dispatch_next_playback_command()
             return True

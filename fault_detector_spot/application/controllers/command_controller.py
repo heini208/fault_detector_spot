@@ -246,7 +246,6 @@ class CommandController:
                     request,
                     CommandControllerState.RUNNING,
                     status.detail,
-                    status.buffered_command_count,
                 )
                 return True
             if status.state is CommandControllerState.SUCCEEDED:
@@ -255,7 +254,6 @@ class CommandController:
                         request,
                         CommandControllerState.RUNNING,
                         status.detail,
-                        status.buffered_command_count,
                     )
                     return True
                 state = CommandControllerState.SUCCEEDED
@@ -268,7 +266,6 @@ class CommandController:
                 request,
                 state,
                 status.detail,
-                status.buffered_command_count,
             )
             self._dispatch_next_locked()
             return True
@@ -430,13 +427,12 @@ class CommandController:
         request: CommandRequest[SemanticCommand],
         state: CommandControllerState,
         detail: str = "",
-        buffered_command_count: int = 0,
     ) -> None:
         status = CommandControllerStatus(
             request=request,
             state=state,
             detail=detail,
-            buffered_command_count=buffered_command_count,
+            buffered_command_count=len(self._queue),
         )
         for listener in tuple(self._listeners):
             self._call_listener(listener, status)

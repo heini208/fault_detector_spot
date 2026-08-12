@@ -1,40 +1,40 @@
 import time
+
 import py_trees
 from py_trees.common import Status
 
 
 class WaitForDuration(py_trees.behaviour.Behaviour):
-    """
-    Waits for `duration` seconds, where duration is read from
-    blackboard.wait_duration at each new tick‑initialisation.
-    Returns RUNNING until the time has elapsed, then SUCCESS.
-    If wait_duration is missing or <=0, immediately returns SUCCESS.
-    """
+    """Wait for the duration attached to the active command request."""
 
-    def __init__(self, name: str = "WaitForDuration"):
+    def __init__(
+        self,
+        name: str = "WaitForDuration",
+        monotonic_clock=time.monotonic,
+    ):
         super().__init__(name)
-        self.start_time: float = None
+        self._clock = monotonic_clock
+        self._request_id = ""
+        self._deadline = None
 
     def setup(self, **kwargs) -> bool:
-        # attach to the blackboard and register the key you will read
         self.blackboard = self.attach_blackboard_client()
         self.blackboard.register_key(
-            key="last_command", access=py_trees.common.Access.READ
+            key="last_command",
+            access=py_trees.common.Access.READ,
         )
-
         return True
 
     def initialise(self) -> None:
-        self.start_time = time.time()
+        command = self.blackboard.last_command
+        request_id = getattr(command, "request_id", "")
+        if request_id == self._request_id and self._deadline is not None:
+            return
+        duration = float(getattr(command, "duration", 0.0) or 0.0)
+        self._request_id = request_id
+        self._deadline = self._clock() + max(0.0, duration)
 
     def update(self) -> Status:
-        duration = self.blackboard.last_command.duration if hasattr(self.blackboard.last_command, 'duration') else None
-
-        # missing or non‑positive duration? skip the wait
-        if duration is None or duration <= 0.0:
+        if self._deadline is None or self._clock() >= self._deadline:
             return Status.SUCCESS
-        # still waiting?
-        if time.time() - self.start_time < duration:
-            return Status.RUNNING
-        # done
-        return Status.SUCCESS
+        return Status.RUNNING
