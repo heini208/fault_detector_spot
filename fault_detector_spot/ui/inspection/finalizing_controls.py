@@ -2,15 +2,12 @@
 
 import math
 
-from fault_detector_msgs.msg import ProbeSetupState, SensorDefinitionArray
-from fault_detector_msgs.srv import AddSensor, RetireSensor
+from fault_detector_msgs.msg import ProbeSetupState
 
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
     RefinementStage,
 )
-
-from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 
 from .controls import InspectionControls
 
@@ -18,24 +15,6 @@ from .controls import InspectionControls
 class FinalizingInspectionControls(InspectionControls):
     """Route physical setup workflows through server-owned APIs."""
 
-    def init_ros_communication(self):
-        """Keep only presentation-side sensor definition transport."""
-        if self.node is None:
-            return
-        self.sensor_add_client = self.node.create_client(
-            AddSensor,
-            "fault_detector/add_sensor",
-        )
-        self.sensor_retire_client = self.node.create_client(
-            RetireSensor,
-            "fault_detector/retire_sensor",
-        )
-        self.sensor_list_subscription = self.node.create_subscription(
-            SensorDefinitionArray,
-            "fault_detector/sensors",
-            self._process_sensor_definitions,
-            LATCHED_QOS,
-        )
 
     def handle_capture_reference_view(self):
         """Submit camera selections to the server-owned capture action."""

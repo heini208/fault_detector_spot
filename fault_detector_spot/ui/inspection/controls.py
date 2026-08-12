@@ -2,10 +2,8 @@
 
 import math
 import time
-from collections import deque
 from copy import deepcopy
 
-from bosdyn.client.frame_helpers import HAND_FRAME_NAME
 from PyQt5.QtCore import QLocale, Qt, QTimer
 from PyQt5.QtGui import QColor, QDoubleValidator, QIntValidator
 from PyQt5.QtWidgets import (
@@ -35,14 +33,8 @@ from fault_detector_msgs.msg import (
     ProbeSetupMotionIntent,
     ProbeSetupState,
     SensorDefinitionArray,
-    TagElement,
 )
 from fault_detector_msgs.srv import AddSensor, RetireSensor
-from rclpy.duration import Duration
-from rclpy.qos import qos_profile_sensor_data
-from rclpy.time import Time
-from sensor_msgs.msg import CameraInfo, Image
-import tf2_ros
 
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 from fault_detector_spot.inspection.model.models import (
@@ -51,10 +43,6 @@ from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
-)
-from fault_detector_spot.inspection.sensing.live_surface_distance import (
-    aggregate_surface_distance_samples,
-    measure_probe_surface_distance,
 )
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
@@ -76,8 +64,6 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     probe_pose_to_hand_pose,
-    refine_probe_pose,
-    relative_pose,
 )
 from fault_detector_spot.inspection.setup.reference_view_surface_target import (
     quaternion_to_rpy,
@@ -86,10 +72,6 @@ from fault_detector_spot.inspection.model.sensor_models import (
     SensorDefinition,
     sensor_definition_from_values,
     sensor_probe_frame,
-)
-from fault_detector_spot.inspection.setup.stable_tag_pose import (
-    TagPoseSample,
-    stabilize_tag_pose,
 )
 
 from .probe_refinement_dialog import ProbeRefinementDialog
@@ -101,16 +83,8 @@ from ..shared.control_helper import UIControlHelper
 
 MAX_REFINEMENT_TRANSLATION_M = 0.05
 MAX_REFINEMENT_ROTATION_DEG = 15.0
-MAX_SURFACE_CORRECTION_STEP_M = 0.02
-MAX_LIVE_DEPTH_AGE_SEC = 0.5
 PROBE_MOTION_SETTLE_SEC = 0.5
 SURFACE_DISTANCE_TOLERANCE_M = 0.005
-SURFACE_DISTANCE_STABILITY_TOLERANCE_M = 0.005
-SURFACE_DISTANCE_SAMPLE_WINDOW_SEC = 0.20
-BASE_TAG_MAXIMUM_AGE_SEC = 1.5
-BASE_TAG_STABILIZATION_HISTORY_SEC = 3.0
-BASE_TAG_HISTORY_MAX_SAMPLES = 64
-BASE_TAG_MINIMUM_SPAN_SEC = 0.10
 REFINEMENT_FRAME_SENSOR = "sensor"
 REFINEMENT_FRAME_HAND = "hand"
 REFINEMENT_FRAME_TAG = "tag"
@@ -124,7 +98,6 @@ class InspectionControls(UIControlHelper):
     def __init__(self, parent_ui):
         """Create controls backed by the remote probe setup API."""
         self._probe_setup_state = None
-        self._selected_reference_tag_id = -1
         self._selected_sensor_id = ""
         self._reference_rgb_size = None
         self._reference_depth_image = None
@@ -142,16 +115,9 @@ class InspectionControls(UIControlHelper):
         self._calculated_probe_setup = None
         self._probe_setup = None
         self._refinement_presentation = None
-        self._tf_buffer = None
-        self._tf_listener = None
         self._sensor_definitions = {}
         self._pending_sensor_selection = ""
         self._pending_sensor_retirement = ""
-        self._latest_hand_depth_image = None
-        self._latest_hand_depth_camera_info = None
-        self._latest_hand_depth_received_monotonic = 0.0
-        self._hand_depth_history = deque(maxlen=16)
-        self._base_tag_histories = {}
         self._probe_motion_pending = False
         self._command_state = ApplicationCommandState.STATE_UNSPECIFIED
         self._buffered_command_count = 0
@@ -162,8 +128,6 @@ class InspectionControls(UIControlHelper):
         self.sensor_add_client = None
         self.sensor_retire_client = None
         self.sensor_list_subscription = None
-        self.hand_depth_subscription = None
-        self.hand_depth_camera_info_subscription = None
         self.management_dialog = None
         super().__init__(parent_ui)
         initial_sensors = getattr(parent_ui, "sensor_definitions", [])
@@ -177,43 +141,23 @@ class InspectionControls(UIControlHelper):
             layout.addLayout(row)
 
     def init_ros_communication(self):
-        """Create transient TF and sensing access for setup readouts."""
-        if self.node is not None:
-            self._tf_buffer = tf2_ros.Buffer()
-            self._tf_listener = tf2_ros.TransformListener(
-                self._tf_buffer,
-                self.node,
-            )
-            self.sensor_add_client = self.node.create_client(
-                AddSensor,
-                "fault_detector/add_sensor",
-            )
-            self.sensor_retire_client = self.node.create_client(
-                RetireSensor,
-                "fault_detector/retire_sensor",
-            )
-            self.sensor_list_subscription = (
-                self.node.create_subscription(
-                    SensorDefinitionArray,
-                    "fault_detector/sensors",
-                    self._process_sensor_definitions,
-                    LATCHED_QOS,
-                )
-            )
-            self.hand_depth_subscription = self.node.create_subscription(
-                Image,
-                "/depth_registered/hand/image",
-                self._process_live_hand_depth,
-                qos_profile_sensor_data,
-            )
-            self.hand_depth_camera_info_subscription = (
-                self.node.create_subscription(
-                    CameraInfo,
-                    "/depth_registered/hand/camera_info",
-                    self._process_live_hand_depth_camera_info,
-                    qos_profile_sensor_data,
-                )
-            )
+        """Create presentation-side sensor registry transport."""
+        if self.node is None:
+            return
+        self.sensor_add_client = self.node.create_client(
+            AddSensor,
+            "fault_detector/add_sensor",
+        )
+        self.sensor_retire_client = self.node.create_client(
+            RetireSensor,
+            "fault_detector/retire_sensor",
+        )
+        self.sensor_list_subscription = self.node.create_subscription(
+            SensorDefinitionArray,
+            "fault_detector/sensors",
+            self._process_sensor_definitions,
+            LATCHED_QOS,
+        )
 
     def make_rows(self):
         """Create a compact inspection setup workspace."""
@@ -534,38 +478,6 @@ class InspectionControls(UIControlHelper):
             definitions.append(definition)
         self.set_sensor_definitions(definitions)
 
-    def _process_live_hand_depth(self, message):
-        self._latest_hand_depth_image = message
-        self._latest_hand_depth_received_monotonic = time.monotonic()
-        stamp = message.header.stamp
-        stamp_key = (int(stamp.sec), int(stamp.nanosec))
-        if (
-            not self._hand_depth_history
-            or self._hand_depth_history[-1][0] != stamp_key
-        ):
-            self._hand_depth_history.append(
-                (
-                    stamp_key,
-                    self._latest_hand_depth_received_monotonic,
-                    message,
-                )
-            )
-
-    def _process_live_hand_depth_camera_info(self, message):
-        self._latest_hand_depth_camera_info = message
-
-    def handle_base_tags(self, tags):
-        """Buffer distinct authoritative base-camera tag observations."""
-        for tag in tags:
-            stamp = tag.pose.header.stamp
-            stamp_key = (int(stamp.sec), int(stamp.nanosec))
-            history = self._base_tag_histories.setdefault(
-                int(tag.id),
-                deque(maxlen=BASE_TAG_HISTORY_MAX_SAMPLES),
-            )
-            if history and history[-1][0] == stamp_key:
-                continue
-            history.append((stamp_key, deepcopy(tag)))
 
     def handle_application_state(self, status):
         """Track operational state for pending surface-workflow migration."""
@@ -2703,14 +2615,6 @@ class InspectionControls(UIControlHelper):
         pitch, yaw = rotations[action]
         return Vector3Data.zero(), pitch, yaw
 
-    def _move_setup_pose(self, attribute, label):
-        try:
-            setup = self._require_probe_setup()
-            pose = getattr(setup, attribute)
-        except Exception as exception:
-            self._show_setup_error("Move Probe Setup", exception)
-            return
-        self._move_transient_probe_pose(pose, label)
 
     def handle_use_current_as_probe(self):
         self._show_setup_error(
@@ -2722,13 +2626,6 @@ class InspectionControls(UIControlHelper):
         )
         return False
 
-    def _move_transient_probe_pose(self, probe_pose_object, label):
-        presentation = self._require_refinement_presentation()
-        return self._send_refinement_motion(
-            presentation.active_stage,
-            label,
-            probe_pose_object,
-        )
 
     def _send_refinement_motion(
         self,
@@ -2846,78 +2743,6 @@ class InspectionControls(UIControlHelper):
                     f"{remaining:.2f} s"
                 )
 
-    def _measure_live_surface_distance_samples(self):
-        if self.node is None:
-            raise RuntimeError("ROS is unavailable in the inspection UI")
-        camera_info = self._latest_hand_depth_camera_info
-        if camera_info is None:
-            raise ValueError("No live registered hand-depth sample is available")
-        required_receipt_time = (
-            self._last_command_completion_monotonic
-            + PROBE_MOTION_SETTLE_SEC
-        )
-        now = self.node.get_clock().now()
-        samples = []
-        errors = []
-        for _, receipt_time, depth_image in self._hand_depth_history:
-            if receipt_time < required_receipt_time:
-                continue
-            try:
-                stamp = Time.from_msg(depth_image.header.stamp)
-                if stamp.nanoseconds <= 0:
-                    raise ValueError("Live hand-depth timestamp is empty")
-                age_seconds = (now - stamp).nanoseconds * 1e-9
-                if age_seconds < -0.05:
-                    raise ValueError(
-                        "Live hand-depth timestamp is in the future"
-                    )
-                if age_seconds > MAX_LIVE_DEPTH_AGE_SEC:
-                    continue
-                depth_frame = (
-                    depth_image.header.frame_id.strip()
-                    or camera_info.header.frame_id.strip()
-                )
-                if not depth_frame:
-                    raise ValueError("Live hand-depth frame is empty")
-                probe_to_camera = self._lookup_pose(
-                    self._active_probe_frame(),
-                    depth_frame,
-                    lookup_time=stamp,
-                )
-                samples.append(
-                    measure_probe_surface_distance(
-                        depth_image,
-                        camera_info,
-                        probe_to_camera,
-                    )
-                )
-            except Exception as exception:
-                errors.append(str(exception))
-        if len(samples) < 3:
-            detail = f" Last rejection: {errors[-1]}" if errors else ""
-            raise ValueError(
-                "Fewer than three valid post-settle depth frames are "
-                f"available.{detail}"
-            )
-        return samples
-
-    def _measure_live_surface_distance(self):
-        samples = self._measure_live_surface_distance_samples()
-        return samples[-1]
-
-    def _current_probe_pose_object(self):
-        tag = self._live_reference_tag()
-        body_frame = tag.pose.header.frame_id.strip()
-        probe_frame = self._active_probe_frame()
-        body_to_probe = self._lookup_pose(body_frame, probe_frame)
-        body_to_object = self._pose_data_from_message(tag.pose.pose)
-        return relative_pose(body_to_object, body_to_probe)
-
-    def _hand_to_probe_pose(self):
-        probe_frame = self._active_probe_frame()
-        if probe_frame == HAND_FRAME_NAME:
-            return PoseData.identity()
-        return self._lookup_pose(HAND_FRAME_NAME, probe_frame)
 
     def _configured_hand_to_probe_pose(self):
         sensor_id = self._selected_sensor_id
@@ -2937,90 +2762,6 @@ class InspectionControls(UIControlHelper):
             raise ValueError("Sensor mounting must be selected")
         return sensor_probe_frame(sensor_id)
 
-    def _lookup_pose(
-        self,
-        target_frame,
-        source_frame,
-        lookup_time=None,
-    ):
-        if self._tf_buffer is None:
-            raise RuntimeError("TF is unavailable in the inspection UI")
-        transform = self._tf_buffer.lookup_transform(
-            target_frame,
-            source_frame,
-            lookup_time or Time(),
-            timeout=Duration(seconds=0.5),
-        )
-        value = transform.transform
-        pose = PoseData(
-            position=Vector3Data(
-                x=value.translation.x,
-                y=value.translation.y,
-                z=value.translation.z,
-            ),
-            orientation=QuaternionData(
-                x=value.rotation.x,
-                y=value.rotation.y,
-                z=value.rotation.z,
-                w=value.rotation.w,
-            ),
-        )
-        pose.validate()
-        return pose
-
-    def _live_reference_tag(self):
-        if self._selected_reference_tag_id < 0:
-            raise ValueError("No inspection object is selected")
-        tag_id = self._selected_reference_tag_id
-        if self.node is not None:
-            return self._stable_reference_tag(tag_id)
-        base_tags = getattr(self.ui, "base_tags", None)
-        if base_tags is None:
-            base_tags = getattr(self.ui, "visible_tags", {})
-        tag = base_tags.get(tag_id)
-        if tag is None:
-            raise ValueError(
-                f"Base-camera reference tag {tag_id} must be visible"
-            )
-        if not tag.pose.header.frame_id.strip():
-            raise ValueError("Reference tag pose frame is empty")
-        return tag
-
-    def _stable_reference_tag(self, tag_id):
-        history = self._base_tag_histories.get(tag_id, ())
-        samples = []
-        messages_by_stamp = {}
-        for stamp_key, tag in history:
-            stamp_seconds = (
-                float(stamp_key[0]) + float(stamp_key[1]) * 1e-9
-            )
-            samples.append(
-                TagPoseSample(
-                    stamp_seconds=stamp_seconds,
-                    frame_id=tag.pose.header.frame_id.strip(),
-                    pose=self._pose_data_from_message(tag.pose.pose),
-                )
-            )
-            messages_by_stamp[stamp_seconds] = tag
-        now_seconds = self.node.get_clock().now().nanoseconds * 1e-9
-        stable = stabilize_tag_pose(
-            samples,
-            now_seconds=now_seconds,
-            maximum_age_sec=BASE_TAG_MAXIMUM_AGE_SEC,
-            stabilization_window_sec=BASE_TAG_STABILIZATION_HISTORY_SEC,
-            minimum_samples=3,
-            minimum_span_sec=BASE_TAG_MINIMUM_SPAN_SEC,
-        )
-        tag = deepcopy(messages_by_stamp[stable.newest_stamp_seconds])
-        tag.pose.header.frame_id = stable.frame_id
-        tag.pose.pose.position.x = stable.pose.position.x
-        tag.pose.pose.position.y = stable.pose.position.y
-        tag.pose.pose.position.z = stable.pose.position.z
-        self._write_quaternion_message(
-            tag.pose.pose.orientation,
-            stable.pose.orientation,
-        )
-        return tag
 
     def _require_probe_setup(self):
         if self._probe_setup is None:
@@ -3035,31 +2776,6 @@ class InspectionControls(UIControlHelper):
         if self.status_label is not None:
             self.status_label.setText(text)
 
-    @staticmethod
-    def _pose_data_from_message(pose):
-        result = PoseData(
-            position=Vector3Data(
-                x=pose.position.x,
-                y=pose.position.y,
-                z=pose.position.z,
-            ),
-            orientation=QuaternionData(
-                x=pose.orientation.x,
-                y=pose.orientation.y,
-                z=pose.orientation.z,
-                w=pose.orientation.w,
-            ),
-        )
-        result.validate()
-        return result
-
-    @staticmethod
-    def _write_quaternion_message(message, quaternion):
-        quaternion.validate()
-        message.x = quaternion.x
-        message.y = quaternion.y
-        message.z = quaternion.z
-        message.w = quaternion.w
 
     @staticmethod
     def _distance_value(field, label):
@@ -3110,9 +2826,6 @@ class InspectionControls(UIControlHelper):
         view = probe_setup_state_to_view(state)
         previous_views = tuple(self._reference_slot_view_ids)
         self._probe_setup_state = state
-        self._selected_reference_tag_id = int(
-            state.selected_reference_tag_id
-        )
         self._selected_sensor_id = state.selected_sensor_id
         self._render_surface_verification_state(state)
         self._apply_object_and_routine_lists(state)
@@ -3307,7 +3020,6 @@ class InspectionControls(UIControlHelper):
         self._retraction_failed = False
         self.inspection_workspace_splitter.setEnabled(False)
         if previous is None:
-            self._hand_depth_history.clear()
             self.refinement_dialog.open_for_stage(
                 presentation.active_stage
             )
