@@ -22,7 +22,7 @@ from fault_detector_spot.application.commanding.semantic_command import (
 from fault_detector_spot.application.commanding.simple_command import SimpleCommand
 from fault_detector_spot.application.commanding.timer_command import TimerCommand
 from fault_detector_spot.application.ros.command_request_adapter import (
-    semantic_command_request_from_message,
+    command_request_from_message,
 )
 from fault_detector_spot.application.ros.semantic_command_adapter import (
     stamped_pose_from_message,
@@ -146,7 +146,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
 
     def append_request_to_buffer(self, message):
         try:
-            request = semantic_command_request_from_message(message)
+            request = command_request_from_message(message)
             stamp = message.command.command.header.stamp
         except (TypeError, ValueError) as exception:
             detail = f"BT rejected command envelope: {exception}"

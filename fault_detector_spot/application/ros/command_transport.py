@@ -12,8 +12,8 @@ from fault_detector_spot.application.controllers.command_controller import (
     CommandExecutionStatus,
 )
 from fault_detector_spot.application.ros.command_request_adapter import (
+    command_request_from_message,
     command_request_to_message,
-    semantic_command_request_from_message,
 )
 from fault_detector_spot.shared.ros.qos_profiles import COMMAND_REQUEST_QOS
 
@@ -77,7 +77,7 @@ class RosCommandTransport:
     def submit_message(self, message: CommandRequestMessage) -> bool:
         """Validate one ROS submission before it enters the command queue."""
         try:
-            request = semantic_command_request_from_message(message)
+            request = command_request_from_message(message)
             self.controller.submit(request)
         except (TypeError, ValueError) as exception:
             self._reject_message(message, str(exception))

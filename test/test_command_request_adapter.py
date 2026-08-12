@@ -1,13 +1,15 @@
 """Tests for the ROS command request adapter."""
 
 import pytest
-from fault_detector_msgs.msg import ComplexCommand
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
     RecordingPolicy,
+)
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
 )
 from fault_detector_spot.application.ros.command_request_adapter import (
     command_request_from_message,
@@ -16,11 +18,9 @@ from fault_detector_spot.application.ros.command_request_adapter import (
 
 
 def make_request():
-    """Build one valid setup request."""
-    command = ComplexCommand()
-    command.command.command_id = CommandID.MOVE_ARM_RELATIVE.value
+    """Build one valid semantic setup request."""
     return CommandRequest.create(
-        command=command,
+        command=SemanticCommand(command_id=CommandID.MOVE_ARM_RELATIVE),
         client_id="probe_ui",
         context_id="probe_setup_4",
         origin=CommandOrigin.PROBE_SETUP,
@@ -40,7 +40,8 @@ def test_adapter_round_trip_preserves_request_metadata():
     assert restored.context_id == "probe_setup_4"
     assert restored.origin is CommandOrigin.PROBE_SETUP
     assert restored.recording_policy is RecordingPolicy.EXCLUDE
-    assert restored.command.command.request_id == request.request_id
+    assert isinstance(restored.command, SemanticCommand)
+    assert restored.command.command_id is CommandID.MOVE_ARM_RELATIVE
 
 
 def test_adapter_rejects_conflicting_nested_request_identity():
@@ -54,9 +55,16 @@ def test_adapter_rejects_conflicting_nested_request_identity():
 
 
 def test_adapter_rejects_empty_command_id():
-    command = ComplexCommand()
+    message = command_request_to_message(make_request())
+    message.command.command.command_id = ""
+
+    with pytest.raises(ValueError, match="Command ID"):
+        command_request_from_message(message)
+
+
+def test_adapter_rejects_non_semantic_outbound_payload():
     request = CommandRequest.create(
-        command=command,
+        command=object(),
         client_id="operator_ui",
         origin=CommandOrigin.OPERATIONAL,
         recording_policy=(
@@ -64,5 +72,5 @@ def test_adapter_rejects_empty_command_id():
         ),
     )
 
-    with pytest.raises(ValueError, match="Command ID must not be empty"):
+    with pytest.raises(TypeError, match="SemanticCommand"):
         command_request_to_message(request)

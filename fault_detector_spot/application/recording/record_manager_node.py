@@ -27,8 +27,8 @@ from fault_detector_spot.application.recording.semantic_command_codec import (
     serialize_recorded_command,
 )
 from fault_detector_spot.application.ros.command_request_adapter import (
+    command_request_from_message,
     command_request_to_message,
-    semantic_command_request_from_message,
 )
 from fault_detector_spot.shared.persistence.runtime_paths import default_recording_root
 from fault_detector_spot.shared.ros.qos_profiles import (
@@ -134,7 +134,7 @@ class RecordManager(Node):
         if not self.recording:
             return False
         try:
-            request = semantic_command_request_from_message(message)
+            request = command_request_from_message(message)
         except (TypeError, ValueError) as exception:
             self.get_logger().error(
                 f"Rejected accepted command request: {exception}"

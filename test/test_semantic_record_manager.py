@@ -27,8 +27,8 @@ from fault_detector_spot.application.recording.semantic_command_codec import (
     serialize_recorded_command,
 )
 from fault_detector_spot.application.ros.command_request_adapter import (
+    command_request_from_message,
     command_request_to_message,
-    semantic_command_request_from_message,
 )
 
 
@@ -187,7 +187,7 @@ def test_playback_dispatches_one_command_after_each_success():
     manager._dispatch_next_playback_command()
 
     assert len(manager.command_submission_pub.messages) == 1
-    first_request = semantic_command_request_from_message(
+    first_request = command_request_from_message(
         manager.command_submission_pub.messages[0]
     )
     assert first_request.origin is CommandOrigin.PLAYBACK
@@ -208,7 +208,7 @@ def test_playback_dispatches_one_command_after_each_success():
     ))
 
     assert len(manager.command_submission_pub.messages) == 2
-    second_request = semantic_command_request_from_message(
+    second_request = command_request_from_message(
         manager.command_submission_pub.messages[1]
     )
     assert second_request.request_id != first_request.request_id
@@ -231,7 +231,7 @@ def test_playback_stops_and_discards_remaining_commands_on_failure():
     manager._playback_commands = deque([first, second])
     manager._playback_name = "inspection"
     manager._dispatch_next_playback_command()
-    request = semantic_command_request_from_message(
+    request = command_request_from_message(
         manager.command_submission_pub.messages[0]
     )
 
