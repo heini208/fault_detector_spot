@@ -17,6 +17,7 @@ def make_rtabmap_node(incremental_memory, condition):
         name="rtabmap",
         output="screen",
         parameters=[{
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
             "frame_id": LaunchConfiguration("frame_id"),
             "map_frame_id": LaunchConfiguration("map_frame_id"),
             "odom_frame_id": LaunchConfiguration("odom_frame_id"),
@@ -90,51 +91,46 @@ def make_rtabmap_node(incremental_memory, condition):
 def generate_launch_description():
     config_rviz = os.path.join(pkg, "config", "mapping.rviz")
 
+    use_sim_time_arg = DeclareLaunchArgument(
+        "use_sim_time",
+        default_value="false",
+    )
     db_path_arg = DeclareLaunchArgument(
         "db_path",
         default_value=os.path.expanduser("~/.ros/rtabmap_lidar.db"),
     )
-
     delete_db_arg = DeclareLaunchArgument(
         "delete_db",
         default_value="false",
     )
-
     extend_map_arg = DeclareLaunchArgument(
         "extend_map",
         default_value="true",
     )
-
     rviz_arg = DeclareLaunchArgument(
         "rviz",
         default_value="true",
     )
-
     raw_lidar_topic_arg = DeclareLaunchArgument(
         "raw_lidar_topic",
         default_value="/velodyne/points",
     )
-
     lidar_topic_arg = DeclareLaunchArgument(
         "lidar_topic",
         default_value="/velodyne/points_filtered",
     )
-
     odom_topic_arg = DeclareLaunchArgument(
         "odom_topic",
         default_value="/odometry",
     )
-
     frame_id_arg = DeclareLaunchArgument(
         "frame_id",
         default_value="base_link",
     )
-
     odom_frame_id_arg = DeclareLaunchArgument(
         "odom_frame_id",
         default_value="odom",
     )
-
     map_frame_id_arg = DeclareLaunchArgument(
         "map_frame_id",
         default_value="map",
@@ -147,30 +143,28 @@ def generate_launch_description():
         executable="lidar_self_filter",
         name="lidar_self_filter",
         output="screen",
-        parameters=[
-            {
-                "input_topic": LaunchConfiguration("raw_lidar_topic"),
-                "output_topic": LaunchConfiguration("lidar_topic"),
-                "base_frame": LaunchConfiguration("frame_id"),
-                "arm_box": [
-                    0.25,
-                    0.70,
-                    -0.23,
-                    0.23,
-                    -1.00,
-                    1.10,
-                ],
-                "tf_timeout_sec": 0.25,
-                "publish_markers": True,
-            }
-        ],
+        parameters=[{
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "input_topic": LaunchConfiguration("raw_lidar_topic"),
+            "output_topic": LaunchConfiguration("lidar_topic"),
+            "base_frame": LaunchConfiguration("frame_id"),
+            "arm_box": [
+                0.25,
+                0.70,
+                -0.23,
+                0.23,
+                -1.00,
+                1.10,
+            ],
+            "tf_timeout_sec": 0.25,
+            "publish_markers": True,
+        }],
     )
 
     rtabmap_mapping_node = make_rtabmap_node(
         incremental_memory="true",
         condition=IfCondition(extend_map),
     )
-
     rtabmap_localization_node = make_rtabmap_node(
         incremental_memory="false",
         condition=UnlessCondition(extend_map),
@@ -181,11 +175,15 @@ def generate_launch_description():
         executable="rviz2",
         name="rviz2",
         arguments=["-d", config_rviz],
+        parameters=[{
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+        }],
         output="screen",
         condition=IfCondition(LaunchConfiguration("rviz")),
     )
 
     return LaunchDescription([
+        use_sim_time_arg,
         db_path_arg,
         delete_db_arg,
         extend_map_arg,

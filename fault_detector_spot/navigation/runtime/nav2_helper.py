@@ -6,48 +6,67 @@ import time
 import py_trees
 from ament_index_python.packages import get_package_share_directory
 
+
 class Nav2Helper:
     """
-    Helper for managing Nav2 (Navigation2) lifecycle.
-    Handles starting/stopping Nav2 with custom launch files and parameters.
-    Tracks the Nav2 process on the blackboard.
+    Helper for managing Nav2 lifecycle and nested launch processes.
     """
 
-    def __init__(self, node, blackboard, launch_file="nav2_sim_launch.py", params_file=None):
+    def __init__(
+        self,
+        node,
+        blackboard,
+        launch_file="nav2_sim_launch.py",
+        params_file=None,
+    ):
         self.node = node
         self.bb = blackboard
         self.launch_file = launch_file
         self.params_file = params_file
 
-        # Register blackboard key for nav2 process
-        self.bb.register_key("nav2_launch_process", access=py_trees.common.Access.WRITE)
+        self.bb.register_key(
+            "nav2_launch_process",
+            access=py_trees.common.Access.WRITE,
+        )
         if not self.bb.exists("nav2_launch_process"):
             self.bb.nav2_launch_process = None
 
     def set_launch_file(self, launch_file: str):
-        """
-        Set the launch file to use for starting Nav2.
-        """
         self.launch_file = launch_file
 
     def set_params_file(self, params_file: str):
-        """
-        Set the parameters file to use for starting Nav2.
-        """
         self.params_file = params_file
 
-    def start(self, map_file: str = None, extra_args: list = None, ) -> subprocess.Popen:
-        """
-        Launch Nav2 using the specified launch file and parameters.
-        """
-        args = ["ros2", "launch", "fault_detector_spot", self.launch_file]
+    def _use_sim_time(self) -> bool:
+        try:
+            return bool(
+                self.node.get_parameter("use_sim_time").value
+            )
+        except Exception:
+            return False
 
-        # Pass params file if specified
+    def _use_sim_time_launch_arg(self) -> str:
+        return "true" if self._use_sim_time() else "false"
+
+    def start(
+        self,
+        map_file: str = None,
+        extra_args: list = None,
+    ) -> subprocess.Popen:
+        args = [
+            "ros2",
+            "launch",
+            "fault_detector_spot",
+            self.launch_file,
+        ]
+
         if self.params_file:
             params_file = self.params_file
             if not os.path.isabs(params_file):
                 params_file = os.path.join(
-                    get_package_share_directory("fault_detector_spot"),
+                    get_package_share_directory(
+                        "fault_detector_spot"
+                    ),
                     "config",
                     params_file,
                 )
@@ -56,48 +75,56 @@ class Nav2Helper:
         if map_file:
             args.append(f"map:={map_file}")
 
-        # Extra launch arguments (e.g., use_sim_time)
-        if extra_args is None:
-            extra_args = []
-        if hasattr(self.node, "use_sim_time"):
-            extra_args.append(f"use_sim_time:={self.node.use_sim_time}")
-
-        args.extend(extra_args)
+        launch_args = list(extra_args or [])
+        if not any(
+            item.startswith("use_sim_time:=")
+            for item in launch_args
+        ):
+            launch_args.append(
+                "use_sim_time:="
+                f"{self._use_sim_time_launch_arg()}"
+            )
+        args.extend(launch_args)
 
         proc = subprocess.Popen(args, preexec_fn=os.setsid)
         self.bb.nav2_launch_process = proc
-        self.node.get_logger().info(f"[Nav2Helper] Started Nav2 with PID {proc.pid}")
+        self.node.get_logger().info(
+            f"[Nav2Helper] Started Nav2 with PID {proc.pid}"
+        )
         return proc
 
     def stop(self):
-        """
-        Stop the Nav2 process if it is running.
-        """
-        proc = getattr(self.bb, "nav2_launch_process", None)
+        proc = getattr(
+            self.bb,
+            "nav2_launch_process",
+            None,
+        )
         if proc:
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGINT)
                 proc.wait(timeout=5)
-                self.node.get_logger().info("[Nav2Helper] Stopped Nav2")
-            except Exception as e:
-                self.node.get_logger().warn(f"[Nav2Helper] Failed to stop Nav2: {e}")
+                self.node.get_logger().info(
+                    "[Nav2Helper] Stopped Nav2"
+                )
+            except Exception as exception:
+                self.node.get_logger().warn(
+                    "[Nav2Helper] Failed to stop Nav2: "
+                    f"{exception}"
+                )
             finally:
                 self.bb.nav2_launch_process = None
 
     def is_running(self) -> bool:
-        """
-        Return True if Nav2 process is running.
-        """
-        proc = getattr(self.bb, "nav2_launch_process", None)
+        proc = getattr(
+            self.bb,
+            "nav2_launch_process",
+            None,
+        )
         if proc is None:
             return False
         return proc.poll() is None
 
     def wait_until_active(self, timeout_sec=10):
-        """
-        Wait until Nav2 process is running and ready (approximate).
-        Returns True if ready within timeout, else False.
-        """
         start_time = time.time()
         while time.time() - start_time < timeout_sec:
             if self.is_running():
