@@ -3,13 +3,16 @@
 from types import SimpleNamespace
 
 from builtin_interfaces.msg import Time
-from fault_detector_msgs.msg import CommandStatus, ComplexCommand
+from fault_detector_msgs.msg import CommandStatus
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
     RecordingPolicy,
+)
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
 )
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
@@ -72,10 +75,8 @@ class FakeNode:
 
 
 def _request(command_id):
-    command = ComplexCommand()
-    command.command.command_id = command_id
     return CommandRequest.create(
-        command=command,
+        command=SemanticCommand(command_id=command_id),
         client_id="test-ui",
         origin=CommandOrigin.OPERATIONAL,
         recording_policy=RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE,
@@ -97,9 +98,9 @@ def test_semantic_requests_remain_fifo_buffered():
     dispatch = node.publishers[
         "fault_detector/_internal/commands/request"
     ]
-    first = _request(CommandID.STAND_UP.value)
-    second = _request(CommandID.READY_ARM.value)
-    third = _request(CommandID.STOW_ARM.value)
+    first = _request(CommandID.STAND_UP)
+    second = _request(CommandID.READY_ARM)
+    third = _request(CommandID.STOW_ARM)
 
     controller.submit(first)
     controller.submit(second)
@@ -164,7 +165,7 @@ def test_semantic_requests_remain_fifo_buffered():
 def test_dispatched_request_reports_transport_stage():
     node = FakeNode()
     controller = CommandController(node)
-    request = _request(CommandID.STAND_UP.value)
+    request = _request(CommandID.STAND_UP)
     states = []
     controller.add_status_listener(states.append)
 

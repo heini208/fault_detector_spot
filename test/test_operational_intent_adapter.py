@@ -3,6 +3,9 @@ import pytest
 from fault_detector_msgs.msg import OperationalIntent
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
+)
 from fault_detector_spot.application.ros.operational_intent_adapter import (
     operational_intent_to_command,
 )
@@ -14,7 +17,8 @@ def test_translates_simple_operational_intent():
 
     command = operational_intent_to_command(intent)
 
-    assert command.command.command_id == CommandID.STAND_UP.value
+    assert isinstance(command, SemanticCommand)
+    assert command.command_id is CommandID.STAND_UP
 
 
 def test_preserves_tag_motion_payload():
@@ -30,14 +34,12 @@ def test_preserves_tag_motion_payload():
 
     command = operational_intent_to_command(intent)
 
-    assert command.command.command_id == (
-        CommandID.MOVE_ARM_TO_TAG_AND_WAIT.value
-    )
+    assert command.command_id is CommandID.MOVE_ARM_TO_TAG_AND_WAIT
     assert command.tag.id == 12
-    assert command.tag.pose.header.frame_id == "odom"
-    assert command.tag.pose.pose.position.x == 1.25
-    assert command.offset.header.frame_id == "body"
-    assert command.offset.pose.position.z == 0.15
+    assert command.tag.pose.frame_id == "odom"
+    assert command.tag.pose.position.x == 1.25
+    assert command.offset.frame_id == "body"
+    assert command.offset.position.z == 0.15
     assert command.orientation_mode == "relative_to_tag"
     assert command.wait_time == 3.5
 
@@ -77,7 +79,7 @@ def test_translates_probe_execution_selection():
 
     command = operational_intent_to_command(intent)
 
-    assert command.command.command_id == CommandID.EXECUTE_PROBE_POINT.value
+    assert command.command_id is CommandID.EXECUTE_PROBE_POINT
     assert command.inspection.object_id == "motor_a"
     assert command.inspection.routine_id == "magnetic_scan"
     assert command.inspection.probe_point_id == "bearing_1"
@@ -93,4 +95,7 @@ def test_rejects_unspecified_intent():
 def test_public_contract_excludes_setup_intents():
     assert not hasattr(OperationalIntent, "INTENT_CREATE_MAP")
     assert not hasattr(OperationalIntent, "INTENT_START_SLAM")
-    assert not hasattr(OperationalIntent, "INTENT_CAPTURE_REFERENCE_VIEW")
+    assert not hasattr(
+        OperationalIntent,
+        "INTENT_CAPTURE_REFERENCE_VIEW",
+    )

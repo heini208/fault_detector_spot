@@ -5,13 +5,15 @@ from types import SimpleNamespace
 import pytest
 
 from fault_detector_msgs.msg import OperationalIntent
-from fault_detector_msgs.msg import ComplexCommand
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
     RecordingPolicy,
+)
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
 )
 from fault_detector_spot.application.controllers.application_controller import (
     ApplicationController,
@@ -24,8 +26,6 @@ from fault_detector_spot.application.controllers.command_controller import (
 
 
 class FakeCommandController:
-    """Expose the command-controller surface used by the application."""
-
     def __init__(self):
         self.listeners = []
         self.submitted = []
@@ -57,7 +57,6 @@ class FakeCommandController:
 
 
 def stand_intent():
-    """Return one valid public intent."""
     intent = OperationalIntent()
     intent.intent = OperationalIntent.INTENT_STAND_UP
     return intent
@@ -80,9 +79,8 @@ def test_prepares_operational_request_with_server_owned_policy():
     assert operation.request.recording_policy is (
         RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
     )
-    assert operation.request.command.command.command_id == (
-        CommandID.STAND_UP.value
-    )
+    assert isinstance(operation.request.command, SemanticCommand)
+    assert operation.request.command.command_id is CommandID.STAND_UP
 
 
 def test_submit_routes_only_prepared_operation():
@@ -130,10 +128,8 @@ def test_untracked_semantic_request_still_reaches_state_listeners():
     controller = ApplicationController(command_controller)
     statuses = []
     controller.add_status_listener(statuses.append)
-    command = ComplexCommand()
-    command.command.command_id = CommandID.STOW_ARM.value
     request = CommandRequest.create(
-        command=command,
+        command=SemanticCommand(command_id=CommandID.STOW_ARM),
         client_id="recording-playback",
         origin=CommandOrigin.PLAYBACK,
         recording_policy=(
@@ -213,11 +209,9 @@ def test_setup_status_is_owned_only_by_setup_coordinator():
         context,
         setup_statuses.append,
     )
-    command = ComplexCommand()
-    command.command.command_id = CommandID.STOW_ARM.value
     operation = controller.setup_coordinator.prepare_command(
         context,
-        command,
+        SemanticCommand(command_id=CommandID.STOW_ARM),
     )
     controller.setup_coordinator.submit(operation)
 

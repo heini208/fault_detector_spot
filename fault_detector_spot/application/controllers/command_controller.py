@@ -10,7 +10,6 @@ from typing import Callable, Deque, List, Optional, Tuple
 from fault_detector_msgs.msg import (
     CommandRequest as CommandRequestMessage,
     CommandStatus,
-    ComplexCommand,
 )
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
@@ -22,8 +21,11 @@ from fault_detector_spot.application.commanding.command_request import (
 from fault_detector_spot.application.commanding.request_identity import (
     validate_request_id,
 )
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
+)
 from fault_detector_spot.application.ros.command_request_adapter import (
-    command_request_from_message,
+    semantic_command_request_from_message,
     command_request_to_message,
 )
 from fault_detector_spot.shared.ros.qos_profiles import (
@@ -46,14 +48,13 @@ class CommandControllerState(str, Enum):
 class CommandControllerStatus:
     """Controller-owned state for one correlated semantic command."""
 
-    request: CommandRequest[ComplexCommand]
+    request: CommandRequest[SemanticCommand]
     state: CommandControllerState
     detail: str = ""
     buffered_command_count: int = 0
 
     @property
     def request_id(self) -> str:
-        """Return the correlated request identity."""
         return self.request.request_id
 
 
@@ -74,18 +75,18 @@ class CommandController:
     def __init__(
         self,
         node,
-        submission_topic: str = "fault_detector/_internal/commands/submit",
-        dispatch_topic: str = "fault_detector/_internal/commands/request",
-        accepted_topic: str = "fault_detector/_internal/commands/accepted",
-        controller_status_topic: str = (
-            "fault_detector/_internal/commands/status"
-        ),
-        status_topic: str = "fault_detector/_internal/command_status",
+        submission_topic="fault_detector/_internal/commands/submit",
+        dispatch_topic="fault_detector/_internal/commands/request",
+        accepted_topic="fault_detector/_internal/commands/accepted",
+        controller_status_topic="fault_detector/_internal/commands/status",
+        status_topic="fault_detector/_internal/command_status",
     ):
         self.node = node
         self._lock = RLock()
-        self._queue: Deque[CommandRequest[ComplexCommand]] = deque()
-        self._active: Optional[CommandRequest[ComplexCommand]] = None
+        self._queue: Deque[CommandRequest[SemanticCommand]] = deque()
+        self._active: Optional[
+            CommandRequest[SemanticCommand]
+        ] = None
         self._listeners: List[StatusListener] = []
         self._known_request_ids = set()
         self._active_acknowledged = False
@@ -127,18 +128,17 @@ class CommandController:
 
     @property
     def active_request_id(self) -> str:
-        """Return the active request identity, or an empty string."""
         with self._lock:
             return self._active.request_id if self._active else ""
 
     @property
     def queued_request_ids(self) -> Tuple[str, ...]:
-        """Return queued request identities in dispatch order."""
         with self._lock:
-            return tuple(request.request_id for request in self._queue)
+            return tuple(
+                request.request_id for request in self._queue
+            )
 
     def add_status_listener(self, listener: StatusListener) -> None:
-        """Register a semantic command status listener."""
         if not callable(listener):
             raise TypeError("Status listener must be callable")
         with self._lock:
@@ -146,16 +146,14 @@ class CommandController:
                 self._listeners.append(listener)
 
     def remove_status_listener(self, listener: StatusListener) -> None:
-        """Remove a previously registered status listener."""
         with self._lock:
             if listener in self._listeners:
                 self._listeners.remove(listener)
 
     def submit(
         self,
-        request: CommandRequest[ComplexCommand],
+        request: CommandRequest[SemanticCommand],
     ) -> str:
-        """Accept and queue one validated semantic command."""
         normalized = self._normalize_request(request)
         with self._lock:
             if normalized.request_id in self._known_request_ids:
@@ -179,9 +177,8 @@ class CommandController:
         return normalized.request_id
 
     def submit_message(self, message: CommandRequestMessage) -> bool:
-        """Validate and submit one ROS-facing semantic request."""
         try:
-            request = command_request_from_message(message)
+            request = semantic_command_request_from_message(message)
             self.submit(request)
         except (TypeError, ValueError) as exception:
             self._reject_message(message, str(exception))
@@ -189,7 +186,6 @@ class CommandController:
         return True
 
     def cancel(self, request_id: str) -> str:
-        """Cancel a queued request or globally stop an active request."""
         normalized_id = validate_request_id(request_id)
         with self._lock:
             for request in tuple(self._queue):
@@ -210,10 +206,13 @@ class CommandController:
                 )
         return self.cancel_all()
 
-    def cancel_all(self, client_id: str = "command_controller") -> str:
-        """Clear queued work and dispatch the behavior-tree emergency stop."""
-        command = ComplexCommand()
-        command.command.command_id = CommandID.EMERGENCY_CANCEL.value
+    def cancel_all(
+        self,
+        client_id: str = "command_controller",
+    ) -> str:
+        command = SemanticCommand(
+            command_id=CommandID.EMERGENCY_CANCEL
+        )
         request = CommandRequest.create(
             command=command,
             client_id=client_id,
@@ -223,7 +222,6 @@ class CommandController:
         return self.submit(request)
 
     def handle_command_status(self, message: CommandStatus) -> bool:
-        """Consume one behavior-tree status for the active request."""
         with self._lock:
             if (
                 self._active is None
@@ -270,16 +268,21 @@ class CommandController:
 
     def _normalize_request(
         self,
-        request: CommandRequest[ComplexCommand],
-    ) -> CommandRequest[ComplexCommand]:
-        message = command_request_to_message(request)
+        request: CommandRequest[SemanticCommand],
+    ) -> CommandRequest[SemanticCommand]:
+        if not isinstance(request, CommandRequest):
+            raise TypeError("Expected an application CommandRequest")
+        if not isinstance(request.command, SemanticCommand):
+            raise TypeError(
+                "Command request must contain SemanticCommand"
+            )
         return CommandRequest(
-            request_id=message.request_id,
-            client_id=message.client_id,
-            context_id=message.context_id,
-            origin=message.origin,
-            recording_policy=message.recording_policy,
-            command=message.command,
+            request_id=request.request_id,
+            client_id=request.client_id,
+            context_id=request.context_id,
+            origin=request.origin,
+            recording_policy=request.recording_policy,
+            command=request.command,
         )
 
     def _retry_dispatch(self) -> None:
@@ -289,7 +292,8 @@ class CommandController:
                 and not self._active_acknowledged
                 and self._active_dispatched_monotonic is not None
                 and (
-                    time.monotonic() - self._active_dispatched_monotonic
+                    time.monotonic()
+                    - self._active_dispatched_monotonic
                     >= self._ack_timeout_sec
                 )
             ):
@@ -299,7 +303,7 @@ class CommandController:
                 self._active_dispatched_monotonic = None
                 detail = (
                     "Behavior tree did not acknowledge the dispatched "
-                    f"{request.command.command.command_id} request within "
+                    f"{request.command.command_id.value} request within "
                     f"{self._ack_timeout_sec:.1f} s"
                 )
                 self.node.get_logger().error(
@@ -337,7 +341,7 @@ class CommandController:
 
     def _dispatch_emergency_locked(
         self,
-        request: CommandRequest[ComplexCommand],
+        request: CommandRequest[SemanticCommand],
     ) -> None:
         interrupted = []
         if self._active is not None:
@@ -366,7 +370,7 @@ class CommandController:
 
     def _publish_dispatch_locked(
         self,
-        request: CommandRequest[ComplexCommand],
+        request: CommandRequest[SemanticCommand],
     ) -> None:
         message = command_request_to_message(request)
         message.command.command.header.stamp = (
@@ -374,14 +378,12 @@ class CommandController:
         )
         self._dispatch_publisher.publish(message)
         self._active_dispatched_monotonic = time.monotonic()
-        command_id = request.command.command.command_id
+        command_id = request.command.command_id.value
         detail = (
             f"Published {command_id} to behavior tree; "
             "waiting for BT receipt"
         )
-        self._log_info(
-            f"{detail} [{request.request_id}]"
-        )
+        self._log_info(f"{detail} [{request.request_id}]")
         self._emit_locked(
             request,
             CommandControllerState.DISPATCHED,
@@ -395,7 +397,9 @@ class CommandController:
                 f"{self._active.request_id}"
             )
         if not self._dispatch_consumer_ready_locked():
-            return "Queued; waiting for behavior-tree command consumer"
+            return (
+                "Queued; waiting for behavior-tree command consumer"
+            )
         return "Queued for behavior-tree dispatch"
 
     def _log_info(self, message: str) -> None:
@@ -409,7 +413,7 @@ class CommandController:
 
     def _emit_locked(
         self,
-        request: CommandRequest[ComplexCommand],
+        request: CommandRequest[SemanticCommand],
         state: CommandControllerState,
         detail: str = "",
         buffered_command_count: int = 0,
@@ -438,8 +442,15 @@ class CommandController:
             detail,
         )
 
-    def _publish_rejection(self, request_id, command_id, detail):
-        self.node.get_logger().error(f"Rejected command request: {detail}")
+    def _publish_rejection(
+        self,
+        request_id,
+        command_id,
+        detail,
+    ):
+        self.node.get_logger().error(
+            f"Rejected command request: {detail}"
+        )
         if not request_id:
             return
         message = CommandStatus()
@@ -455,12 +466,12 @@ class CommandController:
         message = CommandStatus()
         message.header.stamp = self.node.get_clock().now().to_msg()
         message.request_id = status.request_id
-        message.command_id = (
-            status.request.command.command.command_id
-        )
+        message.command_id = status.request.command.command_id.value
         message.state = self._controller_status_state(status.state)
         message.detail = status.detail or status.state.value
-        message.buffered_command_count = status.buffered_command_count
+        message.buffered_command_count = (
+            status.buffered_command_count
+        )
         self._controller_status_publisher.publish(message)
 
     @staticmethod
@@ -481,9 +492,9 @@ class CommandController:
 
     @staticmethod
     def _is_emergency(
-        request: CommandRequest[ComplexCommand],
+        request: CommandRequest[SemanticCommand],
     ) -> bool:
         return (
-            request.command.command.command_id
-            == CommandID.EMERGENCY_CANCEL.value
+            request.command.command_id
+            is CommandID.EMERGENCY_CANCEL
         )

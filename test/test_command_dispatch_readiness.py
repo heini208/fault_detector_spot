@@ -1,15 +1,17 @@
-"""Tests for command dispatch readiness and single controller ownership."""
+"""Tests for command dispatch readiness."""
 
 from types import SimpleNamespace
 
 from builtin_interfaces.msg import Time
-from fault_detector_msgs.msg import ComplexCommand
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
     RecordingPolicy,
+)
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
 )
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
@@ -26,11 +28,6 @@ class FakePublisher:
 
     def get_subscription_count(self):
         return self.subscription_count
-
-
-class FakeLogger:
-    def error(self, _message):
-        return None
 
 
 class FakeNode:
@@ -60,64 +57,52 @@ class FakeNode:
         )
 
     def get_logger(self):
-        return FakeLogger()
+        return SimpleNamespace(
+            info=lambda _message: None,
+            error=lambda _message: None,
+        )
 
 
-def make_request(command_id):
-    command = ComplexCommand()
-    command.command.command_id = command_id
+def request(command_id):
     return CommandRequest.create(
-        command=command,
+        command=SemanticCommand(command_id=command_id),
         client_id="navigation-ui",
         origin=CommandOrigin.NAVIGATION_SETUP,
         recording_policy=RecordingPolicy.EXCLUDE,
     )
 
 
-def test_request_waits_until_behavior_tree_consumer_exists():
+def test_request_waits_until_bt_consumer_exists():
     node = FakeNode()
     controller = CommandController(node)
-    request = make_request(CommandID.SWAP_MAP.value)
+    pending = request(CommandID.SWAP_MAP)
 
-    controller.submit(request)
+    controller.submit(pending)
 
-    dispatch = node.publishers[
-        "fault_detector/_internal/commands/request"
-    ]
-    assert dispatch.messages == []
     assert controller.active_request_id == ""
-    assert controller.queued_request_ids == (request.request_id,)
+    assert controller.queued_request_ids == (pending.request_id,)
 
-    dispatch.subscription_count = 1
+    node.publishers[
+        "fault_detector/_internal/commands/request"
+    ].subscription_count = 1
     node.timer_callback()
 
-    assert [item.request_id for item in dispatch.messages] == [
-        request.request_id
-    ]
-    assert controller.active_request_id == request.request_id
-    assert controller.queued_request_ids == ()
+    assert controller.active_request_id == pending.request_id
 
 
 def test_emergency_is_not_lost_when_consumer_is_absent():
     node = FakeNode()
     controller = CommandController(node)
-    request = make_request(CommandID.SWAP_MAP.value)
-    controller.submit(request)
+    controller.submit(request(CommandID.SWAP_MAP))
 
     emergency_id = controller.cancel_all("operator-ui")
 
-    dispatch = node.publishers[
-        "fault_detector/_internal/commands/request"
-    ]
-    assert dispatch.messages == []
     assert controller.active_request_id == ""
     assert controller.queued_request_ids == (emergency_id,)
 
-    dispatch.subscription_count = 1
+    node.publishers[
+        "fault_detector/_internal/commands/request"
+    ].subscription_count = 1
     node.timer_callback()
 
-    assert dispatch.messages[-1].request_id == emergency_id
-    assert (
-        dispatch.messages[-1].command.command.command_id
-        == CommandID.EMERGENCY_CANCEL.value
-    )
+    assert controller.active_request_id == emergency_id

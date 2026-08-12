@@ -4,13 +4,16 @@ from types import SimpleNamespace
 
 import pytest
 from builtin_interfaces.msg import Time
-from fault_detector_msgs.msg import CommandStatus, ComplexCommand
+from fault_detector_msgs.msg import CommandStatus
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
     RecordingPolicy,
+)
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
 )
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
@@ -23,8 +26,6 @@ from fault_detector_spot.application.ros.command_request_adapter import (
 
 
 class FakePublisher:
-    """Collect messages published on one topic."""
-
     def __init__(self):
         self.messages = []
 
@@ -33,18 +34,18 @@ class FakePublisher:
 
 
 class FakeLogger:
-    """Collect controller errors."""
-
     def __init__(self):
         self.errors = []
+        self.info_messages = []
 
     def error(self, message):
         self.errors.append(message)
 
+    def info(self, message):
+        self.info_messages.append(message)
+
 
 class FakeNode:
-    """Provide the ROS node surface used by the controller."""
-
     def __init__(self):
         self.publishers = {}
         self.subscriptions = {}
@@ -71,11 +72,8 @@ class FakeNode:
 
 
 def make_request(command_id, client_id="operator_ui"):
-    """Build one valid operational request."""
-    command = ComplexCommand()
-    command.command.command_id = command_id
     return CommandRequest.create(
-        command=command,
+        command=SemanticCommand(command_id=command_id),
         client_id=client_id,
         origin=CommandOrigin.OPERATIONAL,
         recording_policy=(
@@ -85,7 +83,6 @@ def make_request(command_id, client_id="operator_ui"):
 
 
 def command_status(request_id, state, buffered_count=0):
-    """Build one behavior-tree result."""
     message = CommandStatus()
     message.request_id = request_id
     message.state = state
@@ -98,8 +95,8 @@ def test_controller_dispatches_only_one_semantic_request_at_a_time():
     controller = CommandController(node)
     states = []
     controller.add_status_listener(states.append)
-    first = make_request(CommandID.STAND_UP.value)
-    second = make_request(CommandID.STOW_ARM.value)
+    first = make_request(CommandID.STAND_UP)
+    second = make_request(CommandID.STOW_ARM)
 
     controller.submit(first)
     controller.submit(second)
@@ -116,6 +113,7 @@ def test_controller_dispatches_only_one_semantic_request_at_a_time():
     ]
     assert controller.active_request_id == first.request_id
     assert controller.queued_request_ids == (second.request_id,)
+    assert isinstance(controller._active.command, SemanticCommand)
 
     controller.handle_command_status(command_status(
         first.request_id,
@@ -134,8 +132,8 @@ def test_controller_dispatches_only_one_semantic_request_at_a_time():
 def test_internal_success_does_not_release_the_next_request():
     node = FakeNode()
     controller = CommandController(node)
-    first = make_request(CommandID.MOVE_ARM_TO_TAG_AND_WAIT.value)
-    second = make_request(CommandID.STOW_ARM.value)
+    first = make_request(CommandID.MOVE_ARM_TO_TAG_AND_WAIT)
+    second = make_request(CommandID.STOW_ARM)
     controller.submit(first)
     controller.submit(second)
 
@@ -155,7 +153,7 @@ def test_internal_success_does_not_release_the_next_request():
 
 def test_duplicate_request_identity_is_rejected():
     controller = CommandController(FakeNode())
-    request = make_request(CommandID.STAND_UP.value)
+    request = make_request(CommandID.STAND_UP)
     controller.submit(request)
 
     with pytest.raises(DuplicateCommandRequest):
@@ -167,8 +165,8 @@ def test_emergency_stop_clears_queue_and_bypasses_active_request():
     controller = CommandController(node)
     states = []
     controller.add_status_listener(states.append)
-    first = make_request(CommandID.MOVE_TO_WAYPOINT.value)
-    second = make_request(CommandID.STOW_ARM.value)
+    first = make_request(CommandID.MOVE_TO_WAYPOINT)
+    second = make_request(CommandID.STOW_ARM)
     controller.submit(first)
     controller.submit(second)
 
@@ -206,7 +204,7 @@ def test_emergency_stop_clears_queue_and_bypasses_active_request():
 def test_dispatch_rewrites_nested_identity_and_timestamp():
     node = FakeNode()
     controller = CommandController(node)
-    request = make_request(CommandID.READY_ARM.value)
+    request = make_request(CommandID.READY_ARM)
 
     controller.submit(request)
 
@@ -223,7 +221,7 @@ def test_dispatch_rewrites_nested_identity_and_timestamp():
 def test_ros_submission_topic_enters_the_serialized_queue():
     node = FakeNode()
     controller = CommandController(node)
-    request = make_request(CommandID.READY_ARM.value)
+    request = make_request(CommandID.READY_ARM)
 
     accepted = node.subscriptions[
         "fault_detector/_internal/commands/submit"
@@ -231,6 +229,7 @@ def test_ros_submission_topic_enters_the_serialized_queue():
 
     assert accepted is True
     assert controller.active_request_id == request.request_id
+    assert isinstance(controller._active.command, SemanticCommand)
     assert node.publishers[
         "fault_detector/_internal/commands/accepted"
     ].messages[0].request_id == request.request_id
@@ -251,10 +250,10 @@ def test_controller_exposes_only_semantic_command_input():
 def test_invalid_submission_is_rejected_without_dispatch():
     node = FakeNode()
     CommandController(node)
-    request = make_request(CommandID.STAND_UP.value)
+    request = make_request(CommandID.STAND_UP)
     message = command_request_to_message(request)
     message.command.command.request_id = make_request(
-        CommandID.STOW_ARM.value
+        CommandID.STOW_ARM
     ).request_id
 
     accepted = node.subscriptions[

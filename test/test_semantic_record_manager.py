@@ -3,7 +3,7 @@
 from collections import deque
 
 import pytest
-from fault_detector_msgs.msg import CommandStatus, ComplexCommand
+from fault_detector_msgs.msg import CommandStatus
 from std_msgs.msg import Bool
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
@@ -12,6 +12,9 @@ from fault_detector_spot.application.commanding.command_request import (
     CommandRequest,
     RecordingPolicy,
 )
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
+)
 from fault_detector_spot.application.recording.record_manager_node import (
     RecordManager,
     deserialize_recorded_command,
@@ -19,14 +22,12 @@ from fault_detector_spot.application.recording.record_manager_node import (
     serialize_recorded_command,
 )
 from fault_detector_spot.application.ros.command_request_adapter import (
-    command_request_from_message,
+    semantic_command_request_from_message,
     command_request_to_message,
 )
 
 
 class FakePublisher:
-    """Collect published messages."""
-
     def __init__(self):
         self.messages = []
 
@@ -35,8 +36,6 @@ class FakePublisher:
 
 
 class FakeLogger:
-    """Collect playback log messages."""
-
     def __init__(self):
         self.info_messages = []
         self.warning_messages = []
@@ -53,8 +52,6 @@ class FakeLogger:
 
 
 class RecordManagerHarness:
-    """Run record-manager state transitions without a ROS node."""
-
     capture_request = RecordManager.capture_request
     handle_playback_status = RecordManager.handle_playback_status
     _dispatch_next_playback_command = (
@@ -82,10 +79,8 @@ def make_request(
     origin=CommandOrigin.OPERATIONAL,
     policy=RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE,
 ):
-    command = ComplexCommand()
-    command.command.command_id = command_id
     return CommandRequest.create(
-        command=command,
+        command=SemanticCommand(command_id=command_id),
         client_id="operator_ui",
         origin=origin,
         recording_policy=policy,
@@ -103,9 +98,9 @@ def terminal_status(request_id, state, command_id=""):
 def test_only_included_accepted_requests_are_recorded():
     manager = RecordManagerHarness()
     manager.recording = True
-    included = make_request(CommandID.STAND_UP.value)
+    included = make_request(CommandID.STAND_UP)
     excluded = make_request(
-        CommandID.STOW_ARM.value,
+        CommandID.STOW_ARM,
         origin=CommandOrigin.PROBE_SETUP,
         policy=RecordingPolicy.EXCLUDE,
     )
@@ -124,15 +119,16 @@ def test_only_included_accepted_requests_are_recorded():
 
 
 def test_recorded_wait_is_preserved_as_an_explicit_command():
-    command = ComplexCommand()
-    command.command.command_id = CommandID.WAIT_TIME.value
-    command.wait_time = 4.5
+    command = SemanticCommand(
+        command_id=CommandID.WAIT_TIME,
+        wait_time=4.5,
+    )
 
     restored = deserialize_recorded_command(
         serialize_recorded_command(command)
     )
 
-    assert restored.command.command_id == CommandID.WAIT_TIME.value
+    assert restored.command_id is CommandID.WAIT_TIME
     assert restored.wait_time == 4.5
 
 
@@ -145,17 +141,15 @@ def test_topic_based_recording_document_is_rejected():
 
 def test_playback_dispatches_one_command_after_each_success():
     manager = RecordManagerHarness()
-    first = ComplexCommand()
-    first.command.command_id = CommandID.STAND_UP.value
-    second = ComplexCommand()
-    second.command.command_id = CommandID.STOW_ARM.value
+    first = SemanticCommand(command_id=CommandID.STAND_UP)
+    second = SemanticCommand(command_id=CommandID.STOW_ARM)
     manager._playback_commands = deque([first, second])
     manager._playback_name = "inspection"
 
     manager._dispatch_next_playback_command()
 
     assert len(manager.command_submission_pub.messages) == 1
-    first_request = command_request_from_message(
+    first_request = semantic_command_request_from_message(
         manager.command_submission_pub.messages[0]
     )
     assert first_request.origin is CommandOrigin.PLAYBACK
@@ -163,6 +157,7 @@ def test_playback_dispatches_one_command_after_each_success():
         first_request.recording_policy
         is RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
     )
+    assert first_request.command.command_id is CommandID.STAND_UP
     assert manager.handle_playback_status(terminal_status(
         first_request.request_id,
         CommandStatus.STATE_RUNNING,
@@ -175,14 +170,11 @@ def test_playback_dispatches_one_command_after_each_success():
     ))
 
     assert len(manager.command_submission_pub.messages) == 2
-    second_request = command_request_from_message(
+    second_request = semantic_command_request_from_message(
         manager.command_submission_pub.messages[1]
     )
     assert second_request.request_id != first_request.request_id
-    assert (
-        second_request.command.command.command_id
-        == CommandID.STOW_ARM.value
-    )
+    assert second_request.command.command_id is CommandID.STOW_ARM
 
     manager.handle_playback_status(terminal_status(
         second_request.request_id,
@@ -196,14 +188,12 @@ def test_playback_dispatches_one_command_after_each_success():
 
 def test_playback_stops_and_discards_remaining_commands_on_failure():
     manager = RecordManagerHarness()
-    first = ComplexCommand()
-    first.command.command_id = CommandID.MOVE_TO_WAYPOINT.value
-    second = ComplexCommand()
-    second.command.command_id = CommandID.STOW_ARM.value
+    first = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    second = SemanticCommand(command_id=CommandID.STOW_ARM)
     manager._playback_commands = deque([first, second])
     manager._playback_name = "inspection"
     manager._dispatch_next_playback_command()
-    request = command_request_from_message(
+    request = semantic_command_request_from_message(
         manager.command_submission_pub.messages[0]
     )
 
