@@ -98,3 +98,26 @@ def test_application_commanding_contains_no_bt_execution_modules():
     assert not (commanding_dir / "move_command.py").exists()
     assert not (commanding_dir / "move_relative_command.py").exists()
     assert not (commanding_dir / "move_to_tag_command.py").exists()
+
+
+def test_runtime_does_not_import_execution_types_from_application_commanding():
+    from pathlib import Path
+
+    package_root = Path(__file__).parents[1] / "fault_detector_spot"
+    legacy_modules = (
+        "simple_command",
+        "timer_command",
+        "move_command",
+        "move_relative_command",
+        "move_to_tag_command",
+    )
+    offenders = []
+    for path in package_root.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        for module in legacy_modules:
+            needle = f"fault_detector_spot.application.commanding.{module}"
+            if needle in source:
+                offenders.append(str(path.relative_to(package_root)))
+                break
+
+    assert offenders == []

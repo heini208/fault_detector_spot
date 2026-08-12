@@ -4,7 +4,9 @@ from bosdyn.client.robot_command import RobotCommandBuilder
 
 import tf2_geometry_msgs
 from bosdyn_msgs.conversions import convert
-from fault_detector_spot.application.commanding.move_command import MoveCommand
+from fault_detector_spot.application.behaviour_tree.commands.move_command import (
+    MoveCommand,
+)
 # CHANGED: Import intermediate class
 from fault_detector_spot.application.behaviour_tree.behaviours.move_command_action import MoveCommandAction
 from spot_msgs.action import RobotCommand
