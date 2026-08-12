@@ -13,17 +13,22 @@ from fault_detector_spot.application.commanding.command_request import (
     RecordingPolicy,
 )
 from fault_detector_spot.application.commanding.semantic_command import (
+    CommandQuaternion,
+    CommandVector3,
+    InspectionSelection,
     SemanticCommand,
+    SemanticTag,
+    StampedPose,
 )
-from fault_detector_spot.application.recording.record_manager_node import (
-    RecordManager,
+from fault_detector_spot.application.recording.record_manager_node import RecordManager
+from fault_detector_spot.application.recording.semantic_command_codec import (
     deserialize_recorded_command,
     deserialize_recording,
     serialize_recorded_command,
 )
 from fault_detector_spot.application.ros.command_request_adapter import (
-    semantic_command_request_from_message,
     command_request_to_message,
+    semantic_command_request_from_message,
 )
 
 
@@ -54,9 +59,7 @@ class FakeLogger:
 class RecordManagerHarness:
     capture_request = RecordManager.capture_request
     handle_playback_status = RecordManager.handle_playback_status
-    _dispatch_next_playback_command = (
-        RecordManager._dispatch_next_playback_command
-    )
+    _dispatch_next_playback_command = RecordManager._dispatch_next_playback_command
     _finish_playback = RecordManager._finish_playback
 
     def __init__(self):
@@ -105,17 +108,12 @@ def test_only_included_accepted_requests_are_recorded():
         policy=RecordingPolicy.EXCLUDE,
     )
 
-    assert manager.capture_request(
-        command_request_to_message(included)
-    ) is True
-    assert manager.capture_request(
-        command_request_to_message(excluded)
-    ) is False
-    assert manager.capture_request(
-        command_request_to_message(included)
-    ) is False
+    assert manager.capture_request(command_request_to_message(included)) is True
+    assert manager.capture_request(command_request_to_message(excluded)) is False
+    assert manager.capture_request(command_request_to_message(included)) is False
     assert len(manager.temp_data) == 1
-    assert manager.temp_data[0]["command"]["request_id"] == ""
+    assert manager.temp_data[0]["command_id"] == CommandID.STAND_UP.value
+    assert "command" not in manager.temp_data[0]
 
 
 def test_recorded_wait_is_preserved_as_an_explicit_command():
@@ -124,12 +122,52 @@ def test_recorded_wait_is_preserved_as_an_explicit_command():
         wait_time=4.5,
     )
 
-    restored = deserialize_recorded_command(
-        serialize_recorded_command(command)
+    restored = deserialize_recorded_command(serialize_recorded_command(command))
+
+    assert restored == command
+
+
+def test_recording_round_trip_preserves_full_semantic_command():
+    pose = StampedPose(
+        frame_id="odom",
+        stamp_sec=7,
+        stamp_nanosec=11,
+        position=CommandVector3(x=0.1, y=-0.2, z=0.3),
+        orientation=CommandQuaternion(x=0.0, y=0.0, z=0.4, w=0.9),
+    )
+    command = SemanticCommand(
+        command_id=CommandID.MOVE_ARM_TO_TAG,
+        tag=SemanticTag(id=4, pose=pose),
+        offset=pose,
+        orientation_mode="relative_to_tag",
+        wait_time=1.25,
+        map_name="factory",
+        waypoint_name="motor_a",
+        inspection=InspectionSelection(
+            object_id="motor_a",
+            routine_id="magnetic_scan",
+            probe_point_id="bearing_1",
+        ),
     )
 
-    assert restored.command_id is CommandID.WAIT_TIME
-    assert restored.wait_time == 4.5
+    data = serialize_recorded_command(command)
+    restored = deserialize_recorded_command(data)
+
+    assert data["command_id"] == CommandID.MOVE_ARM_TO_TAG.value
+    assert data["tag"]["id"] == 4
+    assert "request_id" not in data
+    assert restored == command
+
+
+def test_legacy_complex_command_recording_is_rejected():
+    with pytest.raises(ValueError, match="missing field: tag"):
+        deserialize_recorded_command(
+            {
+                "command": {
+                    "command_id": CommandID.STAND_UP.value,
+                }
+            }
+        )
 
 
 def test_topic_based_recording_document_is_rejected():

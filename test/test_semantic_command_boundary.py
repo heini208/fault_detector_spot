@@ -3,15 +3,9 @@
 import inspect
 from pathlib import Path
 
-from fault_detector_spot.application.commanding.semantic_command import (
-    SemanticCommand,
-)
-from fault_detector_spot.application.controllers.command_controller import (
-    CommandController,
-)
-from fault_detector_spot.application.coordinators.setup_coordinator import (
-    SetupCoordinator,
-)
+from fault_detector_spot.application.commanding.semantic_command import SemanticCommand
+from fault_detector_spot.application.controllers.command_controller import CommandController
+from fault_detector_spot.application.coordinators.setup_coordinator import SetupCoordinator
 
 
 ROOT = Path(__file__).parents[1] / "fault_detector_spot"
@@ -20,8 +14,7 @@ ROOT = Path(__file__).parents[1] / "fault_detector_spot"
 def test_semantic_command_model_has_no_ros_message_imports():
     source = inspect.getsource(SemanticCommand)
     module = (
-        ROOT
-        / "application/commanding/semantic_command.py"
+        ROOT / "application/commanding/semantic_command.py"
     ).read_text(encoding="utf-8")
 
     assert "fault_detector_msgs" not in module
@@ -38,8 +31,7 @@ def test_command_controller_queue_is_semantic_not_complex():
 
 def test_command_controller_has_no_ros_transport_dependency():
     module = (
-        ROOT
-        / "application/controllers/command_controller.py"
+        ROOT / "application/controllers/command_controller.py"
     ).read_text(encoding="utf-8")
 
     assert "fault_detector_msgs" not in module
@@ -52,8 +44,7 @@ def test_command_controller_has_no_ros_transport_dependency():
 
 def test_setup_coordinator_does_not_import_complex_command():
     module = (
-        ROOT
-        / "application/coordinators/setup_coordinator.py"
+        ROOT / "application/coordinators/setup_coordinator.py"
     ).read_text(encoding="utf-8")
 
     assert "ComplexCommand" not in module
@@ -80,11 +71,29 @@ def test_behaviour_tree_consumes_semantic_commands():
     assert "semantic_command_request_from_message" in subscriber
 
 
-def test_complex_command_remains_only_in_current_wire_compatibility_files():
+def test_recording_storage_is_ros_independent():
+    manager = (
+        ROOT / "application/recording/record_manager_node.py"
+    ).read_text(encoding="utf-8")
+    codec = (
+        ROOT / "application/recording/semantic_command_codec.py"
+    ).read_text(encoding="utf-8")
+
+    assert "ComplexCommand" not in manager
+    assert "rosidl_runtime_py" not in manager
+    assert "ComplexCommand" not in codec
+    assert "rosidl_runtime_py" not in codec
+    assert "SemanticCommand" in codec
+
+
+def test_complex_command_is_confined_to_ros_wire_adapters():
     paths = (
         ROOT / "application/ros/semantic_command_adapter.py",
         ROOT / "application/ros/command_request_adapter.py",
-        ROOT / "application/recording/record_manager_node.py",
     )
 
     assert all(path.exists() for path in paths)
+    assert all(
+        "ComplexCommand" in path.read_text(encoding="utf-8")
+        for path in paths
+    )

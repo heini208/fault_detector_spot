@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 from builtin_interfaces.msg import Time
-from fault_detector_msgs.msg import CommandStatus, ComplexCommand
+from fault_detector_msgs.msg import CommandStatus
 from py_trees.common import Status
 
 from fault_detector_spot.application.behaviour_tree.behaviours.buffer_and_status_publisher import (
@@ -19,12 +19,7 @@ from fault_detector_spot.application.commanding.command_request import (
     RecordingPolicy,
 )
 from fault_detector_spot.application.commanding.request_identity import new_request_id
-from fault_detector_spot.application.commanding.semantic_command import (
-    SemanticCommand,
-)
-from fault_detector_spot.application.recording.record_manager_node import (
-    serialize_recorded_command,
-)
+from fault_detector_spot.application.commanding.semantic_command import SemanticCommand
 
 
 class FakeClock:
@@ -58,10 +53,7 @@ def semantic_request(command_id, client_id, context_id="", origin=None):
 
 
 def test_semantic_command_request_id_reaches_internal_motion():
-    request = semantic_request(
-        CommandID.STAND_UP,
-        "operator_ui",
-    )
+    request = semantic_request(CommandID.STAND_UP, "operator_ui")
     subscriber = CommandSubscriber()
     subscriber.blackboard = SimpleNamespace(command_buffer=[])
     subscriber.node = SimpleNamespace(get_clock=lambda: FakeClock())
@@ -69,10 +61,7 @@ def test_semantic_command_request_id_reaches_internal_motion():
     subscriber.fire_request(request)
 
     assert len(subscriber.blackboard.command_buffer) == 1
-    assert (
-        subscriber.blackboard.command_buffer[0].request_id
-        == request.request_id
-    )
+    assert subscriber.blackboard.command_buffer[0].request_id == request.request_id
 
 
 def test_request_metadata_reaches_internal_motion():
@@ -97,10 +86,7 @@ def test_request_metadata_reaches_internal_motion():
 
 
 def test_empty_request_translation_reports_correlated_failure():
-    request = semantic_request(
-        CommandID.SCAN_ALL_IN_RANGE,
-        "operator_ui",
-    )
+    request = semantic_request(CommandID.SCAN_ALL_IN_RANGE, "operator_ui")
     subscriber = CommandSubscriber()
     subscriber.blackboard = SimpleNamespace(
         command_buffer=[],
@@ -163,19 +149,3 @@ def test_terminal_status_is_not_replaced_by_idle_guard_failure():
     assert len(messages) == 1
     assert messages[0].request_id == request_id
     assert messages[0].state == CommandStatus.STATE_SUCCEEDED
-
-
-def test_recordings_clear_transient_request_identity():
-    original_request_id = new_request_id()
-    message = ComplexCommand()
-    message.command.command_id = CommandID.MOVE_ARM_TO_TAG
-    message.command.request_id = original_request_id
-
-    serialized = serialize_recorded_command(message)
-
-    assert serialized["command"]["request_id"] == ""
-    assert serialized["command"]["header"]["stamp"] == {
-        "sec": 0,
-        "nanosec": 0,
-    }
-    assert message.command.request_id == original_request_id
