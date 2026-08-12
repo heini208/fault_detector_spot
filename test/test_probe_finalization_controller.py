@@ -5,6 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from fault_detector_spot.application.commanding.request_identity import (
+    new_request_id,
+)
 from fault_detector_spot.application.coordinators.probe_finalization_controller import (
     ProbeFinalizationController,
 )
@@ -33,26 +36,27 @@ def controller():
 def test_finalization_lock_is_context_scoped():
     finalization = controller()
     context = SimpleNamespace(context_id="context")
+    request_id = new_request_id()
 
-    finalization._active["context"] = "request"
+    finalization._active["context"] = request_id
 
     assert (
         finalization.active_request_id(context)
-        == "request"
+        == request_id
     )
     assert finalization.require(
         context,
-        "request",
-    ) == "request"
+        request_id,
+    ) == request_id
 
-    with pytest.raises(RuntimeError, match="does not match"):
+    with pytest.raises(ValueError, match="UUID"):
         finalization.require(context, "other")
 
 
 def test_discard_context_releases_finalization_lock():
     finalization = controller()
     context = SimpleNamespace(context_id="context")
-    finalization._active["context"] = "request"
+    finalization._active["context"] = new_request_id()
 
     finalization.discard_context(context)
 
