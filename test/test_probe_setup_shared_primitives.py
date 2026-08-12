@@ -35,7 +35,8 @@ def test_probe_setup_uses_shared_setup_primitives():
         encoding="utf-8"
     )
 
-    assert "SetupContextAccess" in coordinator_source
+    assert "SetupContextAccess" not in coordinator_source
+    assert "self.setup_coordinator.resolve_context" in coordinator_source
     assert "ProbeRefinementController" in coordinator_source
     assert "ProbeFinalizationController" in coordinator_source
     assert "SetupOperationRegistry" in refinement_source

@@ -1,8 +1,6 @@
-"""Tests for shared setup bookkeeping primitives."""
+"""Tests for shared setup operation bookkeeping."""
 
 from uuid import uuid4
-
-import pytest
 
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
@@ -13,22 +11,9 @@ from fault_detector_spot.application.commanding.request_identity import (
 from fault_detector_spot.application.setup.setup_context import (
     SetupContextSnapshot,
 )
-from fault_detector_spot.application.setup.setup_context_access import (
-    SetupContextAccess,
-)
 from fault_detector_spot.application.setup.setup_operation_registry import (
     SetupOperationRegistry,
 )
-
-
-class FakeSetupCoordinator:
-    def __init__(self, contexts):
-        self.contexts = tuple(contexts)
-
-    def require_current(self, context):
-        if context not in self.contexts:
-            raise RuntimeError("stale")
-        return context
 
 
 def context(
@@ -92,40 +77,3 @@ def test_operation_registry_owns_listener_deduplication():
     registry.emit("ignored")
 
     assert received == ["status"]
-
-
-def test_context_access_resolves_domain_and_client():
-    navigation = context(
-        CommandOrigin.NAVIGATION_SETUP,
-        "navigation-ui",
-    )
-    probe = context(
-        CommandOrigin.PROBE_SETUP,
-        "probe-ui",
-    )
-    access = SetupContextAccess(
-        FakeSetupCoordinator((navigation, probe))
-    )
-
-    assert access.resolve(
-        navigation.context_id,
-        "navigation-ui",
-        CommandOrigin.NAVIGATION_SETUP,
-    ) == navigation
-    assert access.contexts_for(
-        CommandOrigin.NAVIGATION_SETUP
-    ) == (navigation,)
-
-    with pytest.raises(ValueError, match="does not own"):
-        access.resolve(
-            navigation.context_id,
-            "other-ui",
-            CommandOrigin.NAVIGATION_SETUP,
-        )
-
-    with pytest.raises(LookupError, match="Unknown setup context"):
-        access.resolve(
-            navigation.context_id,
-            "navigation-ui",
-            CommandOrigin.PROBE_SETUP,
-        )

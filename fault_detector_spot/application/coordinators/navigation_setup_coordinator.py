@@ -22,9 +22,6 @@ from fault_detector_spot.application.coordinators.setup_coordinator import (
 from fault_detector_spot.application.setup.setup_context import (
     SetupContextSnapshot,
 )
-from fault_detector_spot.application.setup.setup_context_access import (
-    SetupContextAccess,
-)
 from fault_detector_spot.application.setup.setup_operation_registry import (
     SetupOperationRegistry,
 )
@@ -95,7 +92,6 @@ class NavigationSetupCoordinator:
             command_factory or NavigationSetupCommandFactory()
         )
         self._lock = RLock()
-        self._context_access = SetupContextAccess(setup_coordinator)
         self._operations = SetupOperationRegistry()
         self._active_map = ""
         self._mode = MODE_NONE
@@ -119,7 +115,7 @@ class NavigationSetupCoordinator:
     ) -> SetupContextSnapshot:
         """Resolve a current context and verify client ownership."""
         try:
-            return self._context_access.resolve(
+            return self.setup_coordinator.resolve_context(
                 context_id,
                 client_id,
                 CommandOrigin.NAVIGATION_SETUP,
@@ -139,7 +135,7 @@ class NavigationSetupCoordinator:
             except LookupError:
                 pass
         try:
-            current = self._context_access.resolve(
+            current = self.setup_coordinator.resolve_context(
                 context.context_id,
                 context.client_id,
                 CommandOrigin.NAVIGATION_SETUP,
@@ -411,7 +407,7 @@ class NavigationSetupCoordinator:
 
     def close(self) -> None:
         """Close all owned contexts and discard specialized state."""
-        contexts = self._context_access.contexts_for(
+        contexts = self.setup_coordinator.contexts_for(
             CommandOrigin.NAVIGATION_SETUP
         )
         for context in contexts:

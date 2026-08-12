@@ -19,9 +19,6 @@ from fault_detector_spot.application.controllers.command_controller import (
 from fault_detector_spot.application.setup.setup_context import (
     SetupContextSnapshot,
 )
-from fault_detector_spot.application.setup.setup_context_access import (
-    SetupContextAccess,
-)
 from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
@@ -123,7 +120,6 @@ class ProbeSetupCoordinator:
             motion_command_factory or ProbeSetupMotionCommandFactory()
         )
         self._lock = RLock()
-        self._context_access = SetupContextAccess(setup_coordinator)
         self.refinement_controller = ProbeRefinementController(
             setup_coordinator=setup_coordinator,
             object_repository=self.object_repository,
@@ -168,7 +164,7 @@ class ProbeSetupCoordinator:
     ) -> SetupContextSnapshot:
         """Resolve one current context and enforce client ownership."""
         try:
-            context = self._context_access.resolve(
+            context = self.setup_coordinator.resolve_context(
                 context_id,
                 client_id,
                 CommandOrigin.PROBE_SETUP,
@@ -795,7 +791,6 @@ class ProbeSetupCoordinator:
         """Remove one probe motion status listener."""
         self.refinement_controller.remove_listener(listener)
 
-    @_serialized_transaction
     @_serialized_transaction
     def save_probe_point(
         self,

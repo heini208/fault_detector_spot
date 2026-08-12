@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from threading import RLock
 from typing import Callable, Dict
 
+from fault_detector_spot.application.commanding.client_identity import (
+    required_client_id,
+)
 from fault_detector_spot.application.commanding.command_request import (
     CommandRequest,
     RecordingPolicy,
@@ -23,6 +26,7 @@ from fault_detector_spot.application.setup.setup_context import (
     StaleSetupContext,
     new_context_id,
     setup_origin,
+    validate_context_id,
 )
 
 
@@ -71,6 +75,49 @@ class SetupCoordinator:
     def contexts(self):
         with self._lock:
             return tuple(self._contexts.values())
+
+    def contexts_for(self, origin) -> tuple:
+        """Return current contexts owned by one setup domain."""
+        expected_origin = setup_origin(origin)
+        with self._lock:
+            return tuple(
+                context
+                for context in self._contexts.values()
+                if context.origin is expected_origin
+            )
+
+    def resolve_context(
+        self,
+        context_id: str,
+        client_id: str,
+        origin=None,
+    ) -> SetupContextSnapshot:
+        """Resolve one current context and enforce ownership."""
+        normalized_context_id = validate_context_id(context_id)
+        normalized_client_id = required_client_id(client_id)
+        expected_origin = (
+            setup_origin(origin)
+            if origin is not None
+            else None
+        )
+        with self._lock:
+            context = self._contexts.get(normalized_context_id)
+            if (
+                context is None
+                or (
+                    expected_origin is not None
+                    and context.origin is not expected_origin
+                )
+            ):
+                raise LookupError(
+                    f"Unknown setup context: {normalized_context_id}"
+                )
+            self._require_current_locked(context)
+        if context.client_id != normalized_client_id:
+            raise ValueError(
+                "Client ID does not own the setup context"
+            )
+        return context
 
     def open_context(
         self,
