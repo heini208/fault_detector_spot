@@ -11,6 +11,7 @@ import rclpy
 from py_trees.behaviours import CheckBlackboardVariableValue
 from py_trees.common import ComparisonExpression
 from py_trees.decorators import EternalGuard, StatusToBlackboard
+from rclpy.clock import Clock, ClockType
 
 from fault_detector_spot.application.behaviour_tree import (
     BaseGetGoalTag,
@@ -62,6 +63,15 @@ def read_parameter(node, name, default):
     if not node.has_parameter(name):
         node.declare_parameter(name, default)
     return node.get_parameter(name).value
+
+
+def start_tree_ticking(tree, period_ms=50.0):
+    tree.timer = tree.node.create_timer(
+        period_ms / 1000.0,
+        tree.tick,
+        clock=Clock(clock_type=ClockType.STEADY_TIME),
+    )
+    return tree.timer
 
 
 def create_root(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
@@ -579,7 +589,7 @@ def main(args=None):
         rclpy.try_shutdown()
         sys.exit(1)
 
-    tree.tick_tock(period_ms=50.0)
+    start_tree_ticking(tree)
 
     slam_helper = get_helper_container(tree.node).slam_helper
     stop_mapping_behavior = StopMapping(

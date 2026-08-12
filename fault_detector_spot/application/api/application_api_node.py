@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 import os
-from threading import Event, RLock
+from threading import RLock
 from typing import Dict, Optional
 
 import rclpy
@@ -13,6 +13,7 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.task import Future
 from ament_index_python.packages import get_package_share_directory
 
 from fault_detector_spot.application.controllers.application_controller import (
@@ -86,7 +87,7 @@ _TERMINAL_STATES = frozenset({
 class _OperationExecution:
     goal_handle: object
     operation: ApplicationOperation
-    finished: Event = field(default_factory=Event)
+    finished: Future = field(default_factory=Future)
     state: Optional[ApplicationCommandState] = None
     cancellation_requested: bool = False
 
@@ -259,11 +260,21 @@ class ApplicationApiNode(Node):
             return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
-    @staticmethod
-    def _accept_cancellation(_goal_handle):
+    def _accept_cancellation(self, goal_handle):
+        with self._lock:
+            execution = next(
+                (
+                    candidate
+                    for candidate in self._executions.values()
+                    if candidate.goal_handle is goal_handle
+                ),
+                None,
+            )
+        if execution is not None:
+            self._request_execution_cancellation(execution)
         return CancelResponse.ACCEPT
 
-    def _execute_operation(self, goal_handle):
+    async def _execute_operation(self, goal_handle):
         goal = goal_handle.request
         operation = self.application_controller.prepare_operation(
             intent=goal.intent,
@@ -281,21 +292,13 @@ class ApplicationApiNode(Node):
         except Exception as exception:
             state = self._failure_state(execution, str(exception))
             execution.state = state
-            execution.finished.set()
+            if not execution.finished.done():
+                execution.finished.set_result(state)
 
-        while not execution.finished.wait(0.05):
-            if (
-                goal_handle.is_cancel_requested
-                and not execution.cancellation_requested
-            ):
-                execution.cancellation_requested = True
-                try:
-                    self.application_controller.cancel(
-                        operation.request.client_id,
-                        operation.request_id,
-                    )
-                except UnknownCommandRequest:
-                    pass
+        if goal_handle.is_cancel_requested:
+            self._request_execution_cancellation(execution)
+
+        await execution.finished
 
         state = execution.state or self._failure_state(
             execution,
@@ -312,6 +315,18 @@ class ApplicationApiNode(Node):
         with self._lock:
             self._executions.pop(operation.request_id, None)
         return result
+
+    def _request_execution_cancellation(self, execution):
+        if execution.cancellation_requested:
+            return
+        execution.cancellation_requested = True
+        try:
+            self.application_controller.cancel(
+                execution.operation.request.client_id,
+                execution.operation.request_id,
+            )
+        except UnknownCommandRequest:
+            pass
 
     def _cancel_operation(self, request, response):
         try:
@@ -359,7 +374,8 @@ class ApplicationApiNode(Node):
         feedback.state = state
         execution.goal_handle.publish_feedback(feedback)
         if status.state in _TERMINAL_STATES:
-            execution.finished.set()
+            if not execution.finished.done():
+                execution.finished.set_result(state)
 
     def _state_message(self, status):
         message = ApplicationCommandState()
