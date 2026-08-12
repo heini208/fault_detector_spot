@@ -115,7 +115,7 @@ def test_object_repository_adds_uncaptured_routine_once(tmp_path):
     stored = repository.add_routine("motor_b", routine)
     assert stored.get_routine("magnetic_scan") == routine
     assert repository.load("motor_b") == stored
-    assert stored.get_routine("magnetic_scan").reference_view is None
+    assert stored.get_routine("magnetic_scan").reference_views == []
     with pytest.raises(FileExistsError, match="already exists"):
         repository.add_routine("motor_b", routine)
 
@@ -143,25 +143,44 @@ def test_object_repository_appends_probe_points_without_overwrite(tmp_path):
         slot_index=0,
     )]
     repository.save(definition)
-    repository.add_probe_point("motor_a", "magnetic_scan", make_probe_point("point_b"))
+    repository.add_probe_point(
+        "motor_a",
+        "magnetic_scan",
+        make_probe_point("point_b"),
+    )
     stored = repository.add_probe_point(
-        "motor_a", "magnetic_scan", make_probe_point("point_a")
+        "motor_a",
+        "magnetic_scan",
+        make_probe_point("point_a"),
     )
     assert [
         point.probe_point_id
         for point in stored.get_routine("magnetic_scan").probe_points
     ] == ["point_b", "point_a"]
     assert repository.load("motor_a") == stored
-    before_duplicate = repository.get_object_path("motor_a").read_text(encoding="utf-8")
+    before_duplicate = repository.get_object_path("motor_a").read_text(
+        encoding="utf-8"
+    )
     with pytest.raises(FileExistsError, match="already exists"):
-        repository.add_probe_point("motor_a", "magnetic_scan", make_probe_point("point_a"))
-    assert repository.get_object_path("motor_a").read_text(encoding="utf-8") == before_duplicate
+        repository.add_probe_point(
+            "motor_a",
+            "magnetic_scan",
+            make_probe_point("point_a"),
+        )
+    assert repository.get_object_path("motor_a").read_text(
+        encoding="utf-8"
+    ) == before_duplicate
 
 
 def test_object_repository_deletes_routine_and_owned_datasets(tmp_path):
     repository = ObjectRepository(tmp_path)
     repository.save(make_object())
-    routine_dataset_dir = tmp_path / "motor_a" / "reference_datasets" / "magnetic_scan"
+    routine_dataset_dir = (
+        tmp_path
+        / "motor_a"
+        / "reference_datasets"
+        / "magnetic_scan"
+    )
     routine_dataset_dir.mkdir(parents=True)
     (routine_dataset_dir / "marker").write_text("", encoding="utf-8")
     result = repository.delete_routine("motor_a", "magnetic_scan")
@@ -181,7 +200,12 @@ def test_object_repository_rejects_missing_routine_deletion(tmp_path):
 def test_object_repository_deletes_complete_object_tree(tmp_path):
     repository = ObjectRepository(tmp_path)
     repository.save(make_object())
-    dataset_path = repository.get_object_dir("motor_a") / "reference_datasets" / "magnetic_scan" / "set"
+    dataset_path = (
+        repository.get_object_dir("motor_a")
+        / "reference_datasets"
+        / "magnetic_scan"
+        / "set"
+    )
     dataset_path.mkdir(parents=True)
     object_dir = repository.get_object_dir("motor_a")
     assert repository.delete_object("motor_a") is True
@@ -210,14 +234,24 @@ def test_map_repository_round_trip(tmp_path):
     restored = repository.load("laboratory")
     assert path.is_file()
     assert restored == original
-    assert repository.get_waypoint("laboratory", "motor_front") == original.waypoints[0]
-    assert repository.get_landmark("laboratory", "Tag_23") == original.localization_landmarks[0]
+    assert repository.get_waypoint(
+        "laboratory",
+        "motor_front",
+    ) == original.waypoints[0]
+    assert repository.get_landmark(
+        "laboratory",
+        "Tag_23",
+    ) == original.localization_landmarks[0]
 
 
 def test_map_repository_creates_complete_empty_map(tmp_path):
     repository = MapRepository(tmp_path)
     definition = repository.create_empty("laboratory")
-    serialized = json.loads(repository.get_map_path("laboratory").read_text(encoding="utf-8"))
+    serialized = json.loads(
+        repository.get_map_path("laboratory").read_text(
+            encoding="utf-8"
+        )
+    )
     assert definition.map_id == "laboratory"
     assert serialized == {
         "map_id": "laboratory",
@@ -230,7 +264,10 @@ def test_map_repository_creates_complete_empty_map(tmp_path):
 
 def test_map_repository_rejects_old_format(tmp_path):
     path = MapRepository(tmp_path).get_map_path("legacy")
-    path.write_text(json.dumps({"waypoints": [], "landmarks": []}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"waypoints": [], "landmarks": []}),
+        encoding="utf-8",
+    )
     with pytest.raises(KeyError):
         MapRepository(tmp_path).load("legacy")
 
