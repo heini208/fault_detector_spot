@@ -10,16 +10,12 @@ from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     InspectionObject,
     InspectionRoutine,
-    LocalizationLandmark,
-    MapDefinition,
-    ObjectApproach,
     PoseData,
     ProbePoint,
     QuaternionData,
     ReferenceTag,
     ReferenceView,
     Vector3Data,
-    Waypoint,
 )
 from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,
@@ -58,27 +54,11 @@ from fault_detector_spot.shared.geometry.transforms import (
     relative_pose,
 )
 
-
-def __getattr__(name):
-    if name == "MapRepository":
-        from fault_detector_spot.mapping.repository.map_repository import (
-            MapRepository,
-        )
-
-        return MapRepository
-    raise AttributeError(
-        f"module {__name__!r} has no attribute {name!r}"
-    )
-
 __all__ = [
     "ImagePoint",
     "InspectionObject",
     "InspectionRoutine",
     "LiveObjectPoseResolver",
-    "LocalizationLandmark",
-    "MapDefinition",
-    "MapRepository",
-    "ObjectApproach",
     "ObjectPoseState",
     "ObjectRepository",
     "PoseData",
@@ -96,7 +76,6 @@ __all__ = [
     "SensorDefinition",
     "SensorRepository",
     "Vector3Data",
-    "Waypoint",
     "compose_poses",
     "inverse_pose",
     "live_object_pose_to_msg",

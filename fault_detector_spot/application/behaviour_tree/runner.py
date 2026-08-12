@@ -252,7 +252,6 @@ def get_helper_container(node: rclpy.node.Node):
         helper_initializer = HelperInitializer(
             name="InitHelpers",
             node=node,
-            use_simulation=False,
         )
         helper_initializer.setup(timeout=10)
         helper_initializer.tick_once()

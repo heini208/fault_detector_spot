@@ -9,12 +9,11 @@ from fault_detector_spot.shared.persistence.runtime_paths import (
 class HelperInitializer(py_trees.behaviour.Behaviour):
     """Initialize the shared mapping and navigation runtime helpers."""
 
-    def __init__(self, name: str, node, use_simulation: bool = True):
+    def __init__(self, name: str, node):
         super().__init__(name)
         self.node = node
         self.slam_helper = None
         self.nav2_helper = None
-        self.use_simulation = use_simulation
 
     def setup(self, timeout):
         self.bb_client = self.attach_blackboard_client()

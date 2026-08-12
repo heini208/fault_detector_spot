@@ -17,7 +17,7 @@ class Nav2Helper:
         self,
         node,
         blackboard,
-        launch_file="nav2_sim_launch.py",
+        launch_file="nav2_lidar_launch.py",
         params_file=None,
     ):
         self.node = node

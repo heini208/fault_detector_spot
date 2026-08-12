@@ -22,9 +22,9 @@ from fault_detector_spot.application.coordinators.setup_coordinator import (
     SetupOperation,
     SetupOperationStatus,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.inspection.model.models import ReferenceTag
+from fault_detector_spot.mapping.model.models import (
     LocalizationLandmark,
-    ReferenceTag,
     Waypoint,
 )
 from fault_detector_spot.mapping.repository.map_artifact_store import (

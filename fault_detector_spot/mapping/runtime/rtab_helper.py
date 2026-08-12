@@ -30,9 +30,9 @@ class RTABHelper:
         self,
         node,
         blackboard,
-        nav2_launch_file="nav2_sim_launch.py",
-        nav2_params_file=None,
-        launch_file="rtab_mapping_launch.py",
+        nav2_launch_file="nav2_lidar_launch.py",
+        nav2_params_file="nav2_lidar_params.yaml",
+        launch_file="lidar_rtab_mapping_launch.py",
         maps_dir=None,
     ):
         self.node = node
