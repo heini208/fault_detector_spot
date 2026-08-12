@@ -1,8 +1,11 @@
 """Tests for immutable probe setup state rendering models."""
 
+import pytest
+
 from fault_detector_msgs.msg import ProbeSetupState
 
 from fault_detector_spot.ui.ros.probe_setup_state_adapter import (
+    ProbeRefinementSnapshot,
     probe_setup_state_to_view,
 )
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
@@ -51,6 +54,26 @@ def complete_state():
     return state
 
 
+def refinement_state():
+    state = complete_state()
+    state.refinement_active = True
+    state.refinement_stage = ProbeSetupState.REFINEMENT_STAGE_ALIGNMENT
+    pose(state.safe_approach_candidate_pose_object, 0.81)
+    pose(state.aligned_preapproach_candidate_pose_object, 0.61)
+    pose(state.probe_candidate_pose_object, 0.51)
+    state.safe_approach_motion_state = ProbeSetupState.MOTION_REACHED
+    state.alignment_motion_state = ProbeSetupState.MOTION_MOVING
+    state.probe_motion_state = ProbeSetupState.MOTION_NOT_TESTED
+    state.motion_pending = True
+    state.motion_request_id = "1" * 32
+    state.refinement_recovery_required = True
+    state.refinement_recovery_message = "Retract"
+    state.surface_verification_state = (
+        ProbeSetupState.SURFACE_VERIFICATION_CONVERGED
+    )
+    return state
+
+
 def test_transport_state_becomes_read_only_geometry_view():
     view = probe_setup_state_to_view(complete_state())
 
@@ -75,22 +98,14 @@ def test_empty_state_has_no_geometry_view():
     assert view.refinement is None
 
 
-def test_refinement_state_becomes_a_non_authoritative_ui_view():
-    state = complete_state()
-    state.refinement_active = True
-    state.refinement_stage = ProbeSetupState.REFINEMENT_STAGE_ALIGNMENT
-    pose(state.safe_approach_candidate_pose_object, 0.81)
-    pose(state.aligned_preapproach_candidate_pose_object, 0.61)
-    pose(state.probe_candidate_pose_object, 0.51)
-    state.safe_approach_motion_state = ProbeSetupState.MOTION_REACHED
-    state.alignment_motion_state = ProbeSetupState.MOTION_MOVING
-    state.probe_motion_state = ProbeSetupState.MOTION_NOT_TESTED
-    state.motion_pending = True
-    state.motion_request_id = "1" * 32
+def test_refinement_state_becomes_immutable_server_snapshot():
+    refinement = probe_setup_state_to_view(refinement_state()).refinement
 
-    refinement = probe_setup_state_to_view(state).refinement
-
-    assert refinement.active_stage is RefinementStage.ALIGNMENT
+    assert isinstance(refinement.snapshot, ProbeRefinementSnapshot)
+    assert (
+        refinement.snapshot.server_active_stage
+        is RefinementStage.ALIGNMENT
+    )
     assert refinement.candidate_pose(
         RefinementStage.SAFE_APPROACH
     ).position.x == 0.81
@@ -99,3 +114,24 @@ def test_refinement_state_becomes_a_non_authoritative_ui_view():
         is RefinementMotionState.MOVING
     )
     assert refinement.pending_motion.request_id == "1" * 32
+    assert refinement.recovery_required
+    assert refinement.surface_distance_verified
+
+
+def test_wizard_navigation_cannot_change_server_refinement_snapshot():
+    refinement = probe_setup_state_to_view(refinement_state()).refinement
+
+    refinement.active_stage = RefinementStage.SAFE_APPROACH
+    refinement.surface_distance_verified = False
+
+    assert refinement.active_stage is RefinementStage.SAFE_APPROACH
+    assert (
+        refinement.snapshot.server_active_stage
+        is RefinementStage.ALIGNMENT
+    )
+    assert refinement.surface_distance_verified
+
+    with pytest.raises(TypeError):
+        refinement.motion_states[RefinementStage.ALIGNMENT] = (
+            RefinementMotionState.FAILED
+        )

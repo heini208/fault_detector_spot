@@ -89,6 +89,16 @@ def test_inspection_ui_only_renders_probe_setup_state_and_intent():
     assert "_fail_pending_refinement_motion" not in source
 
 
+def test_probe_setup_ui_adapter_does_not_reconstruct_domain_session():
+    path = UI_ROOT / "ros" / "probe_setup_state_adapter.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert "ProbeRefinementSession" not in source
+    assert "PendingRefinementMotion" not in source
+    assert "ProbeRefinementSnapshot" in source
+    assert "MappingProxyType" in source
+
+
 def test_behaviour_tree_has_no_navigation_authoring_commands():
     root = UI_ROOT.parents[0]
     runner = root / "application" / "behaviour_tree" / "runner.py"
