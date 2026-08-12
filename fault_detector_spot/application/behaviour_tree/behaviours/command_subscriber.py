@@ -12,9 +12,6 @@ from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandRequest,
 )
-from fault_detector_spot.application.commanding.generic_complex_command import (
-    GenericCommand,
-)
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
     SemanticTag,
@@ -36,6 +33,10 @@ from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import
 )
 from fault_detector_spot.navigation.commands.base_move_relative_command import (
     BaseMoveRelativeCommand,
+)
+from fault_detector_spot.mapping.commands.map_command import MapCommand
+from fault_detector_spot.navigation.commands.waypoint_command import (
+    WaypointCommand,
 )
 from fault_detector_spot.navigation.commands.base_to_tag_command import (
     BaseToTagCommand,
@@ -65,6 +66,20 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.MOVE_BASE_TO_TAG: self._move_base_to_tag,
             CommandID.MOVE_BASE_RELATIVE: self._move_base_with_offset,
             CommandID.ESTOP_STATE: self._return_to_estop_state,
+        }
+        self._single_command_builders = {
+            CommandID.STOW_ARM: self._simple_command,
+            CommandID.READY_ARM: self._simple_command,
+            CommandID.STAND_UP: self._simple_command,
+            CommandID.TOGGLE_GRIPPER: self._simple_command,
+            CommandID.CLOSE_GRIPPER: self._simple_command,
+            CommandID.STOP_BASE: self._simple_command,
+            CommandID.STOP_MAPPING: self._simple_command,
+            CommandID.WAIT_TIME: self._wait_command,
+            CommandID.START_SLAM: self._map_command,
+            CommandID.START_LOCALIZATION: self._map_command,
+            CommandID.SWAP_MAP: self._map_command,
+            CommandID.MOVE_TO_WAYPOINT: self._waypoint_command,
         }
         self.pending_msgs = []
         self.last_received_time = None
@@ -203,34 +218,45 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 "server is installed"
             )
         builder = self._combination_command_builders.get(command_id)
-        commands = (
-            builder(command)
-            if builder is not None
-            else [self.semantic_command_to_generic_command(command)]
-        )
+        if builder is not None:
+            commands = builder(command)
+        else:
+            builder = self._single_command_builders.get(command_id)
+            if builder is None:
+                raise ValueError(
+                    f"No execution command builder for {command_id.value}"
+                )
+            commands = [builder(command)]
         self.logger.info(f"Received {command_id.value} command")
         return commands
 
-    def semantic_command_to_generic_command(
-        self,
-        command: SemanticCommand,
-    ) -> GenericCommand:
-        generic_command = GenericCommand(
+    def _simple_command(self, command: SemanticCommand) -> SimpleCommand:
+        return SimpleCommand(
             command_id=command.command_id,
             stamp=self._create_command_stamp(),
         )
-        generic_command.duration = command.wait_time
-        if command.tag is not None:
-            generic_command.tag_id = command.tag.id
-            generic_command.goal_pose = stamped_pose_to_message(command.tag.pose)
-        else:
-            generic_command.goal_pose = stamped_pose_to_message(command.offset)
-        generic_command.orientation_mode = command.orientation_mode
-        generic_command.offset = stamped_pose_to_message(command.offset)
-        generic_command.map_name = command.map_name
-        generic_command.waypoint_name = command.waypoint_name
-        generic_command.inspection = command.inspection
-        return generic_command
+
+    def _wait_command(self, command: SemanticCommand) -> TimerCommand:
+        return TimerCommand(
+            command_id=CommandID.WAIT_TIME,
+            stamp=self._create_command_stamp(),
+            duration=command.wait_time,
+        )
+
+    def _map_command(self, command: SemanticCommand) -> MapCommand:
+        return MapCommand(
+            command_id=command.command_id,
+            stamp=self._create_command_stamp(),
+            map_name=command.map_name,
+        )
+
+    def _waypoint_command(self, command: SemanticCommand) -> WaypointCommand:
+        return WaypointCommand(
+            command_id=CommandID.MOVE_TO_WAYPOINT,
+            stamp=self._create_command_stamp(),
+            map_name=command.map_name,
+            waypoint_name=command.waypoint_name,
+        )
 
     def is_estop_command(self, command: SemanticCommand) -> bool:
         return command.command_id == CommandID.EMERGENCY_CANCEL

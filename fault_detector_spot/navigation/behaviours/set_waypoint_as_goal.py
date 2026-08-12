@@ -3,9 +3,7 @@
 import py_trees
 from geometry_msgs.msg import PoseStamped
 
-from fault_detector_spot.application.commanding.generic_complex_command import (
-    GenericCommand,
-)
+from fault_detector_spot.navigation.commands.waypoint_command import WaypointCommand
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
 from fault_detector_spot.shared.geometry.transforms import pose_data_to_pose
 from fault_detector_spot.shared.persistence.runtime_paths import default_map_root
@@ -47,7 +45,7 @@ class SetWaypointAsGoal(py_trees.behaviour.Behaviour):
         ):
             self.feedback_message = "No last_command on blackboard"
             return py_trees.common.Status.FAILURE
-        command: GenericCommand = self.blackboard.last_command
+        command: WaypointCommand = self.blackboard.last_command
         if not command.waypoint_name or not command.map_name:
             self.feedback_message = "No waypoint_name or map_name in last_command"
             return py_trees.common.Status.FAILURE
