@@ -9,19 +9,30 @@ from fault_detector_spot.application.coordinators.probe_setup_coordinator import
 
 def test_probe_setup_uses_shared_setup_primitives():
     package_root = Path(__file__).parents[1]
-    path = (
+    coordinator_path = (
         package_root
         / "fault_detector_spot/application/coordinators/"
         "probe_setup_coordinator.py"
     )
-    source = path.read_text(encoding="utf-8")
+    refinement_path = (
+        package_root
+        / "fault_detector_spot/application/coordinators/"
+        "probe_refinement_controller.py"
+    )
+    coordinator_source = coordinator_path.read_text(
+        encoding="utf-8"
+    )
+    refinement_source = refinement_path.read_text(
+        encoding="utf-8"
+    )
 
-    assert "SetupContextAccess" in source
-    assert "SetupOperationRegistry" in source
-    assert "self._pending" not in source
-    assert "self._motion_listeners" not in source
-    assert "self._drafts" in source
-    assert "self._context_locks" in source
-    assert "self._finalizations" in source
+    assert "SetupContextAccess" in coordinator_source
+    assert "ProbeRefinementController" in coordinator_source
+    assert "SetupOperationRegistry" in refinement_source
+    assert "self._pending" not in coordinator_source
+    assert "self._motion_listeners" not in coordinator_source
+    assert "self._drafts" in coordinator_source
+    assert "self._context_locks" in coordinator_source
+    assert "self._finalizations" in coordinator_source
 
     assert ProbeSetupCoordinator.__name__ == "ProbeSetupCoordinator"

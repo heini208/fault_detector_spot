@@ -1029,12 +1029,6 @@ class ProbeSetupCoordinator:
 
 
 
-    @staticmethod
-
-    @staticmethod
-
-    @staticmethod
-
     def _require_idle(
         self,
         context: SetupContextSnapshot,

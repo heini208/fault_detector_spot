@@ -2,18 +2,18 @@
 
 import inspect
 
+from fault_detector_spot.application.api.probe_setup_motion_api import (
+    ProbeSetupMotionApi,
+)
+from fault_detector_spot.application.coordinators.probe_refinement_controller import (
+    ProbeRefinementController,
+)
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementStage,
-)
-from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
-    ProbeSetupCoordinator,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
     ProbeMotionKind,
     ProbeMotionRequest,
-)
-from fault_detector_spot.application.api.probe_setup_motion_api import (
-    ProbeSetupMotionApi,
 )
 
 
@@ -24,7 +24,7 @@ def test_surface_distance_correction_is_internal_relative_motion():
 
     assert motion.relative
     assert (
-        ProbeSetupCoordinator._motion_stage(motion.kind)
+        ProbeRefinementController.motion_stage(motion.kind)
         is RefinementStage.PROBE
     )
 
