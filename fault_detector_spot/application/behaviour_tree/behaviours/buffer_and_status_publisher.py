@@ -4,9 +4,7 @@ from py_trees.common import Status
 
 
 class BufferStatusPublisher(py_trees.behaviour.Behaviour):
-    """
-    Publish correlated internal status for the active semantic request.
-    """
+    """Publish correlated internal status for the active semantic request."""
 
     def __init__(self, name: str = "CmdStatusPub"):
         super().__init__(name)
@@ -17,21 +15,28 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         self.node = None
 
     def setup(self, **kwargs) -> bool:
-        self.node = kwargs['node']
+        self.node = kwargs["node"]
         self.blackboard = self.attach_blackboard_client()
         self.structured_status_pub = self.node.create_publisher(
             CommandStatus,
-            'fault_detector/_internal/command_status',
+            "fault_detector/_internal/command_status",
             10,
         )
-        # make sure keys exist
-        self.blackboard.register_key("command_buffer", access=py_trees.common.Access.READ)
-        self.blackboard.register_key("command_tree_status", access=py_trees.common.Access.READ)
-        self.blackboard.register_key("last_command", access=py_trees.common.Access.READ)
+        self.blackboard.register_key(
+            "command_buffer",
+            access=py_trees.common.Access.READ,
+        )
+        self.blackboard.register_key(
+            "command_tree_status",
+            access=py_trees.common.Access.READ,
+        )
+        self.blackboard.register_key(
+            "last_command",
+            access=py_trees.common.Access.READ,
+        )
         return True
 
     def update(self) -> Status:
-        # read from the blackboard
         if self.blackboard.command_buffer is None:
             buffer_list = []
         else:
@@ -50,6 +55,12 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         if signature != self.last_structured_status:
             self.structured_status_pub.publish(structured_status)
             self.last_structured_status = signature
+            if structured_status.request_id:
+                self.node.get_logger().info(
+                    "BT status "
+                    f"{structured_status.request_id}: "
+                    f"{structured_status.detail}"
+                )
             if structured_status.state in (
                 CommandStatus.STATE_SUCCEEDED,
                 CommandStatus.STATE_FAILED,
@@ -82,15 +93,34 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         status = self.blackboard.command_tree_status
         if status == Status.RUNNING:
             message.state = CommandStatus.STATE_RUNNING
+            message.detail = (
+                f"BT executing {message.command_id}"
+                if message.command_id
+                else "BT executing command"
+            )
         elif status == Status.SUCCESS:
             if buffered_command_count > 0:
                 message.state = CommandStatus.STATE_RUNNING
+                message.detail = (
+                    "BT command step succeeded; "
+                    f"{buffered_command_count} buffered step(s) remain"
+                )
             else:
                 message.state = CommandStatus.STATE_SUCCEEDED
+                message.detail = "BT request completed"
         elif status == Status.FAILURE:
             message.state = CommandStatus.STATE_FAILED
+            message.detail = (
+                f"BT execution failed for {message.command_id}"
+                if message.command_id
+                else "BT execution failed"
+            )
         else:
             message.state = CommandStatus.STATE_IDLE
+            if message.request_id:
+                message.detail = "BT selected request; waiting for execution"
+            else:
+                message.detail = "BT idle"
         return message
 
     def _current_request_buffer_count(self, buffer_list):

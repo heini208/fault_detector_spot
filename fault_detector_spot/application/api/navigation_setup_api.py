@@ -31,7 +31,6 @@ from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 
 
 _RUNTIME_OPERATIONS = {
-    NavigationSetupIntent.OPERATION_SELECT_MAP: CommandID.SWAP_MAP,
     NavigationSetupIntent.OPERATION_START_MAPPING: CommandID.START_SLAM,
     NavigationSetupIntent.OPERATION_START_LOCALIZATION: (
         CommandID.START_LOCALIZATION
@@ -59,12 +58,14 @@ class NavigationSetupApi:
         self.coordinator = coordinator
         self._lock = RLock()
         self._executions = {}
+        self._early_states = {}
         self._callback_group = ReentrantCallbackGroup()
         self._transaction_handlers = {
             NavigationSetupIntent.OPERATION_CREATE_MAP_DEFINITION: (
                 self._create_map_definition
             ),
             NavigationSetupIntent.OPERATION_DELETE_MAP: self._delete_map,
+            NavigationSetupIntent.OPERATION_SELECT_MAP: self._select_map,
             NavigationSetupIntent.OPERATION_ADD_CURRENT_WAYPOINT: (
                 self._add_current_waypoint
             ),
@@ -154,7 +155,7 @@ class NavigationSetupApi:
                     snapshot,
                     operation_code,
                     NavigationSetupState.STATE_SUCCEEDED,
-                    "Navigation setup transaction succeeded",
+                    self._transaction_detail(operation_code),
                 ),
             )
         except Exception as exception:
@@ -175,13 +176,16 @@ class NavigationSetupApi:
         return handler(context, intent)
 
     def _create_map_definition(self, context, intent):
-        return self.coordinator.create_map_definition(
+        return self.coordinator.create_and_select_map(
             context,
             intent.map_name,
         )
 
     def _delete_map(self, context, intent):
         return self.coordinator.delete_map(context, intent.map_name)
+
+    def _select_map(self, context, intent):
+        return self.coordinator.select_map(context, intent.map_name)
 
     def _add_current_waypoint(self, context, intent):
         return self.coordinator.add_current_waypoint(
@@ -227,6 +231,21 @@ class NavigationSetupApi:
         )
         with self._lock:
             self._executions[operation.request_id] = execution
+            early_state = self._early_states.pop(
+                operation.request_id,
+                None,
+            )
+        if early_state is not None:
+            execution.state = early_state
+            feedback = ExecuteNavigationSetup.Feedback()
+            feedback.state = early_state
+            goal_handle.publish_feedback(feedback)
+            if early_state.state in {
+                NavigationSetupState.STATE_SUCCEEDED,
+                NavigationSetupState.STATE_FAILED,
+                NavigationSetupState.STATE_CANCELLED,
+            }:
+                execution.finished.set()
         self._wait_for_runtime_execution(execution)
         return self._runtime_result(execution)
 
@@ -250,11 +269,22 @@ class NavigationSetupApi:
         state = execution.state
         with self._lock:
             self._executions.pop(execution.request_id, None)
+        if state is None:
+            state = self._state(
+                self.coordinator.snapshot(execution.context),
+                execution.operation_code,
+                NavigationSetupState.STATE_FAILED,
+                "Runtime operation ended without a state",
+                execution.request_id,
+            )
         result = ExecuteNavigationSetup.Result()
         result.state = state
         if state.state == NavigationSetupState.STATE_SUCCEEDED:
             execution.goal_handle.succeed()
-        elif state.state == NavigationSetupState.STATE_CANCELLED:
+        elif (
+            state.state == NavigationSetupState.STATE_CANCELLED
+            and execution.goal_handle.is_cancel_requested
+        ):
             execution.goal_handle.canceled()
         else:
             execution.goal_handle.abort()
@@ -269,10 +299,16 @@ class NavigationSetupApi:
             status.request_id,
         )
         self._state_publisher.publish(state)
+        self.node.get_logger().info(
+            "Navigation setup request "
+            f"{status.request_id}: {status.state.value}: "
+            f"{status.detail}"
+        )
         with self._lock:
             execution = self._executions.get(status.request_id)
-        if execution is None:
-            return
+            if execution is None:
+                self._early_states[status.request_id] = state
+                return
         execution.state = state
         feedback = ExecuteNavigationSetup.Feedback()
         feedback.state = state
@@ -358,6 +394,32 @@ class NavigationSetupApi:
         message.waypoint_names = list(snapshot.waypoint_names)
         message.landmark_names = list(snapshot.landmark_names)
         return message
+
+    @staticmethod
+    def _transaction_detail(operation_code: int) -> str:
+        details = {
+            NavigationSetupIntent.OPERATION_CREATE_MAP_DEFINITION: (
+                "Map created and selected"
+            ),
+            NavigationSetupIntent.OPERATION_SELECT_MAP: "Map selected",
+            NavigationSetupIntent.OPERATION_DELETE_MAP: "Map deleted",
+            NavigationSetupIntent.OPERATION_ADD_CURRENT_WAYPOINT: (
+                "Waypoint saved"
+            ),
+            NavigationSetupIntent.OPERATION_ADD_VISIBLE_TAG_LANDMARK: (
+                "Landmark saved"
+            ),
+            NavigationSetupIntent.OPERATION_DELETE_WAYPOINT: (
+                "Waypoint deleted"
+            ),
+            NavigationSetupIntent.OPERATION_DELETE_LANDMARK: (
+                "Landmark deleted"
+            ),
+        }
+        return details.get(
+            int(operation_code),
+            "Navigation setup transaction succeeded",
+        )
 
     @staticmethod
     def _validate_operation(operation_code: int) -> None:

@@ -195,6 +195,32 @@ class NavigationSetupCoordinator:
         self.map_repository.create_empty(map_id)
         return self._advance(context)
 
+    def create_and_select_map(
+        self,
+        context: SetupContextSnapshot,
+        map_name: str,
+    ) -> NavigationSetupSnapshot:
+        """Create one map definition and select it for later runtime use."""
+        self._require_runtime_stopped("creating a map")
+        created = self.create_map_definition(context, map_name)
+        return self.select_map(created.context, map_name)
+
+    def select_map(
+        self,
+        context: SetupContextSnapshot,
+        map_name: str,
+    ) -> NavigationSetupSnapshot:
+        """Select persisted map metadata while runtime navigation is stopped."""
+        self.setup_coordinator.require_current(context)
+        self._require_idle(context)
+        self._require_runtime_stopped("selecting a map")
+        map_id = self._map_id(map_name)
+        if not self.map_repository.exists(map_id):
+            raise FileNotFoundError(f"Unknown map: {map_id}")
+        with self._lock:
+            self._active_map = map_id
+        return self._advance(context)
+
     def delete_map(
         self,
         context: SetupContextSnapshot,
@@ -327,7 +353,7 @@ class NavigationSetupCoordinator:
             CommandID.START_SLAM,
             CommandID.START_LOCALIZATION,
         }:
-            self._require_active_map(normalized_map)
+            normalized_map = self._require_active_map(normalized_map)
         if command_id == CommandID.SWAP_MAP:
             map_id = self._map_id(normalized_map)
             if not self.map_repository.exists(map_id):
@@ -484,6 +510,14 @@ class NavigationSetupCoordinator:
         if mode not in {MODE_MAPPING, MODE_LOCALIZATION}:
             raise RuntimeError(
                 "Mapping or localization must be active before saving poses"
+            )
+
+    def _require_runtime_stopped(self, operation: str) -> None:
+        with self._lock:
+            mode = self._mode
+        if mode != MODE_NONE:
+            raise RuntimeError(
+                f"Stop mapping or localization before {operation}"
             )
 
     @staticmethod

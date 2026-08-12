@@ -4,6 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from threading import RLock
+import time
 from typing import Callable, Deque, List, Optional, Tuple
 
 from fault_detector_msgs.msg import (
@@ -87,6 +88,9 @@ class CommandController:
         self._active: Optional[CommandRequest[ComplexCommand]] = None
         self._listeners: List[StatusListener] = []
         self._known_request_ids = set()
+        self._active_acknowledged = False
+        self._active_dispatched_monotonic = None
+        self._ack_timeout_sec = 3.0
         self._dispatch_publisher = node.create_publisher(
             CommandRequestMessage,
             dispatch_topic,
@@ -169,6 +173,7 @@ class CommandController:
                 self._emit_locked(
                     normalized,
                     CommandControllerState.QUEUED,
+                    self._queued_detail_locked(normalized),
                 )
                 self._dispatch_next_locked()
         return normalized.request_id
@@ -226,6 +231,7 @@ class CommandController:
             ):
                 return False
             request = self._active
+            self._active_acknowledged = True
             if message.state == CommandStatus.STATE_RUNNING:
                 self._emit_locked(
                     request,
@@ -251,6 +257,8 @@ class CommandController:
             else:
                 return False
             self._active = None
+            self._active_acknowledged = False
+            self._active_dispatched_monotonic = None
             self._emit_locked(
                 request,
                 state,
@@ -276,6 +284,32 @@ class CommandController:
 
     def _retry_dispatch(self) -> None:
         with self._lock:
+            if (
+                self._active is not None
+                and not self._active_acknowledged
+                and self._active_dispatched_monotonic is not None
+                and (
+                    time.monotonic() - self._active_dispatched_monotonic
+                    >= self._ack_timeout_sec
+                )
+            ):
+                request = self._active
+                self._active = None
+                self._active_acknowledged = False
+                self._active_dispatched_monotonic = None
+                detail = (
+                    "Behavior tree did not acknowledge the dispatched "
+                    f"{request.command.command.command_id} request within "
+                    f"{self._ack_timeout_sec:.1f} s"
+                )
+                self.node.get_logger().error(
+                    f"{detail} [{request.request_id}]"
+                )
+                self._emit_locked(
+                    request,
+                    CommandControllerState.FAILED,
+                    detail,
+                )
             self._dispatch_next_locked()
 
     def _dispatch_consumer_ready_locked(self) -> bool:
@@ -297,6 +331,8 @@ class CommandController:
         if not self._dispatch_consumer_ready_locked():
             return
         self._active = self._queue.popleft()
+        self._active_acknowledged = False
+        self._active_dispatched_monotonic = None
         self._publish_dispatch_locked(self._active)
 
     def _dispatch_emergency_locked(
@@ -308,6 +344,8 @@ class CommandController:
             interrupted.append(self._active)
         interrupted.extend(self._queue)
         self._active = None
+        self._active_acknowledged = False
+        self._active_dispatched_monotonic = None
         self._queue.clear()
         for pending in interrupted:
             self._emit_locked(
@@ -335,10 +373,30 @@ class CommandController:
             self.node.get_clock().now().to_msg()
         )
         self._dispatch_publisher.publish(message)
+        self._active_dispatched_monotonic = time.monotonic()
+        command_id = request.command.command.command_id
+        detail = (
+            f"Published {command_id} to behavior tree; "
+            "waiting for BT receipt"
+        )
+        self.node.get_logger().info(
+            f"{detail} [{request.request_id}]"
+        )
         self._emit_locked(
             request,
             CommandControllerState.DISPATCHED,
+            detail,
         )
+
+    def _queued_detail_locked(self, request) -> str:
+        if self._active is not None:
+            return (
+                "Queued behind active request "
+                f"{self._active.request_id}"
+            )
+        if not self._dispatch_consumer_ready_locked():
+            return "Queued; waiting for behavior-tree command consumer"
+        return "Queued for behavior-tree dispatch"
 
     def _emit_locked(
         self,
