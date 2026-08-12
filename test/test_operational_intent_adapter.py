@@ -78,8 +78,8 @@ def test_translates_probe_execution_selection():
     command = operational_intent_to_command(intent)
 
     assert command.command.command_id == CommandID.EXECUTE_PROBE_POINT.value
-    assert command.inspection.object.object_id == "motor_a"
-    assert command.inspection.routine.routine_id == "magnetic_scan"
+    assert command.inspection.object_id == "motor_a"
+    assert command.inspection.routine_id == "magnetic_scan"
     assert command.inspection.probe_point_id == "bearing_1"
 
 

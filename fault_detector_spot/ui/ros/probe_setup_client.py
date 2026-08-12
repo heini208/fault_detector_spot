@@ -239,7 +239,6 @@ class ProbeSetupClient(QObject):
             or self._surface_goal_handles
             or self._finalization_goal_handles
             or self._capture_goal_handles
-            or self._capture_goal_handles
         ):
             self.request_rejected.emit(
                 "Another probe setup operation is already in progress"

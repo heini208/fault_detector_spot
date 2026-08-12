@@ -10,14 +10,14 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from fault_detector_spot.application.commanding.client_identity import (
     required_client_id,
 )
+from fault_detector_spot.application.coordinators.probe_surface_verification_runner import (
+    ProbeSurfaceVerificationRunner,
+)
 from fault_detector_spot.application.setup.setup_context import (
     validate_context_id,
 )
 from fault_detector_spot.inspection.setup.probe_surface_verification import (
     SurfaceVerificationState,
-)
-from fault_detector_spot.inspection.setup.probe_surface_verification_runner import (
-    ProbeSurfaceVerificationRunner,
 )
 
 

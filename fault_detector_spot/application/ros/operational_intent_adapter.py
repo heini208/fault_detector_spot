@@ -123,7 +123,7 @@ def operational_intent_to_command(
     command.wait_time = float(intent.duration_sec)
     command.map_name = intent.map_name.strip()
     command.waypoint_name = intent.waypoint_name.strip()
-    command.inspection.object.object_id = intent.object_id.strip()
-    command.inspection.routine.routine_id = intent.routine_id.strip()
+    command.inspection.object_id = intent.object_id.strip()
+    command.inspection.routine_id = intent.routine_id.strip()
     command.inspection.probe_point_id = intent.probe_point_id.strip()
     return command

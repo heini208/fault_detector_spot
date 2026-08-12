@@ -20,7 +20,6 @@ class CommandID(str, Enum):
     STOP_MAPPING = "stop_mapping"
     SWAP_MAP = "swap_map"
     MOVE_TO_WAYPOINT = "move_to_waypoint"
-    MOVE_INTO_TAG_RANGE = "move_into_tag_range"
     MOVE_BASE_TO_TAG = "move_base_to_tag"
     MOVE_BASE_RELATIVE = "move_base_relative"
     EXECUTE_PROBE_POINT = "execute_probe_point"

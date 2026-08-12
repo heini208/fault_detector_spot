@@ -1,6 +1,6 @@
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import InspectionCommand
-from geometry_msgs.msg import PoseStamped, Quaternion
+from geometry_msgs.msg import PoseStamped
 from .simple_command import SimpleCommand
 
 
@@ -47,16 +47,15 @@ class GenericCommand(SimpleCommand):
             p = self.goal_pose.pose.position
             parts.append(f"pose=({p.x:.2f}, {p.y:.2f}, {p.z:.2f})")
         if self.inspection is not None:
-            object_id = self.inspection.object.object_id
-            routine_id = self.inspection.routine.routine_id
-            probe_point_id = self.inspection.probe_point_id
-            if object_id:
-                parts.append(f"object_id={object_id!r}")
-            if routine_id:
-                parts.append(f"routine_id={routine_id!r}")
-            if probe_point_id:
-                parts.append(f"probe_point_id={probe_point_id!r}")
-            if self.inspection.replace_existing:
-                parts.append("replace_existing=True")
+            if self.inspection.object_id:
+                parts.append(f"object_id={self.inspection.object_id!r}")
+            if self.inspection.routine_id:
+                parts.append(
+                    f"routine_id={self.inspection.routine_id!r}"
+                )
+            if self.inspection.probe_point_id:
+                parts.append(
+                    f"probe_point_id={self.inspection.probe_point_id!r}"
+                )
 
         return "<GenericCommand " + " ".join(parts) + ">"
