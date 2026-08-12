@@ -30,14 +30,17 @@ def test_probe_setup_operation_validation_uses_actual_handlers():
     api._validate_operation(ProbeSetupIntent.OPERATION_OPEN)
     api._validate_operation(ProbeSetupIntent.OPERATION_REFRESH)
 
+    assert not hasattr(
+        ProbeSetupIntent,
+        "OPERATION_APPROVE_PROBE_POSE",
+    )
+    assert not hasattr(
+        ProbeSetupIntent,
+        "OPERATION_SAVE_PROBE_POINT",
+    )
+
     with pytest.raises(ValueError):
-        api._validate_operation(
-            ProbeSetupIntent.OPERATION_APPROVE_PROBE_POSE
-        )
-    with pytest.raises(ValueError):
-        api._validate_operation(
-            ProbeSetupIntent.OPERATION_SAVE_PROBE_POINT
-        )
+        api._validate_operation(255)
 
 
 def test_finalization_terminal_state_matches_action_outcome():

@@ -54,8 +54,8 @@ def test_semantic_command_rejects_invalid_selection_ids(
 def test_topic_command_is_rejected_until_action_server_exists():
     message = ComplexCommand()
     message.command.command_id = CommandID.EXECUTE_PROBE_POINT
-    message.inspection.object.object_id = "motor_a"
-    message.inspection.routine.routine_id = "magnetic_scan"
+    message.inspection.object_id = "motor_a"
+    message.inspection.routine_id = "magnetic_scan"
     message.inspection.probe_point_id = "bearing_1"
     subscriber = CommandSubscriber()
 
