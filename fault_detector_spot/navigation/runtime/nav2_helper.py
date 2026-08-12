@@ -1,16 +1,17 @@
 import os
-import signal
 import subprocess
 import time
 
 import py_trees
 from ament_index_python.packages import get_package_share_directory
 
+from fault_detector_spot.shared.ros.process_lifecycle import (
+    terminate_process_group,
+)
+
 
 class Nav2Helper:
-    """
-    Helper for managing Nav2 lifecycle and nested launch processes.
-    """
+    """Helper for managing Nav2 lifecycle and nested launch processes."""
 
     def __init__(
         self,
@@ -93,26 +94,29 @@ class Nav2Helper:
         )
         return proc
 
-    def stop(self):
+    def stop(self) -> bool:
         proc = getattr(
             self.bb,
             "nav2_launch_process",
             None,
         )
-        if proc:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-                proc.wait(timeout=5)
-                self.node.get_logger().info(
-                    "[Nav2Helper] Stopped Nav2"
-                )
-            except Exception as exception:
-                self.node.get_logger().warn(
-                    "[Nav2Helper] Failed to stop Nav2: "
-                    f"{exception}"
-                )
-            finally:
-                self.bb.nav2_launch_process = None
+        if proc is None:
+            return True
+
+        if not terminate_process_group(
+            proc,
+            interrupt_timeout_sec=5.0,
+            terminate_timeout_sec=2.0,
+            kill_timeout_sec=1.0,
+        ):
+            self.node.get_logger().error(
+                "[Nav2Helper] Nav2 process did not terminate"
+            )
+            return False
+
+        self.bb.nav2_launch_process = None
+        self.node.get_logger().info("[Nav2Helper] Stopped Nav2")
+        return True
 
     def is_running(self) -> bool:
         proc = getattr(

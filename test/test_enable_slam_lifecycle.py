@@ -1,4 +1,4 @@
-"""Tests for finite mapping-start lifecycle."""
+"""Tests for finite nonblocking mapping-start lifecycle."""
 
 from types import SimpleNamespace
 
@@ -12,6 +12,30 @@ class FakeHelper:
         self.running = False
         self.start_calls = 0
         self.change_calls = []
+        self._operation = None
+        self._result = None
+        self._error = None
+
+    def begin_runtime_operation(self, name, callback, *args):
+        if self._operation is not None:
+            return False
+        self._operation = name
+        try:
+            self._result = callback(*args)
+        except Exception as exception:
+            self._error = exception
+        return True
+
+    def poll_runtime_operation(self, name):
+        assert name == self._operation
+        self._operation = None
+        if self._error is not None:
+            error = self._error
+            self._error = None
+            raise error
+        result = self._result
+        self._result = None
+        return result
 
     def change_map(self, map_name):
         self.change_calls.append(map_name)
@@ -22,7 +46,7 @@ class FakeHelper:
         self.running = True
         return SimpleNamespace(poll=lambda: None)
 
-    def is_rtabmap_running(self):
+    def is_mapping_running(self):
         return self.running
 
 
@@ -47,13 +71,12 @@ def test_mapping_start_finishes_when_launch_process_is_running():
     assert behavior.feedback_message == "Mapping enabled"
 
 
-def test_mapping_start_does_not_wait_for_map_topic_data():
+def test_mapping_start_does_not_block_for_runtime_operation():
     helper = FakeHelper()
     behavior = _behavior(helper)
 
-    assert not hasattr(behavior, "map_received_after_launch")
     assert behavior.update() == py_trees.common.Status.RUNNING
-    assert behavior.update() == py_trees.common.Status.SUCCESS
+    assert behavior._launch_requested
 
 
 def test_mapping_start_synchronizes_requested_map_before_launch():
