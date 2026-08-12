@@ -36,7 +36,10 @@ def test_mapping_start_projects_mapping_while_request_is_inflight():
     )
 
     assert (
-        NavigationSetupClient._display_mode(message)
+        NavigationSetupClient._display_mode(
+            message,
+            NavigationSetupState.MODE_NONE,
+        )
         == NavigationSetupState.MODE_MAPPING
     )
 
@@ -49,7 +52,10 @@ def test_localization_start_projects_localization_while_inflight():
     )
 
     assert (
-        NavigationSetupClient._display_mode(message)
+        NavigationSetupClient._display_mode(
+            message,
+            NavigationSetupState.MODE_NONE,
+        )
         == NavigationSetupState.MODE_LOCALIZATION
     )
 
@@ -62,7 +68,10 @@ def test_stop_projects_none_while_request_is_inflight():
     )
 
     assert (
-        NavigationSetupClient._display_mode(message)
+        NavigationSetupClient._display_mode(
+            message,
+            NavigationSetupState.MODE_MAPPING,
+        )
         == NavigationSetupState.MODE_NONE
     )
 
@@ -75,7 +84,10 @@ def test_failed_start_reverts_to_authoritative_mode():
     )
 
     assert (
-        NavigationSetupClient._display_mode(message)
+        NavigationSetupClient._display_mode(
+            message,
+            NavigationSetupState.MODE_MAPPING,
+        )
         == NavigationSetupState.MODE_NONE
     )
 
@@ -88,7 +100,26 @@ def test_failed_stop_reverts_to_authoritative_running_mode():
     )
 
     assert (
-        NavigationSetupClient._display_mode(message)
+        NavigationSetupClient._display_mode(
+            message,
+            NavigationSetupState.MODE_NONE,
+        )
+        == NavigationSetupState.MODE_MAPPING
+    )
+
+
+def test_rejected_stop_during_start_keeps_mapping_projection():
+    message = _state(
+        NavigationSetupIntent.OPERATION_STOP_MAPPING,
+        NavigationSetupState.STATE_FAILED,
+        NavigationSetupState.MODE_NONE,
+    )
+
+    assert (
+        NavigationSetupClient._display_mode(
+            message,
+            NavigationSetupState.MODE_MAPPING,
+        )
         == NavigationSetupState.MODE_MAPPING
     )
 

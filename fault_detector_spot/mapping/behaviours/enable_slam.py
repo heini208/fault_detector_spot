@@ -1,11 +1,10 @@
-import typing
-
 import py_trees
 from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
-from nav_msgs.msg import OccupancyGrid
 
 
 class EnableSLAM(py_trees.behaviour.Behaviour):
+    """Start RTAB-Map mapping and finish once its launch process is alive."""
+
     def __init__(self, slam_helper: RTABHelper, name: str = "EnableSLAM"):
         super().__init__(name)
         self.slam_helper = slam_helper
@@ -18,22 +17,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
             "last_command",
             access=py_trees.common.Access.READ,
         )
-
-        self.launched_initialized = False
-        self.map_received_after_launch = False
-
-    def setup(self, **kwargs: typing.Any) -> None:
-        self.node = kwargs.get("node")
-        self.sub = self.node.create_subscription(
-            OccupancyGrid,
-            "/map",
-            self._map_callback,
-            10,
-        )
-
-    def _map_callback(self, msg: OccupancyGrid):
-        if self.launched_initialized:
-            self.map_received_after_launch = True
+        self._launch_requested = False
 
     def _requested_map(self):
         command = getattr(self.blackboard, "last_command", None)
@@ -55,7 +39,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
         return self.slam_helper.change_map(requested_map) is not False
 
     def update(self) -> py_trees.common.Status:
-        if not self.launched_initialized:
+        if not self._launch_requested:
             try:
                 if not self._synchronize_requested_map():
                     self.feedback_message = (
@@ -69,30 +53,37 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
                 return py_trees.common.Status.FAILURE
 
         if not self.blackboard.active_map_name:
-            self.feedback_message = "No active map set, cannot enable SLAM"
+            self.feedback_message = (
+                "No active map set, cannot enable SLAM"
+            )
             return py_trees.common.Status.FAILURE
 
-        if not self.launched_initialized:
+        if not self._launch_requested:
             self.feedback_message = "Launching Mapping"
-            self.launched_initialized = True
-            self.map_received_after_launch = False
             try:
-                self.slam_helper.start_mapping_from_existing()
+                process = self.slam_helper.start_mapping_from_existing()
             except Exception as exception:
-                self.launched_initialized = False
                 self.feedback_message = (
                     f"Failed to launch mapping: {exception}"
                 )
                 return py_trees.common.Status.FAILURE
+
+            if process is None:
+                self.feedback_message = (
+                    "Mapping launch did not return a process"
+                )
+                return py_trees.common.Status.FAILURE
+
+            self._launch_requested = True
             return py_trees.common.Status.RUNNING
 
-        if (
-            self.slam_helper.is_slam_running()
-            and self.map_received_after_launch
-        ):
-            self.feedback_message = "Mapping enabled (SLAM running)"
-            self.launched_initialized = False
+        if self.slam_helper.is_rtabmap_running():
+            self._launch_requested = False
+            self.feedback_message = "Mapping enabled"
             return py_trees.common.Status.SUCCESS
 
-        self.feedback_message = "Waiting for map updates..."
-        return py_trees.common.Status.RUNNING
+        self._launch_requested = False
+        self.feedback_message = (
+            "Mapping launch process stopped before becoming active"
+        )
+        return py_trees.common.Status.FAILURE
