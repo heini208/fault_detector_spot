@@ -5,12 +5,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fault_detector_msgs.msg import ComplexCommand
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     RecordingPolicy,
+)
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
 )
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
@@ -115,14 +117,14 @@ class FakeMotionStateSource:
 
 class FakeMotionCommandFactory:
     def absolute(self, _target, _mounting, _tag):
-        command = ComplexCommand()
-        command.command.command_id = CommandID.MOVE_ARM_TO_TAG.value
-        return command
+        return SemanticCommand(
+            command_id=CommandID.MOVE_ARM_TO_TAG,
+        )
 
     def relative(self, _frame, _translation, _pitch, _yaw):
-        command = ComplexCommand()
-        command.command.command_id = CommandID.MOVE_ARM_RELATIVE.value
-        return command
+        return SemanticCommand(
+            command_id=CommandID.MOVE_ARM_RELATIVE,
+        )
 
     @staticmethod
     def frame_id(_frame, _sensor_id, _tag_id):
@@ -307,8 +309,8 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
     )
     assert operation.operation.request.context_id == state.context.context_id
     assert (
-        operation.operation.request.command.command.command_id
-        == CommandID.MOVE_ARM_TO_TAG.value
+        operation.operation.request.command.command_id
+        is CommandID.MOVE_ARM_TO_TAG
     )
     with pytest.raises(RuntimeError, match="active motion"):
         probe.prepare_motion(state.context, operation.motion)
