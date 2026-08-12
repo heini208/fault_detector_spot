@@ -153,12 +153,13 @@ class ProbeRefinementController:
         )
         return operation
 
-    def tracked_operation(self, operation, motion):
+    def require_operation(self, operation):
+        """Return registry metadata for one prepared probe motion."""
         tracked = self._operations.owned(
             operation.request_id,
             operation.context,
         )
-        if tracked is None or tracked.payload[0] != motion:
+        if tracked is None:
             raise ValueError(
                 "Probe setup motion was not prepared here"
             )

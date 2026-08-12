@@ -67,18 +67,6 @@ def _serialized_transaction(method):
 
 
 @dataclass(frozen=True)
-class ProbeSetupMotionOperation:
-    """Bind one setup motion primitive to its shared command request."""
-
-    operation: SetupOperation
-    motion: ProbeMotionRequest
-
-    @property
-    def request_id(self) -> str:
-        return self.operation.request_id
-
-
-@dataclass(frozen=True)
 class ProbeSetupMotionStatus:
     """Expose one correlated probe setup motion transition."""
 
@@ -731,7 +719,7 @@ class ProbeSetupCoordinator:
         motion: ProbeMotionRequest,
         surface_verification_request_id: str = "",
         finalization_request_id: str = "",
-    ) -> ProbeSetupMotionOperation:
+    ) -> SetupOperation:
         """Prepare one motion primitive for the shared command lane."""
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
@@ -741,28 +729,22 @@ class ProbeSetupCoordinator:
                 finalization_request_id,
             )
             draft = self._selected_draft(context)
-            operation = self.refinement_controller.prepare_motion(
+            return self.refinement_controller.prepare_motion(
                 context,
                 draft,
                 motion,
             )
-            return ProbeSetupMotionOperation(operation, motion)
 
     def submit_motion(
         self,
-        operation: ProbeSetupMotionOperation,
+        operation: SetupOperation,
     ) -> str:
         """Submit one prepared motion through the shared command lane."""
-        if not isinstance(operation, ProbeSetupMotionOperation):
-            raise TypeError("Expected a ProbeSetupMotionOperation")
-        tracked = self.refinement_controller.tracked_operation(
-            operation.operation,
-            operation.motion,
-        )
+        if not isinstance(operation, SetupOperation):
+            raise TypeError("Expected a SetupOperation")
+        tracked = self.refinement_controller.require_operation(operation)
         try:
-            return self.setup_coordinator.submit(
-                operation.operation
-            )
+            return self.setup_coordinator.submit(operation)
         except Exception:
             with self._context_lock(tracked.context):
                 draft = self._draft(tracked.context)
@@ -970,6 +952,5 @@ class ProbeSetupCoordinator:
 
 __all__ = [
     "ProbeSetupCoordinator",
-    "ProbeSetupMotionOperation",
     "ProbeSetupMotionStatus",
 ]

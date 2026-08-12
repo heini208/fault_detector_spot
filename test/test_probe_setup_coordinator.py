@@ -217,7 +217,7 @@ def approve_all(probe, command_controller, state):
     )
     probe.submit_motion(operation)
     probe.motion_state_source.pose = pose(0.6)
-    command_controller.succeed(operation.operation.request)
+    command_controller.succeed(operation.request)
     context = probe.context(state.context.context_id, "probe-ui")
     state = probe.approve_aligned_pose(context)
 
@@ -302,22 +302,27 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
         ),
     )
 
-    assert operation.operation.request.origin is CommandOrigin.PROBE_SETUP
+    assert operation.request.origin is CommandOrigin.PROBE_SETUP
     assert (
-        operation.operation.request.recording_policy
+        operation.request.recording_policy
         is RecordingPolicy.EXCLUDE
     )
-    assert operation.operation.request.context_id == state.context.context_id
+    assert operation.request.context_id == state.context.context_id
     assert (
-        operation.operation.request.command.command_id
+        operation.request.command.command_id
         is CommandID.MOVE_ARM_TO_TAG
     )
     with pytest.raises(RuntimeError, match="active motion"):
-        probe.prepare_motion(state.context, operation.motion)
+        probe.prepare_motion(
+            state.context,
+            ProbeMotionRequest(
+                kind=ProbeMotionKind.MOVE_SAFE_APPROACH
+            ),
+        )
 
     probe.submit_motion(operation)
     probe.motion_state_source.pose = pose(0.6)
-    command_controller.succeed(operation.operation.request)
+    command_controller.succeed(operation.request)
     current = probe.context(state.context.context_id, "probe-ui")
     completed = probe.snapshot(current)
 
