@@ -100,3 +100,13 @@ def test_legacy_command_wire_wrappers_are_removed():
     assert "ComplexCommand" not in request_adapter.read_text(
         encoding="utf-8"
     )
+
+
+def test_runtime_python_has_no_legacy_ros_command_types():
+    offenders = []
+    for path in ROOT.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if "ComplexCommand" in source or "BasicCommand" in source:
+            offenders.append(str(path.relative_to(ROOT)))
+
+    assert offenders == []

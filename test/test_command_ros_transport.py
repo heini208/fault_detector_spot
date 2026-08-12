@@ -179,7 +179,7 @@ def test_invalid_ros_submission_is_rejected_before_queueing():
     RosCommandTransport(node, controller)
     request = make_request(CommandID.STAND_UP)
     message = command_request_to_message(request)
-    message.command.command_id = ""
+    message.payload.command_id = ""
 
     accepted = node.subscriptions[
         "fault_detector/_internal/commands/submit"

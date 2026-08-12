@@ -143,8 +143,8 @@ class RosCommandTransport:
 
     def _reject_message(self, message, detail) -> None:
         request_id = getattr(message, "request_id", "")
-        command = getattr(message, "command", None)
-        command_id = getattr(command, "command_id", "")
+        payload = getattr(message, "payload", None)
+        command_id = getattr(payload, "command_id", "")
         self.node.get_logger().error(
             f"Rejected command request: {detail}"
         )

@@ -3,7 +3,10 @@ import rclpy
 from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
-from fault_detector_msgs.msg import ComplexCommand
+
+from fault_detector_spot.application.commanding.generic_complex_command import (
+    GenericCommand,
+)
 
 # GoalStatus constants for ROS 2 Humble
 STATUS_UNKNOWN = 0
@@ -40,7 +43,7 @@ class NavigateToGoalPose(py_trees.behaviour.Behaviour):
         self._action_client = ActionClient(self.node, NavigateToPose, "/navigate_to_pose")
 
     def initialise(self):
-        last_command: ComplexCommand = self.blackboard.last_command
+        last_command: GenericCommand = self.blackboard.last_command
         if last_command is None or last_command.goal_pose is None:
             self.feedback_message = "No goal_pose in last_command"
             return
@@ -72,7 +75,7 @@ class NavigateToGoalPose(py_trees.behaviour.Behaviour):
         self._result_future = goal_handle.get_result_async()
 
     def update(self):
-        last_command: ComplexCommand = self.blackboard.last_command
+        last_command: GenericCommand = self.blackboard.last_command
         if last_command is None or last_command.goal_pose is None:
             self.feedback_message = "No goal_pose to navigate to"
             return py_trees.common.Status.FAILURE

@@ -296,8 +296,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         status = CommandStatus()
         status.header.stamp = self._create_command_stamp()
         status.request_id = request_id
-        command = getattr(message, "command", None)
-        status.command_id = getattr(command, "command_id", "")
+        payload = getattr(message, "payload", None)
+        status.command_id = getattr(payload, "command_id", "")
         status.state = CommandStatus.STATE_FAILED
         status.detail = detail
         status.buffered_command_count = 0

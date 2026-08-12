@@ -26,7 +26,7 @@ def command_request_from_message(
         context_id=message.context_id,
         origin=message.origin,
         recording_policy=message.recording_policy,
-        command=semantic_command_from_message(message.command),
+        command=semantic_command_from_message(message.payload),
     )
     return request
 
@@ -47,7 +47,7 @@ def command_request_to_message(
     message.context_id = request.context_id
     message.origin = int(request.origin)
     message.recording_policy = int(request.recording_policy)
-    message.command = semantic_command_to_message(request.command)
+    message.payload = semantic_command_to_message(request.command)
     return message
 
 

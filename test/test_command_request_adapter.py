@@ -48,12 +48,12 @@ def test_wire_payload_does_not_duplicate_request_identity():
     message = command_request_to_message(make_request())
 
     assert message.request_id
-    assert not hasattr(message.command, "request_id")
+    assert not hasattr(message.payload, "request_id")
 
 
 def test_adapter_rejects_empty_command_id():
     message = command_request_to_message(make_request())
-    message.command.command_id = ""
+    message.payload.command_id = ""
 
     with pytest.raises(ValueError, match="Command ID"):
         command_request_from_message(message)
