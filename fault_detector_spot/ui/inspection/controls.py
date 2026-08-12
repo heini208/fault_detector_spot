@@ -141,7 +141,7 @@ class InspectionControls(UIControlHelper):
         self._selected_surface_target = None
         self._calculated_probe_setup = None
         self._probe_setup = None
-        self._refinement_session = None
+        self._refinement_presentation = None
         self._tf_buffer = None
         self._tf_listener = None
         self._sensor_definitions = {}
@@ -156,7 +156,6 @@ class InspectionControls(UIControlHelper):
         self._command_state = ApplicationCommandState.STATE_UNSPECIFIED
         self._buffered_command_count = 0
         self._last_command_completion_monotonic = 0.0
-        self._refinement_workflow_active = False
         self._distance_failure_requires_retraction = False
         self._retraction_failed = False
         self._editing_probe_point_id = None
@@ -897,7 +896,6 @@ class InspectionControls(UIControlHelper):
         self.clear_reference_pixel_button.clicked.connect(
             self.handle_clear_reference_pixel
         )
-
         self.reference_surface_frame_value_label = (
             self._fixed_readout_label("—", 210)
         )
@@ -1226,9 +1224,6 @@ class InspectionControls(UIControlHelper):
             field.textChanged.connect(
                 self._update_save_probe_point_state
             )
-        self.surface_distance_tolerance_field.textChanged.connect(
-            self._handle_surface_tolerance_changed
-        )
         self.refinement_dialog = ProbeRefinementDialog(self)
 
     def _make_workspace_splitter(self):
@@ -1676,7 +1671,7 @@ class InspectionControls(UIControlHelper):
         for stage_buttons in self.refinement_buttons.values():
             for button in stage_buttons.values():
                 button.setEnabled(False)
-        if self._refinement_workflow_active:
+        if self._refinement_presentation is not None:
             self._refresh_refinement_dialog()
 
     def _update_probe_setup_status_widgets(self):
@@ -2030,17 +2025,16 @@ class InspectionControls(UIControlHelper):
         self._request_geometry_update()
 
     def _handle_target_distance_changed(self):
-        session = self._refinement_session
+        presentation = self._refinement_presentation
         if (
-            self._refinement_workflow_active
-            and session is not None
-            and session.recovery_required
+            presentation is not None
+            and presentation.recovery_required
         ):
             self.reference_target_distance_field.setText(
-                f"{session.target_surface_distance_m:.3f}"
+                f"{presentation.target_surface_distance_m:.3f}"
             )
             self.reference_preapproach_distance_field.setText(
-                f"{session.aligned_preapproach_distance_m:.3f}"
+                f"{presentation.aligned_preapproach_distance_m:.3f}"
             )
             if hasattr(self, "refinement_dialog"):
                 self.refinement_dialog.target_distance_field.setText(
@@ -2058,25 +2052,25 @@ class InspectionControls(UIControlHelper):
         self._request_geometry_update()
 
     def _handle_dialog_distances_changed(self):
-        session = self._refinement_session
+        presentation = self._refinement_presentation
         old_target = (
-            session.target_surface_distance_m
-            if session is not None
+            presentation.target_surface_distance_m
+            if presentation is not None
             else self._distance_value(
                 self.reference_target_distance_field,
                 "Target surface distance",
             )
         )
         old_aligned = (
-            session.aligned_preapproach_distance_m
-            if session is not None
+            presentation.aligned_preapproach_distance_m
+            if presentation is not None
             else self._distance_value(
                 self.reference_preapproach_distance_field,
                 "Aligned pre-approach distance",
             )
         )
         try:
-            if session is not None and session.recovery_required:
+            if presentation is not None and presentation.recovery_required:
                 raise ValueError("Retract before changing surface distances")
             target = self._distance_value(
                 self.refinement_dialog.target_distance_field,
@@ -2114,13 +2108,6 @@ class InspectionControls(UIControlHelper):
         self._refresh_refinement_dialog()
         return True
 
-    def _handle_surface_tolerance_changed(self, _value=None):
-        session = self._refinement_session
-        if session is None:
-            return
-        session.surface_distance_verified = False
-        self._update_save_probe_point_state()
-        self._refresh_refinement_dialog()
 
     @property
     def selected_surface_point(self):
@@ -2181,8 +2168,6 @@ class InspectionControls(UIControlHelper):
         self._selected_surface_target = None
         self._calculated_probe_setup = None
         self._probe_setup = None
-        if not self._refinement_workflow_active:
-            self._refinement_session = None
         self.reference_target_x_value_label.setText("—")
         self.reference_target_y_value_label.setText("—")
         self.reference_target_z_value_label.setText("—")
@@ -2310,20 +2295,20 @@ class InspectionControls(UIControlHelper):
         )
 
     def handle_start_probe_refinement(self):
-        """Request one server-owned supervised refinement session."""
+        """Request one server-owned supervised refinement workflow."""
         intent = ProbeSetupIntent()
         intent.operation = ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT
         return self._submit_probe_setup(intent) is not None
 
     def request_close_refinement_workflow(self):
-        """Request closure of the server-owned refinement session."""
-        session = self._refinement_session
-        if session is not None and session.pending_motion is not None:
+        """Request closure of the server-owned refinement workflow."""
+        presentation = self._refinement_presentation
+        if presentation is not None and presentation.pending_motion is not None:
             self.refinement_recovery_status_label.setText(
                 "Wait for the active movement and settle check."
             )
             return False
-        if session is not None and session.recovery_required:
+        if presentation is not None and presentation.recovery_required:
             self.refinement_recovery_status_label.setText(
                 "Retract Without Saving is required before closing."
             )
@@ -2333,13 +2318,12 @@ class InspectionControls(UIControlHelper):
         return self._submit_probe_setup(intent) is not None
 
     def _finish_refinement_workflow_close(self):
-        self._refinement_workflow_active = False
         self._probe_motion_pending = False
         self._distance_failure_requires_retraction = False
         self._retraction_failed = False
         if hasattr(self, "inspection_workspace_splitter"):
             self.inspection_workspace_splitter.setEnabled(True)
-        self._refinement_session = None
+        self._refinement_presentation = None
         self.refinement_summary_status_label.setText(
             "Refinement workflow closed. Persisted data was preserved."
         )
@@ -2347,13 +2331,13 @@ class InspectionControls(UIControlHelper):
 
     def handle_refinement_back(self):
         """Navigate backward without commanding movement."""
-        session = self._require_refinement_session()
-        if session.recovery_required:
+        presentation = self._require_refinement_presentation()
+        if presentation.recovery_required:
             self.refinement_recovery_status_label.setText(
                 "Retract Without Saving before navigating backward."
             )
             return False
-        index = ProbeRefinementDialog.STAGES.index(session.active_stage)
+        index = ProbeRefinementDialog.STAGES.index(presentation.active_stage)
         if index == 0:
             return False
         self.refinement_dialog.show_stage(
@@ -2363,9 +2347,9 @@ class InspectionControls(UIControlHelper):
 
     def handle_refinement_next(self):
         """Advance only when the current pose has been approved."""
-        session = self._require_refinement_session()
-        stage = session.active_stage
-        if not session.stage_is_approved(stage):
+        presentation = self._require_refinement_presentation()
+        stage = presentation.active_stage
+        if not presentation.stage_is_approved(stage):
             self.refinement_recovery_status_label.setText(
                 "Approve the current stage before continuing."
             )
@@ -2379,21 +2363,21 @@ class InspectionControls(UIControlHelper):
         return True
 
     def _handle_refinement_stage_changed(self, stage):
-        session = self._refinement_session
-        if session is None:
+        presentation = self._refinement_presentation
+        if presentation is None:
             return
-        session.active_stage = stage
+        presentation.active_stage = stage
         self.refinement_recovery_status_label.setText("")
 
     def _refresh_refinement_dialog(self):
-        session = self._refinement_session
-        if session is None or not hasattr(self, "refinement_dialog"):
+        presentation = self._refinement_presentation
+        if presentation is None or not hasattr(self, "refinement_dialog"):
             return
         for stage in RefinementStage:
             labels = self.refinement_dialog.pose_comparison_labels[stage]
-            calculated = session.calculated_pose(stage)
-            candidate = session.candidate_pose(stage)
-            approved = session.approved_pose(stage)
+            calculated = presentation.calculated_pose(stage)
+            candidate = presentation.candidate_pose(stage)
+            approved = presentation.approved_pose(stage)
             labels["calculated"].setText(self._pose_summary(calculated))
             labels["candidate"].setText(self._pose_summary(candidate))
             labels["approved"].setText(
@@ -2419,37 +2403,37 @@ class InspectionControls(UIControlHelper):
             labels["status"].setText(status)
 
         self.approach_step_status_label.setText(
-            session.motion_states[RefinementStage.SAFE_APPROACH].value
+            presentation.motion_states[RefinementStage.SAFE_APPROACH].value
         )
         self.alignment_step_status_label.setText(
-            session.motion_states[RefinementStage.ALIGNMENT].value
+            presentation.motion_states[RefinementStage.ALIGNMENT].value
         )
-        probe_state = session.motion_states[RefinementStage.PROBE].value
-        if session.surface_distance_verified:
+        probe_state = presentation.motion_states[RefinementStage.PROBE].value
+        if presentation.surface_distance_verified:
             probe_state = "Surface Distance Verified"
         self.probe_step_status_label.setText(probe_state)
 
-        pending = session.pending_motion is not None
-        current = session.active_stage
+        pending = presentation.pending_motion is not None
+        current = presentation.active_stage
         recovery_only = self._retraction_failed
         safe_page = current == RefinementStage.SAFE_APPROACH
         alignment_page = current == RefinementStage.ALIGNMENT
         probe_page = current == RefinementStage.PROBE
         safe_reached = (
-            session.motion_states[RefinementStage.SAFE_APPROACH]
+            presentation.motion_states[RefinementStage.SAFE_APPROACH]
             == RefinementMotionState.REACHED
         )
-        safe_adjustable = session.motion_states[
+        safe_adjustable = presentation.motion_states[
             RefinementStage.SAFE_APPROACH
         ] in (
             RefinementMotionState.REACHED,
             RefinementMotionState.FAILED,
         )
         alignment_reached = (
-            session.motion_states[RefinementStage.ALIGNMENT]
+            presentation.motion_states[RefinementStage.ALIGNMENT]
             == RefinementMotionState.REACHED
         )
-        alignment_adjustable = session.motion_states[
+        alignment_adjustable = presentation.motion_states[
             RefinementStage.ALIGNMENT
         ] in (
             RefinementMotionState.REACHED,
@@ -2486,9 +2470,9 @@ class InspectionControls(UIControlHelper):
         )
         self.test_surface_distance_button.setEnabled(test_enabled)
         self.retract_without_saving_button.setEnabled(
-            session.recovery_required and not pending
+            presentation.recovery_required and not pending
         )
-        distances_editable = not pending and not session.recovery_required
+        distances_editable = not pending and not presentation.recovery_required
         self.reference_target_distance_field.setEnabled(distances_editable)
         self.reference_preapproach_distance_field.setEnabled(
             distances_editable
@@ -2515,12 +2499,12 @@ class InspectionControls(UIControlHelper):
         self.refinement_dialog.back_button.setEnabled(
             current != RefinementStage.SAFE_APPROACH
             and not pending
-            and not session.recovery_required
+            and not presentation.recovery_required
         )
         self.refinement_dialog.next_button.setVisible(not probe_page)
-        approved = session.approved_pose(current)
+        approved = presentation.approved_pose(current)
         self.refinement_dialog.next_button.setEnabled(
-            session.stage_is_approved(current) and not pending
+            presentation.stage_is_approved(current) and not pending
         )
         self.refinement_dialog.next_button.setText(
             "Keep Existing and Continue"
@@ -2528,15 +2512,15 @@ class InspectionControls(UIControlHelper):
                 approved is not None
                 and self._poses_equivalent(
                     approved,
-                    session.candidate_pose(current),
+                    presentation.candidate_pose(current),
                 )
             )
             else "Next"
         )
         self.refinement_dialog.close_button.setEnabled(not pending)
-        if session.recovery_required:
+        if presentation.recovery_required:
             self.refinement_recovery_status_label.setText(
-                session.recovery_message
+                presentation.recovery_message
             )
         self._update_save_probe_point_state()
 
@@ -2593,26 +2577,26 @@ class InspectionControls(UIControlHelper):
         angle_error = 2.0 * math.acos(dot)
         return position_error <= 1e-9 and angle_error <= 1e-9
 
-    def _require_refinement_session(self):
-        session = self._refinement_session
-        if session is None or not self._refinement_workflow_active:
+    def _require_refinement_presentation(self):
+        presentation = self._refinement_presentation
+        if presentation is None:
             raise RuntimeError("Probe refinement workflow is not active")
-        return session
+        return presentation
 
     def handle_move_to_approach_pose(self):
-        session = self._require_refinement_session()
+        presentation = self._require_refinement_presentation()
         return self._send_refinement_motion(
             RefinementStage.SAFE_APPROACH,
             "safe approach candidate",
-            session.candidate_pose(RefinementStage.SAFE_APPROACH),
+            presentation.candidate_pose(RefinementStage.SAFE_APPROACH),
         )
 
     def handle_move_to_aligned_pose(self):
-        session = self._require_refinement_session()
+        presentation = self._require_refinement_presentation()
         return self._send_refinement_motion(
             RefinementStage.ALIGNMENT,
             "aligned pre-approach candidate",
-            session.candidate_pose(RefinementStage.ALIGNMENT),
+            presentation.candidate_pose(RefinementStage.ALIGNMENT),
         )
 
     def handle_move_to_probe_pose(self):
@@ -2627,7 +2611,7 @@ class InspectionControls(UIControlHelper):
 
     def handle_refine_pose(self, stage, action):
         try:
-            session = self._require_refinement_session()
+            presentation = self._require_refinement_presentation()
             stage_value = {
                 "approach": RefinementStage.SAFE_APPROACH,
                 "alignment": RefinementStage.ALIGNMENT,
@@ -2637,9 +2621,9 @@ class InspectionControls(UIControlHelper):
                     "Probe geometry is refined only at the aligned "
                     "pre-approach pose"
                 )
-            if session.active_stage != stage_value:
+            if presentation.active_stage != stage_value:
                 raise ValueError("The requested refinement stage is inactive")
-            if session.motion_states[stage_value] not in (
+            if presentation.motion_states[stage_value] not in (
                 RefinementMotionState.REACHED,
                 RefinementMotionState.FAILED,
             ):
@@ -2739,9 +2723,9 @@ class InspectionControls(UIControlHelper):
         return False
 
     def _move_transient_probe_pose(self, probe_pose_object, label):
-        session = self._require_refinement_session()
+        presentation = self._require_refinement_presentation()
         return self._send_refinement_motion(
-            session.active_stage,
+            presentation.active_stage,
             label,
             probe_pose_object,
         )
@@ -3217,6 +3201,7 @@ class InspectionControls(UIControlHelper):
         self._selected_surface_target = view.surface_target
         self._calculated_probe_setup = view.calculated_setup
         self._probe_setup = view.setup
+        self._synchronize_refinement_presentation(view.refinement)
 
         if not state.has_reference_pixel:
             self._clear_selected_surface_point()
@@ -3305,26 +3290,26 @@ class InspectionControls(UIControlHelper):
             f"{state.aligned_preapproach_distance_m:.3f}"
         )
         self._display_probe_setup("Authoritative")
-        self._synchronize_refinement_session(view.refinement)
 
-    def _synchronize_refinement_session(self, refinement):
-        was_active = self._refinement_workflow_active
-        if refinement is None:
-            if was_active:
+    def _synchronize_refinement_presentation(self, presentation):
+        previous = self._refinement_presentation
+        if presentation is None:
+            if previous is not None:
                 self._finish_refinement_workflow_close()
             return
-        self._refinement_session = refinement
-        self._refinement_workflow_active = True
-        self._probe_motion_pending = refinement.pending_motion is not None
+        if previous is not None:
+            presentation.active_stage = previous.active_stage
+        self._refinement_presentation = presentation
+        self._probe_motion_pending = presentation.pending_motion is not None
         self._distance_failure_requires_retraction = (
-            refinement.recovery_required
+            presentation.recovery_required
         )
         self._retraction_failed = False
         self.inspection_workspace_splitter.setEnabled(False)
-        if not was_active:
+        if previous is None:
             self._hand_depth_history.clear()
             self.refinement_dialog.open_for_stage(
-                refinement.active_stage
+                presentation.active_stage
             )
         self._refresh_refinement_dialog()
 

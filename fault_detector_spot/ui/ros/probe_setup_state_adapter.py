@@ -118,10 +118,6 @@ class ProbeRefinementPresentation:
     def surface_distance_verified(self) -> bool:
         return self._snapshot.surface_distance_verified
 
-    @surface_distance_verified.setter
-    def surface_distance_verified(self, _value: bool) -> None:
-        return
-
     @property
     def candidate_poses(self) -> Mapping:
         return self._snapshot.candidate_poses

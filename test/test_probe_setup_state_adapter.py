@@ -122,7 +122,8 @@ def test_wizard_navigation_cannot_change_server_refinement_snapshot():
     refinement = probe_setup_state_to_view(refinement_state()).refinement
 
     refinement.active_stage = RefinementStage.SAFE_APPROACH
-    refinement.surface_distance_verified = False
+    with pytest.raises(AttributeError):
+        refinement.surface_distance_verified = False
 
     assert refinement.active_stage is RefinementStage.SAFE_APPROACH
     assert (

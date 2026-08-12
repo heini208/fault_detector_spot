@@ -99,6 +99,24 @@ def test_probe_setup_ui_adapter_does_not_reconstruct_domain_session():
     assert "MappingProxyType" in source
 
 
+def test_inspection_refinement_state_is_presentation_only():
+    paths = (
+        UI_ROOT / "inspection" / "controls.py",
+        UI_ROOT / "inspection" / "finalizing_controls.py",
+    )
+    source = "".join(path.read_text(encoding="utf-8") for path in paths)
+
+    assert "self._refinement_session" not in source
+    assert "_refinement_workflow_active" not in source
+    assert "_require_refinement_session" not in source
+    assert "_synchronize_refinement_session" not in source
+    assert "_handle_surface_tolerance_changed" not in source
+    assert "surface_distance_verified = False" not in source
+    assert "_refinement_presentation" in source
+    assert "_require_refinement_presentation" in source
+    assert "_synchronize_refinement_presentation" in source
+
+
 def test_behaviour_tree_has_no_navigation_authoring_commands():
     root = UI_ROOT.parents[0]
     runner = root / "application" / "behaviour_tree" / "runner.py"

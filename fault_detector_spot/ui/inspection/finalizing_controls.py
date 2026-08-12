@@ -117,13 +117,13 @@ class FinalizingInspectionControls(InspectionControls):
 
     def _refresh_refinement_dialog(self):
         super()._refresh_refinement_dialog()
-        session = self._refinement_session
-        if session is None:
+        presentation = self._refinement_presentation
+        if presentation is None:
             return
-        pending = session.pending_motion is not None
-        probe_page = session.active_stage is RefinementStage.PROBE
+        pending = presentation.pending_motion is not None
+        probe_page = presentation.active_stage is RefinementStage.PROBE
         alignment_reached = (
-            session.motion_states[RefinementStage.ALIGNMENT]
+            presentation.motion_states[RefinementStage.ALIGNMENT]
             is RefinementMotionState.REACHED
         )
         self.retract_without_saving_button.setEnabled(
