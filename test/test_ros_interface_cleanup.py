@@ -1,6 +1,9 @@
 """Regression guards for the reduced ROS interface surface."""
 
+import re
 from pathlib import Path
+
+from fault_detector_msgs.msg import LiveInspectionObjectState
 
 
 ROOT = Path(__file__).parents[1]
@@ -27,14 +30,13 @@ def test_setup_close_endpoints_share_one_service_contract():
 
 
 def test_live_object_state_is_the_active_object_state_contract():
-    adapter = _source(
-        "fault_detector_spot/inspection/live_object_state_adapter.py"
+    package_root = ROOT / "fault_detector_spot"
+    combined = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in package_root.rglob("*.py")
     )
-    publisher = _source(
-        "fault_detector_spot/behaviour_tree/nodes/inspection/"
-        "publish_live_inspection_object.py"
-    )
-    combined = adapter + "\n" + publisher
 
-    assert "LiveInspectionObjectState" in combined
-    assert "InspectionObjectStateArray" not in combined
+    assert LiveInspectionObjectState.__name__ == "LiveInspectionObjectState"
+    assert re.search(r"\bLiveInspectionObjectState\b", combined)
+    assert not re.search(r"\bInspectionObjectStateArray\b", combined)
+    assert not re.search(r"\bInspectionObjectState\b", combined)
