@@ -23,6 +23,12 @@ from fault_detector_spot.application.controllers.command_controller import (
 from fault_detector_spot.application.setup.setup_context import (
     SetupContextSnapshot,
 )
+from fault_detector_spot.application.setup.setup_context_access import (
+    SetupContextAccess,
+)
+from fault_detector_spot.application.setup.setup_operation_registry import (
+    SetupOperationRegistry,
+)
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     InspectionObject,
@@ -122,11 +128,11 @@ class ProbeSetupCoordinator:
         )
         self.surface_verification = ProbeSurfaceVerificationCoordinator()
         self._lock = RLock()
+        self._context_access = SetupContextAccess(setup_coordinator)
+        self._operations = SetupOperationRegistry()
         self._drafts = {}
         self._context_locks = {}
-        self._pending = {}
         self._finalizations = {}
-        self._motion_listeners = []
 
     def open_context(self, client_id: str) -> ProbeSetupSnapshot:
         """Open one independent server-owned probe setup draft."""
@@ -151,25 +157,27 @@ class ProbeSetupCoordinator:
         client_id: str,
     ) -> SetupContextSnapshot:
         """Resolve one current context and enforce client ownership."""
+        try:
+            context = self._context_access.resolve(
+                context_id,
+                client_id,
+                CommandOrigin.PROBE_SETUP,
+            )
+        except LookupError as exception:
+            raise LookupError(
+                f"Unknown probe context: {context_id}"
+            ) from exception
         with self._lock:
-            draft = self._drafts.get(context_id.strip())
-        if draft is None:
+            draft = self._drafts.get(context.context_id)
+        if draft is None or draft.context != context:
             raise LookupError(f"Unknown probe context: {context_id}")
-        self.setup_coordinator.require_current(draft.context)
-        if draft.context.client_id != client_id.strip():
-            raise ValueError("Client ID does not own the probe context")
-        return draft.context
+        return context
 
     @_serialized_transaction
     def close_context(self, context: SetupContextSnapshot) -> None:
         """Close one probe draft and invalidate delayed callers."""
         draft = self._draft(context)
-        with self._lock:
-            request_ids = tuple(
-                request_id
-                for request_id, pending in self._pending.items()
-                if pending[1].context_id == context.context_id
-            )
+        request_ids = self._operations.request_ids_for(context)
         for request_id in request_ids:
             try:
                 self.setup_coordinator.command_controller.cancel(request_id)
@@ -179,11 +187,7 @@ class ProbeSetupCoordinator:
             self._drafts.pop(draft.context.context_id, None)
             self._context_locks.pop(draft.context.context_id, None)
             self._finalizations.pop(draft.context.context_id, None)
-            self._pending = {
-                request_id: pending
-                for request_id, pending in self._pending.items()
-                if pending[1].context_id != context.context_id
-            }
+        self._operations.discard_context(draft.context)
         if self.setup_coordinator.is_current(draft.context):
             self.setup_coordinator.close_context(draft.context)
 
@@ -899,12 +903,11 @@ class ProbeSetupCoordinator:
                 verify_achieved_pose=not motion.relative,
             )
             refinement.begin_motion(pending_motion)
-            with self._lock:
-                self._pending[operation.request_id] = (
-                    motion,
-                    context,
-                    stage,
-                )
+            self._operations.register(
+                operation.request_id,
+                context,
+                (motion, stage),
+            )
             return ProbeSetupMotionOperation(operation, motion)
 
     def submit_motion(
@@ -914,14 +917,16 @@ class ProbeSetupCoordinator:
         """Submit one prepared motion through the shared command lane."""
         if not isinstance(operation, ProbeSetupMotionOperation):
             raise TypeError("Expected a ProbeSetupMotionOperation")
-        with self._lock:
-            pending = self._pending.get(operation.request_id)
-        if pending is None or pending[0] != operation.motion:
+        tracked = self._operations.owned(
+            operation.request_id,
+            operation.operation.context,
+        )
+        if tracked is None or tracked.payload[0] != operation.motion:
             raise ValueError("Probe setup motion was not prepared here")
         try:
             return self.setup_coordinator.submit(operation.operation)
         except Exception:
-            motion, context, _stage = pending
+            context = tracked.context
             with self._context_lock(context):
                 draft = self._draft(context)
                 refinement = self._require_refinement(draft)
@@ -929,8 +934,7 @@ class ProbeSetupCoordinator:
                     operation.request_id,
                     "Motion submission failed",
                 )
-                with self._lock:
-                    self._pending.pop(operation.request_id, None)
+                self._operations.pop(operation.request_id)
             raise
 
     def cancel_motion(
@@ -941,25 +945,17 @@ class ProbeSetupCoordinator:
         """Cancel one motion owned by the current probe context."""
         self.setup_coordinator.require_current(context)
         normalized = request_id.strip()
-        with self._lock:
-            pending = self._pending.get(normalized)
-        if pending is None or pending[1] != context:
+        if self._operations.owned(normalized, context) is None:
             raise LookupError(f"Unknown probe setup motion: {request_id}")
         return self.setup_coordinator.command_controller.cancel(normalized)
 
     def add_motion_status_listener(self, listener) -> None:
         """Register one probe motion status listener."""
-        if not callable(listener):
-            raise TypeError("Listener must be callable")
-        with self._lock:
-            if listener not in self._motion_listeners:
-                self._motion_listeners.append(listener)
+        self._operations.add_listener(listener)
 
     def remove_motion_status_listener(self, listener) -> None:
         """Remove one probe motion status listener."""
-        with self._lock:
-            if listener in self._motion_listeners:
-                self._motion_listeners.remove(listener)
+        self._operations.remove_listener(listener)
 
     @_serialized_transaction
     def save_probe_point(
@@ -1063,10 +1059,9 @@ class ProbeSetupCoordinator:
         for context in contexts:
             if self.setup_coordinator.is_current(context):
                 self.close_context(context)
+        self._operations.clear()
         with self._lock:
-            self._pending.clear()
             self._finalizations.clear()
-            self._motion_listeners.clear()
 
     def _approve(self, context, operation, stage):
         self._require_physical_lane_idle()
@@ -1102,11 +1097,11 @@ class ProbeSetupCoordinator:
         self,
         status: SetupOperationStatus,
     ) -> None:
-        with self._lock:
-            pending = self._pending.get(status.operation.request_id)
-        if pending is None:
+        tracked = self._operations.get(status.operation.request_id)
+        if tracked is None:
             return
-        motion, context, _stage = pending
+        context = tracked.context
+        motion, _stage = tracked.payload
         terminal = status.state in {
             CommandControllerState.SUCCEEDED,
             CommandControllerState.FAILED,
@@ -1146,8 +1141,7 @@ class ProbeSetupCoordinator:
                         status.operation.request_id,
                         status.detail,
                     )
-                with self._lock:
-                    self._pending.pop(status.operation.request_id, None)
+                self._operations.pop(status.operation.request_id)
                 snapshot = self._advance(draft)
         else:
             snapshot = self.snapshot(context)
@@ -1158,10 +1152,7 @@ class ProbeSetupCoordinator:
             detail=status.detail,
             snapshot=snapshot,
         )
-        with self._lock:
-            listeners = tuple(self._motion_listeners)
-        for listener in listeners:
-            listener(motion_status)
+        self._operations.emit(motion_status)
 
     def _absolute_motion_command(self, draft, target):
         definition = self.object_repository.load(draft.selected_object_id)
@@ -1328,13 +1319,10 @@ class ProbeSetupCoordinator:
                 raise RuntimeError(
                     "Probe refinement requires retraction before editing"
                 )
-            if any(
-                pending[1].context_id == context.context_id
-                for pending in self._pending.values()
-            ):
-                raise RuntimeError(
-                    "Probe setup context already has an active motion"
-                )
+        if self._operations.has_context(context):
+            raise RuntimeError(
+                "Probe setup context already has an active motion"
+            )
 
     def _surface_verification_session(
         self,
