@@ -2,14 +2,17 @@ import os
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import RLock
 
 import py_trees
-from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 
 from fault_detector_spot.navigation.runtime.nav2_helper import Nav2Helper
+from fault_detector_spot.shared.persistence.runtime_paths import (
+    default_map_root,
+)
 from fault_detector_spot.shared.ros.process_lifecycle import (
     terminate_process_group,
 )
@@ -30,13 +33,14 @@ class RTABHelper:
         nav2_launch_file="nav2_sim_launch.py",
         nav2_params_file=None,
         launch_file="rtab_mapping_launch.py",
+        maps_dir=None,
     ):
         self.node = node
         self.slam_launch_file = launch_file
         self.bb = blackboard
-        self.maps_dir = os.path.join(
-            get_package_share_directory("fault_detector_spot"),
-            "maps",
+        configured_maps_dir = maps_dir or default_map_root()
+        self.maps_dir = os.fspath(
+            Path(configured_maps_dir).expanduser()
         )
         os.makedirs(self.maps_dir, exist_ok=True)
         self._runtime_executor = ThreadPoolExecutor(

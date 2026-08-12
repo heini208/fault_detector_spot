@@ -7,7 +7,6 @@ import os
 from typing import Deque, List
 
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from fault_detector_msgs.msg import (
     CommandRecordControl,
     CommandRequest as CommandRequestMessage,
@@ -27,6 +26,9 @@ from fault_detector_spot.application.commanding.command_request import (
 from fault_detector_spot.application.ros.command_request_adapter import (
     command_request_from_message,
     command_request_to_message,
+)
+from fault_detector_spot.shared.persistence.runtime_paths import (
+    default_recording_root,
 )
 from fault_detector_spot.shared.ros.qos_profiles import (
     COMMAND_REQUEST_QOS,
@@ -72,9 +74,15 @@ class RecordManager(Node):
 
     def __init__(self):
         super().__init__("record_manager")
-        self.recordings_dir = os.path.join(
-            get_package_share_directory("fault_detector_spot"),
-            "recordings",
+        self.declare_parameter(
+            "recording.root",
+            str(default_recording_root()),
+        )
+        configured_root = str(
+            self.get_parameter("recording.root").value
+        ).strip()
+        self.recordings_dir = os.path.expanduser(
+            configured_root or str(default_recording_root())
         )
         os.makedirs(self.recordings_dir, exist_ok=True)
         self.recording = False
@@ -135,7 +143,9 @@ class RecordManager(Node):
 
     def start_recording(self, name: str):
         if not name:
-            self.get_logger().warning("Recording name is empty, ignoring.")
+            self.get_logger().warning(
+                "Recording name is empty, ignoring."
+            )
             return
         self.delete_recording(name)
         self.recording = True
@@ -174,7 +184,9 @@ class RecordManager(Node):
         if request.request_id in self._recorded_request_ids:
             return False
         self._recorded_request_ids.add(request.request_id)
-        self.temp_data.append(serialize_recorded_command(request.command))
+        self.temp_data.append(
+            serialize_recorded_command(request.command)
+        )
         return True
 
     def play_recording(self, name: str):
@@ -183,7 +195,9 @@ class RecordManager(Node):
             return
         file_path = self._recording_path(name)
         if not os.path.exists(file_path):
-            self.get_logger().warning(f"Recording not found: {name}")
+            self.get_logger().warning(
+                f"Recording not found: {name}"
+            )
             return
         try:
             with open(file_path, "r") as file:
@@ -217,7 +231,8 @@ class RecordManager(Node):
         ):
             detail = message.detail or "command did not succeed"
             self._finish_playback(
-                f"Playback stopped after {message.command_id}: {detail}",
+                "Playback stopped after "
+                f"{message.command_id}: {detail}",
                 failed=True,
             )
             return True
@@ -261,7 +276,9 @@ class RecordManager(Node):
         file_path = self._recording_path(name)
         if os.path.exists(file_path):
             os.remove(file_path)
-            self.get_logger().info(f"Deleted recording: {name}")
+            self.get_logger().info(
+                f"Deleted recording: {name}"
+            )
             self.publish_recordings_list()
 
     def publish_recordings_list(self):
@@ -270,10 +287,15 @@ class RecordManager(Node):
             for file_name in os.listdir(self.recordings_dir)
             if file_name.endswith(".json")
         ]
-        self.list_pub.publish(StringArray(names=sorted(files)))
+        self.list_pub.publish(
+            StringArray(names=sorted(files))
+        )
 
     def _recording_path(self, name):
-        return os.path.join(self.recordings_dir, f"{name}.json")
+        return os.path.join(
+            self.recordings_dir,
+            f"{name}.json",
+        )
 
 
 def main(args=None):
