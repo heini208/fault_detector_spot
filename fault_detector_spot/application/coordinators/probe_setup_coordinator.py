@@ -97,14 +97,14 @@ class ProbeSetupCoordinator:
             self.object_repository,
             sensor_repository,
         )
-        self.geometry = geometry or ProbeSetupGeometry(reference_repository)
+        geometry = geometry or ProbeSetupGeometry(reference_repository)
         self.geometry_editor = ProbeGeometryEditor(
             self.object_repository,
             sensor_repository,
-            self.geometry,
+            geometry,
         )
         self.motion_state_source = motion_state_source
-        self.motion_command_factory = (
+        motion_command_factory = (
             motion_command_factory or ProbeSetupMotionCommandFactory()
         )
         self._lock = RLock()
@@ -113,7 +113,7 @@ class ProbeSetupCoordinator:
             object_repository=self.object_repository,
             sensor_repository=sensor_repository,
             motion_state_source=motion_state_source,
-            motion_command_factory=self.motion_command_factory,
+            motion_command_factory=motion_command_factory,
             state_lock=self._lock,
         )
         self.surface_controller = ProbeSurfaceVerificationController(
