@@ -36,6 +36,20 @@ def test_command_controller_queue_is_semantic_not_complex():
     assert "ComplexCommand" not in source
 
 
+def test_command_controller_has_no_ros_transport_dependency():
+    module = (
+        ROOT
+        / "application/controllers/command_controller.py"
+    ).read_text(encoding="utf-8")
+
+    assert "fault_detector_msgs" not in module
+    assert "rclpy" not in module
+    assert "create_publisher" not in module
+    assert "create_subscription" not in module
+    assert "command_request_adapter" not in module
+    assert "fault_detector/_internal" not in module
+
+
 def test_setup_coordinator_does_not_import_complex_command():
     module = (
         ROOT
@@ -43,6 +57,16 @@ def test_setup_coordinator_does_not_import_complex_command():
     ).read_text(encoding="utf-8")
 
     assert "ComplexCommand" not in module
+
+
+def test_ros_command_transport_exists_at_ros_boundary():
+    transport = ROOT / "application/ros/command_transport.py"
+    source = transport.read_text(encoding="utf-8")
+
+    assert transport.is_file()
+    assert "CommandStatus" in source
+    assert "semantic_command_request_from_message" in source
+    assert "command_request_to_message" in source
 
 
 def test_complex_command_is_confined_to_transport_or_bt_files():

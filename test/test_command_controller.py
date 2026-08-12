@@ -1,10 +1,6 @@
-"""Tests for serialized semantic command execution."""
-
-from types import SimpleNamespace
+"""Tests for transport-independent semantic command execution."""
 
 import pytest
-from builtin_interfaces.msg import Time
-from fault_detector_msgs.msg import CommandStatus
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
@@ -18,57 +14,9 @@ from fault_detector_spot.application.commanding.semantic_command import (
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
     CommandControllerState,
+    CommandExecutionStatus,
     DuplicateCommandRequest,
 )
-from fault_detector_spot.application.ros.command_request_adapter import (
-    command_request_to_message,
-)
-
-
-class FakePublisher:
-    def __init__(self):
-        self.messages = []
-
-    def publish(self, message):
-        self.messages.append(message)
-
-
-class FakeLogger:
-    def __init__(self):
-        self.errors = []
-        self.info_messages = []
-
-    def error(self, message):
-        self.errors.append(message)
-
-    def info(self, message):
-        self.info_messages.append(message)
-
-
-class FakeNode:
-    def __init__(self):
-        self.publishers = {}
-        self.subscriptions = {}
-        self.logger = FakeLogger()
-
-    def create_publisher(self, message_type, topic, qos):
-        publisher = FakePublisher()
-        self.publishers[topic] = publisher
-        return publisher
-
-    def create_subscription(self, message_type, topic, callback, qos):
-        self.subscriptions[topic] = callback
-        return SimpleNamespace(topic=topic)
-
-    def get_clock(self):
-        return SimpleNamespace(
-            now=lambda: SimpleNamespace(
-                to_msg=lambda: Time(sec=17, nanosec=23)
-            )
-        )
-
-    def get_logger(self):
-        return self.logger
 
 
 def make_request(command_id, client_id="operator_ui"):
@@ -82,18 +30,21 @@ def make_request(command_id, client_id="operator_ui"):
     )
 
 
-def command_status(request_id, state, buffered_count=0):
-    message = CommandStatus()
-    message.request_id = request_id
-    message.state = state
-    message.buffered_command_count = buffered_count
-    return message
+def execution_status(request_id, state, buffered_count=0, detail=""):
+    return CommandExecutionStatus(
+        request_id=request_id,
+        state=state,
+        detail=detail,
+        buffered_command_count=buffered_count,
+    )
 
 
 def test_controller_dispatches_only_one_semantic_request_at_a_time():
-    node = FakeNode()
-    controller = CommandController(node)
+    dispatched = []
+    accepted = []
     states = []
+    controller = CommandController(dispatch_request=dispatched.append)
+    controller.add_accepted_listener(accepted.append)
     controller.add_status_listener(states.append)
     first = make_request(CommandID.STAND_UP)
     second = make_request(CommandID.STOW_ARM)
@@ -101,58 +52,45 @@ def test_controller_dispatches_only_one_semantic_request_at_a_time():
     controller.submit(first)
     controller.submit(second)
 
-    dispatched = node.publishers[
-        "fault_detector/_internal/commands/request"
-    ].messages
-    accepted = node.publishers[
-        "fault_detector/_internal/commands/accepted"
-    ].messages
-    assert len(accepted) == 2
-    assert [message.request_id for message in dispatched] == [
-        first.request_id
-    ]
+    assert accepted == [first, second]
+    assert dispatched == [first]
     assert controller.active_request_id == first.request_id
     assert controller.queued_request_ids == (second.request_id,)
     assert isinstance(controller._active.command, SemanticCommand)
 
-    controller.handle_command_status(command_status(
+    controller.handle_execution_status(execution_status(
         first.request_id,
-        CommandStatus.STATE_SUCCEEDED,
+        CommandControllerState.SUCCEEDED,
     ))
 
-    assert [message.request_id for message in dispatched] == [
-        first.request_id,
-        second.request_id,
-    ]
+    assert dispatched == [first, second]
     assert controller.active_request_id == second.request_id
     assert states[-2].state is CommandControllerState.SUCCEEDED
     assert states[-1].state is CommandControllerState.DISPATCHED
 
 
 def test_internal_success_does_not_release_the_next_request():
-    node = FakeNode()
-    controller = CommandController(node)
+    dispatched = []
+    controller = CommandController(dispatch_request=dispatched.append)
     first = make_request(CommandID.MOVE_ARM_TO_TAG_AND_WAIT)
     second = make_request(CommandID.STOW_ARM)
     controller.submit(first)
     controller.submit(second)
 
-    handled = controller.handle_command_status(command_status(
+    handled = controller.handle_execution_status(execution_status(
         first.request_id,
-        CommandStatus.STATE_SUCCEEDED,
+        CommandControllerState.SUCCEEDED,
         buffered_count=1,
     ))
 
     assert handled is True
     assert controller.active_request_id == first.request_id
     assert controller.queued_request_ids == (second.request_id,)
-    assert len(node.publishers[
-        "fault_detector/_internal/commands/request"
-    ].messages) == 1
+    assert dispatched == [first]
 
 
 def test_duplicate_request_identity_is_rejected():
-    controller = CommandController(FakeNode())
+    controller = CommandController(dispatch_request=lambda _request: None)
     request = make_request(CommandID.STAND_UP)
     controller.submit(request)
 
@@ -161,9 +99,9 @@ def test_duplicate_request_identity_is_rejected():
 
 
 def test_emergency_stop_clears_queue_and_bypasses_active_request():
-    node = FakeNode()
-    controller = CommandController(node)
+    dispatched = []
     states = []
+    controller = CommandController(dispatch_request=dispatched.append)
     controller.add_status_listener(states.append)
     first = make_request(CommandID.MOVE_TO_WAYPOINT)
     second = make_request(CommandID.STOW_ARM)
@@ -172,10 +110,7 @@ def test_emergency_stop_clears_queue_and_bypasses_active_request():
 
     emergency_request_id = controller.cancel_all()
 
-    dispatched = node.publishers[
-        "fault_detector/_internal/commands/request"
-    ].messages
-    assert [message.request_id for message in dispatched] == [
+    assert [request.request_id for request in dispatched] == [
         first.request_id,
         emergency_request_id,
     ]
@@ -187,85 +122,50 @@ def test_emergency_stop_clears_queue_and_bypasses_active_request():
         if status.state is CommandControllerState.CANCELLED
     }
     assert cancelled == {first.request_id, second.request_id}
-    assert (
-        dispatched[-1].command.command.command_id
-        == CommandID.EMERGENCY_CANCEL.value
+    assert dispatched[-1].command.command_id is CommandID.EMERGENCY_CANCEL
+
+
+def test_dispatch_reports_transport_independent_stage():
+    states = []
+    controller = CommandController(dispatch_request=lambda _request: None)
+    controller.add_status_listener(states.append)
+
+    controller.submit(make_request(CommandID.READY_ARM))
+
+    assert states[-1].state is CommandControllerState.DISPATCHED
+    assert states[-1].detail.startswith(
+        "Dispatched ready_arm to behavior tree"
     )
-    external_cancelled = {
-        message.request_id
-        for message in node.publishers[
-            "fault_detector/_internal/commands/status"
-        ].messages
-        if message.state == CommandStatus.STATE_CANCELLED
-    }
-    assert external_cancelled == {first.request_id, second.request_id}
 
 
-def test_dispatch_rewrites_nested_identity_and_timestamp():
-    node = FakeNode()
-    controller = CommandController(node)
+def test_controller_rejects_non_semantic_payload():
+    request = CommandRequest.create(
+        command=object(),
+        client_id="operator-ui",
+        origin=CommandOrigin.OPERATIONAL,
+        recording_policy=RecordingPolicy.EXCLUDE,
+    )
+    controller = CommandController(dispatch_request=lambda _request: None)
+
+    with pytest.raises(TypeError, match="SemanticCommand"):
+        controller.submit(request)
+
+
+def test_unacknowledged_dispatch_fails_without_ros_clock_or_messages():
+    now = {"value": 10.0}
+    states = []
+    controller = CommandController(
+        dispatch_request=lambda _request: None,
+        monotonic_clock=lambda: now["value"],
+        ack_timeout_sec=3.0,
+    )
+    controller.add_status_listener(states.append)
     request = make_request(CommandID.READY_ARM)
-
     controller.submit(request)
 
-    message = node.publishers[
-        "fault_detector/_internal/commands/request"
-    ].messages[0]
-    assert message.command.command.request_id == request.request_id
-    assert message.command.command.header.stamp == Time(
-        sec=17,
-        nanosec=23,
-    )
+    now["value"] = 13.1
+    controller.poll()
 
-
-def test_ros_submission_topic_enters_the_serialized_queue():
-    node = FakeNode()
-    controller = CommandController(node)
-    request = make_request(CommandID.READY_ARM)
-
-    accepted = node.subscriptions[
-        "fault_detector/_internal/commands/submit"
-    ](command_request_to_message(request))
-
-    assert accepted is True
-    assert controller.active_request_id == request.request_id
-    assert isinstance(controller._active.command, SemanticCommand)
-    assert node.publishers[
-        "fault_detector/_internal/commands/accepted"
-    ].messages[0].request_id == request.request_id
-
-
-def test_controller_exposes_only_semantic_command_input():
-    node = FakeNode()
-    CommandController(node)
-
-    assert "fault_detector/_internal/commands/submit" in node.subscriptions
-    assert "fault_detector/commands/basic_command" not in node.subscriptions
-    assert (
-        "fault_detector/commands/complex_command"
-        not in node.subscriptions
-    )
-
-
-def test_invalid_submission_is_rejected_without_dispatch():
-    node = FakeNode()
-    CommandController(node)
-    request = make_request(CommandID.STAND_UP)
-    message = command_request_to_message(request)
-    message.command.command.request_id = make_request(
-        CommandID.STOW_ARM
-    ).request_id
-
-    accepted = node.subscriptions[
-        "fault_detector/_internal/commands/submit"
-    ](message)
-
-    assert accepted is False
-    assert not node.publishers[
-        "fault_detector/_internal/commands/request"
-    ].messages
-    rejection = node.publishers[
-        "fault_detector/_internal/commands/status"
-    ].messages[0]
-    assert rejection.request_id == request.request_id
-    assert rejection.state == CommandStatus.STATE_FAILED
+    assert controller.active_request_id == ""
+    assert states[-1].state is CommandControllerState.FAILED
+    assert "did not acknowledge" in states[-1].detail

@@ -18,4 +18,9 @@ def test_behavior_tree_runner_does_not_create_command_controller():
 def test_application_api_remains_command_controller_owner():
     source = inspect.getsource(ApplicationApiNode.__init__)
 
-    assert "self.command_controller = CommandController(self)" in source
+    assert "self.command_controller = CommandController(" in source
+    assert (
+        "self.command_transport = RosCommandTransport(\n"
+        "            self,\n"
+        "            self.command_controller"
+    ) in source

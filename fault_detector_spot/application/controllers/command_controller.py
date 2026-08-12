@@ -1,4 +1,4 @@
-"""Serialize semantic commands before behavior-tree execution."""
+"""Serialize semantic commands independently of ROS transport."""
 
 from collections import deque
 from dataclasses import dataclass
@@ -6,11 +6,6 @@ from enum import Enum
 from threading import RLock
 import time
 from typing import Callable, Deque, List, Optional, Tuple
-
-from fault_detector_msgs.msg import (
-    CommandRequest as CommandRequestMessage,
-    CommandStatus,
-)
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
@@ -23,13 +18,6 @@ from fault_detector_spot.application.commanding.request_identity import (
 )
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
-)
-from fault_detector_spot.application.ros.command_request_adapter import (
-    semantic_command_request_from_message,
-    command_request_to_message,
-)
-from fault_detector_spot.shared.ros.qos_profiles import (
-    COMMAND_REQUEST_QOS,
 )
 
 
@@ -58,6 +46,16 @@ class CommandControllerStatus:
         return self.request.request_id
 
 
+@dataclass(frozen=True)
+class CommandExecutionStatus:
+    """Transport-independent execution feedback for one dispatched request."""
+
+    request_id: str
+    state: CommandControllerState
+    detail: str = ""
+    buffered_command_count: int = 0
+
+
 class DuplicateCommandRequest(ValueError):
     """Raised when a request identity has already been accepted."""
 
@@ -67,6 +65,10 @@ class UnknownCommandRequest(LookupError):
 
 
 StatusListener = Callable[[CommandControllerStatus], None]
+AcceptedListener = Callable[[CommandRequest[SemanticCommand]], None]
+DispatchCallback = Callable[[CommandRequest[SemanticCommand]], None]
+DispatchReady = Callable[[], bool]
+ListenerErrorHandler = Callable[[Exception], None]
 
 
 class CommandController:
@@ -74,57 +76,39 @@ class CommandController:
 
     def __init__(
         self,
-        node,
-        submission_topic="fault_detector/_internal/commands/submit",
-        dispatch_topic="fault_detector/_internal/commands/request",
-        accepted_topic="fault_detector/_internal/commands/accepted",
-        controller_status_topic="fault_detector/_internal/commands/status",
-        status_topic="fault_detector/_internal/command_status",
+        dispatch_request: Optional[DispatchCallback] = None,
+        dispatch_ready: Optional[DispatchReady] = None,
+        monotonic_clock: Callable[[], float] = time.monotonic,
+        ack_timeout_sec: float = 3.0,
+        listener_error_handler: Optional[ListenerErrorHandler] = None,
     ):
-        self.node = node
+        if dispatch_request is not None and not callable(dispatch_request):
+            raise TypeError("Dispatch callback must be callable")
+        if dispatch_ready is not None and not callable(dispatch_ready):
+            raise TypeError("Dispatch readiness callback must be callable")
+        if not callable(monotonic_clock):
+            raise TypeError("Monotonic clock must be callable")
+        if ack_timeout_sec <= 0.0:
+            raise ValueError("Acknowledgement timeout must be positive")
+        if (
+            listener_error_handler is not None
+            and not callable(listener_error_handler)
+        ):
+            raise TypeError("Listener error handler must be callable")
+
         self._lock = RLock()
         self._queue: Deque[CommandRequest[SemanticCommand]] = deque()
-        self._active: Optional[
-            CommandRequest[SemanticCommand]
-        ] = None
+        self._active: Optional[CommandRequest[SemanticCommand]] = None
         self._listeners: List[StatusListener] = []
+        self._accepted_listeners: List[AcceptedListener] = []
         self._known_request_ids = set()
         self._active_acknowledged = False
         self._active_dispatched_monotonic = None
-        self._ack_timeout_sec = 3.0
-        self._dispatch_publisher = node.create_publisher(
-            CommandRequestMessage,
-            dispatch_topic,
-            COMMAND_REQUEST_QOS,
-        )
-        self._accepted_publisher = node.create_publisher(
-            CommandRequestMessage,
-            accepted_topic,
-            COMMAND_REQUEST_QOS,
-        )
-        self._controller_status_publisher = node.create_publisher(
-            CommandStatus,
-            controller_status_topic,
-            10,
-        )
-        self._submission_subscription = node.create_subscription(
-            CommandRequestMessage,
-            submission_topic,
-            self.submit_message,
-            COMMAND_REQUEST_QOS,
-        )
-        self._status_subscription = node.create_subscription(
-            CommandStatus,
-            status_topic,
-            self.handle_command_status,
-            10,
-        )
-        create_timer = getattr(node, "create_timer", None)
-        self._dispatch_retry_timer = (
-            create_timer(0.1, self._retry_dispatch)
-            if callable(create_timer)
-            else None
-        )
+        self._ack_timeout_sec = float(ack_timeout_sec)
+        self._monotonic_clock = monotonic_clock
+        self._dispatch_request = dispatch_request
+        self._dispatch_ready = dispatch_ready
+        self._listener_error_handler = listener_error_handler
 
     @property
     def active_request_id(self) -> str:
@@ -134,9 +118,28 @@ class CommandController:
     @property
     def queued_request_ids(self) -> Tuple[str, ...]:
         with self._lock:
-            return tuple(
-                request.request_id for request in self._queue
-            )
+            return tuple(request.request_id for request in self._queue)
+
+    def configure_dispatch(
+        self,
+        dispatch_request: DispatchCallback,
+        dispatch_ready: Optional[DispatchReady] = None,
+    ) -> None:
+        """Attach the execution transport used for future dispatches."""
+        if not callable(dispatch_request):
+            raise TypeError("Dispatch callback must be callable")
+        if dispatch_ready is not None and not callable(dispatch_ready):
+            raise TypeError("Dispatch readiness callback must be callable")
+        with self._lock:
+            self._dispatch_request = dispatch_request
+            self._dispatch_ready = dispatch_ready
+            self._dispatch_next_locked()
+
+    def clear_dispatch(self) -> None:
+        """Detach the execution transport without changing queued requests."""
+        with self._lock:
+            self._dispatch_request = None
+            self._dispatch_ready = None
 
     def add_status_listener(self, listener: StatusListener) -> None:
         if not callable(listener):
@@ -150,10 +153,19 @@ class CommandController:
             if listener in self._listeners:
                 self._listeners.remove(listener)
 
-    def submit(
-        self,
-        request: CommandRequest[SemanticCommand],
-    ) -> str:
+    def add_accepted_listener(self, listener: AcceptedListener) -> None:
+        if not callable(listener):
+            raise TypeError("Accepted listener must be callable")
+        with self._lock:
+            if listener not in self._accepted_listeners:
+                self._accepted_listeners.append(listener)
+
+    def remove_accepted_listener(self, listener: AcceptedListener) -> None:
+        with self._lock:
+            if listener in self._accepted_listeners:
+                self._accepted_listeners.remove(listener)
+
+    def submit(self, request: CommandRequest[SemanticCommand]) -> str:
         normalized = self._normalize_request(request)
         with self._lock:
             if normalized.request_id in self._known_request_ids:
@@ -161,9 +173,7 @@ class CommandController:
                     f"Duplicate request ID: {normalized.request_id}"
                 )
             self._known_request_ids.add(normalized.request_id)
-            self._accepted_publisher.publish(
-                command_request_to_message(normalized)
-            )
+            self._emit_accepted_locked(normalized)
             if self._is_emergency(normalized):
                 self._dispatch_emergency_locked(normalized)
             else:
@@ -175,15 +185,6 @@ class CommandController:
                 )
                 self._dispatch_next_locked()
         return normalized.request_id
-
-    def submit_message(self, message: CommandRequestMessage) -> bool:
-        try:
-            request = semantic_command_request_from_message(message)
-            self.submit(request)
-        except (TypeError, ValueError) as exception:
-            self._reject_message(message, str(exception))
-            return False
-        return True
 
     def cancel(self, request_id: str) -> str:
         normalized_id = validate_request_id(request_id)
@@ -210,9 +211,7 @@ class CommandController:
         self,
         client_id: str = "command_controller",
     ) -> str:
-        command = SemanticCommand(
-            command_id=CommandID.EMERGENCY_CANCEL
-        )
+        command = SemanticCommand(command_id=CommandID.EMERGENCY_CANCEL)
         request = CommandRequest.create(
             command=command,
             client_id=client_id,
@@ -221,50 +220,64 @@ class CommandController:
         )
         return self.submit(request)
 
-    def handle_command_status(self, message: CommandStatus) -> bool:
+    def handle_execution_status(
+        self,
+        status: CommandExecutionStatus,
+    ) -> bool:
+        if not isinstance(status, CommandExecutionStatus):
+            raise TypeError("Expected a CommandExecutionStatus")
+        if status.state not in {
+            CommandControllerState.RUNNING,
+            CommandControllerState.SUCCEEDED,
+            CommandControllerState.FAILED,
+            CommandControllerState.CANCELLED,
+        }:
+            return False
         with self._lock:
             if (
                 self._active is None
-                or message.request_id != self._active.request_id
+                or status.request_id != self._active.request_id
             ):
                 return False
             request = self._active
             self._active_acknowledged = True
-            if message.state == CommandStatus.STATE_RUNNING:
+            if status.state is CommandControllerState.RUNNING:
                 self._emit_locked(
                     request,
                     CommandControllerState.RUNNING,
-                    message.detail,
-                    message.buffered_command_count,
+                    status.detail,
+                    status.buffered_command_count,
                 )
                 return True
-            if message.state == CommandStatus.STATE_SUCCEEDED:
-                if message.buffered_command_count > 0:
+            if status.state is CommandControllerState.SUCCEEDED:
+                if status.buffered_command_count > 0:
                     self._emit_locked(
                         request,
                         CommandControllerState.RUNNING,
-                        message.detail,
-                        message.buffered_command_count,
+                        status.detail,
+                        status.buffered_command_count,
                     )
                     return True
                 state = CommandControllerState.SUCCEEDED
-            elif message.state == CommandStatus.STATE_FAILED:
-                state = CommandControllerState.FAILED
-            elif message.state == CommandStatus.STATE_CANCELLED:
-                state = CommandControllerState.CANCELLED
             else:
-                return False
+                state = status.state
             self._active = None
             self._active_acknowledged = False
             self._active_dispatched_monotonic = None
             self._emit_locked(
                 request,
                 state,
-                message.detail,
-                message.buffered_command_count,
+                status.detail,
+                status.buffered_command_count,
             )
             self._dispatch_next_locked()
             return True
+
+    def poll(self) -> None:
+        """Advance timeout handling and dispatch queued work when possible."""
+        with self._lock:
+            self._retry_dispatch_locked()
+            self._dispatch_next_locked()
 
     def _normalize_request(
         self,
@@ -285,48 +298,43 @@ class CommandController:
             command=request.command,
         )
 
-    def _retry_dispatch(self) -> None:
-        with self._lock:
-            if (
-                self._active is not None
-                and not self._active_acknowledged
-                and self._active_dispatched_monotonic is not None
-                and (
-                    time.monotonic()
-                    - self._active_dispatched_monotonic
-                    >= self._ack_timeout_sec
-                )
-            ):
-                request = self._active
-                self._active = None
-                self._active_acknowledged = False
-                self._active_dispatched_monotonic = None
-                detail = (
-                    "Behavior tree did not acknowledge the dispatched "
-                    f"{request.command.command_id.value} request within "
-                    f"{self._ack_timeout_sec:.1f} s"
-                )
-                self.node.get_logger().error(
-                    f"{detail} [{request.request_id}]"
-                )
-                self._emit_locked(
-                    request,
-                    CommandControllerState.FAILED,
-                    detail,
-                )
-            self._dispatch_next_locked()
+    def _retry_dispatch_locked(self) -> None:
+        if (
+            self._active is None
+            or self._active_acknowledged
+            or self._active_dispatched_monotonic is None
+        ):
+            return
+        if (
+            self._monotonic_clock()
+            - self._active_dispatched_monotonic
+            < self._ack_timeout_sec
+        ):
+            return
+        request = self._active
+        self._active = None
+        self._active_acknowledged = False
+        self._active_dispatched_monotonic = None
+        detail = (
+            "Behavior tree did not acknowledge the dispatched "
+            f"{request.command.command_id.value} request within "
+            f"{self._ack_timeout_sec:.1f} s"
+        )
+        self._emit_locked(
+            request,
+            CommandControllerState.FAILED,
+            detail,
+        )
 
     def _dispatch_consumer_ready_locked(self) -> bool:
-        get_count = getattr(
-            self._dispatch_publisher,
-            "get_subscription_count",
-            None,
-        )
-        if not callable(get_count):
+        if self._dispatch_request is None:
+            return False
+        if self._dispatch_ready is None:
             return True
         try:
-            return int(get_count()) > 0
-        except Exception:
+            return bool(self._dispatch_ready())
+        except Exception as exception:
+            self._handle_listener_error(exception)
             return False
 
     def _dispatch_next_locked(self) -> None:
@@ -337,7 +345,7 @@ class CommandController:
         self._active = self._queue.popleft()
         self._active_acknowledged = False
         self._active_dispatched_monotonic = None
-        self._publish_dispatch_locked(self._active)
+        self._dispatch_locked(self._active)
 
     def _dispatch_emergency_locked(
         self,
@@ -359,7 +367,7 @@ class CommandController:
             )
         if self._dispatch_consumer_ready_locked():
             self._active = request
-            self._publish_dispatch_locked(request)
+            self._dispatch_locked(request)
         else:
             self._queue.appendleft(request)
             self._emit_locked(
@@ -368,26 +376,36 @@ class CommandController:
                 "Waiting for behavior-tree command consumer",
             )
 
-    def _publish_dispatch_locked(
+    def _dispatch_locked(
         self,
         request: CommandRequest[SemanticCommand],
     ) -> None:
-        message = command_request_to_message(request)
-        message.command.command.header.stamp = (
-            self.node.get_clock().now().to_msg()
-        )
-        self._dispatch_publisher.publish(message)
-        self._active_dispatched_monotonic = time.monotonic()
+        callback = self._dispatch_request
+        if callback is None:
+            raise RuntimeError("Command dispatch transport is not configured")
+        self._active_dispatched_monotonic = self._monotonic_clock()
+        try:
+            callback(request)
+        except Exception as exception:
+            if self._active is request:
+                self._active = None
+                self._active_acknowledged = False
+                self._active_dispatched_monotonic = None
+                self._emit_locked(
+                    request,
+                    CommandControllerState.FAILED,
+                    f"Command dispatch failed: {exception}",
+                )
+                self._dispatch_next_locked()
+            return
+        if self._active is not request:
+            return
         command_id = request.command.command_id.value
-        detail = (
-            f"Published {command_id} to behavior tree; "
-            "waiting for BT receipt"
-        )
-        self._log_info(f"{detail} [{request.request_id}]")
         self._emit_locked(
             request,
             CommandControllerState.DISPATCHED,
-            detail,
+            f"Dispatched {command_id} to behavior tree; "
+            "waiting for BT receipt",
         )
 
     def _queued_detail_locked(self, request) -> str:
@@ -397,19 +415,15 @@ class CommandController:
                 f"{self._active.request_id}"
             )
         if not self._dispatch_consumer_ready_locked():
-            return (
-                "Queued; waiting for behavior-tree command consumer"
-            )
+            return "Queued; waiting for behavior-tree command consumer"
         return "Queued for behavior-tree dispatch"
 
-    def _log_info(self, message: str) -> None:
-        logger_factory = getattr(self.node, "get_logger", None)
-        if not callable(logger_factory):
-            return
-        logger = logger_factory()
-        info = getattr(logger, "info", None)
-        if callable(info):
-            info(message)
+    def _emit_accepted_locked(
+        self,
+        request: CommandRequest[SemanticCommand],
+    ) -> None:
+        for listener in tuple(self._accepted_listeners):
+            self._call_listener(listener, request)
 
     def _emit_locked(
         self,
@@ -424,77 +438,31 @@ class CommandController:
             detail=detail,
             buffered_command_count=buffered_command_count,
         )
-        self._publish_controller_status(status)
         for listener in tuple(self._listeners):
-            try:
-                listener(status)
-            except Exception as exception:
-                self.node.get_logger().error(
-                    f"Command status listener failed: {exception}"
-                )
+            self._call_listener(listener, status)
 
-    def _reject_message(self, message, detail):
-        command = getattr(message, "command", None)
-        basic = getattr(command, "command", None)
-        self._publish_rejection(
-            getattr(message, "request_id", ""),
-            getattr(basic, "command_id", ""),
-            detail,
-        )
+    def _call_listener(self, listener, value) -> None:
+        try:
+            listener(value)
+        except Exception as exception:
+            self._handle_listener_error(exception)
 
-    def _publish_rejection(
-        self,
-        request_id,
-        command_id,
-        detail,
-    ):
-        self.node.get_logger().error(
-            f"Rejected command request: {detail}"
-        )
-        if not request_id:
-            return
-        message = CommandStatus()
-        message.header.stamp = self.node.get_clock().now().to_msg()
-        message.request_id = request_id
-        message.command_id = command_id
-        message.state = CommandStatus.STATE_FAILED
-        message.detail = detail
-        message.buffered_command_count = 0
-        self._controller_status_publisher.publish(message)
-
-    def _publish_controller_status(self, status):
-        message = CommandStatus()
-        message.header.stamp = self.node.get_clock().now().to_msg()
-        message.request_id = status.request_id
-        message.command_id = status.request.command.command_id.value
-        message.state = self._controller_status_state(status.state)
-        message.detail = status.detail or status.state.value
-        message.buffered_command_count = (
-            status.buffered_command_count
-        )
-        self._controller_status_publisher.publish(message)
-
-    @staticmethod
-    def _controller_status_state(state):
-        if state in (
-            CommandControllerState.QUEUED,
-            CommandControllerState.DISPATCHED,
-            CommandControllerState.RUNNING,
-        ):
-            return CommandStatus.STATE_RUNNING
-        if state is CommandControllerState.SUCCEEDED:
-            return CommandStatus.STATE_SUCCEEDED
-        if state is CommandControllerState.FAILED:
-            return CommandStatus.STATE_FAILED
-        if state is CommandControllerState.CANCELLED:
-            return CommandStatus.STATE_CANCELLED
-        raise ValueError(f"Unsupported controller state: {state}")
+    def _handle_listener_error(self, exception: Exception) -> None:
+        if self._listener_error_handler is not None:
+            self._listener_error_handler(exception)
 
     @staticmethod
     def _is_emergency(
         request: CommandRequest[SemanticCommand],
     ) -> bool:
-        return (
-            request.command.command_id
-            is CommandID.EMERGENCY_CANCEL
-        )
+        return request.command.command_id is CommandID.EMERGENCY_CANCEL
+
+
+__all__ = [
+    "CommandController",
+    "CommandControllerState",
+    "CommandControllerStatus",
+    "CommandExecutionStatus",
+    "DuplicateCommandRequest",
+    "UnknownCommandRequest",
+]

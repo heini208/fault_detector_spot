@@ -25,6 +25,9 @@ from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
     UnknownCommandRequest,
 )
+from fault_detector_spot.application.ros.command_transport import (
+    RosCommandTransport,
+)
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 from fault_detector_spot.mapping.repository.map_artifact_store import (
     MapArtifactStore,
@@ -96,7 +99,17 @@ class ApplicationApiNode(Node):
         self._lock = RLock()
         self._executions: Dict[str, _OperationExecution] = {}
         self._callback_group = ReentrantCallbackGroup()
-        self.command_controller = CommandController(self)
+        self.command_controller = CommandController(
+            listener_error_handler=(
+                lambda exception: self.get_logger().error(
+                    f"Command controller listener failed: {exception}"
+                )
+            )
+        )
+        self.command_transport = RosCommandTransport(
+            self,
+            self.command_controller,
+        )
         self.application_controller = ApplicationController(
             self.command_controller
         )
@@ -389,9 +402,7 @@ class ApplicationApiNode(Node):
             CommandControllerState.SUCCEEDED: (
                 ApplicationCommandState.STATE_SUCCEEDED
             ),
-            CommandControllerState.FAILED: (
-                ApplicationCommandState.STATE_FAILED
-            ),
+            CommandControllerState.FAILED: ApplicationCommandState.STATE_FAILED,
             CommandControllerState.CANCELLED: (
                 ApplicationCommandState.STATE_CANCELLED
             ),
@@ -409,6 +420,7 @@ class ApplicationApiNode(Node):
             self._handle_application_status
         )
         self.application_controller.close()
+        self.command_transport.close()
         self.probe_setup_motion_state.close()
         self._operation_server.destroy()
         return super().destroy_node()
