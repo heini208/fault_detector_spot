@@ -379,7 +379,7 @@ class CommandController:
             f"Published {command_id} to behavior tree; "
             "waiting for BT receipt"
         )
-        self.node.get_logger().info(
+        self._log_info(
             f"{detail} [{request.request_id}]"
         )
         self._emit_locked(
@@ -397,6 +397,15 @@ class CommandController:
         if not self._dispatch_consumer_ready_locked():
             return "Queued; waiting for behavior-tree command consumer"
         return "Queued for behavior-tree dispatch"
+
+    def _log_info(self, message: str) -> None:
+        logger_factory = getattr(self.node, "get_logger", None)
+        if not callable(logger_factory):
+            return
+        logger = logger_factory()
+        info = getattr(logger, "info", None)
+        if callable(info):
+            info(message)
 
     def _emit_locked(
         self,

@@ -22,18 +22,25 @@ class _Helper:
 
 def _behavior(helper, requested="map_b", active="map_a"):
     behavior = SwapMap(helper)
-    behavior.blackboard.set(
+    writer = py_trees.blackboard.Client(name="SwapMapTestWriter")
+    writer.register_key(
         "last_command",
-        SimpleNamespace(map_name=requested),
+        access=py_trees.common.Access.WRITE,
     )
-    behavior.blackboard.set("active_map_name", active)
+    writer.register_key(
+        "active_map_name",
+        access=py_trees.common.Access.WRITE,
+    )
+    writer.last_command = SimpleNamespace(map_name=requested)
+    writer.active_map_name = active
     return behavior
 
 
 def test_swap_map_registers_active_map_blackboard_access():
     behavior = SwapMap(_Helper())
 
-    assert "active_map_name" in behavior.blackboard.read
+    assert "/active_map_name" in behavior.blackboard.read
+    assert "/last_command" in behavior.blackboard.read
 
 
 def test_swap_map_returns_failure_when_helper_raises():

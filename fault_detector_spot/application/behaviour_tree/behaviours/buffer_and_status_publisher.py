@@ -56,7 +56,7 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             self.structured_status_pub.publish(structured_status)
             self.last_structured_status = signature
             if structured_status.request_id:
-                self.node.get_logger().info(
+                self._log_info(
                     "BT status "
                     f"{structured_status.request_id}: "
                     f"{structured_status.detail}"
@@ -70,6 +70,15 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
                 )
 
         return Status.SUCCESS
+
+    def _log_info(self, message: str) -> None:
+        logger_factory = getattr(self.node, "get_logger", None)
+        if not callable(logger_factory):
+            return
+        logger = logger_factory()
+        info = getattr(logger, "info", None)
+        if callable(info):
+            info(message)
 
     def _follows_terminal_status(self, message):
         return bool(
