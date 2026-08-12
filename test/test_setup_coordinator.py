@@ -3,12 +3,14 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
-from fault_detector_msgs.msg import ComplexCommand
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     RecordingPolicy,
+)
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
 )
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
@@ -50,11 +52,9 @@ class FakeCommandController:
             listener(status)
 
 
-def command(command_id=CommandID.READY_ARM.value):
-    """Return one semantic command payload."""
-    message = ComplexCommand()
-    message.command.command_id = command_id
-    return message
+def command(command_id=CommandID.READY_ARM):
+    """Return one immutable semantic command."""
+    return SemanticCommand(command_id=command_id)
 
 
 def test_navigation_and_probe_contexts_coexist_without_global_lock():
@@ -118,7 +118,10 @@ def test_setup_request_metadata_is_owned_by_coordinator():
     source = command()
 
     operation = coordinator.prepare_command(context, source)
-    source.command.command_id = CommandID.STOW_ARM.value
+
+    with pytest.raises(FrozenInstanceError):
+        source.command_id = CommandID.STOW_ARM
+
     request_id = coordinator.submit(operation)
 
     assert request_id == operation.request_id
@@ -127,9 +130,18 @@ def test_setup_request_metadata_is_owned_by_coordinator():
     assert operation.request.context_id == context.context_id
     assert operation.request.origin is CommandOrigin.PROBE_SETUP
     assert operation.request.recording_policy is RecordingPolicy.EXCLUDE
-    assert operation.request.command.command.command_id == (
-        CommandID.READY_ARM.value
+    assert operation.request.command.command_id is CommandID.READY_ARM
+
+
+def test_setup_coordinator_rejects_ros_or_untyped_command_payloads():
+    coordinator = SetupCoordinator(FakeCommandController())
+    context = coordinator.open_context(
+        CommandOrigin.PROBE_SETUP,
+        "probe-ui",
     )
+
+    with pytest.raises(TypeError, match="SemanticCommand"):
+        coordinator.prepare_command(context, object())
 
 
 def test_context_listeners_receive_only_their_own_results():
@@ -152,11 +164,11 @@ def test_context_listeners_receive_only_their_own_results():
     coordinator.add_operation_listener(probe, probe_statuses.append)
     navigation_operation = coordinator.prepare_command(
         navigation,
-        command(CommandID.START_SLAM.value),
+        command(CommandID.START_SLAM),
     )
     probe_operation = coordinator.prepare_command(
         probe,
-        command(CommandID.READY_ARM.value),
+        command(CommandID.READY_ARM),
     )
     coordinator.submit(navigation_operation)
     coordinator.submit(probe_operation)

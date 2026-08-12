@@ -1,6 +1,5 @@
 """Coordinate shared setup contexts and physical command delegation."""
 
-from copy import deepcopy
 from dataclasses import dataclass
 from threading import RLock
 from typing import Callable, Dict
@@ -166,8 +165,8 @@ class SetupCoordinator:
         context: SetupContextSnapshot,
         command: SemanticCommand,
     ) -> SetupOperation:
-        if command is None:
-            raise ValueError("Setup command must not be None")
+        if not isinstance(command, SemanticCommand):
+            raise TypeError("Expected a SemanticCommand")
         with self._lock:
             self._require_current_locked(context)
             request = CommandRequest.create(
