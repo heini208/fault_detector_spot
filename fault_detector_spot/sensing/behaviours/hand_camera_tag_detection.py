@@ -138,8 +138,7 @@ class HandCameraTagDetection(py_trees.behaviour.Behaviour):
         observations = self.observation_cache.snapshot(now)
 
         self.blackboard.hand_tag_observations = observations
-        if self.blackboard.exists("visible_tags"):
-            self._merge_visible_tags(observations)
+        self._merge_visible_tags(observations)
         self.feedback_message = (
             f"Hand tags: {sorted(observations.keys())}; "
             f"pending: {sorted(self.pending_detections.keys())}"
@@ -147,7 +146,10 @@ class HandCameraTagDetection(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
     def _merge_visible_tags(self, hand_observations):
-        visible = deepcopy(self.blackboard.visible_tags or {})
+        try:
+            visible = deepcopy(self.blackboard.visible_tags or {})
+        except (AttributeError, KeyError):
+            return
         for tag_id, observation in hand_observations.items():
             visible.setdefault(tag_id, deepcopy(observation))
         self.blackboard.visible_tags = visible
