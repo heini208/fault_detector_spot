@@ -3,6 +3,7 @@
 import math
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Optional
 
 from bosdyn.client.frame_helpers import HAND_FRAME_NAME
 from fault_detector_msgs.msg import TagElement
@@ -57,6 +58,13 @@ class ProbeMotionFrame(str, Enum):
     MAP = "map"
 
 
+class ProbeAlignmentOrientationMode(str, Enum):
+    """Explicit orientation source for one aligned absolute move."""
+
+    TAG = "tag"
+    CALCULATED_SURFACE = "calculated_surface"
+
+
 @dataclass(frozen=True)
 class ProbeMotionRequest:
     """Describe one validated setup motion primitive."""
@@ -68,12 +76,26 @@ class ProbeMotionRequest:
     yaw_rad: float = 0.0
     position_tolerance_m: float = 0.01
     orientation_tolerance_rad: float = math.radians(5.0)
+    alignment_orientation_mode: ProbeAlignmentOrientationMode = (
+        ProbeAlignmentOrientationMode.TAG
+    )
+    orientation_only: bool = False
+    calculated_surface_orientation_object: Optional[
+        QuaternionData
+    ] = None
 
     def validate(self) -> None:
         if not isinstance(self.kind, ProbeMotionKind):
             raise TypeError("Probe motion kind is invalid")
         if not isinstance(self.frame, ProbeMotionFrame):
             raise TypeError("Probe motion frame is invalid")
+        if not isinstance(
+            self.alignment_orientation_mode,
+            ProbeAlignmentOrientationMode,
+        ):
+            raise TypeError("Alignment orientation mode is invalid")
+        if not isinstance(self.orientation_only, bool):
+            raise TypeError("Orientation-only flag must be boolean")
         self.translation.validate()
         for value, label in (
             (self.pitch_rad, "Pitch adjustment"),
@@ -100,6 +122,28 @@ class ProbeMotionRequest:
             raise ValueError("Position tolerance must be positive")
         if self.orientation_tolerance_rad <= 0.0:
             raise ValueError("Orientation tolerance must be positive")
+        if (
+            self.orientation_only
+            and self.kind is not ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH
+        ):
+            raise ValueError(
+                "Orientation-only motion is available only for alignment"
+            )
+        if (
+            self.alignment_orientation_mode
+            is ProbeAlignmentOrientationMode.CALCULATED_SURFACE
+        ):
+            if self.kind is not ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH:
+                raise ValueError(
+                    "Calculated surface orientation is available only for alignment"
+                )
+            if self.calculated_surface_orientation_object is None:
+                raise ValueError(
+                    "Calculated surface alignment requires an orientation"
+                )
+            self.calculated_surface_orientation_object.validate()
+        elif self.calculated_surface_orientation_object is not None:
+            self.calculated_surface_orientation_object.validate()
 
     @property
     def relative(self) -> bool:
@@ -236,6 +280,7 @@ class ProbeSetupMotionCommandFactory:
 
 
 __all__ = [
+    "ProbeAlignmentOrientationMode",
     "ProbeMotionFrame",
     "ProbeMotionKind",
     "ProbeMotionRequest",

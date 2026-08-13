@@ -12,10 +12,6 @@ from fault_detector_spot.application.coordinators.setup_coordinator import (
 from fault_detector_spot.application.setup.setup_operation_registry import (
     SetupOperationRegistry,
 )
-from fault_detector_spot.inspection.model.models import (
-    QuaternionData,
-    Vector3Data,
-)
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     PendingRefinementMotion,
     ProbeRefinementSession,
@@ -23,14 +19,16 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementStage,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
+    ProbeAlignmentOrientationMode,
     ProbeMotionKind,
+)
+from fault_detector_spot.inspection.setup.alignment_orientation import (
+    tag_aligned_probe_orientation,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     approve_probe_pose,
     approve_safe_approach_pose,
     approve_surface_alignment_pose,
-    multiply_quaternions,
-    rotate_vector,
 )
 
 
@@ -139,17 +137,22 @@ class ProbeRefinementController:
             )
         else:
             target = refinement.candidate_pose(stage)
-            if (
-                stage is RefinementStage.ALIGNMENT
-                and not refinement.stage_is_approved(stage)
-            ):
-                target = self._gravity_leveled_alignment_target(
+            if stage is RefinementStage.ALIGNMENT:
+                target = self._alignment_target(
                     draft,
                     target,
+                    motion,
                 )
                 refinement.set_candidate(stage, target)
             command = self._absolute_motion_command(draft, target)
-            purpose = stage.value
+            purpose = (
+                "alignment orientation"
+                if (
+                    stage is RefinementStage.ALIGNMENT
+                    and motion.orientation_only
+                )
+                else stage.value
+            )
         operation = self.setup_coordinator.prepare_command(
             context,
             command,
@@ -342,7 +345,7 @@ class ProbeRefinementController:
                 f"{math.degrees(orientation_error):.2f} deg"
             )
 
-    def _gravity_leveled_alignment_target(self, draft, target):
+    def _alignment_target(self, draft, candidate, motion):
         definition = self.object_repository.load(
             draft.selected_object_id
         )
@@ -350,84 +353,29 @@ class ProbeRefinementController:
             draft.selected_routine_id
         )
         sensor = self.sensor_repository.load(routine.sensor_id)
-        gravity_to_object = (
-            self._motion_state_source().gravity_aligned_object_pose(
-                definition.reference_tag.tag_id
+        result = deepcopy(candidate)
+        if motion.orientation_only:
+            result.position = deepcopy(
+                self.current_probe_pose(draft).position
             )
-        )
-        gravity_up_object = rotate_vector(
-            self._inverse_orientation(
-                gravity_to_object.orientation
-            ),
-            Vector3Data(x=0.0, y=0.0, z=1.0),
-        )
-        result = deepcopy(target)
-        result.orientation = self._upright_roll_only_orientation(
-            target.orientation,
-            sensor.hand_to_probe.orientation,
-            gravity_up_object,
-        )
+        if (
+            motion.alignment_orientation_mode
+            is ProbeAlignmentOrientationMode.TAG
+        ):
+            result.orientation = tag_aligned_probe_orientation(
+                sensor.hand_to_probe.orientation
+            )
+        elif (
+            motion.alignment_orientation_mode
+            is ProbeAlignmentOrientationMode.CALCULATED_SURFACE
+        ):
+            result.orientation = deepcopy(
+                motion.calculated_surface_orientation_object
+            )
+        else:
+            raise ValueError("Unsupported alignment orientation mode")
         result.validate()
         return result
-
-    @staticmethod
-    def _upright_roll_only_orientation(
-        probe_orientation,
-        hand_to_probe_orientation,
-        gravity_up_object,
-    ):
-        probe_orientation.validate()
-        hand_to_probe_orientation.validate()
-        gravity_up_object.validate()
-
-        gravity_up_probe = rotate_vector(
-            ProbeRefinementController._inverse_orientation(
-                probe_orientation
-            ),
-            gravity_up_object,
-        )
-        hand_up_probe = rotate_vector(
-            ProbeRefinementController._inverse_orientation(
-                hand_to_probe_orientation
-            ),
-            Vector3Data(x=0.0, y=0.0, z=1.0),
-        )
-
-        cosine_term = (
-            gravity_up_probe.y * hand_up_probe.y
-            + gravity_up_probe.z * hand_up_probe.z
-        )
-        sine_term = (
-            -gravity_up_probe.y * hand_up_probe.z
-            + gravity_up_probe.z * hand_up_probe.y
-        )
-        if math.hypot(cosine_term, sine_term) <= 1e-12:
-            return deepcopy(probe_orientation)
-
-        roll_rad = math.atan2(sine_term, cosine_term)
-        half_roll = roll_rad * 0.5
-        local_roll = QuaternionData(
-            x=math.sin(half_roll),
-            y=0.0,
-            z=0.0,
-            w=math.cos(half_roll),
-        )
-        result = multiply_quaternions(
-            probe_orientation,
-            local_roll,
-        )
-        result.validate()
-        return result
-
-    @staticmethod
-    def _inverse_orientation(orientation):
-        orientation.validate()
-        return QuaternionData(
-            x=-orientation.x,
-            y=-orientation.y,
-            z=-orientation.z,
-            w=orientation.w,
-        )
 
     def _absolute_motion_command(self, draft, target):
         definition = self.object_repository.load(

@@ -19,12 +19,16 @@ from fault_detector_spot.application.commanding.client_identity import (
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
 )
-from fault_detector_spot.inspection.model.models import Vector3Data
+from fault_detector_spot.inspection.model.models import (
+    QuaternionData,
+    Vector3Data,
+)
 from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
     ProbeSetupMotionStatus,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
+    ProbeAlignmentOrientationMode,
     ProbeMotionFrame,
     ProbeMotionKind,
     ProbeMotionRequest,
@@ -213,13 +217,31 @@ class ProbeSetupMotionApi:
             ProbeSetupMotionIntent.FRAME_BODY: ProbeMotionFrame.BODY,
             ProbeSetupMotionIntent.FRAME_MAP: ProbeMotionFrame.MAP,
         }
+        modes = {
+            ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_TAG: (
+                ProbeAlignmentOrientationMode.TAG
+            ),
+            ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_CALCULATED_SURFACE: (
+                ProbeAlignmentOrientationMode.CALCULATED_SURFACE
+            ),
+        }
         try:
             kind = kinds[int(intent.operation)]
             frame = frames[int(intent.frame)]
+            mode = modes[int(intent.alignment_orientation_mode)]
         except KeyError as exception:
             raise ValueError(
                 "Unsupported probe setup motion intent"
             ) from exception
+        calculated_orientation = None
+        if bool(intent.has_calculated_surface_orientation):
+            value = intent.calculated_surface_orientation_object
+            calculated_orientation = QuaternionData(
+                x=float(value.x),
+                y=float(value.y),
+                z=float(value.z),
+                w=float(value.w),
+            )
         request = ProbeMotionRequest(
             kind=kind,
             frame=frame,
@@ -233,6 +255,11 @@ class ProbeSetupMotionApi:
             position_tolerance_m=float(intent.position_tolerance_m),
             orientation_tolerance_rad=float(
                 intent.orientation_tolerance_rad
+            ),
+            alignment_orientation_mode=mode,
+            orientation_only=bool(intent.orientation_only),
+            calculated_surface_orientation_object=(
+                calculated_orientation
             ),
         )
         request.validate()

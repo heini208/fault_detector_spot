@@ -109,6 +109,8 @@ class InspectionControls(UIControlHelper):
         self._surface_normal_error = ""
         self._selected_approach_direction = None
         self._selected_surface_target = None
+        self._calculated_surface_probe_orientation = None
+        self._calculated_surface_hand_orientation = None
         self._calculated_probe_setup = None
         self._probe_setup = None
         self._refinement_presentation = None
@@ -151,6 +153,14 @@ class InspectionControls(UIControlHelper):
             self._process_sensor_definitions,
             LATCHED_QOS,
         )
+        client = getattr(self.ui, "probe_setup_client", None)
+        if client is not None:
+            client.surface_orientation_received.connect(
+                self.apply_live_surface_orientation
+            )
+            client.surface_orientation_rejected.connect(
+                self.apply_live_surface_orientation_error
+            )
 
     def make_rows(self):
         """Create a compact inspection setup workspace."""
@@ -923,6 +933,29 @@ class InspectionControls(UIControlHelper):
         self.use_current_alignment_button = QPushButton(
             "Approve Current Pose"
         )
+        self.alignment_orientation_mode_dropdown = QComboBox()
+        self.alignment_orientation_mode_dropdown.addItem(
+            "Align with tag",
+            ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_TAG,
+        )
+        self.alignment_orientation_mode_dropdown.addItem(
+            "Align with calculated surface",
+            ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_CALCULATED_SURFACE,
+        )
+        self.calculated_surface_orientation_value_label = QLabel(
+            "Not calculated"
+        )
+        self.calculated_surface_orientation_value_label.setWordWrap(True)
+        self.calculated_surface_orientation_value_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse
+        )
+        self.calculate_hand_surface_orientation_button = QPushButton(
+            "Calculate Hand-Facing Surface"
+        )
+        self.orient_to_calculated_surface_button = QPushButton(
+            "Orient to Calculated Surface"
+        )
+        self.orient_to_calculated_surface_button.setEnabled(False)
         self.move_probe_pose_button = QPushButton(
             "Direct Probe Movement Disabled"
         )
@@ -1097,6 +1130,15 @@ class InspectionControls(UIControlHelper):
         self.move_aligned_pose_button.clicked.connect(
             self.handle_move_to_aligned_pose
         )
+        self.alignment_orientation_mode_dropdown.currentIndexChanged.connect(
+            self._handle_alignment_orientation_mode_changed
+        )
+        self.calculate_hand_surface_orientation_button.clicked.connect(
+            self.handle_calculate_hand_surface_orientation
+        )
+        self.orient_to_calculated_surface_button.clicked.connect(
+            self.handle_orient_to_calculated_surface
+        )
         self.use_current_alignment_button.clicked.connect(
             self.handle_use_current_alignment
         )
@@ -1226,30 +1268,6 @@ class InspectionControls(UIControlHelper):
         layout = QVBoxLayout(self.reference_point_panel)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
-
-        orientation_group = QGroupBox("Surface orientation")
-        orientation_layout = QGridLayout(orientation_group)
-        orientation_layout.addWidget(QLabel("Mode:"), 0, 0)
-        orientation_layout.addWidget(
-            self.reference_approach_mode_dropdown,
-            0,
-            1,
-            1,
-            2,
-        )
-        orientation_layout.addWidget(QLabel("Used:"), 1, 0)
-        orientation_layout.addWidget(
-            self.reference_approach_source_value_label,
-            1,
-            1,
-        )
-        orientation_layout.addWidget(QLabel("Status:"), 1, 2)
-        orientation_layout.addWidget(
-            self.reference_approach_status_label,
-            1,
-            3,
-        )
-        layout.addWidget(orientation_group)
 
         target_group = QGroupBox("Calculated poses")
         target_layout = QGridLayout(target_group)
@@ -1459,6 +1477,28 @@ class InspectionControls(UIControlHelper):
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        if stage == "alignment":
+            orientation_group = QGroupBox("Alignment orientation")
+            orientation_layout = QFormLayout(orientation_group)
+            orientation_layout.addRow(
+                "Mode:",
+                self.alignment_orientation_mode_dropdown,
+            )
+            orientation_layout.addRow(
+                "Calculated hand orientation:",
+                self.calculated_surface_orientation_value_label,
+            )
+            orientation_actions = QHBoxLayout()
+            orientation_actions.addWidget(
+                self.calculate_hand_surface_orientation_button
+            )
+            orientation_actions.addWidget(
+                self.orient_to_calculated_surface_button
+            )
+            orientation_actions.addStretch()
+            orientation_layout.addRow(orientation_actions)
+            layout.addWidget(orientation_group)
+
         movement_group = QGroupBox("Finite adjustments")
         movement_layout = QGridLayout(movement_group)
         buttons = self.refinement_buttons[stage]
@@ -1561,6 +1601,8 @@ class InspectionControls(UIControlHelper):
             self.use_current_approach_button,
             self.move_aligned_pose_button,
             self.use_current_alignment_button,
+            self.calculate_hand_surface_orientation_button,
+            self.orient_to_calculated_surface_button,
             self.test_surface_distance_button,
             self.approve_and_retract_button,
             self.retract_without_saving_button,
@@ -2064,6 +2106,9 @@ class InspectionControls(UIControlHelper):
 
     def _clear_selected_surface_target(self):
         self._selected_surface_target = None
+        self._clear_live_surface_orientation()
+        self._calculated_surface_probe_orientation = None
+        self._calculated_surface_hand_orientation = None
         self._calculated_probe_setup = None
         self._probe_setup = None
         self.reference_target_x_value_label.setText("—")
@@ -2193,27 +2238,53 @@ class InspectionControls(UIControlHelper):
         )
 
     def handle_start_probe_refinement(self):
-        """Request one server-owned supervised refinement workflow."""
+        """Start or resume one server-owned supervised refinement workflow."""
+        if self._refinement_presentation is not None:
+            return self.resume_refinement_dialog()
         intent = ProbeSetupIntent()
         intent.operation = ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT
         return self._submit_probe_setup(intent) is not None
 
-    def request_close_refinement_workflow(self):
-        """Request closure of the server-owned refinement workflow."""
+    def pause_refinement_dialog(self):
+        """Hide the popup without discarding authoritative refinement state."""
         presentation = self._refinement_presentation
-        if presentation is not None and presentation.pending_motion is not None:
+        if presentation is None:
+            return True
+        if presentation.pending_motion is not None:
             self.refinement_recovery_status_label.setText(
                 "Wait for the active movement and settle check."
             )
             return False
-        if presentation is not None and presentation.recovery_required:
+        if presentation.recovery_required:
             self.refinement_recovery_status_label.setText(
-                "Retract Without Saving is required before closing."
+                "Retract Without Saving is required before hiding this workflow."
             )
             return False
-        intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_END_REFINEMENT
-        return self._submit_probe_setup(intent) is not None
+        self.inspection_workspace_splitter.setEnabled(True)
+        self.start_probe_refinement_button.setText(
+            "Resume Probe Point Position Refinement Workflow"
+        )
+        self.refinement_summary_status_label.setText(
+            "Refinement paused. Reopen to continue from the current stage."
+        )
+        return True
+
+    def resume_refinement_dialog(self):
+        """Reopen the popup at the retained authoritative stage."""
+        presentation = self._refinement_presentation
+        if presentation is None:
+            return False
+        self.inspection_workspace_splitter.setEnabled(False)
+        self.start_probe_refinement_button.setText(
+            "Start Probe Point Position Refinement Workflow"
+        )
+        self.refinement_dialog.open_for_stage(presentation.active_stage)
+        self._refresh_refinement_dialog()
+        return True
+
+    def request_close_refinement_workflow(self):
+        """Treat popup Close as pause, not workflow destruction."""
+        return self.pause_refinement_dialog()
 
     def _finish_refinement_workflow_close(self):
         self._distance_failure_requires_retraction = False
@@ -2221,6 +2292,9 @@ class InspectionControls(UIControlHelper):
         if hasattr(self, "inspection_workspace_splitter"):
             self.inspection_workspace_splitter.setEnabled(True)
         self._refinement_presentation = None
+        self.start_probe_refinement_button.setText(
+            "Start Probe Point Position Refinement Workflow"
+        )
         self.refinement_summary_status_label.setText(
             "Refinement workflow closed. Persisted data was preserved."
         )
@@ -2350,6 +2424,18 @@ class InspectionControls(UIControlHelper):
             and not recovery_only
         )
         self.move_aligned_pose_button.setEnabled(alignment_enabled)
+        self.calculate_hand_surface_orientation_button.setEnabled(
+            alignment_enabled
+        )
+        surface_selected = (
+            self.alignment_orientation_mode_dropdown.currentData()
+            == ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_CALCULATED_SURFACE
+        )
+        self.orient_to_calculated_surface_button.setEnabled(
+            alignment_enabled
+            and surface_selected
+            and self._calculated_surface_probe_orientation is not None
+        )
         self.use_current_alignment_button.setEnabled(
             alignment_enabled and alignment_adjustable
         )
@@ -2392,6 +2478,9 @@ class InspectionControls(UIControlHelper):
         self.refine_translation_step_field.setEnabled(not pending)
         self.refine_rotation_step_field.setEnabled(not pending)
         self.refine_frame_dropdown.setEnabled(not pending)
+        self.alignment_orientation_mode_dropdown.setEnabled(
+            alignment_page and not pending and not recovery_only
+        )
 
         self.refinement_dialog.back_button.setEnabled(
             current != RefinementStage.SAFE_APPROACH
@@ -2489,12 +2578,92 @@ class InspectionControls(UIControlHelper):
         )
 
     def handle_move_to_aligned_pose(self):
-        presentation = self._require_refinement_presentation()
-        return self._send_refinement_motion(
-            RefinementStage.ALIGNMENT,
-            "aligned pre-approach candidate",
-            presentation.candidate_pose(RefinementStage.ALIGNMENT),
+        self._require_refinement_presentation()
+        return self._send_alignment_motion(orientation_only=False)
+
+    def handle_orient_to_calculated_surface(self):
+        self._require_refinement_presentation()
+        if self._calculated_surface_probe_orientation is None:
+            self._show_setup_error(
+                "Orient to Calculated Surface",
+                ValueError("Calculate the live hand-facing surface first"),
+            )
+            return False
+        index = self.alignment_orientation_mode_dropdown.findData(
+            ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_CALCULATED_SURFACE
         )
+        self.alignment_orientation_mode_dropdown.setCurrentIndex(index)
+        return self._send_alignment_motion(orientation_only=True)
+
+    def handle_calculate_hand_surface_orientation(self):
+        client = getattr(self.ui, "probe_setup_client", None)
+        if client is None:
+            return self.show_setup_unavailable(
+                "Live hand surface orientation"
+            )
+        future = client.calculate_surface_orientation()
+        if future is None:
+            return False
+        self.calculated_surface_orientation_value_label.setText(
+            "Calculating from live hand depth..."
+        )
+        return True
+
+    def apply_live_surface_orientation(self, response):
+        probe = response.probe_orientation_object
+        hand = response.hand_orientation_object
+        self._calculated_surface_probe_orientation = QuaternionData(
+            x=float(probe.x),
+            y=float(probe.y),
+            z=float(probe.z),
+            w=float(probe.w),
+        )
+        self._calculated_surface_probe_orientation.validate()
+        self._calculated_surface_hand_orientation = QuaternionData(
+            x=float(hand.x),
+            y=float(hand.y),
+            z=float(hand.z),
+            w=float(hand.w),
+        )
+        self._calculated_surface_hand_orientation.validate()
+        roll, pitch, yaw = quaternion_to_rpy(
+            self._calculated_surface_hand_orientation
+        )
+        self.calculated_surface_orientation_value_label.setText(
+            "rpy=("
+            f"{math.degrees(roll):.1f}, "
+            f"{math.degrees(pitch):.1f}, "
+            f"{self._normalize_degrees(math.degrees(yaw)):.1f}) deg"
+        )
+        normal = response.surface_normal_object
+        self.calculated_surface_orientation_value_label.setToolTip(
+            "Object-frame surface normal: "
+            f"({normal.x:.4f}, {normal.y:.4f}, {normal.z:.4f}); "
+            f"samples={int(response.sample_count)}; "
+            f"RMSE={float(response.plane_rmse_m):.4f} m"
+        )
+        self._refresh_refinement_dialog()
+        return True
+
+    def apply_live_surface_orientation_error(self, detail):
+        self._clear_live_surface_orientation()
+        self.calculated_surface_orientation_value_label.setText(
+            f"Unavailable: {detail}"
+        )
+        self._refresh_refinement_dialog()
+        return False
+
+    def _clear_live_surface_orientation(self):
+        self._calculated_surface_probe_orientation = None
+        self._calculated_surface_hand_orientation = None
+        if hasattr(self, "calculated_surface_orientation_value_label"):
+            self.calculated_surface_orientation_value_label.setText(
+                "Not calculated"
+            )
+            self.calculated_surface_orientation_value_label.setToolTip("")
+
+    def _handle_alignment_orientation_mode_changed(self, _index=None):
+        self._refresh_refinement_dialog()
 
     def handle_move_to_probe_pose(self):
         self._show_setup_error(
@@ -2613,6 +2782,42 @@ class InspectionControls(UIControlHelper):
         )
         return False
 
+
+    def _send_alignment_motion(self, orientation_only):
+        intent = ProbeSetupMotionIntent()
+        intent.operation = (
+            ProbeSetupMotionIntent.OPERATION_MOVE_ALIGNED_PREAPPROACH
+        )
+        intent.frame = ProbeSetupMotionIntent.FRAME_SENSOR
+        intent.alignment_orientation_mode = int(
+            self.alignment_orientation_mode_dropdown.currentData()
+        )
+        intent.orientation_only = bool(orientation_only)
+        if (
+            intent.alignment_orientation_mode
+            == ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_CALCULATED_SURFACE
+        ):
+            orientation = self._calculated_surface_probe_orientation
+            if orientation is None:
+                self._show_setup_error(
+                    "Move to Aligned Pose",
+                    ValueError(
+                        "Calculate the live hand-facing surface first"
+                    ),
+                )
+                return False
+            intent.has_calculated_surface_orientation = True
+            intent.calculated_surface_orientation_object.x = orientation.x
+            intent.calculated_surface_orientation_object.y = orientation.y
+            intent.calculated_surface_orientation_object.z = orientation.z
+            intent.calculated_surface_orientation_object.w = orientation.w
+        self._write_motion_tolerances(intent)
+        label = (
+            "calculated surface orientation"
+            if orientation_only
+            else "aligned pre-approach candidate"
+        )
+        return self._submit_probe_motion(intent, label)
 
     def _send_refinement_motion(
         self,
@@ -2982,11 +3187,11 @@ class InspectionControls(UIControlHelper):
             presentation.recovery_required
         )
         self._retraction_failed = False
-        self.inspection_workspace_splitter.setEnabled(False)
         if previous is None:
-            self.refinement_dialog.open_for_stage(
-                presentation.active_stage
-            )
+            self._clear_live_surface_orientation()
+            self.resume_refinement_dialog()
+        elif self.refinement_dialog.isVisible():
+            self.inspection_workspace_splitter.setEnabled(False)
         self._refresh_refinement_dialog()
 
     def _request_reference_previews(self, state):
@@ -3111,6 +3316,7 @@ class InspectionControls(UIControlHelper):
         intent.operation = ProbeSetupIntent.OPERATION_SELECT_ROUTINE
         intent.object_id = object_id
         intent.routine_id = routine_id
+        self._clear_live_surface_orientation()
         return self._submit_probe_setup(intent) is not None
 
     def _refresh_routine_parent_objects(

@@ -7,6 +7,7 @@ from fault_detector_msgs.msg import (
     ProbeSetupState,
 )
 from fault_detector_msgs.srv import (
+    CalculateProbeSurfaceOrientation,
     CloseSetup,
     ExecuteProbeSetup,
     GetProbeReferencePreview,
@@ -64,6 +65,12 @@ class ProbeSetupApi:
             GetProbeReferencePreview,
             "fault_detector/application/get_probe_reference_preview",
             self._preview,
+            callback_group=self._callback_group,
+        )
+        self._surface_orientation_service = node.create_service(
+            CalculateProbeSurfaceOrientation,
+            "fault_detector/application/calculate_probe_surface_orientation",
+            self._calculate_surface_orientation,
             callback_group=self._callback_group,
         )
 
@@ -262,6 +269,61 @@ class ProbeSetupApi:
         response.selectable_height = region.height
         return response
 
+    def _calculate_surface_orientation(self, request, response):
+        try:
+            context = self.coordinator.context(
+                request.context_id,
+                request.client_id,
+            )
+            snapshot = self.coordinator.snapshot(context)
+            if snapshot.refinement is None:
+                raise RuntimeError("Probe refinement is not active")
+            definition = self.coordinator.object_repository.load(
+                snapshot.selected_object_id
+            )
+            routine = definition.get_routine(
+                snapshot.selected_routine_id
+            )
+            if routine is None:
+                raise ValueError("Selected inspection routine is unavailable")
+            sensor = self.coordinator.sensor_repository.load(
+                routine.sensor_id
+            )
+            source = self.coordinator.motion_state_source
+            if source is None:
+                raise RuntimeError("Probe setup motion state is unavailable")
+            result = source.live_hand_surface_orientation(
+                definition.reference_tag.tag_id,
+                sensor.hand_to_probe.orientation,
+            )
+        except Exception as exception:
+            response.success = False
+            response.detail = str(exception)
+            return response
+        response.success = True
+        response.detail = "Calculated surface orientation from live hand depth"
+        self._write_quaternion(
+            response.probe_orientation_object,
+            result.probe_orientation_object,
+        )
+        self._write_quaternion(
+            response.hand_orientation_object,
+            result.hand_orientation_object,
+        )
+        response.surface_normal_object.x = result.surface_normal_object.x
+        response.surface_normal_object.y = result.surface_normal_object.y
+        response.surface_normal_object.z = result.surface_normal_object.z
+        response.sample_count = int(result.sample_count)
+        response.plane_rmse_m = float(result.plane_rmse_m)
+        return response
+
+    @staticmethod
+    def _write_quaternion(message, value):
+        message.x = value.x
+        message.y = value.y
+        message.z = value.z
+        message.w = value.w
+
     def _failure_state(self, goal, detail, context=None):
         if (
             context is not None
@@ -298,6 +360,7 @@ class ProbeSetupApi:
         self.node.destroy_service(self._execute_service)
         self.node.destroy_service(self._close_service)
         self.node.destroy_service(self._preview_service)
+        self.node.destroy_service(self._surface_orientation_service)
 
 
 __all__ = ["ProbeSetupApi"]

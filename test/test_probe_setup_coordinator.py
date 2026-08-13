@@ -43,6 +43,7 @@ from fault_detector_spot.application.coordinators.probe_setup_coordinator import
     ProbeSetupCoordinator,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
+    ProbeAlignmentOrientationMode,
     ProbeMotionKind,
     ProbeMotionRequest,
 )
@@ -376,7 +377,7 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
     )
 
 
-def test_alignment_motion_changes_only_roll_around_surface_axis(tmp_path):
+def test_alignment_defaults_to_tag_aligned_hand_without_changing_position(tmp_path):
     probe, _ = coordinator(tmp_path)
     state = create_selected_routine(
         probe,
@@ -391,30 +392,13 @@ def test_alignment_motion_changes_only_roll_around_surface_axis(tmp_path):
         0.20,
     )
     probe.motion_state_source.pose = pose(0.8)
-    probe.motion_state_source.gravity_object_pose = PoseData(
-        position=Vector3Data.zero(),
-        orientation=roll_quaternion(150.0),
-    )
     state = probe.begin_refinement(state.context)
-
     draft = probe._drafts[state.context.context_id]
     original = draft.refinement.candidate_pose(
         RefinementStage.ALIGNMENT
     )
-    original.orientation = multiply_quaternions(
-        yaw_quaternion(25.0),
-        pitch_quaternion(-20.0),
-    )
-    draft.refinement.set_candidate(
-        RefinementStage.ALIGNMENT,
-        original,
-    )
-    expected_axis = rotate_vector(
-        original.orientation,
-        Vector3Data(x=1.0, y=0.0, z=0.0),
-    )
 
-    operation = probe.prepare_motion(
+    probe.prepare_motion(
         state.context,
         ProbeMotionRequest(
             kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
@@ -423,28 +407,87 @@ def test_alignment_motion_changes_only_roll_around_surface_axis(tmp_path):
         ),
     )
 
-    pending = draft.refinement.pending_motion
-    target = pending.target_pose_object
-    actual_axis = rotate_vector(
-        target.orientation,
-        Vector3Data(x=1.0, y=0.0, z=0.0),
-    )
-    gravity_orientation = multiply_quaternions(
-        probe.motion_state_source.gravity_object_pose.orientation,
-        target.orientation,
-    )
-    hand_up_gravity = rotate_vector(
-        gravity_orientation,
-        Vector3Data(x=0.0, y=0.0, z=1.0),
-    )
-
-    assert operation.request.command.command_id is CommandID.MOVE_ARM_TO_TAG
+    target = draft.refinement.pending_motion.target_pose_object
     assert target.position == original.position
-    assert actual_axis.x == pytest.approx(expected_axis.x, abs=1e-9)
-    assert actual_axis.y == pytest.approx(expected_axis.y, abs=1e-9)
-    assert actual_axis.z == pytest.approx(expected_axis.z, abs=1e-9)
-    assert hand_up_gravity.z > 0.9
+    assert target.orientation == QuaternionData.identity()
 
+
+def test_calculated_surface_alignment_changes_orientation_only(tmp_path):
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
+        state.context,
+        "slot1_hand",
+        ImagePoint(u=20, v=30),
+        "surface_fit",
+        0.10,
+        0.20,
+    )
+    probe.motion_state_source.pose = pose(0.8)
+    state = probe.begin_refinement(state.context)
+    draft = probe._drafts[state.context.context_id]
+    original = draft.refinement.candidate_pose(
+        RefinementStage.ALIGNMENT
+    )
+    orientation = multiply_quaternions(
+        yaw_quaternion(25.0),
+        pitch_quaternion(-20.0),
+    )
+
+    probe.prepare_motion(
+        state.context,
+        ProbeMotionRequest(
+            kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+            alignment_orientation_mode=(
+                ProbeAlignmentOrientationMode.CALCULATED_SURFACE
+            ),
+            calculated_surface_orientation_object=orientation,
+        ),
+    )
+
+    target = draft.refinement.pending_motion.target_pose_object
+    assert target.position == original.position
+    assert target.orientation == orientation
+
+
+def test_orientation_only_alignment_uses_current_position(tmp_path):
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
+        state.context,
+        "slot1_hand",
+        ImagePoint(u=20, v=30),
+        "surface_fit",
+        0.10,
+        0.20,
+    )
+    probe.motion_state_source.pose = pose(0.8)
+    state = probe.begin_refinement(state.context)
+    probe.motion_state_source.pose = pose(0.61, 0.2, 0.3)
+    orientation = yaw_quaternion(15.0)
+
+    probe.prepare_motion(
+        state.context,
+        ProbeMotionRequest(
+            kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+            alignment_orientation_mode=(
+                ProbeAlignmentOrientationMode.CALCULATED_SURFACE
+            ),
+            calculated_surface_orientation_object=orientation,
+            orientation_only=True,
+        ),
+    )
+
+    draft = probe._drafts[state.context.context_id]
+    target = draft.refinement.pending_motion.target_pose_object
+    assert target.position == pose(0.61, 0.2, 0.3).position
+    assert target.orientation == orientation
 
 def test_probe_motion_cancellation_keeps_context_state_correlated(tmp_path):
     probe, _ = coordinator(tmp_path)

@@ -17,6 +17,7 @@ from fault_detector_msgs.msg import (
     ProbeSetupState,
 )
 from fault_detector_msgs.srv import (
+    CalculateProbeSurfaceOrientation,
     CloseSetup,
     ExecuteProbeSetup,
     GetProbeReferencePreview,
@@ -34,6 +35,8 @@ class ProbeSetupClient(QObject):
     close_finished = pyqtSignal(bool, str)
     preview_received = pyqtSignal(object)
     preview_rejected = pyqtSignal(str, str)
+    surface_orientation_received = pyqtSignal(object)
+    surface_orientation_rejected = pyqtSignal(str)
 
     def __init__(self, node, client_id: str):
         super().__init__()
@@ -59,6 +62,10 @@ class ProbeSetupClient(QObject):
         self._preview_client = node.create_client(
             GetProbeReferencePreview,
             "fault_detector/application/get_probe_reference_preview",
+        )
+        self._surface_orientation_client = node.create_client(
+            CalculateProbeSurfaceOrientation,
+            "fault_detector/application/calculate_probe_surface_orientation",
         )
         self._motion_client = ActionClient(
             node,
@@ -299,6 +306,36 @@ class ProbeSetupClient(QObject):
         future = self._close_client.call_async(request)
         future.add_done_callback(self._receive_close)
         return future
+
+    def calculate_surface_orientation(self):
+        """Request one live hand-center surface orientation calculation."""
+        if not self.context_id:
+            self.surface_orientation_rejected.emit(
+                "Probe setup context is not open"
+            )
+            return None
+        if not self._surface_orientation_client.service_is_ready():
+            self.surface_orientation_rejected.emit(
+                "Surface orientation service is not ready"
+            )
+            return None
+        request = CalculateProbeSurfaceOrientation.Request()
+        request.client_id = self.client_id
+        request.context_id = self.context_id
+        future = self._surface_orientation_client.call_async(request)
+        future.add_done_callback(self._receive_surface_orientation)
+        return future
+
+    def _receive_surface_orientation(self, future):
+        try:
+            response = future.result()
+        except Exception as exception:
+            self.surface_orientation_rejected.emit(str(exception))
+            return
+        if not response.success:
+            self.surface_orientation_rejected.emit(response.detail)
+            return
+        self.surface_orientation_received.emit(response)
 
     def request_preview(self, reference_view_id: str):
         """Request one selected context's read-only RGB preview."""
@@ -588,6 +625,7 @@ class ProbeSetupClient(QObject):
         self.node.destroy_client(self._execute_client)
         self.node.destroy_client(self._close_client)
         self.node.destroy_client(self._preview_client)
+        self.node.destroy_client(self._surface_orientation_client)
         self._motion_client.destroy()
         self._surface_client.destroy()
         self._finalization_client.destroy()
