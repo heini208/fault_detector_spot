@@ -1,7 +1,8 @@
+\
 /**:
   ros__parameters:
     tag_sensing.base_frame: body
-    tag_sensing.base_frame_pattern: 'filtered_fiducial_(\d+)'
+    tag_sensing.base_frame_pattern: '(?<!filtered_)fiducial_(\d+)'
 
     tag_sensing.hand_detection_topic: '/detections'
     tag_sensing.hand_tag_frame_prefix: 'tag36h11:'

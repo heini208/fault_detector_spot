@@ -9,6 +9,9 @@ from fault_detector_spot.inspection.model.models import (
     QuaternionData,
     Vector3Data,
 )
+from fault_detector_spot.inspection.setup.probe_setup_motion_state_source import (
+    BASE_TAG_STABILIZATION_HISTORY_SEC,
+)
 from fault_detector_spot.inspection.setup.stable_tag_pose import (
     TagPoseSample,
     stabilize_tag_pose,
@@ -55,6 +58,25 @@ def test_spot_world_object_age_is_accepted_within_validity_window():
     assert stable.sample_count == 3
     assert stable.sample_span_sec == pytest.approx(2.0)
     assert stable.newest_age_sec == pytest.approx(0.8)
+
+
+def test_observed_one_hz_spot_cadence_fits_runtime_history_window():
+    samples = [
+        sample(6.976),
+        sample(8.043),
+        sample(9.110),
+    ]
+
+    stable = stabilize_tag_pose(
+        samples,
+        now_seconds=10.0,
+        stabilization_window_sec=BASE_TAG_STABILIZATION_HISTORY_SEC,
+    )
+
+    assert BASE_TAG_STABILIZATION_HISTORY_SEC == pytest.approx(4.0)
+    assert stable.sample_count == 3
+    assert stable.sample_span_sec == pytest.approx(2.134)
+    assert stable.newest_age_sec == pytest.approx(0.89)
 
 
 def test_duplicate_timestamps_do_not_count_as_distinct_observations():

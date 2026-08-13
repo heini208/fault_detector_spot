@@ -368,7 +368,12 @@ class ProbeReferenceCaptureCoordinator:
         )
 
     def _stable_reference_tag(self, tag_id):
-        tag = self.motion_state_source.reference_tag(tag_id)
+        try:
+            tag = self.motion_state_source.reference_tag(tag_id)
+        except ValueError as exception:
+            raise ReferenceViewCaptureNotReady(
+                str(exception)
+            ) from exception
         if tag is None:
             raise ReferenceViewCaptureNotReady(
                 f"No fresh stable base-camera observation is available "
