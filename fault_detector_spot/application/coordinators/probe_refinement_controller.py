@@ -12,7 +12,10 @@ from fault_detector_spot.application.coordinators.setup_coordinator import (
 from fault_detector_spot.application.setup.setup_operation_registry import (
     SetupOperationRegistry,
 )
-from fault_detector_spot.inspection.model.models import QuaternionData
+from fault_detector_spot.inspection.model.models import (
+    QuaternionData,
+    Vector3Data,
+)
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     PendingRefinementMotion,
     ProbeRefinementSession,
@@ -23,11 +26,11 @@ from fault_detector_spot.inspection.setup.probe_setup_motion import (
     ProbeMotionKind,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
-    _level_hand_probe_orientation,
     approve_probe_pose,
     approve_safe_approach_pose,
     approve_surface_alignment_pose,
     multiply_quaternions,
+    rotate_vector,
 )
 
 
@@ -352,27 +355,79 @@ class ProbeRefinementController:
                 definition.reference_tag.tag_id
             )
         )
-        desired_gravity_orientation = multiply_quaternions(
-            gravity_to_object.orientation,
-            target.orientation,
-        )
-        probe_gravity_orientation = _level_hand_probe_orientation(
-            desired_gravity_orientation,
-            sensor.hand_to_probe.orientation,
-        )
-        object_to_gravity_orientation = QuaternionData(
-            x=-gravity_to_object.orientation.x,
-            y=-gravity_to_object.orientation.y,
-            z=-gravity_to_object.orientation.z,
-            w=gravity_to_object.orientation.w,
+        gravity_up_object = rotate_vector(
+            self._inverse_orientation(
+                gravity_to_object.orientation
+            ),
+            Vector3Data(x=0.0, y=0.0, z=1.0),
         )
         result = deepcopy(target)
-        result.orientation = multiply_quaternions(
-            object_to_gravity_orientation,
-            probe_gravity_orientation,
+        result.orientation = self._upright_roll_only_orientation(
+            target.orientation,
+            sensor.hand_to_probe.orientation,
+            gravity_up_object,
         )
         result.validate()
         return result
+
+    @staticmethod
+    def _upright_roll_only_orientation(
+        probe_orientation,
+        hand_to_probe_orientation,
+        gravity_up_object,
+    ):
+        probe_orientation.validate()
+        hand_to_probe_orientation.validate()
+        gravity_up_object.validate()
+
+        gravity_up_probe = rotate_vector(
+            ProbeRefinementController._inverse_orientation(
+                probe_orientation
+            ),
+            gravity_up_object,
+        )
+        hand_up_probe = rotate_vector(
+            ProbeRefinementController._inverse_orientation(
+                hand_to_probe_orientation
+            ),
+            Vector3Data(x=0.0, y=0.0, z=1.0),
+        )
+
+        cosine_term = (
+            gravity_up_probe.y * hand_up_probe.y
+            + gravity_up_probe.z * hand_up_probe.z
+        )
+        sine_term = (
+            -gravity_up_probe.y * hand_up_probe.z
+            + gravity_up_probe.z * hand_up_probe.y
+        )
+        if math.hypot(cosine_term, sine_term) <= 1e-12:
+            return deepcopy(probe_orientation)
+
+        roll_rad = math.atan2(sine_term, cosine_term)
+        half_roll = roll_rad * 0.5
+        local_roll = QuaternionData(
+            x=math.sin(half_roll),
+            y=0.0,
+            z=0.0,
+            w=math.cos(half_roll),
+        )
+        result = multiply_quaternions(
+            probe_orientation,
+            local_roll,
+        )
+        result.validate()
+        return result
+
+    @staticmethod
+    def _inverse_orientation(orientation):
+        orientation.validate()
+        return QuaternionData(
+            x=-orientation.x,
+            y=-orientation.y,
+            z=-orientation.z,
+            w=orientation.w,
+        )
 
     def _absolute_motion_command(self, draft, target):
         definition = self.object_repository.load(

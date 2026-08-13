@@ -195,6 +195,26 @@ def roll_quaternion(degrees):
     )
 
 
+def pitch_quaternion(degrees):
+    half_angle = math.radians(degrees) * 0.5
+    return QuaternionData(
+        x=0.0,
+        y=math.sin(half_angle),
+        z=0.0,
+        w=math.cos(half_angle),
+    )
+
+
+def yaw_quaternion(degrees):
+    half_angle = math.radians(degrees) * 0.5
+    return QuaternionData(
+        x=0.0,
+        y=0.0,
+        z=math.sin(half_angle),
+        w=math.cos(half_angle),
+    )
+
+
 def coordinator(tmp_path):
     command_controller = FakeCommandController()
     shared = SetupCoordinator(command_controller)
@@ -356,7 +376,7 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
     )
 
 
-def test_alignment_motion_levels_hand_against_gravity_not_tag_roll(tmp_path):
+def test_alignment_motion_changes_only_roll_around_surface_axis(tmp_path):
     probe, _ = coordinator(tmp_path)
     state = create_selected_routine(
         probe,
@@ -373,9 +393,26 @@ def test_alignment_motion_levels_hand_against_gravity_not_tag_roll(tmp_path):
     probe.motion_state_source.pose = pose(0.8)
     probe.motion_state_source.gravity_object_pose = PoseData(
         position=Vector3Data.zero(),
-        orientation=roll_quaternion(180.0),
+        orientation=roll_quaternion(150.0),
     )
     state = probe.begin_refinement(state.context)
+
+    draft = probe._drafts[state.context.context_id]
+    original = draft.refinement.candidate_pose(
+        RefinementStage.ALIGNMENT
+    )
+    original.orientation = multiply_quaternions(
+        yaw_quaternion(25.0),
+        pitch_quaternion(-20.0),
+    )
+    draft.refinement.set_candidate(
+        RefinementStage.ALIGNMENT,
+        original,
+    )
+    expected_axis = rotate_vector(
+        original.orientation,
+        Vector3Data(x=1.0, y=0.0, z=0.0),
+    )
 
     operation = probe.prepare_motion(
         state.context,
@@ -386,23 +423,27 @@ def test_alignment_motion_levels_hand_against_gravity_not_tag_roll(tmp_path):
         ),
     )
 
-    target = probe._drafts[state.context.context_id].refinement.pending_motion
-    target = target.target_pose_object
+    pending = draft.refinement.pending_motion
+    target = pending.target_pose_object
+    actual_axis = rotate_vector(
+        target.orientation,
+        Vector3Data(x=1.0, y=0.0, z=0.0),
+    )
     gravity_orientation = multiply_quaternions(
         probe.motion_state_source.gravity_object_pose.orientation,
         target.orientation,
     )
-    roll, _pitch, _yaw = quaternion_to_rpy(gravity_orientation)
-    inward = rotate_vector(
-        target.orientation,
-        Vector3Data(x=1.0, y=0.0, z=0.0),
+    hand_up_gravity = rotate_vector(
+        gravity_orientation,
+        Vector3Data(x=0.0, y=0.0, z=1.0),
     )
 
     assert operation.request.command.command_id is CommandID.MOVE_ARM_TO_TAG
-    assert abs(roll) < 1e-6
-    assert inward.x == pytest.approx(1.0)
-    assert inward.y == pytest.approx(0.0)
-    assert inward.z == pytest.approx(0.0)
+    assert target.position == original.position
+    assert actual_axis.x == pytest.approx(expected_axis.x, abs=1e-9)
+    assert actual_axis.y == pytest.approx(expected_axis.y, abs=1e-9)
+    assert actual_axis.z == pytest.approx(expected_axis.z, abs=1e-9)
+    assert hand_up_gravity.z > 0.9
 
 
 def test_probe_motion_cancellation_keeps_context_state_correlated(tmp_path):
