@@ -46,6 +46,8 @@ class ProbeSetupClient(QObject):
         self._surface_goal_handles = {}
         self._finalization_goal_handles = {}
         self._capture_goal_handles = {}
+        self._preview_generations = {}
+        self._pending_preview_requests = {}
         self._execute_client = node.create_client(
             ExecuteProbeSetup,
             "fault_detector/application/execute_probe_setup",
@@ -83,6 +85,10 @@ class ProbeSetupClient(QObject):
             "fault_detector/application/probe_setup_state",
             self._receive_state,
             APPLICATION_STATE_QOS,
+        )
+        self._preview_retry_timer = node.create_timer(
+            0.1,
+            self._flush_pending_previews,
         )
 
     def open(self):
@@ -309,17 +315,46 @@ class ProbeSetupClient(QObject):
                 "Reference view ID must not be empty",
             )
             return None
+        generation = self._preview_generations.get(view_id, 0) + 1
+        self._preview_generations[view_id] = generation
         if not self._preview_client.service_is_ready():
+            self._pending_preview_requests[view_id] = generation
             return None
+        return self._send_preview_request(view_id, generation)
+
+    def _send_preview_request(self, view_id, generation):
         request = GetProbeReferencePreview.Request()
         request.client_id = self.client_id
         request.context_id = self.context_id
         request.reference_view_id = view_id
         future = self._preview_client.call_async(request)
         future.add_done_callback(
-            partial(self._receive_preview, view_id)
+            partial(
+                self._receive_preview,
+                view_id,
+                generation,
+            )
         )
         return future
+
+    def _flush_pending_previews(self):
+        if (
+            not self.context_id
+            or not self._pending_preview_requests
+            or not self._preview_client.service_is_ready()
+        ):
+            return
+        pending = tuple(self._pending_preview_requests.items())
+        for view_id, generation in pending:
+            if self._preview_generations.get(view_id) != generation:
+                self._pending_preview_requests.pop(view_id, None)
+                continue
+            self._pending_preview_requests.pop(view_id, None)
+            self._send_preview_request(view_id, generation)
+
+    def _refresh_reference_previews(self, state):
+        for view_id in state.reference_view_ids:
+            self.request_preview(view_id)
 
     def _send(self, intent, context_id):
         if not isinstance(intent, ProbeSetupIntent):
@@ -401,9 +436,13 @@ class ProbeSetupClient(QObject):
             return
         if response.closed:
             self.context_id = ""
+            self._pending_preview_requests.clear()
+            self._preview_generations.clear()
         self.close_finished.emit(response.closed, response.detail)
 
-    def _receive_preview(self, view_id, future):
+    def _receive_preview(self, view_id, generation, future):
+        if self._preview_generations.get(view_id) != generation:
+            return
         try:
             response = future.result()
         except Exception as exception:
@@ -541,9 +580,11 @@ class ProbeSetupClient(QObject):
             self.request_rejected.emit(str(exception))
             return
         self._emit_state(result.state)
+        self._refresh_reference_previews(result.state)
 
     def destroy(self):
         """Destroy client-side ROS resources owned by this adapter."""
+        self.node.destroy_timer(self._preview_retry_timer)
         self.node.destroy_client(self._execute_client)
         self.node.destroy_client(self._close_client)
         self.node.destroy_client(self._preview_client)
@@ -556,6 +597,8 @@ class ProbeSetupClient(QObject):
         self._surface_goal_handles.clear()
         self._finalization_goal_handles.clear()
         self._capture_goal_handles.clear()
+        self._pending_preview_requests.clear()
+        self._preview_generations.clear()
 
 
 __all__ = ["ProbeSetupClient"]
