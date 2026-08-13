@@ -321,7 +321,9 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
         )
 
     probe.submit_motion(operation)
-    probe.motion_state_source.pose = pose(0.6)
+    probe.motion_state_source.pose = state.refinement.candidate_pose(
+        RefinementStage.SAFE_APPROACH
+    )
     command_controller.succeed(operation.request)
     current = probe.context(state.context.context_id, "probe-ui")
     completed = probe.snapshot(current)
