@@ -179,9 +179,9 @@ class FakeGeometry:
         )
 
 
-def pose(x=0.0):
+def pose(x=0.0, y=0.0, z=0.0):
     return PoseData(
-        position=Vector3Data(x=x, y=0.0, z=0.0),
+        position=Vector3Data(x=x, y=y, z=z),
         orientation=QuaternionData.identity(),
     )
 
