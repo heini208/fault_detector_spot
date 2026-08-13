@@ -41,7 +41,7 @@ class ResolveLiveInspectionObject(
         object_id: str,
         routine_id: str,
         execution_frame: str = "odom",
-        maximum_age_sec: float = 0.25,
+        maximum_age_sec: float = 1.5,
         object_root: Optional[Union[str, Path]] = None,
         name: str = "ResolveLiveInspectionObject",
     ):

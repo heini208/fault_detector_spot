@@ -64,6 +64,21 @@ def test_reference_tag_pose_is_the_object_pose():
     )
 
 
+def test_default_freshness_accepts_one_hz_spot_observation():
+    """A one-second-old base observation remains usable by default."""
+    result = LiveObjectPoseResolver().resolve(
+        make_object(),
+        make_marker(stamp_sec=9, stamp_nanosec=100_000_000),
+        Time(seconds=10.2),
+        observed_tag_id=7,
+        observation_source="base",
+    )
+
+    assert LiveObjectPoseResolver().maximum_age_sec == 1.5
+    assert result.state == ObjectPoseState.LIVE
+    assert math.isclose(result.observation_age_sec, 1.1)
+
+
 def test_missing_marker_is_unavailable():
     """No base observation produces no probe reference."""
     result = LiveObjectPoseResolver().resolve(
@@ -156,6 +171,7 @@ def test_non_finite_marker_position_is_invalid():
 
     assert result.state == ObjectPoseState.INVALID
     assert "non-finite" in result.message
+
 
 def test_non_normalized_marker_quaternion_is_invalid():
     """A non-unit marker quaternion cannot define an object."""

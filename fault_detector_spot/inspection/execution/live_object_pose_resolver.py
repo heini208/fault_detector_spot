@@ -20,7 +20,7 @@ class LiveObjectPoseResolver:
     def __init__(
         self,
         execution_frame: str = "odom",
-        maximum_age_sec: float = 0.25,
+        maximum_age_sec: float = 1.5,
     ):
         """Configure the execution frame and freshness limit."""
         if not execution_frame:

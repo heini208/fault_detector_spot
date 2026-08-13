@@ -97,13 +97,16 @@ def make_object() -> InspectionObject:
     )
 
 
-def make_tag(stamp_sec=10) -> TagElement:
-    """Create a fresh body-frame base tag."""
+def make_tag(
+    stamp_sec=10,
+    stamp_nanosec=100_000_000,
+) -> TagElement:
+    """Create a timestamped body-frame base tag."""
     tag = TagElement()
     tag.id = 7
     tag.pose.header.frame_id = "body"
     tag.pose.header.stamp.sec = stamp_sec
-    tag.pose.header.stamp.nanosec = 100_000_000
+    tag.pose.header.stamp.nanosec = stamp_nanosec
     tag.pose.pose.position.x = 1.0
     tag.pose.pose.orientation.w = 1.0
     return tag
@@ -179,6 +182,23 @@ def test_base_tag_produces_live_odom_object():
     assert result.selected_pose.header.frame_id == "odom"
     assert result.selected_pose.pose.position.x == 3.0
     assert result.observation_source == "base"
+
+
+def test_default_freshness_accepts_one_hz_spot_observation():
+    """A one-second-old base tag keeps the live object available."""
+    writer = create_writer()
+    writer.base_tag_observations = {
+        7: make_tag(stamp_sec=9, stamp_nanosec=100_000_000)
+    }
+    writer.hand_tag_observations = {}
+    behavior = make_behavior()
+
+    behavior.update()
+    result = behavior.blackboard.live_inspection_object
+
+    assert behavior.maximum_age_sec == 1.5
+    assert result.state == ObjectPoseState.LIVE
+    assert result.observation_age_sec == 1.1
 
 
 def test_hand_only_tag_is_ignored():

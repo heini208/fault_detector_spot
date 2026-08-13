@@ -100,7 +100,7 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     base_frame_pattern = read_parameter(
         node,
         "tag_sensing.base_frame_pattern",
-        r"filtered_fiducial_(\d+)",
+        r"(?<!filtered_)fiducial_(\d+)",
     )
     hand_tag_frame_prefix = read_parameter(
         node,
@@ -151,7 +151,7 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         read_parameter(
             node,
             "tag_sensing.probe_max_age_sec",
-            0.25,
+            1.5,
         )
     )
     active_object_id = read_parameter(
