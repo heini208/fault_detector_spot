@@ -12,6 +12,7 @@ from fault_detector_spot.application.coordinators.setup_coordinator import (
 from fault_detector_spot.application.setup.setup_operation_registry import (
     SetupOperationRegistry,
 )
+from fault_detector_spot.inspection.model.models import QuaternionData
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     PendingRefinementMotion,
     ProbeRefinementSession,
@@ -22,9 +23,11 @@ from fault_detector_spot.inspection.setup.probe_setup_motion import (
     ProbeMotionKind,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
+    _level_hand_probe_orientation,
     approve_probe_pose,
     approve_safe_approach_pose,
     approve_surface_alignment_pose,
+    multiply_quaternions,
 )
 
 
@@ -133,6 +136,15 @@ class ProbeRefinementController:
             )
         else:
             target = refinement.candidate_pose(stage)
+            if (
+                stage is RefinementStage.ALIGNMENT
+                and not refinement.stage_is_approved(stage)
+            ):
+                target = self._gravity_leveled_alignment_target(
+                    draft,
+                    target,
+                )
+                refinement.set_candidate(stage, target)
             command = self._absolute_motion_command(draft, target)
             purpose = stage.value
         operation = self.setup_coordinator.prepare_command(
@@ -326,6 +338,41 @@ class ProbeRefinementController:
                 "Achieved probe orientation missed the target by "
                 f"{math.degrees(orientation_error):.2f} deg"
             )
+
+    def _gravity_leveled_alignment_target(self, draft, target):
+        definition = self.object_repository.load(
+            draft.selected_object_id
+        )
+        routine = definition.get_routine(
+            draft.selected_routine_id
+        )
+        sensor = self.sensor_repository.load(routine.sensor_id)
+        gravity_to_object = (
+            self._motion_state_source().gravity_aligned_object_pose(
+                definition.reference_tag.tag_id
+            )
+        )
+        desired_gravity_orientation = multiply_quaternions(
+            gravity_to_object.orientation,
+            target.orientation,
+        )
+        probe_gravity_orientation = _level_hand_probe_orientation(
+            desired_gravity_orientation,
+            sensor.hand_to_probe.orientation,
+        )
+        object_to_gravity_orientation = QuaternionData(
+            x=-gravity_to_object.orientation.x,
+            y=-gravity_to_object.orientation.y,
+            z=-gravity_to_object.orientation.z,
+            w=gravity_to_object.orientation.w,
+        )
+        result = deepcopy(target)
+        result.orientation = multiply_quaternions(
+            object_to_gravity_orientation,
+            probe_gravity_orientation,
+        )
+        result.validate()
+        return result
 
     def _absolute_motion_command(self, draft, target):
         definition = self.object_repository.load(

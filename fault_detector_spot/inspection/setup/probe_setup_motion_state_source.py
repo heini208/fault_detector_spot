@@ -6,6 +6,7 @@ import math
 from threading import RLock
 import time
 
+from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
 from fault_detector_msgs.msg import TagElementArray
 from rclpy.duration import Duration
 from rclpy.qos import qos_profile_sensor_data
@@ -25,6 +26,7 @@ from fault_detector_spot.inspection.sensing.live_surface_distance import (
     measure_probe_surface_distance,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
+    compose_poses,
     relative_pose,
 )
 from fault_detector_spot.inspection.setup.stable_tag_pose import (
@@ -114,6 +116,22 @@ class ProbeSetupMotionStateSource:
         tag.pose.pose.orientation.z = stable.pose.orientation.z
         tag.pose.pose.orientation.w = stable.pose.orientation.w
         return tag
+
+    def gravity_aligned_object_pose(self, reference_tag_id: int) -> PoseData:
+        """Return the tag-defined object pose in Spot's gravity frame."""
+        tag = self.reference_tag(reference_tag_id)
+        source_frame = tag.pose.header.frame_id.strip()
+        source_to_object = pose_to_pose_data(tag.pose.pose)
+        if source_frame == GRAV_ALIGNED_BODY_FRAME_NAME:
+            return source_to_object
+        gravity_to_source = self._lookup_pose(
+            GRAV_ALIGNED_BODY_FRAME_NAME,
+            source_frame,
+        )
+        return compose_poses(
+            gravity_to_source,
+            source_to_object,
+        )
 
     def current_probe_pose_object(
         self,

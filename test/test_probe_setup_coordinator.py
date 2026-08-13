@@ -1,6 +1,7 @@
 """Tests for server-owned probe authoring and persistence."""
 
 from dataclasses import replace
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -51,9 +52,14 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     initialize_reference_probe_setup,
+    multiply_quaternions,
+    rotate_vector,
 )
 from fault_detector_spot.inspection.setup import (
     reference_view_surface_target,
+)
+from fault_detector_spot.inspection.setup.reference_view_surface_target import (
+    quaternion_to_rpy,
 )
 
 
@@ -107,9 +113,13 @@ class FakeCommandController:
 class FakeMotionStateSource:
     def __init__(self):
         self.pose = pose()
+        self.gravity_object_pose = pose()
 
     def current_probe_pose_object(self, _tag_id, _sensor_id):
         return self.pose
+
+    def gravity_aligned_object_pose(self, _tag_id):
+        return self.gravity_object_pose
 
     def reference_tag(self, _tag_id):
         return None
@@ -172,6 +182,16 @@ def pose(x=0.0):
     return PoseData(
         position=Vector3Data(x=x, y=0.0, z=0.0),
         orientation=QuaternionData.identity(),
+    )
+
+
+def roll_quaternion(degrees):
+    half_angle = math.radians(degrees) * 0.5
+    return QuaternionData(
+        x=math.sin(half_angle),
+        y=0.0,
+        z=0.0,
+        w=math.cos(half_angle),
     )
 
 
@@ -334,6 +354,55 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
         completed.refinement.motion_states[RefinementStage.SAFE_APPROACH]
         is RefinementMotionState.REACHED
     )
+
+
+def test_alignment_motion_levels_hand_against_gravity_not_tag_roll(tmp_path):
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
+        state.context,
+        "slot1_hand",
+        ImagePoint(u=20, v=30),
+        "surface_fit",
+        0.10,
+        0.20,
+    )
+    probe.motion_state_source.pose = pose(0.8)
+    probe.motion_state_source.gravity_object_pose = PoseData(
+        position=Vector3Data.zero(),
+        orientation=roll_quaternion(180.0),
+    )
+    state = probe.begin_refinement(state.context)
+
+    operation = probe.prepare_motion(
+        state.context,
+        ProbeMotionRequest(
+            kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+            position_tolerance_m=0.01,
+            orientation_tolerance_rad=0.10,
+        ),
+    )
+
+    target = probe._drafts[state.context.context_id].refinement.pending_motion
+    target = target.target_pose_object
+    gravity_orientation = multiply_quaternions(
+        probe.motion_state_source.gravity_object_pose.orientation,
+        target.orientation,
+    )
+    roll, _pitch, _yaw = quaternion_to_rpy(gravity_orientation)
+    inward = rotate_vector(
+        target.orientation,
+        Vector3Data(x=1.0, y=0.0, z=0.0),
+    )
+
+    assert operation.request.command.command_id is CommandID.MOVE_ARM_TO_TAG
+    assert abs(roll) < 1e-6
+    assert inward.x == pytest.approx(1.0)
+    assert inward.y == pytest.approx(0.0)
+    assert inward.z == pytest.approx(0.0)
 
 
 def test_probe_motion_cancellation_keeps_context_state_correlated(tmp_path):
