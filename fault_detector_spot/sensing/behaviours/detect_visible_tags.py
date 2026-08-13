@@ -1,6 +1,8 @@
 """Detect fresh Spot base-camera fiducials with stable TF geometry."""
 
+from copy import deepcopy
 import re
+from threading import RLock
 from typing import Dict, Optional
 
 import py_trees
@@ -8,7 +10,7 @@ import tf2_ros
 from fault_detector_msgs.msg import TagElement
 from rclpy.node import Node
 from rclpy.time import Time
-from copy import deepcopy
+from tf2_msgs.msg import TFMessage
 
 from fault_detector_spot.sensing.observations.tag_observation_cache import (
     TagObservationCache,
@@ -44,6 +46,9 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         self.observation_cache = TagObservationCache(
             max_age_sec=max_age_sec,
         )
+        self._frame_lock = RLock()
+        self._raw_frames_by_tag = {}
+        self._tf_frame_subscription = None
 
     def setup(self, **kwargs):
         """Create TF resources and register blackboard outputs."""
@@ -59,6 +64,12 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
             self.tf_buffer,
             self.node,
         )
+        self._tf_frame_subscription = self.node.create_subscription(
+            TFMessage,
+            "/tf",
+            self._receive_tf_frames,
+            10,
+        )
 
         self.blackboard.register_key(
             "base_tag_observations",
@@ -72,6 +83,8 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         self.blackboard.base_tag_observations = {}
         self.blackboard.visible_tags = {}
         self.observation_cache.clear()
+        with self._frame_lock:
+            self._raw_frames_by_tag.clear()
 
     def update(self) -> py_trees.common.Status:
         """Publish the fresh per-tag base-camera cache."""
@@ -87,6 +100,55 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         )
         return py_trees.common.Status.SUCCESS
 
+    def _receive_tf_frames(self, message: TFMessage) -> None:
+        """Remember raw fiducial frame names as TF updates arrive."""
+        discovered = {}
+        for transform in message.transforms:
+            match = self.frame_pattern.search(
+                transform.child_frame_id
+            )
+            if match is None:
+                continue
+            discovered[int(match.group(1))] = match.group(0)
+
+        if not discovered:
+            return
+
+        with self._frame_lock:
+            self._raw_frames_by_tag.update(discovered)
+
+    def _raw_fiducial_frames(self):
+        with self._frame_lock:
+            discovered = tuple(
+                sorted(self._raw_frames_by_tag.items())
+            )
+
+        if discovered or self._tf_frame_subscription is not None:
+            return discovered
+
+        return self._discover_frames_from_buffer()
+
+    def _discover_frames_from_buffer(self):
+        if self.tf_buffer is None:
+            return ()
+
+        try:
+            frame_yaml = self.tf_buffer.all_frames_as_yaml()
+        except Exception as exception:
+            self.logger.warning(
+                f"Could not list TF frames: {exception}"
+            )
+            return ()
+
+        discovered = {}
+        for match in self.frame_pattern.finditer(frame_yaml):
+            discovered[int(match.group(1))] = match.group(0)
+
+        with self._frame_lock:
+            self._raw_frames_by_tag.update(discovered)
+
+        return tuple(sorted(discovered.items()))
+
     def _get_visible_tags_from_tf(
         self,
         current_time: Time,
@@ -95,26 +157,12 @@ class DetectVisibleTags(py_trees.behaviour.Behaviour):
         if self.tf_buffer is None:
             return {}
 
-        try:
-            frame_yaml = self.tf_buffer.all_frames_as_yaml()
-        except Exception as exception:
-            self.logger.warning(
-                f"Could not list TF frames: {exception}"
-            )
-            return {}
-
         observations = {}
-        seen_frames = set()
 
-        for match in self.frame_pattern.finditer(frame_yaml):
-            raw_frame_name = match.group(0)
-
-            if raw_frame_name in seen_frames:
-                continue
-
-            seen_frames.add(raw_frame_name)
-            tag_id = int(match.group(1))
-            filtered_frame_name = f"{self.filtered_frame_prefix}{tag_id}"
+        for tag_id, raw_frame_name in self._raw_fiducial_frames():
+            filtered_frame_name = (
+                f"{self.filtered_frame_prefix}{tag_id}"
+            )
 
             try:
                 raw_transform = self.tf_buffer.lookup_transform(
