@@ -2578,6 +2578,8 @@ class InspectionControls(UIControlHelper):
             "Surface verification running"
         )
         return True
+
+    @staticmethod
     def _refinement_delta(action, translation_step, rotation_step):
         translations = {
             "up": Vector3Data(x=0.0, y=0.0, z=translation_step),

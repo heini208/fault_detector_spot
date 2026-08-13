@@ -65,6 +65,10 @@ class ProbeRefinementController:
             draft.geometry.probe_setup,
             draft.setup,
         )
+        if not draft.setup.safe_approach_approved:
+            refinement.seed_safe_approach_from_current_pose(
+                self.current_probe_pose(draft)
+            )
         refinement.active_stage = RefinementStage.SAFE_APPROACH
         with self.state_lock:
             draft.refinement = refinement
