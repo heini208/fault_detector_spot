@@ -138,12 +138,18 @@ class ProbeRefinementController:
         else:
             target = refinement.candidate_pose(stage)
             if stage is RefinementStage.ALIGNMENT:
-                target = self._alignment_target(
+                candidate = self._alignment_target(
                     draft,
                     target,
                     motion,
                 )
-                refinement.set_candidate(stage, target)
+                refinement.set_candidate(stage, candidate)
+                target = candidate
+                if motion.orientation_only:
+                    target = deepcopy(candidate)
+                    target.position = deepcopy(
+                        self.current_probe_pose(draft).position
+                    )
             command = self._absolute_motion_command(draft, target)
             purpose = (
                 "alignment orientation"
@@ -229,6 +235,10 @@ class ProbeRefinementController:
                     status.operation.request_id,
                     achieved,
                 )
+                if motion.orientation_only:
+                    refinement.motion_states[
+                        RefinementStage.ALIGNMENT
+                    ] = RefinementMotionState.NOT_TESTED
             except Exception as exception:
                 refinement.fail_motion(
                     status.operation.request_id,
@@ -354,10 +364,6 @@ class ProbeRefinementController:
         )
         sensor = self.sensor_repository.load(routine.sensor_id)
         result = deepcopy(candidate)
-        if motion.orientation_only:
-            result.position = deepcopy(
-                self.current_probe_pose(draft).position
-            )
         if (
             motion.alignment_orientation_mode
             is ProbeAlignmentOrientationMode.TAG
