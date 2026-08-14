@@ -124,6 +124,7 @@ class ProbeRefinementController:
         refinement = self.require_refinement(draft)
         stage = self.motion_stage(motion.kind)
         refinement.active_stage = stage
+        self._invalidate_downstream_motion_state(refinement, stage)
         surface_correction = (
             motion.kind is ProbeMotionKind.ADJUST_PROBE_DISTANCE
         )
@@ -259,6 +260,24 @@ class ProbeRefinementController:
             )
         self._operations.pop(status.operation.request_id)
         return motion, status
+
+    @staticmethod
+    def _invalidate_downstream_motion_state(refinement, stage) -> None:
+        if stage is RefinementStage.SAFE_APPROACH:
+            downstream = (
+                RefinementStage.ALIGNMENT,
+                RefinementStage.PROBE,
+            )
+        elif stage is RefinementStage.ALIGNMENT:
+            downstream = (RefinementStage.PROBE,)
+        else:
+            downstream = ()
+        for downstream_stage in downstream:
+            refinement.motion_states[downstream_stage] = (
+                RefinementMotionState.NOT_TESTED
+            )
+        if downstream:
+            refinement.surface_distance_verified = False
 
     def add_listener(self, listener) -> None:
         self._operations.add_listener(listener)

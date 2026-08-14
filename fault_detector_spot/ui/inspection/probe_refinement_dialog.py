@@ -1,6 +1,6 @@
 """Three-stage supervised probe-point refinement dialog."""
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QDialog,
@@ -11,18 +11,30 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
+
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementStage,
+)
+from fault_detector_spot.inspection.setup.probe_setup_motion_state_source import (
+    DEFAULT_HAND_SURFACE_WINDOW_RADIUS_PX,
+    HAND_SURFACE_WINDOW_PARAMETER,
+    MAXIMUM_HAND_SURFACE_WINDOW_RADIUS_PX,
+    MINIMUM_HAND_SURFACE_WINDOW_RADIUS_PX,
 )
 
 
 class ProbeRefinementDialog(QDialog):
     """Display one ordered refinement stage at a time."""
+
+    surface_window_parameter_result = pyqtSignal(bool, str)
 
     STAGES = (
         RefinementStage.SAFE_APPROACH,
@@ -36,6 +48,15 @@ class ProbeRefinementDialog(QDialog):
         super().__init__(parent)
         self.controls = controls
         self._force_close = False
+        self._surface_window_parameter_client = None
+        if controls.node is not None:
+            self._surface_window_parameter_client = controls.node.create_client(
+                SetParameters,
+                "/application_api/set_parameters",
+            )
+        self.surface_window_parameter_result.connect(
+            self._continue_surface_orientation_calculation
+        )
         self.setWindowTitle("Probe Point Position Refinement")
         self.setModal(False)
         self.resize(880, 720)
@@ -53,12 +74,53 @@ class ProbeRefinementDialog(QDialog):
         self.target_distance_field.setValidator(
             controls._distance_validator(self.target_distance_field)
         )
+        self.surface_window_radius_field = QSpinBox()
+        self.surface_window_radius_field.setRange(
+            MINIMUM_HAND_SURFACE_WINDOW_RADIUS_PX,
+            MAXIMUM_HAND_SURFACE_WINDOW_RADIUS_PX,
+        )
+        self.surface_window_radius_field.setValue(
+            DEFAULT_HAND_SURFACE_WINDOW_RADIUS_PX
+        )
+        self.surface_window_radius_field.setSuffix(" px")
+        self.surface_window_radius_field.setToolTip(
+            "Radius of the circular registered-depth region around the hand "
+            "image center used for live surface-plane fitting"
+        )
         self.aligned_distance_field.editingFinished.connect(
             self._handle_distance_editing_finished
         )
         self.target_distance_field.editingFinished.connect(
             self._handle_distance_editing_finished
         )
+        calculate_button = (
+            self.controls.calculate_hand_surface_orientation_button
+        )
+        try:
+            calculate_button.clicked.disconnect(
+                self.controls.handle_calculate_hand_surface_orientation
+            )
+        except TypeError:
+            pass
+        calculate_button.clicked.connect(
+            self._handle_calculate_surface_orientation
+        )
+        client = getattr(self.controls.ui, "probe_setup_client", None)
+        rejected_signal = getattr(
+            client,
+            "surface_orientation_rejected",
+            None,
+        )
+        if rejected_signal is not None:
+            try:
+                rejected_signal.disconnect(
+                    self.controls.apply_live_surface_orientation_error
+                )
+            except TypeError:
+                pass
+            rejected_signal.connect(
+                self._handle_surface_orientation_rejected
+            )
 
         layout = QVBoxLayout(self)
         self.progress_label = QLabel("Step 1 of 3")
@@ -137,6 +199,85 @@ class ProbeRefinementDialog(QDialog):
         ):
             button.setEnabled(False)
 
+    def _handle_calculate_surface_orientation(self):
+        radius = int(self.surface_window_radius_field.value())
+        self.controls.calculate_hand_surface_orientation_button.setEnabled(
+            False
+        )
+        self.controls.calculated_surface_orientation_value_label.setText(
+            f"Applying {radius} px center window..."
+        )
+        client = self._surface_window_parameter_client
+        if client is None or not client.service_is_ready():
+            self.surface_window_parameter_result.emit(
+                False,
+                "Application surface-window parameter service is unavailable",
+            )
+            return False
+        request = SetParameters.Request()
+        request.parameters = [
+            Parameter(
+                name=HAND_SURFACE_WINDOW_PARAMETER,
+                value=ParameterValue(
+                    type=ParameterType.PARAMETER_INTEGER,
+                    integer_value=radius,
+                ),
+            )
+        ]
+        future = client.call_async(request)
+        future.add_done_callback(
+            self._receive_surface_window_parameter_result
+        )
+        return True
+
+    def _receive_surface_window_parameter_result(self, future):
+        try:
+            response = future.result()
+        except Exception as exception:
+            self.surface_window_parameter_result.emit(
+                False,
+                str(exception),
+            )
+            return
+        results = tuple(response.results)
+        failed = [
+            result.reason or "parameter update rejected"
+            for result in results
+            if not result.successful
+        ]
+        if not results or failed:
+            self.surface_window_parameter_result.emit(
+                False,
+                failed[-1] if failed else "parameter update returned no result",
+            )
+            return
+        self.surface_window_parameter_result.emit(True, "")
+
+    def _continue_surface_orientation_calculation(self, success, detail):
+        if not success:
+            self.controls.calculated_surface_orientation_value_label.setText(
+                f"Window update unavailable: {detail}"
+            )
+            self.controls._refresh_refinement_dialog()
+            return
+        if not self.controls.handle_calculate_hand_surface_orientation():
+            self.controls.calculated_surface_orientation_value_label.setText(
+                "Surface orientation service is unavailable"
+            )
+            self.controls._refresh_refinement_dialog()
+
+    def _handle_surface_orientation_rejected(self, detail):
+        if self.controls._calculated_surface_probe_orientation is None:
+            return self.controls.apply_live_surface_orientation_error(detail)
+        self.controls.calculated_surface_orientation_value_label.setText(
+            "Latest calculation failed; keeping last valid orientation"
+        )
+        self.controls.calculated_surface_orientation_value_label.setToolTip(
+            detail
+        )
+        self.controls._refresh_refinement_dialog()
+        return False
+
     def _make_safe_approach_page(self):
         return self._make_scroll_page(
             RefinementStage.SAFE_APPROACH,
@@ -157,10 +298,24 @@ class ProbeRefinementDialog(QDialog):
         distance_widget = QWidget()
         distance_widget.setLayout(distance_row)
 
+        surface_fit_group = QGroupBox("Live hand surface fit")
+        surface_fit_layout = QFormLayout(surface_fit_group)
+        surface_fit_layout.addRow(
+            "Center window radius:",
+            self.surface_window_radius_field,
+        )
+        surface_fit_hint = QLabel(
+            "Fit the live surface plane from valid registered-depth pixels "
+            "inside this circular region around the hand-image center."
+        )
+        surface_fit_hint.setWordWrap(True)
+        surface_fit_layout.addRow(surface_fit_hint)
+
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.addWidget(distance_widget)
+        content_layout.addWidget(surface_fit_group)
         content_layout.addWidget(
             self.controls._make_refinement_controls("alignment")
         )

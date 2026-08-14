@@ -216,13 +216,23 @@ class ProbeSetupMotionStateSource:
             u=int(depth_image.width) // 2,
             v=int(depth_image.height) // 2,
         )
-        projected = project_reference_pixel(
-            center,
-            depth_image,
-            camera_info,
-            search_radius_px=window_radius_px,
-            rgb_size=(int(depth_image.width), int(depth_image.height)),
-        )
+        try:
+            projected = project_reference_pixel(
+                center,
+                depth_image,
+                camera_info,
+                search_radius_px=window_radius_px,
+                rgb_size=(int(depth_image.width), int(depth_image.height)),
+            )
+        except ValueError as exception:
+            if "No valid depth within" not in str(exception):
+                raise
+            raise ValueError(
+                "No valid registered hand depth in the "
+                f"{window_radius_px} px center window. The gripper ToF "
+                "may be inside its usable near field. Increase the aligned "
+                "pre-approach distance or the center-window radius."
+            ) from exception
         normal = estimate_reference_surface_normal(
             projected,
             depth_image,
@@ -358,6 +368,14 @@ class ProbeSetupMotionStateSource:
                 errors.append(str(exception))
         if len(samples) < MINIMUM_SURFACE_DISTANCE_SAMPLES:
             detail = errors[-1] if errors else "no fresh depth frames"
+            if (
+                "no valid pixels" in detail.lower()
+                or "insufficient support" in detail.lower()
+            ):
+                detail = (
+                    f"{detail}. The gripper ToF may be inside its usable "
+                    "near field at this probe distance"
+                )
             raise ValueError(
                 "Need at least three fresh registered hand-depth samples: "
                 f"{detail}"
