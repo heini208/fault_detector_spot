@@ -203,7 +203,7 @@ def _collect_surface_samples(
     radius,
     maximum_depth_delta_m,
 ) -> List[List[float]]:
-    center = projected_point.sampled_pixel
+    center = projected_point.mapped_pixel
     samples = []
     depth_size = (depth_image.width, depth_image.height)
     for v in range(

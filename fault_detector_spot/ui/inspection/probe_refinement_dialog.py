@@ -54,10 +54,10 @@ class ProbeRefinementDialog(QDialog):
             controls._distance_validator(self.target_distance_field)
         )
         self.aligned_distance_field.editingFinished.connect(
-            controls._handle_dialog_distances_changed
+            self._handle_distance_editing_finished
         )
         self.target_distance_field.editingFinished.connect(
-            controls._handle_dialog_distances_changed
+            self._handle_distance_editing_finished
         )
 
         layout = QVBoxLayout(self)
@@ -114,6 +114,28 @@ class ProbeRefinementDialog(QDialog):
         self.close_button.clicked.connect(self.close)
         footer.addWidget(self.close_button)
         layout.addLayout(footer)
+
+    def _handle_distance_editing_finished(self):
+        fields = (
+            self.aligned_distance_field,
+            self.target_distance_field,
+        )
+        if not any(field.isModified() for field in fields):
+            return
+        if not self.controls._handle_dialog_distances_changed():
+            return
+        for field in fields:
+            field.setModified(False)
+            field.setEnabled(False)
+        for button in (
+            self.controls.move_aligned_pose_button,
+            self.controls.use_current_alignment_button,
+            self.controls.calculate_hand_surface_orientation_button,
+            self.controls.orient_to_calculated_surface_button,
+            self.back_button,
+            self.next_button,
+        ):
+            button.setEnabled(False)
 
     def _make_safe_approach_page(self):
         return self._make_scroll_page(

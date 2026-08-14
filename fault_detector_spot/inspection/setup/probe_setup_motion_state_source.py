@@ -56,6 +56,10 @@ BASE_TAG_MINIMUM_SPAN_SEC = 0.10
 HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
 MAX_HAND_DEPTH_AGE_SEC = 0.5
 MINIMUM_SURFACE_DISTANCE_SAMPLES = 3
+HAND_SURFACE_WINDOW_PARAMETER = "inspection.hand_surface_window_radius_px"
+DEFAULT_HAND_SURFACE_WINDOW_RADIUS_PX = 16
+MINIMUM_HAND_SURFACE_WINDOW_RADIUS_PX = 4
+MAXIMUM_HAND_SURFACE_WINDOW_RADIUS_PX = 64
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,10 @@ class ProbeSetupMotionStateSource:
             maxlen=HAND_DEPTH_HISTORY_MAX_SAMPLES
         )
         self._hand_depth_camera_info = None
+        node.declare_parameter(
+            HAND_SURFACE_WINDOW_PARAMETER,
+            DEFAULT_HAND_SURFACE_WINDOW_RADIUS_PX,
+        )
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(
             self._tf_buffer,
@@ -203,6 +211,7 @@ class ProbeSetupMotionStateSource:
             raise ValueError(
                 "No fresh registered hand-depth image is available"
             )
+        window_radius_px = self._hand_surface_window_radius_px()
         center = ImagePoint(
             u=int(depth_image.width) // 2,
             v=int(depth_image.height) // 2,
@@ -211,13 +220,15 @@ class ProbeSetupMotionStateSource:
             center,
             depth_image,
             camera_info,
-            search_radius_px=2,
+            search_radius_px=window_radius_px,
             rgb_size=(int(depth_image.width), int(depth_image.height)),
         )
         normal = estimate_reference_surface_normal(
             projected,
             depth_image,
             camera_info,
+            neighborhood_radius_px=window_radius_px,
+            maximum_neighborhood_radius_px=window_radius_px,
         )
         tag = self.reference_tag(reference_tag_id)
         body_frame = tag.pose.header.frame_id.strip()
@@ -258,6 +269,26 @@ class ProbeSetupMotionStateSource:
             sample_count=normal.sample_count,
             plane_rmse_m=normal.plane_rmse_m,
         )
+
+    def _hand_surface_window_radius_px(self) -> int:
+        value = self.node.get_parameter(
+            HAND_SURFACE_WINDOW_PARAMETER
+        ).value
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                "Hand surface window radius must be an integer"
+            )
+        if not (
+            MINIMUM_HAND_SURFACE_WINDOW_RADIUS_PX
+            <= value
+            <= MAXIMUM_HAND_SURFACE_WINDOW_RADIUS_PX
+        ):
+            raise ValueError(
+                "Hand surface window radius must be between "
+                f"{MINIMUM_HAND_SURFACE_WINDOW_RADIUS_PX} and "
+                f"{MAXIMUM_HAND_SURFACE_WINDOW_RADIUS_PX} pixels"
+            )
+        return value
 
     @staticmethod
     def _inverse_orientation(orientation: QuaternionData) -> QuaternionData:
