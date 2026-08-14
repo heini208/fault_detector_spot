@@ -172,7 +172,6 @@ class ProbeSetupMotionStateSource:
         body_to_object = pose_to_pose_data(tag.pose.pose)
         return relative_pose(body_to_object, body_to_probe)
 
-
     def live_hand_surface_orientation(
         self,
         reference_tag_id: int,
@@ -187,18 +186,19 @@ class ProbeSetupMotionStateSource:
             raise ValueError(
                 "No registered hand-depth camera info is available"
             )
-        now = self.node.get_clock().now()
         depth_image = None
         stamp = None
-        for _receipt_time, candidate in reversed(history):
+        fresh_history = self._recent_hand_depth_samples(
+            history,
+            MAX_HAND_DEPTH_AGE_SEC,
+        )
+        for _receipt_time, candidate in reversed(fresh_history):
             candidate_stamp = Time.from_msg(candidate.header.stamp)
             if candidate_stamp.nanoseconds <= 0:
                 continue
-            age_seconds = (now - candidate_stamp).nanoseconds * 1e-9
-            if -0.05 <= age_seconds <= MAX_HAND_DEPTH_AGE_SEC:
-                depth_image = deepcopy(candidate)
-                stamp = candidate_stamp
-                break
+            depth_image = deepcopy(candidate)
+            stamp = candidate_stamp
+            break
         if depth_image is None or stamp is None:
             raise ValueError(
                 "No fresh registered hand-depth image is available"
@@ -269,7 +269,6 @@ class ProbeSetupMotionStateSource:
             w=orientation.w,
         )
 
-
     def surface_distance_samples(
         self,
         sensor_id: str,
@@ -294,23 +293,18 @@ class ProbeSetupMotionStateSource:
                 "No registered hand-depth camera info is available"
             )
 
-        now = self.node.get_clock().now()
         samples = []
         errors = []
-        for receipt_time, depth_image in history:
-            if receipt_time + 1e-9 < receipt_not_before:
-                continue
+        fresh_history = self._recent_hand_depth_samples(
+            history,
+            maximum_age_sec,
+            receipt_not_before=receipt_not_before,
+        )
+        for _receipt_time, depth_image in fresh_history:
             try:
                 stamp = Time.from_msg(depth_image.header.stamp)
                 if stamp.nanoseconds <= 0:
                     raise ValueError("Registered hand-depth timestamp is empty")
-                age_seconds = (now - stamp).nanoseconds * 1e-9
-                if age_seconds < -0.05:
-                    raise ValueError(
-                        "Registered hand-depth timestamp is in the future"
-                    )
-                if age_seconds > maximum_age_sec:
-                    continue
                 depth_frame = (
                     depth_image.header.frame_id.strip()
                     or camera_info.header.frame_id.strip()
@@ -338,6 +332,23 @@ class ProbeSetupMotionStateSource:
                 f"{detail}"
             )
         return tuple(samples)
+
+    @staticmethod
+    def _recent_hand_depth_samples(
+        history,
+        maximum_age_sec: float,
+        receipt_not_before: float = 0.0,
+    ):
+        now_receipt_time = time.monotonic()
+        recent = []
+        for receipt_time, image in history:
+            if receipt_time + 1e-9 < receipt_not_before:
+                continue
+            age_seconds = now_receipt_time - receipt_time
+            if age_seconds < -1e-9 or age_seconds > maximum_age_sec:
+                continue
+            recent.append((receipt_time, image))
+        return tuple(recent)
 
     def _lookup_pose(
         self,
@@ -380,7 +391,6 @@ class ProbeSetupMotionStateSource:
                 if history and history[-1][0] == stamp_key:
                     continue
                 history.append((stamp_key, deepcopy(tag)))
-
 
     def _receive_hand_depth(self, message: Image) -> None:
         with self._lock:

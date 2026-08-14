@@ -39,9 +39,9 @@ def test_surface_samples_ignore_pre_settle_receipts(monkeypatch):
     source._hand_depth_camera_info.header.frame_id = "hand_depth"
     source._hand_depth_history = deque(
         (
-            (1.0, _image(9.7)),
-            (2.0, _image(9.8)),
-            (3.0, _image(9.85)),
+            (3.7, _image(9.7)),
+            (3.8, _image(9.8)),
+            (3.9, _image(9.85)),
             (4.0, _image(9.9)),
         )
     )
@@ -49,6 +49,7 @@ def test_surface_samples_ignore_pre_settle_receipts(monkeypatch):
     source._lookup_pose = lambda target, frame, lookup_time=None: (
         lookups.append((target, frame, lookup_time.nanoseconds)) or object()
     )
+    monkeypatch.setattr(source_module.time, "monotonic", lambda: 4.1)
     monkeypatch.setattr(
         source_module,
         "measure_probe_surface_distance",
@@ -58,7 +59,7 @@ def test_surface_samples_ignore_pre_settle_receipts(monkeypatch):
 
     samples = source.surface_distance_samples(
         "hall_probe",
-        receipt_not_before=2.0,
+        receipt_not_before=3.8,
     )
 
     assert samples == (9.8, 9.85, 9.9)
@@ -75,11 +76,12 @@ def test_surface_samples_require_three_fresh_frames(monkeypatch):
     source._hand_depth_camera_info = CameraInfo()
     source._hand_depth_history = deque(
         (
-            (1.0, _image(9.8)),
+            (1.8, _image(9.8)),
             (2.0, _image(9.9)),
         )
     )
     source._lookup_pose = lambda *args, **kwargs: object()
+    monkeypatch.setattr(source_module.time, "monotonic", lambda: 2.1)
     monkeypatch.setattr(
         source_module,
         "measure_probe_surface_distance",
@@ -92,3 +94,31 @@ def test_surface_samples_require_three_fresh_frames(monkeypatch):
         assert "at least three fresh" in str(exception)
     else:
         raise AssertionError("Expected insufficient fresh depth to fail")
+
+
+def test_surface_samples_use_receipt_time_not_ros_header_age(monkeypatch):
+    source = source_module.ProbeSetupMotionStateSource.__new__(
+        source_module.ProbeSetupMotionStateSource
+    )
+    source.node = _Node()
+    source._lock = RLock()
+    source._hand_depth_camera_info = CameraInfo()
+    source._hand_depth_camera_info.header.frame_id = "hand_depth"
+    source._hand_depth_history = deque(
+        (
+            (9.7, _image(1.0)),
+            (9.8, _image(1.1)),
+            (9.9, _image(1.2)),
+        )
+    )
+    source._lookup_pose = lambda *args, **kwargs: object()
+    monkeypatch.setattr(source_module.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(
+        source_module,
+        "measure_probe_surface_distance",
+        lambda image, info, pose: 0.05,
+    )
+
+    samples = source.surface_distance_samples("hall_probe")
+
+    assert samples == (0.05, 0.05, 0.05)
