@@ -47,3 +47,19 @@ def test_runner_defaults_match_tag_sensing_configuration():
         '"tag_sensing.probe_max_age_sec",\n'
         '            1.5,'
     ) in runner
+
+
+def test_bt_runner_keeps_tf_callbacks_live_during_tree_ticks():
+    runner = (
+        ROOT
+        / "fault_detector_spot"
+        / "application"
+        / "behaviour_tree"
+        / "runner.py"
+    ).read_text(encoding="utf-8")
+
+    assert "from rclpy.executors import MultiThreadedExecutor" in runner
+    assert "executor = MultiThreadedExecutor(num_threads=2)" in runner
+    assert "executor.add_node(tree.node)" in runner
+    assert "executor.spin()" in runner
+    assert "rclpy.spin(tree.node)" not in runner

@@ -12,6 +12,7 @@ from py_trees.behaviours import CheckBlackboardVariableValue
 from py_trees.common import ComparisonExpression
 from py_trees.decorators import EternalGuard, StatusToBlackboard
 from rclpy.clock import Clock, ClockType
+from rclpy.executors import MultiThreadedExecutor
 
 from fault_detector_spot.application.behaviour_tree import (
     BaseGetGoalTag,
@@ -600,10 +601,14 @@ def main(args=None):
     stop_mapping_tree = tree
     signal.signal(signal.SIGINT, ctrl_c_handler)
 
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(tree.node)
     try:
-        rclpy.spin(tree.node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
+    finally:
+        executor.shutdown()
 
     tree.shutdown()
     rclpy.shutdown()

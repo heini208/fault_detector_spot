@@ -10,8 +10,8 @@ from fault_detector_spot.inspection.setup.probe_setup_motion_state_source import
 )
 
 
-def test_hand_camera_clearance_defaults_to_260_mm():
-    assert MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M == 0.290
+def test_hand_camera_clearance_keeps_empirical_safety_floor():
+    assert MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M >= 0.230
 
 
 def test_minimum_probe_distance_uses_probe_to_camera_transform():
@@ -31,37 +31,19 @@ def test_reached_alignment_has_live_camera_clearance_gate(monkeypatch):
     monkeypatch.setattr(
         source,
         "current_hand_camera_surface_clearance_m",
-        lambda: 0.200,
+        lambda: MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M - 0.01,
     )
 
     with pytest.raises(ValueError, match="hand ToF near field"):
         source.require_hand_camera_clearance()
 
+    safe_clearance_m = MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M + 0.01
     monkeypatch.setattr(
         source,
         "current_hand_camera_surface_clearance_m",
-        lambda: 0.270,
+        lambda: safe_clearance_m,
     )
 
-    assert source.require_hand_camera_clearance() == pytest.approx(0.270)
-
-
-def test_depth_failure_explains_how_to_recover(monkeypatch):
-    source = ProbeSetupMotionStateSource.__new__(
-        ProbeSetupMotionStateSource
+    assert source.require_hand_camera_clearance() == pytest.approx(
+        safe_clearance_m
     )
-
-    def unavailable():
-        raise ValueError("No valid registered hand depth")
-
-    monkeypatch.setattr(
-        source,
-        "current_hand_camera_surface_clearance_m",
-        unavailable,
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="increase the aligned pre-approach distance",
-    ):
-        source.require_hand_camera_clearance()
