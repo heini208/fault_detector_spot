@@ -872,7 +872,7 @@ class InspectionControls(UIControlHelper):
         self.reference_target_distance_field.setValidator(
             self._distance_validator(self.reference_target_distance_field)
         )
-        self.reference_preapproach_distance_field = QLineEdit("0.10")
+        self.reference_preapproach_distance_field = QLineEdit("0.2")
         self.reference_preapproach_distance_field.setFixedWidth(90)
         self.reference_preapproach_distance_field.setValidator(
             self._distance_validator(

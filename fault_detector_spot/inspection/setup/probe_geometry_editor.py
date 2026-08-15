@@ -1,11 +1,23 @@
 """Geometry calculation and draft editing for probe setup."""
 
 from copy import deepcopy
+import math
 
-from fault_detector_spot.inspection.model.models import ImagePoint
+from fault_detector_spot.inspection.model.models import (
+    ImagePoint,
+    PoseData,
+    Vector3Data,
+)
+from fault_detector_spot.inspection.setup.probe_refinement_session import (
+    RefinementMotionState,
+    RefinementStage,
+)
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
+    add_vectors,
     approve_safe_approach_pose,
     approve_surface_alignment_pose,
+    rotate_vector,
+    scale_vector,
 )
 
 
@@ -74,6 +86,10 @@ class ProbeGeometryEditor:
             target_surface_distance_m,
             aligned_preapproach_distance_m,
         )
+        aligned_distance_changed = self._aligned_distance_changed(
+            previous,
+            geometry.probe_setup,
+        )
         setup = self._retained_distance_approvals(
             geometry.probe_setup,
             previous,
@@ -81,12 +97,34 @@ class ProbeGeometryEditor:
         draft.geometry = geometry
         draft.setup = setup
         if draft.refinement is not None:
-            draft.refinement = (
-                draft.refinement.with_updated_surface_geometry(
+            previous_refinement = draft.refinement
+            updated_refinement = (
+                previous_refinement.with_updated_surface_geometry(
                     geometry.probe_setup,
                     setup,
                 )
             )
+            if aligned_distance_changed:
+                previous_candidate = previous_refinement.candidate_pose(
+                    RefinementStage.ALIGNMENT
+                )
+                shifted_candidate = self._shift_aligned_candidate(
+                    previous_candidate,
+                    previous.surface_target.aligned_preapproach_distance_m,
+                    geometry.probe_setup.surface_target
+                    .aligned_preapproach_distance_m,
+                )
+                updated_refinement.set_candidate(
+                    RefinementStage.ALIGNMENT,
+                    shifted_candidate,
+                )
+                updated_refinement.motion_states[
+                    RefinementStage.ALIGNMENT
+                ] = RefinementMotionState.NOT_TESTED
+                updated_refinement.motion_states[
+                    RefinementStage.PROBE
+                ] = RefinementMotionState.NOT_TESTED
+            draft.refinement = updated_refinement
         draft.dirty = True
         draft.validation_error = ""
 
@@ -119,8 +157,8 @@ class ProbeGeometryEditor:
             hand_to_probe_pose=sensor.hand_to_probe,
         )
 
-    @staticmethod
-    def _retained_distance_approvals(setup, previous):
+    @classmethod
+    def _retained_distance_approvals(cls, setup, previous):
         setup = deepcopy(setup)
         if previous is None:
             return setup
@@ -135,6 +173,38 @@ class ProbeGeometryEditor:
                 previous.aligned_preapproach_pose_object,
             )
         return setup
+
+    @staticmethod
+    def _aligned_distance_changed(previous, current) -> bool:
+        if previous is None:
+            return False
+        return not math.isclose(
+            previous.surface_target.aligned_preapproach_distance_m,
+            current.surface_target.aligned_preapproach_distance_m,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+
+    @staticmethod
+    def _shift_aligned_candidate(
+        candidate: PoseData,
+        previous_distance_m: float,
+        updated_distance_m: float,
+    ) -> PoseData:
+        inward = rotate_vector(
+            candidate.orientation,
+            Vector3Data(x=1.0, y=0.0, z=0.0),
+        )
+        shift_m = float(previous_distance_m) - float(updated_distance_m)
+        result = PoseData(
+            position=add_vectors(
+                candidate.position,
+                scale_vector(inward, shift_m),
+            ),
+            orientation=deepcopy(candidate.orientation),
+        )
+        result.validate()
+        return result
 
     @staticmethod
     def _text(value: str, label: str) -> str:

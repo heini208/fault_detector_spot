@@ -2,6 +2,7 @@
 
 import math
 from copy import deepcopy
+from dataclasses import replace
 
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
@@ -11,6 +12,10 @@ from fault_detector_spot.application.coordinators.setup_coordinator import (
 )
 from fault_detector_spot.application.setup.setup_operation_registry import (
     SetupOperationRegistry,
+)
+from fault_detector_spot.inspection.model.models import (
+    PoseData,
+    Vector3Data,
 )
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     PendingRefinementMotion,
@@ -26,9 +31,12 @@ from fault_detector_spot.inspection.setup.alignment_orientation import (
     tag_aligned_probe_orientation,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
+    add_vectors,
     approve_probe_pose,
     approve_safe_approach_pose,
     approve_surface_alignment_pose,
+    rotate_vector,
+    scale_vector,
 )
 
 
@@ -65,6 +73,7 @@ class ProbeRefinementController:
             raise ValueError("No calculated probe setup is available")
         if draft.refinement is not None:
             raise RuntimeError("Probe refinement is already active")
+        self._ensure_minimum_camera_clearance_geometry(draft)
         refinement = ProbeRefinementSession.create(
             draft.geometry.probe_setup,
             draft.setup,
@@ -91,8 +100,19 @@ class ProbeRefinementController:
         self.require_physical_lane_idle()
         if draft.setup is None:
             raise ValueError("No calculated probe setup is available")
+        if stage is RefinementStage.ALIGNMENT:
+            self._ensure_minimum_camera_clearance_geometry(draft)
         refinement = self.require_refinement(draft)
-        if (
+        if stage is RefinementStage.ALIGNMENT:
+            if refinement.motion_states[stage] not in {
+                RefinementMotionState.REACHED,
+                RefinementMotionState.FAILED,
+            }:
+                raise RuntimeError(
+                    "Reach or attempt the alignment pose before approval"
+                )
+            self._require_live_alignment_camera_clearance()
+        elif (
             stage != RefinementStage.SAFE_APPROACH
             and refinement.motion_states[stage]
             != RefinementMotionState.REACHED
@@ -121,8 +141,10 @@ class ProbeRefinementController:
     def prepare_motion(self, context, draft, motion):
         self.require_physical_lane_idle()
         motion.validate()
-        refinement = self.require_refinement(draft)
         stage = self.motion_stage(motion.kind)
+        if stage is RefinementStage.ALIGNMENT:
+            self._ensure_minimum_camera_clearance_geometry(draft)
+        refinement = self.require_refinement(draft)
         refinement.active_stage = stage
         self._invalidate_downstream_motion_state(refinement, stage)
         surface_correction = (
@@ -232,6 +254,11 @@ class ProbeRefinementController:
                     motion,
                     achieved,
                 )
+                if (
+                    _stage is RefinementStage.ALIGNMENT
+                    and not motion.orientation_only
+                ):
+                    self._require_live_alignment_camera_clearance()
                 refinement.complete_motion(
                     status.operation.request_id,
                     achieved,
@@ -373,6 +400,166 @@ class ProbeRefinementController:
                 "Achieved probe orientation missed the target by "
                 f"{math.degrees(orientation_error):.2f} deg"
             )
+
+
+    def _ensure_minimum_camera_clearance_geometry(self, draft):
+        if draft.geometry is None or draft.setup is None:
+            return None
+        source = self.motion_state_source
+        resolver = getattr(
+            source,
+            "minimum_aligned_probe_distance_m",
+            None,
+        )
+        if resolver is None or self.object_repository is None:
+            return None
+        object_id = getattr(draft, "selected_object_id", "")
+        routine_id = getattr(draft, "selected_routine_id", "")
+        if not object_id or not routine_id:
+            return None
+        definition = self.object_repository.load(object_id)
+        routine = definition.get_routine(routine_id)
+        minimum_distance_m = float(resolver(routine.sensor_id))
+        calculated = draft.geometry.probe_setup
+        configured_distance_m = float(
+            calculated.surface_target.aligned_preapproach_distance_m
+        )
+        if configured_distance_m + 1e-9 >= minimum_distance_m:
+            return minimum_distance_m
+
+        updated_calculated = self._setup_with_aligned_distance(
+            calculated,
+            minimum_distance_m,
+            invalidate_alignment=False,
+        )
+        updated_setup = self._setup_with_aligned_distance(
+            draft.setup,
+            minimum_distance_m,
+            invalidate_alignment=True,
+        )
+        draft.geometry = replace(
+            draft.geometry,
+            surface_target=updated_calculated.surface_target,
+            probe_setup=updated_calculated,
+        )
+        draft.setup = updated_setup
+        if draft.refinement is not None:
+            previous = draft.refinement
+            previous_candidate = previous.candidate_pose(
+                RefinementStage.ALIGNMENT
+            )
+            updated_refinement = previous.with_updated_surface_geometry(
+                updated_calculated,
+                updated_setup,
+            )
+            shifted_candidate = self._shift_alignment_pose(
+                previous_candidate,
+                configured_distance_m,
+                minimum_distance_m,
+            )
+            updated_refinement.set_candidate(
+                RefinementStage.ALIGNMENT,
+                shifted_candidate,
+            )
+            updated_refinement.motion_states[
+                RefinementStage.ALIGNMENT
+            ] = RefinementMotionState.NOT_TESTED
+            updated_refinement.motion_states[
+                RefinementStage.PROBE
+            ] = RefinementMotionState.NOT_TESTED
+            draft.refinement = updated_refinement
+        draft.dirty = True
+        draft.validation_error = ""
+        return minimum_distance_m
+
+    def _require_live_alignment_camera_clearance(self):
+        source = self._motion_state_source()
+        gate = getattr(source, "require_hand_camera_clearance", None)
+        if gate is None:
+            return None
+        return gate()
+
+    @classmethod
+    def _setup_with_aligned_distance(
+        cls,
+        setup,
+        aligned_distance_m: float,
+        invalidate_alignment: bool,
+    ):
+        target = setup.surface_target
+        previous_distance_m = float(
+            target.aligned_preapproach_distance_m
+        )
+        shifted_alignment = cls._shift_alignment_pose(
+            setup.aligned_preapproach_pose_object,
+            previous_distance_m,
+            aligned_distance_m,
+        )
+        target_alignment_position = add_vectors(
+            target.surface_point_object,
+            scale_vector(
+                target.outward_direction_object,
+                aligned_distance_m,
+            ),
+        )
+        updated_target = replace(
+            target,
+            aligned_preapproach_pose_object=PoseData(
+                position=target_alignment_position,
+                orientation=deepcopy(
+                    target.aligned_preapproach_pose_object.orientation
+                ),
+            ),
+            aligned_preapproach_distance_m=float(aligned_distance_m),
+        )
+        inward = rotate_vector(
+            shifted_alignment.orientation,
+            Vector3Data(x=1.0, y=0.0, z=0.0),
+        )
+        probe_distance_delta = (
+            float(aligned_distance_m)
+            - float(target.target_surface_distance_m)
+        )
+        updated_probe = PoseData(
+            position=add_vectors(
+                shifted_alignment.position,
+                scale_vector(inward, probe_distance_delta),
+            ),
+            orientation=deepcopy(shifted_alignment.orientation),
+        )
+        return replace(
+            setup,
+            surface_target=updated_target,
+            aligned_preapproach_pose_object=shifted_alignment,
+            probe_pose_object=updated_probe,
+            surface_alignment_approved=(
+                False
+                if invalidate_alignment
+                else setup.surface_alignment_approved
+            ),
+            probe_pose_approved=False,
+        )
+
+    @staticmethod
+    def _shift_alignment_pose(
+        pose: PoseData,
+        previous_distance_m: float,
+        updated_distance_m: float,
+    ) -> PoseData:
+        inward = rotate_vector(
+            pose.orientation,
+            Vector3Data(x=1.0, y=0.0, z=0.0),
+        )
+        shift_m = float(previous_distance_m) - float(updated_distance_m)
+        result = PoseData(
+            position=add_vectors(
+                pose.position,
+                scale_vector(inward, shift_m),
+            ),
+            orientation=deepcopy(pose.orientation),
+        )
+        result.validate()
+        return result
 
     def _alignment_target(self, draft, candidate, motion):
         definition = self.object_repository.load(
