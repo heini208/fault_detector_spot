@@ -1,5 +1,6 @@
 """Regression tests for aligned-distance and camera-clearance safety."""
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -155,7 +156,7 @@ class _ObjectRepository:
 
 
 class _ClearanceSource:
-    def __init__(self, minimum=0.155, live=0.250):
+    def __init__(self, minimum=0.125, live=0.240):
         self.minimum = minimum
         self.live = live
         self.live_calls = 0
@@ -214,3 +215,35 @@ def test_live_alignment_clearance_gate_delegates_to_state_source():
         pytest.approx(0.235)
     )
     assert source.live_calls == 1
+
+
+def test_explicit_alignment_approval_promotes_failed_pose_to_reached():
+    calculated = make_setup(aligned_distance=0.12)
+    safe_approved = approve_safe_approach_pose(
+        calculated,
+        pose(x=0.30),
+    )
+    refinement = ProbeRefinementSession.create(calculated, safe_approved)
+    refinement.motion_states[RefinementStage.ALIGNMENT] = (
+        RefinementMotionState.FAILED
+    )
+    draft = SimpleNamespace(
+        setup=safe_approved,
+        refinement=refinement,
+        dirty=False,
+        validation_error="",
+    )
+    controller = ProbeRefinementController.__new__(ProbeRefinementController)
+    controller.state_lock = nullcontext()
+    controller.require_physical_lane_idle = lambda: None
+    controller._ensure_minimum_camera_clearance_geometry = lambda _draft: None
+    controller._require_live_alignment_camera_clearance = lambda: 0.270
+    controller.current_probe_pose = lambda _draft: pose(x=0.12)
+
+    controller.approve(draft, RefinementStage.ALIGNMENT)
+
+    assert draft.refinement.motion_states[RefinementStage.ALIGNMENT] is (
+        RefinementMotionState.REACHED
+    )
+    assert draft.refinement.stage_is_approved(RefinementStage.ALIGNMENT)
+    assert draft.setup.surface_alignment_approved

@@ -131,6 +131,8 @@ class ProbeRefinementController:
                 RefinementMotionState.REACHED
             )
         refinement.approve(stage, pose_object)
+        if stage is RefinementStage.ALIGNMENT:
+            refinement.motion_states[stage] = RefinementMotionState.REACHED
         operation = self._approval_operation(stage)
         setup = operation(draft.setup, deepcopy(pose_object))
         with self.state_lock:

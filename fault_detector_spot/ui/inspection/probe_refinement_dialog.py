@@ -21,6 +21,7 @@ from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
+    RefinementMotionState,
     RefinementStage,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion_state_source import (
@@ -433,6 +434,17 @@ class ProbeRefinementDialog(QDialog):
         self.stage_stack.setCurrentIndex(index)
         self.progress_label.setText(f"Step {index + 1} of 3")
         self.controls._handle_refinement_stage_changed(stage)
+        presentation = self.controls._refinement_presentation
+        if (
+            stage is RefinementStage.PROBE
+            and presentation is not None
+            and presentation.stage_is_approved(RefinementStage.ALIGNMENT)
+            and presentation.motion_states[RefinementStage.ALIGNMENT]
+            is RefinementMotionState.REACHED
+        ):
+            self.controls.surface_distance_test_status_label.setText(
+                "Aligned pre-approach approved. Ready to test surface distance."
+            )
         self.refresh()
 
     def refresh(self):

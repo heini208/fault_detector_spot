@@ -64,7 +64,7 @@ HAND_SURFACE_WINDOW_PARAMETER = "inspection.hand_surface_window_radius_px"
 DEFAULT_HAND_SURFACE_WINDOW_RADIUS_PX = 16
 MINIMUM_HAND_SURFACE_WINDOW_RADIUS_PX = 4
 MAXIMUM_HAND_SURFACE_WINDOW_RADIUS_PX = 64
-MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M = 0.230
+MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M = 0.260
 END_EFFECTOR_FORCE_TOPIC = "/status/end_effector_force"
 END_EFFECTOR_FORCE_HISTORY_MAX_SAMPLES = 128
 MAX_END_EFFECTOR_FORCE_AGE_SEC = 0.25
@@ -429,7 +429,16 @@ class ProbeSetupMotionStateSource:
         ),
     ) -> float:
         """Require the reached aligned pose to remain in usable ToF range."""
-        clearance_m = self.current_hand_camera_surface_clearance_m()
+        try:
+            clearance_m = self.current_hand_camera_surface_clearance_m()
+        except ValueError as exception:
+            raise ValueError(
+                "Unable to verify hand-camera surface clearance from depth. "
+                "If the registered depth is invalid because the hand is too "
+                "close to the surface, increase the aligned pre-approach "
+                "distance and try again. "
+                f"Detail: {exception}"
+            ) from exception
         if clearance_m + 1e-9 < minimum_camera_clearance_m:
             raise ValueError(
                 "Reached aligned pre-approach is inside the hand ToF near "
