@@ -200,6 +200,35 @@ class ProbeRefinementDialog(QDialog):
         ):
             button.setEnabled(False)
 
+    def _handle_back_away_from_surface(self):
+        presentation = self.controls._require_refinement_presentation()
+        if presentation.active_stage is not RefinementStage.ALIGNMENT:
+            self.controls._show_setup_error(
+                "Back Away from Surface",
+                ValueError("Alignment refinement is not active"),
+            )
+            return False
+
+        dropdown = self.controls.refine_frame_dropdown
+        sensor_index = dropdown.findData("sensor")
+        if sensor_index < 0:
+            self.controls._show_setup_error(
+                "Back Away from Surface",
+                ValueError("Sensor refinement frame is unavailable"),
+            )
+            return False
+
+        previous_index = dropdown.currentIndex()
+        dropdown.blockSignals(True)
+        dropdown.setCurrentIndex(sensor_index)
+        dropdown.blockSignals(False)
+        try:
+            return self.controls.handle_refine_pose("alignment", "back")
+        finally:
+            dropdown.blockSignals(True)
+            dropdown.setCurrentIndex(previous_index)
+            dropdown.blockSignals(False)
+
     def _handle_calculate_surface_orientation(self):
         radius = int(self.surface_window_radius_field.value())
         self.controls.calculate_hand_surface_orientation_button.setEnabled(
@@ -317,9 +346,31 @@ class ProbeRefinementDialog(QDialog):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.addWidget(distance_widget)
         content_layout.addWidget(surface_fit_group)
+        clearance_group = QGroupBox("Camera clearance recovery")
+        clearance_layout = QVBoxLayout(clearance_group)
+        clearance_hint = QLabel(
+            "If lateral or rotational refinement moves the hand camera too "
+            "close for reliable registered depth, move one translation step "
+            "away from the surface along probe local -X."
+        )
+        clearance_hint.setWordWrap(True)
+        clearance_layout.addWidget(clearance_hint)
+        self.back_away_surface_button = QPushButton(
+            "Back Away from Surface"
+        )
+        self.back_away_surface_button.setToolTip(
+            "Move one Translation step away from the surface in the Sensor "
+            "frame, regardless of the selected adjustment frame."
+        )
+        self.back_away_surface_button.clicked.connect(
+            self._handle_back_away_from_surface
+        )
+        clearance_layout.addWidget(self.back_away_surface_button)
+
         content_layout.addWidget(
             self.controls._make_refinement_controls("alignment")
         )
+        content_layout.addWidget(clearance_group)
         return self._make_scroll_page(
             RefinementStage.ALIGNMENT,
             "Aligned Pre-approach Pose",

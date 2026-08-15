@@ -11,7 +11,7 @@ from fault_detector_spot.inspection.setup.probe_setup_motion_state_source import
 
 
 def test_hand_camera_clearance_defaults_to_260_mm():
-    assert MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M == 0.260
+    assert MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M == 0.290
 
 
 def test_minimum_probe_distance_uses_probe_to_camera_transform():
