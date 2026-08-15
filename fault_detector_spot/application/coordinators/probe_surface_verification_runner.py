@@ -39,7 +39,7 @@ class ProbeSurfaceVerificationRunner:
         coordinator,
         state_source,
         settle_sec: float = 0.5,
-        sample_timeout_sec: float = 2.0,
+        sample_timeout_sec: float = 3.0,
         poll_sec: float = 0.05,
     ):
         if state_source is None:
@@ -237,6 +237,7 @@ class ProbeSurfaceVerificationRunner:
                 samples = self.state_source.surface_distance_samples(
                     snapshot.selected_sensor_id,
                     receipt_not_before=receipt_not_before,
+                    maximum_age_sec=self.sample_timeout_sec,
                 )
                 achieved = self.state_source.current_probe_pose_object(
                     snapshot.selected_reference_tag_id,

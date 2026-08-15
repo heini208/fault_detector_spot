@@ -54,7 +54,7 @@ def _samples(distance_m):
             spread_m=0.001,
             source_region=ImageRegion(x=0, y=0, width=2, height=2),
         )
-        for stamp in (1.0, 1.1, 1.2)
+        for stamp in (1.0, 1.25, 1.5, 1.75, 2.0)
     ]
 
 
@@ -63,6 +63,13 @@ def _begin(policy=None):
     coordinator = ProbeSurfaceVerificationCoordinator(policy)
     session = coordinator.begin(refinement, TEST_REQUEST_ID)
     return coordinator, session, refinement
+
+
+def test_default_policy_requires_five_samples_over_one_second():
+    policy = SurfaceVerificationPolicy()
+
+    assert policy.minimum_samples == 5
+    assert policy.minimum_sample_span_sec == pytest.approx(1.0)
 
 
 def test_begin_requires_reached_alignment():
@@ -92,7 +99,34 @@ def test_verified_samples_converge_and_capture_achieved_pose():
     assert session.state == SurfaceVerificationState.CONVERGED
     assert session.measured_distance_m == pytest.approx(0.05)
     assert session.error_m == pytest.approx(0.0)
+    assert decision.aggregate.sample_count == 5
+    assert decision.aggregate.sample_span_sec == pytest.approx(1.0)
     assert refinement.verified_pose is achieved_pose
+
+
+def test_default_policy_rejects_short_sample_window():
+    coordinator, session, refinement = _begin()
+    samples = _samples(0.05)
+    samples = [
+        SurfaceDistanceSample(
+            distance_m=sample.distance_m,
+            stamp_seconds=1.0 + index * 0.1,
+            frame_id=sample.frame_id,
+            sample_count=sample.sample_count,
+            valid_pixel_ratio=sample.valid_pixel_ratio,
+            spread_m=sample.spread_m,
+            source_region=sample.source_region,
+        )
+        for index, sample in enumerate(samples)
+    ]
+
+    with pytest.raises(ValueError, match="sampling window"):
+        coordinator.evaluate_samples(
+            session,
+            refinement,
+            samples,
+            achieved_pose_object=object(),
+        )
 
 
 def test_correction_is_bounded_and_recovery_starts_with_motion():

@@ -42,8 +42,8 @@ class SurfaceVerificationPolicy:
     maximum_step_m: float = 0.020
     maximum_cumulative_correction_m: float = 0.100
     maximum_iterations: int = 8
-    minimum_samples: int = 3
-    minimum_sample_span_sec: float = 0.20
+    minimum_samples: int = 5
+    minimum_sample_span_sec: float = 1.0
     stability_tolerance_m: float = 0.005
     divergence_tolerance_m: float = 0.005
     maximum_divergence_count: int = 2
