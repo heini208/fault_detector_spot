@@ -34,7 +34,7 @@ class MoveToTagCommand(MoveCommand):
         """
         if transformer:
             tf_to_target = transformer.lookup_a_tform_b(
-                self.target_frame, self.tag_pose.header.frame_id, timeout_sec=2
+                self.target_frame, self.tag_pose.header.frame_id, timeout_sec=0.0
             )
             tag_in_target = tf2_geometry_msgs.do_transform_pose_stamped(
                 transform=tf_to_target, pose=self.tag_pose

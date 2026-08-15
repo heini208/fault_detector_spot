@@ -51,7 +51,7 @@ class MoveCommand(ExecutionCommand):
         """
         if transformer and source_frame != target_frame:
             tf_msg = transformer.lookup_a_tform_b(
-                target_frame, source_frame, timeout_sec=2
+                target_frame, source_frame, timeout_sec=0.0
             )
             q_rot = [
                 tf_msg.transform.rotation.x,
@@ -66,11 +66,11 @@ class MoveCommand(ExecutionCommand):
     def _rotate_quaternion_into_frame(self, quat_xyzw: list, source_frame: str, target_frame: str,
                                       transformer: TFListenerWrapper) -> list:
         """
-        Helper to rotate a quaternion from source_frame to target_frame.
+        Helper to rotate a quaternion from source_frame to target_frame using the transformer.
         """
         if transformer and source_frame != target_frame:
             tf_msg = transformer.lookup_a_tform_b(
-                target_frame, source_frame, timeout_sec=2
+                target_frame, source_frame, timeout_sec=0.0
             )
             q_rot = [
                 tf_msg.transform.rotation.x,
@@ -92,7 +92,7 @@ class MoveCommand(ExecutionCommand):
             return list(quat_xyzw)
 
             # 1) Get yaw-only from the transform by using an identity input
-        tf_msg = transformer.lookup_a_tform_b(target_frame, source_frame, timeout_sec=2)
+        tf_msg = transformer.lookup_a_tform_b(target_frame, source_frame, timeout_sec=0.0)
         q_rot = [
             tf_msg.transform.rotation.x,
             tf_msg.transform.rotation.y,

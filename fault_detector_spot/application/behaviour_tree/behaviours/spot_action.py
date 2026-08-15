@@ -113,7 +113,6 @@ class ActionClientBehaviour(py_trees.behaviour.Behaviour):
         self.send_goal_future = None
         self.goal_handle = None
         self.get_result_future = None
-        self.initialized = False
 
     def _send_goal(self, goal):
         return self._client.send_goal_async(goal)
@@ -139,7 +138,13 @@ class SimpleSpotAction(ActionClientBehaviour):
     def _init_client(self) -> bool:
         try:
             action_ns = namespace_with(self.robot_name, "robot_command")
-            self._client = ActionClientWrapper(RobotCommand, action_ns, self.node, wait_for_server=False)
+            if self._client is None:
+                self._client = ActionClientWrapper(
+                    RobotCommand,
+                    action_ns,
+                    self.node,
+                    wait_for_server=False,
+                )
             if not self._client.wait_for_server(timeout_sec=0.0):
                 self.feedback_message = f"Action server '{action_ns}' unavailable"
                 return False

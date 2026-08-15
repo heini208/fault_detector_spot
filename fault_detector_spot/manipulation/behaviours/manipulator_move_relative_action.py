@@ -43,7 +43,7 @@ class ManipulatorMoveRelativeAction(MoveCommandAction):
         tf_to_body = self.tf_listener.lookup_a_tform_b(
             GRAV_ALIGNED_BODY_FRAME_NAME,
             pose_in_target.header.frame_id,
-            timeout_sec=2
+            timeout_sec=0.0
         )
         pose_in_body = tf2_geometry_msgs.do_transform_pose_stamped(pose_in_target, tf_to_body)
 

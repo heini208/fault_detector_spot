@@ -38,12 +38,23 @@ class MoveCommandAction(ActionClientBehaviour):
 
     def _init_client(self) -> bool:
         action_ns = namespace_with(self.robot_name, "robot_command")
-        self._client = ActionClientWrapper(RobotCommand, action_ns, self.node)
-        self.tf_listener = TFListenerWrapper(self.node)
+        if self._client is None:
+            self._client = ActionClientWrapper(RobotCommand, action_ns, self.node)
+        if self.tf_listener is None:
+            self.tf_listener = TFListenerWrapper(self.node)
         self.initialized = True
         return True
 
     def _phase_send_goal(self) -> Status | None:
+        try:
+            return self._phase_send_goal_impl()
+        except Exception as exception:
+            self.feedback_message = f"Move goal preparation failed: {exception}"
+            self.logger.error(f"[{self.name}] {self.feedback_message}")
+            self._reset_state()
+            return Status.FAILURE
+
+    def _phase_send_goal_impl(self) -> Status | None:
         if self.send_goal_future is None:
             cmd = self._get_last_command()
             if cmd is None:
