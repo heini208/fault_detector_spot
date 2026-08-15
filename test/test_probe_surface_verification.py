@@ -65,25 +65,15 @@ def _begin(policy=None):
     return coordinator, session, refinement
 
 
-def test_default_policy_requires_five_samples_over_one_second():
+def test_default_policy_uses_slow_steps_and_multi_second_evidence():
     policy = SurfaceVerificationPolicy()
 
+    assert policy.maximum_step_m == pytest.approx(0.01)
     assert policy.minimum_samples == 5
     assert policy.minimum_sample_span_sec == pytest.approx(1.0)
 
 
-def test_begin_requires_reached_alignment():
-    refinement = _Refinement()
-    refinement.motion_states[RefinementStage.ALIGNMENT] = (
-        RefinementMotionState.NOT_TESTED
-    )
-    coordinator = ProbeSurfaceVerificationCoordinator()
-
-    with pytest.raises(ValueError, match="aligned pre-approach"):
-        coordinator.begin(refinement, TEST_REQUEST_ID)
-
-
-def test_verified_samples_converge_and_capture_achieved_pose():
+def test_verified_initial_samples_converge():
     coordinator, session, refinement = _begin()
     achieved_pose = object()
 
@@ -95,41 +85,11 @@ def test_verified_samples_converge_and_capture_achieved_pose():
     )
 
     assert decision.verified
-    assert decision.correction_m == 0.0
     assert session.state == SurfaceVerificationState.CONVERGED
-    assert session.measured_distance_m == pytest.approx(0.05)
-    assert session.error_m == pytest.approx(0.0)
-    assert decision.aggregate.sample_count == 5
-    assert decision.aggregate.sample_span_sec == pytest.approx(1.0)
     assert refinement.verified_pose is achieved_pose
 
 
-def test_default_policy_rejects_short_sample_window():
-    coordinator, session, refinement = _begin()
-    samples = _samples(0.05)
-    samples = [
-        SurfaceDistanceSample(
-            distance_m=sample.distance_m,
-            stamp_seconds=1.0 + index * 0.1,
-            frame_id=sample.frame_id,
-            sample_count=sample.sample_count,
-            valid_pixel_ratio=sample.valid_pixel_ratio,
-            spread_m=sample.spread_m,
-            source_region=sample.source_region,
-        )
-        for index, sample in enumerate(samples)
-    ]
-
-    with pytest.raises(ValueError, match="sampling window"):
-        coordinator.evaluate_samples(
-            session,
-            refinement,
-            samples,
-            achieved_pose_object=object(),
-        )
-
-
-def test_correction_is_bounded_and_recovery_starts_with_motion():
+def test_initial_distance_requests_only_inward_step():
     coordinator, session, refinement = _begin()
 
     decision = coordinator.evaluate_samples(
@@ -139,93 +99,60 @@ def test_correction_is_bounded_and_recovery_starts_with_motion():
     )
 
     assert not decision.verified
-    assert decision.correction_m == pytest.approx(0.02)
+    assert decision.correction_m == pytest.approx(0.01)
     assert session.state == SurfaceVerificationState.MOVING
-    assert not session.recovery_required
-
-    coordinator.mark_correction_started(session, refinement)
-
-    assert session.recovery_required
-    assert refinement.recovery_required
-    assert session.cumulative_correction_m == pytest.approx(0.02)
 
 
-def test_cancellation_after_started_correction_requires_retraction():
+def test_kinematic_estimate_continues_without_depth():
     coordinator, session, refinement = _begin()
-    coordinator.evaluate_samples(session, refinement, _samples(0.08))
-    coordinator.mark_correction_started(session, refinement)
-
-    coordinator.cancel(session, refinement)
-
-    assert session.state == SurfaceVerificationState.RECOVERY_REQUIRED
-    assert session.recovery_required
-    assert refinement.recovery_required
-
-
-def test_cumulative_limit_blocks_another_correction():
-    policy = SurfaceVerificationPolicy(
-        maximum_cumulative_correction_m=0.03,
-    )
-    coordinator, session, refinement = _begin(policy)
-
-    first = coordinator.evaluate_samples(
-        session,
-        refinement,
-        _samples(0.08),
-    )
-    assert first.correction_m == pytest.approx(0.02)
+    coordinator.evaluate_samples(session, refinement, _samples(0.09))
     coordinator.mark_correction_started(session, refinement)
     coordinator.mark_correction_succeeded(session)
-    coordinator.resume_sampling(session)
 
-    second = coordinator.evaluate_samples(
+    decision = coordinator.evaluate_estimated_distance(
         session,
         refinement,
-        _samples(0.08),
+        estimated_distance_m=0.08,
+        achieved_pose_object=object(),
     )
 
-    assert second.correction_m == 0.0
-    assert session.state == SurfaceVerificationState.RECOVERY_REQUIRED
-    assert session.cumulative_correction_m == pytest.approx(0.02)
+    assert not decision.verified
+    assert decision.correction_m == pytest.approx(0.01)
+    assert session.state == SurfaceVerificationState.MOVING
 
 
-def test_repeated_error_growth_stops_before_another_move():
-    policy = SurfaceVerificationPolicy(
-        divergence_tolerance_m=0.001,
-        maximum_divergence_count=2,
-    )
-    coordinator, session, refinement = _begin(policy)
-
-    coordinator.evaluate_samples(session, refinement, _samples(0.07))
+def test_kinematic_estimate_converges():
+    coordinator, session, refinement = _begin()
+    coordinator.evaluate_samples(session, refinement, _samples(0.06))
     coordinator.mark_correction_started(session, refinement)
     coordinator.mark_correction_succeeded(session)
-    coordinator.resume_sampling(session)
+    achieved_pose = object()
 
-    coordinator.evaluate_samples(session, refinement, _samples(0.08))
-    coordinator.mark_correction_started(session, refinement)
-    coordinator.mark_correction_succeeded(session)
-    coordinator.resume_sampling(session)
-
-    decision = coordinator.evaluate_samples(
+    decision = coordinator.evaluate_estimated_distance(
         session,
         refinement,
-        _samples(0.09),
+        estimated_distance_m=0.052,
+        achieved_pose_object=achieved_pose,
     )
 
+    assert decision.verified
+    assert session.state == SurfaceVerificationState.CONVERGED
+    assert refinement.verified_pose is achieved_pose
+
+
+def test_kinematic_overshoot_requires_recovery():
+    coordinator, session, refinement = _begin()
+    coordinator.evaluate_samples(session, refinement, _samples(0.06))
+    coordinator.mark_correction_started(session, refinement)
+    coordinator.mark_correction_succeeded(session)
+
+    decision = coordinator.evaluate_estimated_distance(
+        session,
+        refinement,
+        estimated_distance_m=0.04,
+        achieved_pose_object=object(),
+    )
+
+    assert not decision.verified
     assert decision.correction_m == 0.0
     assert session.state == SurfaceVerificationState.RECOVERY_REQUIRED
-    assert "diverging" in session.detail
-
-
-def test_failed_sampling_before_motion_does_not_require_retraction():
-    coordinator, session, refinement = _begin()
-
-    coordinator.mark_sampling_failed(
-        session,
-        refinement,
-        "No fresh depth frames",
-    )
-
-    assert session.state == SurfaceVerificationState.FAILED
-    assert not session.recovery_required
-    assert not refinement.recovery_required

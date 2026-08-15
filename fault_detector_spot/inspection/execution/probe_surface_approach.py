@@ -25,11 +25,9 @@ class ProbeSurfaceApproachPlan:
     maximum_travel_m: float
 
     def surface_point(self) -> Vector3Data:
-        """Return the frozen surface point as mutable model data."""
         return Vector3Data(*self.surface_point_execution)
 
     def inward_direction(self) -> Vector3Data:
-        """Return the frozen inward direction as mutable model data."""
         return Vector3Data(*self.inward_direction_execution)
 
 
@@ -41,6 +39,7 @@ class ProbeSurfaceApproachEvaluation:
     remaining_inward_travel_m: float
     traveled_inward_m: float
     lateral_offset_m: float
+    axis_error_rad: float
     requested_step_m: float
     reached: bool
 
@@ -89,11 +88,7 @@ def freeze_probe_surface_approach(
 
     return ProbeSurfaceApproachPlan(
         surface_point_execution=surface_point,
-        inward_direction_execution=(
-            inward.x,
-            inward.y,
-            inward.z,
-        ),
+        inward_direction_execution=(inward.x, inward.y, inward.z),
         starting_probe_position_execution=(
             float(position.x),
             float(position.y),
@@ -127,11 +122,23 @@ def evaluate_probe_surface_approach(
     maximum_step_m = float(maximum_step_m)
     tolerance_m = float(tolerance_m)
 
-    inward = Vector3Data(*plan.inward_direction_execution)
-    inward = _normalized(inward, "Frozen inward direction")
+    inward = _normalized(
+        Vector3Data(*plan.inward_direction_execution),
+        "Frozen inward direction",
+    )
     surface = Vector3Data(*plan.surface_point_execution)
     start = Vector3Data(*plan.starting_probe_position_execution)
     current = current_probe_pose_execution.position
+
+    current_inward = _normalized(
+        rotate_vector(
+            current_probe_pose_execution.orientation,
+            Vector3Data(x=1.0, y=0.0, z=0.0),
+        ),
+        "Current probe inward direction",
+    )
+    axis_dot = max(-1.0, min(1.0, _dot(inward, current_inward)))
+    axis_error_rad = math.acos(axis_dot)
 
     to_surface = Vector3Data(
         x=surface.x - current.x,
@@ -190,6 +197,7 @@ def evaluate_probe_surface_approach(
         remaining_inward_travel_m=remaining_inward_travel_m,
         traveled_inward_m=traveled_inward_m,
         lateral_offset_m=lateral_offset_m,
+        axis_error_rad=axis_error_rad,
         requested_step_m=requested_step_m,
         reached=reached,
     )

@@ -66,6 +66,25 @@ class ProbeSurfaceVerificationController:
             achieved_pose_object=achieved_pose_object,
         )
 
+    def evaluate_estimated_distance(
+        self,
+        draft,
+        request_id: str,
+        estimated_distance_m: float,
+        achieved_pose_object,
+    ):
+        """Evaluate frozen-surface progress without another depth sample."""
+        refinement = self.refinement_controller.require_refinement(
+            draft
+        )
+        verification = self._session(draft, request_id)
+        return self.verification.evaluate_estimated_distance(
+            verification,
+            refinement,
+            estimated_distance_m,
+            achieved_pose_object,
+        )
+
     def mark_correction_started(
         self,
         draft,

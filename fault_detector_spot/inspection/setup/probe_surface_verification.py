@@ -39,9 +39,9 @@ class SurfaceVerificationPolicy:
     """Safety limits for one surface-verification workflow."""
 
     tolerance_m: float = 0.005
-    maximum_step_m: float = 0.020
-    maximum_cumulative_correction_m: float = 0.100
-    maximum_iterations: int = 8
+    maximum_step_m: float = 0.010
+    maximum_cumulative_correction_m: float = 1.000
+    maximum_iterations: int = 40
     minimum_samples: int = 5
     minimum_sample_span_sec: float = 1.0
     stability_tolerance_m: float = 0.005
@@ -49,7 +49,6 @@ class SurfaceVerificationPolicy:
     maximum_divergence_count: int = 2
 
     def validate(self) -> None:
-        """Validate all server-owned verification limits."""
         for label, value in (
             ("Surface-distance tolerance", self.tolerance_m),
             ("Maximum correction step", self.maximum_step_m),
@@ -92,6 +91,15 @@ class SurfaceVerificationDecision:
     aggregate: SurfaceDistanceAggregate
 
 
+@dataclass(frozen=True)
+class SurfaceKinematicDecision:
+    """Result of evaluating one post-motion kinematic distance estimate."""
+
+    verified: bool
+    correction_m: float
+    estimated_distance_m: float
+
+
 @dataclass
 class ProbeSurfaceVerificationSession:
     """Mutable authoritative state for one verification request."""
@@ -116,7 +124,6 @@ class ProbeSurfaceVerificationSession:
 
     @property
     def active(self) -> bool:
-        """Return whether the workflow can still make progress."""
         return self.state in {
             SurfaceVerificationState.SAMPLING,
             SurfaceVerificationState.MOVING,
@@ -139,7 +146,6 @@ class ProbeSurfaceVerificationCoordinator:
         refinement,
         request_id: str,
     ) -> ProbeSurfaceVerificationSession:
-        """Start verification from an achieved aligned pre-approach."""
         request_id = validate_request_id(request_id)
         self._require_ready_refinement(refinement)
         target_distance_m = float(refinement.target_surface_distance_m)
@@ -171,7 +177,6 @@ class ProbeSurfaceVerificationCoordinator:
         samples,
         achieved_pose_object=None,
     ) -> SurfaceVerificationDecision:
-        """Evaluate one stable window and choose convergence or one move."""
         self._require_state(
             session,
             SurfaceVerificationState.SAMPLING,
@@ -192,16 +197,11 @@ class ProbeSurfaceVerificationCoordinator:
         self._update_divergence(session, previous_error)
 
         if aggregate.verified:
-            if achieved_pose_object is None:
-                raise ValueError(
-                    "Verified surface distance requires an achieved probe pose"
-                )
-            refinement.mark_surface_verified(achieved_pose_object)
-            session.state = SurfaceVerificationState.CONVERGED
-            session.pending_correction_m = None
-            session.correction_started = False
-            session.detail = (
-                "Surface distance converged within the configured tolerance"
+            self._mark_converged(
+                session,
+                refinement,
+                achieved_pose_object,
+                aggregate.distance_m,
             )
             return SurfaceVerificationDecision(
                 verified=True,
@@ -210,28 +210,7 @@ class ProbeSurfaceVerificationCoordinator:
                 aggregate=aggregate,
             )
 
-        if (
-            session.divergence_count
-            >= session.policy.maximum_divergence_count
-        ):
-            self._fail(
-                session,
-                refinement,
-                "Surface-distance error is diverging",
-            )
-            return SurfaceVerificationDecision(
-                verified=False,
-                correction_m=0.0,
-                resample_required=False,
-                aggregate=aggregate,
-            )
-
-        if session.iteration_count >= session.policy.maximum_iterations:
-            self._fail(
-                session,
-                refinement,
-                "Surface verification exceeded the iteration limit",
-            )
+        if self._terminal_error(session, refinement):
             return SurfaceVerificationDecision(
                 verified=False,
                 correction_m=0.0,
@@ -240,7 +219,14 @@ class ProbeSurfaceVerificationCoordinator:
             )
 
         correction_m = aggregate.correction.inward_correction_m
-        if math.isclose(correction_m, 0.0, abs_tol=1e-12):
+        if correction_m < -session.policy.tolerance_m:
+            self._fail(
+                session,
+                refinement,
+                "Close-to-surface execution does not move away from the surface",
+            )
+            correction_m = 0.0
+        elif math.isclose(correction_m, 0.0, abs_tol=1e-12):
             session.previous_error_m = session.error_m
             session.detail = (
                 "Stable samples are not jointly inside tolerance; resample"
@@ -251,34 +237,13 @@ class ProbeSurfaceVerificationCoordinator:
                 resample_required=True,
                 aggregate=aggregate,
             )
-
-        projected_travel = (
-            session.cumulative_correction_m + abs(correction_m)
-        )
-        if (
-            projected_travel
-            > session.maximum_cumulative_correction_m + 1e-12
-        ):
-            self._fail(
+        else:
+            self._request_correction(
                 session,
                 refinement,
-                "Surface correction exceeds the cumulative travel limit",
-            )
-            return SurfaceVerificationDecision(
-                verified=False,
-                correction_m=0.0,
-                resample_required=False,
-                aggregate=aggregate,
+                correction_m,
             )
 
-        session.previous_error_m = session.error_m
-        session.last_correction_m = correction_m
-        session.pending_correction_m = correction_m
-        session.correction_started = False
-        session.state = SurfaceVerificationState.MOVING
-        session.detail = (
-            f"Request one bounded axial correction of {correction_m:+.4f} m"
-        )
         return SurfaceVerificationDecision(
             verified=False,
             correction_m=correction_m,
@@ -286,12 +251,82 @@ class ProbeSurfaceVerificationCoordinator:
             aggregate=aggregate,
         )
 
+    def evaluate_estimated_distance(
+        self,
+        session: ProbeSurfaceVerificationSession,
+        refinement,
+        estimated_distance_m: float,
+        achieved_pose_object,
+    ) -> SurfaceKinematicDecision:
+        """Choose the next inward step from frozen-surface kinematics."""
+        self._require_state(
+            session,
+            SurfaceVerificationState.SETTLING,
+        )
+        require_positive_finite_distance(
+            estimated_distance_m,
+            "Estimated surface distance",
+        )
+        previous_error = session.error_m
+        estimated_distance_m = float(estimated_distance_m)
+        error_m = estimated_distance_m - session.target_distance_m
+        session.iteration_count += 1
+        session.measured_distance_m = estimated_distance_m
+        session.error_m = error_m
+        self._update_divergence(session, previous_error)
+
+        if abs(error_m) <= session.policy.tolerance_m:
+            self._mark_converged(
+                session,
+                refinement,
+                achieved_pose_object,
+                estimated_distance_m,
+            )
+            return SurfaceKinematicDecision(
+                verified=True,
+                correction_m=0.0,
+                estimated_distance_m=estimated_distance_m,
+            )
+
+        if error_m < -session.policy.tolerance_m:
+            self._fail(
+                session,
+                refinement,
+                "Probe passed the requested surface stand-off",
+            )
+            return SurfaceKinematicDecision(
+                verified=False,
+                correction_m=0.0,
+                estimated_distance_m=estimated_distance_m,
+            )
+
+        if self._terminal_error(session, refinement):
+            return SurfaceKinematicDecision(
+                verified=False,
+                correction_m=0.0,
+                estimated_distance_m=estimated_distance_m,
+            )
+
+        correction_m = min(
+            session.policy.maximum_step_m,
+            error_m,
+        )
+        self._request_correction(
+            session,
+            refinement,
+            correction_m,
+        )
+        return SurfaceKinematicDecision(
+            verified=False,
+            correction_m=correction_m,
+            estimated_distance_m=estimated_distance_m,
+        )
+
     def mark_correction_started(
         self,
         session: ProbeSurfaceVerificationSession,
         refinement,
     ) -> None:
-        """Mark an accepted correction as potentially changing clearance."""
         self._require_state(
             session,
             SurfaceVerificationState.MOVING,
@@ -313,7 +348,6 @@ class ProbeSurfaceVerificationCoordinator:
         self,
         session: ProbeSurfaceVerificationSession,
     ) -> None:
-        """Enter settling after one correlated correction succeeds."""
         self._require_state(
             session,
             SurfaceVerificationState.MOVING,
@@ -329,7 +363,6 @@ class ProbeSurfaceVerificationCoordinator:
         self,
         session: ProbeSurfaceVerificationSession,
     ) -> None:
-        """Resume measurement only after the external settle gate passes."""
         self._require_state(
             session,
             SurfaceVerificationState.SETTLING,
@@ -343,7 +376,6 @@ class ProbeSurfaceVerificationCoordinator:
         refinement,
         detail: str,
     ) -> None:
-        """Fail one correction and preserve explicit recovery state."""
         self._require_state(
             session,
             SurfaceVerificationState.MOVING,
@@ -356,7 +388,6 @@ class ProbeSurfaceVerificationCoordinator:
         refinement,
         detail: str,
     ) -> None:
-        """Fail sampling after its external timeout or validation limit."""
         self._require_state(
             session,
             SurfaceVerificationState.SAMPLING,
@@ -369,7 +400,6 @@ class ProbeSurfaceVerificationCoordinator:
         refinement,
         detail: str,
     ) -> None:
-        """Fail any active verification without losing recovery state."""
         if not session.active:
             return
         self._fail(session, refinement, detail)
@@ -379,7 +409,6 @@ class ProbeSurfaceVerificationCoordinator:
         session: ProbeSurfaceVerificationSession,
         refinement,
     ) -> None:
-        """Cancel without allowing another correction to be requested."""
         if not session.active:
             return
         session.pending_correction_m = None
@@ -395,6 +424,77 @@ class ProbeSurfaceVerificationCoordinator:
             return
         session.state = SurfaceVerificationState.CANCELLED
         session.detail = "Surface verification cancelled"
+
+    def _request_correction(
+        self,
+        session,
+        refinement,
+        correction_m,
+    ) -> None:
+        projected_travel = (
+            session.cumulative_correction_m + abs(correction_m)
+        )
+        if (
+            projected_travel
+            > session.maximum_cumulative_correction_m + 1e-12
+        ):
+            self._fail(
+                session,
+                refinement,
+                "Surface correction exceeds the cumulative travel limit",
+            )
+            return
+        session.previous_error_m = session.error_m
+        session.last_correction_m = correction_m
+        session.pending_correction_m = correction_m
+        session.correction_started = False
+        session.state = SurfaceVerificationState.MOVING
+        session.detail = (
+            f"Request one bounded axial correction of {correction_m:+.4f} m"
+        )
+
+    def _terminal_error(self, session, refinement) -> bool:
+        if (
+            session.divergence_count
+            >= session.policy.maximum_divergence_count
+        ):
+            self._fail(
+                session,
+                refinement,
+                "Surface-distance error is diverging",
+            )
+            return True
+        if session.iteration_count >= session.policy.maximum_iterations:
+            self._fail(
+                session,
+                refinement,
+                "Surface verification exceeded the iteration limit",
+            )
+            return True
+        return False
+
+    @staticmethod
+    def _mark_converged(
+        session,
+        refinement,
+        achieved_pose_object,
+        measured_distance_m,
+    ) -> None:
+        if achieved_pose_object is None:
+            raise ValueError(
+                "Verified surface distance requires an achieved probe pose"
+            )
+        refinement.mark_surface_verified(achieved_pose_object)
+        session.state = SurfaceVerificationState.CONVERGED
+        session.measured_distance_m = float(measured_distance_m)
+        session.error_m = (
+            float(measured_distance_m) - session.target_distance_m
+        )
+        session.pending_correction_m = None
+        session.correction_started = False
+        session.detail = (
+            "Surface distance converged within the configured tolerance"
+        )
 
     @staticmethod
     def _require_ready_refinement(refinement) -> None:
@@ -459,6 +559,7 @@ class ProbeSurfaceVerificationCoordinator:
 __all__ = [
     "ProbeSurfaceVerificationCoordinator",
     "ProbeSurfaceVerificationSession",
+    "SurfaceKinematicDecision",
     "SurfaceVerificationDecision",
     "SurfaceVerificationPolicy",
     "SurfaceVerificationState",
