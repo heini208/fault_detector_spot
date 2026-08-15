@@ -53,6 +53,19 @@ def planar_depth(width=21, height=21, depth_m=0.20):
 
 
 def probe_to_camera_pose():
+    half_angle = math.radians(90.0) * 0.5
+    return PoseData(
+        position=Vector3Data(x=-0.10, y=0.0, z=0.0),
+        orientation=QuaternionData(
+            x=0.0,
+            y=math.sin(half_angle),
+            z=0.0,
+            w=math.cos(half_angle),
+        ),
+    )
+
+
+def opposite_probe_to_camera_pose():
     half_angle = math.radians(-90.0) * 0.5
     return PoseData(
         position=Vector3Data(x=0.10, y=0.0, z=0.0),
@@ -66,7 +79,6 @@ def probe_to_camera_pose():
 
 
 def distance_sample(distance_m, stamp_seconds, frame_id="hand_depth"):
-    """Create a quality-checked measurement for aggregate tests."""
     return SurfaceDistanceSample(
         distance_m=distance_m,
         stamp_seconds=stamp_seconds,
@@ -78,7 +90,7 @@ def distance_sample(distance_m, stamp_seconds, frame_id="hand_depth"):
     )
 
 
-def test_measurement_reports_tip_to_surface_axial_distance():
+def test_measurement_reports_positive_x_tip_to_surface_distance():
     image, info = planar_depth()
 
     sample = measure_probe_surface_distance(
@@ -92,6 +104,17 @@ def test_measurement_reports_tip_to_surface_axial_distance():
     assert sample.stamp_seconds == pytest.approx(10.0)
     assert sample.sample_count >= 12
     assert sample.spread_m == pytest.approx(0.0, abs=1e-6)
+
+
+def test_measurement_rejects_surface_behind_probe_axis():
+    image, info = planar_depth()
+
+    with pytest.raises(ValueError, match="local \\+X"):
+        measure_probe_surface_distance(
+            image,
+            info,
+            opposite_probe_to_camera_pose(),
+        )
 
 
 @pytest.mark.parametrize(
@@ -119,7 +142,7 @@ def test_correction_is_directional_and_bounded(
 def test_measurement_rejects_depth_without_probe_axis_support():
     image, info = planar_depth(depth_m=1.0)
 
-    with pytest.raises(ValueError, match="insufficient support"):
+    with pytest.raises(ValueError, match="local \\+X"):
         measure_probe_surface_distance(
             image,
             info,
@@ -195,7 +218,7 @@ def test_aggregate_rejects_duplicate_or_short_sampling_window():
         distance_sample(0.08, 10.10),
     ]
 
-    with pytest.raises(ValueError, match="three distinct"):
+    with pytest.raises(ValueError, match="at least 3 distinct"):
         aggregate_surface_distance_samples(
             duplicate_samples,
             target_distance_m=0.03,

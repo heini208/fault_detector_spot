@@ -29,7 +29,7 @@ def _image(stamp_seconds):
     return message
 
 
-def test_surface_samples_ignore_pre_settle_receipts(monkeypatch):
+def _source(history):
     source = source_module.ProbeSetupMotionStateSource.__new__(
         source_module.ProbeSetupMotionStateSource
     )
@@ -37,14 +37,18 @@ def test_surface_samples_ignore_pre_settle_receipts(monkeypatch):
     source._lock = RLock()
     source._hand_depth_camera_info = CameraInfo()
     source._hand_depth_camera_info.header.frame_id = "hand_depth"
-    source._hand_depth_history = deque(
-        (
-            (3.7, _image(9.7)),
-            (3.8, _image(9.8)),
-            (3.9, _image(9.85)),
-            (4.0, _image(9.9)),
-        )
-    )
+    source._hand_depth_history = deque(history)
+    source._lookup_pose = lambda *args, **kwargs: object()
+    return source
+
+
+def test_surface_samples_ignore_pre_settle_receipts(monkeypatch):
+    source = _source((
+        (3.7, _image(9.7)),
+        (3.8, _image(9.8)),
+        (3.9, _image(9.85)),
+        (4.0, _image(9.9)),
+    ))
     lookups = []
     source._lookup_pose = lambda target, frame, lookup_time=None: (
         lookups.append((target, frame, lookup_time.nanoseconds)) or object()
@@ -67,20 +71,11 @@ def test_surface_samples_ignore_pre_settle_receipts(monkeypatch):
     assert all(frame == "hand_depth" for _, frame, _ in lookups)
 
 
-def test_surface_samples_require_three_fresh_frames(monkeypatch):
-    source = source_module.ProbeSetupMotionStateSource.__new__(
-        source_module.ProbeSetupMotionStateSource
-    )
-    source.node = _Node()
-    source._lock = RLock()
-    source._hand_depth_camera_info = CameraInfo()
-    source._hand_depth_history = deque(
-        (
-            (1.8, _image(9.8)),
-            (2.0, _image(9.9)),
-        )
-    )
-    source._lookup_pose = lambda *args, **kwargs: object()
+def test_surface_samples_keep_three_as_default_requirement(monkeypatch):
+    source = _source((
+        (1.8, _image(9.8)),
+        (2.0, _image(9.9)),
+    ))
     monkeypatch.setattr(source_module.time, "monotonic", lambda: 2.1)
     monkeypatch.setattr(
         source_module,
@@ -91,27 +86,47 @@ def test_surface_samples_require_three_fresh_frames(monkeypatch):
     try:
         source.surface_distance_samples("hall_probe")
     except ValueError as exception:
-        assert "at least three fresh" in str(exception)
+        assert "at least 3 fresh" in str(exception)
     else:
         raise AssertionError("Expected insufficient fresh depth to fail")
 
 
+def test_surface_samples_can_return_one_valid_frame_for_session_accumulation(
+    monkeypatch,
+):
+    source = _source((
+        (1.8, _image(9.8)),
+        (1.9, _image(9.9)),
+        (2.0, _image(10.0)),
+    ))
+    monkeypatch.setattr(source_module.time, "monotonic", lambda: 2.1)
+
+    def measure(image, info, pose):
+        stamp = image.header.stamp.sec + image.header.stamp.nanosec * 1e-9
+        if stamp < 10.0:
+            raise ValueError("intermittent invalid depth")
+        return stamp
+
+    monkeypatch.setattr(
+        source_module,
+        "measure_probe_surface_distance",
+        measure,
+    )
+
+    samples = source.surface_distance_samples(
+        "hall_probe",
+        minimum_samples=1,
+    )
+
+    assert samples == (10.0,)
+
+
 def test_surface_samples_use_receipt_time_not_ros_header_age(monkeypatch):
-    source = source_module.ProbeSetupMotionStateSource.__new__(
-        source_module.ProbeSetupMotionStateSource
-    )
-    source.node = _Node()
-    source._lock = RLock()
-    source._hand_depth_camera_info = CameraInfo()
-    source._hand_depth_camera_info.header.frame_id = "hand_depth"
-    source._hand_depth_history = deque(
-        (
-            (9.7, _image(1.0)),
-            (9.8, _image(1.1)),
-            (9.9, _image(1.2)),
-        )
-    )
-    source._lookup_pose = lambda *args, **kwargs: object()
+    source = _source((
+        (9.7, _image(1.0)),
+        (9.8, _image(1.1)),
+        (9.9, _image(1.2)),
+    ))
     monkeypatch.setattr(source_module.time, "monotonic", lambda: 10.0)
     monkeypatch.setattr(
         source_module,

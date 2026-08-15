@@ -7,7 +7,9 @@ import numpy as np
 from sensor_msgs.msg import CameraInfo, Image
 
 from fault_detector_spot.inspection.model.models import PoseData
-from fault_detector_spot.inspection.setup.reference_view_depth_projection import ImageRegion
+from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
+    ImageRegion,
+)
 from fault_detector_spot.inspection.sensing.surface_distance_validation import (
     require_positive_finite_distance,
 )
@@ -61,7 +63,7 @@ def measure_probe_surface_distance(
     minimum_valid_pixel_ratio: float = 0.20,
     maximum_spread_m: float = 0.020,
 ) -> SurfaceDistanceSample:
-    """Measure the nearest supported surface along probe local negative X."""
+    """Measure the nearest supported surface along probe local positive X."""
     _validate_parameters(
         axis_radius_m,
         minimum_distance_m,
@@ -104,7 +106,7 @@ def measure_probe_surface_distance(
         + rotation[2, 2] * z_camera
         + translation.z
     )
-    axial_distance = -x_probe
+    axial_distance = x_probe
     cylinder = (
         (axial_distance >= minimum_distance_m)
         & (axial_distance <= maximum_distance_m)
@@ -113,7 +115,7 @@ def measure_probe_surface_distance(
     candidate_count = int(np.count_nonzero(cylinder))
     if candidate_count < minimum_samples:
         raise ValueError(
-            "Live depth has insufficient support along the probe axis"
+            "Live depth has insufficient support along probe local +X"
         )
 
     candidate_distances = axial_distance[cylinder]
@@ -228,7 +230,7 @@ def aggregate_surface_distance_samples(
     ordered = [distinct[stamp] for stamp in sorted(distinct)]
     if len(ordered) < minimum_samples:
         raise ValueError(
-            "Need at least three distinct post-settle depth frames"
+            f"Need at least {minimum_samples} distinct post-settle depth frames"
         )
     selected = _recent_sample_window(
         ordered,
@@ -288,12 +290,7 @@ def aggregate_surface_distance_samples(
     )
 
 
-def _recent_sample_window(
-    samples,
-    minimum_samples,
-    minimum_span_sec,
-):
-    """Return the smallest newest suffix spanning the required window."""
+def _recent_sample_window(samples, minimum_samples, minimum_span_sec):
     newest_stamp = samples[-1].stamp_seconds
     for index in range(len(samples) - 2, -1, -1):
         if (

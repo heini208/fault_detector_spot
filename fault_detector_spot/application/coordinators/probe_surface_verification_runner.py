@@ -132,15 +132,6 @@ class ProbeSurfaceVerificationRunner:
             return snapshot
         if not verification.active:
             return snapshot
-        if decision.resample_required:
-            return self._resample_until_actionable(
-                context_id,
-                client_id,
-                request_id,
-                cancel_requested,
-                state_changed,
-            )
-
         plan = freeze_probe_surface_approach(
             current_probe_pose_execution=achieved_pose,
             measured_initial_distance_m=decision.aggregate.distance_m,
@@ -235,168 +226,51 @@ class ProbeSurfaceVerificationRunner:
         cancel_requested,
     ):
         deadline = time.monotonic() + self.sample_timeout_sec
+        accumulated = {}
         last_error = None
+        evaluated_sample_count = 0
         while True:
             if cancel_requested():
                 return None
             try:
-                samples = self.state_source.surface_distance_samples(
+                fresh_samples = self.state_source.surface_distance_samples(
                     snapshot.selected_sensor_id,
                     receipt_not_before=receipt_not_before,
-                    maximum_age_sec=self.sample_timeout_sec,
+                    minimum_samples=1,
                 )
-                achieved = self.state_source.current_probe_pose_object(
-                    snapshot.selected_reference_tag_id,
-                    snapshot.selected_sensor_id,
-                )
-                context = self.coordinator.context(
-                    snapshot.context.context_id,
-                    snapshot.context.client_id,
-                )
-                decision, current = (
-                    self.coordinator.evaluate_surface_verification(
-                        context,
-                        request_id,
-                        samples,
-                        achieved,
+                for sample in fresh_samples:
+                    accumulated[sample.stamp_seconds] = sample
+                if len(accumulated) > evaluated_sample_count:
+                    achieved = self.state_source.current_probe_pose_object(
+                        snapshot.selected_reference_tag_id,
+                        snapshot.selected_sensor_id,
                     )
-                )
-                return decision, current, achieved
+                    context = self.coordinator.context(
+                        snapshot.context.context_id,
+                        snapshot.context.client_id,
+                    )
+                    samples = tuple(
+                        accumulated[stamp]
+                        for stamp in sorted(accumulated)
+                    )
+                    evaluated_sample_count = len(samples)
+                    decision, current = (
+                        self.coordinator.evaluate_surface_verification(
+                            context,
+                            request_id,
+                            samples,
+                            achieved,
+                        )
+                    )
+                    if not decision.resample_required:
+                        return decision, current, achieved
             except Exception as exception:
                 last_error = exception
             if time.monotonic() >= deadline:
                 return last_error or RuntimeError(
-                    "Timed out waiting for a valid surface sample window"
+                    "Timed out waiting for stable surface-distance samples"
                 )
             time.sleep(self.poll_sec)
-
-    def _resample_until_actionable(
-        self,
-        context_id,
-        client_id,
-        request_id,
-        cancel_requested,
-        state_changed,
-    ):
-        context = self.coordinator.context(context_id, client_id)
-        snapshot = self.coordinator.snapshot(context)
-        receipt_not_before = time.monotonic()
-        while True:
-            result = self._wait_for_initial_evaluation(
-                snapshot,
-                request_id,
-                receipt_not_before,
-                cancel_requested,
-            )
-            if result is None:
-                return self._cancel(
-                    context_id,
-                    client_id,
-                    request_id,
-                    state_changed,
-                )
-            if isinstance(result, Exception):
-                return self._fail_sampling(
-                    context_id,
-                    client_id,
-                    request_id,
-                    result,
-                    state_changed,
-                )
-            decision, snapshot, achieved = result
-            self._emit(state_changed, snapshot)
-            verification = snapshot.surface_verification
-            if verification.state is SurfaceVerificationState.CONVERGED:
-                return snapshot
-            if not verification.active:
-                return snapshot
-            if not decision.resample_required:
-                plan = freeze_probe_surface_approach(
-                    current_probe_pose_execution=achieved,
-                    measured_initial_distance_m=decision.aggregate.distance_m,
-                    target_distance_m=verification.target_distance_m,
-                    maximum_travel_m=(
-                        verification.maximum_cumulative_correction_m
-                    ),
-                )
-                previous_pose = achieved
-                correction_m = decision.correction_m
-                break
-            context = self.coordinator.context(context_id, client_id)
-            snapshot = self.coordinator.snapshot(context)
-            receipt_not_before = time.monotonic()
-
-        while True:
-            if cancel_requested():
-                return self._cancel(
-                    context_id,
-                    client_id,
-                    request_id,
-                    state_changed,
-                )
-            motion_result = self._execute_correction(
-                context_id,
-                client_id,
-                request_id,
-                correction_m,
-                cancel_requested,
-                state_changed,
-            )
-            if motion_result is None:
-                return self._cancel(
-                    context_id,
-                    client_id,
-                    request_id,
-                    state_changed,
-                )
-            if isinstance(motion_result, Exception):
-                return self._fail_correction(
-                    context_id,
-                    client_id,
-                    request_id,
-                    motion_result,
-                    state_changed,
-                )
-            if not self._settle(cancel_requested):
-                return self._cancel(
-                    context_id,
-                    client_id,
-                    request_id,
-                    state_changed,
-                )
-            context = self.coordinator.context(context_id, client_id)
-            snapshot = self.coordinator.snapshot(context)
-            current_pose = self.state_source.current_probe_pose_object(
-                snapshot.selected_reference_tag_id,
-                snapshot.selected_sensor_id,
-            )
-            evaluation = evaluate_probe_surface_approach(
-                plan,
-                current_probe_pose_execution=current_pose,
-                maximum_step_m=verification.policy.maximum_step_m,
-                tolerance_m=verification.policy.tolerance_m,
-            )
-            self._validate_progress(
-                plan,
-                previous_pose,
-                current_pose,
-                correction_m,
-                evaluation,
-            )
-            previous_pose = current_pose
-            decision, snapshot = self._evaluate_kinematic(
-                context,
-                request_id,
-                evaluation.estimated_distance_m,
-                current_pose,
-            )
-            self._emit(state_changed, snapshot)
-            verification = snapshot.surface_verification
-            if verification.state is SurfaceVerificationState.CONVERGED:
-                return snapshot
-            if not verification.active:
-                return snapshot
-            correction_m = decision.correction_m
 
     def _execute_correction(
         self,

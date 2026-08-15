@@ -177,10 +177,7 @@ class ProbeSetupMotionStateSource:
             GRAV_ALIGNED_BODY_FRAME_NAME,
             source_frame,
         )
-        return compose_poses(
-            gravity_to_source,
-            source_to_object,
-        )
+        return compose_poses(gravity_to_source, source_to_object)
 
     def current_probe_pose_object(
         self,
@@ -265,17 +262,12 @@ class ProbeSetupMotionStateSource:
             projected.frame_id,
             lookup_time=stamp,
         )
-        object_to_camera = relative_pose(
-            body_to_object,
-            body_to_camera,
-        )
+        object_to_camera = relative_pose(body_to_object, body_to_camera)
         surface_normal_object = rotate_vector(
             object_to_camera.orientation,
             normal.normal_camera,
         )
-        gravity_to_object = self.gravity_aligned_object_pose(
-            reference_tag_id
-        )
+        gravity_to_object = self.gravity_aligned_object_pose(reference_tag_id)
         gravity_up_object = rotate_vector(
             self._inverse_orientation(gravity_to_object.orientation),
             Vector3Data(x=0.0, y=0.0, z=1.0),
@@ -298,13 +290,9 @@ class ProbeSetupMotionStateSource:
         )
 
     def _hand_surface_window_radius_px(self) -> int:
-        value = self.node.get_parameter(
-            HAND_SURFACE_WINDOW_PARAMETER
-        ).value
+        value = self.node.get_parameter(HAND_SURFACE_WINDOW_PARAMETER).value
         if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(
-                "Hand surface window radius must be an integer"
-            )
+            raise ValueError("Hand surface window radius must be an integer")
         if not (
             MINIMUM_HAND_SURFACE_WINDOW_RADIUS_PX
             <= value
@@ -330,9 +318,7 @@ class ProbeSetupMotionStateSource:
     def minimum_aligned_probe_distance_m(
         self,
         sensor_id: str,
-        minimum_camera_clearance_m: float = (
-            MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M
-        ),
+        minimum_camera_clearance_m: float = MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M,
     ) -> float:
         """Return the minimum tip distance that preserves hand-depth range."""
         if not isinstance(sensor_id, str) or not sensor_id.strip():
@@ -365,9 +351,7 @@ class ProbeSetupMotionStateSource:
         self,
         sensor_id: str,
         aligned_probe_distance_m: float,
-        minimum_camera_clearance_m: float = (
-            MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M
-        ),
+        minimum_camera_clearance_m: float = MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M,
     ) -> float:
         """Validate a user tip distance against the hand-camera near field."""
         if (
@@ -424,9 +408,7 @@ class ProbeSetupMotionStateSource:
 
     def require_hand_camera_clearance(
         self,
-        minimum_camera_clearance_m: float = (
-            MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M
-        ),
+        minimum_camera_clearance_m: float = MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M,
     ) -> float:
         """Require the reached aligned pose to remain in usable ToF range."""
         try:
@@ -452,8 +434,9 @@ class ProbeSetupMotionStateSource:
         sensor_id: str,
         receipt_not_before: float = 0.0,
         maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
+        minimum_samples: int = MINIMUM_SURFACE_DISTANCE_SAMPLES,
     ):
-        """Return fresh registered-depth measurements along the probe axis."""
+        """Return currently fresh valid probe-axis distance measurements."""
         if not isinstance(sensor_id, str) or not sensor_id.strip():
             raise ValueError("Sensor ID must not be empty")
         if not math.isfinite(float(receipt_not_before)):
@@ -463,6 +446,12 @@ class ProbeSetupMotionStateSource:
             or maximum_age_sec <= 0.0
         ):
             raise ValueError("Maximum hand-depth age must be positive")
+        if (
+            isinstance(minimum_samples, bool)
+            or not isinstance(minimum_samples, int)
+            or minimum_samples < 1
+        ):
+            raise ValueError("Minimum surface sample count must be positive")
         with self._lock:
             camera_info = deepcopy(self._hand_depth_camera_info)
             history = tuple(self._hand_depth_history)
@@ -503,19 +492,22 @@ class ProbeSetupMotionStateSource:
                 )
             except Exception as exception:
                 errors.append(str(exception))
-        if len(samples) < MINIMUM_SURFACE_DISTANCE_SAMPLES:
+        if len(samples) < minimum_samples:
             detail = errors[-1] if errors else "no fresh depth frames"
             if (
                 "no valid pixels" in detail.lower()
                 or "insufficient support" in detail.lower()
             ):
                 detail = (
-                    f"{detail}. The gripper ToF may be inside its usable "
-                    "near field at this probe distance"
+                    f"{detail}. Registered depth is present, but no valid "
+                    "surface measurement was found on probe local +X. "
+                    "The gripper ToF may be inside its usable near field "
+                    "at this probe distance"
                 )
             raise ValueError(
-                "Need at least three fresh registered hand-depth samples: "
-                f"{detail}"
+                "Need at least "
+                f"{minimum_samples} fresh registered hand-depth sample"
+                f"{'s' if minimum_samples != 1 else ''}: {detail}"
             )
         return tuple(samples)
 
@@ -547,9 +539,7 @@ class ProbeSetupMotionStateSource:
             if age_seconds < -1e-9 or age_seconds > maximum_age_sec:
                 continue
             stamp = message.header.stamp
-            stamp_seconds = (
-                float(stamp.sec) + float(stamp.nanosec) * 1e-9
-            )
+            stamp_seconds = float(stamp.sec) + float(stamp.nanosec) * 1e-9
             if stamp_seconds <= 0.0:
                 continue
             frame_id = message.header.frame_id.strip()
@@ -649,17 +639,11 @@ class ProbeSetupMotionStateSource:
                 (time.monotonic(), deepcopy(message))
             )
 
-    def _receive_hand_depth_camera_info(
-        self,
-        message: CameraInfo,
-    ) -> None:
+    def _receive_hand_depth_camera_info(self, message: CameraInfo) -> None:
         with self._lock:
             self._hand_depth_camera_info = deepcopy(message)
 
-    def _receive_end_effector_force(
-        self,
-        message: Vector3Stamped,
-    ) -> None:
+    def _receive_end_effector_force(self, message: Vector3Stamped) -> None:
         with self._lock:
             self._end_effector_force_history.append(
                 (time.monotonic(), deepcopy(message))
