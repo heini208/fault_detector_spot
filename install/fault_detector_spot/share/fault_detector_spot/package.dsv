@@ -1,9 +1,0 @@
-source;share/fault_detector_spot/hook/pythonpath.ps1
-source;share/fault_detector_spot/hook/pythonpath.dsv
-source;share/fault_detector_spot/hook/pythonpath.sh
-source;share/fault_detector_spot/hook/ament_prefix_path.ps1
-source;share/fault_detector_spot/hook/ament_prefix_path.dsv
-source;share/fault_detector_spot/hook/ament_prefix_path.sh
-source;../../build/fault_detector_spot/share/fault_detector_spot/hook/pythonpath_develop.ps1
-source;../../build/fault_detector_spot/share/fault_detector_spot/hook/pythonpath_develop.dsv
-source;../../build/fault_detector_spot/share/fault_detector_spot/hook/pythonpath_develop.sh

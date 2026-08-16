@@ -78,16 +78,16 @@ def test_create_sensor_builds_hand_to_probe_request(application):
     client = SensorAttachmentClient(node)
 
     future = client.create_sensor(
-        "bmm150_mount",
-        "BMM150 Hall sensor",
+        "test",
+        "Test sensor",
         (0.20, -0.01, 0.03),
         (0.0, 0.0, 90.0),
     )
 
     assert future is not None
     request = node.clients[client.ADD_SENSOR_SERVICE].requests[0]
-    assert request.sensor.sensor_id == "bmm150_mount"
-    assert request.sensor.display_name == "BMM150 Hall sensor"
+    assert request.sensor.sensor_id == "test"
+    assert request.sensor.display_name == "Test sensor"
     assert request.sensor.hand_to_probe.position.x == pytest.approx(0.20)
     assert request.sensor.hand_to_probe.position.y == pytest.approx(-0.01)
     assert request.sensor.hand_to_probe.position.z == pytest.approx(0.03)
@@ -101,13 +101,66 @@ def test_create_sensor_builds_hand_to_probe_request(application):
     )
 
 
+def test_update_sensor_uses_dedicated_update_service(application):
+    node = FakeNode()
+    client = SensorAttachmentClient(node)
+
+    future = client.update_sensor(
+        "test",
+        "Updated sensor",
+        (0.30, 0.0, 0.0),
+        (0.0, 10.0, 0.0),
+    )
+
+    assert future is not None
+    request = node.clients[client.UPDATE_SENSOR_SERVICE].requests[0]
+    assert request.sensor.sensor_id == "test"
+    assert request.sensor.display_name == "Updated sensor"
+    assert request.sensor.hand_to_probe.position.x == pytest.approx(0.30)
+
+
+def test_delete_sensor_uses_existing_registry_delete_transport(application):
+    node = FakeNode()
+    client = SensorAttachmentClient(node)
+
+    future = client.delete_sensor("test")
+
+    assert future is not None
+    request = node.clients[client.DELETE_SENSOR_SERVICE].requests[0]
+    assert request.sensor_id == "test"
+
+
+def test_definition_view_exposes_rotation_for_edit_form(application):
+    client = SensorAttachmentClient(FakeNode())
+    sensor = SimpleNamespace(
+        sensor_id="test",
+        display_name="Test sensor",
+        hand_to_probe=SimpleNamespace(
+            position=SimpleNamespace(x=0.1, y=0.2, z=0.3),
+            orientation=SimpleNamespace(
+                x=0.0,
+                y=0.0,
+                z=math.sqrt(0.5),
+                w=math.sqrt(0.5),
+            ),
+        ),
+    )
+
+    view = client._definition_view(sensor)
+
+    assert view.sensor_id == "test"
+    assert view.probe_frame == "test_probe"
+    assert view.position == pytest.approx((0.1, 0.2, 0.3))
+    assert view.rotation_degrees == pytest.approx((0.0, 0.0, 90.0))
+
+
 def test_create_sensor_rejects_incomplete_transform(application):
     client = SensorAttachmentClient(FakeNode())
 
     with pytest.raises(ValueError, match="exactly three"):
         client.create_sensor(
-            "bmm150_mount",
-            "BMM150 Hall sensor",
+            "test",
+            "Test sensor",
             (0.20, 0.0),
             (0.0, 0.0, 0.0),
         )
@@ -123,8 +176,8 @@ def test_unavailable_registry_reports_creation_failure(application):
     )
 
     future = client.create_sensor(
-        "bmm150_mount",
-        "BMM150 Hall sensor",
+        "test",
+        "Test sensor",
         (0.20, 0.0, 0.0),
         (0.0, 0.0, 0.0),
     )

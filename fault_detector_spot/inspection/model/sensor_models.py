@@ -3,7 +3,7 @@
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 from .models import PoseData, QuaternionData, Vector3Data
 from fault_detector_spot.shared.persistence.file_storage import (
@@ -58,9 +58,41 @@ def quaternion_from_rpy_degrees(
     return result
 
 
+def rpy_degrees_from_quaternion(
+    quaternion: QuaternionData,
+) -> Tuple[float, float, float]:
+    """Convert a normalized quaternion to fixed-axis RPY degrees."""
+    quaternion.validate()
+    x = float(quaternion.x)
+    y = float(quaternion.y)
+    z = float(quaternion.z)
+    w = float(quaternion.w)
+    norm = math.sqrt(x * x + y * y + z * z + w * w)
+    x /= norm
+    y /= norm
+    z /= norm
+    w /= norm
+
+    roll = math.atan2(
+        2.0 * (w * x + y * z),
+        1.0 - 2.0 * (x * x + y * y),
+    )
+    pitch_input = 2.0 * (w * y - z * x)
+    pitch = math.asin(max(-1.0, min(1.0, pitch_input)))
+    yaw = math.atan2(
+        2.0 * (w * z + x * y),
+        1.0 - 2.0 * (y * y + z * z),
+    )
+    return (
+        math.degrees(roll),
+        math.degrees(pitch),
+        math.degrees(yaw),
+    )
+
+
 @dataclass(frozen=True)
 class SensorDefinition:
-    """One physical sensor in one immutable hand mounting."""
+    """One physical sensor mounted relative to the Spot hand."""
 
     sensor_id: str
     display_name: str
@@ -83,7 +115,7 @@ class SensorDefinition:
         )
 
     def validate(self) -> None:
-        """Validate sensor identity and calibrated pose."""
+        """Validate sensor identity and hand-to-probe transform."""
         if self.sensor_id == BARE_HAND_MOTION_ID:
             raise ValueError(
                 "Sensor ID 'hand' is reserved for the robot hand frame"
@@ -116,7 +148,7 @@ def sensor_definition_from_values(
     pitch_degrees: float,
     yaw_degrees: float,
 ) -> SensorDefinition:
-    """Create and validate a sensor definition from UI calibration values."""
+    """Create and validate a sensor definition from UI transform values."""
     definition = SensorDefinition(
         sensor_id=sensor_id,
         display_name=display_name,

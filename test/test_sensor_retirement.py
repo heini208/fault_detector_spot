@@ -1,4 +1,4 @@
-"""Tests for reference-safe sensor retirement."""
+"""Tests for reference-safe sensor deletion."""
 
 from types import SimpleNamespace
 
@@ -11,12 +11,16 @@ from fault_detector_spot.inspection.model.models import (
     PoseData,
     ReferenceTag,
 )
-from fault_detector_spot.inspection.repository.object_repository import ObjectRepository
 from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.repository.object_repository import (
+    ObjectRepository,
+)
+from fault_detector_spot.inspection.repository.sensor_repository import (
+    SensorRepository,
+)
 from fault_detector_spot.inspection.ros.sensor_registry_node import (
     SensorRegistryNode,
 )
-from fault_detector_spot.inspection.repository.sensor_repository import SensorRepository
 
 
 def sensor_definition():
@@ -50,14 +54,26 @@ def registry(tmp_path):
     definition = sensor_definition()
     sensors.create(definition)
     objects = ObjectRepository(tmp_path / "objects")
-    return SimpleNamespace(
+    state = SimpleNamespace(
         repository=sensors,
         object_repository=objects,
         _definitions={definition.sensor_id: definition},
+        _attachment_state=SimpleNamespace(
+            active_sensor_id="",
+            pending_sensor_id="",
+        ),
     )
+    def require_mutation_allowed(sensor_id):
+        return SensorRegistryNode._require_mutation_allowed(
+            state,
+            sensor_id,
+        )
+
+    state._require_mutation_allowed = require_mutation_allowed
+    return state
 
 
-def test_saved_routine_blocks_sensor_retirement(tmp_path):
+def test_saved_routine_blocks_sensor_deletion(tmp_path):
     state = registry(tmp_path)
     state.object_repository.create(inspection_object())
 
@@ -65,25 +81,36 @@ def test_saved_routine_blocks_sensor_retirement(tmp_path):
         ValueError,
         match="motor_a/magnetic_scan",
     ):
-        SensorRegistryNode._retire_sensor(state, "bmm150_01")
+        SensorRegistryNode._delete_sensor(state, "bmm150_01")
 
     assert state.repository.exists("bmm150_01") is True
     assert "bmm150_01" in state._definitions
 
 
-def test_unreferenced_sensor_is_retired_and_removed_from_registry(tmp_path):
+def test_unreferenced_sensor_is_deleted_and_id_can_be_reused(tmp_path):
     state = registry(tmp_path)
     state.object_repository.create(inspection_object("other_sensor"))
 
-    retired = SensorRegistryNode._retire_sensor(state, "bmm150_01")
+    deleted = SensorRegistryNode._delete_sensor(state, "bmm150_01")
+    state.repository.create(sensor_definition())
 
-    assert retired.sensor_id == "bmm150_01"
-    assert state.repository.exists("bmm150_01") is False
-    assert state.repository.is_retired("bmm150_01") is True
+    assert deleted.sensor_id == "bmm150_01"
+    assert state.repository.exists("bmm150_01") is True
+    assert state.repository.is_retired("bmm150_01") is False
     assert "bmm150_01" not in state._definitions
 
 
-def test_unrelated_incomplete_object_does_not_block_retirement(tmp_path):
+def test_selected_sensor_cannot_be_deleted(tmp_path):
+    state = registry(tmp_path)
+    state._attachment_state.active_sensor_id = "bmm150_01"
+
+    with pytest.raises(RuntimeError, match="currently selected"):
+        SensorRegistryNode._delete_sensor(state, "bmm150_01")
+
+    assert state.repository.exists("bmm150_01") is True
+
+
+def test_unrelated_incomplete_object_does_not_block_deletion(tmp_path):
     state = registry(tmp_path)
     object_path = state.object_repository.get_object_path("old_object")
     object_path.parent.mkdir(parents=True)
@@ -98,10 +125,10 @@ def test_unrelated_incomplete_object_does_not_block_retirement(tmp_path):
         encoding="utf-8",
     )
 
-    retired = SensorRegistryNode._retire_sensor(state, "bmm150_01")
+    deleted = SensorRegistryNode._delete_sensor(state, "bmm150_01")
 
-    assert retired.sensor_id == "bmm150_01"
-    assert state.repository.is_retired("bmm150_01") is True
+    assert deleted.sensor_id == "bmm150_01"
+    assert state.repository.exists("bmm150_01") is False
 
 
 def test_incomplete_object_still_blocks_referenced_sensor(tmp_path):
@@ -120,6 +147,6 @@ def test_incomplete_object_still_blocks_referenced_sensor(tmp_path):
     )
 
     with pytest.raises(ValueError, match="old_object/old_scan"):
-        SensorRegistryNode._retire_sensor(state, "bmm150_01")
+        SensorRegistryNode._delete_sensor(state, "bmm150_01")
 
     assert state.repository.exists("bmm150_01") is True

@@ -1,4 +1,4 @@
-"""Repository for immutable hand-mounted sensor calibrations."""
+"""Repository for hand-mounted sensor transform definitions."""
 
 import os
 from pathlib import Path
@@ -16,7 +16,7 @@ from fault_detector_spot.shared.persistence.file_storage import (
 
 
 class SensorRepository:
-    """Store active and permanently retired physical sensor definitions."""
+    """Store editable physical sensor definitions."""
 
     FILE_SUFFIX = ".yaml"
 
@@ -52,12 +52,12 @@ class SensorRepository:
         return self.get_sensor_path(sensor_id).is_file()
 
     def get_retired_sensor_path(self, sensor_id: str) -> Path:
-        """Return the reserved YAML path for a retired sensor ID."""
+        """Return a legacy retired-sensor path."""
         validate_storage_name(sensor_id, "sensor ID")
         return self.retired_root_dir / f"{sensor_id}{self.FILE_SUFFIX}"
 
     def is_retired(self, sensor_id: str) -> bool:
-        """Return whether a sensor ID has been permanently retired."""
+        """Return whether a legacy retired-sensor file exists."""
         return self.get_retired_sensor_path(sensor_id).is_file()
 
     def load(self, sensor_id: str) -> SensorDefinition:
@@ -83,26 +83,45 @@ class SensorRepository:
         return definition
 
     def create(self, definition: SensorDefinition) -> SensorDefinition:
-        """Create a physical sensor definition without allowing overwrite."""
+        """Create a physical sensor definition without overwrite."""
         definition.validate()
-
         path = self.get_sensor_path(definition.sensor_id)
         if path.exists():
             raise FileExistsError(
                 f"Sensor definition already exists: {definition.sensor_id}"
             )
-        if self.is_retired(definition.sensor_id):
-            raise FileExistsError(
-                "Sensor ID is retired and cannot be reused: "
+        legacy_retired = self.get_retired_sensor_path(
+            definition.sensor_id
+        )
+        if legacy_retired.exists():
+            legacy_retired.unlink()
+        self._write(definition)
+        return definition
+
+    def update(self, definition: SensorDefinition) -> SensorDefinition:
+        """Replace an existing physical sensor definition atomically."""
+        definition.validate()
+        path = self.get_sensor_path(definition.sensor_id)
+        if not path.is_file():
+            raise FileNotFoundError(
+                "Sensor definition does not exist: "
                 f"{definition.sensor_id}"
             )
-        content = yaml.safe_dump(
-            definition.to_dict(),
-            sort_keys=False,
-            allow_unicode=True,
-        )
-        atomic_write_text(path, content)
+        self._write(definition)
         return definition
+
+    def delete(self, sensor_id: str) -> SensorDefinition:
+        """Delete one physical sensor definition and allow ID reuse."""
+        definition = self.load(sensor_id)
+        self.get_sensor_path(sensor_id).unlink()
+        legacy_retired = self.get_retired_sensor_path(sensor_id)
+        if legacy_retired.exists():
+            legacy_retired.unlink()
+        return definition
+
+    def retire(self, sensor_id: str) -> SensorDefinition:
+        """Delete one sensor through the existing retirement transport."""
+        return self.delete(sensor_id)
 
     def list_sensor_ids(self) -> List[str]:
         """List stored physical sensor IDs in stable order."""
@@ -121,20 +140,8 @@ class SensorRepository:
             for sensor_id in self.list_sensor_ids()
         ]
 
-    def retire(self, sensor_id: str) -> SensorDefinition:
-        """Move an active definition into permanent retired storage."""
-        retired_path = self.get_retired_sensor_path(sensor_id)
-        if retired_path.exists():
-            raise FileNotFoundError(
-                f"Sensor is already retired: {sensor_id}"
-            )
-        definition = self.load(sensor_id)
-        retired_path.parent.mkdir(parents=True, exist_ok=True)
-        self.get_sensor_path(sensor_id).replace(retired_path)
-        return definition
-
     def list_retired_sensor_ids(self) -> List[str]:
-        """List permanently reserved retired sensor IDs."""
+        """List legacy retired-sensor files still on disk."""
         if not self.retired_root_dir.is_dir():
             return []
         return sorted(
@@ -143,4 +150,15 @@ class SensorRepository:
                 f"*{self.FILE_SUFFIX}"
             )
             if path.is_file()
+        )
+
+    def _write(self, definition: SensorDefinition) -> None:
+        content = yaml.safe_dump(
+            definition.to_dict(),
+            sort_keys=False,
+            allow_unicode=True,
+        )
+        atomic_write_text(
+            self.get_sensor_path(definition.sensor_id),
+            content,
         )

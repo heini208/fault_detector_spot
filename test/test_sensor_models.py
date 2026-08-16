@@ -1,4 +1,4 @@
-"""Tests for immutable hand-mounted sensor definitions."""
+"""Tests for hand-mounted sensor definitions and transform helpers."""
 
 import math
 
@@ -9,6 +9,7 @@ from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     SensorDefinition,
     quaternion_from_rpy_degrees,
+    rpy_degrees_from_quaternion,
     sensor_definition_from_values,
     sensor_probe_frame,
 )
@@ -34,6 +35,22 @@ def test_sensor_definition_round_trip_and_derived_frame():
     assert sensor_probe_frame("bmm150_01") == "bmm150_01_probe"
 
 
+def test_short_test_sensor_id_is_valid():
+    definition = sensor_definition_from_values(
+        "test",
+        "Test sensor",
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+
+    assert definition.sensor_id == "test"
+    assert definition.probe_frame == "test_probe"
+
+
 def test_bare_hand_motion_uses_real_hand_frame_without_sensor_definition():
     assert BARE_HAND_MOTION_ID == "hand"
     assert sensor_probe_frame(BARE_HAND_MOTION_ID) == "hand"
@@ -46,6 +63,16 @@ def test_bare_hand_motion_uses_real_hand_frame_without_sensor_definition():
 
     with pytest.raises(ValueError, match="reserved"):
         definition.validate()
+
+
+def test_rpy_degree_conversion_round_trips_quaternion():
+    quaternion = quaternion_from_rpy_degrees(12.0, -7.0, 91.0)
+
+    roll, pitch, yaw = rpy_degrees_from_quaternion(quaternion)
+
+    assert roll == pytest.approx(12.0)
+    assert pitch == pytest.approx(-7.0)
+    assert yaw == pytest.approx(91.0)
 
 
 def test_rpy_degrees_are_saved_as_normalized_quaternion():

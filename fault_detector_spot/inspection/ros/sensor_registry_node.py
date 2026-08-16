@@ -1,32 +1,45 @@
-"""ROS owner for persistent sensor calibrations and static transforms."""
+"""ROS owner for persistent sensor transforms and registry mutations."""
 
 from pathlib import Path
 from typing import Dict, Optional
 
 import rclpy
 from fault_detector_msgs.msg import (
+    SensorAttachmentState,
     SensorDefinition as SensorDefinitionMessage,
     SensorDefinitionArray,
 )
-from fault_detector_msgs.srv import AddSensor, RetireSensor
+from fault_detector_msgs.srv import (
+    AddSensor,
+    DeleteSensor,
+    RetireSensor,
+    UpdateSensor,
+)
 from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
 from synchros2.static_transform_broadcaster import (
     StaticTransformBroadcaster,
 )
 
-from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.repository.object_repository import ObjectRepository
 from fault_detector_spot.inspection.model.sensor_models import (
     SENSOR_PARENT_FRAME,
     SensorDefinition,
 )
-from fault_detector_spot.inspection.repository.sensor_repository import SensorRepository
+from fault_detector_spot.inspection.repository.object_repository import (
+    ObjectRepository,
+)
+from fault_detector_spot.inspection.repository.sensor_repository import (
+    SensorRepository,
+)
+from fault_detector_spot.shared.ros.qos_profiles import (
+    APPLICATION_STATE_QOS,
+    LATCHED_QOS,
+)
 
 
 class SensorRegistryNode(Node):
@@ -34,7 +47,12 @@ class SensorRegistryNode(Node):
 
     SENSOR_LIST_TOPIC = "fault_detector/sensors"
     ADD_SENSOR_SERVICE = "fault_detector/add_sensor"
+    UPDATE_SENSOR_SERVICE = "fault_detector/update_sensor"
+    DELETE_SENSOR_SERVICE = "fault_detector/delete_sensor"
     RETIRE_SENSOR_SERVICE = "fault_detector/retire_sensor"
+    ATTACHMENT_STATE_TOPIC = (
+        "fault_detector/application/sensor_attachment_state"
+    )
 
     def __init__(
         self,
@@ -70,16 +88,33 @@ class SensorRegistryNode(Node):
             object_root or configured_object_root or None
         )
         self._definitions: Dict[str, SensorDefinition] = {}
+        self._attachment_state = None
         self._static_broadcaster = StaticTransformBroadcaster(self)
         self._sensor_list_publisher = self.create_publisher(
             SensorDefinitionArray,
             self.SENSOR_LIST_TOPIC,
             LATCHED_QOS,
         )
+        self._attachment_subscription = self.create_subscription(
+            SensorAttachmentState,
+            self.ATTACHMENT_STATE_TOPIC,
+            self._receive_attachment_state,
+            APPLICATION_STATE_QOS,
+        )
         self._add_sensor_service = self.create_service(
             AddSensor,
             self.ADD_SENSOR_SERVICE,
             self._handle_add_sensor,
+        )
+        self._update_sensor_service = self.create_service(
+            UpdateSensor,
+            self.UPDATE_SENSOR_SERVICE,
+            self._handle_update_sensor,
+        )
+        self._delete_sensor_service = self.create_service(
+            DeleteSensor,
+            self.DELETE_SENSOR_SERVICE,
+            self._handle_delete_sensor,
         )
         self._retire_sensor_service = self.create_service(
             RetireSensor,
@@ -103,6 +138,12 @@ class SensorRegistryNode(Node):
             transforms.append(self._transform_message(definition))
         if transforms:
             self._static_broadcaster.sendTransform(transforms)
+
+    def _receive_attachment_state(
+        self,
+        state: SensorAttachmentState,
+    ) -> None:
+        self._attachment_state = state
 
     def _handle_add_sensor(self, request, response):
         try:
@@ -129,36 +170,84 @@ class SensorRegistryNode(Node):
         self.get_logger().info(response.message)
         return response
 
-    def _handle_retire_sensor(self, request, response):
+    def _handle_update_sensor(self, request, response):
         try:
-            definition = self._retire_sensor(request.sensor_id)
+            definition = self._definition_from_message(request.sensor)
+            self._require_mutation_allowed(definition.sensor_id)
+            self.repository.update(definition)
+            self._definitions[definition.sensor_id] = definition
+            self._static_broadcaster.sendTransform(
+                self._transform_message(definition)
+            )
             self._publish_sensor_list()
         except Exception as exception:
             response.success = False
             response.message = str(exception)
             self.get_logger().error(
-                f"Sensor retirement failed: {exception}"
+                f"Sensor update failed: {exception}"
             )
             return response
 
         response.success = True
         response.message = (
-            f"Retired sensor '{definition.sensor_id}'. Restart the complete "
-            "system to clear its static TF. The sensor ID remains reserved."
+            f"Updated sensor '{definition.sensor_id}' transform"
         )
         self.get_logger().info(response.message)
         return response
 
-    def _retire_sensor(self, sensor_id: str) -> SensorDefinition:
+    def _handle_delete_sensor(self, request, response):
+        return self._delete_sensor_response(request, response)
+
+    def _handle_retire_sensor(self, request, response):
+        return self._delete_sensor_response(request, response)
+
+    def _delete_sensor_response(self, request, response):
+        try:
+            definition = self._delete_sensor(request.sensor_id)
+            self._publish_sensor_list()
+        except Exception as exception:
+            response.success = False
+            response.message = str(exception)
+            self.get_logger().error(
+                f"Sensor deletion failed: {exception}"
+            )
+            return response
+
+        response.success = True
+        response.message = (
+            f"Deleted sensor '{definition.sensor_id}'. Restart the complete "
+            "system to clear its old static TF from existing listeners."
+        )
+        self.get_logger().info(response.message)
+        return response
+
+    def _delete_sensor(self, sensor_id: str) -> SensorDefinition:
+        self._require_mutation_allowed(sensor_id)
         references = self.object_repository.find_sensor_references(sensor_id)
         if references:
             raise ValueError(
                 f"Sensor '{sensor_id}' is referenced by saved routines: "
                 + ", ".join(references)
             )
-        definition = self.repository.retire(sensor_id)
+        definition = self.repository.delete(sensor_id)
         self._definitions.pop(sensor_id, None)
         return definition
+
+    def _require_mutation_allowed(self, sensor_id: str) -> None:
+        state = self._attachment_state
+        if state is None:
+            raise RuntimeError(
+                "Sensor attachment state is unavailable; update or delete "
+                "is blocked until application state is received"
+            )
+        if sensor_id in {
+            state.active_sensor_id.strip(),
+            state.pending_sensor_id.strip(),
+        }:
+            raise RuntimeError(
+                f"Sensor '{sensor_id}' is currently selected. Remove or "
+                "select another sensor before editing or deleting it."
+            )
 
     def _publish_sensor_list(self) -> None:
         message = SensorDefinitionArray()

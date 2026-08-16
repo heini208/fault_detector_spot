@@ -1,1 +1,0 @@
-/home/marcel/spot_ws/src/fault_detector_spot/build/fault_detector_spot/launch/nav2_spot_launch.py
