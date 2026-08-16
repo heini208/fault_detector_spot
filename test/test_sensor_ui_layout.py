@@ -46,9 +46,12 @@ def test_sensor_workspace_waits_for_authoritative_registry(application):
     assert controls.active_mount_dropdown.isEnabled() is False
     assert controls.select_mount_button.isEnabled() is False
     assert controls.clear_attachment_button.isEnabled() is False
-    assert controls.new_mount_button.isEnabled() is False
+    assert not hasattr(controls, "new_mount_button")
     assert controls.retire_mount_button.isEnabled() is False
-    assert controls.save_mount_button.isEnabled() is False
+    assert controls.save_mount_button.isEnabled() is True
+    assert controls.discard_mount_button.isEnabled() is True
+    assert controls.mount_id_field.isReadOnly() is False
+    assert controls.display_name_field.isReadOnly() is False
     assert controls.start_configuration_button.isEnabled() is False
     assert controls.mount_table.columnCount() == 4
     assert controls.mount_table.rowCount() == 0
@@ -69,18 +72,16 @@ def test_registry_contains_only_real_physical_sensors(application):
     assert controls.active_mount_dropdown.count() == 1
     assert controls.active_mount_dropdown.itemData(0) == "hall_probe"
     assert controls.clear_attachment_button.text() == "Remove Sensor"
-    assert controls.new_mount_button.isEnabled() is True
+    assert not hasattr(controls, "new_mount_button")
 
 
-def test_new_sensor_mount_opens_manual_transform_form(application):
+def test_sensor_definition_form_is_immediately_editable(application):
     controls = SensorControls()
-    controls.apply_definitions(())
-
-    controls.new_mount_button.click()
     controls.mount_id_field.setText("bmm150_mount")
 
     assert controls.mount_id_field.isReadOnly() is False
     assert controls.display_name_field.isReadOnly() is False
+    assert controls.probe_frame_field.isReadOnly() is True
     assert controls.probe_frame_field.text() == "bmm150_mount_probe"
     assert [field.text() for field in controls.translation_fields] == [
         "0.0",
@@ -94,13 +95,11 @@ def test_new_sensor_mount_opens_manual_transform_form(application):
     ]
     assert controls.save_mount_button.isEnabled() is True
     assert controls.discard_mount_button.isEnabled() is True
-    assert controls.new_mount_button.isEnabled() is False
 
 
 def test_manual_sensor_form_emits_creation_intent(application):
     controls = SensorControls()
     controls.apply_definitions(())
-    controls.new_mount_button.click()
     controls.mount_id_field.setText("bmm150_mount")
     controls.display_name_field.setText("BMM150 Hall sensor")
     values = ("0.20", "-0.01", "0.03")
@@ -122,10 +121,30 @@ def test_manual_sensor_form_emits_creation_intent(application):
     assert intent.rotation_degrees == pytest.approx((0.0, 0.0, 90.0))
 
 
+
+def test_clear_fields_resets_definition_without_new_action(application):
+    controls = SensorControls()
+    controls.mount_id_field.setText("draft_sensor")
+    controls.display_name_field.setText("Draft sensor")
+    controls.translation_fields[0].setText("0.25")
+
+    controls.discard_mount_button.click()
+
+    assert controls.mount_id_field.text() == ""
+    assert controls.display_name_field.text() == ""
+    assert controls.probe_frame_field.text() == ""
+    assert [field.text() for field in controls.translation_fields] == [
+        "0.0",
+        "0.0",
+        "0.0",
+    ]
+    assert controls.save_mount_button.isEnabled() is True
+
+
+
 def test_sensor_creation_result_keeps_failed_draft_editable(application):
     controls = SensorControls()
     controls.apply_definitions(())
-    controls.new_mount_button.click()
     controls.mount_id_field.setText("bad sensor")
     controls.display_name_field.setText("Bad sensor")
 
@@ -142,18 +161,28 @@ def test_sensor_creation_result_keeps_failed_draft_editable(application):
 def test_successful_sensor_creation_locks_saved_definition(application):
     controls = SensorControls()
     controls.apply_definitions(())
-    controls.new_mount_button.click()
     controls.mount_id_field.setText("hall_probe")
     controls.display_name_field.setText("Hall probe")
 
     controls.mark_sensor_creation_pending()
     controls.finish_sensor_creation(True, "Created sensor 'hall_probe'")
 
-    assert controls.mount_id_field.isReadOnly() is True
-    assert controls.display_name_field.isReadOnly() is True
-    assert controls.save_mount_button.isEnabled() is False
-    assert controls.discard_mount_button.isEnabled() is False
-    assert controls.new_mount_button.isEnabled() is True
+    assert controls.mount_id_field.text() == ""
+    assert controls.display_name_field.text() == ""
+    assert controls.mount_id_field.isReadOnly() is False
+    assert controls.display_name_field.isReadOnly() is False
+    assert controls.save_mount_button.isEnabled() is True
+    assert controls.discard_mount_button.isEnabled() is True
+    assert [field.text() for field in controls.translation_fields] == [
+        "0.0",
+        "0.0",
+        "0.0",
+    ]
+    assert [field.text() for field in controls.rotation_fields] == [
+        "0.0",
+        "0.0",
+        "0.0",
+    ]
     assert controls.calibration_status_value.text() == (
         "Created sensor 'hall_probe'"
     )

@@ -45,11 +45,8 @@ class SensorControls(QWidget):
         super().__init__(parent)
         self._definitions = {}
         self._attachment_state = None
-        self._creation_active = False
-        self._registry_received = False
         self._build_ui()
         self._connect_intents()
-        self._set_definition_editable(False)
 
     def _build_ui(self) -> None:
         page_layout = QVBoxLayout(self)
@@ -166,13 +163,10 @@ class SensorControls(QWidget):
         self.empty_registry_label.setAlignment(Qt.AlignCenter)
         self.empty_registry_label.setStyleSheet("color: palette(mid);")
 
-        self.new_mount_button = QPushButton("New Sensor Mount")
         self.retire_mount_button = QPushButton("Retire Selected")
-        self.new_mount_button.setEnabled(False)
         self.retire_mount_button.setEnabled(False)
 
         actions = QHBoxLayout()
-        actions.addWidget(self.new_mount_button)
         actions.addWidget(self.retire_mount_button)
         actions.addStretch()
 
@@ -218,14 +212,14 @@ class SensorControls(QWidget):
         form.addRow("Hand → probe translation:", translation[1])
         form.addRow("Hand → probe rotation:", rotation[1])
 
-        self.calibration_status_value = QLabel("Select New Sensor Mount")
+        self.calibration_status_value = QLabel(
+            "Enter a new mount ID and hand-to-probe transform, then save."
+        )
         self.calibration_status_value.setWordWrap(True)
         form.addRow("Calibration status:", self.calibration_status_value)
 
         self.save_mount_button = QPushButton("Save Sensor Mount")
         self.discard_mount_button = QPushButton("Discard Changes")
-        self.save_mount_button.setEnabled(False)
-        self.discard_mount_button.setEnabled(False)
 
         actions = QHBoxLayout()
         actions.addStretch()
@@ -289,14 +283,11 @@ class SensorControls(QWidget):
         self.clear_attachment_button.clicked.connect(
             self._request_no_sensor
         )
-        self.new_mount_button.clicked.connect(
-            self.begin_sensor_creation
-        )
         self.save_mount_button.clicked.connect(
             self._request_sensor_creation
         )
         self.discard_mount_button.clicked.connect(
-            self.discard_sensor_creation
+            self.clear_sensor_definition
         )
         self.mount_id_field.textChanged.connect(
             self._update_probe_frame_preview
@@ -309,9 +300,6 @@ class SensorControls(QWidget):
             definition.sensor_id: definition
             for definition in definitions
         }
-        self._registry_received = True
-        self.new_mount_button.setEnabled(not self._creation_active)
-
         self.mount_table.setRowCount(0)
         self.active_mount_dropdown.blockSignals(True)
         self.active_mount_dropdown.clear()
@@ -350,40 +338,16 @@ class SensorControls(QWidget):
         self._attachment_state = state
         self._render_attachment_state()
 
-    def begin_sensor_creation(self) -> None:
-        """Open the immutable definition form for a new sensor mount."""
-        self._creation_active = True
-        self.mount_table.clearSelection()
-        self.mount_id_field.clear()
-        self.display_name_field.clear()
-        self.probe_frame_field.clear()
-        for field in self.translation_fields:
-            field.setText("0.0")
-        for field in self.rotation_fields:
-            field.setText("0.0")
+    def clear_sensor_definition(self) -> None:
+        """Reset the manual definition form for a new sensor mount."""
+        self._reset_definition_form()
         self.calibration_status_value.setText(
-            "Enter the measured hand-to-probe transform."
+            "Enter a new mount ID and hand-to-probe transform, then save."
         )
-        self._set_definition_editable(True)
-        self.new_mount_button.setEnabled(False)
-        self.save_mount_button.setEnabled(True)
-        self.discard_mount_button.setEnabled(True)
-        self.mount_id_field.setFocus()
-
-    def discard_sensor_creation(self) -> None:
-        """Discard an unsaved sensor definition draft."""
-        self._creation_active = False
-        self._clear_definition_form()
-        self._set_definition_editable(False)
-        self.new_mount_button.setEnabled(self._registry_received)
-        self.save_mount_button.setEnabled(False)
-        self.discard_mount_button.setEnabled(False)
-        self.calibration_status_value.setText("Select New Sensor Mount")
 
     def mark_sensor_creation_pending(self) -> None:
         """Prevent duplicate submissions while the registry is saving."""
-        if not self._creation_active:
-            return
+        self._set_definition_editable(False)
         self.save_mount_button.setEnabled(False)
         self.discard_mount_button.setEnabled(False)
         self.calibration_status_value.setText(
@@ -401,18 +365,13 @@ class SensorControls(QWidget):
             if success
             else "Sensor mount creation failed"
         )
-        self.calibration_status_value.setText(detail)
         if success:
-            self._creation_active = False
-            self._set_definition_editable(False)
-            self.new_mount_button.setEnabled(self._registry_received)
-            self.save_mount_button.setEnabled(False)
-            self.discard_mount_button.setEnabled(False)
-            return
-        self._set_definition_editable(True)
-        self.new_mount_button.setEnabled(False)
+            self._reset_definition_form()
+        else:
+            self._set_definition_editable(True)
         self.save_mount_button.setEnabled(True)
         self.discard_mount_button.setEnabled(True)
+        self.calibration_status_value.setText(detail)
 
     def _render_attachment_state(self) -> None:
         state = self._attachment_state
@@ -473,8 +432,6 @@ class SensorControls(QWidget):
         self.select_requested.emit("")
 
     def _request_sensor_creation(self) -> None:
-        if not self._creation_active:
-            return
         sensor_id = self.mount_id_field.text().strip()
         display_name = self.display_name_field.text().strip()
         if not sensor_id:
@@ -524,7 +481,8 @@ class SensorControls(QWidget):
         ):
             field.setReadOnly(not editable)
 
-    def _clear_definition_form(self) -> None:
+    def _reset_definition_form(self) -> None:
+        self._set_definition_editable(True)
         self.mount_id_field.clear()
         self.display_name_field.clear()
         self.probe_frame_field.clear()
@@ -532,7 +490,8 @@ class SensorControls(QWidget):
             *self.translation_fields,
             *self.rotation_fields,
         ):
-            field.clear()
+            field.setText("0.0")
+        self.mount_id_field.setFocus()
 
     @staticmethod
     def _field_value(field: QLineEdit) -> float:
