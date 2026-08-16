@@ -116,14 +116,4 @@ def generate_launch_description():
                 {"use_sim_time": use_sim_time},
             ],
         ),
-        Node(
-            package="fault_detector_spot",
-            executable="sensor_registry",
-            name="sensor_registry",
-            output="screen",
-            parameters=[
-                tag_sensing_config,
-                {"use_sim_time": use_sim_time},
-            ],
-        ),
     ])

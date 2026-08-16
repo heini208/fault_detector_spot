@@ -278,6 +278,29 @@ class SensorAttachmentController:
                 )
             return attachment
 
+    def require_definition_mutation_allowed(
+        self,
+        sensor_id: str,
+    ) -> None:
+        """Reject mutation of selected or reserved sensor geometry."""
+        if not isinstance(sensor_id, str) or not sensor_id.strip():
+            raise ValueError("Sensor ID must not be empty")
+        normalized = sensor_id.strip()
+        with self._lock:
+            if self._reservation_count:
+                raise RuntimeError(
+                    "Cannot change sensor definitions while a "
+                    "sensor-dependent workflow is active"
+                )
+            if normalized in {
+                self._state.active_sensor_id,
+                self._state.pending_sensor_id,
+            }:
+                raise RuntimeError(
+                    f"Sensor '{normalized}' is currently selected. Remove "
+                    "or select another sensor before editing or deleting it."
+                )
+
     @contextmanager
     def reserve_motion_attachment(self):
         """Freeze effective geometry across a multi-step motion workflow."""

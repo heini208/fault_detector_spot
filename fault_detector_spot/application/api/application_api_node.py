@@ -19,6 +19,9 @@ from ament_index_python.packages import get_package_share_directory
 from fault_detector_spot.application.api.sensor_attachment_api import (
     SensorAttachmentApi,
 )
+from fault_detector_spot.application.api.sensor_registry_api import (
+    SensorRegistryApi,
+)
 from fault_detector_spot.application.controllers.application_controller import (
     ApplicationController,
     ApplicationOperation,
@@ -31,6 +34,9 @@ from fault_detector_spot.application.controllers.command_controller import (
 )
 from fault_detector_spot.application.controllers.sensor_attachment_controller import (
     SensorAttachmentController,
+)
+from fault_detector_spot.application.controllers.sensor_registry_controller import (
+    SensorRegistryController,
 )
 from fault_detector_spot.application.ros.command_transport import (
     RosCommandTransport,
@@ -172,8 +178,17 @@ class ApplicationApiNode(Node):
             SensorAttachmentStateStore(),
             self.command_controller,
         )
+        self.sensor_registry_controller = SensorRegistryController(
+            sensor_repository,
+            self.sensor_attachment_controller,
+            self.command_controller,
+        )
         self.command_controller.add_request_preparer(
             self.sensor_attachment_controller.prepare_request
+        )
+        self.sensor_registry_api = SensorRegistryApi(
+            self,
+            self.sensor_registry_controller,
         )
         self.sensor_attachment_api = SensorAttachmentApi(
             self,
@@ -461,6 +476,7 @@ class ApplicationApiNode(Node):
         self.probe_setup_api.close()
         self.navigation_setup_api.close()
         self.sensor_attachment_api.close()
+        self.sensor_registry_api.close()
         self.command_controller.remove_request_preparer(
             self.sensor_attachment_controller.prepare_request
         )

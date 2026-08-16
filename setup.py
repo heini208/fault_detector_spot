@@ -35,7 +35,6 @@ setup(
             'available_frames_publisher = '
             'fault_detector_spot.ui.ros.available_frames_publisher:main',
             'lidar_self_filter = fault_detector_spot.mapping.ros.lidar_self_filter:main',
-            'sensor_registry = fault_detector_spot.inspection.ros.sensor_registry_node:main',
         ],
     },
 )

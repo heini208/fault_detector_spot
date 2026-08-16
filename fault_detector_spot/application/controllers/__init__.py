@@ -14,6 +14,7 @@ from .sensor_attachment_controller import (
     SensorAttachmentState,
     SensorAttachmentStatus,
 )
+from .sensor_registry_controller import SensorRegistryController
 
 __all__ = [
     "CommandController",
@@ -25,5 +26,6 @@ __all__ = [
     "SensorAttachmentController",
     "SensorAttachmentState",
     "SensorAttachmentStatus",
+    "SensorRegistryController",
     "UnknownCommandRequest",
 ]

@@ -1,20 +1,44 @@
-"""Tests for persistent sensor registry mutations."""
+"""Tests for application-owned sensor registry mutations."""
 
-from types import SimpleNamespace
+from threading import RLock
 
 import pytest
 from fault_detector_msgs.srv import AddSensor, DeleteSensor, UpdateSensor
 
+from fault_detector_spot.application.api.sensor_registry_api import (
+    SensorRegistryApi,
+)
+from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.commanding.command_request import (
+    CommandOrigin,
+    CommandRequest,
+    RecordingPolicy,
+)
+from fault_detector_spot.application.commanding.semantic_command import (
+    SemanticCommand,
+)
+from fault_detector_spot.application.controllers.command_controller import (
+    CommandController,
+)
+from fault_detector_spot.application.controllers.sensor_attachment_controller import (
+    SensorAttachmentController,
+)
+from fault_detector_spot.application.controllers.sensor_registry_controller import (
+    SensorRegistryController,
+)
+from fault_detector_spot.inspection.model.sensor_models import (
+    sensor_definition_from_values,
+)
+from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (
+    SensorAttachmentStateStore,
+)
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
-)
-from fault_detector_spot.inspection.ros.sensor_registry_node import (
-    SensorRegistryNode,
 )
 
 
 class FakeBroadcaster:
-    """Capture static transforms sent by the registry."""
+    """Capture static transforms sent by the registry API."""
 
     def __init__(self):
         self.transforms = []
@@ -33,50 +57,66 @@ class FakeLogger:
         return None
 
 
-def registry_state(tmp_path):
-    """Build the non-ROS state needed by registry callbacks."""
-    state = SimpleNamespace()
-    state.repository = SensorRepository(tmp_path / "sensors")
-    state._definitions = {}
-    state._attachment_state = SimpleNamespace(
-        active_sensor_id="",
-        pending_sensor_id="",
+class FakeNode:
+    """Provide the node surface used by callback diagnostics."""
+
+    def __init__(self):
+        self.logger = FakeLogger()
+
+    def get_logger(self):
+        return self.logger
+
+
+def definition(sensor_id="test", x=0.20):
+    """Create one valid physical sensor definition."""
+    return sensor_definition_from_values(
+        sensor_id,
+        "Test sensor",
+        x,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
     )
-    state._static_broadcaster = FakeBroadcaster()
-    state._definition_from_message = (
-        SensorRegistryNode._definition_from_message
+
+
+def controllers(tmp_path):
+    """Create one shared repository and application authority."""
+    repository = SensorRepository(tmp_path / "sensors")
+    command_controller = CommandController()
+    attachment_controller = SensorAttachmentController(
+        repository,
+        SensorAttachmentStateStore(tmp_path / "attachment.yaml"),
+        command_controller,
     )
-    state._transform_message = lambda definition: definition
-    state.published = 0
+    registry_controller = SensorRegistryController(
+        repository,
+        attachment_controller,
+        command_controller,
+    )
+    return (
+        registry_controller,
+        attachment_controller,
+        command_controller,
+        repository,
+    )
 
-    def require_mutation_allowed(sensor_id):
-        return SensorRegistryNode._require_mutation_allowed(
-            state,
-            sensor_id,
-        )
 
-    def delete_sensor(sensor_id):
-        return SensorRegistryNode._delete_sensor(
-            state,
-            sensor_id,
-        )
-
-    def publish():
-        state.published += 1
-
-    def delete_sensor_response(request, response):
-        return SensorRegistryNode._delete_sensor_response(
-            state,
-            request,
-            response,
-        )
-
-    state._require_mutation_allowed = require_mutation_allowed
-    state._delete_sensor = delete_sensor
-    state._delete_sensor_response = delete_sensor_response
-    state._publish_sensor_list = publish
-    state.get_logger = lambda: FakeLogger()
-    return state
+def api_state(tmp_path):
+    """Build the non-ROS state needed by registry API callbacks."""
+    registry, attachment, commands, repository = controllers(tmp_path)
+    api = SensorRegistryApi.__new__(SensorRegistryApi)
+    api.node = FakeNode()
+    api.controller = registry
+    api._lock = RLock()
+    api._static_broadcaster = FakeBroadcaster()
+    api.published = []
+    api._transform_message = lambda value: value
+    api._publish_definitions = (
+        lambda values: api.published.append(tuple(values))
+    )
+    return api, attachment, commands, repository
 
 
 def add_request(sensor_id="test", x=0.20):
@@ -99,168 +139,159 @@ def update_request(sensor_id="test", x=0.35):
     return value
 
 
-def test_add_sensor_persists_definition_and_broadcasts_transform(tmp_path):
-    state = registry_state(tmp_path)
-
-    response = SensorRegistryNode._handle_add_sensor(
-        state,
-        add_request(),
-        AddSensor.Response(),
+def queued_command(command_controller):
+    """Queue one physical command without configuring dispatch."""
+    request = CommandRequest.create(
+        command=SemanticCommand(command_id=CommandID.STAND_UP),
+        client_id="test",
+        origin=CommandOrigin.SYSTEM,
+        recording_policy=RecordingPolicy.EXCLUDE,
     )
-
-    stored = state.repository.load("test")
-    assert response.success is True
-    assert "test_probe" in response.message
-    assert stored.hand_to_probe.position.x == pytest.approx(0.20)
-    assert state._definitions["test"] == stored
-    assert state._static_broadcaster.transforms == [stored]
-    assert state.published == 1
+    command_controller.submit(request)
 
 
-def test_add_sensor_rejects_duplicate_mount_id(tmp_path):
-    state = registry_state(tmp_path)
-    SensorRegistryNode._handle_add_sensor(
-        state,
-        add_request(),
-        AddSensor.Response(),
-    )
+def test_registry_and_attachment_share_one_repository(tmp_path):
+    registry, attachment, _, repository = controllers(tmp_path)
 
-    response = SensorRegistryNode._handle_add_sensor(
-        state,
-        add_request(x=0.40),
-        AddSensor.Response(),
-    )
+    assert registry.sensor_repository is repository
+    assert attachment.sensor_repository is repository
 
-    assert response.success is False
-    assert "already exists" in response.message
-    assert state.repository.load("test").hand_to_probe.position.x == (
+
+def test_updated_definition_is_used_by_later_attachment(tmp_path):
+    registry, attachment, _, _ = controllers(tmp_path)
+    registry.create(definition(x=0.20))
+    registry.update(definition(x=0.35))
+
+    pending = attachment.select_sensor("test")
+    attachment.confirm_sensor("test", pending.attachment_revision)
+
+    snapshot = attachment.require_motion_attachment()
+    assert snapshot.hand_to_probe_position[0] == pytest.approx(0.35)
+
+
+def test_update_active_sensor_is_rejected_synchronously(tmp_path):
+    registry, attachment, _, repository = controllers(tmp_path)
+    registry.create(definition())
+    pending = attachment.select_sensor("test")
+    attachment.confirm_sensor("test", pending.attachment_revision)
+
+    with pytest.raises(RuntimeError, match="currently selected"):
+        registry.update(definition(x=0.35))
+
+    assert repository.load("test").hand_to_probe.position.x == (
         pytest.approx(0.20)
     )
 
 
-def test_update_sensor_overwrites_transform_and_rebroadcasts(tmp_path):
-    state = registry_state(tmp_path)
-    SensorRegistryNode._handle_add_sensor(
-        state,
+def test_delete_pending_sensor_is_rejected_synchronously(tmp_path):
+    registry, attachment, _, repository = controllers(tmp_path)
+    registry.create(definition())
+    attachment.select_sensor("test")
+
+    with pytest.raises(RuntimeError, match="currently selected"):
+        registry.delete("test")
+
+    assert repository.exists("test") is True
+
+
+def test_unrelated_idle_sensor_update_succeeds(tmp_path):
+    registry, attachment, _, repository = controllers(tmp_path)
+    registry.create(definition("active"))
+    registry.create(definition("other"))
+    pending = attachment.select_sensor("active")
+    attachment.confirm_sensor("active", pending.attachment_revision)
+
+    registry.update(definition("other", x=0.42))
+
+    assert repository.load("other").hand_to_probe.position.x == (
+        pytest.approx(0.42)
+    )
+
+
+def test_sensor_update_is_blocked_during_attachment_reservation(tmp_path):
+    registry, attachment, _, repository = controllers(tmp_path)
+    registry.create(definition("active"))
+    registry.create(definition("other"))
+    pending = attachment.select_sensor("active")
+    attachment.confirm_sensor("active", pending.attachment_revision)
+
+    with attachment.reserve_motion_attachment():
+        with pytest.raises(RuntimeError, match="workflow is active"):
+            registry.update(definition("other", x=0.42))
+
+    assert repository.load("other").hand_to_probe.position.x == (
+        pytest.approx(0.20)
+    )
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "delete"])
+def test_queued_physical_command_blocks_registry_mutation(
+    tmp_path,
+    operation,
+):
+    registry, _, commands, repository = controllers(tmp_path)
+    if operation != "create":
+        repository.create(definition())
+    queued_command(commands)
+
+    with pytest.raises(RuntimeError, match="active or queued"):
+        if operation == "create":
+            registry.create(definition())
+        elif operation == "update":
+            registry.update(definition(x=0.35))
+        else:
+            registry.delete("test")
+
+
+def test_add_sensor_persists_and_publishes_definition(tmp_path):
+    api, _, _, repository = api_state(tmp_path)
+
+    response = SensorRegistryApi._handle_add_sensor(
+        api,
         add_request(),
         AddSensor.Response(),
     )
 
-    response = SensorRegistryNode._handle_update_sensor(
-        state,
-        update_request(),
-        UpdateSensor.Response(),
-    )
-
-    stored = state.repository.load("test")
+    stored = repository.load("test")
     assert response.success is True
-    assert "Updated sensor 'test'" in response.message
-    assert stored.display_name == "Updated test sensor"
-    assert stored.hand_to_probe.position.x == pytest.approx(0.35)
-    assert state._definitions["test"] == stored
-    assert state._static_broadcaster.transforms[-1] == stored
-    assert state.published == 2
+    assert "test_probe" in response.message
+    assert stored.hand_to_probe.position.x == pytest.approx(0.20)
+    assert api._static_broadcaster.transforms == [stored]
+    assert api.published == [(stored,)]
 
 
 def test_update_sensor_rejects_current_attachment(tmp_path):
-    state = registry_state(tmp_path)
-    SensorRegistryNode._handle_add_sensor(
-        state,
-        add_request(),
-        AddSensor.Response(),
-    )
-    state._attachment_state.active_sensor_id = "test"
+    api, attachment, _, repository = api_state(tmp_path)
+    api.controller.create(definition())
+    pending = attachment.select_sensor("test")
+    attachment.confirm_sensor("test", pending.attachment_revision)
 
-    response = SensorRegistryNode._handle_update_sensor(
-        state,
+    response = SensorRegistryApi._handle_update_sensor(
+        api,
         update_request(),
         UpdateSensor.Response(),
     )
 
     assert response.success is False
     assert "currently selected" in response.message
-    assert state.repository.load("test").hand_to_probe.position.x == (
+    assert repository.load("test").hand_to_probe.position.x == (
         pytest.approx(0.20)
     )
 
 
-def test_delete_sensor_removes_definition_from_registry(tmp_path):
-    state = registry_state(tmp_path)
-    SensorRegistryNode._handle_add_sensor(
-        state,
-        add_request(),
-        AddSensor.Response(),
-    )
+def test_delete_sensor_removes_and_publishes_definition(tmp_path):
+    api, _, _, repository = api_state(tmp_path)
+    api.controller.create(definition())
     request = DeleteSensor.Request()
     request.sensor_id = "test"
 
-    response = SensorRegistryNode._handle_delete_sensor(
-        state,
+    response = SensorRegistryApi._handle_delete_sensor(
+        api,
         request,
         DeleteSensor.Response(),
     )
 
     assert response.success is True
     assert "Deleted sensor 'test'" in response.message
-    assert state.repository.exists("test") is False
-    assert "test" not in state._definitions
-    assert not hasattr(state, "object_repository")
-    assert state.published == 2
-
-
-@pytest.mark.parametrize("attachment_field", [
-    "active_sensor_id",
-    "pending_sensor_id",
-])
-def test_delete_sensor_rejects_selected_attachment(
-    tmp_path,
-    attachment_field,
-):
-    state = registry_state(tmp_path)
-    SensorRegistryNode._handle_add_sensor(
-        state,
-        add_request(),
-        AddSensor.Response(),
-    )
-    setattr(state._attachment_state, attachment_field, "test")
-    request = DeleteSensor.Request()
-    request.sensor_id = "test"
-
-    response = SensorRegistryNode._handle_delete_sensor(
-        state,
-        request,
-        DeleteSensor.Response(),
-    )
-
-    assert response.success is False
-    assert "currently selected" in response.message
-    assert state.repository.exists("test") is True
-
-
-def test_update_and_delete_fail_closed_without_attachment_state(tmp_path):
-    state = registry_state(tmp_path)
-    SensorRegistryNode._handle_add_sensor(
-        state,
-        add_request(),
-        AddSensor.Response(),
-    )
-    state._attachment_state = None
-
-    update = SensorRegistryNode._handle_update_sensor(
-        state,
-        update_request(),
-        UpdateSensor.Response(),
-    )
-    delete_request = DeleteSensor.Request()
-    delete_request.sensor_id = "test"
-    delete = SensorRegistryNode._handle_delete_sensor(
-        state,
-        delete_request,
-        DeleteSensor.Response(),
-    )
-
-    assert update.success is False
-    assert delete.success is False
-    assert "attachment state is unavailable" in update.message
-    assert "attachment state is unavailable" in delete.message
-    assert state.repository.exists("test") is True
+    assert repository.exists("test") is False
+    assert api.published == [()]
