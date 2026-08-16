@@ -262,7 +262,10 @@ def test_main_ui_wires_create_update_and_delete_sensor_intents():
     assert "self.sensor_controls.create_requested.connect(" in source
     assert "self.sensor_controls.update_requested.connect(" in source
     assert "self.sensor_controls.delete_requested.connect(" in source
-    assert "self.sensor_attachment_client.create_sensor" in source
-    assert "self.sensor_attachment_client.update_sensor" in source
-    assert "self.sensor_attachment_client.delete_sensor(" in source
+    assert "self.sensor_registry_client.create_sensor" in source
+    assert "self.sensor_registry_client.update_sensor" in source
+    assert "self.sensor_registry_client.delete_sensor(" in source
+    assert "self.sensor_attachment_client.create_sensor" not in source
+    assert "self.sensor_attachment_client.update_sensor" not in source
+    assert "self.sensor_attachment_client.delete_sensor(" not in source
     assert '"Delete sensor mount"' in source

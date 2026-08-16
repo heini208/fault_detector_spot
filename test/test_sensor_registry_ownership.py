@@ -28,6 +28,37 @@ def test_registry_transport_has_no_attachment_state_subscription():
     assert "_attachment_state" not in source
 
 
+def test_ui_registry_and_attachment_transports_are_independent():
+    registry = (
+        ROOT
+        / "fault_detector_spot/ui/ros/sensor_registry_client.py"
+    ).read_text(encoding="utf-8")
+    attachment = (
+        ROOT
+        / "fault_detector_spot/ui/ros/sensor_attachment_client.py"
+    ).read_text(encoding="utf-8")
+    models = (
+        ROOT
+        / "fault_detector_spot/ui/sensor/models.py"
+    ).read_text(encoding="utf-8")
+
+    assert "class SensorRegistryClient" in registry
+    assert "SensorDefinitionArray" in registry
+    assert "AddSensor" in registry
+    assert "SelectSensorAttachment" not in registry
+    assert "SensorAttachmentState" not in registry
+
+    assert "class SensorAttachmentClient" in attachment
+    assert "SensorAttachmentState" in attachment
+    assert "SelectSensorAttachment" in attachment
+    assert "SensorDefinitionArray" not in attachment
+    assert "AddSensor" not in attachment
+    assert "DeleteSensor" not in attachment
+
+    assert "fault_detector_msgs" not in models
+    assert "PyQt5" not in models
+
+
 def test_standalone_registry_process_is_removed():
     launch = (ROOT / "launch/fault_detector_launch.py").read_text(
         encoding="utf-8"

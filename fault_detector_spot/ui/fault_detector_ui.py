@@ -35,11 +35,10 @@ from .recording.controls import RecordingControls
 from .ros.application_client import ApplicationClient
 from .ros.navigation_setup_client import NavigationSetupClient
 from .ros.probe_setup_client import ProbeSetupClient
-from .ros.sensor_attachment_client import (
-    SensorAttachmentClient,
-    SensorAttachmentViewStatus,
-)
+from .ros.sensor_attachment_client import SensorAttachmentClient
+from .ros.sensor_registry_client import SensorRegistryClient
 from .sensor.controls import SensorControls
+from .sensor.models import SensorAttachmentViewStatus
 from .shared.status_overview_panel import StatusOverviewPanel
 
 
@@ -79,6 +78,7 @@ class Fault_Detector_UI(QWidget):
         self.navigation_setup_client = None
         self.probe_setup_client = None
         self.sensor_attachment_client = None
+        self.sensor_registry_client = None
         self._sensor_definitions = {}
         self._sensor_attachment_state = None
         self.inspection_object_root = self._inspection_root_parameter()
@@ -253,16 +253,16 @@ class Fault_Detector_UI(QWidget):
         return self._save_sensor_definition(intent, update=True)
 
     def _save_sensor_definition(self, intent, update):
-        if self.sensor_attachment_client is None:
+        if self.sensor_registry_client is None:
             self.sensor_controls.finish_sensor_save(
                 False,
                 "ROS is unavailable",
             )
             return None
         operation = (
-            self.sensor_attachment_client.update_sensor
+            self.sensor_registry_client.update_sensor
             if update
-            else self.sensor_attachment_client.create_sensor
+            else self.sensor_registry_client.create_sensor
         )
         try:
             future = operation(
@@ -296,7 +296,7 @@ class Fault_Detector_UI(QWidget):
         self._process_application_error(message)
 
     def _delete_sensor_definition(self, sensor_id):
-        if self.sensor_attachment_client is None:
+        if self.sensor_registry_client is None:
             self._process_application_error("ROS is unavailable")
             return None
         definition = self._sensor_definitions.get(sensor_id)
@@ -314,7 +314,7 @@ class Fault_Detector_UI(QWidget):
         )
         if answer != QMessageBox.Yes:
             return None
-        future = self.sensor_attachment_client.delete_sensor(sensor_id)
+        future = self.sensor_registry_client.delete_sensor(sensor_id)
         if future is not None:
             self.status_label.setText(
                 f"Status: deleting sensor {sensor_id}"
@@ -446,21 +446,22 @@ class Fault_Detector_UI(QWidget):
 
     def init_ros_communication(self):
         self.application_client = ApplicationClient(self.node)
-        self.sensor_attachment_client = SensorAttachmentClient(self.node)
-        self.sensor_attachment_client.definitions_changed.connect(
+        self.sensor_registry_client = SensorRegistryClient(self.node)
+        self.sensor_registry_client.definitions_changed.connect(
             self._process_sensor_definitions
         )
+        self.sensor_registry_client.creation_finished.connect(
+            self._process_sensor_save_result
+        )
+        self.sensor_registry_client.update_finished.connect(
+            self._process_sensor_save_result
+        )
+        self.sensor_registry_client.deletion_finished.connect(
+            self._process_sensor_deletion_result
+        )
+        self.sensor_attachment_client = SensorAttachmentClient(self.node)
         self.sensor_attachment_client.state_changed.connect(
             self._process_sensor_attachment_state
-        )
-        self.sensor_attachment_client.creation_finished.connect(
-            self._process_sensor_save_result
-        )
-        self.sensor_attachment_client.update_finished.connect(
-            self._process_sensor_save_result
-        )
-        self.sensor_attachment_client.deletion_finished.connect(
-            self._process_sensor_deletion_result
         )
         self.sensor_attachment_client.request_rejected.connect(
             self._process_application_error
@@ -731,6 +732,8 @@ class Fault_Detector_UI(QWidget):
         if self.navigation_setup_client is not None:
             self.navigation_setup_client.close()
             self.navigation_setup_client.destroy()
+        if self.sensor_registry_client is not None:
+            self.sensor_registry_client.destroy()
         if self.sensor_attachment_client is not None:
             self.sensor_attachment_client.destroy()
         if self.application_client is not None:

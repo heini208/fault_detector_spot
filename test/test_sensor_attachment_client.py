@@ -9,8 +9,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt5.QtWidgets import QApplication
 
-from fault_detector_spot.ui.ros.sensor_attachment_client import (
-    SensorAttachmentClient,
+from fault_detector_spot.ui.ros.sensor_registry_client import (
+    SensorRegistryClient,
 )
 
 
@@ -75,7 +75,7 @@ def application():
 
 def test_create_sensor_builds_hand_to_probe_request(application):
     node = FakeNode()
-    client = SensorAttachmentClient(node)
+    client = SensorRegistryClient(node)
 
     future = client.create_sensor(
         "test",
@@ -103,7 +103,7 @@ def test_create_sensor_builds_hand_to_probe_request(application):
 
 def test_update_sensor_uses_dedicated_update_service(application):
     node = FakeNode()
-    client = SensorAttachmentClient(node)
+    client = SensorRegistryClient(node)
 
     future = client.update_sensor(
         "test",
@@ -121,7 +121,7 @@ def test_update_sensor_uses_dedicated_update_service(application):
 
 def test_delete_sensor_uses_existing_registry_delete_transport(application):
     node = FakeNode()
-    client = SensorAttachmentClient(node)
+    client = SensorRegistryClient(node)
 
     future = client.delete_sensor("test")
 
@@ -131,7 +131,7 @@ def test_delete_sensor_uses_existing_registry_delete_transport(application):
 
 
 def test_definition_view_exposes_rotation_for_edit_form(application):
-    client = SensorAttachmentClient(FakeNode())
+    client = SensorRegistryClient(FakeNode())
     sensor = SimpleNamespace(
         sensor_id="test",
         display_name="Test sensor",
@@ -155,7 +155,7 @@ def test_definition_view_exposes_rotation_for_edit_form(application):
 
 
 def test_create_sensor_rejects_incomplete_transform(application):
-    client = SensorAttachmentClient(FakeNode())
+    client = SensorRegistryClient(FakeNode())
 
     with pytest.raises(ValueError, match="exactly three"):
         client.create_sensor(
@@ -168,7 +168,7 @@ def test_create_sensor_rejects_incomplete_transform(application):
 
 def test_unavailable_registry_reports_creation_failure(application):
     node = FakeNode()
-    client = SensorAttachmentClient(node)
+    client = SensorRegistryClient(node)
     node.clients[client.ADD_SENSOR_SERVICE].ready = False
     results = []
     client.creation_finished.connect(
