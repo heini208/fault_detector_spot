@@ -27,8 +27,13 @@ def test_sensor_workspace_exposes_expected_visual_sections(application):
     assert controls.retire_mount_button.isEnabled() is False
     assert controls.save_mount_button.isEnabled() is False
     assert controls.start_configuration_button.isEnabled() is False
-    assert controls.manage_sensing_elements_button.isEnabled() is False
     assert controls.mount_table.columnCount() == 4
+
+
+def test_sensor_workspace_has_no_sensing_elements_placeholder(application):
+    controls = SensorControls()
+
+    assert not hasattr(controls, "manage_sensing_elements_button")
 
 
 def test_sensor_workspace_preview_rows_are_presentation_only(application):
@@ -70,7 +75,6 @@ def test_sensor_workspace_has_no_ros_or_backend_ownership():
 
     for value in forbidden:
         assert value not in source
-
 
 
 def test_main_ui_contains_sensor_mount_tab():

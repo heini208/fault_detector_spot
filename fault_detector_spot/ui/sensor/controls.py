@@ -254,35 +254,19 @@ class SensorControls(QWidget):
         )
         automatic_text.setWordWrap(True)
 
-        sensing_title = QLabel("Sensing elements")
-        sensing_title.setStyleSheet("font-weight: bold;")
-        sensing_text = QLabel(
-            "A mount may contain multiple measurement sensors. Their "
-            "individual geometry can be added later without changing the "
-            "single motion probe frame."
-        )
-        sensing_text.setWordWrap(True)
-
         self.start_configuration_button = QPushButton(
             "Start Automatic Configuration"
         )
-        self.manage_sensing_elements_button = QPushButton(
-            "Manage Sensing Elements"
-        )
         self.start_configuration_button.setEnabled(False)
-        self.manage_sensing_elements_button.setEnabled(False)
 
         layout.addWidget(manual_title, 0, 0)
         layout.addWidget(manual_text, 1, 0)
         layout.addWidget(automatic_title, 0, 1)
         layout.addWidget(automatic_text, 1, 1)
         layout.addWidget(self.start_configuration_button, 2, 1)
-        layout.addWidget(sensing_title, 0, 2)
-        layout.addWidget(sensing_text, 1, 2)
-        layout.addWidget(self.manage_sensing_elements_button, 2, 2)
 
-        for column in range(3):
-            layout.setColumnStretch(column, 1)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
         return group
 
     @staticmethod
