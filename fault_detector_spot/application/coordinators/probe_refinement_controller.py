@@ -66,6 +66,7 @@ class ProbeRefinementController:
         self.state_lock = state_lock
         self.sensor_attachment_controller = sensor_attachment_controller
         self._operations = SetupOperationRegistry()
+        self._attachment_reservations = {}
 
     def set_sensor_attachment_controller(self, controller) -> None:
         """Install the authoritative physical sensor attachment source."""
@@ -79,23 +80,29 @@ class ProbeRefinementController:
             raise ValueError("No calculated probe setup is available")
         if draft.refinement is not None:
             raise RuntimeError("Probe refinement is already active")
-        attachment = self._active_attachment()
-        self._ensure_minimum_camera_clearance_geometry(
-            draft,
-            attachment,
-        )
-        refinement = ProbeRefinementSession.create(
-            draft.geometry.probe_setup,
-            draft.setup,
-        )
-        if not draft.setup.safe_approach_approved:
-            refinement.seed_safe_approach_from_current_pose(
-                self.current_probe_pose(draft, attachment)
+        reservation = self._acquire_attachment()
+        attachment = reservation.attachment
+        try:
+            self._ensure_minimum_camera_clearance_geometry(
+                draft,
+                attachment,
             )
-        refinement.active_stage = RefinementStage.SAFE_APPROACH
-        with self.state_lock:
-            draft.refinement = refinement
-            draft.surface_verification = None
+            refinement = ProbeRefinementSession.create(
+                draft.geometry.probe_setup,
+                draft.setup,
+            )
+            if not draft.setup.safe_approach_approved:
+                refinement.seed_safe_approach_from_current_pose(
+                    self.current_probe_pose(draft, attachment)
+                )
+            refinement.active_stage = RefinementStage.SAFE_APPROACH
+            with self.state_lock:
+                draft.refinement = refinement
+                draft.surface_verification = None
+                self._attachment_reservations[id(draft)] = reservation
+        except Exception:
+            reservation.release()
+            raise
 
     def end(self, draft) -> bool:
         if draft.refinement is None:
@@ -104,13 +111,21 @@ class ProbeRefinementController:
         with self.state_lock:
             draft.refinement = None
             draft.surface_verification = None
+        self._release_attachment(draft)
         return True
+
+    def abort(self, draft) -> None:
+        """Discard runtime refinement and release its frozen attachment."""
+        with self.state_lock:
+            draft.refinement = None
+            draft.surface_verification = None
+        self._release_attachment(draft)
 
     def approve(self, draft, stage: RefinementStage) -> None:
         self.require_physical_lane_idle()
         if draft.setup is None:
             raise ValueError("No calculated probe setup is available")
-        attachment = self._active_attachment()
+        attachment = self._active_attachment(draft)
         if stage is RefinementStage.ALIGNMENT:
             self._ensure_minimum_camera_clearance_geometry(
                 draft,
@@ -157,7 +172,7 @@ class ProbeRefinementController:
     def prepare_motion(self, context, draft, motion):
         self.require_physical_lane_idle()
         motion.validate()
-        attachment = self._active_attachment()
+        attachment = self._active_attachment(draft)
         stage = self.motion_stage(motion.kind)
         if stage is RefinementStage.ALIGNMENT:
             self._ensure_minimum_camera_clearance_geometry(
@@ -280,7 +295,7 @@ class ProbeRefinementController:
         refinement = self.require_refinement(draft)
         if status.state == CommandControllerState.SUCCEEDED:
             try:
-                attachment = self._active_attachment()
+                attachment = self._active_attachment(draft)
                 achieved = self.current_probe_pose(
                     draft,
                     attachment,
@@ -362,6 +377,11 @@ class ProbeRefinementController:
 
     def clear(self) -> None:
         self._operations.clear()
+        with self.state_lock:
+            reservations = tuple(self._attachment_reservations.values())
+            self._attachment_reservations.clear()
+        for reservation in reservations:
+            reservation.release()
 
     def require_physical_lane_idle(self) -> None:
         controller = self.setup_coordinator.command_controller
@@ -380,7 +400,7 @@ class ProbeRefinementController:
         definition = self.object_repository.load(
             draft.selected_object_id
         )
-        active = attachment or self._active_attachment()
+        active = attachment or self._active_attachment(draft)
         source = self._motion_state_source()
         return source.current_probe_pose_object(
             definition.reference_tag.tag_id,
@@ -454,7 +474,7 @@ class ProbeRefinementController:
         routine_id = getattr(draft, "selected_routine_id", "")
         if not object_id or not routine_id:
             return None
-        active = attachment or self._active_attachment()
+        active = attachment or self._active_attachment(draft)
         minimum_distance_m = float(resolver(active.sensor_id))
         calculated = draft.geometry.probe_setup
         configured_distance_m = float(
@@ -665,16 +685,60 @@ class ProbeRefinementController:
         )
 
     def motion_attachment(self):
-        """Return current effective sensor or bare-hand geometry."""
+        """Return geometry frozen by the active refinement workflow."""
         return self._active_attachment()
 
-    def _active_attachment(self):
+    def _active_attachment(self, draft=None):
         controller = self.sensor_attachment_controller
         if controller is None:
             raise RuntimeError(
                 "Active sensor attachment state is unavailable"
             )
-        return controller.require_motion_attachment()
+        if draft is not None and draft.refinement is None:
+            return controller.require_motion_attachment()
+        with self.state_lock:
+            if draft is not None:
+                reservation = getattr(
+                    self,
+                    "_attachment_reservations",
+                    {},
+                ).get(id(draft))
+                if reservation is not None:
+                    return reservation.attachment
+                if draft.refinement is not None:
+                    raise RuntimeError(
+                        "Probe refinement has no attachment reservation"
+                    )
+            active = tuple(
+                reservation
+                for reservation in self._attachment_reservations.values()
+                if not reservation.released
+            )
+        if len(active) == 1:
+            return active[0].attachment
+        if active:
+            raise RuntimeError(
+                "Multiple probe refinements have attachment reservations"
+            )
+        raise RuntimeError(
+            "Probe refinement has no attachment reservation"
+        )
+
+    def _acquire_attachment(self):
+        controller = self.sensor_attachment_controller
+        if controller is None:
+            raise RuntimeError(
+                "Active sensor attachment state is unavailable"
+            )
+        return controller.acquire_motion_attachment()
+
+    def _release_attachment(self, draft) -> bool:
+        with self.state_lock:
+            reservation = self._attachment_reservations.pop(
+                id(draft),
+                None,
+            )
+        return reservation.release() if reservation is not None else False
 
     def _motion_state_source(self):
         if self.motion_state_source is None:

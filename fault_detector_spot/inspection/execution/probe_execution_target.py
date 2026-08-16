@@ -15,7 +15,7 @@ from fault_detector_spot.inspection.setup.reference_probe_setup import (
 )
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
-    SensorDefinition,
+    MotionAttachmentSnapshot,
     sensor_probe_frame,
 )
 from fault_detector_spot.inspection.sensing.surface_distance_validation import (
@@ -32,6 +32,7 @@ class ProbeExecutionTarget:
     routine_id: str
     probe_point_id: str
     sensor_id: str
+    attachment_revision: int
     probe_frame: str
     execution_frame: str
     safe_approach_probe_pose_execution: PoseData
@@ -53,14 +54,14 @@ def resolve_probe_execution_target(
     inspection_object: InspectionObject,
     routine_id: str,
     probe_point_id: str,
-    sensor_definition: SensorDefinition | None,
+    attachment: MotionAttachmentSnapshot,
     object_pose_execution: PoseData,
     execution_frame: str = "odom",
 ) -> ProbeExecutionTarget:
     """Compose one saved probe point with active sensor or bare-hand geometry."""
+    if not isinstance(attachment, MotionAttachmentSnapshot):
+        raise TypeError("Expected a motion attachment snapshot")
     inspection_object.validate()
-    if sensor_definition is not None:
-        sensor_definition.validate()
     object_pose_execution.validate()
 
     if not execution_frame or execution_frame != execution_frame.strip():
@@ -80,25 +81,15 @@ def resolve_probe_execution_target(
             f"{routine_id}"
         )
 
-    sensor_id = (
-        sensor_definition.sensor_id
-        if sensor_definition is not None
-        else ""
-    )
-    hand_to_probe = (
-        sensor_definition.hand_to_probe
-        if sensor_definition is not None
-        else PoseData.identity()
-    )
-
     return resolve_probe_execution_geometry(
         object_id=inspection_object.object_id,
         routine_id=routine.routine_id,
         probe_point_id=probe_point.probe_point_id,
-        sensor_id=sensor_id,
+        sensor_id=attachment.sensor_id,
+        attachment_revision=attachment.attachment_revision,
         safe_approach_pose_object=probe_point.safe_approach_pose_object,
         probe_pose_object=probe_point.probe_pose_object,
-        hand_to_probe=hand_to_probe,
+        hand_to_probe=attachment.hand_to_probe(),
         target_surface_distance_m=probe_point.target_surface_distance_m,
         position_tolerance_m=probe_point.position_tolerance_m,
         orientation_tolerance_rad=probe_point.orientation_tolerance_rad,
@@ -128,6 +119,7 @@ def resolve_probe_execution_geometry(
     sensor_path: str | None,
     object_pose_execution: PoseData,
     execution_frame: str = "odom",
+    attachment_revision: int = 0,
 ) -> ProbeExecutionTarget:
     """Resolve one validated immutable geometry snapshot."""
     for value, label in (
@@ -140,6 +132,12 @@ def resolve_probe_execution_geometry(
             raise ValueError(f"{label} must not be empty or padded")
     if sensor_id != sensor_id.strip():
         raise ValueError("Sensor ID must not be padded")
+    if (
+        isinstance(attachment_revision, bool)
+        or not isinstance(attachment_revision, int)
+        or attachment_revision < 0
+    ):
+        raise ValueError("Attachment revision must be a non-negative integer")
     safe_approach_pose_object.validate()
     probe_pose_object.validate()
     hand_to_probe.validate()
@@ -195,6 +193,7 @@ def resolve_probe_execution_geometry(
         routine_id=routine_id,
         probe_point_id=probe_point_id,
         sensor_id=sensor_id,
+        attachment_revision=attachment_revision,
         probe_frame=sensor_probe_frame(motion_sensor_id),
         execution_frame=execution_frame,
         safe_approach_probe_pose_execution=safe_probe_pose,

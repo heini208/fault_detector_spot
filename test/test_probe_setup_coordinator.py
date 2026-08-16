@@ -150,13 +150,36 @@ class FakeMotionCommandFactory:
 class FakeSensorAttachmentController:
     def __init__(self, sensor_id="hall_probe"):
         self.sensor_id = sensor_id
+        self.attachment_revision = 3
+        self.active_reservations = 0
 
     def require_motion_attachment(self):
         return SimpleNamespace(
             sensor_id=self.sensor_id,
             motion_sensor_id=self.sensor_id,
+            attachment_revision=self.attachment_revision,
             hand_to_probe=lambda: PoseData.identity(),
         )
+
+    def acquire_motion_attachment(self):
+        controller = self
+        attachment = self.require_motion_attachment()
+        self.active_reservations += 1
+
+        class Reservation:
+            released = False
+
+            def __init__(self):
+                self.attachment = attachment
+
+            def release(self):
+                if self.released:
+                    return False
+                self.released = True
+                controller.active_reservations -= 1
+                return True
+
+        return Reservation()
 
 
 class FakeGeometry:
@@ -760,3 +783,57 @@ def test_motion_transport_is_separate_from_authoring_transport():
     assert "ActionServer" not in authoring
     assert "create_service" not in motion
     assert "ActionServer" in motion
+
+
+def test_refinement_freezes_attachment_until_explicit_end(tmp_path):
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
+        state.context,
+        "slot1_hand",
+        ImagePoint(u=20, v=30),
+        "surface_fit",
+        0.10,
+        0.20,
+    )
+    attachment_controller = (
+        probe.refinement_controller.sensor_attachment_controller
+    )
+
+    state = probe.begin_refinement(state.context)
+    attachment_controller.sensor_id = "changed_after_begin"
+
+    frozen = probe.refinement_controller.motion_attachment()
+    assert frozen.sensor_id == "hall_probe"
+    assert frozen.attachment_revision == 3
+    assert attachment_controller.active_reservations == 1
+
+    probe.end_refinement(state.context)
+    assert attachment_controller.active_reservations == 0
+
+
+def test_closing_context_releases_refinement_attachment(tmp_path):
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
+        state.context,
+        "slot1_hand",
+        ImagePoint(u=20, v=30),
+        "surface_fit",
+        0.10,
+        0.20,
+    )
+    state = probe.begin_refinement(state.context)
+    attachment_controller = (
+        probe.refinement_controller.sensor_attachment_controller
+    )
+
+    probe.close_context(state.context)
+
+    assert attachment_controller.active_reservations == 0

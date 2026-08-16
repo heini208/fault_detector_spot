@@ -24,7 +24,10 @@ from fault_detector_spot.inspection.execution.probe_execution_session import (
     ProbeExecutionSession,
     ProbeExecutionStage,
 )
-from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.model.sensor_models import (
+    MotionAttachmentSnapshot,
+    SensorDefinition,
+)
 
 
 def pose(x=0.0, y=0.0, z=0.0):
@@ -74,12 +77,15 @@ def inspection_object(point=None):
 def repository_and_sensor(tmp_path, sensor_id="bmm150_01"):
     objects = ObjectRepository(tmp_path / "objects")
     objects.create(inspection_object())
-    sensor = SensorDefinition(
-        sensor_id=sensor_id,
-        display_name="Active sensor",
-        hand_to_probe=pose(x=0.20),
+    attachment = MotionAttachmentSnapshot.from_definition(
+        SensorDefinition(
+            sensor_id=sensor_id,
+            display_name="Active sensor",
+            hand_to_probe=pose(x=0.20),
+        ),
+        attachment_revision=11,
     )
-    return objects, sensor
+    return objects, attachment
 
 
 def command():
@@ -92,14 +98,14 @@ def command():
 
 
 def load_session(tmp_path, sensor_id="bmm150_01"):
-    objects, sensor = repository_and_sensor(tmp_path, sensor_id)
+    objects, attachment = repository_and_sensor(tmp_path, sensor_id)
     selection = command()
     session = ProbeExecutionSession.load(
         selection.object_id,
         selection.routine_id,
         selection.probe_point_id,
         objects,
-        sensor,
+        attachment,
     )
     return session, objects
 
@@ -125,6 +131,7 @@ def test_loaded_configuration_freezes_active_sensor_attachment(
     session, _ = load_session(tmp_path, sensor_id="active_sensor")
 
     assert session.configuration.sensor_id == "active_sensor"
+    assert session.configuration.attachment_revision == 11
     assert session.configuration.hand_to_probe.position == (
         0.20,
         0.0,
@@ -139,11 +146,12 @@ def test_loaded_configuration_can_freeze_bare_hand_identity_geometry(tmp_path):
         "scan",
         "point_1",
         objects,
-        None,
+        MotionAttachmentSnapshot.bare_hand(12),
     )
     target = session.configuration.resolve_target(PoseData.identity())
 
     assert session.configuration.sensor_id == ""
+    assert session.configuration.attachment_revision == 12
     assert session.configuration.hand_to_probe.position == (0.0, 0.0, 0.0)
     assert session.configuration.hand_to_probe.orientation == (
         0.0,

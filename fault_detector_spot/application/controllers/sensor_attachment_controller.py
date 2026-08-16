@@ -4,7 +4,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import Enum
 from threading import RLock
-from typing import Tuple
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
@@ -13,14 +12,9 @@ from fault_detector_spot.application.commanding.command_request import (
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
 )
-from fault_detector_spot.inspection.model.models import (
-    PoseData,
-    QuaternionData,
-    Vector3Data,
-)
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
-    SENSOR_PARENT_FRAME,
+    MotionAttachmentSnapshot,
     SensorDefinition,
 )
 from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (
@@ -69,76 +63,27 @@ class SensorAttachmentState:
         )
 
 
-@dataclass(frozen=True)
-class MotionAttachmentSnapshot:
-    """Freeze effective hand-to-probe geometry for one motion workflow."""
+class MotionAttachmentReservation:
+    """Own one explicitly released immutable attachment snapshot."""
 
-    sensor_id: str
-    display_name: str
-    probe_frame: str
-    attachment_revision: int
-    hand_to_probe_position: Tuple[float, float, float]
-    hand_to_probe_orientation: Tuple[float, float, float, float]
+    def __init__(self, controller, attachment):
+        self._controller = controller
+        self._attachment = attachment
+        self._released = False
 
     @property
-    def has_sensor(self) -> bool:
-        """Return whether a physical registered sensor is attached."""
-        return bool(self.sensor_id)
+    def attachment(self) -> MotionAttachmentSnapshot:
+        """Return geometry frozen when the reservation was acquired."""
+        return self._attachment
 
     @property
-    def motion_sensor_id(self) -> str:
-        """Return the transient command identity for effective probe motion."""
-        return self.sensor_id or BARE_HAND_MOTION_ID
+    def released(self) -> bool:
+        """Return whether this reservation no longer blocks changes."""
+        return self._released
 
-    @classmethod
-    def from_definition(
-        cls,
-        definition: SensorDefinition,
-        attachment_revision: int,
-    ) -> "MotionAttachmentSnapshot":
-        """Freeze one validated physical sensor definition."""
-        definition.validate()
-        position = definition.hand_to_probe.position
-        orientation = definition.hand_to_probe.orientation
-        return cls(
-            sensor_id=definition.sensor_id,
-            display_name=definition.display_name,
-            probe_frame=definition.probe_frame,
-            attachment_revision=attachment_revision,
-            hand_to_probe_position=(
-                float(position.x),
-                float(position.y),
-                float(position.z),
-            ),
-            hand_to_probe_orientation=(
-                float(orientation.x),
-                float(orientation.y),
-                float(orientation.z),
-                float(orientation.w),
-            ),
-        )
-
-    @classmethod
-    def bare_hand(
-        cls,
-        attachment_revision: int,
-    ) -> "MotionAttachmentSnapshot":
-        """Return identity geometry for Spot's bare hand frame."""
-        return cls(
-            sensor_id="",
-            display_name="No sensor",
-            probe_frame=SENSOR_PARENT_FRAME,
-            attachment_revision=attachment_revision,
-            hand_to_probe_position=(0.0, 0.0, 0.0),
-            hand_to_probe_orientation=(0.0, 0.0, 0.0, 1.0),
-        )
-
-    def hand_to_probe(self) -> PoseData:
-        """Return an independent pose for motion calculations."""
-        return PoseData(
-            position=Vector3Data(*self.hand_to_probe_position),
-            orientation=QuaternionData(*self.hand_to_probe_orientation),
-        )
+    def release(self) -> bool:
+        """Release exactly once and report whether this call released it."""
+        return self._controller._release_motion_attachment(self)
 
 
 class SensorAttachmentController:
@@ -304,22 +249,45 @@ class SensorAttachmentController:
     @contextmanager
     def reserve_motion_attachment(self):
         """Freeze effective geometry across a multi-step motion workflow."""
+        reservation = self.acquire_motion_attachment()
+        try:
+            yield reservation.attachment
+        finally:
+            reservation.release()
+
+    def acquire_motion_attachment(self) -> MotionAttachmentReservation:
+        """Acquire geometry for a workflow spanning multiple API calls."""
         def acquire():
             with self._lock:
                 attachment = self._motion_attachment_locked()
                 self._reservation_count += 1
-                return attachment
+                return MotionAttachmentReservation(self, attachment)
 
-        attachment = self.command_controller.run_if_idle(
+        return self.command_controller.run_if_idle(
             acquire,
             "Cannot start sensor-dependent workflow while physical "
             "commands are active or queued",
         )
-        try:
-            yield attachment
-        finally:
-            with self._lock:
-                self._reservation_count -= 1
+
+    def _release_motion_attachment(
+        self,
+        reservation: MotionAttachmentReservation,
+    ) -> bool:
+        with self._lock:
+            if reservation._controller is not self:
+                raise ValueError(
+                    "Motion attachment reservation belongs to another "
+                    "controller"
+                )
+            if reservation._released:
+                return False
+            if self._reservation_count <= 0:
+                raise RuntimeError(
+                    "Motion attachment reservation state is inconsistent"
+                )
+            reservation._released = True
+            self._reservation_count -= 1
+            return True
 
     def prepare_request(
         self,

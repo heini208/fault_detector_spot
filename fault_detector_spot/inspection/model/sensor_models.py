@@ -138,6 +138,88 @@ class SensorDefinition:
         }
 
 
+@dataclass(frozen=True)
+class MotionAttachmentSnapshot:
+    """Freeze effective hand-to-probe geometry for one motion workflow."""
+
+    sensor_id: str
+    display_name: str
+    probe_frame: str
+    attachment_revision: int
+    hand_to_probe_position: Tuple[float, float, float]
+    hand_to_probe_orientation: Tuple[float, float, float, float]
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.attachment_revision, bool)
+            or not isinstance(self.attachment_revision, int)
+            or self.attachment_revision < 0
+        ):
+            raise ValueError(
+                "Attachment revision must be a non-negative integer"
+            )
+
+    @property
+    def has_sensor(self) -> bool:
+        """Return whether a physical registered sensor is attached."""
+        return bool(self.sensor_id)
+
+    @property
+    def motion_sensor_id(self) -> str:
+        """Return the transient command identity for effective probe motion."""
+        return self.sensor_id or BARE_HAND_MOTION_ID
+
+    @classmethod
+    def from_definition(
+        cls,
+        definition: SensorDefinition,
+        attachment_revision: int,
+    ) -> "MotionAttachmentSnapshot":
+        """Freeze one validated physical sensor definition."""
+        definition.validate()
+        position = definition.hand_to_probe.position
+        orientation = definition.hand_to_probe.orientation
+        return cls(
+            sensor_id=definition.sensor_id,
+            display_name=definition.display_name,
+            probe_frame=definition.probe_frame,
+            attachment_revision=attachment_revision,
+            hand_to_probe_position=(
+                float(position.x),
+                float(position.y),
+                float(position.z),
+            ),
+            hand_to_probe_orientation=(
+                float(orientation.x),
+                float(orientation.y),
+                float(orientation.z),
+                float(orientation.w),
+            ),
+        )
+
+    @classmethod
+    def bare_hand(
+        cls,
+        attachment_revision: int,
+    ) -> "MotionAttachmentSnapshot":
+        """Return identity geometry for Spot's bare hand frame."""
+        return cls(
+            sensor_id="",
+            display_name="No sensor",
+            probe_frame=SENSOR_PARENT_FRAME,
+            attachment_revision=attachment_revision,
+            hand_to_probe_position=(0.0, 0.0, 0.0),
+            hand_to_probe_orientation=(0.0, 0.0, 0.0, 1.0),
+        )
+
+    def hand_to_probe(self) -> PoseData:
+        """Return an independent pose for motion calculations."""
+        return PoseData(
+            position=Vector3Data(*self.hand_to_probe_position),
+            orientation=QuaternionData(*self.hand_to_probe_orientation),
+        )
+
+
 def sensor_definition_from_values(
     sensor_id: str,
     display_name: str,

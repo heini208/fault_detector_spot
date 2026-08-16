@@ -171,6 +171,7 @@ class ProbeSetupCoordinator:
                 self.setup_coordinator.command_controller.cancel(request_id)
             except LookupError:
                 pass
+        self.refinement_controller.abort(draft)
         with self._lock:
             self._drafts.pop(draft.context.context_id, None)
             self._context_locks.pop(draft.context.context_id, None)

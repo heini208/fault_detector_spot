@@ -1,5 +1,9 @@
 """Application command and workflow controllers."""
 
+from fault_detector_spot.inspection.model.sensor_models import (
+    MotionAttachmentSnapshot,
+)
+
 from .command_controller import (
     CommandController,
     CommandControllerState,
@@ -9,7 +13,6 @@ from .command_controller import (
     UnknownCommandRequest,
 )
 from .sensor_attachment_controller import (
-    MotionAttachmentSnapshot,
     SensorAttachmentController,
     SensorAttachmentState,
     SensorAttachmentStatus,

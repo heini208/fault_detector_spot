@@ -9,7 +9,9 @@ from fault_detector_spot.inspection.model.models import (
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.model.sensor_models import (
+    MotionAttachmentSnapshot,
+)
 from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,
 )
@@ -127,6 +129,7 @@ class ProbeExecutionConfiguration:
     reference_tag_id: int
     reference_tag_family: str
     sensor_id: str
+    attachment_revision: int
     safe_approach_pose_object: FrozenPoseData
     probe_pose_object: FrozenPoseData
     hand_to_probe: FrozenPoseData
@@ -144,9 +147,11 @@ class ProbeExecutionConfiguration:
         routine_id: str,
         probe_point_id: str,
         object_repository: ObjectRepository,
-        sensor_definition: SensorDefinition | None,
+        attachment: MotionAttachmentSnapshot,
     ) -> "ProbeExecutionConfiguration":
         """Freeze selected point geometry with the active sensor snapshot."""
+        if not isinstance(attachment, MotionAttachmentSnapshot):
+            raise TypeError("Expected a motion attachment snapshot")
         inspection_object = object_repository.load(object_id)
         inspection_object.validate()
         routine = inspection_object.get_routine(routine_id)
@@ -161,19 +166,14 @@ class ProbeExecutionConfiguration:
                 "Unknown probe point for probe execution: "
                 f"{object_id}/{routine_id}/{probe_point_id}"
             )
-        if sensor_definition is not None:
-            sensor_definition.validate()
         return cls(
             object_id=inspection_object.object_id,
             routine_id=routine.routine_id,
             probe_point_id=probe_point.probe_point_id,
             reference_tag_id=inspection_object.reference_tag.tag_id,
             reference_tag_family=inspection_object.reference_tag.tag_family,
-            sensor_id=(
-                sensor_definition.sensor_id
-                if sensor_definition is not None
-                else ""
-            ),
+            sensor_id=attachment.sensor_id,
+            attachment_revision=attachment.attachment_revision,
             safe_approach_pose_object=FrozenPoseData.from_pose(
                 probe_point.safe_approach_pose_object
             ),
@@ -181,9 +181,7 @@ class ProbeExecutionConfiguration:
                 probe_point.probe_pose_object
             ),
             hand_to_probe=FrozenPoseData.from_pose(
-                sensor_definition.hand_to_probe
-                if sensor_definition is not None
-                else PoseData.identity()
+                attachment.hand_to_probe()
             ),
             target_surface_distance_m=float(
                 probe_point.target_surface_distance_m
@@ -214,6 +212,7 @@ class ProbeExecutionConfiguration:
             routine_id=self.routine_id,
             probe_point_id=self.probe_point_id,
             sensor_id=self.sensor_id,
+            attachment_revision=self.attachment_revision,
             safe_approach_pose_object=(
                 self.safe_approach_pose_object.to_pose()
             ),
@@ -253,7 +252,7 @@ class ProbeExecutionSession:
         routine_id: str,
         probe_point_id: str,
         object_repository: ObjectRepository,
-        sensor_definition: SensorDefinition | None,
+        attachment: MotionAttachmentSnapshot,
     ) -> "ProbeExecutionSession":
         return cls(
             configuration=ProbeExecutionConfiguration.load(
@@ -261,7 +260,7 @@ class ProbeExecutionSession:
                 routine_id,
                 probe_point_id,
                 object_repository,
-                sensor_definition,
+                attachment,
             )
         )
 

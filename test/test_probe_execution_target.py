@@ -17,7 +17,10 @@ from fault_detector_spot.inspection.model.models import (
 from fault_detector_spot.inspection.execution.probe_execution_target import (
     resolve_probe_execution_target,
 )
-from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.model.sensor_models import (
+    MotionAttachmentSnapshot,
+    SensorDefinition,
+)
 
 
 def pose(x=0.0, y=0.0, z=0.0, orientation=None):
@@ -81,10 +84,13 @@ def inspection_object():
 
 
 def sensor(sensor_id="bmm150_01", hand_to_probe=None):
-    return SensorDefinition(
-        sensor_id=sensor_id,
-        display_name="BMM150 01",
-        hand_to_probe=hand_to_probe or pose(x=0.20),
+    return MotionAttachmentSnapshot.from_definition(
+        SensorDefinition(
+            sensor_id=sensor_id,
+            display_name="BMM150 01",
+            hand_to_probe=hand_to_probe or pose(x=0.20),
+        ),
+        attachment_revision=7,
     )
 
 
@@ -93,7 +99,7 @@ def test_resolves_probe_and_hand_targets_in_execution_frame():
         inspection_object(),
         routine_id="scan",
         probe_point_id="point_1",
-        sensor_definition=sensor(),
+        attachment=sensor(),
         object_pose_execution=pose(x=1.0, y=2.0, z=0.5),
     )
 
@@ -101,6 +107,7 @@ def test_resolves_probe_and_hand_targets_in_execution_frame():
     assert target.routine_id == "scan"
     assert target.probe_point_id == "point_1"
     assert target.sensor_id == "bmm150_01"
+    assert target.attachment_revision == 7
     assert target.probe_frame == "bmm150_01_probe"
     assert target.execution_frame == "odom"
     assert target.safe_approach_probe_pose_execution.position.x == (
@@ -136,7 +143,7 @@ def test_live_object_rotation_rotates_positions_and_approach_axis():
         inspection_object(),
         routine_id="scan",
         probe_point_id="point_1",
-        sensor_definition=sensor(),
+        attachment=sensor(),
         object_pose_execution=pose(
             x=1.0,
             y=2.0,
@@ -171,7 +178,7 @@ def test_rotated_sensor_calibration_changes_required_hand_pose():
         inspection_object(),
         routine_id="scan",
         probe_point_id="point_1",
-        sensor_definition=sensor(hand_to_probe=calibration),
+        attachment=sensor(hand_to_probe=calibration),
         object_pose_execution=PoseData.identity(),
     )
 
@@ -182,12 +189,12 @@ def test_rotated_sensor_calibration_changes_required_hand_pose():
     assert hand.orientation.w == pytest.approx(math.sqrt(0.5))
 
 
-def test_active_sensor_definition_owns_execution_geometry():
+def test_active_attachment_owns_execution_geometry():
     target = resolve_probe_execution_target(
         inspection_object(),
         routine_id="scan",
         probe_point_id="point_1",
-        sensor_definition=sensor("active_sensor"),
+        attachment=sensor("active_sensor"),
         object_pose_execution=PoseData.identity(),
     )
 
@@ -199,11 +206,12 @@ def test_no_sensor_uses_identity_hand_geometry_without_fake_probe_frame():
         inspection_object(),
         routine_id="scan",
         probe_point_id="point_1",
-        sensor_definition=None,
+        attachment=MotionAttachmentSnapshot.bare_hand(8),
         object_pose_execution=PoseData.identity(),
     )
 
     assert target.sensor_id == ""
+    assert target.attachment_revision == 8
     assert target.probe_frame == "hand"
     assert target.nominal_probe_pose_execution == (
         target.nominal_hand_pose_execution
@@ -226,7 +234,7 @@ def test_rejects_unknown_selection(routine_id, probe_point_id, message):
             inspection_object(),
             routine_id=routine_id,
             probe_point_id=probe_point_id,
-            sensor_definition=sensor(),
+            attachment=sensor(),
             object_pose_execution=PoseData.identity(),
         )
 
@@ -238,7 +246,7 @@ def test_rejects_invalid_execution_frame(execution_frame):
             inspection_object(),
             routine_id="scan",
             probe_point_id="point_1",
-            sensor_definition=sensor(),
+            attachment=sensor(),
             object_pose_execution=PoseData.identity(),
             execution_frame=execution_frame,
         )

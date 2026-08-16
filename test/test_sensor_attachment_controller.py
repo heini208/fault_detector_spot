@@ -453,3 +453,28 @@ def test_sensor_change_is_rejected_during_attachment_reservation(tmp_path):
 
     state = controller.clear_sensor()
     assert state.status is SensorAttachmentStatus.NO_SENSOR
+
+
+def test_explicit_reservation_freezes_revision_and_releases_once(tmp_path):
+    controller, repository, _, _ = build_controller(tmp_path)
+    repository.create(sensor_definition())
+    pending = controller.select_sensor("bmm150_01")
+    controller.confirm_sensor(
+        "bmm150_01",
+        pending.attachment_revision,
+    )
+
+    reservation = controller.acquire_motion_attachment()
+
+    assert reservation.attachment.sensor_id == "bmm150_01"
+    assert (
+        reservation.attachment.attachment_revision
+        == pending.attachment_revision
+    )
+    with pytest.raises(RuntimeError, match="workflow is active"):
+        controller.clear_sensor()
+    assert reservation.release() is True
+    assert reservation.release() is False
+    assert reservation.released is True
+
+    assert controller.clear_sensor().status is SensorAttachmentStatus.NO_SENSOR

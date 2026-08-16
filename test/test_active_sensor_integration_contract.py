@@ -62,5 +62,21 @@ def test_future_probe_execution_configuration_accepts_active_sensor_snapshot():
     session = source("inspection/execution/probe_execution_session.py")
 
     assert "routine.sensor_id !=" not in target
-    assert "sensor_definition: SensorDefinition" in session
+    assert "attachment: MotionAttachmentSnapshot" in session
+    assert "attachment_revision" in session
     assert "sensor_repository.load(routine.sensor_id)" not in session
+
+
+def test_refinement_reserves_one_attachment_until_workflow_end():
+    controller = source(
+        "application/coordinators/probe_refinement_controller.py"
+    )
+
+    assert "acquire_motion_attachment()" in controller
+    assert "self._attachment_reservations" in controller
+    assert "self._release_attachment(draft)" in controller
+
+    finalization = source(
+        "application/coordinators/probe_finalization_controller.py"
+    )
+    assert "self.refinement_controller.end(draft)" in finalization

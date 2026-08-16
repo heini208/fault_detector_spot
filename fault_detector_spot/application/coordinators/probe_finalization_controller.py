@@ -126,10 +126,9 @@ class ProbeFinalizationController:
             draft
         )
         refinement.complete_retraction()
-        refinement.discard_unapproved_candidates()
+        if not self.refinement_controller.end(draft):
+            raise RuntimeError("Probe refinement ended during finalization")
         with self.state_lock:
-            draft.refinement = None
-            draft.surface_verification = None
             self._active.pop(context.context_id, None)
 
     def fail(
