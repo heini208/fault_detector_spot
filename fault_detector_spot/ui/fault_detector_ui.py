@@ -152,11 +152,6 @@ class Fault_Detector_UI(QWidget):
         text = "ON" if active else "OFF"
         self.navigation_mode_label.setText(f"Navigation: {text}")
 
-    @property
-    def sensor_definitions(self):
-        """Return the current sensor definition snapshot."""
-        return tuple(self._sensor_definitions.values())
-
     def set_sensor_status(
         self,
         status: str,
@@ -182,8 +177,6 @@ class Fault_Detector_UI(QWidget):
         }
         if hasattr(self, "sensor_controls"):
             self.sensor_controls.apply_definitions(definitions)
-        if hasattr(self, "inspection_controls"):
-            self.inspection_controls.set_sensor_definitions(definitions)
         self._refresh_sensor_status()
 
     def _process_sensor_attachment_state(self, state):

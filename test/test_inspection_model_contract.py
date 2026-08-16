@@ -26,13 +26,14 @@ def test_routine_has_one_authoritative_multi_view_collection():
     routine = InspectionRoutine(
         routine_id="routine",
         display_name="Routine",
-        sensor_id="sensor",
         reference_views=[first, second],
     )
 
     assert routine.reference_views == [first, second]
     assert "reference_view" not in vars(InspectionRoutine)
     assert "reference_view" not in routine.to_dict()
+    assert "sensor_id" not in vars(InspectionRoutine)
+    assert "sensor_id" not in routine.to_dict()
     assert routine.to_dict()["reference_views"] == [
         first.to_dict(),
         second.to_dict(),
@@ -43,7 +44,6 @@ def test_routine_round_trip_preserves_all_reference_views():
     routine = InspectionRoutine(
         routine_id="routine",
         display_name="Routine",
-        sensor_id="sensor",
         reference_views=[
             stored_view("slot1_left", "left", 0),
             stored_view("slot2_right", "right", 1),

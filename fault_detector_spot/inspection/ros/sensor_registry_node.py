@@ -30,9 +30,6 @@ from fault_detector_spot.inspection.model.sensor_models import (
     SENSOR_PARENT_FRAME,
     SensorDefinition,
 )
-from fault_detector_spot.inspection.repository.object_repository import (
-    ObjectRepository,
-)
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
 )
@@ -57,7 +54,6 @@ class SensorRegistryNode(Node):
     def __init__(
         self,
         sensor_root: Optional[Path] = None,
-        object_root: Optional[Path] = None,
         retired_sensor_root: Optional[Path] = None,
     ):
         """Load stored definitions and publish their static transforms."""
@@ -74,18 +70,9 @@ class SensorRegistryNode(Node):
             configured_retired_root = (
                 self.get_parameter("sensor.retired_root").value.strip()
             )
-        configured_object_root = ""
-        if object_root is None:
-            self.declare_parameter("inspection.object_root", "")
-            configured_object_root = (
-                self.get_parameter("inspection.object_root").value.strip()
-            )
         self.repository = SensorRepository(
             sensor_root or configured_sensor_root or None,
             retired_sensor_root or configured_retired_root or None,
-        )
-        self.object_repository = ObjectRepository(
-            object_root or configured_object_root or None
         )
         self._definitions: Dict[str, SensorDefinition] = {}
         self._attachment_state = None
@@ -223,12 +210,6 @@ class SensorRegistryNode(Node):
 
     def _delete_sensor(self, sensor_id: str) -> SensorDefinition:
         self._require_mutation_allowed(sensor_id)
-        references = self.object_repository.find_sensor_references(sensor_id)
-        if references:
-            raise ValueError(
-                f"Sensor '{sensor_id}' is referenced by saved routines: "
-                + ", ".join(references)
-            )
         definition = self.repository.delete(sensor_id)
         self._definitions.pop(sensor_id, None)
         return definition

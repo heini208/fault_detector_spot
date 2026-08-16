@@ -5,9 +5,6 @@ from types import SimpleNamespace
 import pytest
 from fault_detector_msgs.srv import AddSensor, DeleteSensor, UpdateSensor
 
-from fault_detector_spot.inspection.repository.object_repository import (
-    ObjectRepository,
-)
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
 )
@@ -43,7 +40,6 @@ def registry_state(tmp_path):
         tmp_path / "sensors",
         tmp_path / "retired_sensors",
     )
-    state.object_repository = ObjectRepository(tmp_path / "objects")
     state._definitions = {}
     state._attachment_state = SimpleNamespace(
         active_sensor_id="",

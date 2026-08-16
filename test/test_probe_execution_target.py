@@ -37,7 +37,7 @@ def yaw_quaternion(degrees):
     )
 
 
-def inspection_object(sensor_id="bmm150_01"):
+def inspection_object():
     view = ReferenceView(
         controlled_frame_pose_object=PoseData.identity(),
         controlled_frame="hand_color_image_sensor",
@@ -66,7 +66,6 @@ def inspection_object(sensor_id="bmm150_01"):
     routine = InspectionRoutine(
         routine_id="scan",
         display_name="Scan",
-        sensor_id=sensor_id,
         reference_views=[view],
         probe_points=[point],
     )
@@ -183,9 +182,9 @@ def test_rotated_sensor_calibration_changes_required_hand_pose():
     assert hand.orientation.w == pytest.approx(math.sqrt(0.5))
 
 
-def test_active_sensor_calibration_may_differ_from_saved_routine_sensor():
+def test_active_sensor_definition_owns_execution_geometry():
     target = resolve_probe_execution_target(
-        inspection_object(sensor_id="saved_sensor"),
+        inspection_object(),
         routine_id="scan",
         probe_point_id="point_1",
         sensor_definition=sensor("active_sensor"),
@@ -195,11 +194,9 @@ def test_active_sensor_calibration_may_differ_from_saved_routine_sensor():
     assert target.sensor_id == "active_sensor"
     assert target.probe_frame == "active_sensor_probe"
 
-
-
 def test_no_sensor_uses_identity_hand_geometry_without_fake_probe_frame():
     target = resolve_probe_execution_target(
-        inspection_object(sensor_id="saved_sensor"),
+        inspection_object(),
         routine_id="scan",
         probe_point_id="point_1",
         sensor_definition=None,

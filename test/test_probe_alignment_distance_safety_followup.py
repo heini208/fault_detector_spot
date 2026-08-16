@@ -120,7 +120,7 @@ def test_active_refinement_shifts_candidate_when_aligned_distance_changes():
         dirty=False,
         validation_error="",
     )
-    editor = ProbeGeometryEditor(None, None, None)
+    editor = ProbeGeometryEditor(None, None)
     editor._resolve_geometry = lambda *args, **kwargs: geometry
 
     editor.update_geometry(

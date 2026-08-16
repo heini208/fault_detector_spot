@@ -20,9 +20,6 @@ from fault_detector_spot.application.setup.setup_context import (
     SetupContextSnapshot,
 )
 from fault_detector_spot.inspection.model.models import ImagePoint
-from fault_detector_spot.inspection.repository.sensor_repository import (
-    SensorRepository,
-)
 from fault_detector_spot.application.coordinators.probe_finalization_controller import (
     ProbeFinalizationController,
 )
@@ -84,7 +81,6 @@ class ProbeSetupCoordinator:
         self,
         setup_coordinator: SetupCoordinator,
         reference_repository,
-        sensor_repository: SensorRepository,
         geometry=None,
         motion_state_source=None,
         motion_command_factory=None,
@@ -92,15 +88,12 @@ class ProbeSetupCoordinator:
         self.setup_coordinator = setup_coordinator
         self.reference_repository = reference_repository
         self.object_repository = reference_repository.object_repository
-        self.sensor_repository = sensor_repository
         self.definition_service = ProbeDefinitionService(
             self.object_repository,
-            sensor_repository,
         )
         geometry = geometry or ProbeSetupGeometry(reference_repository)
         self.geometry_editor = ProbeGeometryEditor(
             self.object_repository,
-            sensor_repository,
             geometry,
         )
         self.motion_state_source = motion_state_source
@@ -111,7 +104,6 @@ class ProbeSetupCoordinator:
         self.refinement_controller = ProbeRefinementController(
             setup_coordinator=setup_coordinator,
             object_repository=self.object_repository,
-            sensor_repository=sensor_repository,
             motion_state_source=motion_state_source,
             motion_command_factory=motion_command_factory,
             state_lock=self._lock,
@@ -202,7 +194,6 @@ class ProbeSetupCoordinator:
             probe_ids,
             reference_tag_id,
             reference_tag_family,
-            selected_sensor_id,
         ) = (
             self.definition_service.selected_definition_lists(
                 draft.selected_object_id,
@@ -218,8 +209,6 @@ class ProbeSetupCoordinator:
             reference_camera_ids=camera_ids,
             selected_reference_tag_id=reference_tag_id,
             selected_reference_tag_family=reference_tag_family,
-            selected_sensor_id=selected_sensor_id,
-            sensor_ids=self.sensor_repository.list_sensor_ids(),
             probe_point_ids=probe_ids,
         )
 
@@ -319,15 +308,13 @@ class ProbeSetupCoordinator:
         object_id: str,
         routine_id: str,
         display_name: str,
-        sensor_id: str,
     ) -> ProbeSetupSnapshot:
-        """Create one sensor-specific inspection routine."""
+        """Create one inspection routine."""
         draft = self._draft(context)
         object_name, routine = self.definition_service.create_routine(
             object_id,
             routine_id,
             display_name,
-            sensor_id,
         )
         with self._lock:
             draft.selected_object_id = object_name
@@ -795,8 +782,6 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
-
-
     def close(self) -> None:
         """Close every probe context owned by this coordinator."""
         with self._lock:
@@ -851,10 +836,6 @@ class ProbeSetupCoordinator:
             )
         )
 
-
-
-
-
     def _require_idle(
         self,
         context: SetupContextSnapshot,
@@ -905,9 +886,6 @@ class ProbeSetupCoordinator:
             raise RuntimeError(
                 "Probe setup context already has an active motion"
             )
-
-
-
 
     def _selected_draft(
         self,

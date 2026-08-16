@@ -67,7 +67,6 @@ class CurrentPoseRefinementController(ProbeRefinementController):
         super().__init__(
             setup_coordinator=SetupCoordinatorStub(),
             object_repository=None,
-            sensor_repository=None,
             motion_state_source=None,
             motion_command_factory=None,
             state_lock=RLock(),

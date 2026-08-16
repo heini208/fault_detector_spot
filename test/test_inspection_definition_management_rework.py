@@ -7,8 +7,6 @@ import pytest
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from fault_detector_spot.inspection.model.models import PoseData
-from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
 from fault_detector_spot.ui.inspection.controls import InspectionControls
 
 
@@ -30,13 +28,6 @@ class FakeUI:
         self.status_label = QLabel()
         self.probe_setup_client = FakeProbeSetupClient()
         self.requests = []
-        self.sensor_definitions = [
-            SensorDefinition(
-                sensor_id="hall_probe",
-                display_name="Hall probe",
-                hand_to_probe=PoseData.identity(),
-            )
-        ]
 
     def execute_probe_setup(self, intent):
         self.requests.append(intent)
@@ -72,7 +63,6 @@ def state(object_id="", routine_id=""):
     if object_id:
         message.routine_ids = ["magnetic_scan"]
     message.selected_routine_id = routine_id
-    message.selected_sensor_id = "hall_probe" if routine_id else ""
     return message
 
 
@@ -84,7 +74,7 @@ def test_snapshot_populates_definition_selectors(controls):
     assert controls.routine_parent_object_dropdown.currentData() == "motor"
     assert controls._probe_setup_state.selected_reference_tag_id == 7
     assert not hasattr(controls, "_selected_reference_tag_id")
-    assert controls._selected_sensor_id == "hall_probe"
+    assert not hasattr(controls, "_selected_sensor_id")
 
 
 def test_object_creation_submits_typed_intent(controls):
@@ -107,9 +97,6 @@ def test_routine_creation_submits_typed_intent(controls):
     controls.apply_setup_state(state("motor"))
     controls.routine_id_field.setText("magnetic_scan")
     controls.routine_display_name_field.setText("Magnetic scan")
-    controls.sensor_id_field.setCurrentIndex(
-        controls.sensor_id_field.findData("hall_probe")
-    )
 
     assert controls.handle_create_routine() is True
 
@@ -117,7 +104,7 @@ def test_routine_creation_submits_typed_intent(controls):
     assert intent.operation == ProbeSetupIntent.OPERATION_CREATE_ROUTINE
     assert intent.object_id == "motor"
     assert intent.routine_id == "magnetic_scan"
-    assert intent.sensor_id == "hall_probe"
+    assert not hasattr(intent, "sensor_id")
 
 
 def test_deletion_submits_typed_intent_without_local_mutation(controls):

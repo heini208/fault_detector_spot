@@ -1,7 +1,6 @@
 """Tests for extracted probe definition authoring."""
 
 from dataclasses import replace
-from types import SimpleNamespace
 
 from fault_detector_spot.inspection.model.models import (
     PoseData,
@@ -47,23 +46,13 @@ class FakeObjectRepository:
         )
 
 
-class FakeSensorRepository:
-    def __init__(self):
-        self.loaded = []
-
-    def load(self, sensor_id):
-        self.loaded.append(sensor_id)
-        return SimpleNamespace(sensor_id=sensor_id)
-
-
 def service():
     objects = FakeObjectRepository()
-    sensors = FakeSensorRepository()
-    return ProbeDefinitionService(objects, sensors), objects, sensors
+    return ProbeDefinitionService(objects), objects
 
 
 def test_definition_service_creates_and_selects_object_and_routine():
-    definitions, objects, sensors = service()
+    definitions, objects = service()
 
     definition = definitions.create_object(
         "motor",
@@ -75,7 +64,6 @@ def test_definition_service_creates_and_selects_object_and_routine():
         "motor",
         "magnetic_scan",
         "Magnetic scan",
-        "hall_probe",
     )
 
     assert definition.object_id == "motor"
@@ -85,7 +73,6 @@ def test_definition_service_creates_and_selects_object_and_routine():
     )
     assert object_id == "motor"
     assert routine.routine_id == "magnetic_scan"
-    assert sensors.loaded == ["hall_probe"]
     assert definitions.select_object("motor") == "motor"
     assert definitions.select_routine(
         "motor",
@@ -97,7 +84,7 @@ def test_definition_service_creates_and_selects_object_and_routine():
 
 
 def test_definition_service_builds_snapshot_metadata():
-    definitions, objects, _ = service()
+    definitions, objects = service()
     definitions.create_object(
         "motor",
         "Motor",
@@ -108,7 +95,6 @@ def test_definition_service_builds_snapshot_metadata():
         "motor",
         "magnetic_scan",
         "Magnetic scan",
-        "hall_probe",
     )
     definition = objects.load("motor")
     routine = definition.get_routine("magnetic_scan")
@@ -143,11 +129,11 @@ def test_definition_service_builds_snapshot_metadata():
     assert metadata[2] == ("hand",)
     assert metadata[4] == 7
     assert metadata[5] == "36h11"
-    assert metadata[6] == "hall_probe"
+    assert len(metadata) == 6
 
 
 def test_definition_service_delete_operations_are_repository_owned():
-    definitions, objects, _ = service()
+    definitions, objects = service()
     definitions.create_object(
         "motor",
         "Motor",
@@ -158,7 +144,6 @@ def test_definition_service_delete_operations_are_repository_owned():
         "motor",
         "magnetic_scan",
         "Magnetic scan",
-        "hall_probe",
     )
 
     assert definitions.delete_routine(

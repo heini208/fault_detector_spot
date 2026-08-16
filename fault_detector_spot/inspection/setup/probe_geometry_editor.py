@@ -27,12 +27,10 @@ class ProbeGeometryEditor:
     def __init__(
         self,
         object_repository,
-        sensor_repository,
         geometry,
         sensor_attachment_controller=None,
     ):
         self.object_repository = object_repository
-        self.sensor_repository = sensor_repository
         self.geometry = geometry
         self.sensor_attachment_controller = sensor_attachment_controller
 

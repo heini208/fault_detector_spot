@@ -30,7 +30,6 @@ def make_object():
         routines=[InspectionRoutine(
             routine_id="magnetic_scan",
             display_name="Magnetic scan",
-            sensor_id="bmm150",
         )],
     )
 

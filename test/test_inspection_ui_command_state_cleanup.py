@@ -29,6 +29,8 @@ def test_application_state_hook_does_not_derive_inspection_workflow_state():
 
     marker = "def handle_application_state(self, _status):"
     assert marker in source
-    method = source.split(marker, 1)[1].split("def set_sensor_definitions", 1)[0]
+    method = source.split(marker, 1)[1].split(
+        "def _update_create_routine_button", 1
+    )[0]
     assert "return None" in method
     assert "status." not in method

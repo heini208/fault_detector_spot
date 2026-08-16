@@ -55,12 +55,10 @@ class ProbeSetupStateAdapter:
         message.selected_reference_tag_family = (
             snapshot.selected_reference_tag_family
         )
-        message.selected_sensor_id = snapshot.selected_sensor_id
         message.object_ids = list(snapshot.object_ids)
         message.routine_ids = list(snapshot.routine_ids)
         message.reference_view_ids = list(snapshot.reference_view_ids)
         message.reference_camera_ids = list(snapshot.reference_camera_ids)
-        message.sensor_ids = list(snapshot.sensor_ids)
         message.probe_point_ids = list(snapshot.probe_point_ids)
         self._write_geometry(message, snapshot)
         self._write_refinement(message, snapshot)

@@ -30,7 +30,6 @@ def make_object() -> InspectionObject:
         routines=[InspectionRoutine(
             routine_id="magnetic_scan",
             display_name="Magnetic scan",
-            sensor_id="bmm150",
         )],
     )
 
@@ -110,7 +109,6 @@ def test_object_repository_adds_uncaptured_routine_once(tmp_path):
     routine = InspectionRoutine(
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
-        sensor_id="bmm150",
     )
     stored = repository.add_routine("motor_b", routine)
     assert stored.get_routine("magnetic_scan") == routine
@@ -124,7 +122,6 @@ def test_object_repository_requires_object_before_routine(tmp_path):
     routine = InspectionRoutine(
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
-        sensor_id="bmm150",
     )
     with pytest.raises(FileNotFoundError):
         ObjectRepository(tmp_path).add_routine("missing", routine)

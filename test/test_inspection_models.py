@@ -38,7 +38,6 @@ def make_routine(routine_id="magnetic_scan") -> InspectionRoutine:
     return InspectionRoutine(
         routine_id=routine_id,
         display_name=routine_id,
-        sensor_id="bmm150",
         reference_views=[ReferenceView(
             controlled_frame_pose_object=PoseData.identity(),
             controlled_frame="hand_color_image_sensor",
@@ -72,14 +71,15 @@ def test_inspection_object_round_trip_preserves_routine_order():
         "magnetic_scan",
         "temperature_scan",
     ]
-    assert restored.get_routine("temperature_scan").sensor_id == "bmm150"
+    assert "sensor_id" not in restored.get_routine(
+        "temperature_scan"
+    ).to_dict()
 
 
 def test_uncaptured_routine_round_trip_preserves_empty_reference_views():
     routine = InspectionRoutine(
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
-        sensor_id="bmm150",
     )
     restored = InspectionRoutine.from_dict(routine.to_dict())
     restored.validate()
@@ -91,7 +91,6 @@ def test_probe_points_require_a_captured_reference_view():
     routine = InspectionRoutine(
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
-        sensor_id="bmm150",
         probe_points=[make_probe()],
     )
     with pytest.raises(ValueError, match="requires a reference view"):

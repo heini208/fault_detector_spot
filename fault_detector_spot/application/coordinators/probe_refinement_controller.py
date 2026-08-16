@@ -54,7 +54,6 @@ class ProbeRefinementController:
         self,
         setup_coordinator,
         object_repository,
-        sensor_repository,
         motion_state_source,
         motion_command_factory,
         state_lock,
@@ -62,7 +61,6 @@ class ProbeRefinementController:
     ):
         self.setup_coordinator = setup_coordinator
         self.object_repository = object_repository
-        self.sensor_repository = sensor_repository
         self.motion_state_source = motion_state_source
         self.motion_command_factory = motion_command_factory
         self.state_lock = state_lock

@@ -39,7 +39,7 @@ def test_inspection_ui_does_not_own_robot_sensing_runtime():
     assert "ProbeSetupMotionIntent" in source
 
 
-def test_inspection_ui_consumes_global_sensor_definitions_only():
+def test_inspection_ui_does_not_consume_sensor_registry_state():
     base = (INSPECTION_UI / "controls.py").read_text(encoding="utf-8")
     finalizing = (
         INSPECTION_UI / "finalizing_controls.py"
@@ -58,10 +58,12 @@ def test_inspection_ui_consumes_global_sensor_definitions_only():
         "sensor_list_subscription",
         "handle_add_sensor",
         "handle_retire_sensor",
+        "def set_sensor_definitions",
+        "sensor_id_field",
+        "probe_frame_value_label",
     )
     for value in forbidden:
         assert value not in base
 
-    assert "def set_sensor_definitions" in base
-    assert "self.inspection_controls.set_sensor_definitions(" in main
+    assert "self.inspection_controls.set_sensor_definitions(" not in main
     assert "def init_ros_communication" not in finalizing

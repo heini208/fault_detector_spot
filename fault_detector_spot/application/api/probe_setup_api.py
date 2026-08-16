@@ -183,7 +183,6 @@ class ProbeSetupApi:
             intent.object_id,
             intent.routine_id,
             intent.routine_display_name,
-            intent.sensor_id,
         )
 
     def _delete_routine(self, context, intent):

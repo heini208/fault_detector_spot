@@ -33,13 +33,12 @@ class _AttachmentController:
         )
 
 
-def test_geometry_uses_confirmed_active_attachment_not_routine_sensor():
+def test_geometry_uses_confirmed_active_attachment():
     active_transform = PoseData.identity()
     active_transform.position = Vector3Data(x=0.27, y=-0.03, z=0.04)
     geometry = _Geometry()
     editor = ProbeGeometryEditor(
         object_repository=SimpleNamespace(),
-        sensor_repository=SimpleNamespace(),
         geometry=geometry,
         sensor_attachment_controller=_AttachmentController(
             active_transform
@@ -65,7 +64,6 @@ def test_geometry_uses_confirmed_active_attachment_not_routine_sensor():
 def test_geometry_fails_closed_without_attachment_authority():
     editor = ProbeGeometryEditor(
         object_repository=SimpleNamespace(),
-        sensor_repository=SimpleNamespace(),
         geometry=_Geometry(),
     )
     draft = SimpleNamespace(

@@ -438,11 +438,10 @@ class ProbePoint:
 
 @dataclass
 class InspectionRoutine:
-    """Ordered probe procedure for one sensor and up to three views."""
+    """Ordered probe procedure with up to three reference views."""
 
     routine_id: str
     display_name: str
-    sensor_id: str
     reference_views: List[ReferenceView] = field(
         default_factory=list
     )
@@ -470,7 +469,6 @@ class InspectionRoutine:
         return cls(
             routine_id=str(data["routine_id"]),
             display_name=str(data["display_name"]),
-            sensor_id=str(data["sensor_id"]),
             reference_views=[
                 ReferenceView.from_dict(view)
                 for view in reference_views
@@ -487,7 +485,6 @@ class InspectionRoutine:
             self.display_name,
             "Routine display name",
         )
-        _require_text(self.sensor_id, "Sensor ID")
         if not 0 <= len(self.reference_views) <= 3:
             raise ValueError(
                 "Routine must contain at most three reference views"
@@ -577,7 +574,6 @@ class InspectionRoutine:
         return {
             "routine_id": self.routine_id,
             "display_name": self.display_name,
-            "sensor_id": self.sensor_id,
             "reference_views": [
                 view.to_dict()
                 for view in self.reference_views

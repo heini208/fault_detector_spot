@@ -20,16 +20,7 @@ class FakeObjectRepository:
         return SimpleNamespace(
             get_routine=lambda routine_id: SimpleNamespace(
                 routine_id=routine_id,
-                sensor_id="hall_probe",
             )
-        )
-
-
-class FakeSensorRepository:
-    def load(self, sensor_id):
-        assert sensor_id == "hall_probe"
-        return SimpleNamespace(
-            hand_to_probe=PoseData.identity(),
         )
 
 
@@ -85,7 +76,6 @@ def editor():
     return (
         ProbeGeometryEditor(
             FakeObjectRepository(),
-            FakeSensorRepository(),
             geometry,
             sensor_attachment_controller=(
                 FakeSensorAttachmentController()

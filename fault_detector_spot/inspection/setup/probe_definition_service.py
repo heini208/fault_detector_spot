@@ -13,9 +13,8 @@ from fault_detector_spot.shared.persistence.file_storage import (
 class ProbeDefinitionService:
     """Own inspection object and routine definition persistence."""
 
-    def __init__(self, object_repository, sensor_repository):
+    def __init__(self, object_repository):
         self.object_repository = object_repository
-        self.sensor_repository = sensor_repository
 
     def select_routine(
         self,
@@ -78,18 +77,14 @@ class ProbeDefinitionService:
         object_id: str,
         routine_id: str,
         display_name: str,
-        sensor_id: str,
     ) -> tuple[str, InspectionRoutine]:
         object_name = self._name(object_id, "object ID")
-        sensor_name = self._name(sensor_id, "sensor ID")
-        self.sensor_repository.load(sensor_name)
         routine = InspectionRoutine(
             routine_id=self._name(routine_id, "routine ID"),
             display_name=self._text(
                 display_name,
                 "routine display name",
             ),
-            sensor_id=sensor_name,
         )
         self.object_repository.add_routine(object_name, routine)
         return object_name, routine
@@ -114,7 +109,7 @@ class ProbeDefinitionService:
         object_ids: tuple,
     ):
         if selected_object_id not in object_ids:
-            return (), (), (), (), -1, "", ""
+            return (), (), (), (), -1, ""
         definition = self.object_repository.load(selected_object_id)
         routine_ids = tuple(
             routine.routine_id for routine in definition.routines
@@ -128,7 +123,6 @@ class ProbeDefinitionService:
                 (),
                 definition.reference_tag.tag_id,
                 definition.reference_tag.tag_family,
-                "",
             )
         return (
             routine_ids,
@@ -137,7 +131,6 @@ class ProbeDefinitionService:
             tuple(point.probe_point_id for point in routine.probe_points),
             definition.reference_tag.tag_id,
             definition.reference_tag.tag_family,
-            routine.sensor_id,
         )
 
     @staticmethod

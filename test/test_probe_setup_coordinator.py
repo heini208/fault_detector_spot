@@ -32,12 +32,8 @@ from fault_detector_spot.inspection.model.models import (
     ReferenceView,
     Vector3Data,
 )
-from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
 from fault_detector_spot.inspection.repository import (
     multi_reference_view_repository,
-)
-from fault_detector_spot.inspection.repository.sensor_repository import (
-    SensorRepository,
 )
 from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
@@ -243,20 +239,10 @@ def coordinator(tmp_path, active_sensor_id="hall_probe"):
     references = multi_reference_view_repository.MultiReferenceViewRepository(
         tmp_path / "objects"
     )
-    sensors = SensorRepository(
-        tmp_path / "sensors",
-        tmp_path / "retired_sensors",
-    )
-    sensors.create(SensorDefinition(
-        sensor_id="hall_probe",
-        display_name="Hall probe",
-        hand_to_probe=PoseData.identity(),
-    ))
     motion_state = FakeMotionStateSource()
     probe = ProbeSetupCoordinator(
         setup_coordinator=shared,
         reference_repository=references,
-        sensor_repository=sensors,
         geometry=FakeGeometry(),
         motion_state_source=motion_state,
         motion_command_factory=FakeMotionCommandFactory(),
@@ -307,7 +293,6 @@ def create_selected_routine(probe, context):
         "motor",
         "magnetic_scan",
         "Magnetic scan",
-        "hall_probe",
     )
     definition = probe.object_repository.load("motor")
     routine = definition.get_routine("magnetic_scan")
@@ -402,7 +387,7 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
     )
 
 
-def test_probe_motion_uses_active_sensor_not_routine_sensor(tmp_path):
+def test_probe_motion_uses_active_sensor_attachment(tmp_path):
     probe, _ = coordinator(tmp_path, active_sensor_id="hand")
     state = create_selected_routine(
         probe,
@@ -424,7 +409,6 @@ def test_probe_motion_uses_active_sensor_not_routine_sensor(tmp_path):
         ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH),
     )
 
-    assert state.selected_sensor_id == "hall_probe"
     assert operation.request.command.motion_sensor_id == "hand"
 
 
@@ -585,14 +569,14 @@ def test_selected_definition_metadata_is_server_owned(tmp_path):
 
     assert selected.selected_reference_tag_id == 7
     assert selected.selected_reference_tag_family == "36h11"
-    assert selected.selected_sensor_id == "hall_probe"
+    assert not hasattr(selected, "selected_sensor_id")
+    assert not hasattr(selected, "sensor_ids")
 
     object_only = probe.select_object(selected.context, "motor")
 
     assert object_only.selected_object_id == "motor"
     assert object_only.selected_routine_id == ""
     assert object_only.selected_reference_tag_id == 7
-    assert object_only.selected_sensor_id == ""
 
 
 def test_geometry_and_approvals_are_owned_by_context(tmp_path):

@@ -4,7 +4,7 @@ import math
 from copy import deepcopy
 
 from PyQt5.QtCore import QLocale, Qt, QTimer
-from PyQt5.QtGui import QColor, QDoubleValidator, QIntValidator
+from PyQt5.QtGui import QDoubleValidator, QIntValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -57,14 +57,8 @@ from fault_detector_spot.inspection.setup.reference_view_approach_direction impo
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ImageRegion,
 )
-from fault_detector_spot.inspection.setup.reference_probe_setup import (
-    probe_pose_to_hand_pose,
-)
 from fault_detector_spot.inspection.setup.reference_view_surface_target import (
     quaternion_to_rpy,
-)
-from fault_detector_spot.inspection.model.sensor_models import (
-    sensor_probe_frame,
 )
 
 from .probe_refinement_dialog import ProbeRefinementDialog
@@ -90,7 +84,6 @@ class InspectionControls(UIControlHelper):
     def __init__(self, parent_ui):
         """Create controls backed by the remote probe setup API."""
         self._probe_setup_state = None
-        self._selected_sensor_id = ""
         self._reference_rgb_size = None
         self._reference_depth_image = None
         self._reference_rgb_camera_info = None
@@ -109,16 +102,11 @@ class InspectionControls(UIControlHelper):
         self._calculated_probe_setup = None
         self._probe_setup = None
         self._refinement_presentation = None
-        self._sensor_definitions = {}
-        self._pending_sensor_selection = ""
         self._distance_failure_requires_retraction = False
         self._retraction_failed = False
         self._editing_probe_point_id = None
         self.management_dialog = None
         super().__init__(parent_ui)
-        initial_sensors = getattr(parent_ui, "sensor_definitions", [])
-        if initial_sensors:
-            self.set_sensor_definitions(initial_sensors)
         self.refresh_setup_state()
 
     def add_rows(self, layout):
@@ -264,6 +252,9 @@ class InspectionControls(UIControlHelper):
 
         self.routine_parent_object_dropdown = QComboBox()
         self.routine_parent_object_dropdown.setMinimumWidth(260)
+        self.routine_parent_object_dropdown.currentIndexChanged.connect(
+            self._update_create_routine_button
+        )
         routine_layout.addRow(
             "Existing object:",
             self.routine_parent_object_dropdown,
@@ -280,24 +271,9 @@ class InspectionControls(UIControlHelper):
             self.routine_display_name_field,
         )
 
-        self.sensor_id_field = QComboBox()
-        self.sensor_id_field.setMinimumWidth(260)
-        self.sensor_id_field.currentIndexChanged.connect(
-            self._handle_routine_sensor_changed
-        )
-        routine_layout.addRow("Sensor mounting:", self.sensor_id_field)
-
-        self.probe_frame_value_label = QLabel("No sensor selected")
-        self.probe_frame_value_label.setTextInteractionFlags(
-            Qt.TextSelectableByMouse
-        )
-        routine_layout.addRow(
-            "Derived probe frame:",
-            self.probe_frame_value_label,
-        )
-
         routine_buttons = QHBoxLayout()
         self.create_routine_button = QPushButton("Create Routine")
+        self.create_routine_button.setEnabled(False)
         self.create_routine_button.clicked.connect(
             self.handle_create_routine
         )
@@ -305,7 +281,6 @@ class InspectionControls(UIControlHelper):
         routine_buttons.addStretch()
         routine_layout.addRow(routine_buttons)
         dialog_layout.addWidget(routine_group)
-        self._populate_sensor_dropdown()
 
         self.storage_path_label = QLabel(
             "Storage: managed by the application service"
@@ -351,79 +326,10 @@ class InspectionControls(UIControlHelper):
         """Keep the top-level application-state callback presentation-only."""
         return None
 
-    def set_sensor_definitions(self, definitions):
-        """Replace the UI sensor list with validated registry data."""
-        validated = {}
-        for definition in definitions:
-            definition.validate()
-            if definition.sensor_id in validated:
-                raise ValueError(
-                    f"Duplicate sensor ID: {definition.sensor_id}"
-                )
-            validated[definition.sensor_id] = definition
-        self._sensor_definitions = validated
-        desired_sensor_id = (
-            self._pending_sensor_selection
-            or self.sensor_id_field.currentData()
-            or ""
+    def _update_create_routine_button(self, _index=None):
+        self.create_routine_button.setEnabled(
+            bool(self.routine_parent_object_dropdown.currentData())
         )
-        self._populate_sensor_dropdown(desired_sensor_id)
-        if (
-            self._pending_sensor_selection
-            and self._pending_sensor_selection in validated
-        ):
-            self._pending_sensor_selection = ""
-
-    def _populate_sensor_dropdown(self, desired_sensor_id=""):
-        if not hasattr(self, "sensor_id_field"):
-            return
-        dropdown = self.sensor_id_field
-        dropdown.blockSignals(True)
-        dropdown.clear()
-        dropdown.addItem("Select registered sensor", None)
-        for sensor_id in sorted(self._sensor_definitions):
-            definition = self._sensor_definitions[sensor_id]
-            dropdown.addItem(
-                f"{definition.display_name} [{sensor_id}]",
-                sensor_id,
-            )
-        selected_index = dropdown.findData(desired_sensor_id)
-        if desired_sensor_id and selected_index < 0:
-            dropdown.addItem(
-                f"Unavailable sensor [{desired_sensor_id}]",
-                desired_sensor_id,
-            )
-            selected_index = dropdown.count() - 1
-            dropdown.setItemData(
-                selected_index,
-                QColor("red"),
-                Qt.ForegroundRole,
-            )
-        dropdown.setCurrentIndex(
-            selected_index if selected_index >= 0 else 0
-        )
-        dropdown.blockSignals(False)
-        self._handle_routine_sensor_changed()
-
-    def _handle_routine_sensor_changed(self, _index=None):
-        sensor_id = self.sensor_id_field.currentData()
-        if not sensor_id:
-            self.probe_frame_value_label.setText("No sensor selected")
-        elif sensor_id not in self._sensor_definitions:
-            self.probe_frame_value_label.setText(
-                f"{sensor_probe_frame(sensor_id)} (sensor unavailable)"
-            )
-        else:
-            self.probe_frame_value_label.setText(
-                sensor_probe_frame(sensor_id)
-            )
-        if hasattr(self, "create_routine_button"):
-            has_parent = bool(
-                self.routine_parent_object_dropdown.currentData()
-            )
-            self.create_routine_button.setEnabled(
-                has_parent and sensor_id in self._sensor_definitions
-            )
 
     def _create_reference_widgets(self):
         self.reference_view_widgets = [
@@ -947,7 +853,7 @@ class InspectionControls(UIControlHelper):
         target_layout.addWidget(self.reference_target_z_value_label, 2, 6)
 
         target_layout.addWidget(
-            QLabel("Commanded hand angle relative to object [deg]:"),
+            QLabel("Probe angle relative to object [deg]:"),
             3,
             0,
         )
@@ -1825,9 +1731,7 @@ class InspectionControls(UIControlHelper):
         self.reference_target_z_value_label.setText(
             self._format_readout_value(target.position.z, 3)
         )
-        mounting = self._configured_hand_to_probe_pose()
-        hand_target = probe_pose_to_hand_pose(target, mounting)
-        roll, pitch, yaw = quaternion_to_rpy(hand_target.orientation)
+        roll, pitch, yaw = quaternion_to_rpy(target.orientation)
         self.reference_target_roll_value_label.setText(
             self._format_readout_value(math.degrees(roll), 1)
         )
@@ -1850,17 +1754,14 @@ class InspectionControls(UIControlHelper):
             self._format_readout_value(aligned.position.z, 3)
         )
         detail = (
-            "Object-frame hand quaternion: "
-            f"x={hand_target.orientation.x:.5f}, "
-            f"y={hand_target.orientation.y:.5f}, "
-            f"z={hand_target.orientation.z:.5f}, "
-            f"w={hand_target.orientation.w:.5f}. "
             "Object-frame probe quaternion: "
             f"x={target.orientation.x:.5f}, "
             f"y={target.orientation.y:.5f}, "
             f"z={target.orientation.z:.5f}, "
             f"w={target.orientation.w:.5f}. "
-            "The probe local +X axis points toward the surface."
+            "The probe local +X axis points toward the surface. "
+            "The application resolves the commanded hand pose from the "
+            "confirmed active sensor attachment."
         )
         for label in (
             self.reference_target_roll_value_label,
@@ -2562,25 +2463,6 @@ class InspectionControls(UIControlHelper):
         """Request the application-level emergency stop."""
         self.ui.handle_emergency_stop()
 
-    def _configured_hand_to_probe_pose(self):
-        sensor_id = self._selected_sensor_id
-        if not sensor_id:
-            sensor_id = self.sensor_id_field.currentData()
-        definition = self._sensor_definitions.get(sensor_id)
-        if definition is None:
-            return PoseData.identity()
-        return deepcopy(definition.hand_to_probe)
-
-    def _active_probe_frame(self):
-        if self._selected_sensor_id:
-            return sensor_probe_frame(self._selected_sensor_id)
-
-        sensor_id = self.sensor_id_field.currentData()
-        if not sensor_id:
-            raise ValueError("Sensor mounting must be selected")
-        return sensor_probe_frame(sensor_id)
-
-
     def _require_probe_setup(self):
         if self._probe_setup is None:
             raise ValueError("No calculated probe setup is available")
@@ -2644,7 +2526,6 @@ class InspectionControls(UIControlHelper):
         view = probe_setup_state_to_view(state)
         previous_views = tuple(self._reference_slot_view_ids)
         self._probe_setup_state = state
-        self._selected_sensor_id = state.selected_sensor_id
         self._render_surface_verification_state(state)
         self._apply_object_and_routine_lists(state)
         self._apply_probe_setup_view(view)
@@ -2696,6 +2577,7 @@ class InspectionControls(UIControlHelper):
             parent_index if parent_index >= 0 else 0
         )
         self.routine_parent_object_dropdown.blockSignals(False)
+        self._update_create_routine_button()
 
         self.saved_routine_dropdown.blockSignals(True)
         self.saved_routine_dropdown.clear()
@@ -2719,10 +2601,6 @@ class InspectionControls(UIControlHelper):
         self.delete_routine_button.setEnabled(
             bool(state.selected_object_id and state.selected_routine_id)
         )
-        if state.selected_sensor_id:
-            self._pending_sensor_selection = state.selected_sensor_id
-            self._populate_sensor_dropdown(state.selected_sensor_id)
-
     def _apply_probe_setup_view(self, view):
         state = view.message
         self._selected_surface_point = view.projected_point
@@ -2994,6 +2872,7 @@ class InspectionControls(UIControlHelper):
             index if index >= 0 else 0
         )
         self.routine_parent_object_dropdown.blockSignals(False)
+        self._update_create_routine_button()
 
     def _populate_routine_dropdown(
         self,
@@ -3079,15 +2958,13 @@ class InspectionControls(UIControlHelper):
             self.routine_display_name_field,
             "a routine display name",
         )
-        sensor_id = self.sensor_id_field.currentData()
-        if None in (routine_id, display_name) or not sensor_id:
+        if None in (routine_id, display_name):
             return False
         intent = ProbeSetupIntent()
         intent.operation = ProbeSetupIntent.OPERATION_CREATE_ROUTINE
         intent.object_id = object_id
         intent.routine_id = routine_id
         intent.routine_display_name = display_name
-        intent.sensor_id = sensor_id
         submitted = self._submit_probe_setup(intent) is not None
         if submitted:
             self.routine_id_field.clear()

@@ -60,7 +60,6 @@ def inspection_object(point=None):
     routine = InspectionRoutine(
         routine_id="scan",
         display_name="Scan",
-        sensor_id="bmm150_01",
         reference_views=[view],
         probe_points=[point or probe_point()],
     )
@@ -120,7 +119,7 @@ def test_loaded_configuration_is_not_changed_by_later_repository_edits(
     )
 
 
-def test_loaded_configuration_freezes_active_sensor_not_routine_sensor(
+def test_loaded_configuration_freezes_active_sensor_attachment(
     tmp_path,
 ):
     session, _ = load_session(tmp_path, sensor_id="active_sensor")
@@ -131,8 +130,6 @@ def test_loaded_configuration_freezes_active_sensor_not_routine_sensor(
         0.0,
         0.0,
     )
-
-
 
 def test_loaded_configuration_can_freeze_bare_hand_identity_geometry(tmp_path):
     objects, _ = repository_and_sensor(tmp_path)
