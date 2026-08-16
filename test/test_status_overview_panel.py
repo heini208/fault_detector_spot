@@ -17,12 +17,15 @@ def application():
     return QApplication.instance() or QApplication([])
 
 
-def test_statuses_share_one_row_and_buffer_uses_second_row(application):
+def test_primary_statuses_use_first_row_and_context_uses_second_row(
+    application,
+):
     status = QLabel("Status: Connected")
     command = QLabel("Command: IDLE")
     navigation = QLabel("Navigation: OFF")
     visible = QLabel("Visible tags: []")
     buffer_label = QLabel("Buffer: []")
+    sensor = QLabel("Sensor: ● None")
     estop = QPushButton("EMERGENCY STOP")
 
     panel = StatusOverviewPanel(
@@ -31,6 +34,7 @@ def test_statuses_share_one_row_and_buffer_uses_second_row(application):
         navigation,
         visible,
         buffer_label,
+        sensor,
         estop,
     )
     layout = panel.grid_layout
@@ -43,15 +47,29 @@ def test_statuses_share_one_row_and_buffer_uses_second_row(application):
         1,
         1,
     )
-    assert layout.getItemPosition(layout.indexOf(visible)) == (0, 3, 1, 1)
+    assert layout.getItemPosition(layout.indexOf(estop)) == (0, 3, 2, 1)
+
     assert layout.getItemPosition(layout.indexOf(buffer_label)) == (
         1,
         0,
         1,
-        4,
+        1,
     )
-    assert layout.getItemPosition(layout.indexOf(estop)) == (0, 4, 2, 1)
-    assert visible.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding
+    assert layout.getItemPosition(layout.indexOf(visible)) == (
+        1,
+        1,
+        1,
+        1,
+    )
+    assert layout.getItemPosition(layout.indexOf(sensor)) == (
+        1,
+        2,
+        1,
+        1,
+    )
+
     assert buffer_label.sizePolicy().horizontalPolicy() == (
         QSizePolicy.Expanding
     )
+    assert visible.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding
+    assert sensor.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding

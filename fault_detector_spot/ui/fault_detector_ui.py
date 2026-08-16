@@ -51,6 +51,9 @@ class Fault_Detector_UI(QWidget):
         self.visible_label = QLabel("Visible tags: []")
         self.visible_label.setTextFormat(Qt.RichText)
         self.navigation_mode_label = QLabel("Navigation: OFF")
+        self.sensor_status_label = QLabel()
+        self.sensor_status_label.setTextFormat(Qt.RichText)
+        self.set_sensor_status("none")
         self._buffer_text = "Buffer: []"
 
         self.visible_tags = {}
@@ -95,6 +98,7 @@ class Fault_Detector_UI(QWidget):
             self.navigation_mode_label,
             self.visible_label,
             self.buffer_label,
+            self.sensor_status_label,
             self._make_estop_button(),
             self,
         )
@@ -115,6 +119,24 @@ class Fault_Detector_UI(QWidget):
     def set_navigation_mode(self, active: bool):
         text = "ON" if active else "OFF"
         self.navigation_mode_label.setText(f"Navigation: {text}")
+
+    def set_sensor_status(
+        self,
+        status: str,
+        sensor_name: str = "",
+    ) -> None:
+        states = {
+            "confirmed": ("#2E7D32", "Confirmed"),
+            "pending": ("#EF6C00", "Confirmation pending"),
+            "none": ("#757575", "No sensor"),
+        }
+        color, label = states.get(status, states["none"])
+        name = sensor_name.strip()
+        suffix = f" — {name}" if name else ""
+        self.sensor_status_label.setText(
+            f'Sensor: <span style="color:{color}">●</span> '
+            f"{label}{suffix}"
+        )
 
     def _on_tab_changed(self, index):
         if self.tabs.tabText(index) == "Navigation Control":

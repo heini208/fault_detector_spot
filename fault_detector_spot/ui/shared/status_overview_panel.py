@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
 
 
 class StatusOverviewPanel(QFrame):
-    """Arrange global status, tags, buffer, and emergency stop compactly."""
+    """Arrange global status, buffer, tags, sensor, and emergency stop."""
 
     def __init__(
         self,
@@ -20,6 +20,7 @@ class StatusOverviewPanel(QFrame):
         navigation_mode_label: QLabel,
         visible_label: QLabel,
         buffer_label: QLabel,
+        sensor_status_label: QLabel,
         estop_button: QPushButton,
         parent=None,
     ):
@@ -38,25 +39,32 @@ class StatusOverviewPanel(QFrame):
         ):
             self._configure_status_label(label)
 
-        visible_label.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Preferred,
-        )
-        visible_label.setMinimumWidth(190)
+        for label in (
+            buffer_label,
+            visible_label,
+            sensor_status_label,
+        ):
+            label.setSizePolicy(
+                QSizePolicy.Expanding,
+                QSizePolicy.Preferred,
+            )
 
-        buffer_label.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Preferred,
-        )
         buffer_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        visible_label.setMinimumWidth(190)
+        sensor_status_label.setMinimumWidth(150)
 
         layout.addWidget(status_label, 0, 0)
         layout.addWidget(command_status_label, 0, 1)
         layout.addWidget(navigation_mode_label, 0, 2)
-        layout.addWidget(visible_label, 0, 3)
-        layout.addWidget(estop_button, 0, 4, 2, 1)
-        layout.addWidget(buffer_label, 1, 0, 1, 4)
-        layout.setColumnStretch(3, 1)
+        layout.addWidget(estop_button, 0, 3, 2, 1)
+
+        layout.addWidget(buffer_label, 1, 0)
+        layout.addWidget(visible_label, 1, 1)
+        layout.addWidget(sensor_status_label, 1, 2)
+
+        layout.setColumnStretch(0, 2)
+        layout.setColumnStretch(1, 2)
+        layout.setColumnStretch(2, 2)
 
         self.grid_layout = layout
 
