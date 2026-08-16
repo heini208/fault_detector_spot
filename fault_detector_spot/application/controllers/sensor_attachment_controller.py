@@ -55,18 +55,16 @@ class SensorAttachmentState:
 
     @property
     def selected_sensor_id(self) -> str:
-        """Return the pending selection or active sensor identity."""
-        return self.pending_sensor_id or self.active_sensor_id
+        """Return the selected sensor identity for the current state."""
+        if self.status is SensorAttachmentStatus.CONFIRMATION_PENDING:
+            return self.pending_sensor_id
+        return self.active_sensor_id
 
     @property
     def sensor_dependent_motion_allowed(self) -> bool:
         """Return whether effective hand/probe geometry is trustworthy."""
         return (
-            self.status
-            in {
-                SensorAttachmentStatus.NO_SENSOR,
-                SensorAttachmentStatus.ACTIVE,
-            }
+            self.status is SensorAttachmentStatus.ACTIVE
             and not self.pending_sensor_id
         )
 
@@ -190,7 +188,7 @@ class SensorAttachmentController:
         return self._change_while_idle(select)
 
     def clear_sensor(self) -> SensorAttachmentState:
-        """Remove sensor selection and use the bare hand immediately."""
+        """Select the bare hand and require physical confirmation."""
         def clear():
             with self._lock:
                 self._require_no_reservation_locked()
@@ -211,14 +209,14 @@ class SensorAttachmentController:
         sensor_id: str,
         attachment_revision: int,
     ) -> SensorAttachmentState:
-        """Confirm the exact pending physical sensor attachment."""
+        """Confirm the exact pending sensor or bare-hand state."""
         def confirm():
             with self._lock:
                 self._require_no_reservation_locked()
-                if (
-                    self._state.status
-                    is not SensorAttachmentStatus.CONFIRMATION_PENDING
-                ):
+                if self._state.status not in {
+                    SensorAttachmentStatus.NO_SENSOR,
+                    SensorAttachmentStatus.CONFIRMATION_PENDING,
+                }:
                     raise RuntimeError(
                         "No sensor attachment confirmation is pending"
                     )
@@ -226,16 +224,27 @@ class SensorAttachmentController:
                     raise RuntimeError(
                         "Sensor attachment confirmation uses a stale revision"
                     )
-                if sensor_id != self._state.pending_sensor_id:
-                    raise RuntimeError(
-                        "Sensor attachment confirmation does not match "
-                        "the pending sensor"
-                    )
 
-                definition = self.sensor_repository.load(sensor_id)
-                definition.validate()
+                normalized = sensor_id.strip()
+                if self._state.status is SensorAttachmentStatus.NO_SENSOR:
+                    if normalized:
+                        raise RuntimeError(
+                            "Sensor attachment confirmation does not match "
+                            "the pending no-sensor state"
+                        )
+                    active_sensor_id = ""
+                else:
+                    if normalized != self._state.pending_sensor_id:
+                        raise RuntimeError(
+                            "Sensor attachment confirmation does not match "
+                            "the pending sensor"
+                        )
+                    definition = self.sensor_repository.load(normalized)
+                    definition.validate()
+                    active_sensor_id = definition.sensor_id
+
                 self._state = SensorAttachmentState(
-                    active_sensor_id=definition.sensor_id,
+                    active_sensor_id=active_sensor_id,
                     pending_sensor_id="",
                     status=SensorAttachmentStatus.ACTIVE,
                     attachment_revision=self._state.attachment_revision,
@@ -328,7 +337,7 @@ class SensorAttachmentController:
             raise RuntimeError(
                 "Sensor attachment confirmation is pending"
             )
-        if self._state.status is SensorAttachmentStatus.NO_SENSOR:
+        if not self._state.active_sensor_id:
             return MotionAttachmentSnapshot.bare_hand(
                 self._state.attachment_revision
             )

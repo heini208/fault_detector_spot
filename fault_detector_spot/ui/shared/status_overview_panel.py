@@ -4,9 +4,11 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
+    QWidget,
 )
 
 
@@ -20,7 +22,9 @@ class StatusOverviewPanel(QFrame):
         navigation_mode_label: QLabel,
         visible_label: QLabel,
         buffer_label: QLabel,
+        sensor_indicator_label: QLabel,
         sensor_status_label: QLabel,
+        sensor_confirm_button: QPushButton,
         estop_button: QPushButton,
         parent=None,
     ):
@@ -53,6 +57,15 @@ class StatusOverviewPanel(QFrame):
         visible_label.setMinimumWidth(190)
         sensor_status_label.setMinimumWidth(150)
 
+        sensor_widget = QWidget()
+        sensor_layout = QHBoxLayout(sensor_widget)
+        sensor_layout.setContentsMargins(0, 0, 0, 0)
+        sensor_layout.setSpacing(4)
+        sensor_layout.addWidget(QLabel("Sensor:"))
+        sensor_layout.addWidget(sensor_indicator_label)
+        sensor_layout.addWidget(sensor_status_label, 1)
+        sensor_layout.addWidget(sensor_confirm_button)
+
         layout.addWidget(status_label, 0, 0)
         layout.addWidget(command_status_label, 0, 1)
         layout.addWidget(navigation_mode_label, 0, 2)
@@ -60,12 +73,13 @@ class StatusOverviewPanel(QFrame):
 
         layout.addWidget(buffer_label, 1, 0)
         layout.addWidget(visible_label, 1, 1)
-        layout.addWidget(sensor_status_label, 1, 2)
+        layout.addWidget(sensor_widget, 1, 2)
 
         layout.setColumnStretch(0, 2)
         layout.setColumnStretch(1, 2)
         layout.setColumnStretch(2, 2)
 
+        self.sensor_widget = sensor_widget
         self.grid_layout = layout
 
     @staticmethod

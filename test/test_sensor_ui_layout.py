@@ -45,7 +45,6 @@ def test_sensor_workspace_waits_for_authoritative_registry(application):
 
     assert controls.active_mount_dropdown.isEnabled() is False
     assert controls.select_mount_button.isEnabled() is False
-    assert controls.confirm_attachment_button.isEnabled() is False
     assert controls.clear_attachment_button.isEnabled() is False
     assert controls.new_mount_button.isEnabled() is False
     assert controls.retire_mount_button.isEnabled() is False
@@ -82,24 +81,19 @@ def test_no_sensor_state_uses_hand_without_registry_entry(application):
     assert controls.mount_table.rowCount() == 0
     assert controls.active_mount_dropdown.isEnabled() is False
     assert controls.attachment_name_value.text() == "No sensor"
-    assert controls.attachment_status_value.text() == "No sensor attached"
+    assert controls.attachment_status_value.text() == "Confirmation pending"
     assert controls.attachment_probe_frame_value.text() == "hand"
     assert controls.attachment_revision_value.text() == "4"
-    assert controls.confirm_attachment_button.isEnabled() is False
     assert controls.clear_attachment_button.isEnabled() is False
 
 
-def test_pending_attachment_enables_exact_confirmation(application):
+def test_pending_attachment_is_presented_without_local_confirm_button(
+    application,
+):
     controls = SensorControls()
     controls.apply_definitions((
         definition("hall_probe", "Hall probe"),
     ))
-    confirmations = []
-    controls.confirm_requested.connect(
-        lambda sensor_id, revision: confirmations.append(
-            (sensor_id, revision)
-        )
-    )
 
     controls.apply_attachment_state(
         attachment(
@@ -108,12 +102,10 @@ def test_pending_attachment_enables_exact_confirmation(application):
             attachment_revision=7,
         )
     )
-    controls.confirm_attachment_button.click()
 
     assert controls.attachment_name_value.text() == "Hall probe"
     assert controls.attachment_status_value.text() == "Confirmation pending"
-    assert controls.confirm_attachment_button.isEnabled() is True
-    assert confirmations == [("hall_probe", 7)]
+    assert not hasattr(controls, "confirm_attachment_button")
 
 
 def test_remove_sensor_emits_empty_selection(application):
@@ -196,7 +188,9 @@ def test_main_ui_contains_sensor_mount_tab_and_attachment_client():
     assert "SensorAttachmentClient" in source
     assert "self.sensor_controls = SensorControls(self)" in source
     assert "self.sensor_controls.select_requested.connect(" in source
-    assert "self.sensor_controls.confirm_requested.connect(" in source
+    assert "self.sensor_controls.confirm_requested.connect(" not in source
+    assert "self.sensor_confirm_button = QPushButton(\"✓\")" in source
+    assert "QMessageBox.question(" in source
     assert (
         'self.tabs.addTab(self.sensor_controls, "Sensor Mounts")'
         in source

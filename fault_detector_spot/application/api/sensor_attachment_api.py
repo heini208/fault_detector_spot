@@ -60,7 +60,9 @@ class SensorAttachmentApi:
                 )
             else:
                 state = self.controller.clear_sensor()
-                detail = "Removed sensor selection; bare hand is active"
+                detail = (
+                    "Selected no sensor; physical confirmation is required"
+                )
         except Exception as exception:
             response.success = False
             response.detail = str(exception)
@@ -85,6 +87,8 @@ class SensorAttachmentApi:
         response.success = True
         response.detail = (
             f"Confirmed physical sensor '{state.active_sensor_id}'"
+            if state.active_sensor_id
+            else "Confirmed no sensor attached"
         )
         response.state = self.publish_state(state)
         return response

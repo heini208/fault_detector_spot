@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
@@ -55,9 +56,20 @@ class Fault_Detector_UI(QWidget):
         self.visible_label = QLabel("Visible tags: []")
         self.visible_label.setTextFormat(Qt.RichText)
         self.navigation_mode_label = QLabel("Navigation: OFF")
-        self.sensor_status_label = QLabel()
-        self.sensor_status_label.setTextFormat(Qt.RichText)
-        self.set_sensor_status("none")
+        self.sensor_indicator_label = QLabel("●")
+        self.sensor_indicator_label.setAlignment(Qt.AlignCenter)
+        self.sensor_indicator_label.setFixedWidth(12)
+        self.sensor_status_label = QLabel("Unknown")
+        self.sensor_confirm_button = QPushButton("✓")
+        self.sensor_confirm_button.setFixedSize(24, 24)
+        self.sensor_confirm_button.setToolTip(
+            "Confirm the displayed physical sensor state"
+        )
+        self.sensor_confirm_button.setEnabled(False)
+        self.sensor_confirm_button.clicked.connect(
+            self._request_sensor_state_confirmation
+        )
+        self.set_sensor_status("unknown")
         self._buffer_text = "Buffer: []"
 
         self.visible_tags = {}
@@ -83,10 +95,6 @@ class Fault_Detector_UI(QWidget):
         self.sensor_controls.select_requested.connect(
             self._select_sensor_attachment
         )
-        self.sensor_controls.confirm_requested.connect(
-            self._confirm_sensor_attachment
-        )
-
         self.create_user_interface()
 
         self.timer = QTimer(self)
@@ -111,7 +119,9 @@ class Fault_Detector_UI(QWidget):
             self.navigation_mode_label,
             self.visible_label,
             self.buffer_label,
+            self.sensor_indicator_label,
             self.sensor_status_label,
+            self.sensor_confirm_button,
             self._make_estop_button(),
             self,
         )
@@ -141,15 +151,14 @@ class Fault_Detector_UI(QWidget):
         states = {
             "confirmed": ("#2E7D32", "Confirmed"),
             "pending": ("#EF6C00", "Confirmation pending"),
-            "none": ("#757575", "No sensor"),
+            "unknown": ("#757575", "Sensor state unavailable"),
         }
-        color, label = states.get(status, states["none"])
-        name = sensor_name.strip()
-        suffix = f" — {name}" if name else ""
-        self.sensor_status_label.setText(
-            f'Sensor: <span style="color:{color}">●</span> '
-            f"{label}{suffix}"
+        color, tooltip = states.get(status, states["unknown"])
+        self.sensor_indicator_label.setStyleSheet(
+            f"color: {color}; font-size: 14px;"
         )
+        self.sensor_indicator_label.setToolTip(tooltip)
+        self.sensor_status_label.setText(sensor_name.strip() or "Unknown")
 
     def _process_sensor_definitions(self, definitions):
         self._sensor_definitions = {
@@ -175,21 +184,57 @@ class Fault_Detector_UI(QWidget):
     def _refresh_sensor_status(self):
         state = self._sensor_attachment_state
         if state is None:
-            self.set_sensor_status("none")
+            self.set_sensor_status("unknown")
+            self.sensor_confirm_button.setEnabled(False)
             return
+
         if state.status is SensorAttachmentViewStatus.PENDING:
-            self.set_sensor_status(
-                "pending",
-                self._sensor_display_name(state.pending_sensor_id),
+            sensor_name = self._sensor_display_name(
+                state.pending_sensor_id
             )
+            self.set_sensor_status("pending", sensor_name)
+            self.sensor_confirm_button.setEnabled(True)
             return
-        if state.status is SensorAttachmentViewStatus.ACTIVE:
-            self.set_sensor_status(
-                "confirmed",
-                self._sensor_display_name(state.active_sensor_id),
-            )
+
+        if state.status is SensorAttachmentViewStatus.NONE:
+            self.set_sensor_status("pending", "No sensor")
+            self.sensor_confirm_button.setEnabled(True)
             return
-        self.set_sensor_status("none")
+
+        sensor_name = (
+            self._sensor_display_name(state.active_sensor_id)
+            if state.active_sensor_id
+            else "No sensor"
+        )
+        self.set_sensor_status("confirmed", sensor_name)
+        self.sensor_confirm_button.setEnabled(False)
+
+    def _request_sensor_state_confirmation(self):
+        state = self._sensor_attachment_state
+        if state is None:
+            return None
+        if state.status is SensorAttachmentViewStatus.PENDING:
+            sensor_id = state.pending_sensor_id
+            sensor_name = self._sensor_display_name(sensor_id)
+        elif state.status is SensorAttachmentViewStatus.NONE:
+            sensor_id = ""
+            sensor_name = "No sensor"
+        else:
+            return None
+
+        answer = QMessageBox.question(
+            self,
+            "Confirm sensor state",
+            f'Confirm sensor state "{sensor_name}"?',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return None
+        return self._confirm_sensor_attachment(
+            sensor_id,
+            state.attachment_revision,
+        )
 
     def _select_sensor_attachment(self, sensor_id):
         if self.sensor_attachment_client is None:

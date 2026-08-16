@@ -25,7 +25,9 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
     navigation = QLabel("Navigation: OFF")
     visible = QLabel("Visible tags: []")
     buffer_label = QLabel("Buffer: []")
-    sensor = QLabel("Sensor: ● None")
+    sensor_indicator = QLabel("●")
+    sensor = QLabel("No sensor")
+    confirm = QPushButton("✓")
     estop = QPushButton("EMERGENCY STOP")
 
     panel = StatusOverviewPanel(
@@ -34,7 +36,9 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
         navigation,
         visible,
         buffer_label,
+        sensor_indicator,
         sensor,
+        confirm,
         estop,
     )
     layout = panel.grid_layout
@@ -61,12 +65,15 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
         1,
         1,
     )
-    assert layout.getItemPosition(layout.indexOf(sensor)) == (
+    assert layout.getItemPosition(layout.indexOf(panel.sensor_widget)) == (
         1,
         2,
         1,
         1,
     )
+    assert panel.sensor_widget.layout().indexOf(sensor_indicator) >= 0
+    assert panel.sensor_widget.layout().indexOf(sensor) >= 0
+    assert panel.sensor_widget.layout().indexOf(confirm) >= 0
 
     assert buffer_label.sizePolicy().horizontalPolicy() == (
         QSizePolicy.Expanding

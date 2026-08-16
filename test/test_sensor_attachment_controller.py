@@ -66,18 +66,37 @@ def build_controller(tmp_path):
     return controller, repository, state_store, command_controller
 
 
-def test_first_startup_uses_bare_hand_without_fake_sensor(tmp_path):
+def test_first_startup_requires_bare_hand_confirmation(tmp_path):
     controller, repository, state_store, _ = build_controller(tmp_path)
 
     state = controller.snapshot()
-    attachment = controller.require_motion_attachment()
 
     assert state.status is SensorAttachmentStatus.NO_SENSOR
     assert state.active_sensor_id == ""
     assert state.pending_sensor_id == ""
     assert state.attachment_revision == 0
-    assert state.sensor_dependent_motion_allowed is True
+    assert state.sensor_dependent_motion_allowed is False
     assert repository.list_sensor_ids() == []
+    assert state_store.load() is None
+
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        controller.require_motion_attachment()
+
+
+def test_no_sensor_confirmation_activates_bare_hand_geometry(tmp_path):
+    controller, _, state_store, _ = build_controller(tmp_path)
+    initial = controller.snapshot()
+
+    state = controller.confirm_sensor(
+        "",
+        initial.attachment_revision,
+    )
+    attachment = controller.require_motion_attachment()
+
+    assert state.status is SensorAttachmentStatus.ACTIVE
+    assert state.active_sensor_id == ""
+    assert state.pending_sensor_id == ""
+    assert state.sensor_dependent_motion_allowed is True
     assert state_store.load() is None
     assert attachment.has_sensor is False
     assert attachment.sensor_id == ""
@@ -86,8 +105,16 @@ def test_first_startup_uses_bare_hand_without_fake_sensor(tmp_path):
     assert attachment.hand_to_probe_position == (0.0, 0.0, 0.0)
     assert attachment.hand_to_probe_orientation == (0.0, 0.0, 0.0, 1.0)
 
-    with pytest.raises(RuntimeError, match="confirmed physical sensor"):
-        controller.require_confirmed_sensor()
+
+def test_no_sensor_confirmation_rejects_sensor_id(tmp_path):
+    controller, repository, _, _ = build_controller(tmp_path)
+    repository.create(sensor_definition())
+
+    with pytest.raises(RuntimeError, match="pending no-sensor state"):
+        controller.confirm_sensor(
+            "bmm150_01",
+            controller.snapshot().attachment_revision,
+        )
 
 
 def test_selecting_registered_sensor_requires_confirmation(tmp_path):
@@ -192,7 +219,7 @@ def test_restart_restores_real_sensor_as_unconfirmed(tmp_path):
         restarted.require_motion_attachment()
 
 
-def test_remove_sensor_immediately_restores_bare_hand(tmp_path):
+def test_remove_sensor_requires_bare_hand_confirmation(tmp_path):
     controller, repository, state_store, _ = build_controller(tmp_path)
     repository.create(sensor_definition())
     pending = controller.select_sensor("bmm150_01")
@@ -202,22 +229,32 @@ def test_remove_sensor_immediately_restores_bare_hand(tmp_path):
     )
 
     state = controller.clear_sensor()
-    attachment = controller.require_motion_attachment()
 
     assert state.status is SensorAttachmentStatus.NO_SENSOR
     assert state.active_sensor_id == ""
     assert state.pending_sensor_id == ""
-    assert state.sensor_dependent_motion_allowed is True
+    assert state.sensor_dependent_motion_allowed is False
     assert state_store.load() is None
+
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        controller.require_motion_attachment()
+
+    confirmed = controller.confirm_sensor(
+        "",
+        state.attachment_revision,
+    )
+    attachment = controller.require_motion_attachment()
+
+    assert confirmed.status is SensorAttachmentStatus.ACTIVE
     assert attachment.motion_sensor_id == BARE_HAND_MOTION_ID
     assert attachment.probe_frame == "hand"
 
 
-def test_restart_preserves_no_sensor_without_confirmation(tmp_path):
+def test_restart_requires_no_sensor_reconfirmation(tmp_path):
     controller, repository, state_store, command_controller = (
         build_controller(tmp_path)
     )
-    controller.clear_sensor()
+    controller.confirm_sensor("", controller.snapshot().attachment_revision)
 
     restarted = SensorAttachmentController(
         repository,
@@ -229,7 +266,8 @@ def test_restart_preserves_no_sensor_without_confirmation(tmp_path):
     assert state.status is SensorAttachmentStatus.NO_SENSOR
     assert state.attachment_revision == 0
     assert state_store.load() is None
-    assert restarted.require_motion_attachment().probe_frame == "hand"
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        restarted.require_motion_attachment()
 
 
 def test_legacy_builtin_hand_selection_is_normalized_to_no_sensor(tmp_path):
@@ -251,7 +289,8 @@ def test_legacy_builtin_hand_selection_is_normalized_to_no_sensor(tmp_path):
     assert controller.snapshot().status is SensorAttachmentStatus.NO_SENSOR
     assert controller.snapshot().attachment_revision == 7
     assert state_store.load() is None
-    assert controller.require_motion_attachment().probe_frame == "hand"
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        controller.require_motion_attachment()
 
 
 def test_restart_drops_selection_for_deleted_sensor(tmp_path):
@@ -276,7 +315,8 @@ def test_restart_drops_selection_for_deleted_sensor(tmp_path):
     assert state.pending_sensor_id == ""
     assert state.attachment_revision == 5
     assert state_store.load() is None
-    assert controller.require_motion_attachment().probe_frame == "hand"
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        controller.require_motion_attachment()
 
 
 def test_unknown_sensor_selection_does_not_change_state(tmp_path):
@@ -350,7 +390,7 @@ def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path):
     assert accepted[0].command.motion_sensor_id == "bmm150_01"
 
 
-def test_move_to_tag_request_is_bound_to_bare_hand_without_sensor(tmp_path):
+def test_move_to_tag_requires_then_uses_confirmed_bare_hand(tmp_path):
     controller, _, _, command_controller = build_controller(tmp_path)
     command_controller.add_request_preparer(controller.prepare_request)
     accepted = []
@@ -362,6 +402,10 @@ def test_move_to_tag_request_is_bound_to_bare_hand_without_sensor(tmp_path):
         recording_policy=RecordingPolicy.EXCLUDE,
     )
 
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        command_controller.submit(request)
+
+    controller.confirm_sensor("", controller.snapshot().attachment_revision)
     command_controller.submit(request)
 
     assert accepted[0].command.motion_sensor_id == BARE_HAND_MOTION_ID

@@ -25,7 +25,6 @@ class SensorControls(QWidget):
     """Render sensor attachment state and emit user intents."""
 
     select_requested = pyqtSignal(str)
-    confirm_requested = pyqtSignal(str, int)
 
     def __init__(self, parent=None):
         """Build the sensor mount workspace."""
@@ -110,19 +109,14 @@ class SensorControls(QWidget):
         self.active_mount_dropdown.setEnabled(False)
 
         self.select_mount_button = QPushButton("Select Mount")
-        self.confirm_attachment_button = QPushButton(
-            "Confirm Attachment"
-        )
         self.clear_attachment_button = QPushButton("Remove Sensor")
 
         self.select_mount_button.setEnabled(False)
-        self.confirm_attachment_button.setEnabled(False)
         self.clear_attachment_button.setEnabled(False)
 
         action_row = QHBoxLayout()
         action_row.addWidget(self.active_mount_dropdown, 1)
         action_row.addWidget(self.select_mount_button)
-        action_row.addWidget(self.confirm_attachment_button)
         action_row.addWidget(self.clear_attachment_button)
 
         layout.addLayout(action_row, 2, 0, 1, 4)
@@ -273,9 +267,6 @@ class SensorControls(QWidget):
         self.select_mount_button.clicked.connect(
             self._request_selected_mount
         )
-        self.confirm_attachment_button.clicked.connect(
-            self._request_confirmation
-        )
         self.clear_attachment_button.clicked.connect(
             self._request_no_sensor
         )
@@ -333,35 +324,31 @@ class SensorControls(QWidget):
             self.attachment_status_value.setText("Waiting for state")
             self.attachment_probe_frame_value.setText("—")
             self.attachment_revision_value.setText("—")
-            self.confirm_attachment_button.setEnabled(False)
             self.clear_attachment_button.setEnabled(False)
             return
 
         status_name = getattr(state.status, "value", str(state.status))
-        if status_name == "none":
+        selected_id = state.selected_sensor_id
+        if not selected_id:
             display_name = "No sensor"
             probe_frame = "hand"
-            status_text = "No sensor attached"
-            confirm_enabled = False
         else:
-            selected_id = state.selected_sensor_id
             definition = self._definitions.get(selected_id)
             display_name = (
                 definition.display_name
                 if definition is not None
-                else selected_id or "—"
+                else selected_id
             )
             probe_frame = (
                 definition.probe_frame
                 if definition is not None
                 else "—"
             )
-            if status_name == "pending":
-                status_text = "Confirmation pending"
-                confirm_enabled = bool(state.pending_sensor_id)
-            else:
-                status_text = "Confirmed"
-                confirm_enabled = False
+
+        if status_name in {"none", "pending"}:
+            status_text = "Confirmation pending"
+        else:
+            status_text = "Confirmed"
 
         self.attachment_name_value.setText(display_name)
         self.attachment_status_value.setText(status_text)
@@ -369,8 +356,10 @@ class SensorControls(QWidget):
         self.attachment_revision_value.setText(
             str(state.attachment_revision)
         )
-        self.confirm_attachment_button.setEnabled(confirm_enabled)
-        self.clear_attachment_button.setEnabled(status_name != "none")
+        self.clear_attachment_button.setEnabled(
+            bool(selected_id)
+            or status_name == "pending"
+        )
 
         selected_id = state.selected_sensor_id
         if selected_id:
@@ -382,15 +371,6 @@ class SensorControls(QWidget):
         sensor_id = self.active_mount_dropdown.currentData() or ""
         if sensor_id:
             self.select_requested.emit(sensor_id)
-
-    def _request_confirmation(self) -> None:
-        state = self._attachment_state
-        if state is None or not state.pending_sensor_id:
-            return
-        self.confirm_requested.emit(
-            state.pending_sensor_id,
-            int(state.attachment_revision),
-        )
 
     def _request_no_sensor(self) -> None:
         self.select_requested.emit("")
