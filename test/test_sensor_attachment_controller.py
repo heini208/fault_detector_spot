@@ -6,6 +6,7 @@ from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
+    RecordingPolicy,
 )
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
@@ -215,6 +216,7 @@ def test_sensor_change_is_rejected_while_command_lane_has_work(tmp_path):
         command=SemanticCommand(command_id=CommandID.STAND_UP),
         client_id="test",
         origin=CommandOrigin.SYSTEM,
+        recording_policy=RecordingPolicy.EXCLUDE,
     )
     command_controller.submit(request)
 
