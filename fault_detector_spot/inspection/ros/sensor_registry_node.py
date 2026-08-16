@@ -12,7 +12,6 @@ from fault_detector_msgs.msg import (
 from fault_detector_msgs.srv import (
     AddSensor,
     DeleteSensor,
-    RetireSensor,
     UpdateSensor,
 )
 from geometry_msgs.msg import TransformStamped
@@ -46,7 +45,6 @@ class SensorRegistryNode(Node):
     ADD_SENSOR_SERVICE = "fault_detector/add_sensor"
     UPDATE_SENSOR_SERVICE = "fault_detector/update_sensor"
     DELETE_SENSOR_SERVICE = "fault_detector/delete_sensor"
-    RETIRE_SENSOR_SERVICE = "fault_detector/retire_sensor"
     ATTACHMENT_STATE_TOPIC = (
         "fault_detector/application/sensor_attachment_state"
     )
@@ -54,7 +52,6 @@ class SensorRegistryNode(Node):
     def __init__(
         self,
         sensor_root: Optional[Path] = None,
-        retired_sensor_root: Optional[Path] = None,
     ):
         """Load stored definitions and publish their static transforms."""
         super().__init__("sensor_registry")
@@ -64,15 +61,8 @@ class SensorRegistryNode(Node):
             configured_sensor_root = (
                 self.get_parameter("sensor.root").value.strip()
             )
-        configured_retired_root = ""
-        if retired_sensor_root is None:
-            self.declare_parameter("sensor.retired_root", "")
-            configured_retired_root = (
-                self.get_parameter("sensor.retired_root").value.strip()
-            )
         self.repository = SensorRepository(
             sensor_root or configured_sensor_root or None,
-            retired_sensor_root or configured_retired_root or None,
         )
         self._definitions: Dict[str, SensorDefinition] = {}
         self._attachment_state = None
@@ -102,11 +92,6 @@ class SensorRegistryNode(Node):
             DeleteSensor,
             self.DELETE_SENSOR_SERVICE,
             self._handle_delete_sensor,
-        )
-        self._retire_sensor_service = self.create_service(
-            RetireSensor,
-            self.RETIRE_SENSOR_SERVICE,
-            self._handle_retire_sensor,
         )
         self._load_stored_definitions()
         self._publish_sensor_list()
@@ -183,9 +168,6 @@ class SensorRegistryNode(Node):
         return response
 
     def _handle_delete_sensor(self, request, response):
-        return self._delete_sensor_response(request, response)
-
-    def _handle_retire_sensor(self, request, response):
         return self._delete_sensor_response(request, response)
 
     def _delete_sensor_response(self, request, response):

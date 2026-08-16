@@ -90,7 +90,6 @@ def test_management_controls_live_in_non_modal_dialog(
     assert not hasattr(controls, "sensor_id_field")
     assert not hasattr(controls, "probe_frame_value_label")
     assert not hasattr(controls, "new_sensor_id_field")
-    assert not hasattr(controls, "retire_sensor_dropdown")
 
 
 def test_transient_approval_statuses_update_all_tabs(

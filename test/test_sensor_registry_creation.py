@@ -36,10 +36,7 @@ class FakeLogger:
 def registry_state(tmp_path):
     """Build the non-ROS state needed by registry callbacks."""
     state = SimpleNamespace()
-    state.repository = SensorRepository(
-        tmp_path / "sensors",
-        tmp_path / "retired_sensors",
-    )
+    state.repository = SensorRepository(tmp_path / "sensors")
     state._definitions = {}
     state._attachment_state = SimpleNamespace(
         active_sensor_id="",
@@ -207,7 +204,37 @@ def test_delete_sensor_removes_definition_from_registry(tmp_path):
     assert "Deleted sensor 'test'" in response.message
     assert state.repository.exists("test") is False
     assert "test" not in state._definitions
+    assert not hasattr(state, "object_repository")
     assert state.published == 2
+
+
+@pytest.mark.parametrize("attachment_field", [
+    "active_sensor_id",
+    "pending_sensor_id",
+])
+def test_delete_sensor_rejects_selected_attachment(
+    tmp_path,
+    attachment_field,
+):
+    state = registry_state(tmp_path)
+    SensorRegistryNode._handle_add_sensor(
+        state,
+        add_request(),
+        AddSensor.Response(),
+    )
+    setattr(state._attachment_state, attachment_field, "test")
+    request = DeleteSensor.Request()
+    request.sensor_id = "test"
+
+    response = SensorRegistryNode._handle_delete_sensor(
+        state,
+        request,
+        DeleteSensor.Response(),
+    )
+
+    assert response.success is False
+    assert "currently selected" in response.message
+    assert state.repository.exists("test") is True
 
 
 def test_update_and_delete_fail_closed_without_attachment_state(tmp_path):

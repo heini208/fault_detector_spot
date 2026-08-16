@@ -23,7 +23,6 @@ class SensorRepository:
     def __init__(
         self,
         root_dir: Optional[Union[str, Path]] = None,
-        retired_root_dir: Optional[Union[str, Path]] = None,
     ):
         """Create the repository under ROS_HOME by default."""
         if root_dir is None:
@@ -35,12 +34,7 @@ class SensorRepository:
             )
             storage_root = ros_home / "fault_detector_spot"
             root_dir = storage_root / "sensors"
-            if retired_root_dir is None:
-                retired_root_dir = storage_root / "retired_sensors"
         self.root_dir = Path(root_dir).expanduser()
-        if retired_root_dir is None:
-            retired_root_dir = self.root_dir.parent / "retired_sensors"
-        self.retired_root_dir = Path(retired_root_dir).expanduser()
 
     def get_sensor_path(self, sensor_id: str) -> Path:
         """Return the YAML path for a sensor ID."""
@@ -50,15 +44,6 @@ class SensorRepository:
     def exists(self, sensor_id: str) -> bool:
         """Return whether a physical sensor definition exists."""
         return self.get_sensor_path(sensor_id).is_file()
-
-    def get_retired_sensor_path(self, sensor_id: str) -> Path:
-        """Return a legacy retired-sensor path."""
-        validate_storage_name(sensor_id, "sensor ID")
-        return self.retired_root_dir / f"{sensor_id}{self.FILE_SUFFIX}"
-
-    def is_retired(self, sensor_id: str) -> bool:
-        """Return whether a legacy retired-sensor file exists."""
-        return self.get_retired_sensor_path(sensor_id).is_file()
 
     def load(self, sensor_id: str) -> SensorDefinition:
         """Load and validate one physical sensor definition."""
@@ -90,11 +75,6 @@ class SensorRepository:
             raise FileExistsError(
                 f"Sensor definition already exists: {definition.sensor_id}"
             )
-        legacy_retired = self.get_retired_sensor_path(
-            definition.sensor_id
-        )
-        if legacy_retired.exists():
-            legacy_retired.unlink()
         self._write(definition)
         return definition
 
@@ -114,14 +94,7 @@ class SensorRepository:
         """Delete one physical sensor definition and allow ID reuse."""
         definition = self.load(sensor_id)
         self.get_sensor_path(sensor_id).unlink()
-        legacy_retired = self.get_retired_sensor_path(sensor_id)
-        if legacy_retired.exists():
-            legacy_retired.unlink()
         return definition
-
-    def retire(self, sensor_id: str) -> SensorDefinition:
-        """Delete one sensor through the existing retirement transport."""
-        return self.delete(sensor_id)
 
     def list_sensor_ids(self) -> List[str]:
         """List stored physical sensor IDs in stable order."""
@@ -139,18 +112,6 @@ class SensorRepository:
             self.load(sensor_id)
             for sensor_id in self.list_sensor_ids()
         ]
-
-    def list_retired_sensor_ids(self) -> List[str]:
-        """List legacy retired-sensor files still on disk."""
-        if not self.retired_root_dir.is_dir():
-            return []
-        return sorted(
-            path.stem
-            for path in self.retired_root_dir.glob(
-                f"*{self.FILE_SUFFIX}"
-            )
-            if path.is_file()
-        )
 
     def _write(self, definition: SensorDefinition) -> None:
         content = yaml.safe_dump(

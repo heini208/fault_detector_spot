@@ -50,10 +50,7 @@ def sensor_definition(sensor_id="bmm150_01"):
 
 def build_controller(tmp_path):
     """Create isolated repository and attachment state."""
-    repository = SensorRepository(
-        tmp_path / "sensors",
-        tmp_path / "retired_sensors",
-    )
+    repository = SensorRepository(tmp_path / "sensors")
     state_store = SensorAttachmentStateStore(
         tmp_path / "attachment.yaml"
     )

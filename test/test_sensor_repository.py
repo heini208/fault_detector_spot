@@ -108,24 +108,6 @@ def test_delete_removes_sensor_and_allows_same_id_to_be_recreated(tmp_path):
     )
 
 
-def test_legacy_retired_id_no_longer_blocks_reuse(tmp_path):
-    repository = SensorRepository(
-        tmp_path / "sensors",
-        tmp_path / "retired_sensors",
-    )
-    legacy_path = repository.get_retired_sensor_path("test")
-    legacy_path.parent.mkdir(parents=True, exist_ok=True)
-    legacy_path.write_text(
-        yaml.safe_dump(definition("test").to_dict()),
-        encoding="utf-8",
-    )
-
-    repository.create(definition("test"))
-
-    assert repository.exists("test") is True
-    assert repository.is_retired("test") is False
-
-
 def test_sensor_file_id_must_match_filename(tmp_path):
     repository = SensorRepository(tmp_path)
     path = repository.get_sensor_path("bmm150_01")

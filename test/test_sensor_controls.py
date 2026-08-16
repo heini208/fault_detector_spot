@@ -54,7 +54,6 @@ def test_inspection_controls_do_not_own_sensor_registry_mutations(
 
     forbidden = (
         "sensor_add_client",
-        "sensor_retire_client",
         "sensor_list_subscription",
         "sensor_id_field",
         "probe_frame_value_label",
@@ -63,9 +62,7 @@ def test_inspection_controls_do_not_own_sensor_registry_mutations(
         "_active_probe_frame",
         "_configured_hand_to_probe_pose",
         "new_sensor_id_field",
-        "retire_sensor_dropdown",
         "handle_add_sensor",
-        "handle_retire_sensor",
     )
     for name in forbidden:
         assert not hasattr(controls, name)
