@@ -183,8 +183,26 @@ class _AttachmentController:
         return SimpleNamespace(
             sensor_id="sensor",
             motion_sensor_id="sensor",
+            attachment_revision=1,
             hand_to_probe=lambda: PoseData.identity(),
         )
+
+    def acquire_motion_attachment(self):
+        attachment = self.require_motion_attachment()
+
+        class Reservation:
+            released = False
+
+            def __init__(self):
+                self.attachment = attachment
+
+            def release(self):
+                if self.released:
+                    return False
+                self.released = True
+                return True
+
+        return Reservation()
 
 
 def test_controller_clamps_configured_alignment_to_camera_safe_minimum():
@@ -262,7 +280,12 @@ def test_explicit_alignment_approval_promotes_failed_pose_to_reached():
         ProbeRefinementController
     )
     controller.state_lock = nullcontext()
-    controller.sensor_attachment_controller = _AttachmentController()
+    attachment_controller = _AttachmentController()
+    controller.sensor_attachment_controller = attachment_controller
+    reservation = attachment_controller.acquire_motion_attachment()
+    controller._attachment_reservations = {
+        id(draft): reservation,
+    }
     controller.require_physical_lane_idle = lambda: None
     controller._ensure_minimum_camera_clearance_geometry = (
         lambda _draft, _attachment=None: None
@@ -281,3 +304,4 @@ def test_explicit_alignment_approval_promotes_failed_pose_to_reached():
     )
     assert draft.refinement.stage_is_approved(RefinementStage.ALIGNMENT)
     assert draft.setup.surface_alignment_approved
+    assert reservation.release() is True

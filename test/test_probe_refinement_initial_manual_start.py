@@ -58,8 +58,26 @@ class ActiveAttachmentController:
         return SimpleNamespace(
             sensor_id="active_probe",
             motion_sensor_id="active_probe",
+            attachment_revision=1,
             hand_to_probe=lambda: PoseData.identity(),
         )
+
+    def acquire_motion_attachment(self):
+        attachment = self.require_motion_attachment()
+
+        class Reservation:
+            released = False
+
+            def __init__(self):
+                self.attachment = attachment
+
+            def release(self):
+                if self.released:
+                    return False
+                self.released = True
+                return True
+
+        return Reservation()
 
 
 class CurrentPoseRefinementController(ProbeRefinementController):
