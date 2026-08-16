@@ -24,6 +24,7 @@ from fault_detector_spot.inspection.model.models import (
     Vector3Data,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
+    NO_SENSOR_MOUNT_ID,
     SensorDefinition,
 )
 from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (
@@ -179,7 +180,7 @@ def test_restart_restores_selection_as_unconfirmed(tmp_path):
         restarted.require_confirmed_sensor("bmm150_01")
 
 
-def test_clear_sensor_disables_sensor_dependent_motion(tmp_path):
+def test_clear_sensor_selects_builtin_mount_for_confirmation(tmp_path):
     controller, repository, state_store, _ = build_controller(tmp_path)
     repository.create(sensor_definition())
     pending = controller.select_sensor("bmm150_01")
@@ -190,11 +191,30 @@ def test_clear_sensor_disables_sensor_dependent_motion(tmp_path):
 
     state = controller.clear_sensor()
 
-    assert state.status is SensorAttachmentStatus.NO_SENSOR
-    assert state.active_sensor_id == ""
-    assert state.pending_sensor_id == ""
+    assert state.status is SensorAttachmentStatus.CONFIRMATION_PENDING
+    assert state.active_sensor_id == "bmm150_01"
+    assert state.pending_sensor_id == NO_SENSOR_MOUNT_ID
     assert state.sensor_dependent_motion_allowed is False
-    assert state_store.load().sensor_id == ""
+    assert state_store.load().sensor_id == NO_SENSOR_MOUNT_ID
+
+
+def test_builtin_no_sensor_mount_can_be_confirmed(tmp_path):
+    controller, _, _, _ = build_controller(tmp_path)
+    pending = controller.clear_sensor()
+
+    state = controller.confirm_sensor(
+        NO_SENSOR_MOUNT_ID,
+        pending.attachment_revision,
+    )
+    attachment = controller.require_confirmed_sensor(
+        NO_SENSOR_MOUNT_ID
+    )
+
+    assert state.status is SensorAttachmentStatus.ACTIVE
+    assert state.active_sensor_id == NO_SENSOR_MOUNT_ID
+    assert attachment.probe_frame == "hand_probe"
+    assert attachment.hand_to_probe_position == (0.0, 0.0, 0.0)
+    assert attachment.hand_to_probe_orientation == (0.0, 0.0, 0.0, 1.0)
 
 
 def test_unknown_sensor_selection_does_not_change_state(tmp_path):

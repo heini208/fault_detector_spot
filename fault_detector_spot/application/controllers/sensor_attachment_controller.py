@@ -11,6 +11,7 @@ from fault_detector_spot.inspection.model.models import (
     Vector3Data,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
+    NO_SENSOR_MOUNT_ID,
     SensorDefinition,
 )
 from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (
@@ -142,23 +143,8 @@ class SensorAttachmentController:
             return self._state
 
     def clear_sensor(self) -> SensorAttachmentState:
-        """Select no inspection sensor and disable sensor-dependent motion."""
-        with self._lock:
-            self._require_command_lane_idle()
-            revision = self._state.attachment_revision + 1
-            self.state_store.save(
-                PersistedSensorAttachmentSelection(
-                    sensor_id="",
-                    attachment_revision=revision,
-                )
-            )
-            self._state = SensorAttachmentState(
-                active_sensor_id="",
-                pending_sensor_id="",
-                status=SensorAttachmentStatus.NO_SENSOR,
-                attachment_revision=revision,
-            )
-            return self._state
+        """Select the built-in no-sensor mount for confirmation."""
+        return self.select_sensor(NO_SENSOR_MOUNT_ID)
 
     def confirm_sensor(
         self,

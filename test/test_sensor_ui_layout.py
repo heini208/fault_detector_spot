@@ -28,6 +28,11 @@ def test_sensor_workspace_exposes_expected_visual_sections(application):
     assert controls.save_mount_button.isEnabled() is False
     assert controls.start_configuration_button.isEnabled() is False
     assert controls.mount_table.columnCount() == 4
+    assert controls.mount_table.rowCount() == 1
+    assert controls.mount_table.item(0, 0).text() == "No Sensor Mount"
+    assert controls.mount_table.item(0, 1).text() == "hand"
+    assert controls.mount_table.item(0, 2).text() == "hand_probe"
+    assert controls.mount_table.item(0, 3).text() == "Calibrated"
 
 
 def test_sensor_workspace_has_no_sensing_elements_placeholder(application):
@@ -46,9 +51,9 @@ def test_sensor_workspace_preview_rows_are_presentation_only(application):
         "Calibrated",
     )
 
-    assert controls.mount_table.rowCount() == 1
-    assert controls.mount_table.item(0, 0).text() == "Hall probe mount"
-    assert controls.mount_table.item(0, 1).text() == "bmm150_mount"
+    assert controls.mount_table.rowCount() == 2
+    assert controls.mount_table.item(1, 0).text() == "Hall probe mount"
+    assert controls.mount_table.item(1, 1).text() == "bmm150_mount"
     assert controls.empty_registry_label.isHidden()
 
 

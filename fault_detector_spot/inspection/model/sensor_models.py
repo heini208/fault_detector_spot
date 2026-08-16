@@ -12,6 +12,8 @@ from fault_detector_spot.shared.persistence.file_storage import (
 
 
 SENSOR_PARENT_FRAME = "hand"
+NO_SENSOR_MOUNT_ID = "hand"
+NO_SENSOR_MOUNT_DISPLAY_NAME = "No Sensor Mount"
 _SENSOR_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -97,6 +99,17 @@ class SensorDefinition:
             "display_name": self.display_name,
             "hand_to_probe": self.hand_to_probe.to_dict(),
         }
+
+
+def no_sensor_mount_definition() -> SensorDefinition:
+    """Return the immutable built-in no-sensor hand mounting."""
+    definition = SensorDefinition(
+        sensor_id=NO_SENSOR_MOUNT_ID,
+        display_name=NO_SENSOR_MOUNT_DISPLAY_NAME,
+        hand_to_probe=PoseData.identity(),
+    )
+    definition.validate()
+    return definition
 
 
 def sensor_definition_from_values(

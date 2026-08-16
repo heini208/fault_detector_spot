@@ -6,7 +6,10 @@ import pytest
 
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.model.sensor_models import (
+    NO_SENSOR_MOUNT_DISPLAY_NAME,
+    NO_SENSOR_MOUNT_ID,
     SensorDefinition,
+    no_sensor_mount_definition,
     quaternion_from_rpy_degrees,
     sensor_definition_from_values,
     sensor_probe_frame,
@@ -31,6 +34,15 @@ def test_sensor_definition_round_trip_and_derived_frame():
     assert restored == definition
     assert restored.probe_frame == "bmm150_01_probe"
     assert sensor_probe_frame("bmm150_01") == "bmm150_01_probe"
+
+
+def test_no_sensor_mount_is_identity_calibration():
+    definition = no_sensor_mount_definition()
+
+    assert definition.sensor_id == NO_SENSOR_MOUNT_ID
+    assert definition.display_name == NO_SENSOR_MOUNT_DISPLAY_NAME
+    assert definition.probe_frame == "hand_probe"
+    assert definition.hand_to_probe == PoseData.identity()
 
 
 def test_rpy_degrees_are_saved_as_normalized_quaternion():

@@ -1,6 +1,11 @@
 """Presentation-only sensor mount workspace."""
 
 from PyQt5.QtCore import Qt
+from fault_detector_spot.inspection.model.sensor_models import (
+    NO_SENSOR_MOUNT_DISPLAY_NAME,
+    NO_SENSOR_MOUNT_ID,
+    sensor_probe_frame,
+)
 from PyQt5.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -168,7 +173,25 @@ class SensorControls(QWidget):
         layout.addWidget(self.mount_table)
         layout.addWidget(self.empty_registry_label)
         layout.addLayout(actions)
+        self._add_builtin_no_sensor_mount()
         return group
+
+    def _add_builtin_no_sensor_mount(self) -> None:
+        row = self.mount_table.rowCount()
+        self.mount_table.insertRow(row)
+        values = (
+            NO_SENSOR_MOUNT_DISPLAY_NAME,
+            NO_SENSOR_MOUNT_ID,
+            sensor_probe_frame(NO_SENSOR_MOUNT_ID),
+            "Calibrated",
+        )
+        for column, value in enumerate(values):
+            item = QTableWidgetItem(value)
+            item.setToolTip(
+                "Built-in no-sensor mount; cannot be retired or replaced."
+            )
+            self.mount_table.setItem(row, column, item)
+        self.empty_registry_label.setVisible(False)
 
     def _build_definition_group(self) -> QGroupBox:
         group = QGroupBox("Sensor mount definition")
