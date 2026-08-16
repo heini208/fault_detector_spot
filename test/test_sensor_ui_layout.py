@@ -69,6 +69,94 @@ def test_registry_contains_only_real_physical_sensors(application):
     assert controls.active_mount_dropdown.count() == 1
     assert controls.active_mount_dropdown.itemData(0) == "hall_probe"
     assert controls.clear_attachment_button.text() == "Remove Sensor"
+    assert controls.new_mount_button.isEnabled() is True
+
+
+def test_new_sensor_mount_opens_manual_transform_form(application):
+    controls = SensorControls()
+    controls.apply_definitions(())
+
+    controls.new_mount_button.click()
+    controls.mount_id_field.setText("bmm150_mount")
+
+    assert controls.mount_id_field.isReadOnly() is False
+    assert controls.display_name_field.isReadOnly() is False
+    assert controls.probe_frame_field.text() == "bmm150_mount_probe"
+    assert [field.text() for field in controls.translation_fields] == [
+        "0.0",
+        "0.0",
+        "0.0",
+    ]
+    assert [field.text() for field in controls.rotation_fields] == [
+        "0.0",
+        "0.0",
+        "0.0",
+    ]
+    assert controls.save_mount_button.isEnabled() is True
+    assert controls.discard_mount_button.isEnabled() is True
+    assert controls.new_mount_button.isEnabled() is False
+
+
+def test_manual_sensor_form_emits_creation_intent(application):
+    controls = SensorControls()
+    controls.apply_definitions(())
+    controls.new_mount_button.click()
+    controls.mount_id_field.setText("bmm150_mount")
+    controls.display_name_field.setText("BMM150 Hall sensor")
+    values = ("0.20", "-0.01", "0.03")
+    for field, value in zip(controls.translation_fields, values):
+        field.setText(value)
+    rotations = ("0.0", "0.0", "90.0")
+    for field, value in zip(controls.rotation_fields, rotations):
+        field.setText(value)
+    intents = []
+    controls.create_requested.connect(intents.append)
+
+    controls.save_mount_button.click()
+
+    assert len(intents) == 1
+    intent = intents[0]
+    assert intent.sensor_id == "bmm150_mount"
+    assert intent.display_name == "BMM150 Hall sensor"
+    assert intent.translation_m == pytest.approx((0.20, -0.01, 0.03))
+    assert intent.rotation_degrees == pytest.approx((0.0, 0.0, 90.0))
+
+
+def test_sensor_creation_result_keeps_failed_draft_editable(application):
+    controls = SensorControls()
+    controls.apply_definitions(())
+    controls.new_mount_button.click()
+    controls.mount_id_field.setText("bad sensor")
+    controls.display_name_field.setText("Bad sensor")
+
+    controls.mark_sensor_creation_pending()
+    controls.finish_sensor_creation(False, "Sensor ID is invalid")
+
+    assert controls.mount_id_field.text() == "bad sensor"
+    assert controls.mount_id_field.isReadOnly() is False
+    assert controls.save_mount_button.isEnabled() is True
+    assert controls.discard_mount_button.isEnabled() is True
+    assert controls.calibration_status_value.text() == "Sensor ID is invalid"
+
+
+def test_successful_sensor_creation_locks_saved_definition(application):
+    controls = SensorControls()
+    controls.apply_definitions(())
+    controls.new_mount_button.click()
+    controls.mount_id_field.setText("hall_probe")
+    controls.display_name_field.setText("Hall probe")
+
+    controls.mark_sensor_creation_pending()
+    controls.finish_sensor_creation(True, "Created sensor 'hall_probe'")
+
+    assert controls.mount_id_field.isReadOnly() is True
+    assert controls.display_name_field.isReadOnly() is True
+    assert controls.save_mount_button.isEnabled() is False
+    assert controls.discard_mount_button.isEnabled() is False
+    assert controls.new_mount_button.isEnabled() is True
+    assert controls.calibration_status_value.text() == (
+        "Created sensor 'hall_probe'"
+    )
 
 
 def test_no_sensor_state_uses_hand_without_registry_entry(application):
@@ -188,7 +276,9 @@ def test_main_ui_contains_sensor_mount_tab_and_attachment_client():
     assert "SensorAttachmentClient" in source
     assert "self.sensor_controls = SensorControls(self)" in source
     assert "self.sensor_controls.select_requested.connect(" in source
+    assert "self.sensor_controls.create_requested.connect(" in source
     assert "self.sensor_controls.confirm_requested.connect(" not in source
+    assert "self.sensor_attachment_client.create_sensor(" in source
     assert "self.sensor_confirm_button = QPushButton(\"✓\")" in source
     assert "QMessageBox.question(" in source
     assert (

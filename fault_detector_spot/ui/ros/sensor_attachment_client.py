@@ -9,11 +9,13 @@ from fault_detector_msgs.msg import (
     SensorDefinitionArray,
 )
 from fault_detector_msgs.srv import (
+    AddSensor,
     ConfirmSensorAttachment,
     SelectSensorAttachment,
 )
 
 from fault_detector_spot.inspection.model.sensor_models import (
+    quaternion_from_rpy_degrees,
     sensor_probe_frame,
 )
 from fault_detector_spot.shared.ros.qos_profiles import (
@@ -61,9 +63,11 @@ class SensorAttachmentClient(QObject):
 
     definitions_changed = pyqtSignal(object)
     state_changed = pyqtSignal(object)
+    creation_finished = pyqtSignal(bool, str)
     request_rejected = pyqtSignal(str)
 
     SENSOR_TOPIC = "fault_detector/sensors"
+    ADD_SENSOR_SERVICE = "fault_detector/add_sensor"
     STATE_TOPIC = "fault_detector/application/sensor_attachment_state"
     SELECT_SERVICE = "fault_detector/application/select_sensor_attachment"
     CONFIRM_SERVICE = "fault_detector/application/confirm_sensor_attachment"
@@ -83,6 +87,10 @@ class SensorAttachmentClient(QObject):
             self._receive_state,
             APPLICATION_STATE_QOS,
         )
+        self._add_sensor_client = node.create_client(
+            AddSensor,
+            self.ADD_SENSOR_SERVICE,
+        )
         self._select_client = node.create_client(
             SelectSensorAttachment,
             self.SELECT_SERVICE,
@@ -91,6 +99,46 @@ class SensorAttachmentClient(QObject):
             ConfirmSensorAttachment,
             self.CONFIRM_SERVICE,
         )
+
+    def create_sensor(
+        self,
+        sensor_id: str,
+        display_name: str,
+        translation_m,
+        rotation_degrees,
+    ):
+        """Submit one manually calibrated immutable sensor definition."""
+        if not self._add_sensor_client.service_is_ready():
+            self.creation_finished.emit(
+                False,
+                "Sensor registry service is unavailable",
+            )
+            return None
+
+        translation = self._three_values(
+            translation_m,
+            "translation",
+        )
+        rotation = self._three_values(
+            rotation_degrees,
+            "rotation",
+        )
+        quaternion = quaternion_from_rpy_degrees(*rotation)
+
+        request = AddSensor.Request()
+        request.sensor.sensor_id = sensor_id.strip()
+        request.sensor.display_name = display_name.strip()
+        request.sensor.hand_to_probe.position.x = translation[0]
+        request.sensor.hand_to_probe.position.y = translation[1]
+        request.sensor.hand_to_probe.position.z = translation[2]
+        request.sensor.hand_to_probe.orientation.x = quaternion.x
+        request.sensor.hand_to_probe.orientation.y = quaternion.y
+        request.sensor.hand_to_probe.orientation.z = quaternion.z
+        request.sensor.hand_to_probe.orientation.w = quaternion.w
+
+        future = self._add_sensor_client.call_async(request)
+        future.add_done_callback(self._handle_creation_result)
+        return future
 
     def select(self, sensor_id: str):
         """Select a physical sensor or clear selection with an empty ID."""
@@ -144,6 +192,23 @@ class SensorAttachmentClient(QObject):
     def _receive_state(self, message):
         self.state_changed.emit(self._state_view(message))
 
+    def _handle_creation_result(self, future):
+        try:
+            response = future.result()
+        except Exception as exception:
+            self.creation_finished.emit(False, str(exception))
+            return
+        if response is None:
+            self.creation_finished.emit(
+                False,
+                "Sensor registry service returned no response",
+            )
+            return
+        self.creation_finished.emit(
+            bool(response.success),
+            response.message,
+        )
+
     def _handle_service_result(self, future):
         try:
             response = future.result()
@@ -160,6 +225,20 @@ class SensorAttachmentClient(QObject):
             self.state_changed.emit(self._state_view(response.state))
             return
         self.state_changed.emit(self._state_view(response.state))
+
+    @staticmethod
+    def _three_values(values, label):
+        try:
+            normalized = tuple(float(value) for value in values)
+        except (TypeError, ValueError) as exception:
+            raise ValueError(
+                f"Sensor {label} must contain three numeric values"
+            ) from exception
+        if len(normalized) != 3:
+            raise ValueError(
+                f"Sensor {label} must contain exactly three values"
+            )
+        return normalized
 
     @staticmethod
     def _state_view(message) -> SensorAttachmentView:
@@ -188,6 +267,7 @@ class SensorAttachmentClient(QObject):
         """Destroy subscriptions and service clients."""
         self.node.destroy_subscription(self._definitions_subscription)
         self.node.destroy_subscription(self._state_subscription)
+        self.node.destroy_client(self._add_sensor_client)
         self.node.destroy_client(self._select_client)
         self.node.destroy_client(self._confirm_client)
 

@@ -95,6 +95,9 @@ class Fault_Detector_UI(QWidget):
         self.sensor_controls.select_requested.connect(
             self._select_sensor_attachment
         )
+        self.sensor_controls.create_requested.connect(
+            self._create_sensor_definition
+        )
         self.create_user_interface()
 
         self.timer = QTimer(self)
@@ -236,6 +239,44 @@ class Fault_Detector_UI(QWidget):
             state.attachment_revision,
         )
 
+    def _create_sensor_definition(self, intent):
+        if self.sensor_attachment_client is None:
+            self.sensor_controls.finish_sensor_creation(
+                False,
+                "ROS is unavailable",
+            )
+            return None
+        try:
+            future = self.sensor_attachment_client.create_sensor(
+                intent.sensor_id,
+                intent.display_name,
+                intent.translation_m,
+                intent.rotation_degrees,
+            )
+        except (TypeError, ValueError) as exception:
+            self.sensor_controls.finish_sensor_creation(
+                False,
+                str(exception),
+            )
+            return None
+        if future is not None:
+            self.sensor_controls.mark_sensor_creation_pending()
+            self.status_label.setText(
+                "Status: saving sensor calibration"
+            )
+        return future
+
+    def _process_sensor_creation_result(self, success, message):
+        if hasattr(self, "sensor_controls"):
+            self.sensor_controls.finish_sensor_creation(
+                bool(success),
+                message,
+            )
+        if success:
+            self.status_label.setText(f"Status: {message}")
+            return
+        self._process_application_error(message)
+
     def _select_sensor_attachment(self, sensor_id):
         if self.sensor_attachment_client is None:
             self._process_application_error("ROS is unavailable")
@@ -350,6 +391,9 @@ class Fault_Detector_UI(QWidget):
         )
         self.sensor_attachment_client.state_changed.connect(
             self._process_sensor_attachment_state
+        )
+        self.sensor_attachment_client.creation_finished.connect(
+            self._process_sensor_creation_result
         )
         self.sensor_attachment_client.request_rejected.connect(
             self._process_application_error
