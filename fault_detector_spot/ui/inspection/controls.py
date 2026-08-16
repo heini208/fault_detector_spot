@@ -30,11 +30,8 @@ from fault_detector_msgs.msg import (
     ProbeSetupIntent,
     ProbeSetupMotionIntent,
     ProbeSetupState,
-    SensorDefinitionArray,
 )
-from fault_detector_msgs.srv import AddSensor, RetireSensor
 
-from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
@@ -67,8 +64,6 @@ from fault_detector_spot.inspection.setup.reference_view_surface_target import (
     quaternion_to_rpy,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
-    SensorDefinition,
-    sensor_definition_from_values,
     sensor_probe_frame,
 )
 
@@ -116,13 +111,9 @@ class InspectionControls(UIControlHelper):
         self._refinement_presentation = None
         self._sensor_definitions = {}
         self._pending_sensor_selection = ""
-        self._pending_sensor_retirement = ""
         self._distance_failure_requires_retraction = False
         self._retraction_failed = False
         self._editing_probe_point_id = None
-        self.sensor_add_client = None
-        self.sensor_retire_client = None
-        self.sensor_list_subscription = None
         self.management_dialog = None
         super().__init__(parent_ui)
         initial_sensors = getattr(parent_ui, "sensor_definitions", [])
@@ -136,23 +127,9 @@ class InspectionControls(UIControlHelper):
             layout.addLayout(row)
 
     def init_ros_communication(self):
-        """Create presentation-side sensor registry transport."""
+        """Connect presentation callbacks to the probe setup client."""
         if self.node is None:
             return
-        self.sensor_add_client = self.node.create_client(
-            AddSensor,
-            "fault_detector/add_sensor",
-        )
-        self.sensor_retire_client = self.node.create_client(
-            RetireSensor,
-            "fault_detector/retire_sensor",
-        )
-        self.sensor_list_subscription = self.node.create_subscription(
-            SensorDefinitionArray,
-            "fault_detector/sensors",
-            self._process_sensor_definitions,
-            LATCHED_QOS,
-        )
         client = getattr(self.ui, "probe_setup_client", None)
         if client is not None:
             client.surface_orientation_received.connect(
@@ -282,76 +259,6 @@ class InspectionControls(UIControlHelper):
         object_layout.addRow(object_buttons)
         dialog_layout.addWidget(object_group)
 
-        sensor_group = QGroupBox("Manage hand-mounted sensors")
-        sensor_layout = QFormLayout(sensor_group)
-        self.new_sensor_id_field = QLineEdit()
-        self.new_sensor_id_field.setPlaceholderText("Unique mounting ID")
-        sensor_layout.addRow("Sensor ID:", self.new_sensor_id_field)
-
-        self.new_sensor_display_name_field = QLineEdit()
-        self.new_sensor_display_name_field.setPlaceholderText(
-            "Display name"
-        )
-        sensor_layout.addRow(
-            "Display name:",
-            self.new_sensor_display_name_field,
-        )
-
-        translation_row = QHBoxLayout()
-        self.sensor_translation_fields = []
-        for axis in ("X", "Y", "Z"):
-            translation_row.addWidget(QLabel(f"{axis}:"))
-            field = QLineEdit("0.0")
-            field.setFixedWidth(78)
-            field.setValidator(self._signed_number_validator(field))
-            self.sensor_translation_fields.append(field)
-            translation_row.addWidget(field)
-        translation_row.addStretch()
-        sensor_layout.addRow("Hand to probe [m]:", translation_row)
-
-        rotation_row = QHBoxLayout()
-        self.sensor_rotation_fields = []
-        for axis in ("Roll", "Pitch", "Yaw"):
-            rotation_row.addWidget(QLabel(f"{axis}:"))
-            field = QLineEdit("0.0")
-            field.setFixedWidth(78)
-            field.setValidator(self._signed_number_validator(field))
-            self.sensor_rotation_fields.append(field)
-            rotation_row.addWidget(field)
-        rotation_row.addStretch()
-        sensor_layout.addRow("Rotation [deg]:", rotation_row)
-
-        sensor_buttons = QHBoxLayout()
-        self.add_sensor_button = QPushButton("Add Sensor")
-        self.add_sensor_button.clicked.connect(self.handle_add_sensor)
-        sensor_buttons.addWidget(self.add_sensor_button)
-        self.sensor_creation_status_label = QLabel(
-            "Calibration is fixed after saving."
-        )
-        sensor_buttons.addWidget(self.sensor_creation_status_label, 1)
-        sensor_layout.addRow(sensor_buttons)
-
-        self.retire_sensor_dropdown = QComboBox()
-        self.retire_sensor_dropdown.setMinimumWidth(260)
-        self.retire_sensor_dropdown.currentIndexChanged.connect(
-            self._handle_retire_sensor_changed
-        )
-        sensor_layout.addRow(
-            "Registered sensor:",
-            self.retire_sensor_dropdown,
-        )
-
-        retire_sensor_buttons = QHBoxLayout()
-        self.retire_sensor_button = QPushButton("Retire Sensor")
-        self.retire_sensor_button.setEnabled(False)
-        self.retire_sensor_button.clicked.connect(
-            self.handle_retire_sensor
-        )
-        retire_sensor_buttons.addWidget(self.retire_sensor_button)
-        retire_sensor_buttons.addStretch()
-        sensor_layout.addRow(retire_sensor_buttons)
-        dialog_layout.addWidget(sensor_group)
-
         routine_group = QGroupBox("Create inspection routine")
         routine_layout = QFormLayout(routine_group)
 
@@ -432,16 +339,6 @@ class InspectionControls(UIControlHelper):
         self.reference_tag_family_field.setText("36h11")
         self.routine_id_field.clear()
         self.routine_display_name_field.clear()
-        self.new_sensor_id_field.clear()
-        self.new_sensor_display_name_field.clear()
-        for field in (
-            *self.sensor_translation_fields,
-            *self.sensor_rotation_fields,
-        ):
-            field.setText("0.0")
-        self.sensor_creation_status_label.setText(
-            "Calibration is fixed after saving."
-        )
         self.management_status_label.setText(
             "Create a new object, or select an existing object "
             "for the new routine."
@@ -450,49 +347,12 @@ class InspectionControls(UIControlHelper):
         self.management_dialog.raise_()
         self.management_dialog.activateWindow()
 
-    def _process_sensor_definitions(self, message):
-        definitions = []
-        for sensor_message in message.sensors:
-            definition = SensorDefinition(
-                sensor_id=sensor_message.sensor_id,
-                display_name=sensor_message.display_name,
-                hand_to_probe=PoseData(
-                    position=Vector3Data(
-                        x=sensor_message.hand_to_probe.position.x,
-                        y=sensor_message.hand_to_probe.position.y,
-                        z=sensor_message.hand_to_probe.position.z,
-                    ),
-                    orientation=QuaternionData(
-                        x=sensor_message.hand_to_probe.orientation.x,
-                        y=sensor_message.hand_to_probe.orientation.y,
-                        z=sensor_message.hand_to_probe.orientation.z,
-                        w=sensor_message.hand_to_probe.orientation.w,
-                    ),
-                ),
-            )
-            try:
-                definition.validate()
-            except Exception as exception:
-                self._set_status_text(
-                    "Ignored invalid sensor definition "
-                    f"'{definition.sensor_id}': {exception}"
-                )
-                continue
-            definitions.append(definition)
-        self.set_sensor_definitions(definitions)
-
-
     def handle_application_state(self, _status):
         """Keep the top-level application-state callback presentation-only."""
         return None
 
     def set_sensor_definitions(self, definitions):
         """Replace the UI sensor list with validated registry data."""
-        desired_retired_sensor_id = ""
-        if hasattr(self, "retire_sensor_dropdown"):
-            desired_retired_sensor_id = (
-                self.retire_sensor_dropdown.currentData() or ""
-            )
         validated = {}
         for definition in definitions:
             definition.validate()
@@ -513,9 +373,6 @@ class InspectionControls(UIControlHelper):
             and self._pending_sensor_selection in validated
         ):
             self._pending_sensor_selection = ""
-        self._populate_retire_sensor_dropdown(
-            desired_retired_sensor_id
-        )
 
     def _populate_sensor_dropdown(self, desired_sensor_id=""):
         if not hasattr(self, "sensor_id_field"):
@@ -548,32 +405,6 @@ class InspectionControls(UIControlHelper):
         dropdown.blockSignals(False)
         self._handle_routine_sensor_changed()
 
-    def _populate_retire_sensor_dropdown(self, desired_sensor_id=""):
-        if not hasattr(self, "retire_sensor_dropdown"):
-            return
-        dropdown = self.retire_sensor_dropdown
-        dropdown.blockSignals(True)
-        dropdown.clear()
-        dropdown.addItem("Select registered sensor", None)
-        for sensor_id in sorted(self._sensor_definitions):
-            definition = self._sensor_definitions[sensor_id]
-            dropdown.addItem(
-                f"{definition.display_name} [{sensor_id}]",
-                sensor_id,
-            )
-        selected_index = dropdown.findData(desired_sensor_id)
-        dropdown.setCurrentIndex(
-            selected_index if selected_index >= 0 else 0
-        )
-        dropdown.blockSignals(False)
-        self._handle_retire_sensor_changed()
-
-    def _handle_retire_sensor_changed(self, _index=None):
-        sensor_id = self.retire_sensor_dropdown.currentData()
-        self.retire_sensor_button.setEnabled(
-            sensor_id in self._sensor_definitions
-        )
-
     def _handle_routine_sensor_changed(self, _index=None):
         sensor_id = self.sensor_id_field.currentData()
         if not sensor_id:
@@ -593,189 +424,6 @@ class InspectionControls(UIControlHelper):
             self.create_routine_button.setEnabled(
                 has_parent and sensor_id in self._sensor_definitions
             )
-
-    def handle_add_sensor(self):
-        """Submit one immutable sensor mounting to the registry."""
-        sensor_id = self._required_text(
-            self.new_sensor_id_field,
-            "a unique sensor ID",
-        )
-        display_name = self._required_text(
-            self.new_sensor_display_name_field,
-            "a sensor display name",
-        )
-        if sensor_id is None or display_name is None:
-            return False
-        try:
-            translation = [
-                self._signed_number_value(field, axis)
-                for field, axis in zip(
-                    self.sensor_translation_fields,
-                    ("Translation X", "Translation Y", "Translation Z"),
-                )
-            ]
-            rotation = [
-                self._signed_number_value(field, axis)
-                for field, axis in zip(
-                    self.sensor_rotation_fields,
-                    ("Roll", "Pitch", "Yaw"),
-                )
-            ]
-            definition = sensor_definition_from_values(
-                sensor_id,
-                display_name,
-                *translation,
-                *rotation,
-            )
-        except Exception as exception:
-            self.sensor_creation_status_label.setText(str(exception))
-            self.show_warning("Add Sensor", str(exception))
-            return False
-
-        if self.sensor_add_client is None:
-            message = "Sensor registry is unavailable"
-            self.sensor_creation_status_label.setText(message)
-            self.show_warning("Add Sensor", message)
-            return False
-        if not self.sensor_add_client.service_is_ready():
-            message = "Sensor registry service is not ready"
-            self.sensor_creation_status_label.setText(message)
-            self.show_warning("Add Sensor", message)
-            return False
-
-        request = AddSensor.Request()
-        request.sensor.sensor_id = definition.sensor_id
-        request.sensor.display_name = definition.display_name
-        request.sensor.hand_to_probe.position.x = (
-            definition.hand_to_probe.position.x
-        )
-        request.sensor.hand_to_probe.position.y = (
-            definition.hand_to_probe.position.y
-        )
-        request.sensor.hand_to_probe.position.z = (
-            definition.hand_to_probe.position.z
-        )
-        request.sensor.hand_to_probe.orientation.x = (
-            definition.hand_to_probe.orientation.x
-        )
-        request.sensor.hand_to_probe.orientation.y = (
-            definition.hand_to_probe.orientation.y
-        )
-        request.sensor.hand_to_probe.orientation.z = (
-            definition.hand_to_probe.orientation.z
-        )
-        request.sensor.hand_to_probe.orientation.w = (
-            definition.hand_to_probe.orientation.w
-        )
-        self._pending_sensor_selection = definition.sensor_id
-        self.add_sensor_button.setEnabled(False)
-        self.sensor_creation_status_label.setText(
-            f"Adding sensor '{definition.sensor_id}'..."
-        )
-        future = self.sensor_add_client.call_async(request)
-        future.add_done_callback(self._handle_add_sensor_response)
-        return True
-
-    def _handle_add_sensor_response(self, future):
-        self.add_sensor_button.setEnabled(True)
-        try:
-            response = future.result()
-        except Exception as exception:
-            self._pending_sensor_selection = ""
-            self.sensor_creation_status_label.setText(
-                f"Sensor creation failed: {exception}"
-            )
-            return
-        self.sensor_creation_status_label.setText(response.message)
-        if not response.success:
-            self._pending_sensor_selection = ""
-            return
-        self._set_status_text(response.message)
-        self.new_sensor_id_field.clear()
-        self.new_sensor_display_name_field.clear()
-
-    def handle_retire_sensor(self):
-        """Retire one unreferenced sensor mounting through the registry."""
-        sensor_id = self.retire_sensor_dropdown.currentData()
-        if sensor_id not in self._sensor_definitions:
-            self.show_warning(
-                "Retire Sensor",
-                "Select a registered sensor mounting.",
-            )
-            return False
-        if not self.ask_question(
-            "Retire Sensor",
-            (
-                f"Retire sensor '{sensor_id}'? Its ID cannot be reused. "
-                "The complete system must be restarted to clear its "
-                "static TF."
-            ),
-        ):
-            return False
-        if self.sensor_retire_client is None:
-            message = "Sensor registry is unavailable"
-            self.sensor_creation_status_label.setText(message)
-            self.show_warning("Retire Sensor", message)
-            return False
-        if not self.sensor_retire_client.service_is_ready():
-            message = "Sensor registry service is not ready"
-            self.sensor_creation_status_label.setText(message)
-            self.show_warning("Retire Sensor", message)
-            return False
-
-        request = RetireSensor.Request()
-        request.sensor_id = sensor_id
-        self._pending_sensor_retirement = sensor_id
-        self.retire_sensor_button.setEnabled(False)
-        self.create_routine_button.setEnabled(False)
-        self.sensor_creation_status_label.setText(
-            f"Retiring sensor '{sensor_id}'..."
-        )
-        future = self.sensor_retire_client.call_async(request)
-        future.add_done_callback(self._handle_retire_sensor_response)
-        return True
-
-    def _handle_retire_sensor_response(self, future):
-        try:
-            response = future.result()
-        except Exception as exception:
-            self._pending_sensor_retirement = ""
-            self._handle_retire_sensor_changed()
-            self._handle_routine_sensor_changed()
-            self.sensor_creation_status_label.setText(
-                f"Sensor retirement failed: {exception}"
-            )
-            return
-        self.sensor_creation_status_label.setText(response.message)
-        if not response.success:
-            self._pending_sensor_retirement = ""
-            self._handle_retire_sensor_changed()
-            self._handle_routine_sensor_changed()
-            return
-        retired_sensor_id = self._pending_sensor_retirement
-        self._pending_sensor_retirement = ""
-        self._sensor_definitions.pop(retired_sensor_id, None)
-        self._populate_sensor_dropdown()
-        self._populate_retire_sensor_dropdown()
-        self._set_status_text(response.message)
-
-    @staticmethod
-    def _signed_number_value(field, label):
-        text = field.text().strip()
-        try:
-            value = float(text)
-        except ValueError as exception:
-            raise ValueError(f"{label} must be a number") from exception
-        if not math.isfinite(value):
-            raise ValueError(f"{label} must be finite")
-        return value
-
-    @staticmethod
-    def _signed_number_validator(parent):
-        validator = QDoubleValidator(-1000.0, 1000.0, 9, parent)
-        validator.setNotation(QDoubleValidator.StandardNotation)
-        validator.setLocale(QLocale.c())
-        return validator
 
     def _create_reference_widgets(self):
         self.reference_view_widgets = [

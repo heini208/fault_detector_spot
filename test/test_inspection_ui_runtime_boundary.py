@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 INSPECTION_UI = ROOT / "fault_detector_spot" / "ui" / "inspection"
+MAIN_UI = ROOT / "fault_detector_spot" / "ui" / "fault_detector_ui.py"
 
 
 def test_inspection_ui_does_not_own_robot_sensing_runtime():
@@ -38,13 +39,29 @@ def test_inspection_ui_does_not_own_robot_sensing_runtime():
     assert "ProbeSetupMotionIntent" in source
 
 
-def test_sensor_registry_transport_is_defined_once():
+def test_inspection_ui_consumes_global_sensor_definitions_only():
     base = (INSPECTION_UI / "controls.py").read_text(encoding="utf-8")
     finalizing = (
         INSPECTION_UI / "finalizing_controls.py"
     ).read_text(encoding="utf-8")
+    main = MAIN_UI.read_text(encoding="utf-8")
 
-    assert "fault_detector/sensors" in base
-    assert "AddSensor" in base
-    assert "RetireSensor" in base
+    forbidden = (
+        "fault_detector/sensors",
+        "fault_detector/add_sensor",
+        "fault_detector/retire_sensor",
+        "AddSensor",
+        "RetireSensor",
+        "SensorDefinitionArray",
+        "sensor_add_client",
+        "sensor_retire_client",
+        "sensor_list_subscription",
+        "handle_add_sensor",
+        "handle_retire_sensor",
+    )
+    for value in forbidden:
+        assert value not in base
+
+    assert "def set_sensor_definitions" in base
+    assert "self.inspection_controls.set_sensor_definitions(" in main
     assert "def init_ros_communication" not in finalizing
