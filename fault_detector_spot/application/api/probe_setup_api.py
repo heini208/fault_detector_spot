@@ -281,20 +281,15 @@ class ProbeSetupApi:
             definition = self.coordinator.object_repository.load(
                 snapshot.selected_object_id
             )
-            routine = definition.get_routine(
-                snapshot.selected_routine_id
-            )
-            if routine is None:
-                raise ValueError("Selected inspection routine is unavailable")
-            sensor = self.coordinator.sensor_repository.load(
-                routine.sensor_id
+            attachment = (
+                self.coordinator.refinement_controller.confirmed_attachment()
             )
             source = self.coordinator.motion_state_source
             if source is None:
                 raise RuntimeError("Probe setup motion state is unavailable")
             result = source.live_hand_surface_orientation(
                 definition.reference_tag.tag_id,
-                sensor.hand_to_probe.orientation,
+                attachment.hand_to_probe().orientation,
             )
         except Exception as exception:
             response.success = False

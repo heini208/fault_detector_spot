@@ -58,6 +58,7 @@ class ProbeRefinementController:
         motion_state_source,
         motion_command_factory,
         state_lock,
+        sensor_attachment_controller=None,
     ):
         self.setup_coordinator = setup_coordinator
         self.object_repository = object_repository
@@ -65,7 +66,14 @@ class ProbeRefinementController:
         self.motion_state_source = motion_state_source
         self.motion_command_factory = motion_command_factory
         self.state_lock = state_lock
+        self.sensor_attachment_controller = sensor_attachment_controller
         self._operations = SetupOperationRegistry()
+
+    def set_sensor_attachment_controller(self, controller) -> None:
+        """Install the authoritative physical sensor attachment source."""
+        if controller is None:
+            raise ValueError("Sensor attachment controller is required")
+        self.sensor_attachment_controller = controller
 
     def begin(self, draft) -> None:
         self.require_physical_lane_idle()
@@ -73,14 +81,18 @@ class ProbeRefinementController:
             raise ValueError("No calculated probe setup is available")
         if draft.refinement is not None:
             raise RuntimeError("Probe refinement is already active")
-        self._ensure_minimum_camera_clearance_geometry(draft)
+        attachment = self._active_attachment()
+        self._ensure_minimum_camera_clearance_geometry(
+            draft,
+            attachment,
+        )
         refinement = ProbeRefinementSession.create(
             draft.geometry.probe_setup,
             draft.setup,
         )
         if not draft.setup.safe_approach_approved:
             refinement.seed_safe_approach_from_current_pose(
-                self.current_probe_pose(draft)
+                self.current_probe_pose(draft, attachment)
             )
         refinement.active_stage = RefinementStage.SAFE_APPROACH
         with self.state_lock:
@@ -100,8 +112,12 @@ class ProbeRefinementController:
         self.require_physical_lane_idle()
         if draft.setup is None:
             raise ValueError("No calculated probe setup is available")
+        attachment = self._active_attachment()
         if stage is RefinementStage.ALIGNMENT:
-            self._ensure_minimum_camera_clearance_geometry(draft)
+            self._ensure_minimum_camera_clearance_geometry(
+                draft,
+                attachment,
+            )
         refinement = self.require_refinement(draft)
         if stage is RefinementStage.ALIGNMENT:
             if refinement.motion_states[stage] not in {
@@ -120,7 +136,7 @@ class ProbeRefinementController:
             raise RuntimeError(
                 f"Reach the {stage.value} pose before approval"
             )
-        pose_object = self.current_probe_pose(draft)
+        pose_object = self.current_probe_pose(draft, attachment)
         if (
             stage == RefinementStage.SAFE_APPROACH
             and refinement.motion_states[stage]
@@ -143,9 +159,13 @@ class ProbeRefinementController:
     def prepare_motion(self, context, draft, motion):
         self.require_physical_lane_idle()
         motion.validate()
+        attachment = self._active_attachment()
         stage = self.motion_stage(motion.kind)
         if stage is RefinementStage.ALIGNMENT:
-            self._ensure_minimum_camera_clearance_geometry(draft)
+            self._ensure_minimum_camera_clearance_geometry(
+                draft,
+                attachment,
+            )
         refinement = self.require_refinement(draft)
         refinement.active_stage = stage
         self._invalidate_downstream_motion_state(refinement, stage)
@@ -153,7 +173,11 @@ class ProbeRefinementController:
             motion.kind is ProbeMotionKind.ADJUST_PROBE_DISTANCE
         )
         if motion.relative:
-            command = self._relative_motion_command(draft, motion)
+            command = self._relative_motion_command(
+                draft,
+                motion,
+                attachment,
+            )
             target = refinement.candidate_pose(stage)
             purpose = (
                 "surface-distance correction"
@@ -167,15 +191,23 @@ class ProbeRefinementController:
                     draft,
                     target,
                     motion,
+                    attachment,
                 )
                 refinement.set_candidate(stage, candidate)
                 target = candidate
                 if motion.orientation_only:
                     target = deepcopy(candidate)
                     target.position = deepcopy(
-                        self.current_probe_pose(draft).position
+                        self.current_probe_pose(
+                            draft,
+                            attachment,
+                        ).position
                     )
-            command = self._absolute_motion_command(draft, target)
+            command = self._absolute_motion_command(
+                draft,
+                target,
+                attachment,
+            )
             purpose = (
                 "alignment orientation"
                 if (
@@ -244,20 +276,24 @@ class ProbeRefinementController:
         tracked = self._operations.get(status.operation.request_id)
         if tracked is None:
             return None
-        motion, _stage = tracked.payload
+        motion, stage = tracked.payload
         if status.state not in _TERMINAL_STATES:
             return motion, status
         refinement = self.require_refinement(draft)
         if status.state == CommandControllerState.SUCCEEDED:
             try:
-                achieved = self.current_probe_pose(draft)
+                attachment = self._active_attachment()
+                achieved = self.current_probe_pose(
+                    draft,
+                    attachment,
+                )
                 self.verify_achieved_motion(
                     refinement.pending_motion,
                     motion,
                     achieved,
                 )
                 if (
-                    _stage is RefinementStage.ALIGNMENT
+                    stage is RefinementStage.ALIGNMENT
                     and not motion.orientation_only
                 ):
                     self._require_live_alignment_camera_clearance()
@@ -342,17 +378,15 @@ class ProbeRefinementController:
             raise RuntimeError("Probe refinement is not active")
         return draft.refinement
 
-    def current_probe_pose(self, draft):
+    def current_probe_pose(self, draft, attachment=None):
         definition = self.object_repository.load(
             draft.selected_object_id
         )
-        routine = definition.get_routine(
-            draft.selected_routine_id
-        )
+        active = attachment or self._active_attachment()
         source = self._motion_state_source()
         return source.current_probe_pose_object(
             definition.reference_tag.tag_id,
-            routine.sensor_id,
+            active.sensor_id,
         )
 
     @staticmethod
@@ -403,8 +437,11 @@ class ProbeRefinementController:
                 f"{math.degrees(orientation_error):.2f} deg"
             )
 
-
-    def _ensure_minimum_camera_clearance_geometry(self, draft):
+    def _ensure_minimum_camera_clearance_geometry(
+        self,
+        draft,
+        attachment=None,
+    ):
         if draft.geometry is None or draft.setup is None:
             return None
         source = self.motion_state_source
@@ -419,9 +456,8 @@ class ProbeRefinementController:
         routine_id = getattr(draft, "selected_routine_id", "")
         if not object_id or not routine_id:
             return None
-        definition = self.object_repository.load(object_id)
-        routine = definition.get_routine(routine_id)
-        minimum_distance_m = float(resolver(routine.sensor_id))
+        active = attachment or self._active_attachment()
+        minimum_distance_m = float(resolver(active.sensor_id))
         calculated = draft.geometry.probe_setup
         configured_distance_m = float(
             calculated.surface_target.aligned_preapproach_distance_m
@@ -563,21 +599,20 @@ class ProbeRefinementController:
         result.validate()
         return result
 
-    def _alignment_target(self, draft, candidate, motion):
-        definition = self.object_repository.load(
-            draft.selected_object_id
-        )
-        routine = definition.get_routine(
-            draft.selected_routine_id
-        )
-        sensor = self.sensor_repository.load(routine.sensor_id)
+    def _alignment_target(
+        self,
+        draft,
+        candidate,
+        motion,
+        attachment,
+    ):
         result = deepcopy(candidate)
         if (
             motion.alignment_orientation_mode
             is ProbeAlignmentOrientationMode.TAG
         ):
             result.orientation = tag_aligned_probe_orientation(
-                sensor.hand_to_probe.orientation
+                attachment.hand_to_probe().orientation
             )
         elif (
             motion.alignment_orientation_mode
@@ -591,33 +626,36 @@ class ProbeRefinementController:
         result.validate()
         return result
 
-    def _absolute_motion_command(self, draft, target):
+    def _absolute_motion_command(
+        self,
+        draft,
+        target,
+        attachment,
+    ):
         definition = self.object_repository.load(
             draft.selected_object_id
         )
-        routine = definition.get_routine(
-            draft.selected_routine_id
-        )
-        sensor = self.sensor_repository.load(routine.sensor_id)
         tag = self._motion_state_source().reference_tag(
             definition.reference_tag.tag_id
         )
         return self.motion_command_factory.absolute(
             target,
-            sensor.hand_to_probe,
             tag,
+            attachment.sensor_id,
         )
 
-    def _relative_motion_command(self, draft, motion):
+    def _relative_motion_command(
+        self,
+        draft,
+        motion,
+        attachment,
+    ):
         definition = self.object_repository.load(
             draft.selected_object_id
         )
-        routine = definition.get_routine(
-            draft.selected_routine_id
-        )
         frame_id = self.motion_command_factory.frame_id(
             motion.frame,
-            routine.sensor_id,
+            attachment.sensor_id,
             definition.reference_tag.tag_id,
         )
         return self.motion_command_factory.relative(
@@ -625,7 +663,20 @@ class ProbeRefinementController:
             motion.translation,
             motion.pitch_rad,
             motion.yaw_rad,
+            attachment.sensor_id,
         )
+
+    def confirmed_attachment(self):
+        """Return the current confirmed physical attachment snapshot."""
+        return self._active_attachment()
+
+    def _active_attachment(self):
+        controller = self.sensor_attachment_controller
+        if controller is None:
+            raise RuntimeError(
+                "Active sensor attachment state is unavailable"
+            )
+        return controller.require_confirmed_sensor()
 
     def _motion_state_source(self):
         if self.motion_state_source is None:

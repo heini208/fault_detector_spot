@@ -16,6 +16,9 @@ from rclpy.node import Node
 from rclpy.task import Future
 from ament_index_python.packages import get_package_share_directory
 
+from fault_detector_spot.application.api.sensor_attachment_api import (
+    SensorAttachmentApi,
+)
 from fault_detector_spot.application.controllers.application_controller import (
     ApplicationController,
     ApplicationOperation,
@@ -25,6 +28,9 @@ from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
     CommandControllerState,
     UnknownCommandRequest,
+)
+from fault_detector_spot.application.controllers.sensor_attachment_controller import (
+    SensorAttachmentController,
 )
 from fault_detector_spot.application.ros.command_transport import (
     RosCommandTransport,
@@ -36,6 +42,9 @@ from fault_detector_spot.mapping.repository.map_artifact_store import (
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
 from fault_detector_spot.inspection.repository.multi_reference_view_repository import (
     MultiReferenceViewRepository,
+)
+from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (
+    SensorAttachmentStateStore,
 )
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
@@ -157,14 +166,33 @@ class ApplicationApiNode(Node):
         reference_repository = MultiReferenceViewRepository(
             object_root or None
         )
+        sensor_repository = SensorRepository(sensor_root or None)
+        self.sensor_attachment_controller = SensorAttachmentController(
+            sensor_repository,
+            SensorAttachmentStateStore(),
+            self.command_controller,
+        )
+        self.command_controller.add_request_preparer(
+            self.sensor_attachment_controller.prepare_request
+        )
+        self.sensor_attachment_api = SensorAttachmentApi(
+            self,
+            self.sensor_attachment_controller,
+        )
         self.probe_setup_motion_state = (
             probe_setup_motion_state_source.ProbeSetupMotionStateSource(self)
         )
         self.probe_setup_coordinator = ProbeSetupCoordinator(
             setup_coordinator=self.application_controller.setup_coordinator,
             reference_repository=reference_repository,
-            sensor_repository=SensorRepository(sensor_root or None),
+            sensor_repository=sensor_repository,
             motion_state_source=self.probe_setup_motion_state,
+        )
+        self.probe_setup_coordinator.geometry_editor.set_sensor_attachment_controller(
+            self.sensor_attachment_controller
+        )
+        self.probe_setup_coordinator.refinement_controller.set_sensor_attachment_controller(
+            self.sensor_attachment_controller
         )
         self.application_controller.attach_probe_setup(
             self.probe_setup_coordinator
@@ -211,6 +239,7 @@ class ApplicationApiNode(Node):
             self.application_controller.probe_setup_coordinator,
             self.probe_setup_state_publisher,
             self.probe_setup_state_adapter,
+            self.sensor_attachment_controller,
         )
         self.probe_refinement_finalization_api = (
             ProbeRefinementFinalizationApi(
@@ -432,6 +461,10 @@ class ApplicationApiNode(Node):
         self.probe_setup_motion_api.close()
         self.probe_setup_api.close()
         self.navigation_setup_api.close()
+        self.sensor_attachment_api.close()
+        self.command_controller.remove_request_preparer(
+            self.sensor_attachment_controller.prepare_request
+        )
         self.application_controller.remove_status_listener(
             self._handle_application_status
         )

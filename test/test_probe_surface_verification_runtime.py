@@ -73,7 +73,9 @@ class _Coordinator:
         samples,
         achieved,
     ):
-        self.evaluated.append(tuple(sample.stamp_seconds for sample in samples))
+        self.evaluated.append(
+            tuple(sample.stamp_seconds for sample in samples)
+        )
         if len(samples) < 5:
             raise ValueError("Need five samples")
         return SimpleNamespace(resample_required=False), "snapshot"
@@ -83,6 +85,7 @@ class _StateSource:
     def __init__(self):
         self.calls = 0
         self.minimum_samples = []
+        self.sensor_ids = []
 
     def surface_distance_samples(
         self,
@@ -91,11 +94,13 @@ class _StateSource:
         maximum_age_sec=0.5,
         minimum_samples=3,
     ):
+        self.sensor_ids.append(sensor_id)
         self.minimum_samples.append(minimum_samples)
         self.calls += 1
         return (_sample(10.0 + self.calls * 0.25),)
 
     def current_probe_pose_object(self, tag_id, sensor_id):
+        self.sensor_ids.append(sensor_id)
         return _pose()
 
 
@@ -126,7 +131,7 @@ def test_runner_defaults_to_three_second_sampling():
     assert runner.sample_timeout_sec == pytest.approx(3.0)
 
 
-def test_runner_accumulates_individually_fresh_samples(monkeypatch):
+def test_runner_accumulates_samples_for_reserved_active_sensor(monkeypatch):
     coordinator = _Coordinator()
     state_source = _StateSource()
     runner = verification_runner.ProbeSurfaceVerificationRunner(
@@ -135,7 +140,6 @@ def test_runner_accumulates_individually_fresh_samples(monkeypatch):
         poll_sec=0.001,
     )
     snapshot = SimpleNamespace(
-        selected_sensor_id="hall_probe",
         selected_reference_tag_id=2,
         context=SimpleNamespace(
             context_id="context",
@@ -148,11 +152,13 @@ def test_runner_accumulates_individually_fresh_samples(monkeypatch):
         request_id="request",
         receipt_not_before=1.0,
         cancel_requested=lambda: False,
+        sensor_id="active_probe",
     )
 
     assert result[0].resample_required is False
     assert state_source.calls == 5
     assert state_source.minimum_samples == [1, 1, 1, 1, 1]
+    assert set(state_source.sensor_ids) == {"active_probe"}
     assert coordinator.evaluated[-1] == (
         10.25,
         10.5,

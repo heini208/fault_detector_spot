@@ -29,7 +29,6 @@ from fault_detector_spot.inspection.model.sensor_models import (
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     compose_poses,
-    probe_pose_to_hand_pose,
 )
 from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
 
@@ -135,7 +134,8 @@ class ProbeMotionRequest:
         ):
             if self.kind is not ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH:
                 raise ValueError(
-                    "Calculated surface orientation is available only for alignment"
+                    "Calculated surface orientation is available only "
+                    "for alignment"
                 )
             if self.calculated_surface_orientation_object is None:
                 raise ValueError(
@@ -160,22 +160,21 @@ class ProbeSetupMotionCommandFactory:
     def absolute(
         self,
         target_probe_pose_object: PoseData,
-        hand_to_probe: PoseData,
         reference_tag: TagElement,
+        motion_sensor_id: str,
     ) -> SemanticCommand:
         target_probe_pose_object.validate()
-        hand_to_probe.validate()
+        sensor_id = self._required_sensor_id(motion_sensor_id)
 
         frame_id = reference_tag.pose.header.frame_id.strip()
         if not frame_id:
             raise ValueError("Reference tag pose frame is empty")
 
         body_to_object = pose_to_pose_data(reference_tag.pose.pose)
-        object_to_hand = probe_pose_to_hand_pose(
+        body_to_probe = compose_poses(
+            body_to_object,
             target_probe_pose_object,
-            hand_to_probe,
         )
-        body_to_hand = compose_poses(body_to_object, object_to_hand)
 
         tag_pose = StampedPose(
             frame_id=reference_tag.pose.header.frame_id,
@@ -199,15 +198,15 @@ class ProbeSetupMotionCommandFactory:
             stamp_sec=int(reference_tag.pose.header.stamp.sec),
             stamp_nanosec=int(reference_tag.pose.header.stamp.nanosec),
             position=CommandVector3(
-                x=body_to_hand.position.x - body_to_object.position.x,
-                y=body_to_hand.position.y - body_to_object.position.y,
-                z=body_to_hand.position.z - body_to_object.position.z,
+                x=body_to_probe.position.x - body_to_object.position.x,
+                y=body_to_probe.position.y - body_to_object.position.y,
+                z=body_to_probe.position.z - body_to_object.position.z,
             ),
             orientation=CommandQuaternion(
-                x=body_to_hand.orientation.x,
-                y=body_to_hand.orientation.y,
-                z=body_to_hand.orientation.z,
-                w=body_to_hand.orientation.w,
+                x=body_to_probe.orientation.x,
+                y=body_to_probe.orientation.y,
+                z=body_to_probe.orientation.z,
+                w=body_to_probe.orientation.w,
             ),
         )
 
@@ -219,6 +218,7 @@ class ProbeSetupMotionCommandFactory:
             ),
             offset=offset,
             orientation_mode=OrientationModes.CUSTOM_ORIENTATION.value,
+            motion_sensor_id=sensor_id,
         )
 
     def relative(
@@ -227,9 +227,11 @@ class ProbeSetupMotionCommandFactory:
         translation: Vector3Data,
         pitch_rad: float,
         yaw_rad: float,
+        motion_sensor_id: str,
     ) -> SemanticCommand:
         if not isinstance(frame_id, str) or not frame_id.strip():
             raise ValueError("Refinement frame must not be empty")
+        sensor_id = self._required_sensor_id(motion_sensor_id)
 
         translation.validate()
         rotation = self._relative_rotation(pitch_rad, yaw_rad)
@@ -250,6 +252,7 @@ class ProbeSetupMotionCommandFactory:
                     w=rotation.w,
                 ),
             ),
+            motion_sensor_id=sensor_id,
         )
 
     @staticmethod
@@ -266,6 +269,15 @@ class ProbeSetupMotionCommandFactory:
             ProbeMotionFrame.MAP: "map",
         }
         return values[frame]
+
+    @staticmethod
+    def _required_sensor_id(sensor_id: str) -> str:
+        if not isinstance(sensor_id, str):
+            raise TypeError("Motion sensor ID must be a string")
+        normalized = sensor_id.strip()
+        if not normalized:
+            raise ValueError("Motion sensor ID must not be empty")
+        return normalized
 
     @staticmethod
     def _relative_rotation(pitch_rad, yaw_rad):

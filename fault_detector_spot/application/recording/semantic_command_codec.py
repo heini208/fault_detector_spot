@@ -17,6 +17,7 @@ def serialize_recorded_command(command: SemanticCommand) -> dict:
         raise TypeError("Recorded command must be a SemanticCommand")
     data = asdict(command)
     data["command_id"] = command.command_id.value
+    data.pop("motion_sensor_id", None)
     return data
 
 
@@ -33,7 +34,9 @@ def deserialize_recorded_command(data: dict) -> SemanticCommand:
             wait_time=data["wait_time"],
             map_name=data["map_name"],
             waypoint_name=data["waypoint_name"],
-            inspection=InspectionSelection(**_object(data["inspection"], "Inspection selection")),
+            inspection=InspectionSelection(
+                **_object(data["inspection"], "Inspection selection")
+            ),
         )
     except KeyError as exception:
         raise ValueError(

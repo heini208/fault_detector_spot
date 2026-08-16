@@ -2,7 +2,11 @@
 
 from dataclasses import dataclass
 
-from fault_detector_spot.inspection.model.models import InspectionObject, PoseData, Vector3Data
+from fault_detector_spot.inspection.model.models import (
+    InspectionObject,
+    PoseData,
+    Vector3Data,
+)
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     compose_poses,
     derive_aligned_preapproach_pose,
@@ -50,7 +54,7 @@ def resolve_probe_execution_target(
     object_pose_execution: PoseData,
     execution_frame: str = "odom",
 ) -> ProbeExecutionTarget:
-    """Compose one saved probe point with a live object pose."""
+    """Compose one saved probe point with the active sensor calibration."""
     inspection_object.validate()
     sensor_definition.validate()
     object_pose_execution.validate()
@@ -63,12 +67,6 @@ def resolve_probe_execution_target(
         raise ValueError(
             f"Unknown routine {routine_id} for object "
             f"{inspection_object.object_id}"
-        )
-
-    if routine.sensor_id != sensor_definition.sensor_id:
-        raise ValueError(
-            "Routine sensor does not match loaded calibration: "
-            f"{routine.sensor_id} != {sensor_definition.sensor_id}"
         )
 
     probe_point = routine.get_probe_point(probe_point_id)
@@ -189,18 +187,10 @@ def resolve_probe_execution_geometry(
         nominal_probe_pose_execution=nominal_probe_pose,
         nominal_hand_pose_execution=nominal_hand_pose,
         inward_direction_execution=inward_direction,
-        target_surface_distance_m=(
-            target_surface_distance_m
-        ),
+        target_surface_distance_m=target_surface_distance_m,
         position_tolerance_m=position_tolerance_m,
-        orientation_tolerance_rad=(
-            orientation_tolerance_rad
-        ),
-        measurement_duration_sec=(
-            measurement_duration_sec
-        ),
-        aligned_preapproach_distance_m=(
-            aligned_preapproach_distance_m
-        ),
+        orientation_tolerance_rad=orientation_tolerance_rad,
+        measurement_duration_sec=measurement_duration_sec,
+        aligned_preapproach_distance_m=aligned_preapproach_distance_m,
         sensor_path=sensor_path,
     )

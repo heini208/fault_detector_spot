@@ -127,19 +127,39 @@ class FakeMotionStateSource:
 
 
 class FakeMotionCommandFactory:
-    def absolute(self, _target, _mounting, _tag):
+    def absolute(self, _target, _tag, motion_sensor_id):
         return SemanticCommand(
             command_id=CommandID.MOVE_ARM_TO_TAG,
+            motion_sensor_id=motion_sensor_id,
         )
 
-    def relative(self, _frame, _translation, _pitch, _yaw):
+    def relative(
+        self,
+        _frame,
+        _translation,
+        _pitch,
+        _yaw,
+        motion_sensor_id,
+    ):
         return SemanticCommand(
             command_id=CommandID.MOVE_ARM_RELATIVE,
+            motion_sensor_id=motion_sensor_id,
         )
 
     @staticmethod
     def frame_id(_frame, _sensor_id, _tag_id):
         return "body"
+
+
+class FakeSensorAttachmentController:
+    def __init__(self, sensor_id="hall_probe"):
+        self.sensor_id = sensor_id
+
+    def require_confirmed_sensor(self):
+        return SimpleNamespace(
+            sensor_id=self.sensor_id,
+            hand_to_probe=lambda: PoseData.identity(),
+        )
 
 
 class FakeGeometry:
@@ -216,7 +236,7 @@ def yaw_quaternion(degrees):
     )
 
 
-def coordinator(tmp_path):
+def coordinator(tmp_path, active_sensor_id="hall_probe"):
     command_controller = FakeCommandController()
     shared = SetupCoordinator(command_controller)
     references = multi_reference_view_repository.MultiReferenceViewRepository(
@@ -240,6 +260,9 @@ def coordinator(tmp_path):
         motion_state_source=motion_state,
         motion_command_factory=FakeMotionCommandFactory(),
     )
+    attachment = FakeSensorAttachmentController(active_sensor_id)
+    probe.geometry_editor.set_sensor_attachment_controller(attachment)
+    probe.refinement_controller.set_sensor_attachment_controller(attachment)
     return probe, command_controller
 
 
@@ -353,6 +376,7 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
         operation.request.command.command_id
         is CommandID.MOVE_ARM_TO_TAG
     )
+    assert operation.request.command.motion_sensor_id == "hall_probe"
     with pytest.raises(RuntimeError, match="active motion"):
         probe.prepare_motion(
             state.context,
@@ -377,7 +401,35 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
     )
 
 
-def test_alignment_defaults_to_tag_aligned_hand_without_changing_position(tmp_path):
+def test_probe_motion_uses_active_sensor_not_routine_sensor(tmp_path):
+    probe, _ = coordinator(tmp_path, active_sensor_id="hand")
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
+        state.context,
+        "slot1_hand",
+        ImagePoint(u=20, v=30),
+        "surface_fit",
+        0.10,
+        0.20,
+    )
+    probe.motion_state_source.pose = pose(0.8)
+    state = probe.begin_refinement(state.context)
+
+    operation = probe.prepare_motion(
+        state.context,
+        ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH),
+    )
+
+    assert state.selected_sensor_id == "hall_probe"
+    assert operation.request.command.motion_sensor_id == "hand"
+
+
+def test_alignment_defaults_to_tag_aligned_hand_without_changing_position(
+    tmp_path,
+):
     probe, _ = coordinator(tmp_path)
     state = create_selected_routine(
         probe,
@@ -488,6 +540,7 @@ def test_orientation_only_alignment_uses_current_position(tmp_path):
     target = draft.refinement.pending_motion.target_pose_object
     assert target.position == pose(0.61, 0.2, 0.3).position
     assert target.orientation == orientation
+
 
 def test_probe_motion_cancellation_keeps_context_state_correlated(tmp_path):
     probe, _ = coordinator(tmp_path)

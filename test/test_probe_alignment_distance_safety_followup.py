@@ -104,7 +104,9 @@ def test_active_refinement_shifts_candidate_when_aligned_distance_changes():
     refinement.motion_states[RefinementStage.ALIGNMENT] = (
         RefinementMotionState.REACHED
     )
-    previous_candidate = refinement.candidate_pose(RefinementStage.ALIGNMENT)
+    previous_candidate = refinement.candidate_pose(
+        RefinementStage.ALIGNMENT
+    )
     updated_calculated = make_setup(aligned_distance=0.15)
     geometry = SimpleNamespace(probe_setup=updated_calculated)
     draft = SimpleNamespace(
@@ -128,11 +130,15 @@ def test_active_refinement_shifts_candidate_when_aligned_distance_changes():
         0.15,
     )
 
-    candidate = draft.refinement.candidate_pose(RefinementStage.ALIGNMENT)
+    candidate = draft.refinement.candidate_pose(
+        RefinementStage.ALIGNMENT
+    )
     assert candidate.position.x == pytest.approx(
         previous_candidate.position.x - 0.05
     )
-    assert candidate.position.y == pytest.approx(previous_candidate.position.y)
+    assert candidate.position.y == pytest.approx(
+        previous_candidate.position.y
+    )
     assert candidate.orientation == previous_candidate.orientation
     assert draft.refinement.motion_states[RefinementStage.ALIGNMENT] is (
         RefinementMotionState.NOT_TESTED
@@ -140,7 +146,9 @@ def test_active_refinement_shifts_candidate_when_aligned_distance_changes():
     assert draft.refinement.motion_states[RefinementStage.PROBE] is (
         RefinementMotionState.NOT_TESTED
     )
-    assert not draft.refinement.stage_is_approved(RefinementStage.ALIGNMENT)
+    assert not draft.refinement.stage_is_approved(
+        RefinementStage.ALIGNMENT
+    )
 
 
 class _Definition:
@@ -170,6 +178,14 @@ class _ClearanceSource:
         return self.live
 
 
+class _AttachmentController:
+    def require_confirmed_sensor(self):
+        return SimpleNamespace(
+            sensor_id="sensor",
+            hand_to_probe=lambda: PoseData.identity(),
+        )
+
+
 def test_controller_clamps_configured_alignment_to_camera_safe_minimum():
     original = approved_setup(aligned_distance=0.10)
     geometry = ProbeGeometryResult(
@@ -190,9 +206,12 @@ def test_controller_clamps_configured_alignment_to_camera_safe_minimum():
         dirty=False,
         validation_error="old",
     )
-    controller = ProbeRefinementController.__new__(ProbeRefinementController)
+    controller = ProbeRefinementController.__new__(
+        ProbeRefinementController
+    )
     controller.object_repository = _ObjectRepository()
     controller.motion_state_source = _ClearanceSource(minimum=0.125)
+    controller.sensor_attachment_controller = _AttachmentController()
 
     minimum = controller._ensure_minimum_camera_clearance_geometry(draft)
 
@@ -207,7 +226,9 @@ def test_controller_clamps_configured_alignment_to_camera_safe_minimum():
 
 
 def test_live_alignment_clearance_gate_delegates_to_state_source():
-    controller = ProbeRefinementController.__new__(ProbeRefinementController)
+    controller = ProbeRefinementController.__new__(
+        ProbeRefinementController
+    )
     source = _ClearanceSource(live=0.235)
     controller.motion_state_source = source
 
@@ -223,7 +244,10 @@ def test_explicit_alignment_approval_promotes_failed_pose_to_reached():
         calculated,
         pose(x=0.30),
     )
-    refinement = ProbeRefinementSession.create(calculated, safe_approved)
+    refinement = ProbeRefinementSession.create(
+        calculated,
+        safe_approved,
+    )
     refinement.motion_states[RefinementStage.ALIGNMENT] = (
         RefinementMotionState.FAILED
     )
@@ -233,12 +257,21 @@ def test_explicit_alignment_approval_promotes_failed_pose_to_reached():
         dirty=False,
         validation_error="",
     )
-    controller = ProbeRefinementController.__new__(ProbeRefinementController)
+    controller = ProbeRefinementController.__new__(
+        ProbeRefinementController
+    )
     controller.state_lock = nullcontext()
+    controller.sensor_attachment_controller = _AttachmentController()
     controller.require_physical_lane_idle = lambda: None
-    controller._ensure_minimum_camera_clearance_geometry = lambda _draft: None
-    controller._require_live_alignment_camera_clearance = lambda: 0.270
-    controller.current_probe_pose = lambda _draft: pose(x=0.12)
+    controller._ensure_minimum_camera_clearance_geometry = (
+        lambda _draft, _attachment=None: None
+    )
+    controller._require_live_alignment_camera_clearance = (
+        lambda: 0.270
+    )
+    controller.current_probe_pose = (
+        lambda _draft, _attachment=None: pose(x=0.12)
+    )
 
     controller.approve(draft, RefinementStage.ALIGNMENT)
 

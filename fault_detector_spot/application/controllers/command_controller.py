@@ -69,6 +69,10 @@ AcceptedListener = Callable[[CommandRequest[SemanticCommand]], None]
 DispatchCallback = Callable[[CommandRequest[SemanticCommand]], None]
 DispatchReady = Callable[[], bool]
 ListenerErrorHandler = Callable[[Exception], None]
+RequestPreparer = Callable[
+    [CommandRequest[SemanticCommand]],
+    CommandRequest[SemanticCommand],
+]
 
 
 class CommandController:
@@ -101,6 +105,7 @@ class CommandController:
         self._active: Optional[CommandRequest[SemanticCommand]] = None
         self._listeners: List[StatusListener] = []
         self._accepted_listeners: List[AcceptedListener] = []
+        self._request_preparers: List[RequestPreparer] = []
         self._known_request_ids = set()
         self._active_acknowledged = False
         self._active_dispatched_monotonic = None
@@ -165,9 +170,39 @@ class CommandController:
             if listener in self._accepted_listeners:
                 self._accepted_listeners.remove(listener)
 
+    def add_request_preparer(self, preparer: RequestPreparer) -> None:
+        """Register one atomic command-admission preparation step."""
+        if not callable(preparer):
+            raise TypeError("Request preparer must be callable")
+        with self._lock:
+            if preparer not in self._request_preparers:
+                self._request_preparers.append(preparer)
+
+    def remove_request_preparer(self, preparer: RequestPreparer) -> None:
+        """Remove one command-admission preparation step."""
+        with self._lock:
+            if preparer in self._request_preparers:
+                self._request_preparers.remove(preparer)
+
+    def run_if_idle(
+        self,
+        action,
+        busy_message: str = "Physical commands are active or queued",
+    ):
+        """Run one shared-state mutation atomically while the lane is idle."""
+        if not callable(action):
+            raise TypeError("Idle-lane action must be callable")
+        if not isinstance(busy_message, str) or not busy_message.strip():
+            raise ValueError("Busy-lane message must not be empty")
+        with self._lock:
+            if self._active is not None or self._queue:
+                raise RuntimeError(busy_message.strip())
+            return action()
+
     def submit(self, request: CommandRequest[SemanticCommand]) -> str:
         normalized = self._normalize_request(request)
         with self._lock:
+            normalized = self._prepare_request_locked(normalized)
             if normalized.request_id in self._known_request_ids:
                 raise DuplicateCommandRequest(
                     f"Duplicate request ID: {normalized.request_id}"
@@ -294,6 +329,19 @@ class CommandController:
             recording_policy=request.recording_policy,
             command=request.command,
         )
+
+    def _prepare_request_locked(
+        self,
+        request: CommandRequest[SemanticCommand],
+    ) -> CommandRequest[SemanticCommand]:
+        prepared = request
+        for preparer in tuple(self._request_preparers):
+            prepared = self._normalize_request(preparer(prepared))
+            if prepared.request_id != request.request_id:
+                raise ValueError(
+                    "Request preparer must not change the request ID"
+                )
+        return prepared
 
     def _retry_dispatch_locked(self) -> None:
         if (

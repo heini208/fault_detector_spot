@@ -259,3 +259,76 @@ def test_confirmed_geometry_snapshot_is_independent(tmp_path):
     refreshed = controller.require_confirmed_sensor("bmm150_01")
 
     assert refreshed.hand_to_probe_position[0] == pytest.approx(0.2)
+
+
+
+def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path):
+    controller, repository, _, command_controller = build_controller(
+        tmp_path
+    )
+    repository.create(sensor_definition())
+    pending = controller.select_sensor("bmm150_01")
+    controller.confirm_sensor(
+        "bmm150_01",
+        pending.attachment_revision,
+    )
+    command_controller.add_request_preparer(controller.prepare_request)
+    accepted = []
+    command_controller.add_accepted_listener(accepted.append)
+    request = CommandRequest.create(
+        command=SemanticCommand(command_id=CommandID.MOVE_ARM_TO_TAG),
+        client_id="test",
+        origin=CommandOrigin.SYSTEM,
+        recording_policy=RecordingPolicy.EXCLUDE,
+    )
+
+    command_controller.submit(request)
+
+    assert accepted[0].command.motion_sensor_id == "bmm150_01"
+
+
+def test_explicit_stale_motion_sensor_is_rejected(tmp_path):
+    controller, repository, _, command_controller = build_controller(
+        tmp_path
+    )
+    repository.create(sensor_definition())
+    repository.create(sensor_definition("thermal_01"))
+    pending = controller.select_sensor("bmm150_01")
+    controller.confirm_sensor(
+        "bmm150_01",
+        pending.attachment_revision,
+    )
+    command_controller.add_request_preparer(controller.prepare_request)
+    request = CommandRequest.create(
+        command=SemanticCommand(
+            command_id=CommandID.MOVE_ARM_RELATIVE,
+            motion_sensor_id="thermal_01",
+        ),
+        client_id="test",
+        origin=CommandOrigin.SYSTEM,
+        recording_policy=RecordingPolicy.EXCLUDE,
+    )
+
+    with pytest.raises(RuntimeError, match="prepared for sensor"):
+        command_controller.submit(request)
+
+    assert command_controller.active_request_id == ""
+    assert command_controller.queued_request_ids == ()
+
+
+def test_sensor_change_is_rejected_during_attachment_reservation(tmp_path):
+    controller, repository, _, _ = build_controller(tmp_path)
+    repository.create(sensor_definition())
+    pending = controller.select_sensor("bmm150_01")
+    controller.confirm_sensor(
+        "bmm150_01",
+        pending.attachment_revision,
+    )
+
+    with controller.reserve_confirmed_attachment() as attachment:
+        assert attachment.sensor_id == "bmm150_01"
+        with pytest.raises(RuntimeError, match="workflow is active"):
+            controller.clear_sensor()
+
+    state = controller.clear_sensor()
+    assert state.pending_sensor_id == NO_SENSOR_MOUNT_ID

@@ -41,11 +41,11 @@ def tag(x=1.0):
     return message
 
 
-def test_absolute_motion_is_one_semantic_arm_primitive():
+def test_absolute_motion_is_one_probe_target_semantic_arm_primitive():
     command = ProbeSetupMotionCommandFactory().absolute(
         pose(0.5),
-        PoseData.identity(),
         tag(),
+        "hall_probe",
     )
 
     assert isinstance(command, SemanticCommand)
@@ -54,6 +54,7 @@ def test_absolute_motion_is_one_semantic_arm_primitive():
     assert command.offset.frame_id == "body"
     assert command.offset.position.x == pytest.approx(0.5)
     assert command.offset.orientation.w == pytest.approx(1.0)
+    assert command.motion_sensor_id == "hall_probe"
     assert (
         command.orientation_mode
         == OrientationModes.CUSTOM_ORIENTATION.value
@@ -66,6 +67,7 @@ def test_relative_motion_is_one_semantic_relative_arm_primitive():
         Vector3Data(x=0.01, y=-0.02, z=0.0),
         pitch_rad=math.radians(2.0),
         yaw_rad=math.radians(-3.0),
+        motion_sensor_id="hall_probe",
     )
 
     assert isinstance(command, SemanticCommand)
@@ -73,6 +75,7 @@ def test_relative_motion_is_one_semantic_relative_arm_primitive():
     assert command.offset.frame_id == "probe_hall_probe"
     assert command.offset.position.x == pytest.approx(0.01)
     assert command.offset.position.y == pytest.approx(-0.02)
+    assert command.motion_sensor_id == "hall_probe"
 
 
 def test_motion_request_rejects_oversized_manual_adjustment():

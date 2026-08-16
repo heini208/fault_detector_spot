@@ -30,6 +30,7 @@ class ProbeSurfaceVerificationApi:
         coordinator,
         state_publisher,
         state_adapter,
+        sensor_attachment_controller,
     ):
         self.node = node
         self.coordinator = coordinator
@@ -38,6 +39,7 @@ class ProbeSurfaceVerificationApi:
         self.runner = ProbeSurfaceVerificationRunner(
             coordinator,
             coordinator.motion_state_source,
+            sensor_attachment_controller=sensor_attachment_controller,
         )
         self._callback_group = ReentrantCallbackGroup()
         self._action_server = ActionServer(

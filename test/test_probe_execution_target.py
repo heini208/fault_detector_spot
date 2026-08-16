@@ -104,11 +104,11 @@ def test_resolves_probe_and_hand_targets_in_execution_frame():
     assert target.sensor_id == "bmm150_01"
     assert target.probe_frame == "bmm150_01_probe"
     assert target.execution_frame == "odom"
-    assert target.safe_approach_probe_pose_execution.position.x == pytest.approx(
-        1.30
+    assert target.safe_approach_probe_pose_execution.position.x == (
+        pytest.approx(1.30)
     )
-    assert target.safe_approach_hand_pose_execution.position.x == pytest.approx(
-        1.10
+    assert target.safe_approach_hand_pose_execution.position.x == (
+        pytest.approx(1.10)
     )
     assert (
         target.aligned_preapproach_probe_pose_execution.position.x
@@ -183,18 +183,17 @@ def test_rotated_sensor_calibration_changes_required_hand_pose():
     assert hand.orientation.w == pytest.approx(math.sqrt(0.5))
 
 
-def test_rejects_sensor_calibration_for_another_mount():
-    with pytest.raises(
-        ValueError,
-        match="Routine sensor does not match loaded calibration",
-    ):
-        resolve_probe_execution_target(
-            inspection_object(),
-            routine_id="scan",
-            probe_point_id="point_1",
-            sensor_definition=sensor("bmm150_02"),
-            object_pose_execution=PoseData.identity(),
-        )
+def test_active_sensor_calibration_may_differ_from_saved_routine_sensor():
+    target = resolve_probe_execution_target(
+        inspection_object(sensor_id="saved_sensor"),
+        routine_id="scan",
+        probe_point_id="point_1",
+        sensor_definition=sensor("active_sensor"),
+        object_pose_execution=PoseData.identity(),
+    )
+
+    assert target.sensor_id == "active_sensor"
+    assert target.probe_frame == "active_sensor_probe"
 
 
 @pytest.mark.parametrize(

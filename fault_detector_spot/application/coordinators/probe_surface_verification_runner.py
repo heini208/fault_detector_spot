@@ -43,6 +43,7 @@ class ProbeSurfaceVerificationRunner:
         self,
         coordinator,
         state_source,
+        sensor_attachment_controller=None,
         settle_sec: float = 0.5,
         sample_timeout_sec: float = 3.0,
         poll_sec: float = 0.05,
@@ -54,6 +55,7 @@ class ProbeSurfaceVerificationRunner:
             raise ValueError("Probe surface verification needs a state source")
         self.coordinator = coordinator
         self.state_source = state_source
+        self.sensor_attachment_controller = sensor_attachment_controller
         self.settle_sec = float(settle_sec)
         self.sample_timeout_sec = float(sample_timeout_sec)
         self.poll_sec = float(poll_sec)
@@ -89,6 +91,30 @@ class ProbeSurfaceVerificationRunner:
         state_changed=None,
     ):
         """Run until target stand-off, failure, cancellation, or recovery."""
+        if self.sensor_attachment_controller is None:
+            raise RuntimeError(
+                "Active sensor attachment state is unavailable"
+            )
+        with (
+            self.sensor_attachment_controller.reserve_confirmed_attachment()
+            as attachment
+        ):
+            return self._run_reserved(
+                context,
+                request_id,
+                cancel_requested,
+                state_changed,
+                attachment.sensor_id,
+            )
+
+    def _run_reserved(
+        self,
+        context,
+        request_id,
+        cancel_requested,
+        state_changed,
+        sensor_id,
+    ):
         if not callable(cancel_requested):
             raise TypeError("Cancellation predicate must be callable")
         if state_changed is not None and not callable(state_changed):
@@ -108,6 +134,7 @@ class ProbeSurfaceVerificationRunner:
             request_id,
             receipt_not_before,
             cancel_requested,
+            sensor_id,
         )
         if initial is None:
             return self._cancel(
@@ -187,7 +214,7 @@ class ProbeSurfaceVerificationRunner:
             snapshot = self.coordinator.snapshot(context)
             current_pose = self.state_source.current_probe_pose_object(
                 snapshot.selected_reference_tag_id,
-                snapshot.selected_sensor_id,
+                sensor_id,
             )
             evaluation = evaluate_probe_surface_approach(
                 plan,
@@ -224,6 +251,7 @@ class ProbeSurfaceVerificationRunner:
         request_id,
         receipt_not_before,
         cancel_requested,
+        sensor_id,
     ):
         deadline = time.monotonic() + self.sample_timeout_sec
         accumulated = {}
@@ -234,7 +262,7 @@ class ProbeSurfaceVerificationRunner:
                 return None
             try:
                 fresh_samples = self.state_source.surface_distance_samples(
-                    snapshot.selected_sensor_id,
+                    sensor_id,
                     receipt_not_before=receipt_not_before,
                     minimum_samples=1,
                 )
@@ -243,7 +271,7 @@ class ProbeSurfaceVerificationRunner:
                 if len(accumulated) > evaluated_sample_count:
                     achieved = self.state_source.current_probe_pose_object(
                         snapshot.selected_reference_tag_id,
-                        snapshot.selected_sensor_id,
+                        sensor_id,
                     )
                     context = self.coordinator.context(
                         snapshot.context.context_id,

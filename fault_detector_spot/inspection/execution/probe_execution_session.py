@@ -4,13 +4,19 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Tuple
 
-from fault_detector_spot.inspection.model.models import PoseData, QuaternionData, Vector3Data
-from fault_detector_spot.inspection.repository.object_repository import ObjectRepository
+from fault_detector_spot.inspection.model.models import (
+    PoseData,
+    QuaternionData,
+    Vector3Data,
+)
+from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
+from fault_detector_spot.inspection.repository.object_repository import (
+    ObjectRepository,
+)
 from .probe_execution_target import (
     ProbeExecutionTarget,
     resolve_probe_execution_geometry,
 )
-from fault_detector_spot.inspection.repository.sensor_repository import SensorRepository
 
 
 class ProbeExecutionStage(str, Enum):
@@ -138,9 +144,9 @@ class ProbeExecutionConfiguration:
         routine_id: str,
         probe_point_id: str,
         object_repository: ObjectRepository,
-        sensor_repository: SensorRepository,
+        sensor_definition: SensorDefinition,
     ) -> "ProbeExecutionConfiguration":
-        """Load and validate only the selected execution definitions."""
+        """Freeze selected point geometry with the active sensor snapshot."""
         inspection_object = object_repository.load(object_id)
         inspection_object.validate()
         routine = inspection_object.get_routine(routine_id)
@@ -155,7 +161,6 @@ class ProbeExecutionConfiguration:
                 "Unknown probe point for probe execution: "
                 f"{object_id}/{routine_id}/{probe_point_id}"
             )
-        sensor_definition = sensor_repository.load(routine.sensor_id)
         sensor_definition.validate()
         return cls(
             object_id=inspection_object.object_id,
@@ -241,7 +246,7 @@ class ProbeExecutionSession:
         routine_id: str,
         probe_point_id: str,
         object_repository: ObjectRepository,
-        sensor_repository: SensorRepository,
+        sensor_definition: SensorDefinition,
     ) -> "ProbeExecutionSession":
         return cls(
             configuration=ProbeExecutionConfiguration.load(
@@ -249,7 +254,7 @@ class ProbeExecutionSession:
                 routine_id,
                 probe_point_id,
                 object_repository,
-                sensor_repository,
+                sensor_definition,
             )
         )
 

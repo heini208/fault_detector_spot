@@ -128,6 +128,7 @@ class SemanticCommand:
     inspection: InspectionSelection = field(
         default_factory=InspectionSelection
     )
+    motion_sensor_id: str = ""
 
     def __post_init__(self):
         try:
@@ -152,6 +153,8 @@ class SemanticCommand:
             raise TypeError(
                 "Inspection selection must be InspectionSelection"
             )
+        if not isinstance(self.motion_sensor_id, str):
+            raise TypeError("Motion sensor ID must be a string")
         object.__setattr__(self, "command_id", command_id)
         object.__setattr__(
             self,
@@ -167,6 +170,11 @@ class SemanticCommand:
             self,
             "waypoint_name",
             self.waypoint_name.strip(),
+        )
+        object.__setattr__(
+            self,
+            "motion_sensor_id",
+            self.motion_sensor_id.strip(),
         )
 
 

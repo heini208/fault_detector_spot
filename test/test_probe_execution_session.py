@@ -17,13 +17,14 @@ from fault_detector_spot.inspection.model.models import (
     ReferenceView,
     Vector3Data,
 )
-from fault_detector_spot.inspection.repository.object_repository import ObjectRepository
+from fault_detector_spot.inspection.repository.object_repository import (
+    ObjectRepository,
+)
 from fault_detector_spot.inspection.execution.probe_execution_session import (
     ProbeExecutionSession,
     ProbeExecutionStage,
 )
 from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
-from fault_detector_spot.inspection.repository.sensor_repository import SensorRepository
 
 
 def pose(x=0.0, y=0.0, z=0.0):
@@ -71,18 +72,15 @@ def inspection_object(point=None):
     )
 
 
-def repositories(tmp_path):
+def repository_and_sensor(tmp_path, sensor_id="bmm150_01"):
     objects = ObjectRepository(tmp_path / "objects")
-    sensors = SensorRepository(tmp_path / "sensors")
     objects.create(inspection_object())
-    sensors.create(
-        SensorDefinition(
-            sensor_id="bmm150_01",
-            display_name="BMM150",
-            hand_to_probe=pose(x=0.20),
-        )
+    sensor = SensorDefinition(
+        sensor_id=sensor_id,
+        display_name="Active sensor",
+        hand_to_probe=pose(x=0.20),
     )
-    return objects, sensors
+    return objects, sensor
 
 
 def command():
@@ -94,15 +92,15 @@ def command():
     )
 
 
-def load_session(tmp_path):
-    objects, sensors = repositories(tmp_path)
+def load_session(tmp_path, sensor_id="bmm150_01"):
+    objects, sensor = repository_and_sensor(tmp_path, sensor_id)
     selection = command()
     session = ProbeExecutionSession.load(
         selection.object_id,
         selection.routine_id,
         selection.probe_point_id,
         objects,
-        sensors,
+        sensor,
     )
     return session, objects
 
@@ -119,6 +117,19 @@ def test_loaded_configuration_is_not_changed_by_later_repository_edits(
     assert (
         target.safe_approach_probe_pose_execution.position.x
         == pytest.approx(0.30)
+    )
+
+
+def test_loaded_configuration_freezes_active_sensor_not_routine_sensor(
+    tmp_path,
+):
+    session, _ = load_session(tmp_path, sensor_id="active_sensor")
+
+    assert session.configuration.sensor_id == "active_sensor"
+    assert session.configuration.hand_to_probe.position == (
+        0.20,
+        0.0,
+        0.0,
     )
 
 

@@ -29,10 +29,18 @@ class ProbeGeometryEditor:
         object_repository,
         sensor_repository,
         geometry,
+        sensor_attachment_controller=None,
     ):
         self.object_repository = object_repository
         self.sensor_repository = sensor_repository
         self.geometry = geometry
+        self.sensor_attachment_controller = sensor_attachment_controller
+
+    def set_sensor_attachment_controller(self, controller) -> None:
+        """Install the authoritative physical sensor attachment source."""
+        if controller is None:
+            raise ValueError("Sensor attachment controller is required")
+        self.sensor_attachment_controller = controller
 
     def select_reference_pixel(
         self,
@@ -137,13 +145,7 @@ class ProbeGeometryEditor:
         target_surface_distance_m,
         aligned_preapproach_distance_m,
     ):
-        definition = self.object_repository.load(
-            draft.selected_object_id
-        )
-        routine = definition.get_routine(
-            draft.selected_routine_id
-        )
-        sensor = self.sensor_repository.load(routine.sensor_id)
+        attachment = self._active_attachment()
         return self.geometry.resolve(
             object_id=draft.selected_object_id,
             routine_id=draft.selected_routine_id,
@@ -154,8 +156,16 @@ class ProbeGeometryEditor:
             aligned_preapproach_distance_m=(
                 aligned_preapproach_distance_m
             ),
-            hand_to_probe_pose=sensor.hand_to_probe,
+            hand_to_probe_pose=attachment.hand_to_probe(),
         )
+
+    def _active_attachment(self):
+        controller = self.sensor_attachment_controller
+        if controller is None:
+            raise RuntimeError(
+                "Active sensor attachment state is unavailable"
+            )
+        return controller.require_confirmed_sensor()
 
     @classmethod
     def _retained_distance_approvals(cls, setup, previous):

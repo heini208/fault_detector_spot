@@ -34,6 +34,10 @@ from .recording.controls import RecordingControls
 from .ros.application_client import ApplicationClient
 from .ros.navigation_setup_client import NavigationSetupClient
 from .ros.probe_setup_client import ProbeSetupClient
+from .ros.sensor_attachment_client import (
+    SensorAttachmentClient,
+    SensorAttachmentViewStatus,
+)
 from .sensor.controls import SensorControls
 from .shared.status_overview_panel import StatusOverviewPanel
 
@@ -62,6 +66,9 @@ class Fault_Detector_UI(QWidget):
         self.application_client = None
         self.navigation_setup_client = None
         self.probe_setup_client = None
+        self.sensor_attachment_client = None
+        self._sensor_definitions = {}
+        self._sensor_attachment_state = None
         self.inspection_object_root = self._inspection_root_parameter()
 
         if self.node:
@@ -73,6 +80,12 @@ class Fault_Detector_UI(QWidget):
         self.base_movement_controls = BaseMovementControls(self)
         self.inspection_controls = FinalizingInspectionControls(self)
         self.sensor_controls = SensorControls(self)
+        self.sensor_controls.select_requested.connect(
+            self._select_sensor_attachment
+        )
+        self.sensor_controls.confirm_requested.connect(
+            self._confirm_sensor_attachment
+        )
 
         self.create_user_interface()
 
@@ -137,6 +150,70 @@ class Fault_Detector_UI(QWidget):
             f'Sensor: <span style="color:{color}">●</span> '
             f"{label}{suffix}"
         )
+
+    def _process_sensor_definitions(self, definitions):
+        self._sensor_definitions = {
+            definition.sensor_id: definition
+            for definition in definitions
+        }
+        if hasattr(self, "sensor_controls"):
+            self.sensor_controls.apply_definitions(definitions)
+        self._refresh_sensor_status()
+
+    def _process_sensor_attachment_state(self, state):
+        self._sensor_attachment_state = state
+        if hasattr(self, "sensor_controls"):
+            self.sensor_controls.apply_attachment_state(state)
+        self._refresh_sensor_status()
+
+    def _sensor_display_name(self, sensor_id):
+        definition = self._sensor_definitions.get(sensor_id)
+        if definition is not None:
+            return definition.display_name
+        return sensor_id
+
+    def _refresh_sensor_status(self):
+        state = self._sensor_attachment_state
+        if state is None:
+            self.set_sensor_status("none")
+            return
+        if state.status is SensorAttachmentViewStatus.PENDING:
+            self.set_sensor_status(
+                "pending",
+                self._sensor_display_name(state.pending_sensor_id),
+            )
+            return
+        if state.status is SensorAttachmentViewStatus.ACTIVE:
+            if state.active_is_no_sensor:
+                self.set_sensor_status("none")
+            else:
+                self.set_sensor_status(
+                    "confirmed",
+                    self._sensor_display_name(state.active_sensor_id),
+                )
+            return
+        self.set_sensor_status("none")
+
+    def _select_sensor_attachment(self, sensor_id):
+        if self.sensor_attachment_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        future = self.sensor_attachment_client.select(sensor_id)
+        if future is not None:
+            self.status_label.setText("Sensor selection requested")
+        return future
+
+    def _confirm_sensor_attachment(self, sensor_id, attachment_revision):
+        if self.sensor_attachment_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        future = self.sensor_attachment_client.confirm(
+            sensor_id,
+            attachment_revision,
+        )
+        if future is not None:
+            self.status_label.setText("Sensor attachment confirmation requested")
+        return future
 
     def _on_tab_changed(self, index):
         if self.tabs.tabText(index) == "Navigation Control":
@@ -225,6 +302,16 @@ class Fault_Detector_UI(QWidget):
 
     def init_ros_communication(self):
         self.application_client = ApplicationClient(self.node)
+        self.sensor_attachment_client = SensorAttachmentClient(self.node)
+        self.sensor_attachment_client.definitions_changed.connect(
+            self._process_sensor_definitions
+        )
+        self.sensor_attachment_client.state_changed.connect(
+            self._process_sensor_attachment_state
+        )
+        self.sensor_attachment_client.request_rejected.connect(
+            self._process_application_error
+        )
         self.application_client.state_changed.connect(
             self._process_application_state
         )
@@ -491,6 +578,8 @@ class Fault_Detector_UI(QWidget):
         if self.navigation_setup_client is not None:
             self.navigation_setup_client.close()
             self.navigation_setup_client.destroy()
+        if self.sensor_attachment_client is not None:
+            self.sensor_attachment_client.destroy()
         if self.application_client is not None:
             self.application_client.destroy()
         event.accept()

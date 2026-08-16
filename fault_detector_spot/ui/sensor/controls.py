@@ -1,11 +1,6 @@
 """Presentation-only sensor mount workspace."""
 
-from PyQt5.QtCore import Qt
-from fault_detector_spot.inspection.model.sensor_models import (
-    NO_SENSOR_MOUNT_DISPLAY_NAME,
-    NO_SENSOR_MOUNT_ID,
-    sensor_probe_frame,
-)
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -27,12 +22,19 @@ from PyQt5.QtWidgets import (
 
 
 class SensorControls(QWidget):
-    """Render the sensor mount feature without owning application state."""
+    """Render sensor attachment state and emit user intents."""
+
+    select_requested = pyqtSignal(str)
+    confirm_requested = pyqtSignal(str, int)
 
     def __init__(self, parent=None):
         """Build the presentation-only sensor mount workspace."""
         super().__init__(parent)
+        self._definitions = {}
+        self._attachment_state = None
+        self._no_sensor_id = ""
         self._build_ui()
+        self._connect_intents()
 
     def _build_ui(self) -> None:
         page_layout = QVBoxLayout(self)
@@ -72,20 +74,13 @@ class SensorControls(QWidget):
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
 
         subtitle = QLabel(
-            "Layout prototype for registered hand-mounted sensor "
-            "configurations and the currently attached mount."
+            "Registered hand-mounted sensor configurations and the "
+            "currently confirmed physical attachment."
         )
         subtitle.setWordWrap(True)
 
-        prototype = QLabel(
-            "Presentation only — no controls on this page are connected."
-        )
-        prototype.setStyleSheet("color: palette(mid);")
-        prototype.setWordWrap(True)
-
         layout.addWidget(title)
         layout.addWidget(subtitle)
-        layout.addWidget(prototype)
         return header
 
     def _build_attachment_group(self) -> QGroupBox:
@@ -95,7 +90,7 @@ class SensorControls(QWidget):
         layout.setVerticalSpacing(6)
 
         self.attachment_name_value = QLabel("—")
-        self.attachment_status_value = QLabel("Not connected")
+        self.attachment_status_value = QLabel("No sensor selected")
         self.attachment_probe_frame_value = QLabel("—")
         self.attachment_revision_value = QLabel("—")
 
@@ -109,19 +104,20 @@ class SensorControls(QWidget):
         layout.addWidget(self.attachment_revision_value, 1, 3)
 
         self.active_mount_dropdown = QComboBox()
-        self.active_mount_dropdown.addItem("Select a registered mount")
+        self.active_mount_dropdown.addItem("No registered mounts", "")
         self.active_mount_dropdown.setEnabled(False)
 
         self.select_mount_button = QPushButton("Select Mount")
-        self.confirm_attachment_button = QPushButton("Confirm Attachment")
-        self.clear_attachment_button = QPushButton("No Sensor Attached")
+        self.confirm_attachment_button = QPushButton(
+            "Confirm Attachment"
+        )
+        self.clear_attachment_button = QPushButton(
+            "No Sensor Attached"
+        )
 
-        for button in (
-            self.select_mount_button,
-            self.confirm_attachment_button,
-            self.clear_attachment_button,
-        ):
-            button.setEnabled(False)
+        self.select_mount_button.setEnabled(False)
+        self.confirm_attachment_button.setEnabled(False)
+        self.clear_attachment_button.setEnabled(False)
 
         action_row = QHBoxLayout()
         action_row.addWidget(self.active_mount_dropdown, 1)
@@ -154,8 +150,7 @@ class SensorControls(QWidget):
         self.mount_table.setMinimumHeight(180)
 
         self.empty_registry_label = QLabel(
-            "Registered mounts will appear here once the backend is "
-            "connected."
+            "Waiting for registered sensor mounts."
         )
         self.empty_registry_label.setAlignment(Qt.AlignCenter)
         self.empty_registry_label.setStyleSheet("color: palette(mid);")
@@ -173,25 +168,7 @@ class SensorControls(QWidget):
         layout.addWidget(self.mount_table)
         layout.addWidget(self.empty_registry_label)
         layout.addLayout(actions)
-        self._add_builtin_no_sensor_mount()
         return group
-
-    def _add_builtin_no_sensor_mount(self) -> None:
-        row = self.mount_table.rowCount()
-        self.mount_table.insertRow(row)
-        values = (
-            NO_SENSOR_MOUNT_DISPLAY_NAME,
-            NO_SENSOR_MOUNT_ID,
-            sensor_probe_frame(NO_SENSOR_MOUNT_ID),
-            "Calibrated",
-        )
-        for column, value in enumerate(values):
-            item = QTableWidgetItem(value)
-            item.setToolTip(
-                "Built-in no-sensor mount; cannot be retired or replaced."
-            )
-            self.mount_table.setItem(row, column, item)
-        self.empty_registry_label.setVisible(False)
 
     def _build_definition_group(self) -> QGroupBox:
         group = QGroupBox("Sensor mount definition")
@@ -291,6 +268,155 @@ class SensorControls(QWidget):
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
         return group
+
+    def _connect_intents(self) -> None:
+        self.select_mount_button.clicked.connect(
+            self._request_selected_mount
+        )
+        self.confirm_attachment_button.clicked.connect(
+            self._request_confirmation
+        )
+        self.clear_attachment_button.clicked.connect(
+            self._request_no_sensor
+        )
+
+    def apply_definitions(self, definitions) -> None:
+        """Render the authoritative registered sensor list."""
+        selected_id = self.active_mount_dropdown.currentData() or ""
+        self._definitions = {
+            definition.sensor_id: definition
+            for definition in definitions
+        }
+        self._no_sensor_id = next(
+            (
+                definition.sensor_id
+                for definition in definitions
+                if definition.built_in
+            ),
+            "",
+        )
+
+        self.mount_table.setRowCount(0)
+        self.active_mount_dropdown.blockSignals(True)
+        self.active_mount_dropdown.clear()
+
+        for definition in definitions:
+            self._append_definition_row(definition)
+            self.active_mount_dropdown.addItem(
+                definition.display_name,
+                definition.sensor_id,
+            )
+
+        has_definitions = bool(definitions)
+        self.empty_registry_label.setVisible(not has_definitions)
+        self.active_mount_dropdown.setEnabled(has_definitions)
+        self.select_mount_button.setEnabled(has_definitions)
+        self.clear_attachment_button.setEnabled(bool(self._no_sensor_id))
+
+        if has_definitions:
+            index = self.active_mount_dropdown.findData(selected_id)
+            if index < 0 and self._attachment_state is not None:
+                index = self.active_mount_dropdown.findData(
+                    self._attachment_state.selected_sensor_id
+                )
+            if index < 0:
+                index = 0
+            self.active_mount_dropdown.setCurrentIndex(index)
+        else:
+            self.active_mount_dropdown.addItem(
+                "No registered mounts",
+                "",
+            )
+
+        self.active_mount_dropdown.blockSignals(False)
+        self._render_attachment_state()
+
+    def apply_attachment_state(self, state) -> None:
+        """Render authoritative physical attachment state."""
+        self._attachment_state = state
+        self._render_attachment_state()
+
+    def _render_attachment_state(self) -> None:
+        state = self._attachment_state
+        if state is None:
+            self.attachment_name_value.setText("—")
+            self.attachment_status_value.setText("Waiting for state")
+            self.attachment_probe_frame_value.setText("—")
+            self.attachment_revision_value.setText("—")
+            self.confirm_attachment_button.setEnabled(False)
+            return
+
+        selected_id = state.selected_sensor_id
+        definition = self._definitions.get(selected_id)
+        display_name = (
+            definition.display_name
+            if definition is not None
+            else selected_id or "—"
+        )
+        probe_frame = (
+            definition.probe_frame
+            if definition is not None
+            else "—"
+        )
+
+        status_name = getattr(state.status, "value", str(state.status))
+        if status_name == "pending":
+            status_text = "Confirmation pending"
+            confirm_enabled = bool(state.pending_sensor_id)
+        elif status_name == "active":
+            status_text = "Confirmed"
+            confirm_enabled = False
+        else:
+            status_text = "No sensor selected"
+            confirm_enabled = False
+
+        self.attachment_name_value.setText(display_name)
+        self.attachment_status_value.setText(status_text)
+        self.attachment_probe_frame_value.setText(probe_frame)
+        self.attachment_revision_value.setText(
+            str(state.attachment_revision)
+        )
+        self.confirm_attachment_button.setEnabled(confirm_enabled)
+
+        if selected_id:
+            index = self.active_mount_dropdown.findData(selected_id)
+            if index >= 0:
+                self.active_mount_dropdown.setCurrentIndex(index)
+
+    def _request_selected_mount(self) -> None:
+        sensor_id = self.active_mount_dropdown.currentData() or ""
+        if sensor_id:
+            self.select_requested.emit(sensor_id)
+
+    def _request_confirmation(self) -> None:
+        state = self._attachment_state
+        if state is None or not state.pending_sensor_id:
+            return
+        self.confirm_requested.emit(
+            state.pending_sensor_id,
+            int(state.attachment_revision),
+        )
+
+    def _request_no_sensor(self) -> None:
+        if self._no_sensor_id:
+            self.select_requested.emit(self._no_sensor_id)
+
+    def _append_definition_row(self, definition) -> None:
+        row = self.mount_table.rowCount()
+        self.mount_table.insertRow(row)
+        values = (
+            definition.display_name,
+            definition.sensor_id,
+            definition.probe_frame,
+            "Calibrated",
+        )
+        for column, value in enumerate(values):
+            item = QTableWidgetItem(value)
+            if definition.built_in:
+                item.setToolTip(
+                    "Built-in no-sensor mount; cannot be retired or replaced."
+                )
+            self.mount_table.setItem(row, column, item)
 
     @staticmethod
     def _vector_fields(labels, unit):

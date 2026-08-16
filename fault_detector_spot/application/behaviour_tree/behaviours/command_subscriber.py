@@ -99,14 +99,18 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             self.blackboard = self.attach_blackboard_client()
             self._register_blackboard_keys()
         except KeyError as exception:
-            self.logger.error(f"Could not retrieve node from kwargs: {exception}")
+            self.logger.error(
+                f"Could not retrieve node from kwargs: {exception}"
+            )
 
     def update(self) -> py_trees.common.Status:
         if not self.pending_msgs:
             self.feedback_message = "No commands received yet"
             return py_trees.common.Status.SUCCESS
 
-        self.pending_msgs.sort(key=lambda item: (item[0].sec, item[0].nanosec))
+        self.pending_msgs.sort(
+            key=lambda item: (item[0].sec, item[0].nanosec)
+        )
 
         processed_count = 0
         for _, request in self.pending_msgs:
@@ -174,7 +178,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             return
 
         if request.request_id in self._received_request_ids:
-            detail = f"BT rejected duplicate request ID: {request.request_id}"
+            detail = (
+                f"BT rejected duplicate request ID: {request.request_id}"
+            )
             self.logger.error(detail)
             self._publish_request_failure(request, detail)
             return
@@ -187,7 +193,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandStatus.STATE_RUNNING,
             detail,
         )
-        self.node.get_logger().info(f"{detail} [{request.request_id}]")
+        self.node.get_logger().info(
+            f"{detail} [{request.request_id}]"
+        )
 
         if self.is_estop_command(request.command):
             self.trigger_estop(request)
@@ -234,7 +242,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.logger.info(f"Received {command_id.value} command")
         return commands
 
-    def _simple_command(self, command: SemanticCommand) -> ExecutionCommand:
+    def _simple_command(
+        self,
+        command: SemanticCommand,
+    ) -> ExecutionCommand:
         return ExecutionCommand(
             command_id=command.command_id,
             stamp=self._create_command_stamp(),
@@ -254,7 +265,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             map_name=command.map_name,
         )
 
-    def _waypoint_command(self, command: SemanticCommand) -> WaypointCommand:
+    def _waypoint_command(
+        self,
+        command: SemanticCommand,
+    ) -> WaypointCommand:
         return WaypointCommand(
             command_id=CommandID.MOVE_TO_WAYPOINT,
             stamp=self._create_command_stamp(),
@@ -336,7 +350,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def _create_command_stamp(self):
         return self.node.get_clock().now().to_msg()
 
-    def _move_arm_command_with_offset(self, command: SemanticCommand):
+    def _move_arm_command_with_offset(
+        self,
+        command: SemanticCommand,
+    ):
         return [
             ManipulatorMoveRelativeCommand(
                 command.command_id,
@@ -350,6 +367,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         command: SemanticCommand,
     ) -> List[ExecutionCommand]:
         tag = self._required_tag(command)
+        if not command.motion_sensor_id:
+            raise ValueError(
+                "Move-to-tag command is missing active sensor geometry"
+            )
         return [
             ManipulatorToTagCommand(
                 CommandID.MOVE_ARM_TO_TAG,
@@ -358,6 +379,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 tag.id,
                 stamped_pose_to_message(command.offset),
                 command.orientation_mode,
+                motion_sensor_id=command.motion_sensor_id,
             )
         ]
 
