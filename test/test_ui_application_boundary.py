@@ -10,6 +10,7 @@ OPERATIONAL_UI_FILES = (
     UI_ROOT / "navigation" / "base_movement_controls.py",
     UI_ROOT / "navigation" / "controls.py",
     UI_ROOT / "inspection" / "controls.py",
+    UI_ROOT / "sensor" / "controls.py",
 )
 
 
