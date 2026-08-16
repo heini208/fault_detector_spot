@@ -14,6 +14,9 @@ from fault_detector_spot.application.commanding.command_request import (
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
 )
+from fault_detector_spot.application.commanding.request_identity import (
+    validate_request_id,
+)
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
     CommandControllerState,
@@ -60,14 +63,14 @@ class SetupCoordinator:
     """Own setup context lifecycle and shared command-controller access."""
 
     def __init__(self, command_controller: CommandController):
-        self.command_controller = command_controller
+        self._command_controller = command_controller
         self._lock = RLock()
         self._contexts: Dict[str, SetupContextSnapshot] = {}
         self._prepared: Dict[str, SetupOperation] = {}
         self._operations: Dict[str, SetupOperation] = {}
         self._context_listeners = []
         self._operation_listeners: Dict[str, list] = {}
-        self.command_controller.add_status_listener(
+        self._command_controller.add_status_listener(
             self._handle_command_status
         )
 
@@ -247,7 +250,7 @@ class SetupCoordinator:
             ] = operation
             self._prepared.pop(operation.request_id)
         try:
-            self.command_controller.submit(operation.request)
+            self._command_controller.submit(operation.request)
         except Exception:
             with self._lock:
                 self._operations.pop(
@@ -256,6 +259,39 @@ class SetupCoordinator:
                 )
             raise
         return operation.request_id
+
+    def require_command_lane_idle(
+        self,
+        detail: str,
+        queued_detail: str = "",
+    ) -> None:
+        """Reject work that requires an idle physical command lane."""
+        message = detail.strip()
+        if not message:
+            raise ValueError(
+                "Command-lane admission detail must not be empty"
+            )
+        queued_message = queued_detail.strip() or message
+        if self._command_controller.active_request_id:
+            raise RuntimeError(message)
+        if self._command_controller.queued_request_ids:
+            raise RuntimeError(queued_message)
+
+    def cancel_operation(
+        self,
+        context: SetupContextSnapshot,
+        request_id: str,
+    ) -> str:
+        """Cancel one submitted operation owned by the current context."""
+        normalized = validate_request_id(request_id)
+        with self._lock:
+            self._require_current_locked(context)
+            operation = self._operations.get(normalized)
+            if operation is None or operation.context != context:
+                raise LookupError(
+                    f"Unknown setup operation: {normalized}"
+                )
+        return self._command_controller.cancel(normalized)
 
     def add_context_listener(
         self,
@@ -419,7 +455,7 @@ class SetupCoordinator:
             return tuple(listeners)
 
     def close(self) -> None:
-        self.command_controller.remove_status_listener(
+        self._command_controller.remove_status_listener(
             self._handle_command_status
         )
         with self._lock:

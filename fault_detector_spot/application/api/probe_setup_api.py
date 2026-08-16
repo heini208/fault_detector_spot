@@ -274,21 +274,8 @@ class ProbeSetupApi:
                 request.context_id,
                 request.client_id,
             )
-            snapshot = self.coordinator.snapshot(context)
-            if snapshot.refinement is None:
-                raise RuntimeError("Probe refinement is not active")
-            definition = self.coordinator.object_repository.load(
-                snapshot.selected_object_id
-            )
-            attachment = (
-                self.coordinator.refinement_controller.motion_attachment()
-            )
-            source = self.coordinator.motion_state_source
-            if source is None:
-                raise RuntimeError("Probe setup motion state is unavailable")
-            result = source.live_hand_surface_orientation(
-                definition.reference_tag.tag_id,
-                attachment.hand_to_probe().orientation,
+            result = self.coordinator.calculate_surface_orientation(
+                context
             )
         except Exception as exception:
             response.success = False
@@ -321,7 +308,7 @@ class ProbeSetupApi:
     def _failure_state(self, goal, detail, context=None):
         if (
             context is not None
-            and self.coordinator.setup_coordinator.is_current(context)
+            and self.coordinator.is_current(context)
         ):
             snapshot = self.coordinator.snapshot(context)
             state = self.state_adapter.message(

@@ -343,9 +343,7 @@ class NavigationSetupApi:
         return result
 
     def _abort(self, goal_handle, goal, detail, context=None):
-        if context is not None and self.coordinator.setup_coordinator.is_current(
-            context
-        ):
+        if context is not None and self.coordinator.is_current(context):
             state = self._state(
                 self.coordinator.snapshot(context),
                 int(goal.intent.operation),

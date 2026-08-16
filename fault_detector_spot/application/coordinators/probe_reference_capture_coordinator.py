@@ -136,9 +136,7 @@ class ProbeReferenceCaptureCoordinator:
 
             self._require_command_lane_idle()
             self._wait_settled(cancel_requested)
-            self.probe_setup_coordinator.setup_coordinator.require_current(
-                context
-            )
+            self.probe_setup_coordinator.require_current(context)
             self._require_command_lane_idle()
 
             synchronizers = self._create_synchronizers(selected)
@@ -167,9 +165,7 @@ class ProbeReferenceCaptureCoordinator:
                         selected,
                         cancel_requested,
                     )
-                    self.probe_setup_coordinator.setup_coordinator.require_current(
-                        context
-                    )
+                    self.probe_setup_coordinator.require_current(context)
                     self._require_command_lane_idle()
                     reference_tag = self._stable_reference_tag(tag_id)
                     self._require_tf_ready(
@@ -402,17 +398,10 @@ class ProbeReferenceCaptureCoordinator:
             )
 
     def _require_command_lane_idle(self):
-        controller = (
-            self.probe_setup_coordinator.setup_coordinator.command_controller
+        self.probe_setup_coordinator.require_physical_lane_idle(
+            "Reference capture requires the physical command lane to be idle",
+            "Reference capture requires an empty physical command queue",
         )
-        if controller.active_request_id:
-            raise RuntimeError(
-                "Reference capture requires the physical command lane to be idle"
-            )
-        if controller.queued_request_ids:
-            raise RuntimeError(
-                "Reference capture requires an empty physical command queue"
-            )
 
     def _check_cancel(self, cancel_requested):
         if self._shutdown.is_set():

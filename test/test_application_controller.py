@@ -183,7 +183,9 @@ def test_probe_setup_attachment_uses_shared_coordinator():
     command_controller = FakeCommandController()
     controller = ApplicationController(command_controller)
     probe = SimpleNamespace(
-        setup_coordinator=controller.setup_coordinator,
+        uses_setup_coordinator=lambda coordinator: (
+            coordinator is controller.setup_coordinator
+        ),
         close=lambda: None,
     )
 
@@ -222,3 +224,4 @@ def test_setup_status_is_owned_only_by_setup_coordinator():
 
     assert application_statuses == []
     assert setup_statuses[-1].operation == operation
+

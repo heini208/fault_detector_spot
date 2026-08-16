@@ -147,7 +147,7 @@ class ApplicationController:
 
     def attach_navigation_setup(self, coordinator) -> None:
         """Attach the specialized navigation setup coordinator."""
-        if coordinator.setup_coordinator is not self.setup_coordinator:
+        if not coordinator.uses_setup_coordinator(self.setup_coordinator):
             raise ValueError(
                 "Navigation setup must use the shared setup coordinator"
             )
@@ -157,7 +157,7 @@ class ApplicationController:
 
     def attach_probe_setup(self, coordinator) -> None:
         """Attach the specialized probe setup coordinator."""
-        if coordinator.setup_coordinator is not self.setup_coordinator:
+        if not coordinator.uses_setup_coordinator(self.setup_coordinator):
             raise ValueError(
                 "Probe setup must use the shared setup coordinator"
             )

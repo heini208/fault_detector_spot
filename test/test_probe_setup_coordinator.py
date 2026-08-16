@@ -64,14 +64,16 @@ class FakeCommandController:
     def __init__(self):
         self.listeners = []
         self.submitted = []
+        self.active = ""
+        self.queued = ()
 
     @property
     def active_request_id(self):
-        return ""
+        return self.active
 
     @property
     def queued_request_ids(self):
-        return ()
+        return self.queued
 
     def add_status_listener(self, listener):
         self.listeners.append(listener)
@@ -263,16 +265,15 @@ def coordinator(tmp_path, active_sensor_id="hall_probe"):
         tmp_path / "objects"
     )
     motion_state = FakeMotionStateSource()
+    attachment = FakeSensorAttachmentController(active_sensor_id)
     probe = ProbeSetupCoordinator(
         setup_coordinator=shared,
         reference_repository=references,
+        sensor_attachment_controller=attachment,
         geometry=FakeGeometry(),
         motion_state_source=motion_state,
         motion_command_factory=FakeMotionCommandFactory(),
     )
-    attachment = FakeSensorAttachmentController(active_sensor_id)
-    probe.geometry_editor.set_sensor_attachment_controller(attachment)
-    probe.refinement_controller.set_sensor_attachment_controller(attachment)
     return probe, command_controller
 
 
@@ -785,6 +786,26 @@ def test_motion_transport_is_separate_from_authoring_transport():
     assert "ActionServer" in motion
 
 
+def test_setup_coordinator_owns_command_lane_admission_and_cancellation():
+    commands = FakeCommandController()
+    setup = SetupCoordinator(commands)
+    context = setup.open_context(CommandOrigin.PROBE_SETUP, "probe-ui")
+    operation = setup.prepare_command(
+        context,
+        SemanticCommand(command_id=CommandID.STAND_UP),
+    )
+    setup.submit(operation)
+
+    assert setup.cancel_operation(context, operation.request_id) == (
+        operation.request_id
+    )
+    assert not hasattr(setup, "command_controller")
+
+    commands.active = "busy"
+    with pytest.raises(RuntimeError, match="lane is busy"):
+        setup.require_command_lane_idle("The physical lane is busy")
+
+
 def test_refinement_freezes_attachment_until_explicit_end(tmp_path):
     probe, _ = coordinator(tmp_path)
     state = create_selected_routine(
@@ -813,6 +834,7 @@ def test_refinement_freezes_attachment_until_explicit_end(tmp_path):
 
     probe.end_refinement(state.context)
     assert attachment_controller.active_reservations == 0
+
 
 
 def test_closing_context_releases_refinement_attachment(tmp_path):

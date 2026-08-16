@@ -200,13 +200,10 @@ class ApplicationApiNode(Node):
         self.probe_setup_coordinator = ProbeSetupCoordinator(
             setup_coordinator=self.application_controller.setup_coordinator,
             reference_repository=reference_repository,
+            sensor_attachment_controller=(
+                self.sensor_attachment_controller
+            ),
             motion_state_source=self.probe_setup_motion_state,
-        )
-        self.probe_setup_coordinator.geometry_editor.set_sensor_attachment_controller(
-            self.sensor_attachment_controller
-        )
-        self.probe_setup_coordinator.refinement_controller.set_sensor_attachment_controller(
-            self.sensor_attachment_controller
         )
         self.application_controller.attach_probe_setup(
             self.probe_setup_coordinator

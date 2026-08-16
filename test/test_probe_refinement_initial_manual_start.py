@@ -44,13 +44,13 @@ def calculated_setup():
     return initialize_reference_probe_setup(target)
 
 
-class IdleCommandController:
-    active_request_id = ""
-    queued_request_ids = ()
-
-
 class SetupCoordinatorStub:
-    command_controller = IdleCommandController()
+    def require_command_lane_idle(
+        self,
+        detail,
+        queued_detail="",
+    ):
+        return None
 
 
 class ActiveAttachmentController:

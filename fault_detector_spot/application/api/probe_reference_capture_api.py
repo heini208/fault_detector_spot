@@ -159,9 +159,7 @@ class ProbeReferenceCaptureApi:
     ):
         if (
             context is not None
-            and self.probe_setup_coordinator.setup_coordinator.is_current(
-                context
-            )
+            and self.probe_setup_coordinator.is_current(context)
         ):
             snapshot = self.probe_setup_coordinator.snapshot(context)
             state = self.state_adapter.message(

@@ -125,13 +125,24 @@ class NavigationSetupCoordinator:
                 f"Unknown navigation context: {context_id}"
             ) from exception
 
+    def is_current(self, context: SetupContextSnapshot) -> bool:
+        """Return whether a navigation context snapshot is still current."""
+        return self.setup_coordinator.is_current(context)
+
+    def uses_setup_coordinator(self, coordinator: SetupCoordinator) -> bool:
+        """Return whether this facade uses the supplied shared coordinator."""
+        return self.setup_coordinator is coordinator
+
     def close_context(self, context: SetupContextSnapshot) -> None:
         """Close one navigation setup context."""
         self.setup_coordinator.require_current(context)
         request_ids = self._operations.request_ids_for(context)
         for request_id in request_ids:
             try:
-                self.setup_coordinator.command_controller.cancel(request_id)
+                self.setup_coordinator.cancel_operation(
+                    context,
+                    request_id,
+                )
             except LookupError:
                 pass
         try:
@@ -399,7 +410,10 @@ class NavigationSetupCoordinator:
             raise LookupError(
                 f"Unknown navigation setup request: {request_id}"
             )
-        return self.setup_coordinator.command_controller.cancel(normalized)
+        return self.setup_coordinator.cancel_operation(
+            context,
+            normalized,
+        )
 
     def remove_status_listener(self, listener) -> None:
         """Remove one navigation setup status listener."""

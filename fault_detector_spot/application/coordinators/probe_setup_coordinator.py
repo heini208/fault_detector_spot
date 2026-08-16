@@ -81,6 +81,7 @@ class ProbeSetupCoordinator:
         self,
         setup_coordinator: SetupCoordinator,
         reference_repository,
+        sensor_attachment_controller,
         geometry=None,
         motion_state_source=None,
         motion_command_factory=None,
@@ -95,6 +96,7 @@ class ProbeSetupCoordinator:
         self.geometry_editor = ProbeGeometryEditor(
             self.object_repository,
             geometry,
+            sensor_attachment_controller=sensor_attachment_controller,
         )
         self.motion_state_source = motion_state_source
         motion_command_factory = (
@@ -107,6 +109,7 @@ class ProbeSetupCoordinator:
             motion_state_source=motion_state_source,
             motion_command_factory=motion_command_factory,
             state_lock=self._lock,
+            sensor_attachment_controller=sensor_attachment_controller,
         )
         self.surface_controller = ProbeSurfaceVerificationController(
             self.refinement_controller,
@@ -168,7 +171,10 @@ class ProbeSetupCoordinator:
         )
         for request_id in request_ids:
             try:
-                self.setup_coordinator.command_controller.cancel(request_id)
+                self.setup_coordinator.cancel_operation(
+                    context,
+                    request_id,
+                )
             except LookupError:
                 pass
         self.refinement_controller.abort(draft)
@@ -472,6 +478,73 @@ class ProbeSetupCoordinator:
             draft = self._selected_draft(context)
             self.surface_controller.begin(draft, request_id)
             return self.snapshot(context)
+
+    def calculate_surface_orientation(
+        self,
+        context: SetupContextSnapshot,
+    ):
+        """Calculate live probe orientation through the public facade."""
+        with self._context_lock(context):
+            self.setup_coordinator.require_current(context)
+            draft = self._selected_draft(context)
+            self.refinement_controller.require_refinement(draft)
+            attachment = self.refinement_controller.motion_attachment()
+            if self.motion_state_source is None:
+                raise RuntimeError(
+                    "Probe setup motion state is unavailable"
+                )
+            definition = self.object_repository.load(
+                draft.selected_object_id
+            )
+            return self.motion_state_source.live_hand_surface_orientation(
+                definition.reference_tag.tag_id,
+                attachment.hand_to_probe().orientation,
+            )
+
+    def require_physical_lane_idle(
+        self,
+        detail: str,
+        queued_detail: str = "",
+    ) -> None:
+        """Expose physical command-lane admission without its controller."""
+        self.setup_coordinator.require_command_lane_idle(
+            detail,
+            queued_detail,
+        )
+
+    def require_current(
+        self,
+        context: SetupContextSnapshot,
+    ) -> SetupContextSnapshot:
+        """Require a current probe context through the public facade."""
+        return self.setup_coordinator.require_current(context)
+
+    def is_current(self, context: SetupContextSnapshot) -> bool:
+        """Return whether a probe context snapshot is still current."""
+        return self.setup_coordinator.is_current(context)
+
+    def uses_setup_coordinator(self, coordinator: SetupCoordinator) -> bool:
+        """Return whether this facade uses the supplied shared coordinator."""
+        return self.setup_coordinator is coordinator
+
+    def evaluate_surface_estimate(
+        self,
+        context: SetupContextSnapshot,
+        request_id: str,
+        estimated_distance_m: float,
+        achieved_pose,
+    ):
+        """Evaluate one kinematic estimate through the public facade."""
+        with self._context_lock(context):
+            self.setup_coordinator.require_current(context)
+            draft = self._selected_draft(context)
+            decision = self.surface_controller.evaluate_estimated_distance(
+                draft,
+                request_id,
+                estimated_distance_m,
+                achieved_pose,
+            )
+            return decision, self.snapshot(context)
 
     def evaluate_surface_verification(
         self,

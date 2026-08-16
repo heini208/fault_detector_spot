@@ -68,12 +68,6 @@ class ProbeRefinementController:
         self._operations = SetupOperationRegistry()
         self._attachment_reservations = {}
 
-    def set_sensor_attachment_controller(self, controller) -> None:
-        """Install the authoritative physical sensor attachment source."""
-        if controller is None:
-            raise ValueError("Sensor attachment controller is required")
-        self.sensor_attachment_controller = controller
-
     def begin(self, draft) -> None:
         self.require_physical_lane_idle()
         if draft.geometry is None or draft.setup is None:
@@ -278,8 +272,9 @@ class ProbeRefinementController:
             raise LookupError(
                 f"Unknown probe setup motion: {request_id}"
             )
-        return self.setup_coordinator.command_controller.cancel(
-            normalized
+        return self.setup_coordinator.cancel_operation(
+            context,
+            normalized,
         )
 
     def tracked_status(self, status):
@@ -384,11 +379,9 @@ class ProbeRefinementController:
             reservation.release()
 
     def require_physical_lane_idle(self) -> None:
-        controller = self.setup_coordinator.command_controller
-        if controller.active_request_id or controller.queued_request_ids:
-            raise RuntimeError(
-                "Robot command lane must be idle for probe refinement"
-            )
+        self.setup_coordinator.require_command_lane_idle(
+            "Robot command lane must be idle for probe refinement"
+        )
 
     @staticmethod
     def require_refinement(draft):

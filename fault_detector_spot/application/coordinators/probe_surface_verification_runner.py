@@ -374,18 +374,12 @@ class ProbeSurfaceVerificationRunner:
         estimated_distance_m,
         achieved_pose,
     ):
-        with self.coordinator._context_lock(context):
-            self.coordinator.setup_coordinator.require_current(context)
-            draft = self.coordinator._selected_draft(context)
-            decision = (
-                self.coordinator.surface_controller.evaluate_estimated_distance(
-                    draft,
-                    request_id,
-                    estimated_distance_m,
-                    achieved_pose,
-                )
-            )
-            return decision, self.coordinator.snapshot(context)
+        return self.coordinator.evaluate_surface_estimate(
+            context,
+            request_id,
+            estimated_distance_m,
+            achieved_pose,
+        )
 
     def _validate_progress(
         self,

@@ -34,12 +34,6 @@ class ProbeGeometryEditor:
         self.geometry = geometry
         self.sensor_attachment_controller = sensor_attachment_controller
 
-    def set_sensor_attachment_controller(self, controller) -> None:
-        """Install the authoritative physical sensor attachment source."""
-        if controller is None:
-            raise ValueError("Sensor attachment controller is required")
-        self.sensor_attachment_controller = controller
-
     def select_reference_pixel(
         self,
         draft,
