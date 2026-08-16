@@ -25,9 +25,10 @@ class _AttachmentController:
     def __init__(self, hand_to_probe):
         self.hand_to_probe = hand_to_probe
 
-    def require_confirmed_sensor(self):
+    def require_motion_attachment(self):
         return SimpleNamespace(
             sensor_id="active_sensor",
+            motion_sensor_id="active_sensor",
             hand_to_probe=lambda: self.hand_to_probe,
         )
 

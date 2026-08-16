@@ -71,6 +71,33 @@ def test_surface_samples_ignore_pre_settle_receipts(monkeypatch):
     assert all(frame == "hand_depth" for _, frame, _ in lookups)
 
 
+def test_surface_samples_use_real_hand_frame_without_sensor(monkeypatch):
+    source = _source((
+        (9.8, _image(9.8)),
+        (9.9, _image(9.9)),
+        (10.0, _image(10.0)),
+    ))
+    lookups = []
+    source._lookup_pose = lambda target, frame, lookup_time=None: (
+        lookups.append((target, frame)) or object()
+    )
+    monkeypatch.setattr(source_module.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(
+        source_module,
+        "measure_probe_surface_distance",
+        lambda image, info, pose: 0.05,
+    )
+
+    samples = source.surface_distance_samples("hand")
+
+    assert samples == (0.05, 0.05, 0.05)
+    assert lookups == [
+        ("hand", "hand_depth"),
+        ("hand", "hand_depth"),
+        ("hand", "hand_depth"),
+    ]
+
+
 def test_surface_samples_keep_three_as_default_requirement(monkeypatch):
     source = _source((
         (1.8, _image(9.8)),

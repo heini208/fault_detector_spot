@@ -13,8 +13,11 @@ from fault_detector_spot.inspection.setup.reference_probe_setup import (
     probe_pose_to_hand_pose,
     rotate_vector,
 )
-from fault_detector_spot.inspection.model.sensor_models import SensorDefinition
-from fault_detector_spot.inspection.model.sensor_models import sensor_probe_frame
+from fault_detector_spot.inspection.model.sensor_models import (
+    BARE_HAND_MOTION_ID,
+    SensorDefinition,
+    sensor_probe_frame,
+)
 from fault_detector_spot.inspection.sensing.surface_distance_validation import (
     require_positive_finite_distance,
     validate_surface_distance_pair,
@@ -50,13 +53,14 @@ def resolve_probe_execution_target(
     inspection_object: InspectionObject,
     routine_id: str,
     probe_point_id: str,
-    sensor_definition: SensorDefinition,
+    sensor_definition: SensorDefinition | None,
     object_pose_execution: PoseData,
     execution_frame: str = "odom",
 ) -> ProbeExecutionTarget:
-    """Compose one saved probe point with the active sensor calibration."""
+    """Compose one saved probe point with active sensor or bare-hand geometry."""
     inspection_object.validate()
-    sensor_definition.validate()
+    if sensor_definition is not None:
+        sensor_definition.validate()
     object_pose_execution.validate()
 
     if not execution_frame or execution_frame != execution_frame.strip():
@@ -76,14 +80,25 @@ def resolve_probe_execution_target(
             f"{routine_id}"
         )
 
+    sensor_id = (
+        sensor_definition.sensor_id
+        if sensor_definition is not None
+        else ""
+    )
+    hand_to_probe = (
+        sensor_definition.hand_to_probe
+        if sensor_definition is not None
+        else PoseData.identity()
+    )
+
     return resolve_probe_execution_geometry(
         object_id=inspection_object.object_id,
         routine_id=routine.routine_id,
         probe_point_id=probe_point.probe_point_id,
-        sensor_id=sensor_definition.sensor_id,
+        sensor_id=sensor_id,
         safe_approach_pose_object=probe_point.safe_approach_pose_object,
         probe_pose_object=probe_point.probe_pose_object,
-        hand_to_probe=sensor_definition.hand_to_probe,
+        hand_to_probe=hand_to_probe,
         target_surface_distance_m=probe_point.target_surface_distance_m,
         position_tolerance_m=probe_point.position_tolerance_m,
         orientation_tolerance_rad=probe_point.orientation_tolerance_rad,
@@ -119,11 +134,12 @@ def resolve_probe_execution_geometry(
         (object_id, "Object ID"),
         (routine_id, "Routine ID"),
         (probe_point_id, "Probe point ID"),
-        (sensor_id, "Sensor ID"),
         (execution_frame, "Execution frame"),
     ):
         if not value or value != value.strip():
             raise ValueError(f"{label} must not be empty or padded")
+    if sensor_id != sensor_id.strip():
+        raise ValueError("Sensor ID must not be padded")
     safe_approach_pose_object.validate()
     probe_pose_object.validate()
     hand_to_probe.validate()
@@ -172,13 +188,14 @@ def resolve_probe_execution_geometry(
         nominal_probe_pose.orientation,
         Vector3Data(x=1.0, y=0.0, z=0.0),
     )
+    motion_sensor_id = sensor_id or BARE_HAND_MOTION_ID
 
     return ProbeExecutionTarget(
         object_id=object_id,
         routine_id=routine_id,
         probe_point_id=probe_point_id,
         sensor_id=sensor_id,
-        probe_frame=sensor_probe_frame(sensor_id),
+        probe_frame=sensor_probe_frame(motion_sensor_id),
         execution_frame=execution_frame,
         safe_approach_probe_pose_execution=safe_probe_pose,
         safe_approach_hand_pose_execution=safe_hand_pose,

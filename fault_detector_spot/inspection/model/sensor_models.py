@@ -12,14 +12,15 @@ from fault_detector_spot.shared.persistence.file_storage import (
 
 
 SENSOR_PARENT_FRAME = "hand"
-NO_SENSOR_MOUNT_ID = "hand"
-NO_SENSOR_MOUNT_DISPLAY_NAME = "No Sensor Mount"
+BARE_HAND_MOTION_ID = SENSOR_PARENT_FRAME
 _SENSOR_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def sensor_probe_frame(sensor_id: str) -> str:
-    """Derive the immutable TF child frame for a sensor mounting."""
+    """Resolve the probe frame for a sensor or the bare hand."""
     validate_storage_name(sensor_id, "sensor ID")
+    if sensor_id == BARE_HAND_MOTION_ID:
+        return SENSOR_PARENT_FRAME
     if _SENSOR_ID_PATTERN.fullmatch(sensor_id) is None:
         raise ValueError(
             "Sensor ID must start with a lowercase letter and contain "
@@ -83,6 +84,10 @@ class SensorDefinition:
 
     def validate(self) -> None:
         """Validate sensor identity and calibrated pose."""
+        if self.sensor_id == BARE_HAND_MOTION_ID:
+            raise ValueError(
+                "Sensor ID 'hand' is reserved for the robot hand frame"
+            )
         sensor_probe_frame(self.sensor_id)
         if not self.display_name.strip():
             raise ValueError("Sensor display name must not be empty")
@@ -99,17 +104,6 @@ class SensorDefinition:
             "display_name": self.display_name,
             "hand_to_probe": self.hand_to_probe.to_dict(),
         }
-
-
-def no_sensor_mount_definition() -> SensorDefinition:
-    """Return the immutable built-in no-sensor hand mounting."""
-    definition = SensorDefinition(
-        sensor_id=NO_SENSOR_MOUNT_ID,
-        display_name=NO_SENSOR_MOUNT_DISPLAY_NAME,
-        hand_to_probe=PoseData.identity(),
-    )
-    definition.validate()
-    return definition
 
 
 def sensor_definition_from_values(

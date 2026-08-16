@@ -54,9 +54,10 @@ class SetupCoordinatorStub:
 
 
 class ActiveAttachmentController:
-    def require_confirmed_sensor(self):
+    def require_motion_attachment(self):
         return SimpleNamespace(
             sensor_id="active_probe",
+            motion_sensor_id="active_probe",
             hand_to_probe=lambda: PoseData.identity(),
         )
 

@@ -91,6 +91,13 @@ class SensorAttachmentStateStore:
             ) from exception
         return PersistedSensorAttachmentSelection.from_dict(data)
 
+    def clear(self) -> None:
+        """Remove persisted selection so bare hand remains the default."""
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
+
     def save(
         self,
         selection: PersistedSensorAttachmentSelection,

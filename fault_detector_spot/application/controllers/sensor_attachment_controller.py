@@ -19,7 +19,8 @@ from fault_detector_spot.inspection.model.models import (
     Vector3Data,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
-    NO_SENSOR_MOUNT_ID,
+    BARE_HAND_MOTION_ID,
+    SENSOR_PARENT_FRAME,
     SensorDefinition,
 )
 from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (
@@ -36,7 +37,7 @@ _AUTOMATIC_SENSOR_COMMANDS = frozenset({
 
 
 class SensorAttachmentStatus(str, Enum):
-    """Describe whether a physical sensor attachment is trusted."""
+    """Describe authoritative physical sensor attachment state."""
 
     NO_SENSOR = "no_sensor"
     CONFIRMATION_PENDING = "confirmation_pending"
@@ -59,17 +60,20 @@ class SensorAttachmentState:
 
     @property
     def sensor_dependent_motion_allowed(self) -> bool:
-        """Return whether calibrated sensor motion may be admitted."""
+        """Return whether effective hand/probe geometry is trustworthy."""
         return (
-            self.status is SensorAttachmentStatus.ACTIVE
-            and bool(self.active_sensor_id)
+            self.status
+            in {
+                SensorAttachmentStatus.NO_SENSOR,
+                SensorAttachmentStatus.ACTIVE,
+            }
             and not self.pending_sensor_id
         )
 
 
 @dataclass(frozen=True)
-class ConfirmedSensorAttachment:
-    """Freeze calibrated geometry for one confirmed attachment."""
+class MotionAttachmentSnapshot:
+    """Freeze effective hand-to-probe geometry for one motion workflow."""
 
     sensor_id: str
     display_name: str
@@ -78,13 +82,23 @@ class ConfirmedSensorAttachment:
     hand_to_probe_position: Tuple[float, float, float]
     hand_to_probe_orientation: Tuple[float, float, float, float]
 
+    @property
+    def has_sensor(self) -> bool:
+        """Return whether a physical registered sensor is attached."""
+        return bool(self.sensor_id)
+
+    @property
+    def motion_sensor_id(self) -> str:
+        """Return the transient command identity for effective probe motion."""
+        return self.sensor_id or BARE_HAND_MOTION_ID
+
     @classmethod
     def from_definition(
         cls,
         definition: SensorDefinition,
         attachment_revision: int,
-    ) -> "ConfirmedSensorAttachment":
-        """Freeze one validated sensor definition."""
+    ) -> "MotionAttachmentSnapshot":
+        """Freeze one validated physical sensor definition."""
         definition.validate()
         position = definition.hand_to_probe.position
         orientation = definition.hand_to_probe.orientation
@@ -106,6 +120,21 @@ class ConfirmedSensorAttachment:
             ),
         )
 
+    @classmethod
+    def bare_hand(
+        cls,
+        attachment_revision: int,
+    ) -> "MotionAttachmentSnapshot":
+        """Return identity geometry for Spot's bare hand frame."""
+        return cls(
+            sensor_id="",
+            display_name="No sensor",
+            probe_frame=SENSOR_PARENT_FRAME,
+            attachment_revision=attachment_revision,
+            hand_to_probe_position=(0.0, 0.0, 0.0),
+            hand_to_probe_orientation=(0.0, 0.0, 0.0, 1.0),
+        )
+
     def hand_to_probe(self) -> PoseData:
         """Return an independent pose for motion calculations."""
         return PoseData(
@@ -123,7 +152,7 @@ class SensorAttachmentController:
         state_store: SensorAttachmentStateStore,
         command_controller,
     ):
-        """Restore selection while invalidating prior confirmation."""
+        """Restore selection while invalidating prior sensor confirmation."""
         self.sensor_repository = sensor_repository
         self.state_store = state_store
         self.command_controller = command_controller
@@ -137,7 +166,7 @@ class SensorAttachmentController:
             return self._state
 
     def select_sensor(self, sensor_id: str) -> SensorAttachmentState:
-        """Select one registered sensor and require confirmation."""
+        """Select one registered physical sensor and require confirmation."""
         def select():
             with self._lock:
                 self._require_no_reservation_locked()
@@ -161,8 +190,21 @@ class SensorAttachmentController:
         return self._change_while_idle(select)
 
     def clear_sensor(self) -> SensorAttachmentState:
-        """Select the built-in no-sensor mount for confirmation."""
-        return self.select_sensor(NO_SENSOR_MOUNT_ID)
+        """Remove sensor selection and use the bare hand immediately."""
+        def clear():
+            with self._lock:
+                self._require_no_reservation_locked()
+                revision = self._state.attachment_revision + 1
+                self.state_store.clear()
+                self._state = SensorAttachmentState(
+                    active_sensor_id="",
+                    pending_sensor_id="",
+                    status=SensorAttachmentStatus.NO_SENSOR,
+                    attachment_revision=revision,
+                )
+                return self._state
+
+        return self._change_while_idle(clear)
 
     def confirm_sensor(
         self,
@@ -202,13 +244,22 @@ class SensorAttachmentController:
 
         return self._change_while_idle(confirm)
 
+    def require_motion_attachment(self) -> MotionAttachmentSnapshot:
+        """Return effective geometry for the active sensor or bare hand."""
+        with self._lock:
+            return self._motion_attachment_locked()
+
     def require_confirmed_sensor(
         self,
         expected_sensor_id: str = "",
-    ) -> ConfirmedSensorAttachment:
-        """Return frozen geometry for the current confirmed sensor."""
+    ) -> MotionAttachmentSnapshot:
+        """Return one confirmed physical sensor attachment."""
         with self._lock:
-            attachment = self._confirmed_attachment_locked()
+            attachment = self._motion_attachment_locked()
+            if not attachment.has_sensor:
+                raise RuntimeError(
+                    "A confirmed physical sensor attachment is required"
+                )
             expected = expected_sensor_id.strip()
             if expected and expected != attachment.sensor_id:
                 raise RuntimeError(
@@ -219,11 +270,11 @@ class SensorAttachmentController:
             return attachment
 
     @contextmanager
-    def reserve_confirmed_attachment(self):
-        """Freeze one confirmed attachment across a multi-step workflow."""
+    def reserve_motion_attachment(self):
+        """Freeze effective geometry across a multi-step motion workflow."""
         def acquire():
             with self._lock:
-                attachment = self._confirmed_attachment_locked()
+                attachment = self._motion_attachment_locked()
                 self._reservation_count += 1
                 return attachment
 
@@ -242,7 +293,7 @@ class SensorAttachmentController:
         self,
         request: CommandRequest[SemanticCommand],
     ) -> CommandRequest[SemanticCommand]:
-        """Bind or validate active sensor geometry at command admission."""
+        """Bind or validate effective probe geometry at command admission."""
         command = request.command
         requires_automatic_binding = (
             command.command_id in _AUTOMATIC_SENSOR_COMMANDS
@@ -251,15 +302,16 @@ class SensorAttachmentController:
             return request
 
         with self._lock:
-            attachment = self._confirmed_attachment_locked()
+            attachment = self._motion_attachment_locked()
+            motion_sensor_id = attachment.motion_sensor_id
             if (
                 command.motion_sensor_id
-                and command.motion_sensor_id != attachment.sensor_id
+                and command.motion_sensor_id != motion_sensor_id
             ):
                 raise RuntimeError(
-                    "Motion was prepared for sensor "
-                    f"'{command.motion_sensor_id}' but the confirmed "
-                    f"attachment is '{attachment.sensor_id}'"
+                    "Motion was prepared for attachment "
+                    f"'{command.motion_sensor_id}' but the current "
+                    f"attachment is '{motion_sensor_id}'"
                 )
             if command.motion_sensor_id:
                 return request
@@ -267,20 +319,24 @@ class SensorAttachmentController:
                 request,
                 command=replace(
                     command,
-                    motion_sensor_id=attachment.sensor_id,
+                    motion_sensor_id=motion_sensor_id,
                 ),
             )
 
-    def _confirmed_attachment_locked(self) -> ConfirmedSensorAttachment:
+    def _motion_attachment_locked(self) -> MotionAttachmentSnapshot:
         if not self._state.sensor_dependent_motion_allowed:
             raise RuntimeError(
-                "A confirmed physical sensor attachment is required"
+                "Sensor attachment confirmation is pending"
+            )
+        if self._state.status is SensorAttachmentStatus.NO_SENSOR:
+            return MotionAttachmentSnapshot.bare_hand(
+                self._state.attachment_revision
             )
         definition = self.sensor_repository.load(
             self._state.active_sensor_id
         )
         definition.validate()
-        return ConfirmedSensorAttachment.from_definition(
+        return MotionAttachmentSnapshot.from_definition(
             definition,
             self._state.attachment_revision,
         )
@@ -302,24 +358,46 @@ class SensorAttachmentController:
     def _restore_state(self) -> SensorAttachmentState:
         persisted = self.state_store.load()
         if persisted is None:
-            sensor_id = NO_SENSOR_MOUNT_ID
-            revision = 1
-        elif not persisted.sensor_id:
-            sensor_id = NO_SENSOR_MOUNT_ID
-            revision = persisted.attachment_revision + 1
-        else:
-            sensor_id = persisted.sensor_id
-            revision = persisted.attachment_revision + 1
+            return SensorAttachmentState(
+                active_sensor_id="",
+                pending_sensor_id="",
+                status=SensorAttachmentStatus.NO_SENSOR,
+                attachment_revision=0,
+            )
+        if (
+            not persisted.sensor_id
+            or persisted.sensor_id == BARE_HAND_MOTION_ID
+        ):
+            self.state_store.clear()
+            return SensorAttachmentState(
+                active_sensor_id="",
+                pending_sensor_id="",
+                status=SensorAttachmentStatus.NO_SENSOR,
+                attachment_revision=persisted.attachment_revision,
+            )
 
+        try:
+            definition = self.sensor_repository.load(persisted.sensor_id)
+            definition.validate()
+        except FileNotFoundError:
+            self.state_store.clear()
+            return SensorAttachmentState(
+                active_sensor_id="",
+                pending_sensor_id="",
+                status=SensorAttachmentStatus.NO_SENSOR,
+                attachment_revision=persisted.attachment_revision,
+            )
+
+        revision = persisted.attachment_revision + 1
         self.state_store.save(
             PersistedSensorAttachmentSelection(
-                sensor_id=sensor_id,
+                sensor_id=definition.sensor_id,
                 attachment_revision=revision,
             )
         )
         return SensorAttachmentState(
             active_sensor_id="",
-            pending_sensor_id=sensor_id,
+            pending_sensor_id=definition.sensor_id,
             status=SensorAttachmentStatus.CONFIRMATION_PENDING,
             attachment_revision=revision,
         )

@@ -14,7 +14,6 @@ from fault_detector_msgs.srv import (
 )
 
 from fault_detector_spot.inspection.model.sensor_models import (
-    NO_SENSOR_MOUNT_ID,
     sensor_probe_frame,
 )
 from fault_detector_spot.shared.ros.qos_profiles import (
@@ -33,14 +32,13 @@ class SensorAttachmentViewStatus(str, Enum):
 
 @dataclass(frozen=True)
 class SensorDefinitionView:
-    """Presentation data for one registered sensor mount."""
+    """Presentation data for one registered physical sensor."""
 
     sensor_id: str
     display_name: str
     probe_frame: str
     position: tuple
     orientation: tuple
-    built_in: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,16 +52,8 @@ class SensorAttachmentView:
 
     @property
     def selected_sensor_id(self) -> str:
-        """Return the pending or active sensor ID."""
+        """Return the pending or active physical sensor ID."""
         return self.pending_sensor_id or self.active_sensor_id
-
-    @property
-    def active_is_no_sensor(self) -> bool:
-        """Return whether confirmed state represents the bare hand."""
-        return (
-            self.status is SensorAttachmentViewStatus.ACTIVE
-            and self.active_sensor_id == NO_SENSOR_MOUNT_ID
-        )
 
 
 class SensorAttachmentClient(QObject):
@@ -103,7 +93,7 @@ class SensorAttachmentClient(QObject):
         )
 
     def select(self, sensor_id: str):
-        """Request one registered sensor as the physical selection."""
+        """Select a physical sensor or clear selection with an empty ID."""
         if not self._select_client.service_is_ready():
             self.request_rejected.emit(
                 "Sensor attachment service is unavailable"
@@ -146,7 +136,6 @@ class SensorAttachmentClient(QObject):
                     float(sensor.hand_to_probe.orientation.z),
                     float(sensor.hand_to_probe.orientation.w),
                 ),
-                built_in=(sensor.sensor_id == NO_SENSOR_MOUNT_ID),
             )
             for sensor in message.sensors
         )

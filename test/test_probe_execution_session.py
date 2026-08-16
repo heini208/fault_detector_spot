@@ -133,6 +133,33 @@ def test_loaded_configuration_freezes_active_sensor_not_routine_sensor(
     )
 
 
+
+def test_loaded_configuration_can_freeze_bare_hand_identity_geometry(tmp_path):
+    objects, _ = repository_and_sensor(tmp_path)
+
+    session = ProbeExecutionSession.load(
+        "motor_a",
+        "scan",
+        "point_1",
+        objects,
+        None,
+    )
+    target = session.configuration.resolve_target(PoseData.identity())
+
+    assert session.configuration.sensor_id == ""
+    assert session.configuration.hand_to_probe.position == (0.0, 0.0, 0.0)
+    assert session.configuration.hand_to_probe.orientation == (
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    )
+    assert target.probe_frame == "hand"
+    assert target.nominal_probe_pose_execution == (
+        target.nominal_hand_pose_execution
+    )
+
+
 def test_loaded_configuration_has_no_mutable_definition_graph(tmp_path):
     session, _ = load_session(tmp_path)
     configuration = session.configuration

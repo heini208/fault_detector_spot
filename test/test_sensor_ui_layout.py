@@ -17,16 +17,11 @@ def application():
     return QApplication.instance() or QApplication([])
 
 
-def definition(
-    sensor_id,
-    display_name,
-    built_in=False,
-):
+def definition(sensor_id, display_name):
     return SimpleNamespace(
         sensor_id=sensor_id,
         display_name=display_name,
         probe_frame=f"{sensor_id}_probe",
-        built_in=built_in,
     )
 
 
@@ -60,29 +55,43 @@ def test_sensor_workspace_waits_for_authoritative_registry(application):
     assert controls.mount_table.rowCount() == 0
 
 
-def test_builtin_no_sensor_mount_is_rendered_from_registry(application):
+def test_registry_contains_only_real_physical_sensors(application):
     controls = SensorControls()
 
     controls.apply_definitions((
-        definition("hand", "No Sensor Mount", built_in=True),
+        definition("hall_probe", "Hall probe"),
     ))
 
     assert controls.mount_table.rowCount() == 1
-    assert controls.mount_table.item(0, 0).text() == "No Sensor Mount"
-    assert controls.mount_table.item(0, 1).text() == "hand"
-    assert controls.mount_table.item(0, 2).text() == "hand_probe"
+    assert controls.mount_table.item(0, 0).text() == "Hall probe"
+    assert controls.mount_table.item(0, 1).text() == "hall_probe"
+    assert controls.mount_table.item(0, 2).text() == "hall_probe_probe"
     assert controls.mount_table.item(0, 3).text() == "Calibrated"
-    assert controls.active_mount_dropdown.isEnabled() is True
-    assert controls.select_mount_button.isEnabled() is True
-    assert controls.clear_attachment_button.isEnabled() is True
+    assert controls.active_mount_dropdown.count() == 1
+    assert controls.active_mount_dropdown.itemData(0) == "hall_probe"
     assert controls.clear_attachment_button.text() == "Remove Sensor"
-    assert controls.active_mount_dropdown.currentData() == "hand"
+
+
+def test_no_sensor_state_uses_hand_without_registry_entry(application):
+    controls = SensorControls()
+    controls.apply_definitions(())
+    controls.apply_attachment_state(
+        attachment("none", attachment_revision=4)
+    )
+
+    assert controls.mount_table.rowCount() == 0
+    assert controls.active_mount_dropdown.isEnabled() is False
+    assert controls.attachment_name_value.text() == "No sensor"
+    assert controls.attachment_status_value.text() == "No sensor attached"
+    assert controls.attachment_probe_frame_value.text() == "hand"
+    assert controls.attachment_revision_value.text() == "4"
+    assert controls.confirm_attachment_button.isEnabled() is False
+    assert controls.clear_attachment_button.isEnabled() is False
 
 
 def test_pending_attachment_enables_exact_confirmation(application):
     controls = SensorControls()
     controls.apply_definitions((
-        definition("hand", "No Sensor Mount", built_in=True),
         definition("hall_probe", "Hall probe"),
     ))
     confirmations = []
@@ -107,22 +116,24 @@ def test_pending_attachment_enables_exact_confirmation(application):
     assert confirmations == [("hall_probe", 7)]
 
 
-def test_remove_sensor_selects_builtin_mount_and_emits_selection(application):
+def test_remove_sensor_emits_empty_selection(application):
     controls = SensorControls()
     controls.apply_definitions((
-        definition("hand", "No Sensor Mount", built_in=True),
         definition("hall_probe", "Hall probe"),
     ))
-    controls.active_mount_dropdown.setCurrentIndex(
-        controls.active_mount_dropdown.findData("hall_probe")
+    controls.apply_attachment_state(
+        attachment(
+            "active",
+            active_sensor_id="hall_probe",
+            attachment_revision=8,
+        )
     )
     selections = []
     controls.select_requested.connect(selections.append)
 
     controls.clear_attachment_button.click()
 
-    assert controls.active_mount_dropdown.currentData() == "hand"
-    assert selections == ["hand"]
+    assert selections == [""]
 
 
 def test_sensor_workspace_has_no_sensing_elements_placeholder(application):

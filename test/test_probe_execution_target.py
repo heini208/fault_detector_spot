@@ -196,6 +196,26 @@ def test_active_sensor_calibration_may_differ_from_saved_routine_sensor():
     assert target.probe_frame == "active_sensor_probe"
 
 
+
+def test_no_sensor_uses_identity_hand_geometry_without_fake_probe_frame():
+    target = resolve_probe_execution_target(
+        inspection_object(sensor_id="saved_sensor"),
+        routine_id="scan",
+        probe_point_id="point_1",
+        sensor_definition=None,
+        object_pose_execution=PoseData.identity(),
+    )
+
+    assert target.sensor_id == ""
+    assert target.probe_frame == "hand"
+    assert target.nominal_probe_pose_execution == (
+        target.nominal_hand_pose_execution
+    )
+    assert target.safe_approach_probe_pose_execution == (
+        target.safe_approach_hand_pose_execution
+    )
+
+
 @pytest.mark.parametrize(
     "routine_id,probe_point_id,message",
     [

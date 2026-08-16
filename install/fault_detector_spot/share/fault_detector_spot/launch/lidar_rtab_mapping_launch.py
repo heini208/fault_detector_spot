@@ -1,0 +1,1 @@
+/home/marcel/spot_ws/src/fault_detector_spot/build/fault_detector_spot/launch/lidar_rtab_mapping_launch.py

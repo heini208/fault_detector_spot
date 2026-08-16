@@ -141,7 +141,7 @@ class Fault_Detector_UI(QWidget):
         states = {
             "confirmed": ("#2E7D32", "Confirmed"),
             "pending": ("#EF6C00", "Confirmation pending"),
-            "none": ("#757575", "No Sensor Mount"),
+            "none": ("#757575", "No sensor"),
         }
         color, label = states.get(status, states["none"])
         name = sensor_name.strip()

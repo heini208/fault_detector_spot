@@ -50,18 +50,24 @@ class SensorAttachmentApi:
         return message
 
     def _select(self, request, response):
+        sensor_id = request.sensor_id.strip()
         try:
-            state = self.controller.select_sensor(request.sensor_id)
+            if sensor_id:
+                state = self.controller.select_sensor(sensor_id)
+                detail = (
+                    f"Selected sensor '{state.pending_sensor_id}'; "
+                    "physical confirmation is required"
+                )
+            else:
+                state = self.controller.clear_sensor()
+                detail = "Removed sensor selection; bare hand is active"
         except Exception as exception:
             response.success = False
             response.detail = str(exception)
             response.state = self._message(self.controller.snapshot())
             return response
         response.success = True
-        response.detail = (
-            f"Selected sensor '{state.pending_sensor_id}'; "
-            "physical confirmation is required"
-        )
+        response.detail = detail
         response.state = self.publish_state(state)
         return response
 

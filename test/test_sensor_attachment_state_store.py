@@ -38,6 +38,20 @@ def test_no_sensor_selection_round_trip(tmp_path):
     assert store.load() == selection
 
 
+def test_clear_removes_persisted_selection(tmp_path):
+    store = SensorAttachmentStateStore(tmp_path / "attachment.yaml")
+    store.save(
+        PersistedSensorAttachmentSelection(
+            sensor_id="bmm150_01",
+            attachment_revision=4,
+        )
+    )
+
+    store.clear()
+
+    assert store.load() is None
+
+
 def test_invalid_attachment_revision_is_rejected(tmp_path):
     store = SensorAttachmentStateStore(tmp_path / "attachment.yaml")
 

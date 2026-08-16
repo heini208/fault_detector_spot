@@ -96,7 +96,7 @@ class ProbeSurfaceVerificationRunner:
                 "Active sensor attachment state is unavailable"
             )
         with (
-            self.sensor_attachment_controller.reserve_confirmed_attachment()
+            self.sensor_attachment_controller.reserve_motion_attachment()
             as attachment
         ):
             return self._run_reserved(
@@ -104,7 +104,7 @@ class ProbeSurfaceVerificationRunner:
                 request_id,
                 cancel_requested,
                 state_changed,
-                attachment.sensor_id,
+                attachment.motion_sensor_id,
             )
 
     def _run_reserved(

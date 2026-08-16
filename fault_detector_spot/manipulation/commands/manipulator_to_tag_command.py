@@ -10,6 +10,7 @@ from fault_detector_spot.application.behaviour_tree.commands.move_to_tag_command
     MoveToTagCommand,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
+    BARE_HAND_MOTION_ID,
     sensor_probe_frame,
 )
 from geometry_msgs.msg import PoseStamped, Quaternion
@@ -61,9 +62,11 @@ class ManipulatorToTagCommand(MoveToTagCommand):
         probe_target: PoseStamped,
         transformer: TFListenerWrapper,
     ) -> PoseStamped:
+        if self.motion_sensor_id == BARE_HAND_MOTION_ID:
+            return probe_target
         if not self.motion_sensor_id:
             raise ValueError(
-                "Manipulator tag motion requires an active sensor mount"
+                "Manipulator tag motion requires attachment geometry"
             )
         if transformer is None:
             raise RuntimeError(

@@ -165,7 +165,7 @@ class ProbeGeometryEditor:
             raise RuntimeError(
                 "Active sensor attachment state is unavailable"
             )
-        return controller.require_confirmed_sensor()
+        return controller.require_motion_attachment()
 
     @classmethod
     def _retained_distance_approvals(cls, setup, previous):

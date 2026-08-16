@@ -641,7 +641,7 @@ class ProbeRefinementController:
         return self.motion_command_factory.absolute(
             target,
             tag,
-            attachment.sensor_id,
+            attachment.motion_sensor_id,
         )
 
     def _relative_motion_command(
@@ -655,7 +655,7 @@ class ProbeRefinementController:
         )
         frame_id = self.motion_command_factory.frame_id(
             motion.frame,
-            attachment.sensor_id,
+            attachment.motion_sensor_id,
             definition.reference_tag.tag_id,
         )
         return self.motion_command_factory.relative(
@@ -663,11 +663,11 @@ class ProbeRefinementController:
             motion.translation,
             motion.pitch_rad,
             motion.yaw_rad,
-            attachment.sensor_id,
+            attachment.motion_sensor_id,
         )
 
-    def confirmed_attachment(self):
-        """Return the current confirmed physical attachment snapshot."""
+    def motion_attachment(self):
+        """Return current effective sensor or bare-hand geometry."""
         return self._active_attachment()
 
     def _active_attachment(self):
@@ -676,7 +676,7 @@ class ProbeRefinementController:
             raise RuntimeError(
                 "Active sensor attachment state is unavailable"
             )
-        return controller.require_confirmed_sensor()
+        return controller.require_motion_attachment()
 
     def _motion_state_source(self):
         if self.motion_state_source is None:

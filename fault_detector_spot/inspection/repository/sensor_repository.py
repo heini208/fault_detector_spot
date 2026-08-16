@@ -7,9 +7,7 @@ from typing import List, Optional, Union
 import yaml
 
 from fault_detector_spot.inspection.model.sensor_models import (
-    NO_SENSOR_MOUNT_ID,
     SensorDefinition,
-    no_sensor_mount_definition,
 )
 from fault_detector_spot.shared.persistence.file_storage import (
     atomic_write_text,
@@ -18,7 +16,7 @@ from fault_detector_spot.shared.persistence.file_storage import (
 
 
 class SensorRepository:
-    """Store active and permanently retired sensor mount definitions."""
+    """Store active and permanently retired physical sensor definitions."""
 
     FILE_SUFFIX = ".yaml"
 
@@ -50,9 +48,7 @@ class SensorRepository:
         return self.root_dir / f"{sensor_id}{self.FILE_SUFFIX}"
 
     def exists(self, sensor_id: str) -> bool:
-        """Return whether a definition exists."""
-        if sensor_id == NO_SENSOR_MOUNT_ID:
-            return True
+        """Return whether a physical sensor definition exists."""
         return self.get_sensor_path(sensor_id).is_file()
 
     def get_retired_sensor_path(self, sensor_id: str) -> Path:
@@ -62,15 +58,10 @@ class SensorRepository:
 
     def is_retired(self, sensor_id: str) -> bool:
         """Return whether a sensor ID has been permanently retired."""
-        if sensor_id == NO_SENSOR_MOUNT_ID:
-            return False
         return self.get_retired_sensor_path(sensor_id).is_file()
 
     def load(self, sensor_id: str) -> SensorDefinition:
-        """Load and validate one sensor definition."""
-        if sensor_id == NO_SENSOR_MOUNT_ID:
-            return no_sensor_mount_definition()
-
+        """Load and validate one physical sensor definition."""
         path = self.get_sensor_path(sensor_id)
         if not path.is_file():
             raise FileNotFoundError(
@@ -92,12 +83,8 @@ class SensorRepository:
         return definition
 
     def create(self, definition: SensorDefinition) -> SensorDefinition:
-        """Create a sensor definition without allowing overwrite."""
+        """Create a physical sensor definition without allowing overwrite."""
         definition.validate()
-        if definition.sensor_id == NO_SENSOR_MOUNT_ID:
-            raise ValueError(
-                "The built-in no-sensor mount cannot be replaced"
-            )
 
         path = self.get_sensor_path(definition.sensor_id)
         if path.exists():
@@ -118,18 +105,17 @@ class SensorRepository:
         return definition
 
     def list_sensor_ids(self) -> List[str]:
-        """List the built-in and stored sensor IDs in stable order."""
-        custom_ids = []
-        if self.root_dir.is_dir():
-            custom_ids = sorted(
-                path.stem
-                for path in self.root_dir.glob(f"*{self.FILE_SUFFIX}")
-                if path.is_file() and path.stem != NO_SENSOR_MOUNT_ID
-            )
-        return [NO_SENSOR_MOUNT_ID, *custom_ids]
+        """List stored physical sensor IDs in stable order."""
+        if not self.root_dir.is_dir():
+            return []
+        return sorted(
+            path.stem
+            for path in self.root_dir.glob(f"*{self.FILE_SUFFIX}")
+            if path.is_file()
+        )
 
     def load_all(self) -> List[SensorDefinition]:
-        """Load every available sensor definition."""
+        """Load every available physical sensor definition."""
         return [
             self.load(sensor_id)
             for sensor_id in self.list_sensor_ids()
@@ -137,11 +123,6 @@ class SensorRepository:
 
     def retire(self, sensor_id: str) -> SensorDefinition:
         """Move an active definition into permanent retired storage."""
-        if sensor_id == NO_SENSOR_MOUNT_ID:
-            raise ValueError(
-                "The built-in no-sensor mount cannot be retired"
-            )
-
         retired_path = self.get_retired_sensor_path(sensor_id)
         if retired_path.exists():
             raise FileNotFoundError(
@@ -161,5 +142,5 @@ class SensorRepository:
             for path in self.retired_root_dir.glob(
                 f"*{self.FILE_SUFFIX}"
             )
-            if path.is_file() and path.stem != NO_SENSOR_MOUNT_ID
+            if path.is_file()
         )

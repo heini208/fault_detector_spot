@@ -34,7 +34,7 @@ def test_probe_geometry_and_live_orientation_use_confirmed_attachment():
     assert "attachment = self._active_attachment()" in geometry
     assert "attachment.hand_to_probe()" in geometry
     assert "routine.sensor_id" not in geometry
-    assert "confirmed_attachment()" in api
+    assert "motion_attachment()" in api
     assert "routine.sensor_id" not in api
 
 
@@ -43,8 +43,8 @@ def test_surface_verification_reserves_one_attachment_for_whole_run():
         "application/coordinators/probe_surface_verification_runner.py"
     )
 
-    assert "reserve_confirmed_attachment()" in runner
-    assert "attachment.sensor_id" in runner
+    assert "reserve_motion_attachment()" in runner
+    assert "attachment.motion_sensor_id" in runner
     assert "routine.sensor_id" not in runner
 
 

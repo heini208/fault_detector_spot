@@ -78,6 +78,17 @@ def test_relative_motion_is_one_semantic_relative_arm_primitive():
     assert command.motion_sensor_id == "hall_probe"
 
 
+
+
+def test_sensor_relative_frame_uses_real_hand_when_no_sensor_is_attached():
+    frame = ProbeSetupMotionCommandFactory.frame_id(
+        ProbeMotionFrame.SENSOR,
+        "hand",
+        7,
+    )
+
+    assert frame == "hand"
+
 def test_motion_request_rejects_oversized_manual_adjustment():
     request = ProbeMotionRequest(
         kind=ProbeMotionKind.ADJUST_SAFE_APPROACH,

@@ -9,7 +9,7 @@ from .command_controller import (
     UnknownCommandRequest,
 )
 from .sensor_attachment_controller import (
-    ConfirmedSensorAttachment,
+    MotionAttachmentSnapshot,
     SensorAttachmentController,
     SensorAttachmentState,
     SensorAttachmentStatus,
@@ -20,8 +20,8 @@ __all__ = [
     "CommandControllerState",
     "CommandControllerStatus",
     "CommandExecutionStatus",
-    "ConfirmedSensorAttachment",
     "DuplicateCommandRequest",
+    "MotionAttachmentSnapshot",
     "SensorAttachmentController",
     "SensorAttachmentState",
     "SensorAttachmentStatus",

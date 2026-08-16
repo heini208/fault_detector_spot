@@ -282,7 +282,7 @@ class ProbeSetupApi:
                 snapshot.selected_object_id
             )
             attachment = (
-                self.coordinator.refinement_controller.confirmed_attachment()
+                self.coordinator.refinement_controller.motion_attachment()
             )
             source = self.coordinator.motion_state_source
             if source is None:

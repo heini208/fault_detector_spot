@@ -20,8 +20,10 @@ class FakeTransformer:
 
     def __init__(self, hand_to_probe):
         self.hand_to_probe = hand_to_probe
+        self.calls = []
 
     def lookup_a_tform_b(self, frame_a, frame_b, timeout_sec=0.0):
+        self.calls.append((frame_a, frame_b))
         assert timeout_sec == 0.0
         if frame_a == "body" and frame_b == "body":
             transform = TransformStamped()
@@ -31,12 +33,6 @@ class FakeTransformer:
             return transform
         if frame_a == "hand" and frame_b == "hall_probe_probe":
             return self.hand_to_probe
-        if frame_a == "hand" and frame_b == "hand_probe":
-            transform = TransformStamped()
-            transform.header.frame_id = "hand"
-            transform.child_frame_id = "hand_probe"
-            transform.transform.rotation.w = 1.0
-            return transform
         raise AssertionError(f"Unexpected TF lookup: {frame_a} <- {frame_b}")
 
 
@@ -84,11 +80,11 @@ def test_tag_move_places_active_probe_target_not_hand_at_requested_pose():
     assert goal.pose.orientation.w == pytest.approx(math.sqrt(0.5))
 
 
-def test_builtin_hand_mount_keeps_tag_target_unchanged():
-    goal = target_command("hand").compute_goal_pose(
-        FakeTransformer(TransformStamped())
-    )
+def test_no_sensor_uses_bare_hand_without_extra_probe_transform():
+    transformer = FakeTransformer(TransformStamped())
+    goal = target_command("hand").compute_goal_pose(transformer)
 
+    assert ("hand", "hand") not in transformer.calls
     assert goal.pose.position.x == pytest.approx(1.0)
     assert goal.pose.position.y == pytest.approx(0.0)
     assert goal.pose.position.z == pytest.approx(0.0)

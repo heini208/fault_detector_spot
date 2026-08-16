@@ -155,9 +155,10 @@ class FakeSensorAttachmentController:
     def __init__(self, sensor_id="hall_probe"):
         self.sensor_id = sensor_id
 
-    def require_confirmed_sensor(self):
+    def require_motion_attachment(self):
         return SimpleNamespace(
             sensor_id=self.sensor_id,
+            motion_sensor_id=self.sensor_id,
             hand_to_probe=lambda: PoseData.identity(),
         )
 
