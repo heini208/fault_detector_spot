@@ -79,4 +79,7 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
         QSizePolicy.Expanding
     )
     assert visible.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding
-    assert sensor.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding
+    assert sensor.sizePolicy().horizontalPolicy() == QSizePolicy.Maximum
+    sensor_layout = panel.sensor_widget.layout()
+    assert sensor_layout.indexOf(sensor) + 1 == sensor_layout.indexOf(confirm)
+    assert sensor_layout.itemAt(sensor_layout.count() - 1).spacerItem() is not None

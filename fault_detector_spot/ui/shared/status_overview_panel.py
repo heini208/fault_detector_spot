@@ -46,7 +46,6 @@ class StatusOverviewPanel(QFrame):
         for label in (
             buffer_label,
             visible_label,
-            sensor_status_label,
         ):
             label.setSizePolicy(
                 QSizePolicy.Expanding,
@@ -55,7 +54,10 @@ class StatusOverviewPanel(QFrame):
 
         buffer_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         visible_label.setMinimumWidth(190)
-        sensor_status_label.setMinimumWidth(150)
+        sensor_status_label.setSizePolicy(
+            QSizePolicy.Maximum,
+            QSizePolicy.Preferred,
+        )
 
         sensor_widget = QWidget()
         sensor_layout = QHBoxLayout(sensor_widget)
@@ -63,8 +65,9 @@ class StatusOverviewPanel(QFrame):
         sensor_layout.setSpacing(4)
         sensor_layout.addWidget(QLabel("Sensor:"))
         sensor_layout.addWidget(sensor_indicator_label)
-        sensor_layout.addWidget(sensor_status_label, 1)
+        sensor_layout.addWidget(sensor_status_label)
         sensor_layout.addWidget(sensor_confirm_button)
+        sensor_layout.addStretch()
 
         layout.addWidget(status_label, 0, 0)
         layout.addWidget(command_status_label, 0, 1)
