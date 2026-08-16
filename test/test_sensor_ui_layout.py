@@ -75,6 +75,8 @@ def test_builtin_no_sensor_mount_is_rendered_from_registry(application):
     assert controls.active_mount_dropdown.isEnabled() is True
     assert controls.select_mount_button.isEnabled() is True
     assert controls.clear_attachment_button.isEnabled() is True
+    assert controls.clear_attachment_button.text() == "Remove Sensor"
+    assert controls.active_mount_dropdown.currentData() == "hand"
 
 
 def test_pending_attachment_enables_exact_confirmation(application):
@@ -105,17 +107,21 @@ def test_pending_attachment_enables_exact_confirmation(application):
     assert confirmations == [("hall_probe", 7)]
 
 
-def test_no_sensor_button_emits_builtin_selection(application):
+def test_remove_sensor_selects_builtin_mount_and_emits_selection(application):
     controls = SensorControls()
     controls.apply_definitions((
         definition("hand", "No Sensor Mount", built_in=True),
         definition("hall_probe", "Hall probe"),
     ))
+    controls.active_mount_dropdown.setCurrentIndex(
+        controls.active_mount_dropdown.findData("hall_probe")
+    )
     selections = []
     controls.select_requested.connect(selections.append)
 
     controls.clear_attachment_button.click()
 
+    assert controls.active_mount_dropdown.currentData() == "hand"
     assert selections == ["hand"]
 
 

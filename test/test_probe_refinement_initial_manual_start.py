@@ -53,6 +53,14 @@ class SetupCoordinatorStub:
     command_controller = IdleCommandController()
 
 
+class ActiveAttachmentController:
+    def require_confirmed_sensor(self):
+        return SimpleNamespace(
+            sensor_id="active_probe",
+            hand_to_probe=lambda: PoseData.identity(),
+        )
+
+
 class CurrentPoseRefinementController(ProbeRefinementController):
     def __init__(self, current_pose):
         super().__init__(
@@ -62,10 +70,11 @@ class CurrentPoseRefinementController(ProbeRefinementController):
             motion_state_source=None,
             motion_command_factory=None,
             state_lock=RLock(),
+            sensor_attachment_controller=ActiveAttachmentController(),
         )
         self._current_pose = current_pose
 
-    def current_probe_pose(self, draft):
+    def current_probe_pose(self, draft, attachment=None):
         return self._current_pose
 
 

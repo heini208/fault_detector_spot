@@ -141,7 +141,7 @@ class Fault_Detector_UI(QWidget):
         states = {
             "confirmed": ("#2E7D32", "Confirmed"),
             "pending": ("#EF6C00", "Confirmation pending"),
-            "none": ("#757575", "No sensor"),
+            "none": ("#757575", "No Sensor Mount"),
         }
         color, label = states.get(status, states["none"])
         name = sensor_name.strip()
@@ -184,13 +184,10 @@ class Fault_Detector_UI(QWidget):
             )
             return
         if state.status is SensorAttachmentViewStatus.ACTIVE:
-            if state.active_is_no_sensor:
-                self.set_sensor_status("none")
-            else:
-                self.set_sensor_status(
-                    "confirmed",
-                    self._sensor_display_name(state.active_sensor_id),
-                )
+            self.set_sensor_status(
+                "confirmed",
+                self._sensor_display_name(state.active_sensor_id),
+            )
             return
         self.set_sensor_status("none")
 

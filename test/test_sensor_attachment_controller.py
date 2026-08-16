@@ -65,19 +65,20 @@ def build_controller(tmp_path):
     return controller, repository, state_store, command_controller
 
 
-def test_first_startup_has_no_confirmed_sensor(tmp_path):
-    controller, _, _, _ = build_controller(tmp_path)
+def test_first_startup_selects_no_sensor_mount_for_confirmation(tmp_path):
+    controller, _, state_store, _ = build_controller(tmp_path)
 
     state = controller.snapshot()
 
-    assert state.status is SensorAttachmentStatus.NO_SENSOR
+    assert state.status is SensorAttachmentStatus.CONFIRMATION_PENDING
     assert state.active_sensor_id == ""
-    assert state.pending_sensor_id == ""
-    assert state.attachment_revision == 0
+    assert state.pending_sensor_id == NO_SENSOR_MOUNT_ID
+    assert state.attachment_revision == 1
     assert state.sensor_dependent_motion_allowed is False
+    assert state_store.load().sensor_id == NO_SENSOR_MOUNT_ID
 
     with pytest.raises(RuntimeError):
-        controller.require_confirmed_sensor("bmm150_01")
+        controller.require_confirmed_sensor(NO_SENSOR_MOUNT_ID)
 
 
 def test_selecting_registered_sensor_requires_confirmation(tmp_path):
@@ -88,7 +89,7 @@ def test_selecting_registered_sensor_requires_confirmation(tmp_path):
 
     assert state.status is SensorAttachmentStatus.CONFIRMATION_PENDING
     assert state.pending_sensor_id == "bmm150_01"
-    assert state.attachment_revision == 1
+    assert state.attachment_revision == 2
     assert state.sensor_dependent_motion_allowed is False
 
     with pytest.raises(RuntimeError):
@@ -139,7 +140,7 @@ def test_confirmation_rejects_wrong_sensor(tmp_path):
         )
 
 
-def test_routine_sensor_must_match_confirmed_attachment(tmp_path):
+def test_explicit_expected_sensor_must_match_confirmed_attachment(tmp_path):
     controller, repository, _, _ = build_controller(tmp_path)
     repository.create(sensor_definition())
     repository.create(sensor_definition("thermal_01"))
@@ -149,7 +150,7 @@ def test_routine_sensor_must_match_confirmed_attachment(tmp_path):
         pending.attachment_revision,
     )
 
-    with pytest.raises(RuntimeError, match="requires sensor"):
+    with pytest.raises(RuntimeError, match="Expected sensor"):
         controller.require_confirmed_sensor("thermal_01")
 
 

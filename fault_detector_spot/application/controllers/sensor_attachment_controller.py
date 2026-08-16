@@ -302,30 +302,24 @@ class SensorAttachmentController:
     def _restore_state(self) -> SensorAttachmentState:
         persisted = self.state_store.load()
         if persisted is None:
-            return SensorAttachmentState(
-                active_sensor_id="",
-                pending_sensor_id="",
-                status=SensorAttachmentStatus.NO_SENSOR,
-                attachment_revision=0,
-            )
-        if not persisted.sensor_id:
-            return SensorAttachmentState(
-                active_sensor_id="",
-                pending_sensor_id="",
-                status=SensorAttachmentStatus.NO_SENSOR,
-                attachment_revision=persisted.attachment_revision,
-            )
+            sensor_id = NO_SENSOR_MOUNT_ID
+            revision = 1
+        elif not persisted.sensor_id:
+            sensor_id = NO_SENSOR_MOUNT_ID
+            revision = persisted.attachment_revision + 1
+        else:
+            sensor_id = persisted.sensor_id
+            revision = persisted.attachment_revision + 1
 
-        revision = persisted.attachment_revision + 1
         self.state_store.save(
             PersistedSensorAttachmentSelection(
-                sensor_id=persisted.sensor_id,
+                sensor_id=sensor_id,
                 attachment_revision=revision,
             )
         )
         return SensorAttachmentState(
             active_sensor_id="",
-            pending_sensor_id=persisted.sensor_id,
+            pending_sensor_id=sensor_id,
             status=SensorAttachmentStatus.CONFIRMATION_PENDING,
             attachment_revision=revision,
         )

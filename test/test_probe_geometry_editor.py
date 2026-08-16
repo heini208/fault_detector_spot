@@ -33,6 +33,14 @@ class FakeSensorRepository:
         )
 
 
+class FakeSensorAttachmentController:
+    def require_confirmed_sensor(self):
+        return SimpleNamespace(
+            sensor_id="active_probe",
+            hand_to_probe=lambda: PoseData.identity(),
+        )
+
+
 class FakeGeometry:
     def __init__(self):
         self.calls = []
@@ -78,6 +86,9 @@ def editor():
             FakeObjectRepository(),
             FakeSensorRepository(),
             geometry,
+            sensor_attachment_controller=(
+                FakeSensorAttachmentController()
+            ),
         ),
         geometry,
     )

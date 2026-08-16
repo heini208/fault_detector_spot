@@ -90,7 +90,7 @@ class SensorControls(QWidget):
         layout.setVerticalSpacing(6)
 
         self.attachment_name_value = QLabel("—")
-        self.attachment_status_value = QLabel("No sensor selected")
+        self.attachment_status_value = QLabel("Waiting for state")
         self.attachment_probe_frame_value = QLabel("—")
         self.attachment_revision_value = QLabel("—")
 
@@ -111,9 +111,7 @@ class SensorControls(QWidget):
         self.confirm_attachment_button = QPushButton(
             "Confirm Attachment"
         )
-        self.clear_attachment_button = QPushButton(
-            "No Sensor Attached"
-        )
+        self.clear_attachment_button = QPushButton("Remove Sensor")
 
         self.select_mount_button.setEnabled(False)
         self.confirm_attachment_button.setEnabled(False)
@@ -319,6 +317,10 @@ class SensorControls(QWidget):
                 index = self.active_mount_dropdown.findData(
                     self._attachment_state.selected_sensor_id
                 )
+            if index < 0 and self._no_sensor_id:
+                index = self.active_mount_dropdown.findData(
+                    self._no_sensor_id
+                )
             if index < 0:
                 index = 0
             self.active_mount_dropdown.setCurrentIndex(index)
@@ -347,6 +349,8 @@ class SensorControls(QWidget):
             return
 
         selected_id = state.selected_sensor_id
+        if not selected_id:
+            selected_id = self._no_sensor_id
         definition = self._definitions.get(selected_id)
         display_name = (
             definition.display_name
@@ -367,7 +371,7 @@ class SensorControls(QWidget):
             status_text = "Confirmed"
             confirm_enabled = False
         else:
-            status_text = "No sensor selected"
+            status_text = "Confirmation required"
             confirm_enabled = False
 
         self.attachment_name_value.setText(display_name)
@@ -398,8 +402,12 @@ class SensorControls(QWidget):
         )
 
     def _request_no_sensor(self) -> None:
-        if self._no_sensor_id:
-            self.select_requested.emit(self._no_sensor_id)
+        if not self._no_sensor_id:
+            return
+        index = self.active_mount_dropdown.findData(self._no_sensor_id)
+        if index >= 0:
+            self.active_mount_dropdown.setCurrentIndex(index)
+        self.select_requested.emit(self._no_sensor_id)
 
     def _append_definition_row(self, definition) -> None:
         row = self.mount_table.rowCount()
