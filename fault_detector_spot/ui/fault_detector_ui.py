@@ -34,6 +34,7 @@ from .recording.controls import RecordingControls
 from .ros.application_client import ApplicationClient
 from .ros.navigation_setup_client import NavigationSetupClient
 from .ros.probe_setup_client import ProbeSetupClient
+from .sensor.controls import SensorControls
 from .shared.status_overview_panel import StatusOverviewPanel
 
 
@@ -68,6 +69,7 @@ class Fault_Detector_UI(QWidget):
         self.navigation_controls = NavigationControls(self)
         self.base_movement_controls = BaseMovementControls(self)
         self.inspection_controls = FinalizingInspectionControls(self)
+        self.sensor_controls = SensorControls(self)
 
         self.create_user_interface()
 
@@ -105,6 +107,7 @@ class Fault_Detector_UI(QWidget):
         self.add_base_movement_control_tab()
         self.add_navigation_control_tab()
         self.add_inspection_control_tab()
+        self.add_sensor_control_tab()
 
         self.recording_controls.add_rows(main_layout)
         QTimer.singleShot(0, self._refresh_buffer_label)
@@ -194,6 +197,9 @@ class Fault_Detector_UI(QWidget):
         self.inspection_controls.add_rows(inspection_layout)
         inspection_layout.addStretch()
         self.tabs.addTab(inspection_tab, "Inspection Control")
+
+    def add_sensor_control_tab(self):
+        self.tabs.addTab(self.sensor_controls, "Sensor Mounts")
 
     def init_ros_communication(self):
         self.application_client = ApplicationClient(self.node)

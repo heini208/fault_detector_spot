@@ -70,3 +70,21 @@ def test_sensor_workspace_has_no_ros_or_backend_ownership():
 
     for value in forbidden:
         assert value not in source
+
+
+
+def test_main_ui_contains_sensor_mount_tab():
+    path = (
+        Path(__file__).parents[1]
+        / "fault_detector_spot"
+        / "ui"
+        / "fault_detector_ui.py"
+    )
+    source = path.read_text(encoding="utf-8")
+
+    assert "from .sensor.controls import SensorControls" in source
+    assert "self.sensor_controls = SensorControls(self)" in source
+    assert (
+        'self.tabs.addTab(self.sensor_controls, "Sensor Mounts")'
+        in source
+    )
