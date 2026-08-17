@@ -5,6 +5,7 @@ import math
 import numpy as np
 import pytest
 from geometry_msgs.msg import Pose
+from scipy.spatial.transform import Rotation
 
 from fault_detector_spot.inspection.model.models import (
     PoseData,
@@ -14,6 +15,7 @@ from fault_detector_spot.inspection.model.models import (
 from fault_detector_spot.shared.geometry.transforms import (
     compose_poses,
     inverse_pose,
+    matrix_to_pose,
     pose_data_to_pose,
     pose_to_matrix,
     pose_to_pose_data,
@@ -193,3 +195,60 @@ def test_zero_quaternion_is_rejected():
         match="Quaternion norm is zero",
     ):
         pose_to_matrix(pose)
+
+
+def test_pose_to_matrix_matches_scipy_for_full_3d_rotation():
+    pose = Pose()
+    pose.position.x = 0.3
+    pose.position.y = -0.2
+    pose.position.z = 0.8
+    quaternion = Rotation.from_euler(
+        "xyz",
+        [0.4, -0.3, 0.7],
+    ).as_quat()
+    pose.orientation.x = quaternion[0]
+    pose.orientation.y = quaternion[1]
+    pose.orientation.z = quaternion[2]
+    pose.orientation.w = quaternion[3]
+
+    matrix = pose_to_matrix(pose)
+
+    assert np.allclose(
+        matrix[:3, :3],
+        Rotation.from_quat(quaternion).as_matrix(),
+        atol=1e-10,
+    )
+    assert np.allclose(
+        matrix[:3, 3],
+        np.array([0.3, -0.2, 0.8]),
+        atol=1e-10,
+    )
+
+
+def test_matrix_to_pose_preserves_full_3d_rotation():
+    rotation = Rotation.from_euler(
+        "xyz",
+        [-0.5, 0.2, 1.1],
+    )
+    matrix = np.eye(4)
+    matrix[:3, :3] = rotation.as_matrix()
+    matrix[:3, 3] = [0.1, 0.2, 0.3]
+
+    pose = matrix_to_pose(matrix)
+
+    assert np.allclose(
+        pose_to_matrix(pose),
+        matrix,
+        atol=1e-10,
+    )
+
+
+def test_matrix_to_pose_rejects_non_finite_transform():
+    matrix = np.eye(4)
+    matrix[0, 3] = math.nan
+
+    with pytest.raises(
+        ValueError,
+        match="Transform matrix is not finite",
+    ):
+        matrix_to_pose(matrix)

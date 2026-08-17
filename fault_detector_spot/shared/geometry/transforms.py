@@ -6,6 +6,10 @@ from typing import Union
 import numpy as np
 from geometry_msgs.msg import Pose, PoseStamped
 
+from fault_detector_spot.inspection.geometry.rotation import (
+    quaternion_from_matrix,
+    rotation_from_quaternion,
+)
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
@@ -106,45 +110,27 @@ def normalize_pose_quaternion(pose: Pose) -> None:
     pose.orientation.w = quaternion[3]
 
 
-def pose_to_matrix(pose: PoseMessage) -> np.ndarray:
-    """Convert a ROS pose into a homogeneous transform matrix."""
+def _pose_rotation(pose: PoseMessage):
     pose_message = get_pose(pose)
-
     x, y, z, w = normalized_quaternion(
         pose_message.orientation.x,
         pose_message.orientation.y,
         pose_message.orientation.z,
         pose_message.orientation.w,
     )
+    return rotation_from_quaternion(
+        QuaternionData(x=x, y=y, z=z, w=w)
+    )
 
-    xx = x * x
-    yy = y * y
-    zz = z * z
-    xy = x * y
-    xz = x * z
-    yz = y * z
-    wx = w * x
-    wy = w * y
-    wz = w * z
 
+def pose_to_matrix(pose: PoseMessage) -> np.ndarray:
+    """Convert a ROS pose into a homogeneous transform matrix."""
+    pose_message = get_pose(pose)
     matrix = np.eye(4, dtype=float)
-
-    matrix[0, 0] = 1.0 - 2.0 * (yy + zz)
-    matrix[0, 1] = 2.0 * (xy - wz)
-    matrix[0, 2] = 2.0 * (xz + wy)
-
-    matrix[1, 0] = 2.0 * (xy + wz)
-    matrix[1, 1] = 1.0 - 2.0 * (xx + zz)
-    matrix[1, 2] = 2.0 * (yz - wx)
-
-    matrix[2, 0] = 2.0 * (xz - wy)
-    matrix[2, 1] = 2.0 * (yz + wx)
-    matrix[2, 2] = 1.0 - 2.0 * (xx + yy)
-
+    matrix[:3, :3] = _pose_rotation(pose_message).as_matrix()
     matrix[0, 3] = pose_message.position.x
     matrix[1, 3] = pose_message.position.y
     matrix[2, 3] = pose_message.position.z
-
     return matrix
 
 
@@ -154,86 +140,22 @@ def matrix_to_pose(matrix: np.ndarray) -> Pose:
 
     if matrix.shape != (4, 4):
         raise ValueError("Transform matrix must have shape 4x4")
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("Transform matrix is not finite")
 
-    rotation = matrix[:3, :3]
-
-    if not np.allclose(
-        rotation @ rotation.T,
-        np.eye(3),
-        atol=1e-6,
-    ):
-        raise ValueError("Transform rotation is not orthonormal")
-
-    determinant = np.linalg.det(rotation)
-
-    if not math.isclose(determinant, 1.0, abs_tol=1e-6):
-        raise ValueError("Transform rotation determinant is not one")
-
-    x, y, z, w = rotation_matrix_to_quaternion(rotation)
+    quaternion = quaternion_from_matrix(matrix[:3, :3])
 
     pose = Pose()
     pose.position.x = float(matrix[0, 3])
     pose.position.y = float(matrix[1, 3])
     pose.position.z = float(matrix[2, 3])
 
-    pose.orientation.x = x
-    pose.orientation.y = y
-    pose.orientation.z = z
-    pose.orientation.w = w
+    pose.orientation.x = quaternion.x
+    pose.orientation.y = quaternion.y
+    pose.orientation.z = quaternion.z
+    pose.orientation.w = quaternion.w
 
     return pose
-
-
-def rotation_matrix_to_quaternion(
-    rotation: np.ndarray,
-) -> tuple:
-    """Convert a three-dimensional rotation matrix to quaternion."""
-    trace = float(np.trace(rotation))
-
-    if trace > 0.0:
-        scale = math.sqrt(trace + 1.0) * 2.0
-        w = 0.25 * scale
-        x = (rotation[2, 1] - rotation[1, 2]) / scale
-        y = (rotation[0, 2] - rotation[2, 0]) / scale
-        z = (rotation[1, 0] - rotation[0, 1]) / scale
-    elif (
-        rotation[0, 0] > rotation[1, 1]
-        and rotation[0, 0] > rotation[2, 2]
-    ):
-        scale = math.sqrt(
-            1.0
-            + rotation[0, 0]
-            - rotation[1, 1]
-            - rotation[2, 2]
-        ) * 2.0
-        w = (rotation[2, 1] - rotation[1, 2]) / scale
-        x = 0.25 * scale
-        y = (rotation[0, 1] + rotation[1, 0]) / scale
-        z = (rotation[0, 2] + rotation[2, 0]) / scale
-    elif rotation[1, 1] > rotation[2, 2]:
-        scale = math.sqrt(
-            1.0
-            + rotation[1, 1]
-            - rotation[0, 0]
-            - rotation[2, 2]
-        ) * 2.0
-        w = (rotation[0, 2] - rotation[2, 0]) / scale
-        x = (rotation[0, 1] + rotation[1, 0]) / scale
-        y = 0.25 * scale
-        z = (rotation[1, 2] + rotation[2, 1]) / scale
-    else:
-        scale = math.sqrt(
-            1.0
-            + rotation[2, 2]
-            - rotation[0, 0]
-            - rotation[1, 1]
-        ) * 2.0
-        w = (rotation[1, 0] - rotation[0, 1]) / scale
-        x = (rotation[0, 2] + rotation[2, 0]) / scale
-        y = (rotation[1, 2] + rotation[2, 1]) / scale
-        z = 0.25 * scale
-
-    return normalized_quaternion(x, y, z, w)
 
 
 def compose_poses(
@@ -255,9 +177,7 @@ def inverse_pose(pose: PoseMessage) -> Pose:
 
     inverse = np.eye(4, dtype=float)
     inverse[:3, :3] = matrix[:3, :3].T
-    inverse[:3, 3] = (
-        -matrix[:3, :3].T @ matrix[:3, 3]
-    )
+    inverse[:3, 3] = -matrix[:3, :3].T @ matrix[:3, 3]
 
     return matrix_to_pose(inverse)
 
