@@ -397,7 +397,7 @@ class ProbeRefinementController:
         source = self._motion_state_source()
         return source.current_probe_pose_object(
             definition.reference_tag.tag_id,
-            active.sensor_id,
+            active.motion_sensor_id,
         )
 
     @staticmethod
@@ -468,7 +468,7 @@ class ProbeRefinementController:
         if not object_id or not routine_id:
             return None
         active = attachment or self._active_attachment(draft)
-        minimum_distance_m = float(resolver(active.sensor_id))
+        minimum_distance_m = float(resolver(active.motion_sensor_id))
         calculated = draft.geometry.probe_setup
         configured_distance_m = float(
             calculated.surface_target.aligned_preapproach_distance_m
@@ -755,3 +755,4 @@ class ProbeRefinementController:
 
 
 __all__ = ["ProbeRefinementController"]
+

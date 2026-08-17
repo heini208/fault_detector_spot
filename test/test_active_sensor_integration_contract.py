@@ -74,6 +74,8 @@ def test_refinement_reserves_one_attachment_until_workflow_end():
     assert "acquire_motion_attachment()" in controller
     assert "self._attachment_reservations" in controller
     assert "self._release_attachment(draft)" in controller
+    assert "active.sensor_id" not in controller
+    assert "active.motion_sensor_id" in controller
 
     finalization = source(
         "application/coordinators/probe_finalization_controller.py"
@@ -124,3 +126,4 @@ def test_transport_and_workflows_use_public_coordinator_boundaries():
     assert "coordinator._context_lock" not in workflows
     assert "coordinator._selected_draft" not in workflows
     assert "set_sensor_attachment_controller" not in workflows
+
