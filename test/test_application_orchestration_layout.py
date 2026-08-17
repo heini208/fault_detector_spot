@@ -15,10 +15,10 @@ def test_application_orchestration_uses_application_layer_paths():
         ROOT / "application/api/navigation_setup_api.py",
         ROOT / "application/api/probe_setup_api.py",
         ROOT / "application/api/probe_setup_motion_api.py",
-        ROOT / "application/api/probe_surface_verification_api.py",
         ROOT / "application/api/probe_refinement_finalization_api.py",
     )
-    old = (
+    obsolete = (
+        ROOT / "application/api/probe_surface_verification_api.py",
         ROOT / "application/setup/setup_coordinator.py",
         ROOT / "navigation/setup/navigation_setup_coordinator.py",
         ROOT / "navigation/setup/navigation_setup_api.py",
@@ -31,4 +31,4 @@ def test_application_orchestration_uses_application_layer_paths():
     )
 
     assert all(path.is_file() for path in expected)
-    assert all(not path.exists() for path in old)
+    assert all(not path.exists() for path in obsolete)

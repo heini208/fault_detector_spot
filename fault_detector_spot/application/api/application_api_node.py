@@ -71,9 +71,6 @@ from fault_detector_spot.application.api.probe_setup_motion_api import (
 from fault_detector_spot.application.api.probe_refinement_finalization_api import (
     ProbeRefinementFinalizationApi,
 )
-from fault_detector_spot.application.api.probe_surface_verification_api import (
-    ProbeSurfaceVerificationApi,
-)
 from fault_detector_spot.inspection.setup.probe_setup_state_adapter import (
     ProbeSetupStateAdapter,
 )
@@ -244,12 +241,6 @@ class ApplicationApiNode(Node):
             self.probe_setup_state_adapter,
         )
         self.probe_setup_motion_api = ProbeSetupMotionApi(
-            self,
-            self.application_controller.probe_setup_coordinator,
-            self.probe_setup_state_publisher,
-            self.probe_setup_state_adapter,
-        )
-        self.probe_surface_verification_api = ProbeSurfaceVerificationApi(
             self,
             self.application_controller.probe_setup_coordinator,
             self.probe_setup_state_publisher,
@@ -471,7 +462,6 @@ class ApplicationApiNode(Node):
     def destroy_node(self):
         self.probe_reference_capture_api.close()
         self.probe_refinement_finalization_api.close()
-        self.probe_surface_verification_api.close()
         self.probe_setup_motion_api.close()
         self.probe_setup_api.close()
         self.navigation_setup_api.close()
@@ -507,4 +497,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-
