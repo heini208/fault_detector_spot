@@ -40,6 +40,9 @@ _INTENT_COMMAND_IDS = {
     OperationalIntent.INTENT_MOVE_ARM_RELATIVE: (
         CommandID.MOVE_ARM_RELATIVE
     ),
+    OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE: (
+        CommandID.MOVE_CLOSE_TO_SURFACE
+    ),
     OperationalIntent.INTENT_MOVE_BASE_TO_TAG: (
         CommandID.MOVE_BASE_TO_TAG
     ),
@@ -90,6 +93,13 @@ def _duration(value: float, allow_zero: bool = False) -> float:
         raise ValueError(
             f"Duration must be {qualifier}"
         )
+    return normalized
+
+
+def _positive_distance(value: float, label: str) -> float:
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized <= 0.0:
+        raise ValueError(f"{label} must be positive")
     return normalized
 
 
@@ -156,6 +166,14 @@ def operational_intent_to_command(
         _duration(intent.duration_sec)
     if (
         intent.intent
+        == OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+    ):
+        _positive_distance(
+            intent.target_surface_distance_m,
+            "Target surface distance",
+        )
+    if (
+        intent.intent
         == OperationalIntent.INTENT_MOVE_TO_WAYPOINT
     ):
         _required_text(intent.map_name, "Map name")
@@ -189,6 +207,9 @@ def operational_intent_to_command(
         offset=stamped_pose_from_message(intent.offset),
         orientation_mode=intent.orientation_mode,
         wait_time=float(intent.duration_sec),
+        target_surface_distance_m=float(
+            intent.target_surface_distance_m
+        ),
         map_name=intent.map_name,
         waypoint_name=intent.waypoint_name,
         inspection=InspectionSelection(

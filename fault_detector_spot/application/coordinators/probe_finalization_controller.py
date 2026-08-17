@@ -1,6 +1,7 @@
 """Finalization state and probe-point persistence for probe setup."""
 
 from copy import deepcopy
+from dataclasses import replace
 
 from fault_detector_spot.application.commanding.request_identity import (
     validate_request_id,
@@ -9,11 +10,8 @@ from fault_detector_spot.inspection.model.models import ProbePoint
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementStage,
 )
-from fault_detector_spot.inspection.setup.probe_surface_verification import (
-    SurfaceVerificationState,
-)
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
-    approve_probe_pose,
+    approve_surface_alignment_pose,
 )
 from fault_detector_spot.shared.persistence.file_storage import (
     validate_storage_name,
@@ -58,17 +56,6 @@ class ProbeFinalizationController:
                 raise ValueError(
                     f"Approve the {label} before finalization"
                 )
-        if save_requested:
-            verification = draft.surface_verification
-            if (
-                verification is None
-                or verification.state
-                is not SurfaceVerificationState.CONVERGED
-                or not refinement.surface_distance_verified
-            ):
-                raise ValueError(
-                    "Verify the final surface distance before saving"
-                )
         with self.state_lock:
             self._active[context.context_id] = normalized
 
@@ -82,14 +69,21 @@ class ProbeFinalizationController:
         refinement = self.refinement_controller.require_refinement(
             draft
         )
-        refinement.approve_verified_probe()
-        pose = refinement.approved_pose(
-            RefinementStage.PROBE
+        setup = draft.setup
+        if setup is None:
+            raise ValueError("No calculated probe setup is available")
+        execution_setup = approve_surface_alignment_pose(
+            setup,
+            setup.aligned_preapproach_pose_object,
+        )
+        refinement.approve(
+            RefinementStage.PROBE,
+            execution_setup.probe_pose_object,
         )
         with self.state_lock:
-            draft.setup = approve_probe_pose(
-                draft.setup,
-                pose,
+            draft.setup = replace(
+                execution_setup,
+                probe_pose_approved=True,
             )
             draft.dirty = True
             draft.validation_error = ""

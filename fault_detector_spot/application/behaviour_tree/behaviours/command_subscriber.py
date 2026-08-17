@@ -35,6 +35,9 @@ from fault_detector_spot.manipulation.commands.manipulator_move_relative_command
 from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import (
     ManipulatorToTagCommand,
 )
+from fault_detector_spot.manipulation.commands.move_close_to_surface_command import (
+    MoveCloseToSurfaceCommand,
+)
 from fault_detector_spot.navigation.commands.base_move_relative_command import (
     BaseMoveRelativeCommand,
 )
@@ -84,6 +87,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.START_LOCALIZATION: self._map_command,
             CommandID.SWAP_MAP: self._map_command,
             CommandID.MOVE_TO_WAYPOINT: self._waypoint_command,
+            CommandID.MOVE_CLOSE_TO_SURFACE: self._move_close_to_surface,
         }
         self.pending_msgs = []
         self.last_received_time = None
@@ -274,6 +278,16 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             stamp=self._create_command_stamp(),
             map_name=command.map_name,
             waypoint_name=command.waypoint_name,
+        )
+
+    def _move_close_to_surface(
+        self,
+        command: SemanticCommand,
+    ) -> MoveCloseToSurfaceCommand:
+        return MoveCloseToSurfaceCommand(
+            command_id=CommandID.MOVE_CLOSE_TO_SURFACE,
+            stamp=self._create_command_stamp(),
+            target_surface_distance_m=command.target_surface_distance_m,
         )
 
     def is_estop_command(self, command: SemanticCommand) -> bool:

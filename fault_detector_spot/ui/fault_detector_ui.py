@@ -657,14 +657,28 @@ class Fault_Detector_UI(QWidget):
         return request_id
 
     def execute_probe_surface_verification(self):
-        if self.probe_setup_client is None:
+        if self.application_client is None:
             self._process_application_error("ROS is unavailable")
             return None
-        request_id = (
-            self.probe_setup_client.execute_surface_verification()
+        controls = getattr(self, "inspection_controls", None)
+        presentation = getattr(
+            controls,
+            "_refinement_presentation",
+            None,
         )
+        if presentation is None:
+            self._process_application_error(
+                "Probe refinement target distance is unavailable"
+            )
+            return None
+        intent = OperationalIntent()
+        intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+        intent.target_surface_distance_m = float(
+            presentation.target_surface_distance_m
+        )
+        request_id = self.execute_operation(intent)
         if request_id is not None:
-            self.status_label.setText("Surface verification submitted")
+            self.status_label.setText("Move close to surface submitted")
         return request_id
 
     def execute_probe_refinement_finalization(self, **kwargs):

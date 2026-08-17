@@ -76,6 +76,7 @@ def semantic_command_from_message(
         offset=stamped_pose_from_message(message.offset),
         orientation_mode=message.orientation_mode,
         wait_time=message.wait_time,
+        target_surface_distance_m=message.target_surface_distance_m,
         map_name=message.map_name,
         waypoint_name=message.waypoint_name,
         inspection=InspectionSelection(
@@ -104,6 +105,9 @@ def semantic_command_to_message(
     message.offset = stamped_pose_to_message(command.offset)
     message.orientation_mode = command.orientation_mode
     message.wait_time = float(command.wait_time)
+    message.target_surface_distance_m = float(
+        command.target_surface_distance_m
+    )
     message.map_name = command.map_name
     message.waypoint_name = command.waypoint_name
     message.object_id = command.inspection.object_id

@@ -19,6 +19,9 @@ from fault_detector_spot.manipulation.behaviours.manipulator_get_goal_tag import
 from fault_detector_spot.manipulation.behaviours.manipulator_move_arm_action import (
     ManipulatorMoveArmAction,
 )
+from fault_detector_spot.manipulation.behaviours.manipulator_move_close_to_surface_action import (
+    ManipulatorMoveCloseToSurfaceAction,
+)
 from fault_detector_spot.manipulation.behaviours.manipulator_move_relative_action import (
     ManipulatorMoveRelativeAction,
 )
@@ -56,6 +59,7 @@ __all__ = [
     "CommandSubscriber",
     "ManipulatorGetGoalTag",
     "ManipulatorMoveArmAction",
+    "ManipulatorMoveCloseToSurfaceAction",
     "ReadyArmActionSimple",
     "StowArmActionSimple",
     "NewCommandGuard",

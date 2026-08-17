@@ -7,6 +7,7 @@ class CommandID(str, Enum):
     MOVE_ARM_TO_TAG = "move_to_tag"
     MOVE_ARM_TO_TAG_AND_WAIT = "move_tag_and_wait"
     MOVE_ARM_RELATIVE = "move_arm_relative"
+    MOVE_CLOSE_TO_SURFACE = "move_close_to_surface"
     STAND_UP = "stand_up"
     WAIT_TIME = "wait_time"
     EMERGENCY_CANCEL = "cancel_all"

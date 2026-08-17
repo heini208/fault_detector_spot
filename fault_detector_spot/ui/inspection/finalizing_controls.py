@@ -1,8 +1,9 @@
 """Add server-owned probe finalization to inspection controls."""
 
 import math
+from copy import deepcopy
 
-from fault_detector_msgs.msg import ProbeSetupState
+from fault_detector_msgs.msg import ApplicationCommandState, OperationalIntent
 
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
@@ -15,6 +16,13 @@ from .controls import InspectionControls
 class FinalizingInspectionControls(InspectionControls):
     """Route physical setup workflows through server-owned APIs."""
 
+
+    def __init__(self, ui):
+        super().__init__(ui)
+        self._surface_test_active = False
+        self._surface_move_succeeded = False
+        self._surface_move_target_m = None
+        self._surface_move_alignment_pose = None
 
     def handle_capture_reference_view(self):
         """Submit camera selections to the server-owned capture action."""
@@ -53,6 +61,84 @@ class FinalizingInspectionControls(InspectionControls):
         )
         return True
 
+    def handle_test_surface_distance(self):
+        presentation = self._require_refinement_presentation()
+        self._surface_test_active = False
+        self._surface_move_succeeded = False
+        self._surface_move_target_m = float(
+            presentation.target_surface_distance_m
+        )
+        self._surface_move_alignment_pose = deepcopy(
+            presentation.candidate_pose(RefinementStage.ALIGNMENT)
+        )
+        self._update_save_probe_point_state()
+        submitted = super().handle_test_surface_distance()
+        self._surface_test_active = bool(submitted)
+        return submitted
+
+    def handle_application_state(self, status):
+        """Track only this UI's standalone close-surface test command."""
+        if (
+            not self._surface_test_active
+            or status.intent
+            != OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+        ):
+            return None
+        client = getattr(self.ui, "application_client", None)
+        if client is not None and status.client_id != client.client_id:
+            return None
+
+        states = {
+            ApplicationCommandState.STATE_QUEUED: "Queued",
+            ApplicationCommandState.STATE_DISPATCHED: "Dispatched",
+            ApplicationCommandState.STATE_RUNNING: "Running",
+            ApplicationCommandState.STATE_SUCCEEDED: "Reached",
+            ApplicationCommandState.STATE_FAILED: "Failed",
+            ApplicationCommandState.STATE_CANCELLED: "Cancelled",
+        }
+        label = states.get(status.state, "Surface movement")
+        detail = status.detail.strip()
+        self.surface_distance_test_status_label.setText(
+            f"{label}: {detail}" if detail else label
+        )
+        if status.state == ApplicationCommandState.STATE_SUCCEEDED:
+            self._surface_test_active = False
+            self._surface_move_succeeded = True
+            self._distance_failure_requires_retraction = False
+        elif status.state in {
+            ApplicationCommandState.STATE_FAILED,
+            ApplicationCommandState.STATE_CANCELLED,
+        }:
+            self._surface_test_active = False
+            self._surface_move_succeeded = False
+            self._distance_failure_requires_retraction = (
+                status.state == ApplicationCommandState.STATE_CANCELLED
+                or "surface recovery" in detail.lower()
+            )
+        self._update_save_probe_point_state()
+        return None
+
+    def _surface_result_current(self):
+        presentation = self._refinement_presentation
+        if (
+            not self._surface_move_succeeded
+            or presentation is None
+            or self._surface_move_target_m is None
+            or self._surface_move_alignment_pose is None
+        ):
+            return False
+        if not math.isclose(
+            presentation.target_surface_distance_m,
+            self._surface_move_target_m,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            return False
+        return self._poses_equivalent(
+            presentation.candidate_pose(RefinementStage.ALIGNMENT),
+            self._surface_move_alignment_pose,
+        )
+
     def _update_save_probe_point_state(self, _value=None):
         state = self._probe_setup_state
         point_id = self.probe_point_id_field.text().strip()
@@ -81,16 +167,13 @@ class FinalizingInspectionControls(InspectionControls):
             status = f"Probe point '{point_id}' already exists."
         elif not numeric_ready:
             status = "Enter positive tolerances and measurement duration."
-        elif (
-            state.surface_verification_state
-            != ProbeSetupState.SURFACE_VERIFICATION_CONVERGED
-        ):
-            status = "Verify the final surface distance before saving."
+        elif not self._surface_result_current():
+            status = "Run Move Close to Surface successfully before saving."
         elif state.motion_pending:
             status = "Wait for the active probe movement to finish."
         else:
             ready = True
-            status = "Ready to save and retract."
+            status = "Ready to approve the reached pose, save, and retract."
         self.approve_and_retract_button.setEnabled(ready)
         self.save_probe_point_status_label.setText(status)
 
@@ -98,6 +181,10 @@ class FinalizingInspectionControls(InspectionControls):
         super()._refresh_refinement_dialog()
         presentation = self._refinement_presentation
         if presentation is None:
+            self._surface_test_active = False
+            self._surface_move_succeeded = False
+            self._surface_move_target_m = None
+            self._surface_move_alignment_pose = None
             return
         pending = presentation.pending_motion is not None
         probe_page = presentation.active_stage is RefinementStage.PROBE

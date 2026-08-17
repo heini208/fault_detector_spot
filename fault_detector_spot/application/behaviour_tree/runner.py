@@ -31,6 +31,7 @@ from fault_detector_spot.application.behaviour_tree import (
     LandmarkRelocalizer,
     ManipulatorGetGoalTag,
     ManipulatorMoveArmAction,
+    ManipulatorMoveCloseToSurfaceAction,
     ManipulatorMoveRelativeAction,
     NavigateToGoalPose,
     NewCommandGuard,
@@ -300,6 +301,12 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             CommandID.MOVE_ARM_RELATIVE,
             lambda n: ManipulatorMoveRelativeAction(
                 name="MoveArmRelativeAction"
+            ),
+        ),
+        (
+            CommandID.MOVE_CLOSE_TO_SURFACE,
+            lambda n: ManipulatorMoveCloseToSurfaceAction(
+                name="MoveCloseToSurfaceAction"
             ),
         ),
         (
