@@ -26,6 +26,20 @@ def make_camera_info(width=3, height=2):
         0.0,
         1.0,
     ]
+    camera_info.p = [
+        100.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        200.0,
+        0.5,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+    ]
     return camera_info
 
 
@@ -109,6 +123,20 @@ def test_open3d_cloud_handles_big_endian_32fc1_and_invalid_values():
         0.0,
         1.0,
     ]
+    camera_info.p = [
+        100.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        100.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+    ]
     cloud = create_organized_depth_point_cloud(
         make_32fc1([float("nan"), 1.25], bigendian=True),
         camera_info,
@@ -120,3 +148,88 @@ def test_open3d_cloud_handles_big_endian_32fc1_and_invalid_values():
     assert cloud.point_camera(1, 0) == pytest.approx(
         np.array([0.0125, 0.0, 1.25])
     )
+
+
+def test_open3d_cloud_uses_processed_projection_intrinsics():
+    camera_info = make_camera_info(width=3, height=1)
+    camera_info.k = [
+        50.0,
+        0.0,
+        0.0,
+        0.0,
+        50.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+    camera_info.p = [
+        200.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        200.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+    ]
+
+    cloud = create_organized_depth_point_cloud(
+        make_16uc1([0, 0, 2000], width=3, height=1),
+        camera_info,
+    )
+
+    assert cloud.point_camera(2, 0) == pytest.approx(
+        np.array([0.01, 0.0, 2.0])
+    )
+
+
+def test_open3d_cloud_falls_back_to_raw_intrinsics_when_projection_is_empty():
+    camera_info = make_camera_info(width=3, height=1)
+    camera_info.p = [0.0] * 12
+    camera_info.k = [
+        100.0,
+        0.0,
+        1.0,
+        0.0,
+        100.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+
+    cloud = create_organized_depth_point_cloud(
+        make_16uc1([0, 0, 2000], width=3, height=1),
+        camera_info,
+    )
+
+    assert cloud.point_camera(2, 0) == pytest.approx(
+        np.array([0.02, 0.0, 2.0])
+    )
+
+
+def test_open3d_cloud_rejects_stereo_projection_translation():
+    camera_info = make_camera_info()
+    camera_info.p[3] = -20.0
+
+    with pytest.raises(ValueError, match="projection translation"):
+        create_organized_depth_point_cloud(
+            make_16uc1([1000] * 6),
+            camera_info,
+        )
+
+
+def test_open3d_cloud_rejects_non_finite_projection_matrix():
+    camera_info = make_camera_info()
+    camera_info.p[11] = float("nan")
+
+    with pytest.raises(ValueError, match="projection matrix is not finite"):
+        create_organized_depth_point_cloud(
+            make_16uc1([1000] * 6),
+            camera_info,
+        )

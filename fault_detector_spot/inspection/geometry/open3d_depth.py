@@ -52,6 +52,7 @@ def create_organized_depth_point_cloud(
         (depth_image.width, depth_image.height),
         "Depth CameraInfo",
     )
+    _validate_open3d_projection(camera_info, "Depth CameraInfo")
     open3d = require_open3d()
     intrinsic = open3d.camera.PinholeCameraIntrinsic(
         depth_image.width,
@@ -90,23 +91,66 @@ def camera_intrinsics(
     expected_size: Tuple[int, int],
     label: str,
 ) -> Tuple[float, float, float, float]:
-    """Validate and return fx, fy, cx, cy from a ROS CameraInfo."""
-    if len(camera_info.k) != 9:
-        raise ValueError(f"{label} matrix must contain nine values")
+    """Return intrinsics for the image represented by one CameraInfo."""
     expected_width, expected_height = expected_size
     if camera_info.width not in (0, expected_width):
         raise ValueError(f"{label} width does not match its image")
     if camera_info.height not in (0, expected_height):
         raise ValueError(f"{label} height does not match its image")
-    fx = float(camera_info.k[0])
-    fy = float(camera_info.k[4])
-    cx = float(camera_info.k[2])
-    cy = float(camera_info.k[5])
+
+    projection = tuple(float(value) for value in camera_info.p)
+    projection_present = any(
+        not math.isfinite(value) or abs(value) > 1e-12
+        for value in projection
+    )
+    if projection_present:
+        if len(projection) != 12:
+            raise ValueError(
+                f"{label} projection matrix must contain twelve values"
+            )
+        if not all(math.isfinite(value) for value in projection):
+            raise ValueError(f"{label} projection matrix is not finite")
+        fx = projection[0]
+        fy = projection[5]
+        cx = projection[2]
+        cy = projection[6]
+    else:
+        if len(camera_info.k) != 9:
+            raise ValueError(f"{label} matrix must contain nine values")
+        fx = float(camera_info.k[0])
+        fy = float(camera_info.k[4])
+        cx = float(camera_info.k[2])
+        cy = float(camera_info.k[5])
+
     if not all(math.isfinite(value) for value in (fx, fy, cx, cy)):
         raise ValueError(f"{label} contains a non-finite intrinsic")
     if fx <= 0.0 or fy <= 0.0:
         raise ValueError(f"{label} focal lengths must be positive")
     return fx, fy, cx, cy
+
+
+def _validate_open3d_projection(
+    camera_info: CameraInfo,
+    label: str,
+) -> None:
+    projection = tuple(float(value) for value in camera_info.p)
+    projection_present = any(
+        not math.isfinite(value) or abs(value) > 1e-12
+        for value in projection
+    )
+    if not projection_present:
+        return
+    if len(projection) != 12:
+        raise ValueError(
+            f"{label} projection matrix must contain twelve values"
+        )
+    if not all(math.isfinite(value) for value in projection):
+        raise ValueError(f"{label} projection matrix is not finite")
+    if abs(projection[3]) > 1e-12 or abs(projection[7]) > 1e-12:
+        raise ValueError(
+            f"{label} projection translation is incompatible with "
+            "Open3D depth unprojection"
+        )
 
 
 def _depth_arrays(depth_image: Image) -> Tuple[np.ndarray, np.ndarray]:
