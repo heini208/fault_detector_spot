@@ -6,6 +6,9 @@ from typing import Optional
 
 import numpy as np
 
+from fault_detector_spot.inspection.geometry.rotation import (
+    rotation_from_quaternion,
+)
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from .reference_view_depth_projection import ProjectedReferencePoint
 from .reference_view_surface_normal import ReferenceSurfaceNormal
@@ -85,16 +88,11 @@ def _object_positive_x_in_camera(
     controlled_frame_pose_object: PoseData,
 ) -> np.ndarray:
     controlled_frame_pose_object.validate()
-    orientation = controlled_frame_pose_object.orientation
-    rotation_object_camera = _quaternion_rotation_matrix(
-        orientation.x,
-        orientation.y,
-        orientation.z,
-        orientation.w,
+    rotation_object_camera = rotation_from_quaternion(
+        controlled_frame_pose_object.orientation
     )
-    direction = rotation_object_camera.T @ np.array(
-        [1.0, 0.0, 0.0],
-        dtype=float,
+    direction = rotation_object_camera.inv().apply(
+        np.array([1.0, 0.0, 0.0], dtype=float)
     )
     return _normalized_vector(direction, "Tag-frame +X direction")
 
@@ -161,34 +159,3 @@ def _normalized_vector(vector, label: str) -> np.ndarray:
     if not math.isfinite(norm) or norm <= 1e-12:
         raise ValueError(f"{label} cannot be normalized")
     return vector / norm
-
-
-def _quaternion_rotation_matrix(x, y, z, w) -> np.ndarray:
-    values = np.asarray([x, y, z, w], dtype=float)
-    if not np.all(np.isfinite(values)):
-        raise ValueError("Reference-view orientation is not finite")
-    norm = float(np.linalg.norm(values))
-    if not math.isfinite(norm) or norm <= 1e-12:
-        raise ValueError("Reference-view orientation has zero norm")
-    x, y, z, w = values / norm
-
-    return np.array(
-        [
-            [
-                1.0 - 2.0 * (y * y + z * z),
-                2.0 * (x * y - z * w),
-                2.0 * (x * z + y * w),
-            ],
-            [
-                2.0 * (x * y + z * w),
-                1.0 - 2.0 * (x * x + z * z),
-                2.0 * (y * z - x * w),
-            ],
-            [
-                2.0 * (x * z - y * w),
-                2.0 * (y * z + x * w),
-                1.0 - 2.0 * (x * x + y * y),
-            ],
-        ],
-        dtype=float,
-    )

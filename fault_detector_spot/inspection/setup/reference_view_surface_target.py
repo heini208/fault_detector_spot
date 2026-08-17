@@ -6,6 +6,11 @@ from typing import Tuple
 
 import numpy as np
 
+from fault_detector_spot.inspection.geometry.rotation import (
+    quaternion_from_matrix,
+    quaternion_to_rpy as scipy_quaternion_to_rpy,
+    rotation_from_quaternion,
+)
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
@@ -49,7 +54,7 @@ def resolve_reference_surface_target(
     projected_point.point_camera.validate()
     approach_direction.direction_camera.validate()
 
-    rotation_object_camera = _quaternion_rotation_matrix(
+    rotation_object_camera = rotation_from_quaternion(
         controlled_frame_pose_object.orientation
     )
     camera_origin_object = _vector_array(
@@ -67,10 +72,10 @@ def resolve_reference_surface_target(
 
     surface_point_object_array = (
         camera_origin_object
-        + rotation_object_camera @ surface_point_camera
+        + rotation_object_camera.apply(surface_point_camera)
     )
     outward_object_array = _normalized_vector(
-        rotation_object_camera @ outward_camera,
+        rotation_object_camera.apply(outward_camera),
         "Object-frame surface outward direction",
     )
     target_position = (
@@ -115,27 +120,8 @@ def resolve_reference_surface_target(
 def quaternion_to_rpy(
     quaternion: QuaternionData,
 ) -> Tuple[float, float, float]:
-    """Convert one normalized quaternion into roll, pitch, and yaw."""
-    quaternion.validate()
-    x = quaternion.x
-    y = quaternion.y
-    z = quaternion.z
-    w = quaternion.w
-
-    sin_roll = 2.0 * (w * x + y * z)
-    cos_roll = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sin_roll, cos_roll)
-
-    sin_pitch = 2.0 * (w * y - z * x)
-    if abs(sin_pitch) >= 1.0:
-        pitch = math.copysign(math.pi / 2.0, sin_pitch)
-    else:
-        pitch = math.asin(sin_pitch)
-
-    sin_yaw = 2.0 * (w * z + x * y)
-    cos_yaw = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(sin_yaw, cos_yaw)
-    return roll, pitch, yaw
+    """Convert one quaternion into roll, pitch, and yaw with SciPy."""
+    return scipy_quaternion_to_rpy(quaternion)
 
 
 def _surface_facing_orientation(
@@ -160,113 +146,18 @@ def _surface_facing_orientation(
         "Surface target up axis",
     )
     rotation = np.column_stack((local_x, local_y, local_z))
-    return _rotation_matrix_to_quaternion(rotation)
-
-
-def _rotation_matrix_to_quaternion(
-    rotation: np.ndarray,
-) -> QuaternionData:
-    rotation = np.asarray(rotation, dtype=float)
-    if rotation.shape != (3, 3):
-        raise ValueError("Surface target rotation must be 3x3")
-    if not np.all(np.isfinite(rotation)):
-        raise ValueError("Surface target rotation is not finite")
-    if not np.allclose(
-        rotation @ rotation.T,
-        np.eye(3),
-        atol=1e-6,
-    ):
-        raise ValueError("Surface target rotation is not orthonormal")
-    if not math.isclose(
-        float(np.linalg.det(rotation)),
-        1.0,
-        abs_tol=1e-6,
-    ):
-        raise ValueError("Surface target rotation is not right-handed")
-
-    trace = float(np.trace(rotation))
-    if trace > 0.0:
-        scale = math.sqrt(trace + 1.0) * 2.0
-        w = 0.25 * scale
-        x = (rotation[2, 1] - rotation[1, 2]) / scale
-        y = (rotation[0, 2] - rotation[2, 0]) / scale
-        z = (rotation[1, 0] - rotation[0, 1]) / scale
-    elif rotation[0, 0] > rotation[1, 1] and rotation[0, 0] > rotation[2, 2]:
-        scale = math.sqrt(
-            1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]
-        ) * 2.0
-        w = (rotation[2, 1] - rotation[1, 2]) / scale
-        x = 0.25 * scale
-        y = (rotation[0, 1] + rotation[1, 0]) / scale
-        z = (rotation[0, 2] + rotation[2, 0]) / scale
-    elif rotation[1, 1] > rotation[2, 2]:
-        scale = math.sqrt(
-            1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]
-        ) * 2.0
-        w = (rotation[0, 2] - rotation[2, 0]) / scale
-        x = (rotation[0, 1] + rotation[1, 0]) / scale
-        y = 0.25 * scale
-        z = (rotation[1, 2] + rotation[2, 1]) / scale
-    else:
-        scale = math.sqrt(
-            1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]
-        ) * 2.0
-        w = (rotation[1, 0] - rotation[0, 1]) / scale
-        x = (rotation[0, 2] + rotation[2, 0]) / scale
-        y = (rotation[1, 2] + rotation[2, 1]) / scale
-        z = 0.25 * scale
-
-    values = np.array([x, y, z, w], dtype=float)
-    values = values / np.linalg.norm(values)
-    result = QuaternionData(
-        x=float(values[0]),
-        y=float(values[1]),
-        z=float(values[2]),
-        w=float(values[3]),
-    )
-    result.validate()
-    return result
-
-
-def _quaternion_rotation_matrix(
-    quaternion: QuaternionData,
-) -> np.ndarray:
-    quaternion.validate()
-    x = quaternion.x
-    y = quaternion.y
-    z = quaternion.z
-    w = quaternion.w
-    return np.array(
-        [
-            [
-                1.0 - 2.0 * (y * y + z * z),
-                2.0 * (x * y - z * w),
-                2.0 * (x * z + y * w),
-            ],
-            [
-                2.0 * (x * y + z * w),
-                1.0 - 2.0 * (x * x + z * z),
-                2.0 * (y * z - x * w),
-            ],
-            [
-                2.0 * (x * z - y * w),
-                2.0 * (y * z + x * w),
-                1.0 - 2.0 * (x * x + y * y),
-            ],
-        ],
-        dtype=float,
-    )
+    return quaternion_from_matrix(rotation)
 
 
 def _vector_array(vector: Vector3Data, label: str) -> np.ndarray:
     vector.validate()
-    return _normalized_shape_array(
+    return _shape_array(
         [vector.x, vector.y, vector.z],
         label,
     )
 
 
-def _normalized_shape_array(values, label: str) -> np.ndarray:
+def _shape_array(values, label: str) -> np.ndarray:
     array = np.asarray(values, dtype=float)
     if array.shape != (3,) or not np.all(np.isfinite(array)):
         raise ValueError(f"{label} must contain three finite values")
@@ -274,7 +165,7 @@ def _normalized_shape_array(values, label: str) -> np.ndarray:
 
 
 def _normalized_vector(values, label: str) -> np.ndarray:
-    array = _normalized_shape_array(values, label)
+    array = _shape_array(values, label)
     norm = float(np.linalg.norm(array))
     if not math.isfinite(norm) or norm <= 1e-12:
         raise ValueError(f"{label} cannot be normalized")
@@ -282,7 +173,7 @@ def _normalized_vector(values, label: str) -> np.ndarray:
 
 
 def _vector_data(values) -> Vector3Data:
-    array = _normalized_shape_array(values, "Vector")
+    array = _shape_array(values, "Vector")
     return Vector3Data(
         x=float(array[0]),
         y=float(array[1]),
