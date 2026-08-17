@@ -6,6 +6,7 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
 )
 from fault_detector_spot.inspection.setup.probe_surface_verification import (
     ProbeSurfaceVerificationCoordinator,
+    SurfaceVerificationState,
 )
 
 
@@ -114,7 +115,16 @@ class ProbeSurfaceVerificationController:
         draft,
         request_id: str,
     ) -> None:
+        refinement = self.refinement_controller.require_refinement(
+            draft
+        )
         verification = self._session(draft, request_id)
+        if verification.state is SurfaceVerificationState.RECOVERY_REQUIRED:
+            self.verification.restart_after_retraction(
+                verification,
+                refinement,
+            )
+            return
         self.verification.resume_sampling(verification)
 
     def fail_sampling(

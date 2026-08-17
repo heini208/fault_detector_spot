@@ -34,6 +34,7 @@ class _Refinement:
         self.maximum_inward_travel_m = 0.08
         self.verified_pose = None
         self.recovery_message = ""
+        self.retraction_count = 0
 
     def mark_surface_verified(self, pose):
         self.verified_pose = pose
@@ -41,6 +42,11 @@ class _Refinement:
     def require_recovery(self, message):
         self.recovery_required = True
         self.recovery_message = message
+
+    def complete_retraction(self):
+        self.recovery_required = False
+        self.recovery_message = ""
+        self.retraction_count += 1
 
 
 def _samples(distance_m):
@@ -71,6 +77,16 @@ def test_default_policy_uses_slow_steps_and_multi_second_evidence():
     assert policy.maximum_step_m == pytest.approx(0.01)
     assert policy.minimum_samples == 5
     assert policy.minimum_sample_span_sec == pytest.approx(1.0)
+
+
+def test_surface_verification_uses_absolute_workflow_travel_guard():
+    coordinator, session, refinement = _begin()
+
+    assert refinement.maximum_inward_travel_m == pytest.approx(0.08)
+    assert session.maximum_cumulative_correction_m == pytest.approx(1.0)
+    assert session.maximum_cumulative_correction_m == pytest.approx(
+        coordinator.policy.maximum_cumulative_correction_m
+    )
 
 
 def test_verified_initial_samples_converge():
@@ -156,3 +172,28 @@ def test_kinematic_overshoot_requires_recovery():
     assert not decision.verified
     assert decision.correction_m == 0.0
     assert session.state == SurfaceVerificationState.RECOVERY_REQUIRED
+
+
+def test_retraction_restart_clears_previous_attempt_evidence():
+    coordinator, session, refinement = _begin()
+    coordinator.evaluate_samples(session, refinement, _samples(0.09))
+    coordinator.mark_correction_started(session, refinement)
+    coordinator.mark_correction_failed(
+        session,
+        refinement,
+        "possible contact",
+    )
+
+    coordinator.restart_after_retraction(session, refinement)
+
+    assert session.state == SurfaceVerificationState.SAMPLING
+    assert session.measured_distance_m is None
+    assert session.error_m is None
+    assert session.pending_correction_m is None
+    assert session.cumulative_correction_m == 0.0
+    assert session.iteration_count == 0
+    assert session.divergence_count == 0
+    assert not session.any_correction_started
+    assert not session.recovery_required
+    assert not refinement.recovery_required
+    assert refinement.retraction_count == 1

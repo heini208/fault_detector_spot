@@ -1,6 +1,7 @@
 """Boundary tests for server-owned surface-verification execution."""
 
 import inspect
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +22,10 @@ from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
+)
+from fault_detector_spot.inspection.sensing.end_effector_force import (
+    EndEffectorForceSample,
+    ForceBaseline,
 )
 from fault_detector_spot.inspection.sensing.live_surface_distance import (
     SurfaceDistanceSample,
@@ -53,6 +58,15 @@ def _sample(stamp):
         valid_pixel_ratio=0.8,
         spread_m=0.001,
         source_region=ImageRegion(x=0, y=0, width=2, height=2),
+    )
+
+
+def _force_sample(force_x, receipt_time, stamp_seconds):
+    return EndEffectorForceSample(
+        force_hand=Vector3Data(x=force_x, y=0.0, z=0.0),
+        stamp_seconds=stamp_seconds,
+        receipt_time=receipt_time,
+        frame_id="hand",
     )
 
 
@@ -104,6 +118,15 @@ class _StateSource:
         return _pose()
 
 
+class _ForceStateSource(_StateSource):
+    def __init__(self, samples):
+        super().__init__()
+        self.force_samples = list(samples)
+
+    def latest_end_effector_force(self):
+        return self.force_samples.pop(0)
+
+
 def test_surface_distance_correction_is_internal_relative_motion():
     motion = ProbeMotionRequest(
         kind=ProbeMotionKind.ADJUST_PROBE_DISTANCE,
@@ -129,6 +152,16 @@ def test_runner_defaults_to_three_second_sampling():
     )
 
     assert runner.sample_timeout_sec == pytest.approx(3.0)
+
+
+def test_runner_defaults_to_three_contact_retries():
+    runner = verification_runner.ProbeSurfaceVerificationRunner(
+        _Coordinator(),
+        _StateSource(),
+    )
+
+    assert runner.maximum_contact_retries == 3
+    assert runner.force_contact_consecutive_samples == 2
 
 
 def test_runner_accumulates_samples_for_reserved_active_sensor(monkeypatch):
@@ -166,6 +199,36 @@ def test_runner_accumulates_samples_for_reserved_active_sensor(monkeypatch):
         11.0,
         11.25,
     )
+
+
+def test_force_guard_requires_two_consecutive_contact_samples():
+    now = time.monotonic()
+    state_source = _ForceStateSource((
+        _force_sample(6.0, now + 0.01, 10.0),
+        _force_sample(6.5, now + 0.02, 10.1),
+    ))
+    runner = verification_runner.ProbeSurfaceVerificationRunner(
+        _Coordinator(),
+        state_source,
+    )
+    baseline = ForceBaseline(
+        force_hand=Vector3Data.zero(),
+        frame_id="hand",
+        sample_count=10,
+        sample_span_sec=0.6,
+        maximum_component_span_n=0.1,
+    )
+    guard = verification_runner._ForceGuardState(
+        last_receipt_time=now,
+    )
+    axis = Vector3Data(x=1.0, y=0.0, z=0.0)
+
+    first = runner._check_force_guard(baseline, axis, guard)
+    second = runner._check_force_guard(baseline, axis, guard)
+
+    assert first is None
+    assert isinstance(second, verification_runner._ProbableContact)
+    assert "possible contact" in str(second).lower()
 
 
 def test_progress_guard_rejects_probable_obstruction():

@@ -153,19 +153,12 @@ class ProbeSurfaceVerificationCoordinator:
             target_distance_m,
             "Target surface distance",
         )
-        refinement_limit = float(refinement.maximum_inward_travel_m)
-        require_positive_finite_distance(
-            refinement_limit,
-            "Maximum refinement travel",
-        )
-        limit = min(
-            refinement_limit,
-            self.policy.maximum_cumulative_correction_m,
-        )
         return ProbeSurfaceVerificationSession(
             request_id=request_id,
             target_distance_m=target_distance_m,
-            maximum_cumulative_correction_m=limit,
+            maximum_cumulative_correction_m=(
+                self.policy.maximum_cumulative_correction_m
+            ),
             policy=self.policy,
             detail="Collecting fresh post-settle surface-distance samples",
         )
@@ -369,6 +362,37 @@ class ProbeSurfaceVerificationCoordinator:
         )
         session.state = SurfaceVerificationState.SAMPLING
         session.detail = "Collecting fresh post-settle samples"
+
+    def restart_after_retraction(
+        self,
+        session: ProbeSurfaceVerificationSession,
+        refinement,
+    ) -> None:
+        """Reset one failed attempt after reaching its original aligned pose."""
+        self._require_state(
+            session,
+            SurfaceVerificationState.RECOVERY_REQUIRED,
+        )
+        if refinement.pending_motion is not None:
+            raise RuntimeError(
+                "Surface verification cannot restart during robot movement"
+            )
+        refinement.complete_retraction()
+        session.state = SurfaceVerificationState.SAMPLING
+        session.measured_distance_m = None
+        session.error_m = None
+        session.last_correction_m = None
+        session.pending_correction_m = None
+        session.cumulative_correction_m = 0.0
+        session.iteration_count = 0
+        session.divergence_count = 0
+        session.previous_error_m = None
+        session.correction_started = False
+        session.any_correction_started = False
+        session.recovery_required = False
+        session.detail = (
+            "Retraction reached; collecting fresh surface-distance samples"
+        )
 
     def mark_correction_failed(
         self,
