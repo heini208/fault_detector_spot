@@ -21,9 +21,6 @@ from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
 )
-from fault_detector_spot.inspection.setup.probe_reference_preview import (
-    ProbeReferencePreviewSource,
-)
 from fault_detector_spot.inspection.setup.probe_setup_state_adapter import (
     ProbeSetupStateAdapter,
 )
@@ -38,15 +35,13 @@ class ProbeSetupApi:
         coordinator: ProbeSetupCoordinator,
         state_publisher,
         state_adapter: ProbeSetupStateAdapter,
-        preview_source=None,
+        preview_source,
     ):
         self.node = node
         self.coordinator = coordinator
         self.state_publisher = state_publisher
         self.state_adapter = state_adapter
-        self.preview_source = preview_source or ProbeReferencePreviewSource(
-            coordinator.reference_repository
-        )
+        self.preview_source = preview_source
         self._callback_group = ReentrantCallbackGroup()
         self._handlers = self._transaction_handlers()
         self._execute_service = node.create_service(
@@ -345,3 +340,4 @@ class ProbeSetupApi:
 
 
 __all__ = ["ProbeSetupApi"]
+

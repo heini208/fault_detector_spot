@@ -77,6 +77,9 @@ from fault_detector_spot.application.api.probe_surface_verification_api import (
 from fault_detector_spot.inspection.setup.probe_setup_state_adapter import (
     ProbeSetupStateAdapter,
 )
+from fault_detector_spot.inspection.setup.probe_reference_preview import (
+    ProbeReferencePreviewSource,
+)
 from fault_detector_spot.inspection.setup import (
     probe_setup_motion_state_source,
 )
@@ -221,6 +224,7 @@ class ApplicationApiNode(Node):
             self.application_controller.probe_setup_coordinator,
             self.probe_setup_state_publisher,
             self.probe_setup_state_adapter,
+            ProbeReferencePreviewSource(reference_repository),
         )
         self.probe_reference_capture_coordinator = (
             ProbeReferenceCaptureCoordinator(
@@ -250,7 +254,6 @@ class ApplicationApiNode(Node):
             self.application_controller.probe_setup_coordinator,
             self.probe_setup_state_publisher,
             self.probe_setup_state_adapter,
-            self.sensor_attachment_controller,
         )
         self.probe_refinement_finalization_api = (
             ProbeRefinementFinalizationApi(
@@ -504,3 +507,4 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+

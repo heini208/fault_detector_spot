@@ -83,6 +83,13 @@ def test_refinement_reserves_one_attachment_until_workflow_end():
 
 def test_transport_and_workflows_use_public_coordinator_boundaries():
     api = source("application/api/probe_setup_api.py")
+    verification_api = source(
+        "application/api/probe_surface_verification_api.py"
+    )
+    application = source("application/api/application_api_node.py")
+    probe_coordinator = source(
+        "application/coordinators/probe_setup_coordinator.py"
+    )
     setup = source("application/coordinators/setup_coordinator.py")
     workflow_paths = (
         "application/coordinators/navigation_setup_coordinator.py",
@@ -92,11 +99,22 @@ def test_transport_and_workflows_use_public_coordinator_boundaries():
         "application/coordinators/probe_surface_verification_runner.py",
         "application/api/navigation_setup_api.py",
         "application/api/probe_reference_capture_api.py",
+        "application/api/probe_surface_verification_api.py",
     )
     workflows = "\n".join(source(path) for path in workflow_paths)
 
     assert ".refinement_controller" not in api
     assert ".object_repository" not in api
+    assert "coordinator.reference_repository" not in api
+    assert "self.preview_source = preview_source" in api
+    assert "ProbeReferencePreviewSource(reference_repository)" in application
+    assert "ProbeSurfaceVerificationRunner" not in verification_api
+    assert "sensor_attachment_controller" not in verification_api
+    assert "coordinator.motion_state_source" not in verification_api
+    assert "self.coordinator.run_surface_verification(" in verification_api
+    assert "def run_surface_verification(" in probe_coordinator
+    assert "ProbeSurfaceVerificationRunner(" in probe_coordinator
+    assert "runner.close()" in probe_coordinator
     assert ".setup_coordinator.is_current" not in api
     assert "def cancel_operation(" in setup
     assert "def require_command_lane_idle(" in setup

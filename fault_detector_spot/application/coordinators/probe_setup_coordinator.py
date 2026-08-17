@@ -29,6 +29,9 @@ from fault_detector_spot.application.coordinators.probe_refinement_controller im
 from fault_detector_spot.application.coordinators.probe_surface_verification_controller import (
     ProbeSurfaceVerificationController,
 )
+from fault_detector_spot.application.coordinators.probe_surface_verification_runner import (
+    ProbeSurfaceVerificationRunner,
+)
 from fault_detector_spot.inspection.setup.probe_definition_service import (
     ProbeDefinitionService,
 )
@@ -120,6 +123,17 @@ class ProbeSetupCoordinator:
             self.refinement_controller,
             self._lock,
         )
+        self._surface_verification_runner = None
+        if motion_state_source is not None:
+            self._surface_verification_runner = (
+                ProbeSurfaceVerificationRunner(
+                    self,
+                    motion_state_source,
+                    sensor_attachment_controller=(
+                        sensor_attachment_controller
+                    ),
+                )
+            )
         self._drafts = {}
         self._context_locks = {}
 
@@ -478,6 +492,26 @@ class ProbeSetupCoordinator:
             draft = self._selected_draft(context)
             self.surface_controller.begin(draft, request_id)
             return self.snapshot(context)
+
+    def run_surface_verification(
+        self,
+        context: SetupContextSnapshot,
+        request_id: str,
+        cancel_requested,
+        state_changed=None,
+    ) -> ProbeSetupSnapshot:
+        """Run the server-owned surface verification workflow."""
+        runner = self._surface_verification_runner
+        if runner is None:
+            raise RuntimeError(
+                "Probe surface verification runtime is unavailable"
+            )
+        return runner.run(
+            context,
+            request_id,
+            cancel_requested,
+            state_changed,
+        )
 
     def calculate_surface_orientation(
         self,
@@ -858,6 +892,10 @@ class ProbeSetupCoordinator:
 
     def close(self) -> None:
         """Close every probe context owned by this coordinator."""
+        runner = self._surface_verification_runner
+        if runner is not None:
+            runner.close()
+            self._surface_verification_runner = None
         with self._lock:
             contexts = tuple(
                 draft.context
@@ -1006,3 +1044,4 @@ __all__ = [
     "ProbeSetupCoordinator",
     "ProbeSetupMotionStatus",
 ]
+
