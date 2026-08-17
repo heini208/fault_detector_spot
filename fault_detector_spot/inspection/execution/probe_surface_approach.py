@@ -3,6 +3,7 @@
 import math
 from dataclasses import dataclass
 
+from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.sensing.surface_distance_validation import (
     require_positive_finite_distance,
@@ -14,9 +15,10 @@ from fault_detector_spot.inspection.setup.reference_probe_setup import (
 
 @dataclass(frozen=True)
 class ProbeSurfaceApproachPlan:
-    """Frozen surface geometry for one close-range approach attempt."""
+    """Frozen fitted surface geometry for one close-range approach attempt."""
 
     surface_point_execution: tuple[float, float, float]
+    surface_normal_execution: tuple[float, float, float]
     inward_direction_execution: tuple[float, float, float]
     starting_probe_position_execution: tuple[float, float, float]
     measured_initial_distance_m: float
@@ -26,6 +28,9 @@ class ProbeSurfaceApproachPlan:
 
     def surface_point(self) -> Vector3Data:
         return Vector3Data(*self.surface_point_execution)
+
+    def surface_normal(self) -> Vector3Data:
+        return Vector3Data(*self.surface_normal_execution)
 
     def inward_direction(self) -> Vector3Data:
         return Vector3Data(*self.inward_direction_execution)
@@ -49,8 +54,9 @@ def freeze_probe_surface_approach(
     measured_initial_distance_m: float,
     target_distance_m: float,
     maximum_travel_m: float,
+    surface_plane_probe: SurfacePlane = None,
 ) -> ProbeSurfaceApproachPlan:
-    """Freeze one measured surface and its inward approach direction."""
+    """Freeze the fitted surface plane and current probe approach axis."""
     current_probe_pose_execution.validate()
     for value, label in (
         (measured_initial_distance_m, "Measured surface distance"),
@@ -68,26 +74,81 @@ def freeze_probe_surface_approach(
             "Target surface distance exceeds measured surface distance"
         )
 
-    planned_travel_m = measured_initial_distance_m - target_distance_m
+    inward = _normalized(
+        rotate_vector(
+            current_probe_pose_execution.orientation,
+            Vector3Data(x=1.0, y=0.0, z=0.0),
+        ),
+        "Probe inward direction",
+    )
+    position = current_probe_pose_execution.position
+
+    if surface_plane_probe is None:
+        surface_point = Vector3Data(
+            x=float(position.x) + inward.x * measured_initial_distance_m,
+            y=float(position.y) + inward.y * measured_initial_distance_m,
+            z=float(position.z) + inward.z * measured_initial_distance_m,
+        )
+        surface_normal = Vector3Data(
+            x=-inward.x,
+            y=-inward.y,
+            z=-inward.z,
+        )
+    else:
+        surface_plane_probe.validate()
+        surface_point_relative = surface_plane_probe.point
+        surface_normal_relative = surface_plane_probe.normal
+        surface_point_rotated = rotate_vector(
+            current_probe_pose_execution.orientation,
+            surface_point_relative,
+        )
+        surface_normal = _normalized(
+            rotate_vector(
+                current_probe_pose_execution.orientation,
+                surface_normal_relative,
+            ),
+            "Surface outward normal",
+        )
+        surface_point = Vector3Data(
+            x=position.x + surface_point_rotated.x,
+            y=position.y + surface_point_rotated.y,
+            z=position.z + surface_point_rotated.z,
+        )
+        if _dot(surface_normal, inward) >= -1e-6:
+            raise ValueError(
+                "Fitted surface normal does not oppose probe local +X"
+            )
+
+    initial_distance = _plane_distance(
+        surface_point,
+        surface_normal,
+        position,
+    )
+    if surface_plane_probe is not None:
+        measured_initial_distance_m = initial_distance
+
+    alignment = -_dot(surface_normal, inward)
+    if alignment <= 1e-6:
+        raise ValueError("Probe approach axis does not intersect fitted surface")
+    planned_travel_m = (
+        measured_initial_distance_m - target_distance_m
+    ) / alignment
     if planned_travel_m > maximum_travel_m + 1e-12:
         raise ValueError(
             "Required surface approach exceeds maximum travel"
         )
 
-    inward = rotate_vector(
-        current_probe_pose_execution.orientation,
-        Vector3Data(x=1.0, y=0.0, z=0.0),
-    )
-    inward = _normalized(inward, "Probe inward direction")
-    position = current_probe_pose_execution.position
-    surface_point = (
-        float(position.x) + inward.x * measured_initial_distance_m,
-        float(position.y) + inward.y * measured_initial_distance_m,
-        float(position.z) + inward.z * measured_initial_distance_m,
-    )
-
     return ProbeSurfaceApproachPlan(
-        surface_point_execution=surface_point,
+        surface_point_execution=(
+            surface_point.x,
+            surface_point.y,
+            surface_point.z,
+        ),
+        surface_normal_execution=(
+            surface_normal.x,
+            surface_normal.y,
+            surface_normal.z,
+        ),
         inward_direction_execution=(inward.x, inward.y, inward.z),
         starting_probe_position_execution=(
             float(position.x),
@@ -127,6 +188,10 @@ def evaluate_probe_surface_approach(
         "Frozen inward direction",
     )
     surface = Vector3Data(*plan.surface_point_execution)
+    normal = _normalized(
+        Vector3Data(*plan.surface_normal_execution),
+        "Frozen surface normal",
+    )
     start = Vector3Data(*plan.starting_probe_position_execution)
     current = current_probe_pose_execution.position
 
@@ -140,12 +205,7 @@ def evaluate_probe_surface_approach(
     axis_dot = max(-1.0, min(1.0, _dot(inward, current_inward)))
     axis_error_rad = math.acos(axis_dot)
 
-    to_surface = Vector3Data(
-        x=surface.x - current.x,
-        y=surface.y - current.y,
-        z=surface.z - current.z,
-    )
-    estimated_distance_m = _dot(to_surface, inward)
+    estimated_distance_m = _plane_distance(surface, normal, current)
     if estimated_distance_m < -tolerance_m:
         raise ValueError("Probe passed the frozen surface plane")
 
@@ -174,7 +234,12 @@ def evaluate_probe_surface_approach(
         requested_step_m = 0.0
         remaining_inward_travel_m = 0.0
     else:
-        remaining_inward_travel_m = max(0.0, error_m)
+        alignment = -_dot(normal, inward)
+        if alignment <= 1e-6:
+            raise ValueError(
+                "Probe approach axis no longer intersects fitted surface"
+            )
+        remaining_inward_travel_m = max(0.0, error_m / alignment)
         remaining_guard_m = (
             plan.maximum_travel_m - max(0.0, traveled_inward_m)
         )
@@ -200,6 +265,21 @@ def evaluate_probe_surface_approach(
         axis_error_rad=axis_error_rad,
         requested_step_m=requested_step_m,
         reached=reached,
+    )
+
+
+def _plane_distance(
+    surface_point: Vector3Data,
+    outward_normal: Vector3Data,
+    point: Vector3Data,
+) -> float:
+    return _dot(
+        Vector3Data(
+            x=point.x - surface_point.x,
+            y=point.y - surface_point.y,
+            z=point.z - surface_point.z,
+        ),
+        outward_normal,
     )
 
 

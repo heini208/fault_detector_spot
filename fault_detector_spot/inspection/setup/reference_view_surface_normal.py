@@ -9,7 +9,9 @@ from sensor_msgs.msg import CameraInfo, Image
 from fault_detector_spot.inspection.geometry.open3d_depth import (
     OrganizedDepthPointCloud,
     create_organized_depth_point_cloud,
-    require_open3d,
+)
+from fault_detector_spot.inspection.geometry.surface_plane import (
+    fit_surface_plane,
 )
 from fault_detector_spot.inspection.model.models import Vector3Data
 from .reference_view_depth_projection import ProjectedReferencePoint
@@ -39,7 +41,7 @@ def estimate_reference_surface_normal(
     minimum_plane_inlier_ratio: float = 0.60,
     ransac_iterations: int = 100,
 ) -> ReferenceSurfaceNormal:
-    """Fit a robust local plane with Open3D RANSAC."""
+    """Fit a robust local plane with shared Open3D geometry."""
     _validate_inputs(
         projected_point,
         neighborhood_radius_px,
@@ -72,15 +74,28 @@ def estimate_reference_surface_normal(
         if len(samples) < max(minimum_sample_count, 3):
             continue
         try:
-            return _fit_surface_plane(
-                projected_point,
+            plane = fit_surface_plane(
                 samples,
-                radius,
-                minimum_sample_count,
+                projected_point.frame_id,
                 maximum_plane_rmse_m,
-                minimum_tangent_spread_m,
+                max(minimum_sample_count, 3),
                 minimum_plane_inlier_ratio,
                 ransac_iterations,
+                minimum_tangent_spread_m,
+            ).oriented_toward(Vector3Data(x=0.0, y=0.0, z=0.0))
+            if plane.rmse_m > maximum_plane_rmse_m:
+                raise ValueError(
+                    "Local depth is not planar enough: "
+                    f"RMSE {plane.rmse_m:.4f} m exceeds "
+                    f"{maximum_plane_rmse_m:.4f} m using "
+                    f"{plane.inlier_count} RANSAC inliers"
+                )
+            return ReferenceSurfaceNormal(
+                projected_point=projected_point,
+                normal_camera=plane.normal,
+                sample_count=plane.inlier_count,
+                plane_rmse_m=plane.rmse_m,
+                neighborhood_radius_px=radius,
             )
         except ValueError as exception:
             last_error = exception
@@ -92,102 +107,6 @@ def estimate_reference_surface_normal(
         f"estimation: {best_sample_count} < {minimum_sample_count}; "
         f"searched through radius {maximum_neighborhood_radius_px} px"
     )
-
-
-def _fit_surface_plane(
-    projected_point,
-    samples,
-    radius,
-    minimum_sample_count,
-    maximum_plane_rmse_m,
-    minimum_tangent_spread_m,
-    minimum_plane_inlier_ratio,
-    ransac_iterations,
-) -> ReferenceSurfaceNormal:
-    open3d = require_open3d()
-    points = np.asarray(samples, dtype=np.float64)
-    point_cloud = open3d.geometry.PointCloud(
-        open3d.utility.Vector3dVector(points)
-    )
-    plane_model, inlier_indices = point_cloud.segment_plane(
-        maximum_plane_rmse_m,
-        3,
-        ransac_iterations,
-    )
-    inlier_indices = np.asarray(inlier_indices, dtype=int)
-    minimum_inliers = max(minimum_sample_count, 3)
-    inlier_ratio = len(inlier_indices) / len(points)
-    if (
-        len(inlier_indices) < minimum_inliers
-        or inlier_ratio < minimum_plane_inlier_ratio
-    ):
-        raise ValueError(
-            "Local depth is not planar enough: "
-            f"RANSAC kept {len(inlier_indices)}/{len(points)} samples "
-            f"({inlier_ratio:.0%})"
-        )
-
-    normal = np.asarray(plane_model[:3], dtype=float)
-    normal_norm = float(np.linalg.norm(normal))
-    if not math.isfinite(normal_norm) or normal_norm <= 0.0:
-        raise ValueError("Surface normal cannot be normalized")
-    normal = normal / normal_norm
-    plane_offset = float(plane_model[3]) / normal_norm
-
-    inlier_points = points[inlier_indices]
-    _validate_tangent_spread(
-        inlier_points,
-        minimum_tangent_spread_m,
-    )
-
-    camera_direction = -np.asarray([
-        projected_point.point_camera.x,
-        projected_point.point_camera.y,
-        projected_point.point_camera.z,
-    ], dtype=float)
-    if float(np.dot(normal, camera_direction)) < 0.0:
-        normal = -normal
-        plane_offset = -plane_offset
-
-    distances = inlier_points @ normal + plane_offset
-    plane_rmse_m = math.sqrt(float(np.mean(distances ** 2)))
-    if not math.isfinite(plane_rmse_m):
-        raise ValueError("Surface-plane error is not finite")
-    if plane_rmse_m > maximum_plane_rmse_m:
-        raise ValueError(
-            "Local depth is not planar enough: "
-            f"RMSE {plane_rmse_m:.4f} m exceeds "
-            f"{maximum_plane_rmse_m:.4f} m using "
-            f"{len(inlier_points)} RANSAC inliers"
-        )
-
-    result = ReferenceSurfaceNormal(
-        projected_point=projected_point,
-        normal_camera=Vector3Data(
-            x=float(normal[0]),
-            y=float(normal[1]),
-            z=float(normal[2]),
-        ),
-        sample_count=len(inlier_points),
-        plane_rmse_m=plane_rmse_m,
-        neighborhood_radius_px=radius,
-    )
-    result.normal_camera.validate()
-    return result
-
-
-def _validate_tangent_spread(points, minimum_tangent_spread_m) -> None:
-    centroid = points.mean(axis=0)
-    centered = points - centroid
-    covariance = centered.T @ centered / len(points)
-    eigenvalues = np.linalg.eigvalsh(covariance)
-    if not np.all(np.isfinite(eigenvalues)):
-        raise ValueError("Surface-plane covariance is not finite")
-    tangent_spread_m = math.sqrt(max(float(eigenvalues[1]), 0.0))
-    if tangent_spread_m < minimum_tangent_spread_m:
-        raise ValueError(
-            "Depth neighborhood does not span a two-dimensional surface"
-        )
 
 
 def _candidate_radii(initial_radius: int, maximum_radius: int):
@@ -302,4 +221,3 @@ def _require_positive_integer(value, label) -> None:
 def _require_positive_finite(value, label) -> None:
     if not math.isfinite(value) or value <= 0.0:
         raise ValueError(f"{label} must be positive and finite")
-

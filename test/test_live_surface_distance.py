@@ -1,4 +1,4 @@
-"""Tests for live probe-axis distance measurement and correction."""
+"""Tests for live fitted-plane surface distance and correction."""
 
 import math
 import struct
@@ -90,7 +90,7 @@ def distance_sample(distance_m, stamp_seconds, frame_id="hand_depth"):
     )
 
 
-def test_measurement_reports_positive_x_tip_to_surface_distance():
+def test_measurement_reports_fitted_positive_x_tip_to_surface_distance():
     image, info = planar_depth()
 
     sample = measure_probe_surface_distance(
@@ -99,11 +99,12 @@ def test_measurement_reports_positive_x_tip_to_surface_distance():
         probe_to_camera_pose(),
     )
 
-    assert sample.distance_m == pytest.approx(0.10, abs=1e-6)
+    assert sample.distance_m == pytest.approx(0.10, abs=1e-5)
     assert sample.frame_id == "hand_depth"
     assert sample.stamp_seconds == pytest.approx(10.0)
     assert sample.sample_count >= 12
-    assert sample.spread_m == pytest.approx(0.0, abs=1e-6)
+    assert sample.surface_plane_probe is not None
+    assert sample.surface_plane_probe.normal.x == pytest.approx(-1.0, abs=1e-5)
 
 
 def test_measurement_rejects_surface_behind_probe_axis():
