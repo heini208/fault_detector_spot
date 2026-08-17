@@ -6,6 +6,7 @@ import struct
 import pytest
 from sensor_msgs.msg import CameraInfo, Image
 
+from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
 from fault_detector_spot.inspection.sensing.live_surface_distance import (
     SurfaceDistanceSample,
     aggregate_surface_distance_samples,
@@ -78,7 +79,12 @@ def opposite_probe_to_camera_pose():
     )
 
 
-def distance_sample(distance_m, stamp_seconds, frame_id="hand_depth"):
+def distance_sample(
+    distance_m,
+    stamp_seconds,
+    frame_id="hand_depth",
+    surface_plane_probe=None,
+):
     return SurfaceDistanceSample(
         distance_m=distance_m,
         stamp_seconds=stamp_seconds,
@@ -87,6 +93,19 @@ def distance_sample(distance_m, stamp_seconds, frame_id="hand_depth"):
         valid_pixel_ratio=0.8,
         spread_m=0.001,
         source_region=ImageRegion(x=0, y=0, width=3, height=3),
+        surface_plane_probe=surface_plane_probe,
+    )
+
+
+def fitted_plane(distance_m):
+    return SurfacePlane(
+        point=Vector3Data(x=distance_m, y=0.0, z=0.0),
+        normal=Vector3Data(x=-1.0, y=0.0, z=0.0),
+        frame_id="probe",
+        inlier_count=30,
+        sample_count=30,
+        inlier_ratio=1.0,
+        rmse_m=0.001,
     )
 
 
@@ -258,3 +277,61 @@ def test_aggregate_rejects_unstable_or_directionally_mixed_frames():
             maximum_step_m=0.02,
             stability_tolerance_m=0.02,
         )
+
+
+def test_aggregate_uses_plane_closest_to_median_distance():
+    far_plane = fitted_plane(0.079)
+    median_plane = fitted_plane(0.080)
+    newest_plane = fitted_plane(0.081)
+    samples = [
+        distance_sample(0.079, 10.0, surface_plane_probe=far_plane),
+        distance_sample(0.080, 10.1, surface_plane_probe=median_plane),
+        distance_sample(0.081, 10.2, surface_plane_probe=newest_plane),
+    ]
+
+    result = aggregate_surface_distance_samples(
+        samples,
+        target_distance_m=0.03,
+        maximum_step_m=0.02,
+    )
+
+    assert result.distance_m == pytest.approx(0.080)
+    assert result.surface_plane_probe is median_plane
+
+
+def test_aggregate_uses_newest_plane_when_median_distance_ties():
+    older_plane = fitted_plane(0.079)
+    newer_plane = fitted_plane(0.081)
+    samples = [
+        distance_sample(0.079, 10.0, surface_plane_probe=older_plane),
+        distance_sample(0.081, 10.1, surface_plane_probe=newer_plane),
+        distance_sample(0.083, 10.2, surface_plane_probe=fitted_plane(0.083)),
+        distance_sample(0.077, 10.3, surface_plane_probe=fitted_plane(0.077)),
+    ]
+
+    result = aggregate_surface_distance_samples(
+        samples,
+        target_distance_m=0.03,
+        maximum_step_m=0.02,
+        minimum_samples=4,
+        stability_tolerance_m=0.01,
+    )
+
+    assert result.distance_m == pytest.approx(0.080)
+    assert result.surface_plane_probe is newer_plane
+
+
+def test_aggregate_keeps_plane_optional_for_legacy_non_geometry_samples():
+    samples = [
+        distance_sample(0.079, 10.0),
+        distance_sample(0.080, 10.1),
+        distance_sample(0.081, 10.2),
+    ]
+
+    result = aggregate_surface_distance_samples(
+        samples,
+        target_distance_m=0.03,
+        maximum_step_m=0.02,
+    )
+
+    assert result.surface_plane_probe is None

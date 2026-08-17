@@ -289,7 +289,15 @@ def aggregate_surface_distance_samples(
         sample for sample in selected
         if sample.surface_plane_probe is not None
     ]
-    plane = fitted_samples[-1].surface_plane_probe if fitted_samples else None
+    representative = _representative_fitted_sample(
+        fitted_samples,
+        distance,
+    )
+    plane = (
+        representative.surface_plane_probe
+        if representative is not None
+        else None
+    )
     return SurfaceDistanceAggregate(
         distance_m=distance,
         frame_id=selected[-1].frame_id,
@@ -299,6 +307,18 @@ def aggregate_surface_distance_samples(
         verified=verified,
         correction=correction,
         surface_plane_probe=plane,
+    )
+
+
+def _representative_fitted_sample(samples, median_distance_m):
+    if not samples:
+        return None
+    return min(
+        samples,
+        key=lambda sample: (
+            abs(sample.distance_m - median_distance_m),
+            -sample.stamp_seconds,
+        ),
     )
 
 
