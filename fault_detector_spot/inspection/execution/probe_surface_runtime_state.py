@@ -12,15 +12,14 @@ from bosdyn.client.frame_helpers import (
 )
 from fault_detector_msgs.msg import SensorAttachmentState
 from geometry_msgs.msg import Vector3Stamped
-from rclpy.duration import Duration
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
+from fault_detector_spot.inspection.geometry.rotation import rotate_vector
 from fault_detector_spot.inspection.model.models import (
     PoseData,
-    QuaternionData,
     Vector3Data,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
@@ -33,10 +32,8 @@ from fault_detector_spot.inspection.sensing.end_effector_force import (
 from fault_detector_spot.inspection.sensing.live_surface_distance import (
     measure_probe_surface_distance,
 )
-from fault_detector_spot.inspection.setup.reference_probe_setup import (
-    rotate_vector,
-)
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
+from fault_detector_spot.shared.ros.tf_transforms import lookup_pose_data
 
 
 HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
@@ -272,28 +269,12 @@ class ProbeSurfaceRuntimeStateSource:
         source_frame: str,
         lookup_time=None,
     ) -> PoseData:
-        transform = self._tf_buffer.lookup_transform(
+        return lookup_pose_data(
+            self._tf_buffer,
             target_frame,
             source_frame,
-            lookup_time if lookup_time is not None else Time(),
-            timeout=Duration(seconds=0.5),
+            lookup_time=lookup_time,
         )
-        value = transform.transform
-        pose = PoseData(
-            position=Vector3Data(
-                x=value.translation.x,
-                y=value.translation.y,
-                z=value.translation.z,
-            ),
-            orientation=QuaternionData(
-                x=value.rotation.x,
-                y=value.rotation.y,
-                z=value.rotation.z,
-                w=value.rotation.w,
-            ),
-        )
-        pose.validate()
-        return pose
 
     def _receive_hand_depth(self, message: Image) -> None:
         with self._lock:
