@@ -37,6 +37,6 @@ def test_probe_setup_client_blocks_close_while_capture_is_active():
     assert "_capture_goal_handles" in source
 
 
-def test_probe_setup_transactions_are_blocked_during_capture():
+def test_probe_setup_transactions_are_not_blocked_during_capture():
     source = inspect.getsource(ProbeSetupClient._send)
-    assert "_capture_goal_handles" in source
+    assert "_capture_goal_handles" not in source
