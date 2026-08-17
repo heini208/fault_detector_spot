@@ -16,7 +16,6 @@ from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
 
 
 def make_camera_info(width=11, height=11, focal_length=100.0):
-    """Create a centered registered-depth camera model."""
     camera_info = CameraInfo()
     camera_info.header.frame_id = "hand_color_image_sensor"
     camera_info.width = width
@@ -36,7 +35,6 @@ def make_camera_info(width=11, height=11, focal_length=100.0):
 
 
 def make_32fc1(values, width=11, height=11):
-    """Create one floating-point depth image in metres."""
     image = Image()
     image.header.frame_id = "hand_color_image_sensor"
     image.width = width
@@ -54,7 +52,6 @@ def plane_depth_values(
     normal,
     center_depth_m,
 ):
-    """Render ideal ray-plane intersections into a depth image."""
     nx, ny, nz = normal
     fx = camera_info.k[0]
     fy = camera_info.k[4]
@@ -71,7 +68,6 @@ def plane_depth_values(
 
 
 def estimate(depth_image, camera_info, pixel=None, **kwargs):
-    """Project the selected point and estimate its local normal."""
     pixel = pixel or ImagePoint(u=5, v=5)
     projected = project_reference_pixel(pixel, depth_image, camera_info)
     return estimate_reference_surface_normal(
@@ -83,7 +79,6 @@ def estimate(depth_image, camera_info, pixel=None, **kwargs):
 
 
 def test_front_facing_plane_normal_points_toward_camera():
-    """A flat frontal surface produces a camera-facing negative-Z normal."""
     camera_info = make_camera_info()
     depth = make_32fc1([1.0] * 121)
 
@@ -97,7 +92,6 @@ def test_front_facing_plane_normal_points_toward_camera():
 
 
 def test_tilted_plane_normal_is_recovered_and_normalized():
-    """Plane fitting recovers a tilted camera-facing surface direction."""
     camera_info = make_camera_info()
     desired = (0.2, -0.1, -math.sqrt(0.95))
     values = plane_depth_values(
@@ -120,7 +114,6 @@ def test_tilted_plane_normal_is_recovered_and_normalized():
 
 
 def test_background_depth_is_excluded_near_surface_edge():
-    """A distant background cannot tilt the selected foreground normal."""
     width = 11
     height = 11
     camera_info = make_camera_info(width, height)
@@ -141,8 +134,25 @@ def test_background_depth_is_excluded_near_surface_edge():
     assert result.sample_count >= 20
 
 
+def test_ransac_ignores_a_small_number_of_depth_outliers():
+    camera_info = make_camera_info()
+    values = [1.0] * 121
+    for u, v in ((3, 3), (7, 3), (3, 7), (7, 7)):
+        values[v * 11 + u] = 1.04
+    depth = make_32fc1(values)
+
+    result = estimate(
+        depth,
+        camera_info,
+        maximum_depth_delta_m=0.05,
+        maximum_plane_rmse_m=0.005,
+    )
+
+    assert result.normal_camera.z == pytest.approx(-1.0, abs=1e-6)
+    assert result.plane_rmse_m < 0.005
+
+
 def test_too_few_valid_samples_are_rejected():
-    """A sparse depth neighborhood cannot define a surface plane."""
     camera_info = make_camera_info()
     values = [float("nan")] * 121
     for u, v in ((5, 5), (4, 5), (6, 5), (5, 4), (5, 6)):
@@ -153,8 +163,7 @@ def test_too_few_valid_samples_are_rejected():
         estimate(depth, camera_info)
 
 
-def test_nonplanar_neighborhood_is_rejected_by_fit_error():
-    """Depth variation that does not describe a plane remains invalid."""
+def test_nonplanar_neighborhood_is_rejected_by_inlier_ratio():
     camera_info = make_camera_info()
     values = []
     for v in range(11):
@@ -172,7 +181,6 @@ def test_nonplanar_neighborhood_is_rejected_by_fit_error():
 
 
 def test_invalid_configuration_is_rejected():
-    """Estimator thresholds must be positive and meaningful."""
     camera_info = make_camera_info()
     depth = make_32fc1([1.0] * 121)
     projected = project_reference_pixel(
@@ -187,4 +195,12 @@ def test_invalid_configuration_is_rejected():
             depth,
             camera_info,
             minimum_sample_count=0,
+        )
+
+    with pytest.raises(ValueError, match="within"):
+        estimate_reference_surface_normal(
+            projected,
+            depth,
+            camera_info,
+            minimum_plane_inlier_ratio=0.0,
         )
