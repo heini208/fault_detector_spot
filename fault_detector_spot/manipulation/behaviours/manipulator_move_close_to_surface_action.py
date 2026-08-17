@@ -223,9 +223,13 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
                     f"{aggregate.distance_m:.4f} m"
                 )
                 return Status.SUCCESS
+            if aggregate.surface_plane_probe is None:
+                raise RuntimeError(
+                    "Stable surface sampling did not produce a fitted plane"
+                )
             self._plan = freeze_probe_surface_approach(
                 current_probe_pose_execution=current_probe,
-                measured_initial_distance_m=aggregate.distance_m,
+                surface_plane_probe=aggregate.surface_plane_probe,
                 target_distance_m=self._command.target_surface_distance_m,
                 maximum_travel_m=self.maximum_travel_m,
             )

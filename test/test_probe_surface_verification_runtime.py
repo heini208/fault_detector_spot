@@ -18,6 +18,7 @@ from fault_detector_spot.application.coordinators import (
 from fault_detector_spot.inspection.execution.probe_surface_approach import (
     freeze_probe_surface_approach,
 )
+from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
@@ -46,6 +47,18 @@ def _pose(x=0.0, y=0.0, z=0.0):
     return PoseData(
         position=Vector3Data(x=x, y=y, z=z),
         orientation=QuaternionData.identity(),
+    )
+
+
+def _surface_plane(distance_m=0.20):
+    return SurfacePlane(
+        point=Vector3Data(x=distance_m, y=0.0, z=0.0),
+        normal=Vector3Data(x=-1.0, y=0.0, z=0.0),
+        frame_id="probe",
+        inlier_count=20,
+        sample_count=20,
+        inlier_ratio=1.0,
+        rmse_m=0.001,
     )
 
 
@@ -238,7 +251,7 @@ def test_progress_guard_rejects_probable_obstruction():
     )
     plan = freeze_probe_surface_approach(
         current_probe_pose_execution=_pose(),
-        measured_initial_distance_m=0.20,
+        surface_plane_probe=_surface_plane(),
         target_distance_m=0.05,
         maximum_travel_m=0.16,
     )

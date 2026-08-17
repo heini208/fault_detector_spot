@@ -51,28 +51,23 @@ class ProbeSurfaceApproachEvaluation:
 
 def freeze_probe_surface_approach(
     current_probe_pose_execution: PoseData,
-    measured_initial_distance_m: float,
+    surface_plane_probe: SurfacePlane,
     target_distance_m: float,
     maximum_travel_m: float,
-    surface_plane_probe: SurfacePlane = None,
 ) -> ProbeSurfaceApproachPlan:
     """Freeze the fitted surface plane and current probe approach axis."""
     current_probe_pose_execution.validate()
+    if not isinstance(surface_plane_probe, SurfacePlane):
+        raise TypeError("Surface approach requires a fitted SurfacePlane")
+    surface_plane_probe.validate()
     for value, label in (
-        (measured_initial_distance_m, "Measured surface distance"),
         (target_distance_m, "Target surface distance"),
         (maximum_travel_m, "Maximum surface approach travel"),
     ):
         require_positive_finite_distance(value, label)
 
-    measured_initial_distance_m = float(measured_initial_distance_m)
     target_distance_m = float(target_distance_m)
     maximum_travel_m = float(maximum_travel_m)
-
-    if target_distance_m > measured_initial_distance_m:
-        raise ValueError(
-            "Target surface distance exceeds measured surface distance"
-        )
 
     inward = _normalized(
         rotate_vector(
@@ -83,49 +78,42 @@ def freeze_probe_surface_approach(
     )
     position = current_probe_pose_execution.position
 
-    if surface_plane_probe is None:
-        surface_point = Vector3Data(
-            x=float(position.x) + inward.x * measured_initial_distance_m,
-            y=float(position.y) + inward.y * measured_initial_distance_m,
-            z=float(position.z) + inward.z * measured_initial_distance_m,
-        )
-        surface_normal = Vector3Data(
-            x=-inward.x,
-            y=-inward.y,
-            z=-inward.z,
-        )
-    else:
-        surface_plane_probe.validate()
-        surface_point_relative = surface_plane_probe.point
-        surface_normal_relative = surface_plane_probe.normal
-        surface_point_rotated = rotate_vector(
+    surface_point_relative = surface_plane_probe.point
+    surface_normal_relative = surface_plane_probe.normal
+    surface_point_rotated = rotate_vector(
+        current_probe_pose_execution.orientation,
+        surface_point_relative,
+    )
+    surface_normal = _normalized(
+        rotate_vector(
             current_probe_pose_execution.orientation,
-            surface_point_relative,
+            surface_normal_relative,
+        ),
+        "Surface outward normal",
+    )
+    surface_point = Vector3Data(
+        x=position.x + surface_point_rotated.x,
+        y=position.y + surface_point_rotated.y,
+        z=position.z + surface_point_rotated.z,
+    )
+    if _dot(surface_normal, inward) >= -1e-6:
+        raise ValueError(
+            "Fitted surface normal does not oppose probe local +X"
         )
-        surface_normal = _normalized(
-            rotate_vector(
-                current_probe_pose_execution.orientation,
-                surface_normal_relative,
-            ),
-            "Surface outward normal",
-        )
-        surface_point = Vector3Data(
-            x=position.x + surface_point_rotated.x,
-            y=position.y + surface_point_rotated.y,
-            z=position.z + surface_point_rotated.z,
-        )
-        if _dot(surface_normal, inward) >= -1e-6:
-            raise ValueError(
-                "Fitted surface normal does not oppose probe local +X"
-            )
 
-    initial_distance = _plane_distance(
+    measured_initial_distance_m = _plane_distance(
         surface_point,
         surface_normal,
         position,
     )
-    if surface_plane_probe is not None:
-        measured_initial_distance_m = initial_distance
+    require_positive_finite_distance(
+        measured_initial_distance_m,
+        "Measured surface distance",
+    )
+    if target_distance_m > measured_initial_distance_m:
+        raise ValueError(
+            "Target surface distance exceeds measured surface distance"
+        )
 
     alignment = -_dot(surface_normal, inward)
     if alignment <= 1e-6:

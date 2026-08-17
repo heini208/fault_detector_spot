@@ -1,4 +1,4 @@
-"""Tests for frozen kinematic probe surface approach tracking."""
+"""Tests for frozen fitted-plane probe surface approach tracking."""
 
 import math
 
@@ -8,6 +8,7 @@ from fault_detector_spot.inspection.execution.probe_surface_approach import (
     evaluate_probe_surface_approach,
     freeze_probe_surface_approach,
 )
+from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
@@ -32,23 +33,37 @@ def _yaw(degrees):
     )
 
 
-def test_freeze_uses_measured_distance():
+def _plane(distance=0.30, normal=None):
+    return SurfacePlane(
+        point=Vector3Data(x=distance, y=0.0, z=0.0),
+        normal=normal or Vector3Data(x=-1.0, y=0.0, z=0.0),
+        frame_id="probe",
+        inlier_count=30,
+        sample_count=32,
+        inlier_ratio=30 / 32,
+        rmse_m=0.001,
+    )
+
+
+def test_freeze_uses_fitted_surface_plane():
     plan = freeze_probe_surface_approach(
         current_probe_pose_execution=_pose(x=1.0, y=2.0),
-        measured_initial_distance_m=0.30,
+        surface_plane_probe=_plane(),
         target_distance_m=0.05,
         maximum_travel_m=0.27,
     )
 
     assert plan.surface_point_execution == pytest.approx((1.30, 2.0, 0.0))
+    assert plan.surface_normal_execution == pytest.approx((-1.0, 0.0, 0.0))
     assert plan.inward_direction_execution == pytest.approx((1.0, 0.0, 0.0))
+    assert plan.measured_initial_distance_m == pytest.approx(0.30)
     assert plan.planned_travel_m == pytest.approx(0.25)
 
 
-def test_evaluation_uses_current_tf_without_new_depth():
+def test_evaluation_uses_frozen_plane_without_new_depth():
     plan = freeze_probe_surface_approach(
         current_probe_pose_execution=_pose(),
-        measured_initial_distance_m=0.30,
+        surface_plane_probe=_plane(),
         target_distance_m=0.05,
         maximum_travel_m=0.27,
     )
@@ -67,10 +82,40 @@ def test_evaluation_uses_current_tf_without_new_depth():
     assert not evaluation.reached
 
 
+def test_tilted_plane_changes_required_axis_travel():
+    normal = Vector3Data(
+        x=-math.cos(math.radians(30.0)),
+        y=math.sin(math.radians(30.0)),
+        z=0.0,
+    )
+    plane = SurfacePlane(
+        point=Vector3Data(x=0.30, y=0.0, z=0.0),
+        normal=normal,
+        frame_id="probe",
+        inlier_count=30,
+        sample_count=30,
+        inlier_ratio=1.0,
+        rmse_m=0.001,
+    )
+    plan = freeze_probe_surface_approach(
+        current_probe_pose_execution=_pose(),
+        surface_plane_probe=plane,
+        target_distance_m=0.05,
+        maximum_travel_m=0.40,
+    )
+
+    expected_distance = 0.30 * math.cos(math.radians(30.0))
+    expected_travel = (
+        expected_distance - 0.05
+    ) / math.cos(math.radians(30.0))
+    assert plan.measured_initial_distance_m == pytest.approx(expected_distance)
+    assert plan.planned_travel_m == pytest.approx(expected_travel)
+
+
 def test_evaluation_reports_lateral_and_axis_drift():
     plan = freeze_probe_surface_approach(
         current_probe_pose_execution=_pose(),
-        measured_initial_distance_m=0.30,
+        surface_plane_probe=_plane(),
         target_distance_m=0.05,
         maximum_travel_m=0.27,
     )
@@ -93,7 +138,7 @@ def test_evaluation_reports_lateral_and_axis_drift():
 def test_evaluation_stops_inside_requested_tolerance():
     plan = freeze_probe_surface_approach(
         current_probe_pose_execution=_pose(),
-        measured_initial_distance_m=0.30,
+        surface_plane_probe=_plane(),
         target_distance_m=0.05,
         maximum_travel_m=0.27,
     )
@@ -110,6 +155,16 @@ def test_evaluation_stops_inside_requested_tolerance():
     assert evaluation.reached
 
 
+def test_freeze_requires_fitted_plane():
+    with pytest.raises(TypeError, match="fitted SurfacePlane"):
+        freeze_probe_surface_approach(
+            current_probe_pose_execution=_pose(),
+            surface_plane_probe=None,
+            target_distance_m=0.05,
+            maximum_travel_m=0.30,
+        )
+
+
 def test_freeze_rejects_touch_target():
     with pytest.raises(
         ValueError,
@@ -117,7 +172,7 @@ def test_freeze_rejects_touch_target():
     ):
         freeze_probe_surface_approach(
             current_probe_pose_execution=_pose(),
-            measured_initial_distance_m=0.30,
+            surface_plane_probe=_plane(),
             target_distance_m=0.0,
             maximum_travel_m=0.30,
         )
@@ -130,7 +185,7 @@ def test_freeze_rejects_required_travel_beyond_limit():
     ):
         freeze_probe_surface_approach(
             current_probe_pose_execution=_pose(),
-            measured_initial_distance_m=0.30,
+            surface_plane_probe=_plane(),
             target_distance_m=0.05,
             maximum_travel_m=0.20,
         )
