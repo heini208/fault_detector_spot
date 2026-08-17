@@ -47,7 +47,7 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
         force_baseline_timeout_sec: float = 2.0,
         maximum_step_m: float = 0.010,
         tolerance_m: float = 0.005,
-        maximum_travel_m: float = 1.0,
+        maximum_travel_m: float = 0.400,
         maximum_approach_steps: int = 40,
         minimum_surface_samples: int = 5,
         minimum_surface_span_sec: float = 1.0,
@@ -234,6 +234,15 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
                 target_distance_m=self._command.target_surface_distance_m,
                 maximum_travel_m=self.maximum_travel_m,
             )
+            if (
+                self._plan.initial_axis_error_rad
+                > self.maximum_axis_error_rad
+            ):
+                raise ValueError(
+                    "Probe axis is not aligned with the fitted surface: "
+                    f"{math.degrees(self._plan.initial_axis_error_rad):.2f} deg "
+                    f"> {math.degrees(self.maximum_axis_error_rad):.2f} deg"
+                )
             self._previous_probe_pose = current_probe
             self._baseline_receipt_not_before = time.monotonic()
             self._phase_started = self._baseline_receipt_not_before
@@ -705,6 +714,16 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
             raise ValueError("Close-surface configuration values must be positive")
         if self.maximum_approach_steps < 1:
             raise ValueError("Maximum surface approach steps must be positive")
+        if self.maximum_step_m > 0.010 + 1e-12:
+            raise ValueError("Surface approach step must not exceed 0.010 m")
+        reachable_travel_m = (
+            self.maximum_step_m * self.maximum_approach_steps
+        )
+        if self.maximum_travel_m > reachable_travel_m + 1e-12:
+            raise ValueError(
+                "Maximum surface approach travel exceeds the configured "
+                "step-count limit"
+            )
         if self.minimum_surface_samples < 3:
             raise ValueError("Surface sampling requires at least three samples")
         if self.force_contact_consecutive_samples < 1:

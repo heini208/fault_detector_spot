@@ -1,0 +1,130 @@
+"""Safety invariants for the standalone close-surface approach."""
+
+import math
+
+import pytest
+
+from fault_detector_spot.inspection.execution.probe_surface_approach import (
+    evaluate_probe_surface_approach,
+    freeze_probe_surface_approach,
+)
+from fault_detector_spot.inspection.geometry.rotation import (
+    quaternion_from_euler,
+)
+from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
+from fault_detector_spot.inspection.model.models import (
+    PoseData,
+    QuaternionData,
+    Vector3Data,
+)
+from fault_detector_spot.manipulation.behaviours.manipulator_move_close_to_surface_action import (
+    ManipulatorMoveCloseToSurfaceAction,
+)
+
+
+def pose(orientation=None):
+    return PoseData(
+        position=Vector3Data(x=0.0, y=0.0, z=0.0),
+        orientation=orientation or QuaternionData.identity(),
+    )
+
+
+def plane(normal=None):
+    return SurfacePlane(
+        point=Vector3Data(x=0.10, y=0.0, z=0.0),
+        normal=normal or Vector3Data(x=-1.0, y=0.0, z=0.0),
+        frame_id="probe",
+        inlier_count=50,
+        sample_count=50,
+        inlier_ratio=1.0,
+        rmse_m=0.001,
+    )
+
+
+def test_default_travel_matches_40_ten_millimeter_steps():
+    action = ManipulatorMoveCloseToSurfaceAction()
+
+    assert action.maximum_step_m == pytest.approx(0.010)
+    assert action.maximum_approach_steps == 40
+    assert action.maximum_travel_m == pytest.approx(0.400)
+
+
+def test_configuration_rejects_step_larger_than_ten_millimeters():
+    with pytest.raises(ValueError, match="0.010 m"):
+        ManipulatorMoveCloseToSurfaceAction(maximum_step_m=0.0101)
+
+
+def test_configuration_rejects_travel_unreachable_with_step_count():
+    with pytest.raises(ValueError, match="step-count limit"):
+        ManipulatorMoveCloseToSurfaceAction(
+            maximum_step_m=0.005,
+            maximum_approach_steps=40,
+            maximum_travel_m=0.201,
+        )
+
+
+def test_frozen_plan_records_surface_normal_axis_error():
+    tilted_normal = Vector3Data(
+        x=-math.cos(math.radians(4.0)),
+        y=math.sin(math.radians(4.0)),
+        z=0.0,
+    )
+
+    plan = freeze_probe_surface_approach(
+        current_probe_pose_execution=pose(),
+        surface_plane_probe=plane(tilted_normal),
+        target_distance_m=0.05,
+        maximum_travel_m=0.40,
+    )
+
+    assert plan.initial_axis_error_rad == pytest.approx(
+        math.radians(4.0)
+    )
+
+
+def test_runtime_axis_error_is_measured_against_surface_normal():
+    tilted_normal = Vector3Data(
+        x=-math.cos(math.radians(4.0)),
+        y=math.sin(math.radians(4.0)),
+        z=0.0,
+    )
+    plan = freeze_probe_surface_approach(
+        current_probe_pose_execution=pose(),
+        surface_plane_probe=plane(tilted_normal),
+        target_distance_m=0.05,
+        maximum_travel_m=0.40,
+    )
+    current = pose(
+        quaternion_from_euler("z", math.radians(-2.0))
+    )
+
+    evaluation = evaluate_probe_surface_approach(
+        plan,
+        current_probe_pose_execution=current,
+        maximum_step_m=0.010,
+        tolerance_m=0.005,
+    )
+
+    assert evaluation.axis_error_rad == pytest.approx(
+        math.radians(2.0)
+    )
+
+
+def test_action_rejects_initial_surface_misalignment_before_force_baseline():
+    action = ManipulatorMoveCloseToSurfaceAction(
+        maximum_axis_error_rad=math.radians(5.0)
+    )
+    plan = freeze_probe_surface_approach(
+        current_probe_pose_execution=pose(),
+        surface_plane_probe=plane(
+            Vector3Data(
+                x=-math.cos(math.radians(6.0)),
+                y=math.sin(math.radians(6.0)),
+                z=0.0,
+            )
+        ),
+        target_distance_m=0.05,
+        maximum_travel_m=0.40,
+    )
+
+    assert plan.initial_axis_error_rad > action.maximum_axis_error_rad

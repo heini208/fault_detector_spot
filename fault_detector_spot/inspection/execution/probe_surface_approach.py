@@ -3,12 +3,12 @@
 import math
 from dataclasses import dataclass
 
-from fault_detector_spot.inspection.geometry.rotation import rotate_vector
 from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.sensing.surface_distance_validation import (
     require_positive_finite_distance,
 )
+from fault_detector_spot.inspection.geometry.rotation import rotate_vector
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,7 @@ class ProbeSurfaceApproachPlan:
     inward_direction_execution: tuple[float, float, float]
     starting_probe_position_execution: tuple[float, float, float]
     measured_initial_distance_m: float
+    initial_axis_error_rad: float
     target_distance_m: float
     planned_travel_m: float
     maximum_travel_m: float
@@ -113,9 +114,10 @@ def freeze_probe_surface_approach(
             "Target surface distance exceeds measured surface distance"
         )
 
-    alignment = -_dot(surface_normal, inward)
+    alignment = max(-1.0, min(1.0, -_dot(surface_normal, inward)))
     if alignment <= 1e-6:
         raise ValueError("Probe approach axis does not intersect fitted surface")
+    initial_axis_error_rad = math.acos(alignment)
     planned_travel_m = (
         measured_initial_distance_m - target_distance_m
     ) / alignment
@@ -142,6 +144,7 @@ def freeze_probe_surface_approach(
             float(position.z),
         ),
         measured_initial_distance_m=measured_initial_distance_m,
+        initial_axis_error_rad=initial_axis_error_rad,
         target_distance_m=target_distance_m,
         planned_travel_m=planned_travel_m,
         maximum_travel_m=maximum_travel_m,
@@ -188,8 +191,11 @@ def evaluate_probe_surface_approach(
         ),
         "Current probe inward direction",
     )
-    axis_dot = max(-1.0, min(1.0, _dot(inward, current_inward)))
-    axis_error_rad = math.acos(axis_dot)
+    axis_alignment = max(
+        -1.0,
+        min(1.0, -_dot(normal, current_inward)),
+    )
+    axis_error_rad = math.acos(axis_alignment)
 
     estimated_distance_m = _plane_distance(surface, normal, current)
     if estimated_distance_m < -tolerance_m:
