@@ -17,6 +17,7 @@ from fault_detector_spot.inspection.execution.probe_surface_approach import (
     evaluate_probe_surface_approach,
     freeze_probe_surface_approach,
 )
+from fault_detector_spot.inspection.geometry.rotation import rotation_distance_rad
 from fault_detector_spot.inspection.execution.probe_surface_runtime_state import (
     ProbeSurfaceRuntimeStateSource,
 )
@@ -403,9 +404,9 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
         )
         distance = self._norm(remaining)
         if distance <= 0.005:
-            orientation_error = self._orientation_error(
-                current,
-                self._recovery_hand_pose,
+            orientation_error = rotation_distance_rad(
+                current.orientation,
+                self._recovery_hand_pose.orientation,
             )
             if orientation_error > self.maximum_axis_error_rad:
                 return self._fail(
@@ -421,12 +422,7 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
                 "pre-approach pose within the recovery step limit"
             )
 
-        maximum_component = max(
-            abs(remaining.x),
-            abs(remaining.y),
-            abs(remaining.z),
-        )
-        scale = min(1.0, self.recovery_step_m / maximum_component)
+        scale = min(1.0, self.recovery_step_m / distance)
         target = PoseData(
             position=Vector3Data(
                 x=current.position.x + remaining.x * scale,
@@ -717,8 +713,8 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
             raise ValueError("Maximum contact retries must not be negative")
         if self.maximum_recovery_steps < 1:
             raise ValueError("Maximum recovery steps must be positive")
-        if self.recovery_step_m > 0.05 + 1e-12:
-            raise ValueError("Surface recovery step must not exceed 0.05 m")
+        if self.recovery_step_m > 0.040 + 1e-12:
+            raise ValueError("Surface recovery step must not exceed 0.040 m")
         if not 0.0 < self.minimum_step_progress_ratio <= 1.0:
             raise ValueError(
                 "Minimum surface-step progress ratio must be in (0, 1]"
@@ -739,13 +735,5 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
             + vector.y * vector.y
             + vector.z * vector.z
         )
-
-    @staticmethod
-    def _orientation_error(left: PoseData, right: PoseData) -> float:
-        a = left.orientation
-        b = right.orientation
-        dot = abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w)
-        return 2.0 * math.acos(max(-1.0, min(1.0, dot)))
-
 
 __all__ = ["ManipulatorMoveCloseToSurfaceAction"]

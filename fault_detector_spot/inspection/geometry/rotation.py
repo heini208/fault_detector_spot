@@ -119,6 +119,18 @@ def rotate_vector(
     )
 
 
+def rotation_distance_rad(
+    first: QuaternionData,
+    second: QuaternionData,
+) -> float:
+    first_rotation = rotation_from_quaternion(first)
+    second_rotation = rotation_from_quaternion(second)
+    distance = float((first_rotation.inv() * second_rotation).magnitude())
+    if not math.isfinite(distance):
+        raise ValueError("Rotation distance is not finite")
+    return distance
+
+
 def quaternion_to_rpy(
     quaternion: QuaternionData,
 ) -> tuple[float, float, float]:
@@ -139,5 +151,6 @@ __all__ = [
     "quaternion_from_rotation",
     "quaternion_to_rpy",
     "rotate_vector",
+    "rotation_distance_rad",
     "rotation_from_quaternion",
 ]
