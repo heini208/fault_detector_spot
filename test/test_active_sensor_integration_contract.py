@@ -62,7 +62,10 @@ def test_tag_motion_converts_probe_target_to_hand_once():
 
     assert "probe_pose_to_hand_pose" not in factory
     assert "_probe_target_to_hand_target" in command
-    assert "tf.inverse_matrix(hand_to_probe_matrix)" in command
+    assert "transform_to_pose_data(hand_to_probe)" in command
+    assert "inverse_pose(hand_to_probe_pose)" in command
+    assert "compose_poses(" in command
+    assert "tf_transformations" not in command
 
 
 def test_future_probe_execution_configuration_accepts_active_sensor_snapshot():

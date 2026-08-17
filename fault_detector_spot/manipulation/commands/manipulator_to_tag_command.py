@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-from math import sin, cos, pi
+from math import cos, pi, sin
 
-import tf_transformations as tf
 from builtin_interfaces.msg import Time
 from fault_detector_spot.application.commanding.command_ids import (
     OrientationModes,
@@ -9,12 +8,23 @@ from fault_detector_spot.application.commanding.command_ids import (
 from fault_detector_spot.application.behaviour_tree.commands.move_to_tag_command import (
     MoveToTagCommand,
 )
+from fault_detector_spot.inspection.geometry.rotation import (
+    multiply_quaternions,
+)
+from fault_detector_spot.inspection.model.models import QuaternionData
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     sensor_probe_frame,
 )
+from fault_detector_spot.shared.geometry.transforms import (
+    compose_poses,
+    inverse_pose,
+    pose_data_to_pose,
+)
+from fault_detector_spot.shared.ros.tf_transforms import transform_to_pose_data
 from geometry_msgs.msg import PoseStamped, Quaternion
 from synchros2.tf_listener_wrapper import TFListenerWrapper
+
 
 _YAW_90_SIN = sin(pi / 4)
 _YAW_90_COS = cos(pi / 4)
@@ -23,9 +33,7 @@ _PITCH_45_COS = cos(pi / 8)
 
 
 class ManipulatorToTagCommand(MoveToTagCommand):
-    """
-    Move the active probe point to a tag-relative target pose.
-    """
+    """Move the active probe point to a tag-relative target pose."""
 
     def __init__(
         self,
@@ -79,67 +87,14 @@ class ManipulatorToTagCommand(MoveToTagCommand):
             probe_frame,
             timeout_sec=0.0,
         )
-        target_to_probe = self._pose_matrix(probe_target.pose)
-        hand_to_probe_matrix = self._transform_matrix(
-            hand_to_probe.transform
+        hand_to_probe_pose = pose_data_to_pose(
+            transform_to_pose_data(hand_to_probe)
         )
-        target_to_hand = tf.concatenate_matrices(
-            target_to_probe,
-            tf.inverse_matrix(hand_to_probe_matrix),
-        )
-        translation = tf.translation_from_matrix(target_to_hand)
-        quaternion = tf.quaternion_from_matrix(target_to_hand)
-
-        probe_target.pose.position.x = float(translation[0])
-        probe_target.pose.position.y = float(translation[1])
-        probe_target.pose.position.z = float(translation[2])
-        probe_target.pose.orientation = Quaternion(
-            x=float(quaternion[0]),
-            y=float(quaternion[1]),
-            z=float(quaternion[2]),
-            w=float(quaternion[3]),
+        probe_target.pose = compose_poses(
+            probe_target.pose,
+            inverse_pose(hand_to_probe_pose),
         )
         return probe_target
-
-    @staticmethod
-    def _pose_matrix(pose):
-        return tf.concatenate_matrices(
-            tf.translation_matrix(
-                [
-                    pose.position.x,
-                    pose.position.y,
-                    pose.position.z,
-                ]
-            ),
-            tf.quaternion_matrix(
-                [
-                    pose.orientation.x,
-                    pose.orientation.y,
-                    pose.orientation.z,
-                    pose.orientation.w,
-                ]
-            ),
-        )
-
-    @staticmethod
-    def _transform_matrix(transform):
-        return tf.concatenate_matrices(
-            tf.translation_matrix(
-                [
-                    transform.translation.x,
-                    transform.translation.y,
-                    transform.translation.z,
-                ]
-            ),
-            tf.quaternion_matrix(
-                [
-                    transform.rotation.x,
-                    transform.rotation.y,
-                    transform.rotation.z,
-                    transform.rotation.w,
-                ]
-            ),
-        )
 
     def _apply_orientation_mode(
         self,
@@ -197,28 +152,37 @@ class ManipulatorToTagCommand(MoveToTagCommand):
         q1_msg: Quaternion,
         q2_msg: Quaternion,
     ) -> Quaternion:
-        q1 = [q1_msg.x, q1_msg.y, q1_msg.z, q1_msg.w]
-        q2 = [q2_msg.x, q2_msg.y, q2_msg.z, q2_msg.w]
-        q_combined = tf.quaternion_multiply(q1, q2)
+        first = QuaternionData(
+            x=float(q1_msg.x),
+            y=float(q1_msg.y),
+            z=float(q1_msg.z),
+            w=float(q1_msg.w),
+        )
+        second = QuaternionData(
+            x=float(q2_msg.x),
+            y=float(q2_msg.y),
+            z=float(q2_msg.z),
+            w=float(q2_msg.w),
+        )
+        combined = multiply_quaternions(first, second)
         return Quaternion(
-            x=q_combined[0],
-            y=q_combined[1],
-            z=q_combined[2],
-            w=q_combined[3],
+            x=combined.x,
+            y=combined.y,
+            z=combined.z,
+            w=combined.w,
         )
 
     def _get_rotated_offset_orientation(
         self,
         transformer: TFListenerWrapper,
     ) -> Quaternion:
-        q_offset = [
-            self.offset.pose.orientation.x,
-            self.offset.pose.orientation.y,
-            self.offset.pose.orientation.z,
-            self.offset.pose.orientation.w,
-        ]
         rotated_q = self._rotate_quaternion_into_frame(
-            q_offset,
+            [
+                self.offset.pose.orientation.x,
+                self.offset.pose.orientation.y,
+                self.offset.pose.orientation.z,
+                self.offset.pose.orientation.w,
+            ],
             self.offset.header.frame_id,
             self.target_frame,
             transformer,
