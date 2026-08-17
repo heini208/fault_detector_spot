@@ -5,6 +5,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from fault_detector_spot.inspection.geometry.rotation import (
+    inverse_quaternion,
+    multiply_quaternions as scipy_multiply_quaternions,
+    quaternion_from_euler,
+    rotate_vector as scipy_rotate_vector,
+)
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
@@ -380,12 +386,7 @@ def relative_pose(
 def inverse_pose(pose: PoseData) -> PoseData:
     """Invert one rigid pose."""
     pose.validate()
-    inverse_orientation = QuaternionData(
-        x=-pose.orientation.x,
-        y=-pose.orientation.y,
-        z=-pose.orientation.z,
-        w=pose.orientation.w,
-    )
+    inverse_orientation = inverse_quaternion(pose.orientation)
     inverse_position = rotate_vector(
         inverse_orientation,
         Vector3Data(
@@ -406,56 +407,16 @@ def multiply_quaternions(
     first: QuaternionData,
     second: QuaternionData,
 ) -> QuaternionData:
-    """Multiply two normalized quaternions."""
-    first.validate()
-    second.validate()
-    x1, y1, z1, w1 = first.x, first.y, first.z, first.w
-    x2, y2, z2, w2 = second.x, second.y, second.z, second.w
-    values = np.array(
-        [
-            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-        ],
-        dtype=float,
-    )
-    norm = float(np.linalg.norm(values))
-    if not math.isfinite(norm) or norm <= 1e-12:
-        raise ValueError("Quaternion product cannot be normalized")
-    values /= norm
-    result = QuaternionData(
-        x=float(values[0]),
-        y=float(values[1]),
-        z=float(values[2]),
-        w=float(values[3]),
-    )
-    result.validate()
-    return result
+    """Compose two rotations with SciPy."""
+    return scipy_multiply_quaternions(first, second)
 
 
 def rotate_vector(
     quaternion: QuaternionData,
     vector: Vector3Data,
 ) -> Vector3Data:
-    """Rotate a vector by a normalized quaternion."""
-    quaternion.validate()
-    vector.validate()
-    q = np.array(
-        [quaternion.x, quaternion.y, quaternion.z],
-        dtype=float,
-    )
-    value = np.array([vector.x, vector.y, vector.z], dtype=float)
-    rotated = (
-        value
-        + 2.0 * quaternion.w * np.cross(q, value)
-        + 2.0 * np.cross(q, np.cross(q, value))
-    )
-    return Vector3Data(
-        x=float(rotated[0]),
-        y=float(rotated[1]),
-        z=float(rotated[2]),
-    )
+    """Rotate a vector with the shared SciPy geometry adapter."""
+    return scipy_rotate_vector(quaternion, vector)
 
 
 def add_vectors(first: Vector3Data, second: Vector3Data) -> Vector3Data:
@@ -496,20 +457,8 @@ def _pitch_yaw_quaternion(
     pitch_rad: float,
     yaw_rad: float,
 ) -> QuaternionData:
-    half_pitch = pitch_rad * 0.5
-    half_yaw = yaw_rad * 0.5
-    pitch = QuaternionData(
-        x=0.0,
-        y=math.sin(half_pitch),
-        z=0.0,
-        w=math.cos(half_pitch),
-    )
-    yaw = QuaternionData(
-        x=0.0,
-        y=0.0,
-        z=math.sin(half_yaw),
-        w=math.cos(half_yaw),
-    )
+    pitch = quaternion_from_euler("y", pitch_rad)
+    yaw = quaternion_from_euler("z", yaw_rad)
     return multiply_quaternions(yaw, pitch)
 
 

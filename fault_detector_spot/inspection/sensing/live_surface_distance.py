@@ -9,6 +9,9 @@ from sensor_msgs.msg import CameraInfo, Image
 from fault_detector_spot.inspection.geometry.open3d_depth import (
     create_organized_depth_point_cloud,
 )
+from fault_detector_spot.inspection.geometry.rotation import (
+    rotation_from_quaternion,
+)
 from fault_detector_spot.inspection.geometry.surface_plane import (
     SurfacePlane,
     fit_surface_plane,
@@ -312,41 +315,14 @@ def _positive_x_plane_intersection(plane: SurfacePlane) -> float:
 
 
 def _transform_points(points: np.ndarray, pose: PoseData) -> np.ndarray:
-    rotation = _rotation_matrix(pose)
+    pose.validate()
     translation = np.array(
         [pose.position.x, pose.position.y, pose.position.z],
         dtype=float,
     )
-    return points @ rotation.T + translation
-
-
-def _rotation_matrix(pose: PoseData) -> np.ndarray:
-    quaternion = pose.orientation
-    x, y, z, w = (
-        quaternion.x,
-        quaternion.y,
-        quaternion.z,
-        quaternion.w,
-    )
-    return np.array(
-        [
-            [
-                1.0 - 2.0 * (y * y + z * z),
-                2.0 * (x * y - z * w),
-                2.0 * (x * z + y * w),
-            ],
-            [
-                2.0 * (x * y + z * w),
-                1.0 - 2.0 * (x * x + z * z),
-                2.0 * (y * z - x * w),
-            ],
-            [
-                2.0 * (x * z - y * w),
-                2.0 * (y * z + x * w),
-                1.0 - 2.0 * (x * x + y * y),
-            ],
-        ],
-        dtype=float,
+    return (
+        rotation_from_quaternion(pose.orientation).apply(points)
+        + translation
     )
 
 

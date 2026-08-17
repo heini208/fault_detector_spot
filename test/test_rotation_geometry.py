@@ -7,7 +7,11 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from fault_detector_spot.inspection.geometry.rotation import (
+    inverse_quaternion,
+    multiply_quaternions,
+    quaternion_from_euler,
     quaternion_from_matrix,
+    quaternion_from_rotation,
     quaternion_to_rpy,
     rotate_vector,
     rotation_from_quaternion,
@@ -94,3 +98,59 @@ def test_matrix_conversion_rejects_non_rotation():
                 ]
             )
         )
+
+
+def test_rotation_composition_matches_scipy_order():
+    yaw = quaternion_from_euler("z", math.radians(30.0))
+    pitch = quaternion_from_euler("y", math.radians(-10.0))
+
+    result = multiply_quaternions(yaw, pitch)
+
+    expected = (
+        Rotation.from_euler("z", math.radians(30.0))
+        * Rotation.from_euler("y", math.radians(-10.0))
+    ).as_matrix()
+    assert rotation_from_quaternion(result).as_matrix() == pytest.approx(
+        expected
+    )
+
+
+def test_inverse_quaternion_cancels_rotation():
+    rotation = quaternion_from_euler("xyz", [0.2, -0.3, 0.4])
+
+    inverse = inverse_quaternion(rotation)
+    identity = multiply_quaternions(rotation, inverse)
+
+    assert rotation_from_quaternion(identity).as_matrix() == pytest.approx(
+        np.eye(3),
+        abs=1e-12,
+    )
+
+
+def test_quaternion_output_uses_stable_positive_identity_representative():
+    quaternion = quaternion_from_rotation(
+        Rotation.from_quat([0.0, 0.0, 0.0, -1.0])
+    )
+
+    assert quaternion == QuaternionData.identity()
+
+
+def test_quaternion_output_uses_stable_half_turn_representative():
+    quaternion = quaternion_from_rotation(
+        Rotation.from_quat([0.0, 0.0, -1.0, 0.0])
+    )
+
+    assert quaternion.x == pytest.approx(0.0)
+    assert quaternion.y == pytest.approx(0.0)
+    assert quaternion.z == pytest.approx(1.0)
+    assert quaternion.w == pytest.approx(0.0)
+
+
+def test_inverse_and_composition_keep_expected_quaternion_sign():
+    probe = quaternion_from_euler("z", math.pi)
+    mounting = quaternion_from_euler("z", math.pi / 2.0)
+
+    hand = multiply_quaternions(probe, inverse_quaternion(mounting))
+
+    assert hand.z == pytest.approx(math.sqrt(0.5))
+    assert hand.w == pytest.approx(math.sqrt(0.5))

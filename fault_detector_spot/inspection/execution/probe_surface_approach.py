@@ -3,13 +3,11 @@
 import math
 from dataclasses import dataclass
 
+from fault_detector_spot.inspection.geometry.rotation import rotate_vector
 from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.sensing.surface_distance_validation import (
     require_positive_finite_distance,
-)
-from fault_detector_spot.inspection.setup.reference_probe_setup import (
-    rotate_vector,
 )
 
 

@@ -37,6 +37,7 @@ def quaternion_from_rotation(rotation: Rotation) -> QuaternionData:
     values = np.asarray(rotation.as_quat(), dtype=float)
     if values.shape != (4,) or not np.all(np.isfinite(values)):
         raise ValueError("SciPy returned an invalid quaternion")
+    values = _canonical_quaternion(values)
     result = QuaternionData(
         x=float(values[0]),
         y=float(values[1]),
@@ -45,6 +46,25 @@ def quaternion_from_rotation(rotation: Rotation) -> QuaternionData:
     )
     result.validate()
     return result
+
+
+def _canonical_quaternion(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    if values.shape != (4,) or not np.all(np.isfinite(values)):
+        raise ValueError("Quaternion must contain four finite values")
+    norm = float(np.linalg.norm(values))
+    if not math.isfinite(norm) or norm <= 1e-12:
+        raise ValueError("Quaternion has zero norm")
+    values = values / norm
+    epsilon = 1e-12
+    if values[3] < -epsilon:
+        return -values
+    if abs(values[3]) <= epsilon:
+        vector = values[:3]
+        dominant = int(np.argmax(np.abs(vector)))
+        if vector[dominant] < 0.0:
+            return -values
+    return values
 
 
 def quaternion_from_matrix(matrix) -> QuaternionData:
@@ -58,6 +78,29 @@ def quaternion_from_matrix(matrix) -> QuaternionData:
     if not math.isclose(float(np.linalg.det(matrix)), 1.0, abs_tol=1e-6):
         raise ValueError("Rotation matrix is not right-handed")
     return quaternion_from_rotation(Rotation.from_matrix(matrix))
+
+
+def multiply_quaternions(
+    first: QuaternionData,
+    second: QuaternionData,
+) -> QuaternionData:
+    first_rotation = rotation_from_quaternion(first)
+    second_rotation = rotation_from_quaternion(second)
+    return quaternion_from_rotation(first_rotation * second_rotation)
+
+
+def inverse_quaternion(quaternion: QuaternionData) -> QuaternionData:
+    return quaternion_from_rotation(
+        rotation_from_quaternion(quaternion).inv()
+    )
+
+
+def quaternion_from_euler(sequence: str, angles) -> QuaternionData:
+    if not isinstance(sequence, str) or not sequence:
+        raise ValueError("Euler sequence must not be empty")
+    return quaternion_from_rotation(
+        Rotation.from_euler(sequence, angles, degrees=False)
+    )
 
 
 def rotate_vector(
@@ -89,6 +132,9 @@ def quaternion_to_rpy(
 
 
 __all__ = [
+    "inverse_quaternion",
+    "multiply_quaternions",
+    "quaternion_from_euler",
     "quaternion_from_matrix",
     "quaternion_from_rotation",
     "quaternion_to_rpy",
