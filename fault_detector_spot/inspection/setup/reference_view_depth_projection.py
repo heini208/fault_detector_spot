@@ -1,5 +1,6 @@
 """Project selected RGB reference pixels through registered depth."""
 
+import copy
 import math
 from dataclasses import dataclass
 from typing import Iterable, Optional, Tuple
@@ -45,10 +46,11 @@ class ImageRegion:
     height: int
 
     def validate(self) -> None:
-        """Validate a positive image region."""
         values = (self.x, self.y, self.width, self.height)
-        if any(isinstance(value, bool) or not isinstance(value, int)
-               for value in values):
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in values
+        ):
             raise ValueError("Image region values must be integers")
         if self.x < 0 or self.y < 0:
             raise ValueError("Image region origin must not be negative")
@@ -56,7 +58,6 @@ class ImageRegion:
             raise ValueError("Image region dimensions must be positive")
 
     def to_dict(self):
-        """Serialize the image region."""
         return {
             "x": self.x,
             "y": self.y,
@@ -73,7 +74,7 @@ def project_reference_pixel(
     rgb_size: Optional[Tuple[int, int]] = None,
     rgb_camera_info: Optional[CameraInfo] = None,
 ) -> ProjectedReferencePoint:
-    """Map an RGB pixel into registered depth and project it with Open3D."""
+    """Map an RGB ray into registered depth and project it with Open3D."""
     if pixel is None:
         raise ValueError("No reference pixel is selected")
     pixel.validate()
@@ -87,9 +88,7 @@ def project_reference_pixel(
         depth_size,
         rgb_camera_info=rgb_camera_info,
         depth_camera_info=(
-            depth_camera_info
-            if rgb_camera_info is not None
-            else None
+            depth_camera_info if rgb_camera_info is not None else None
         ),
     )
     frame_id = _resolve_frame_id(depth_image, depth_camera_info)
@@ -124,7 +123,7 @@ def map_rgb_pixel_to_depth(
     rgb_camera_info: Optional[CameraInfo] = None,
     depth_camera_info: Optional[CameraInfo] = None,
 ) -> ImagePoint:
-    """Map an RGB ray into the registered-depth raster."""
+    """Map one RGB ray into the registered-depth raster."""
     pixel.validate()
     rgb_width, rgb_height = _validate_image_size(
         rgb_size,
@@ -141,54 +140,34 @@ def map_rgb_pixel_to_depth(
     )
 
     if (rgb_camera_info is None) != (depth_camera_info is None):
-        raise ValueError(
-            "RGB and depth CameraInfo must be provided together"
-        )
+        raise ValueError("RGB and depth CameraInfo must be provided together")
     if rgb_camera_info is None:
-        mapped_u = _map_pixel_coordinate(
-            pixel.u,
-            rgb_width,
-            depth_width,
-        )
-        mapped_v = _map_pixel_coordinate(
-            pixel.v,
-            rgb_height,
-            depth_height,
-        )
-        return ImagePoint(u=mapped_u, v=mapped_v)
+        if (rgb_width, rgb_height) != (depth_width, depth_height):
+            raise ValueError(
+                "Different RGB and registered-depth resolutions require "
+                "both CameraInfo messages"
+            )
+        return ImagePoint(u=pixel.u, v=pixel.v)
 
-    rgb_intrinsics = camera_intrinsics(
+    rgb_model = _pinhole_camera_model(
         rgb_camera_info,
         (rgb_width, rgb_height),
         "RGB CameraInfo",
     )
-    depth_intrinsics = camera_intrinsics(
+    depth_model = _pinhole_camera_model(
         depth_camera_info,
         (depth_width, depth_height),
         "Depth CameraInfo",
     )
-    mapped_u = _map_calibrated_coordinate(
-        pixel.u,
-        rgb_intrinsics[0],
-        rgb_intrinsics[2],
-        depth_intrinsics[0],
-        depth_intrinsics[2],
-    )
-    mapped_v = _map_calibrated_coordinate(
-        pixel.v,
-        rgb_intrinsics[1],
-        rgb_intrinsics[3],
-        depth_intrinsics[1],
-        depth_intrinsics[3],
-    )
+    mapped = _map_registered_ray(pixel, rgb_model, depth_model)
     if not (
-        0 <= mapped_u < depth_width
-        and 0 <= mapped_v < depth_height
+        0 <= mapped.u < depth_width
+        and 0 <= mapped.v < depth_height
     ):
         raise ValueError(
             "Reference pixel is outside the registered-depth field of view"
         )
-    return ImagePoint(u=mapped_u, v=mapped_v)
+    return mapped
 
 
 def rgb_depth_overlap_region(
@@ -206,35 +185,39 @@ def rgb_depth_overlap_region(
         depth_size,
         "Depth image size",
     )
-    rgb_intrinsics = camera_intrinsics(
+    rgb_model = _pinhole_camera_model(
         rgb_camera_info,
         (rgb_width, rgb_height),
         "RGB CameraInfo",
     )
-    depth_intrinsics = camera_intrinsics(
+    depth_model = _pinhole_camera_model(
         depth_camera_info,
         (depth_width, depth_height),
         "Depth CameraInfo",
     )
     valid_u = [
-        u for u in range(rgb_width)
-        if 0 <= _map_calibrated_coordinate(
-            u,
-            rgb_intrinsics[0],
-            rgb_intrinsics[2],
-            depth_intrinsics[0],
-            depth_intrinsics[2],
-        ) < depth_width
+        u
+        for u in range(rgb_width)
+        if _continuous_coordinate_in_raster(
+            _project_registered_ray(
+                ImagePoint(u=u, v=0),
+                rgb_model,
+                depth_model,
+            )[0],
+            depth_width,
+        )
     ]
     valid_v = [
-        v for v in range(rgb_height)
-        if 0 <= _map_calibrated_coordinate(
-            v,
-            rgb_intrinsics[1],
-            rgb_intrinsics[3],
-            depth_intrinsics[1],
-            depth_intrinsics[3],
-        ) < depth_height
+        v
+        for v in range(rgb_height)
+        if _continuous_coordinate_in_raster(
+            _project_registered_ray(
+                ImagePoint(u=0, v=v),
+                rgb_model,
+                depth_model,
+            )[1],
+            depth_height,
+        )
     ]
     if not valid_u or not valid_v:
         raise ValueError(
@@ -262,14 +245,18 @@ def rgb_depth_selectable_region(
         "RGB image size",
     )
     depth_size = (depth_image.width, depth_image.height)
-    rgb_intrinsics = camera_intrinsics(
+    depth_width, depth_height = _validate_image_size(
+        depth_size,
+        "Depth image size",
+    )
+    rgb_model = _pinhole_camera_model(
         rgb_camera_info,
         (rgb_width, rgb_height),
         "RGB CameraInfo",
     )
-    depth_intrinsics = camera_intrinsics(
+    depth_model = _pinhole_camera_model(
         depth_camera_info,
-        depth_size,
+        (depth_width, depth_height),
         "Depth CameraInfo",
     )
     point_cloud = create_organized_depth_point_cloud(
@@ -278,24 +265,30 @@ def rgb_depth_selectable_region(
     )
     depth_support = _depth_valid_support_region(point_cloud)
     valid_u = [
-        u for u in range(rgb_width)
-        if depth_support.x <= _map_calibrated_coordinate(
-            u,
-            rgb_intrinsics[0],
-            rgb_intrinsics[2],
-            depth_intrinsics[0],
-            depth_intrinsics[2],
-        ) < depth_support.x + depth_support.width
+        u
+        for u in range(rgb_width)
+        if _continuous_coordinate_in_region(
+            _project_registered_ray(
+                ImagePoint(u=u, v=0),
+                rgb_model,
+                depth_model,
+            )[0],
+            depth_support.x,
+            depth_support.width,
+        )
     ]
     valid_v = [
-        v for v in range(rgb_height)
-        if depth_support.y <= _map_calibrated_coordinate(
-            v,
-            rgb_intrinsics[1],
-            rgb_intrinsics[3],
-            depth_intrinsics[1],
-            depth_intrinsics[3],
-        ) < depth_support.y + depth_support.height
+        v
+        for v in range(rgb_height)
+        if _continuous_coordinate_in_region(
+            _project_registered_ray(
+                ImagePoint(u=0, v=v),
+                rgb_model,
+                depth_model,
+            )[1],
+            depth_support.y,
+            depth_support.height,
+        )
     ]
     if not valid_u or not valid_v:
         raise RegisteredDepthSupportNotReady(
@@ -309,6 +302,93 @@ def rgb_depth_selectable_region(
     )
     region.validate()
     return region
+
+
+def _pinhole_camera_model(
+    camera_info: CameraInfo,
+    image_size: Tuple[int, int],
+    label: str,
+):
+    camera_intrinsics(camera_info, image_size, label)
+    try:
+        from image_geometry import PinholeCameraModel
+    except ImportError as exception:
+        raise RuntimeError(
+            "ROS image_geometry is required for registered RGB/depth mapping"
+        ) from exception
+    normalized = copy.deepcopy(camera_info)
+    if not any(abs(float(value)) > 1e-12 for value in normalized.p):
+        normalized.p = [
+            normalized.k[0],
+            normalized.k[1],
+            normalized.k[2],
+            0.0,
+            normalized.k[3],
+            normalized.k[4],
+            normalized.k[5],
+            0.0,
+            normalized.k[6],
+            normalized.k[7],
+            normalized.k[8],
+            0.0,
+        ]
+    model = PinholeCameraModel()
+    model.fromCameraInfo(normalized)
+    return model
+
+
+def _project_registered_ray(pixel, source_model, target_model):
+    ray = source_model.projectPixelTo3dRay(
+        (float(pixel.u), float(pixel.v))
+    )
+    projected = target_model.project3dToPixel(ray)
+    u = float(projected[0])
+    v = float(projected[1])
+    if not math.isfinite(u) or not math.isfinite(v):
+        raise ValueError(
+            "Registered-depth projection produced a non-finite pixel"
+        )
+    return u, v
+
+
+def _map_registered_ray(pixel, source_model, target_model) -> ImagePoint:
+    projected_u, projected_v = _project_registered_ray(
+        pixel,
+        source_model,
+        target_model,
+    )
+    return ImagePoint(
+        u=_round_pixel_coordinate(projected_u),
+        v=_round_pixel_coordinate(projected_v),
+    )
+
+
+def _round_pixel_coordinate(value: float) -> int:
+    tolerance = 1e-9 * max(1.0, abs(value))
+    return int(math.floor(value + 0.5 + tolerance))
+
+
+def _continuous_coordinate_in_raster(value: float, length: int) -> bool:
+    tolerance = 1e-9 * max(1.0, abs(value), float(length))
+    return (
+        value >= -0.5 - tolerance
+        and value < float(length) - 0.5 - tolerance
+    )
+
+
+def _continuous_coordinate_in_region(
+    value: float,
+    start: int,
+    length: int,
+) -> bool:
+    tolerance = 1e-9 * max(
+        1.0,
+        abs(value),
+        float(start + length),
+    )
+    lower = float(start) - 0.5
+    upper = float(start + length) - 0.5
+    return value >= lower - tolerance and value < upper - tolerance
 
 
 def _depth_valid_support_region(
@@ -342,38 +422,6 @@ def _depth_valid_support_region(
     )
     region.validate()
     return region
-
-
-def _map_pixel_coordinate(
-    coordinate: int,
-    source_length: int,
-    target_length: int,
-) -> int:
-    mapped = (
-        (float(coordinate) + 0.5)
-        * float(target_length)
-        / float(source_length)
-        - 0.5
-    )
-    rounded = int(math.floor(mapped + 0.5))
-    return min(max(rounded, 0), target_length - 1)
-
-
-def _map_calibrated_coordinate(
-    coordinate: int,
-    source_focal_length: float,
-    source_principal_point: float,
-    target_focal_length: float,
-    target_principal_point: float,
-) -> int:
-    normalized = (
-        float(coordinate) - source_principal_point
-    ) / source_focal_length
-    mapped = (
-        normalized * target_focal_length
-        + target_principal_point
-    )
-    return int(math.floor(mapped + 0.5))
 
 
 def _resolve_rgb_size(

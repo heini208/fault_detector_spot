@@ -1,4 +1,4 @@
-"""Tests for RGB-to-depth mapping in reference geometry."""
+"""Tests for ROS image-geometry RGB-to-depth mapping."""
 
 import struct
 
@@ -18,7 +18,6 @@ from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
 
 
 def make_depth(values, width, height):
-    """Create one floating-point registered depth image."""
     image = Image()
     image.header.frame_id = "hand_color_image_sensor"
     image.width = width
@@ -30,45 +29,91 @@ def make_depth(values, width, height):
 
 
 def make_camera_info(width, height, focal_length=100.0):
-    """Create calibration for the registered depth resolution."""
     camera_info = CameraInfo()
     camera_info.header.frame_id = "hand_color_image_sensor"
     camera_info.width = width
     camera_info.height = height
+    cx = (width - 1) / 2.0
+    cy = (height - 1) / 2.0
     camera_info.k = [
         focal_length,
         0.0,
-        (width - 1) / 2.0,
+        cx,
         0.0,
         focal_length,
-        (height - 1) / 2.0,
+        cy,
         0.0,
         0.0,
         1.0,
     ]
+    camera_info.p = [
+        focal_length,
+        0.0,
+        cx,
+        0.0,
+        0.0,
+        focal_length,
+        cy,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+    ]
     return camera_info
 
 
-def test_maps_pixel_centres_between_registered_resolutions():
-    """RGB coordinates are scaled into the depth raster."""
+def test_equal_registered_rasters_need_no_calibration_mapping():
     result = map_rgb_pixel_to_depth(
-        ImagePoint(u=6, v=4),
-        rgb_size=(8, 6),
+        ImagePoint(u=3, v=2),
+        rgb_size=(4, 3),
         depth_size=(4, 3),
     )
 
     assert result == ImagePoint(u=3, v=2)
 
 
+def test_mismatched_rasters_require_camera_geometry():
+    with pytest.raises(ValueError, match="require both CameraInfo"):
+        map_rgb_pixel_to_depth(
+            ImagePoint(u=6, v=4),
+            rgb_size=(8, 6),
+            depth_size=(4, 3),
+        )
+
+
+def test_ros_camera_geometry_maps_registered_resolution():
+    result = map_rgb_pixel_to_depth(
+        ImagePoint(u=6, v=4),
+        rgb_size=(8, 6),
+        depth_size=(4, 3),
+        rgb_camera_info=make_camera_info(8, 6, focal_length=200.0),
+        depth_camera_info=make_camera_info(4, 3, focal_length=100.0),
+    )
+
+    assert result == ImagePoint(u=3, v=2)
+
+
+def test_half_pixel_projection_rounds_consistently_outward():
+    with pytest.raises(ValueError, match="field of view"):
+        map_rgb_pixel_to_depth(
+            ImagePoint(u=4, v=4),
+            rgb_size=(8, 6),
+            depth_size=(4, 3),
+            rgb_camera_info=make_camera_info(8, 6, focal_length=100.0),
+            depth_camera_info=make_camera_info(4, 3, focal_length=100.0),
+        )
+
+
 def test_projection_uses_mapped_and_sampled_depth_coordinates():
-    """Back-projection uses the actual depth sample, not the RGB pixel."""
     values = [0.0] * 12
     values[2 * 4 + 3] = 2.0
     result = project_reference_pixel(
         ImagePoint(u=6, v=4),
         make_depth(values, 4, 3),
-        make_camera_info(4, 3),
+        make_camera_info(4, 3, focal_length=100.0),
         rgb_size=(8, 6),
+        rgb_camera_info=make_camera_info(8, 6, focal_length=200.0),
         search_radius_px=0,
     )
 
@@ -80,14 +125,14 @@ def test_projection_uses_mapped_and_sampled_depth_coordinates():
 
 
 def test_nearby_depth_hole_uses_actual_sample_ray():
-    """A local hole search changes both depth and projection ray."""
     values = [0.0] * 12
     values[1 * 4 + 3] = 1.5
     result = project_reference_pixel(
         ImagePoint(u=4, v=2),
         make_depth(values, 4, 3),
-        make_camera_info(4, 3),
+        make_camera_info(4, 3, focal_length=100.0),
         rgb_size=(8, 6),
+        rgb_camera_info=make_camera_info(8, 6, focal_length=200.0),
         search_radius_px=1,
     )
 
@@ -96,21 +141,21 @@ def test_nearby_depth_hole_uses_actual_sample_ray():
     assert result.point_camera.x == pytest.approx(0.0225)
 
 
-def test_normal_fit_uses_mapped_depth_neighborhood():
-    """A flat plane works when RGB and depth resolutions differ."""
+def test_normal_fit_uses_registered_depth_neighborhood():
     depth = make_depth([1.0] * 121, 11, 11)
-    camera_info = make_camera_info(11, 11)
+    depth_info = make_camera_info(11, 11, focal_length=100.0)
     projected = project_reference_pixel(
         ImagePoint(u=10, v=10),
         depth,
-        camera_info,
+        depth_info,
         rgb_size=(22, 22),
+        rgb_camera_info=make_camera_info(22, 22, focal_length=200.0),
     )
 
     result = estimate_reference_surface_normal(
         projected,
         depth,
-        camera_info,
+        depth_info,
     )
 
     assert projected.mapped_pixel == ImagePoint(u=5, v=5)
@@ -121,18 +166,17 @@ def test_normal_fit_uses_mapped_depth_neighborhood():
 
 
 def test_rgb_bounds_are_checked_before_depth_mapping():
-    """Selections outside the displayed RGB image are rejected."""
     with pytest.raises(ValueError, match="RGB reference image"):
         project_reference_pixel(
             ImagePoint(u=8, v=0),
             make_depth([1.0] * 12, 4, 3),
             make_camera_info(4, 3),
             rgb_size=(8, 6),
+            rgb_camera_info=make_camera_info(8, 6),
         )
 
 
-def test_calibration_distinguishes_crop_from_lower_resolution():
-    """Equal focal lengths reveal a smaller centered depth field."""
+def test_camera_geometry_distinguishes_crop_from_lower_resolution():
     rgb_info = make_camera_info(8, 6, focal_length=100.0)
     depth_info = make_camera_info(4, 3, focal_length=100.0)
 
@@ -149,28 +193,18 @@ def test_calibration_distinguishes_crop_from_lower_resolution():
     assert region.height == 3
 
 
-def test_calibrated_mapping_rejects_rgb_border_outside_depth_crop():
-    """A visible RGB pixel without a registered-depth ray is rejected."""
+def test_camera_geometry_rejects_rgb_border_outside_depth_crop():
     with pytest.raises(ValueError, match="field of view"):
         map_rgb_pixel_to_depth(
             ImagePoint(u=0, v=2),
             rgb_size=(8, 6),
             depth_size=(4, 3),
-            rgb_camera_info=make_camera_info(
-                8,
-                6,
-                focal_length=100.0,
-            ),
-            depth_camera_info=make_camera_info(
-                4,
-                3,
-                focal_length=100.0,
-            ),
+            rgb_camera_info=make_camera_info(8, 6, focal_length=100.0),
+            depth_camera_info=make_camera_info(4, 3, focal_length=100.0),
         )
 
 
 def test_selectable_region_excludes_zero_depth_border():
-    """A registered-depth border without returns is not selectable."""
     values = []
     for _ in range(4):
         values.extend([0.0, 0.0, 1.0, 1.0, 1.0, 1.0])
@@ -190,7 +224,6 @@ def test_selectable_region_excludes_zero_depth_border():
 
 
 def test_selectable_region_rejects_empty_registered_depth():
-    """A capture without any depth cannot define a surface."""
     with pytest.raises(ValueError, match="valid depth support"):
         rgb_depth_selectable_region(
             (4, 3),
@@ -198,3 +231,18 @@ def test_selectable_region_rejects_empty_registered_depth():
             make_camera_info(4, 3),
             make_camera_info(4, 3),
         )
+
+
+def test_overlap_excludes_exact_upper_half_pixel_boundary():
+    rgb_info = make_camera_info(8, 6, focal_length=100.0)
+    depth_info = make_camera_info(4, 3, focal_length=100.0)
+
+    region = rgb_depth_overlap_region(
+        (8, 6),
+        (4, 3),
+        rgb_info,
+        depth_info,
+    )
+
+    assert region.y == 1
+    assert region.height == 3
