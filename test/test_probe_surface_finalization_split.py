@@ -13,10 +13,11 @@ def _source():
     ).read_text(encoding="utf-8")
 
 
-def test_probe_setup_delegates_surface_and_finalization_state():
+def test_probe_setup_delegates_only_refinement_and_finalization_state():
     source = _source()
 
-    assert "ProbeSurfaceVerificationController" in source
+    assert "ProbeSurfaceVerificationController" not in source
+    assert "ProbeSurfaceVerificationRunner" not in source
     assert "ProbeFinalizationController" in source
     assert "_finalizations" not in source
     assert "def _persist_probe_point(" not in source
@@ -40,7 +41,8 @@ def test_require_idle_is_still_an_instance_method():
     )
 
     assert method.decorator_list == []
-    assert [argument.arg for argument in method.args.args[:2]] == [
+    assert [argument.arg for argument in method.args.args] == [
         "self",
         "context",
+        "finalization_request_id",
     ]

@@ -11,9 +11,6 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
     RefinementStage,
 )
-from fault_detector_spot.inspection.setup.probe_surface_verification import (
-    SurfaceVerificationState,
-)
 from fault_detector_spot.shared.geometry.transforms import pose_data_to_pose
 
 
@@ -62,7 +59,6 @@ class ProbeSetupStateAdapter:
         message.probe_point_ids = list(snapshot.probe_point_ids)
         self._write_geometry(message, snapshot)
         self._write_refinement(message, snapshot)
-        self._write_surface_verification(message, snapshot)
         return message
 
     @staticmethod
@@ -115,56 +111,6 @@ class ProbeSetupStateAdapter:
         if pending is not None:
             message.motion_pending = True
             message.motion_request_id = pending.request_id
-
-    @staticmethod
-    def _write_surface_verification(message, snapshot):
-        verification = snapshot.surface_verification
-        if verification is None:
-            return
-        states = {
-            SurfaceVerificationState.IDLE: (
-                ProbeSetupState.SURFACE_VERIFICATION_IDLE
-            ),
-            SurfaceVerificationState.SAMPLING: (
-                ProbeSetupState.SURFACE_VERIFICATION_SAMPLING
-            ),
-            SurfaceVerificationState.MOVING: (
-                ProbeSetupState.SURFACE_VERIFICATION_MOVING
-            ),
-            SurfaceVerificationState.SETTLING: (
-                ProbeSetupState.SURFACE_VERIFICATION_SETTLING
-            ),
-            SurfaceVerificationState.CONVERGED: (
-                ProbeSetupState.SURFACE_VERIFICATION_CONVERGED
-            ),
-            SurfaceVerificationState.FAILED: (
-                ProbeSetupState.SURFACE_VERIFICATION_FAILED
-            ),
-            SurfaceVerificationState.CANCELLED: (
-                ProbeSetupState.SURFACE_VERIFICATION_CANCELLED
-            ),
-            SurfaceVerificationState.RECOVERY_REQUIRED: (
-                ProbeSetupState.SURFACE_VERIFICATION_RECOVERY_REQUIRED
-            ),
-        }
-        message.surface_verification_active = verification.active
-        message.surface_verification_state = states[verification.state]
-        message.surface_verification_request_id = verification.request_id
-        message.surface_distance_tolerance_m = verification.policy.tolerance_m
-        if verification.measured_distance_m is not None:
-            message.has_surface_distance_measurement = True
-            message.measured_surface_distance_m = (
-                verification.measured_distance_m
-            )
-            message.surface_distance_error_m = verification.error_m
-        if verification.last_correction_m is not None:
-            message.has_surface_correction = True
-            message.last_surface_correction_m = verification.last_correction_m
-        message.cumulative_surface_correction_m = (
-            verification.cumulative_correction_m
-        )
-        message.surface_verification_iteration = verification.iteration_count
-        message.surface_recovery_required = verification.recovery_required
 
     @classmethod
     def _write_geometry(cls, message, snapshot):

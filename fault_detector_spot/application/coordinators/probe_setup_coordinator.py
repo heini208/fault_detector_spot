@@ -1,6 +1,5 @@
 """Coordinate probe authoring and single-step setup movement."""
 
-from copy import deepcopy
 from dataclasses import dataclass
 from functools import wraps
 from threading import RLock
@@ -26,12 +25,6 @@ from fault_detector_spot.application.coordinators.probe_finalization_controller 
 from fault_detector_spot.application.coordinators.probe_refinement_controller import (
     ProbeRefinementController,
 )
-from fault_detector_spot.application.coordinators.probe_surface_verification_controller import (
-    ProbeSurfaceVerificationController,
-)
-from fault_detector_spot.application.coordinators.probe_surface_verification_runner import (
-    ProbeSurfaceVerificationRunner,
-)
 from fault_detector_spot.inspection.setup.probe_definition_service import (
     ProbeDefinitionService,
 )
@@ -46,7 +39,6 @@ from fault_detector_spot.inspection.setup.probe_setup_geometry import (
     ProbeSetupGeometry,
 )
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
-    RefinementMotionState,
     RefinementStage,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
@@ -114,26 +106,11 @@ class ProbeSetupCoordinator:
             state_lock=self._lock,
             sensor_attachment_controller=sensor_attachment_controller,
         )
-        self.surface_controller = ProbeSurfaceVerificationController(
-            self.refinement_controller,
-            self._lock,
-        )
         self.finalization_controller = ProbeFinalizationController(
             self.object_repository,
             self.refinement_controller,
             self._lock,
         )
-        self._surface_verification_runner = None
-        if motion_state_source is not None:
-            self._surface_verification_runner = (
-                ProbeSurfaceVerificationRunner(
-                    self,
-                    motion_state_source,
-                    sensor_attachment_controller=(
-                        sensor_attachment_controller
-                    ),
-                )
-            )
         self._drafts = {}
         self._context_locks = {}
 
@@ -479,40 +456,6 @@ class ProbeSetupCoordinator:
             return self.snapshot(context)
         return self._advance(draft)
 
-    def begin_surface_verification(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-    ) -> ProbeSetupSnapshot:
-        """Start one server-owned closed-loop surface verification."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            self._require_idle(context)
-            self.refinement_controller.require_physical_lane_idle()
-            draft = self._selected_draft(context)
-            self.surface_controller.begin(draft, request_id)
-            return self.snapshot(context)
-
-    def run_surface_verification(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-        cancel_requested,
-        state_changed=None,
-    ) -> ProbeSetupSnapshot:
-        """Run the server-owned surface verification workflow."""
-        runner = self._surface_verification_runner
-        if runner is None:
-            raise RuntimeError(
-                "Probe surface verification runtime is unavailable"
-            )
-        return runner.run(
-            context,
-            request_id,
-            cancel_requested,
-            state_changed,
-        )
-
     def calculate_surface_orientation(
         self,
         context: SetupContextSnapshot,
@@ -560,155 +503,6 @@ class ProbeSetupCoordinator:
     def uses_setup_coordinator(self, coordinator: SetupCoordinator) -> bool:
         """Return whether this facade uses the supplied shared coordinator."""
         return self.setup_coordinator is coordinator
-
-    def evaluate_surface_estimate(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-        estimated_distance_m: float,
-        achieved_pose,
-    ):
-        """Evaluate one kinematic estimate through the public facade."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            decision = self.surface_controller.evaluate_estimated_distance(
-                draft,
-                request_id,
-                estimated_distance_m,
-                achieved_pose,
-            )
-            return decision, self.snapshot(context)
-
-    def evaluate_surface_verification(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-        samples,
-        achieved_pose_object,
-    ):
-        """Evaluate one authoritative surface-distance sample window."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            decision = self.surface_controller.evaluate(
-                draft,
-                request_id,
-                samples,
-                achieved_pose_object,
-            )
-            return decision, self.snapshot(context)
-
-    def mark_surface_correction_started(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-    ) -> ProbeSetupSnapshot:
-        """Record that a verification correction may have moved the probe."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            self.surface_controller.mark_correction_started(
-                draft,
-                request_id,
-            )
-            return self.snapshot(context)
-
-    def mark_surface_correction_succeeded(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-    ) -> ProbeSetupSnapshot:
-        """Enter the settle gate after one correction succeeds."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            self.surface_controller.mark_correction_succeeded(
-                draft,
-                request_id,
-            )
-            return self.snapshot(context)
-
-    def resume_surface_sampling(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-    ) -> ProbeSetupSnapshot:
-        """Resume fresh sampling after the server settle gate passes."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            self.surface_controller.resume_sampling(
-                draft,
-                request_id,
-            )
-            return self.snapshot(context)
-
-    def fail_surface_sampling(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-        detail: str,
-    ) -> ProbeSetupSnapshot:
-        """Fail a verification whose fresh-depth gate timed out."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            self.surface_controller.fail_sampling(
-                draft,
-                request_id,
-                detail,
-            )
-            return self.snapshot(context)
-
-    def fail_surface_correction(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-        detail: str,
-    ) -> ProbeSetupSnapshot:
-        """Fail one correlated axial correction."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            self.surface_controller.fail_correction(
-                draft,
-                request_id,
-                detail,
-            )
-            return self.snapshot(context)
-
-    def abort_surface_verification(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-        detail: str,
-    ) -> ProbeSetupSnapshot:
-        """Fail any active verification while preserving recovery state."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            self.surface_controller.abort(
-                draft,
-                request_id,
-                detail,
-            )
-            return self.snapshot(context)
-
-    def cancel_surface_verification(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-    ) -> ProbeSetupSnapshot:
-        """Cancel verification and preserve any required recovery state."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            self.surface_controller.cancel(
-                draft,
-                request_id,
-            )
-            return self.snapshot(context)
 
     def begin_finalization(
         self,
@@ -812,7 +606,6 @@ class ProbeSetupCoordinator:
         self,
         context: SetupContextSnapshot,
         motion: ProbeMotionRequest,
-        surface_verification_request_id: str = "",
         finalization_request_id: str = "",
     ) -> SetupOperation:
         """Prepare one motion primitive for the shared command lane."""
@@ -820,7 +613,6 @@ class ProbeSetupCoordinator:
             self.setup_coordinator.require_current(context)
             self._require_idle(
                 context,
-                surface_verification_request_id,
                 finalization_request_id,
             )
             draft = self._selected_draft(context)
@@ -892,10 +684,6 @@ class ProbeSetupCoordinator:
 
     def close(self) -> None:
         """Close every probe context owned by this coordinator."""
-        runner = self._surface_verification_runner
-        if runner is not None:
-            runner.close()
-            self._surface_verification_runner = None
         with self._lock:
             contexts = tuple(
                 draft.context
@@ -951,24 +739,10 @@ class ProbeSetupCoordinator:
     def _require_idle(
         self,
         context: SetupContextSnapshot,
-        surface_verification_request_id: str = "",
         finalization_request_id: str = "",
     ) -> None:
         with self._lock:
             draft = self._drafts.get(context.context_id)
-            verification_request_id = (
-                self.surface_controller.active_request_id(draft)
-                if draft is not None
-                else ""
-            )
-            if (
-                verification_request_id
-                and verification_request_id
-                != surface_verification_request_id
-            ):
-                raise RuntimeError(
-                    "Probe setup context has active surface verification"
-                )
             active_finalization = (
                 self.finalization_controller.active_request_id(
                     context
@@ -986,10 +760,7 @@ class ProbeSetupCoordinator:
                 draft is not None
                 and draft.refinement is not None
                 and draft.refinement.recovery_required
-                and not (
-                    surface_verification_request_id
-                    or finalization_request_id
-                )
+                and not finalization_request_id
             ):
                 raise RuntimeError(
                     "Probe refinement requires retraction before editing"
@@ -1038,10 +809,7 @@ class ProbeSetupCoordinator:
         return self.snapshot(updated)
 
 
-
-
 __all__ = [
     "ProbeSetupCoordinator",
     "ProbeSetupMotionStatus",
 ]
-
