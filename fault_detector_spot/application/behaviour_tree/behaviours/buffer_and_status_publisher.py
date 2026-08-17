@@ -34,6 +34,14 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             "last_command",
             access=py_trees.common.Access.READ,
         )
+        self.blackboard.register_key(
+            "command_failure_request_id",
+            access=py_trees.common.Access.READ,
+        )
+        self.blackboard.register_key(
+            "command_failure_detail",
+            access=py_trees.common.Access.READ,
+        )
         return True
 
     def update(self) -> Status:
@@ -119,11 +127,19 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
                 message.detail = "BT request completed"
         elif status == Status.FAILURE:
             message.state = CommandStatus.STATE_FAILED
-            message.detail = (
-                f"BT execution failed for {message.command_id}"
-                if message.command_id
-                else "BT execution failed"
-            )
+            failure_detail = self._current_failure_detail(message.request_id)
+            if failure_detail:
+                message.detail = (
+                    f"{message.command_id} failed: {failure_detail}"
+                    if message.command_id
+                    else failure_detail
+                )
+            else:
+                message.detail = (
+                    f"BT execution failed for {message.command_id}"
+                    if message.command_id
+                    else "BT execution failed"
+                )
         else:
             message.state = CommandStatus.STATE_IDLE
             if message.request_id:
@@ -131,6 +147,17 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             else:
                 message.detail = "BT idle"
         return message
+
+    def _current_failure_detail(self, request_id: str) -> str:
+        failure_request_id = getattr(
+            self.blackboard,
+            "command_failure_request_id",
+            "",
+        )
+        if not request_id or failure_request_id != request_id:
+            return ""
+        detail = getattr(self.blackboard, "command_failure_detail", "")
+        return detail.strip() if isinstance(detail, str) else ""
 
     def _current_request_buffer_count(self, buffer_list):
         command = self.blackboard.last_command

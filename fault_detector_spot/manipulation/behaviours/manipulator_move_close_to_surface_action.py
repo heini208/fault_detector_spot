@@ -94,6 +94,14 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
         self._state_source = None
         self.blackboard = self.attach_blackboard_client()
         self.blackboard.register_key(key="last_command", access=Access.READ)
+        self.blackboard.register_key(
+            key="command_failure_request_id",
+            access=Access.WRITE,
+        )
+        self.blackboard.register_key(
+            key="command_failure_detail",
+            access=Access.WRITE,
+        )
         self._clear_runtime()
 
     def setup(self, **kwargs):
@@ -131,6 +139,8 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
             command = self._command_from_blackboard()
             if self._command is None:
                 self._command = command
+                self.blackboard.command_failure_request_id = command.request_id
+                self.blackboard.command_failure_detail = ""
             elif command is not self._command:
                 return self._fail("Close-surface command changed during execution")
 
@@ -638,8 +648,14 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
         self._result_future = None
 
     def _fail(self, detail: str) -> Status:
+        detail = str(detail).strip() or "Close-surface movement failed"
         self.feedback_message = detail
-        self.logger.error(f"[{self.name}] {detail}")
+        request_id = getattr(self._command, "request_id", "")
+        self.blackboard.command_failure_request_id = request_id
+        self.blackboard.command_failure_detail = detail
+        if self.node is not None:
+            logger = self.node.get_logger()
+            logger.error(f"[{self.name}] {detail}")
         self._cancel_active_goal()
         return Status.FAILURE
 

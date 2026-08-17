@@ -32,6 +32,8 @@ def behavior(status=Status.SUCCESS, command_id="move_to_tag"):
             command_id=command_id,
             request_id=new_request_id(),
         ),
+        command_failure_request_id="",
+        command_failure_detail="",
     )
     result.node = SimpleNamespace(
         get_clock=lambda: SimpleNamespace(
@@ -103,3 +105,34 @@ def test_internal_success_is_running_until_request_buffer_is_empty():
     message = result.structured_status_pub.messages[0]
     assert message.state == message.STATE_RUNNING
     assert message.buffered_command_count == 1
+
+
+def test_correlated_leaf_failure_detail_is_published():
+    result = behavior(Status.FAILURE, "move_close_to_surface")
+    request_id = result.blackboard.last_command.request_id
+    result.blackboard.command_failure_request_id = request_id
+    result.blackboard.command_failure_detail = (
+        "Unable to establish stationary end-effector force baseline"
+    )
+
+    result.update()
+
+    message = result.structured_status_pub.messages[0]
+    assert message.state == message.STATE_FAILED
+    assert message.detail == (
+        "move_close_to_surface failed: Unable to establish stationary "
+        "end-effector force baseline"
+    )
+
+
+def test_failure_detail_from_another_request_is_not_reused():
+    result = behavior(Status.FAILURE, "move_close_to_surface")
+    result.blackboard.command_failure_request_id = new_request_id()
+    result.blackboard.command_failure_detail = "stale failure"
+
+    result.update()
+
+    message = result.structured_status_pub.messages[0]
+    assert message.detail == (
+        "BT execution failed for move_close_to_surface"
+    )
