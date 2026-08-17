@@ -63,7 +63,7 @@ def make_probe_point(probe_point_id: str) -> ProbePoint:
         probe_point_id=probe_point_id,
         display_name=probe_point_id,
         safe_approach_pose_object=PoseData.identity(),
-        probe_pose_object=PoseData.identity(),
+        aligned_preapproach_pose_object=PoseData.identity(),
         target_surface_distance_m=0.03,
         position_tolerance_m=0.01,
         orientation_tolerance_rad=0.087,

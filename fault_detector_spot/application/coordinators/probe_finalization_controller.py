@@ -229,8 +229,8 @@ class ProbeFinalizationController:
             safe_approach_pose_object=deepcopy(
                 setup.safe_approach_pose_object
             ),
-            probe_pose_object=deepcopy(
-                setup.probe_pose_object
+            aligned_preapproach_pose_object=deepcopy(
+                setup.aligned_preapproach_pose_object
             ),
             target_surface_distance_m=(
                 setup.surface_target.target_surface_distance_m

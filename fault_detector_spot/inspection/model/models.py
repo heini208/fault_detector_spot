@@ -287,12 +287,12 @@ class ReferenceView:
 
 @dataclass
 class ProbePoint:
-    """One ordered target with local positive X facing outward."""
+    """Persisted probe execution target with local +X pointing inward."""
 
     probe_point_id: str
     display_name: str
     safe_approach_pose_object: PoseData
-    probe_pose_object: PoseData
+    aligned_preapproach_pose_object: PoseData
     target_surface_distance_m: float
     position_tolerance_m: float
     orientation_tolerance_rad: float
@@ -314,8 +314,8 @@ class ProbePoint:
             safe_approach_pose_object=PoseData.from_dict(
                 data["safe_approach_pose_object"]
             ),
-            probe_pose_object=PoseData.from_dict(
-                data["probe_pose_object"]
+            aligned_preapproach_pose_object=PoseData.from_dict(
+                data["aligned_preapproach_pose_object"]
             ),
             target_surface_distance_m=float(
                 data["target_surface_distance_m"]
@@ -356,7 +356,7 @@ class ProbePoint:
             "Probe point display name",
         )
         self.safe_approach_pose_object.validate()
-        self.probe_pose_object.validate()
+        self.aligned_preapproach_pose_object.validate()
         numeric_values = (
             self.target_surface_distance_m,
             self.position_tolerance_m,
@@ -408,7 +408,9 @@ class ProbePoint:
             "safe_approach_pose_object": (
                 self.safe_approach_pose_object.to_dict()
             ),
-            "probe_pose_object": self.probe_pose_object.to_dict(),
+            "aligned_preapproach_pose_object": (
+                self.aligned_preapproach_pose_object.to_dict()
+            ),
             "target_surface_distance_m": (
                 self.target_surface_distance_m
             ),

@@ -55,8 +55,8 @@ def inspection_object():
         probe_point_id="point_1",
         display_name="Point 1",
         safe_approach_pose_object=pose(x=0.30),
-        probe_pose_object=pose(
-            x=0.03,
+        aligned_preapproach_pose_object=pose(
+            x=0.10,
             orientation=yaw_quaternion(180.0),
         ),
         target_surface_distance_m=0.03,
@@ -94,7 +94,7 @@ def sensor(sensor_id="bmm150_01", hand_to_probe=None):
     )
 
 
-def test_resolves_probe_and_hand_targets_in_execution_frame():
+def test_resolves_safe_and_aligned_targets_in_execution_frame():
     target = resolve_probe_execution_target(
         inspection_object(),
         routine_id="scan",
@@ -124,18 +124,14 @@ def test_resolves_probe_and_hand_targets_in_execution_frame():
         target.aligned_preapproach_hand_pose_execution.position.x
         == pytest.approx(1.30)
     )
-    assert target.nominal_probe_pose_execution.position.x == pytest.approx(
-        1.03
-    )
-    assert target.nominal_hand_pose_execution.position.x == pytest.approx(
-        1.23
-    )
     assert target.inward_direction_execution.x == pytest.approx(-1.0)
     assert target.inward_direction_execution.y == pytest.approx(0.0)
     assert target.inward_direction_execution.z == pytest.approx(0.0)
     assert target.target_surface_distance_m == pytest.approx(0.03)
     assert target.aligned_preapproach_distance_m == pytest.approx(0.10)
     assert target.measurement_duration_sec == pytest.approx(1.5)
+    assert not hasattr(target, "nominal_probe_pose_execution")
+    assert not hasattr(target, "nominal_hand_pose_execution")
 
 
 def test_live_object_rotation_rotates_positions_and_approach_axis():
@@ -167,7 +163,7 @@ def test_live_object_rotation_rotates_positions_and_approach_axis():
     assert inward.y == pytest.approx(-1.0)
 
 
-def test_rotated_sensor_calibration_changes_required_hand_pose():
+def test_rotated_sensor_calibration_changes_required_aligned_hand_pose():
     calibration = pose(
         x=0.10,
         y=0.0,
@@ -182,8 +178,8 @@ def test_rotated_sensor_calibration_changes_required_hand_pose():
         object_pose_execution=PoseData.identity(),
     )
 
-    hand = target.nominal_hand_pose_execution
-    assert hand.position.x == pytest.approx(0.03)
+    hand = target.aligned_preapproach_hand_pose_execution
+    assert hand.position.x == pytest.approx(0.10)
     assert hand.position.y == pytest.approx(-0.10)
     assert hand.orientation.z == pytest.approx(math.sqrt(0.5))
     assert hand.orientation.w == pytest.approx(math.sqrt(0.5))
@@ -201,6 +197,7 @@ def test_active_attachment_owns_execution_geometry():
     assert target.sensor_id == "active_sensor"
     assert target.probe_frame == "active_sensor_probe"
 
+
 def test_no_sensor_uses_identity_hand_geometry_without_fake_probe_frame():
     target = resolve_probe_execution_target(
         inspection_object(),
@@ -213,8 +210,8 @@ def test_no_sensor_uses_identity_hand_geometry_without_fake_probe_frame():
     assert target.sensor_id == ""
     assert target.attachment_revision == 8
     assert target.probe_frame == "hand"
-    assert target.nominal_probe_pose_execution == (
-        target.nominal_hand_pose_execution
+    assert target.aligned_preapproach_probe_pose_execution == (
+        target.aligned_preapproach_hand_pose_execution
     )
     assert target.safe_approach_probe_pose_execution == (
         target.safe_approach_hand_pose_execution

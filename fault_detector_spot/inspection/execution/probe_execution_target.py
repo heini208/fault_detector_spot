@@ -9,7 +9,6 @@ from fault_detector_spot.inspection.model.models import (
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     compose_poses,
-    derive_aligned_preapproach_pose,
     probe_pose_to_hand_pose,
     rotate_vector,
 )
@@ -26,7 +25,7 @@ from fault_detector_spot.inspection.sensing.surface_distance_validation import (
 
 @dataclass(frozen=True)
 class ProbeExecutionTarget:
-    """Validated probe and hand targets for one saved point."""
+    """Validated safe and aligned targets for one saved point."""
 
     object_id: str
     routine_id: str
@@ -39,8 +38,6 @@ class ProbeExecutionTarget:
     safe_approach_hand_pose_execution: PoseData
     aligned_preapproach_probe_pose_execution: PoseData
     aligned_preapproach_hand_pose_execution: PoseData
-    nominal_probe_pose_execution: PoseData
-    nominal_hand_pose_execution: PoseData
     inward_direction_execution: Vector3Data
     target_surface_distance_m: float
     position_tolerance_m: float
@@ -58,7 +55,7 @@ def resolve_probe_execution_target(
     object_pose_execution: PoseData,
     execution_frame: str = "odom",
 ) -> ProbeExecutionTarget:
-    """Compose one saved probe point with active sensor or bare-hand geometry."""
+    """Compose one saved probe point with active attachment geometry."""
     if not isinstance(attachment, MotionAttachmentSnapshot):
         raise TypeError("Expected a motion attachment snapshot")
     inspection_object.validate()
@@ -88,7 +85,9 @@ def resolve_probe_execution_target(
         sensor_id=attachment.sensor_id,
         attachment_revision=attachment.attachment_revision,
         safe_approach_pose_object=probe_point.safe_approach_pose_object,
-        probe_pose_object=probe_point.probe_pose_object,
+        aligned_preapproach_pose_object=(
+            probe_point.aligned_preapproach_pose_object
+        ),
         hand_to_probe=attachment.hand_to_probe(),
         target_surface_distance_m=probe_point.target_surface_distance_m,
         position_tolerance_m=probe_point.position_tolerance_m,
@@ -109,7 +108,7 @@ def resolve_probe_execution_geometry(
     probe_point_id: str,
     sensor_id: str,
     safe_approach_pose_object: PoseData,
-    probe_pose_object: PoseData,
+    aligned_preapproach_pose_object: PoseData,
     hand_to_probe: PoseData,
     target_surface_distance_m: float,
     position_tolerance_m: float,
@@ -121,7 +120,7 @@ def resolve_probe_execution_geometry(
     execution_frame: str = "odom",
     attachment_revision: int = 0,
 ) -> ProbeExecutionTarget:
-    """Resolve one validated immutable geometry snapshot."""
+    """Resolve one immutable safe/aligned geometry snapshot."""
     for value, label in (
         (object_id, "Object ID"),
         (routine_id, "Routine ID"),
@@ -139,7 +138,7 @@ def resolve_probe_execution_geometry(
     ):
         raise ValueError("Attachment revision must be a non-negative integer")
     safe_approach_pose_object.validate()
-    probe_pose_object.validate()
+    aligned_preapproach_pose_object.validate()
     hand_to_probe.validate()
     object_pose_execution.validate()
     validate_surface_distance_pair(
@@ -157,18 +156,9 @@ def resolve_probe_execution_geometry(
         object_pose_execution,
         safe_approach_pose_object,
     )
-    aligned_probe_pose_object = derive_aligned_preapproach_pose(
-        probe_pose_object,
-        target_surface_distance_m,
-        aligned_preapproach_distance_m,
-    )
     aligned_probe_pose = compose_poses(
         object_pose_execution,
-        aligned_probe_pose_object,
-    )
-    nominal_probe_pose = compose_poses(
-        object_pose_execution,
-        probe_pose_object,
+        aligned_preapproach_pose_object,
     )
     safe_hand_pose = probe_pose_to_hand_pose(
         safe_probe_pose,
@@ -178,12 +168,8 @@ def resolve_probe_execution_geometry(
         aligned_probe_pose,
         hand_to_probe,
     )
-    nominal_hand_pose = probe_pose_to_hand_pose(
-        nominal_probe_pose,
-        hand_to_probe,
-    )
     inward_direction = rotate_vector(
-        nominal_probe_pose.orientation,
+        aligned_probe_pose.orientation,
         Vector3Data(x=1.0, y=0.0, z=0.0),
     )
     motion_sensor_id = sensor_id or BARE_HAND_MOTION_ID
@@ -200,8 +186,6 @@ def resolve_probe_execution_geometry(
         safe_approach_hand_pose_execution=safe_hand_pose,
         aligned_preapproach_probe_pose_execution=aligned_probe_pose,
         aligned_preapproach_hand_pose_execution=aligned_hand_pose,
-        nominal_probe_pose_execution=nominal_probe_pose,
-        nominal_hand_pose_execution=nominal_hand_pose,
         inward_direction_execution=inward_direction,
         target_surface_distance_m=target_surface_distance_m,
         position_tolerance_m=position_tolerance_m,

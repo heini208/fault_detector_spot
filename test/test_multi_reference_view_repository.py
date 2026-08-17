@@ -180,13 +180,13 @@ def test_recapture_preserves_probe_geometry_and_clears_provenance(
     routine = definition.get_routine("magnetic_scan")
     safe_approach_pose = PoseData.identity()
     safe_approach_pose.position.x = 0.30
-    probe_pose = PoseData.identity()
-    probe_pose.position.x = 0.02
+    aligned_pose = PoseData.identity()
+    aligned_pose.position.x = 0.08
     original_probe = ProbePoint(
         probe_point_id="point_a",
         display_name="Point A",
         safe_approach_pose_object=safe_approach_pose,
-        probe_pose_object=probe_pose,
+        aligned_preapproach_pose_object=aligned_pose,
         target_surface_distance_m=0.01,
         position_tolerance_m=0.005,
         orientation_tolerance_rad=0.05,

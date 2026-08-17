@@ -23,7 +23,7 @@ def make_probe(probe_point_id="point_a") -> ProbePoint:
         probe_point_id=probe_point_id,
         display_name=probe_point_id,
         safe_approach_pose_object=PoseData.identity(),
-        probe_pose_object=PoseData.identity(),
+        aligned_preapproach_pose_object=PoseData.identity(),
         target_surface_distance_m=0.01,
         position_tolerance_m=0.005,
         orientation_tolerance_rad=0.05,
@@ -100,18 +100,23 @@ def test_probe_points_require_a_captured_reference_view():
 def test_probe_point_round_trip_preserves_execution_geometry():
     original = make_probe()
     original.safe_approach_pose_object.position.x = 0.30
-    original.probe_pose_object.position.x = 0.02
+    original.aligned_preapproach_pose_object.position.x = 0.08
     restored = ProbePoint.from_dict(original.to_dict())
     restored.validate()
     assert restored == original
     assert restored.safe_approach_pose_object.position.x == 0.30
-    assert restored.probe_pose_object.position.x == 0.02
+    assert restored.aligned_preapproach_pose_object.position.x == 0.08
     assert restored.target_surface_distance_m == 0.01
     assert restored.aligned_preapproach_distance_m == 0.08
-    assert "preapproach_distance_m" not in restored.to_dict()
+    serialized = restored.to_dict()
+    assert "probe_pose_object" not in serialized
+    assert "aligned_preapproach_pose_object" in serialized
 
 
-@pytest.mark.parametrize("distance", [0.0, -0.01, 0.059, float("inf"), float("nan")])
+@pytest.mark.parametrize(
+    "distance",
+    [0.0, -0.01, 0.059, float("inf"), float("nan")],
+)
 def test_probe_point_requires_safe_absolute_preapproach_distance(distance):
     probe_point = make_probe()
     probe_point.aligned_preapproach_distance_m = distance
@@ -128,15 +133,27 @@ def test_probe_point_accepts_exact_minimum_distance_separation():
 
 def test_probe_point_rejects_invalid_approved_pose():
     probe_point = make_probe()
-    probe_point.probe_pose_object.orientation.w = 2.0
+    probe_point.aligned_preapproach_pose_object.orientation.w = 2.0
     with pytest.raises(ValueError, match="Quaternion must be normalized"):
         probe_point.validate()
 
 
-@pytest.mark.parametrize("field_name", ["probe_pose_object", "aligned_preapproach_distance_m"])
-def test_obsolete_probe_point_format_is_rejected(field_name):
+@pytest.mark.parametrize(
+    "field_name",
+    ["aligned_preapproach_pose_object", "aligned_preapproach_distance_m"],
+)
+def test_incomplete_probe_point_format_is_rejected(field_name):
     serialized = make_probe().to_dict()
     serialized.pop(field_name)
+    with pytest.raises(KeyError):
+        ProbePoint.from_dict(serialized)
+
+
+def test_old_nominal_probe_pose_format_is_rejected():
+    serialized = make_probe().to_dict()
+    serialized["probe_pose_object"] = PoseData.identity().to_dict()
+    serialized.pop("aligned_preapproach_pose_object")
+
     with pytest.raises(KeyError):
         ProbePoint.from_dict(serialized)
 

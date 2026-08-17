@@ -131,7 +131,7 @@ class ProbeExecutionConfiguration:
     sensor_id: str
     attachment_revision: int
     safe_approach_pose_object: FrozenPoseData
-    probe_pose_object: FrozenPoseData
+    aligned_preapproach_pose_object: FrozenPoseData
     hand_to_probe: FrozenPoseData
     target_surface_distance_m: float
     position_tolerance_m: float
@@ -177,8 +177,8 @@ class ProbeExecutionConfiguration:
             safe_approach_pose_object=FrozenPoseData.from_pose(
                 probe_point.safe_approach_pose_object
             ),
-            probe_pose_object=FrozenPoseData.from_pose(
-                probe_point.probe_pose_object
+            aligned_preapproach_pose_object=FrozenPoseData.from_pose(
+                probe_point.aligned_preapproach_pose_object
             ),
             hand_to_probe=FrozenPoseData.from_pose(
                 attachment.hand_to_probe()
@@ -216,7 +216,9 @@ class ProbeExecutionConfiguration:
             safe_approach_pose_object=(
                 self.safe_approach_pose_object.to_pose()
             ),
-            probe_pose_object=self.probe_pose_object.to_pose(),
+            aligned_preapproach_pose_object=(
+                self.aligned_preapproach_pose_object.to_pose()
+            ),
             hand_to_probe=self.hand_to_probe.to_pose(),
             target_surface_distance_m=self.target_surface_distance_m,
             position_tolerance_m=self.position_tolerance_m,

@@ -41,7 +41,7 @@ def probe_point(safe_x=0.30):
         probe_point_id="point_1",
         display_name="Point 1",
         safe_approach_pose_object=pose(x=safe_x),
-        probe_pose_object=pose(x=0.03),
+        aligned_preapproach_pose_object=pose(x=0.10),
         target_surface_distance_m=0.03,
         position_tolerance_m=0.005,
         orientation_tolerance_rad=0.05,
@@ -125,6 +125,17 @@ def test_loaded_configuration_is_not_changed_by_later_repository_edits(
     )
 
 
+def test_loaded_configuration_freezes_aligned_preapproach_geometry(tmp_path):
+    session, _ = load_session(tmp_path)
+
+    assert session.configuration.aligned_preapproach_pose_object.position == (
+        0.10,
+        0.0,
+        0.0,
+    )
+    assert not hasattr(session.configuration, "probe_pose_object")
+
+
 def test_loaded_configuration_freezes_active_sensor_attachment(
     tmp_path,
 ):
@@ -137,6 +148,7 @@ def test_loaded_configuration_freezes_active_sensor_attachment(
         0.0,
         0.0,
     )
+
 
 def test_loaded_configuration_can_freeze_bare_hand_identity_geometry(tmp_path):
     objects, _ = repository_and_sensor(tmp_path)
@@ -160,8 +172,8 @@ def test_loaded_configuration_can_freeze_bare_hand_identity_geometry(tmp_path):
         1.0,
     )
     assert target.probe_frame == "hand"
-    assert target.nominal_probe_pose_execution == (
-        target.nominal_hand_pose_execution
+    assert target.aligned_preapproach_probe_pose_execution == (
+        target.aligned_preapproach_hand_pose_execution
     )
 
 
