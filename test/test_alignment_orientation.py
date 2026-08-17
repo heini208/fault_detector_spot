@@ -12,7 +12,19 @@ from fault_detector_spot.inspection.setup.alignment_orientation import (
     surface_aligned_probe_orientation,
     tag_aligned_probe_orientation,
 )
-from fault_detector_spot.inspection.setup.reference_probe_setup import rotate_vector
+from fault_detector_spot.inspection.setup.reference_probe_setup import (
+    multiply_quaternions,
+    rotate_vector,
+)
+
+
+def inverse(orientation):
+    return QuaternionData(
+        x=-orientation.x,
+        y=-orientation.y,
+        z=-orientation.z,
+        w=orientation.w,
+    )
 
 
 def roll_quaternion(degrees):
@@ -25,12 +37,16 @@ def roll_quaternion(degrees):
     )
 
 
-def test_tag_alignment_matches_zero_custom_probe_orientation():
+def test_tag_alignment_produces_tag_aligned_hand_with_sensor_mounting():
     hand_to_probe = roll_quaternion(90.0)
 
     probe = tag_aligned_probe_orientation(hand_to_probe)
+    hand = multiply_quaternions(probe, inverse(hand_to_probe))
 
-    assert probe == QuaternionData.identity()
+    assert hand.x == pytest.approx(0.0)
+    assert hand.y == pytest.approx(0.0)
+    assert hand.z == pytest.approx(0.0)
+    assert abs(hand.w) == pytest.approx(1.0)
 
 
 def test_surface_alignment_preserves_tilted_surface_facing_axis():

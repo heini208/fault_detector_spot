@@ -146,10 +146,12 @@ class ManipulatorToTagCommand(MoveToTagCommand):
         pose: PoseStamped,
         transformer: TFListenerWrapper,
     ) -> PoseStamped:
-        if self.orientation_mode in {
-            OrientationModes.TAG_ORIENTATION,
-            OrientationModes.CUSTOM_ORIENTATION,
-        }:
+        if self.orientation_mode == OrientationModes.TAG_ORIENTATION:
+            pose.pose.orientation = self._combine_orientations(
+                pose.pose.orientation,
+                self.offset.pose.orientation,
+            )
+        elif self.orientation_mode == OrientationModes.CUSTOM_ORIENTATION:
             pose.pose.orientation = self._get_rotated_offset_orientation(
                 transformer
             )
@@ -189,6 +191,21 @@ class ManipulatorToTagCommand(MoveToTagCommand):
                 w=_PITCH_45_COS,
             )
         return pose
+
+    @staticmethod
+    def _combine_orientations(
+        q1_msg: Quaternion,
+        q2_msg: Quaternion,
+    ) -> Quaternion:
+        q1 = [q1_msg.x, q1_msg.y, q1_msg.z, q1_msg.w]
+        q2 = [q2_msg.x, q2_msg.y, q2_msg.z, q2_msg.w]
+        q_combined = tf.quaternion_multiply(q1, q2)
+        return Quaternion(
+            x=q_combined[0],
+            y=q_combined[1],
+            z=q_combined[2],
+            w=q_combined[3],
+        )
 
     def _get_rotated_offset_orientation(
         self,

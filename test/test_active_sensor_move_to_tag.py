@@ -36,16 +36,10 @@ class FakeTransformer:
         raise AssertionError(f"Unexpected TF lookup: {frame_a} <- {frame_b}")
 
 
-def target_command(
-    sensor_id,
-    orientation_mode=OrientationModes.CUSTOM_ORIENTATION.value,
-    tag_yaw_degrees=0.0,
-):
+def target_command(sensor_id):
     tag = PoseStamped()
     tag.header.frame_id = "body"
-    half_yaw = math.radians(tag_yaw_degrees) * 0.5
-    tag.pose.orientation.z = math.sin(half_yaw)
-    tag.pose.orientation.w = math.cos(half_yaw)
+    tag.pose.orientation.w = 1.0
 
     offset = PoseStamped()
     offset.header.frame_id = "body"
@@ -58,7 +52,7 @@ def target_command(
         tag_pose=tag,
         tag_id=7,
         offset=offset,
-        orientation_mode=orientation_mode,
+        orientation_mode=OrientationModes.CUSTOM_ORIENTATION.value,
         motion_sensor_id=sensor_id,
     )
 
@@ -98,36 +92,3 @@ def test_no_sensor_uses_bare_hand_without_extra_probe_transform():
     assert goal.pose.orientation.y == pytest.approx(0.0)
     assert goal.pose.orientation.z == pytest.approx(0.0)
     assert goal.pose.orientation.w == pytest.approx(1.0)
-
-
-def test_tag_orientation_matches_zero_custom_orientation():
-    hand_to_probe = TransformStamped()
-    hand_to_probe.header.frame_id = "hand"
-    hand_to_probe.child_frame_id = "hall_probe_probe"
-    half_yaw = math.radians(90.0) * 0.5
-    hand_to_probe.transform.rotation.z = math.sin(half_yaw)
-    hand_to_probe.transform.rotation.w = math.cos(half_yaw)
-
-    custom_goal = target_command(
-        "hall_probe",
-        OrientationModes.CUSTOM_ORIENTATION.value,
-        tag_yaw_degrees=35.0,
-    ).compute_goal_pose(FakeTransformer(hand_to_probe))
-    tag_goal = target_command(
-        "hall_probe",
-        OrientationModes.TAG_ORIENTATION.value,
-        tag_yaw_degrees=35.0,
-    ).compute_goal_pose(FakeTransformer(hand_to_probe))
-
-    assert tag_goal.pose.orientation.x == pytest.approx(
-        custom_goal.pose.orientation.x
-    )
-    assert tag_goal.pose.orientation.y == pytest.approx(
-        custom_goal.pose.orientation.y
-    )
-    assert tag_goal.pose.orientation.z == pytest.approx(
-        custom_goal.pose.orientation.z
-    )
-    assert tag_goal.pose.orientation.w == pytest.approx(
-        custom_goal.pose.orientation.w
-    )

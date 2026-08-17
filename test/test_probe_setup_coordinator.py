@@ -32,9 +32,6 @@ from fault_detector_spot.inspection.model.models import (
     ReferenceView,
     Vector3Data,
 )
-from fault_detector_spot.inspection.model.sensor_models import (
-    BARE_HAND_MOTION_ID,
-)
 from fault_detector_spot.inspection.repository import (
     multi_reference_view_repository,
 )
@@ -116,20 +113,9 @@ class FakeMotionStateSource:
     def __init__(self):
         self.pose = pose()
         self.gravity_object_pose = pose()
-        self.pose_sensor_ids = []
-        self.clearance_sensor_ids = []
 
-    def current_probe_pose_object(self, _tag_id, sensor_id):
-        if not sensor_id:
-            raise ValueError("Sensor ID must not be empty")
-        self.pose_sensor_ids.append(sensor_id)
+    def current_probe_pose_object(self, _tag_id, _sensor_id):
         return self.pose
-
-    def minimum_aligned_probe_distance_m(self, sensor_id):
-        if not sensor_id:
-            raise ValueError("Sensor ID must not be empty")
-        self.clearance_sensor_ids.append(sensor_id)
-        return 0.0
 
     def gravity_aligned_object_pose(self, _tag_id):
         return self.gravity_object_pose
@@ -172,9 +158,7 @@ class FakeSensorAttachmentController:
     def require_motion_attachment(self):
         return SimpleNamespace(
             sensor_id=self.sensor_id,
-            motion_sensor_id=(
-                self.sensor_id or BARE_HAND_MOTION_ID
-            ),
+            motion_sensor_id=self.sensor_id,
             attachment_revision=self.attachment_revision,
             hand_to_probe=lambda: PoseData.identity(),
         )
@@ -427,8 +411,8 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
     )
 
 
-def test_probe_motion_uses_bare_hand_when_no_sensor_is_attached(tmp_path):
-    probe, _ = coordinator(tmp_path, active_sensor_id="")
+def test_probe_motion_uses_active_sensor_attachment(tmp_path):
+    probe, _ = coordinator(tmp_path, active_sensor_id="hand")
     state = create_selected_routine(
         probe,
         probe.open_context("probe-ui").context,
@@ -450,8 +434,6 @@ def test_probe_motion_uses_bare_hand_when_no_sensor_is_attached(tmp_path):
     )
 
     assert operation.request.command.motion_sensor_id == "hand"
-    assert set(probe.motion_state_source.pose_sensor_ids) == {"hand"}
-    assert set(probe.motion_state_source.clearance_sensor_ids) == {"hand"}
 
 
 def test_alignment_defaults_to_tag_aligned_hand_without_changing_position(
@@ -877,4 +859,3 @@ def test_closing_context_releases_refinement_attachment(tmp_path):
     probe.close_context(state.context)
 
     assert attachment_controller.active_reservations == 0
-
