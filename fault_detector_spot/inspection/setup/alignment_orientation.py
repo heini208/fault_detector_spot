@@ -22,9 +22,9 @@ ALIGNMENT_ORIENTATION_CALCULATED_SURFACE = "calculated_surface"
 def tag_aligned_probe_orientation(
     hand_to_probe_orientation: QuaternionData,
 ) -> QuaternionData:
-    """Return the probe orientation produced by a tag-aligned hand."""
+    """Return the zero-custom probe orientation used for tag alignment."""
     hand_to_probe_orientation.validate()
-    return deepcopy(hand_to_probe_orientation)
+    return QuaternionData.identity()
 
 
 def surface_aligned_probe_orientation(
