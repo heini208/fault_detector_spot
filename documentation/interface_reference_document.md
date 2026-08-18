@@ -156,17 +156,26 @@ The provided Qt-based UI uses these same fields (see [manipulation_controls.py](
 
 The Behaviour Tree publishes multiple topics that UIs and monitors can subscribe to.
 
-### 3.1 Visible and Reachable Tags
+### 3.1 Base, Visible, and Reachable Tags
+
+- **Base-camera tags**
+    - Topic: `fault_detector/state/base_tags`
+    - Type: `fault_detector_msgs/TagElementArray`
+    - Direction: Tag observation node → BT / external
 
 - **Visible tags**
     - Topic: `fault_detector/state/visible_tags`
     - Type: `fault_detector_msgs/TagElementArray`
-    - Direction: BT → UI / external
+    - Direction: Tag observation node → BT / UI / external
 
 - **Reachable tags**
     - Topic: `fault_detector/state/reachable_tags`
     - Type: `fault_detector_msgs/TagElementArray`
     - Direction: BT → UI / external
+
+The dedicated tag observation node owns raw `/tf` and `/detections`
+processing. The behaviour tree subscribes to the resulting base and visible
+snapshots, then derives and publishes manipulator reachability.
 
 Each `TagElement` contains:
 

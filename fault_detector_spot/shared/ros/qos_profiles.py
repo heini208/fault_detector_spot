@@ -25,6 +25,13 @@ LIVE_OBJECT_QOS = QoSProfile(
     durability=DurabilityPolicy.VOLATILE,
 )
 
+TAG_STATE_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.VOLATILE,
+)
+
 POINT_CLOUD_QOS = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,

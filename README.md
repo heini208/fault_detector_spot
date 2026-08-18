@@ -120,6 +120,7 @@ The **primary launch file** is `fault_detector_launch.py`, which starts:
 - `fault_detector_ui` – PyQt5 GUI
 - `bt_runner` – main behaviour tree node
 - `apriltag_node` – AprilTag detection for hand camera (`apriltag_ros`)
+- `tag_observation_node` – tag fusion, TF resolution, and state publishing
 - `record_manager` – command recording & playback node
 
 From your ROS 2 workspace:

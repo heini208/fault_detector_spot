@@ -47,7 +47,7 @@ By following this structure, this document aims to be an all-in-one resource for
 - [8. Feedback Subtree](#8-feedback-subtree)
   - [8.1 Initial UI Information (PublishInitialUIInfoOnce)](#81-initial-ui-information-publishinitialuiinfoonce)
   - [8.2 Command and Buffer Status (BufferStatusPublisher)](#82-command-and-buffer-status-bufferstatuspublisher)
-  - [8.3 Tag State Publishing (PublishTagStates)](#83-tag-state-publishing-publishtagstates)
+  - [8.3 Tag State Publishing](#83-tag-state-publishing)
   - [8.4 Landmark-Based Relocalization (LandmarkRelocalizer)](#84-landmark-based-relocalization-landmarkrelocalizer)
 
 - [9. Local Motion Control](#9-local-motion-control)
@@ -234,12 +234,14 @@ This ensures safety overrides can take effect at any point in the command sequen
 
 ## 2.4 Sensing and Input
 
-The sensing subsystem forms one of the main branches of the behaviour tree alongside command execution and feedback publishing.  
-It continuously gathers environmental and system state information and writes the results to the shared blackboard.
+The sensing subsystem combines continuously running ROS observation nodes with
+a behaviour-tree branch that consumes their state. Raw perception is processed
+independently of behaviour-tree progress, while the tree copies validated state
+snapshots to the shared blackboard.
 
 The sensing branch runs multiple non-blocking tasks in parallel, including:
 
-- AprilTag-based perception using both body-mounted and arm-mounted cameras.
+- Subscription to AprilTag state produced from body-mounted and arm-mounted cameras.
 - Transformation of detected tag poses into the global/world frame.
 - Subscription to localization and state updates from the mapping subsystem.
 - Monitoring of new incoming commands from the command subscriber.
@@ -255,7 +257,7 @@ It operates in parallel to command execution and sensing, ensuring the operator 
 **Main responsibilities:**
 
 - **Visible Tags**  
-  Publishes the AprilTags currently detected by the robot.
+  Published continuously by the tag observation node independently of the tree.
 
 - **Reachable Tags**  
   Publishes the subset of visible tags that can be reached by the manipulator.
@@ -297,6 +299,7 @@ The core ROS2 nodes of the Fault Detector Spot system are started using a unifie
     - [`fault_detector_ui`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fui_classes%2Ffault_detector_ui.py) (User Interface)
     - [`bt_runner`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fbt_runner.py) (behaviour tree execution node)
     - [`apriltag_node`](https://github.com/christianrauch/apriltag_ros) (AprilTag perception via `apriltag_ros`)
+    - `tag_observation_node` (tag fusion, TF resolution, freshness, and state publishing)
     - [`record_manager`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Frecord_manager_node.py) (command recording and playback)
 
 This launch file can be invoked, for example, with:
@@ -365,7 +368,8 @@ Key idea:
 
 | Purpose                 | Topic                                 | Type                                  | Direction       |
 |-------------------------|---------------------------------------|---------------------------------------|-----------------|
-| Visible AprilTags       | `fault_detector/state/visible_tags`   | `fault_detector_msgs/TagElementArray` | BT → UI / tools |
+| Base-camera AprilTags   | `fault_detector/state/base_tags`      | `fault_detector_msgs/TagElementArray` | Tag node → BT / tools |
+| Visible AprilTags       | `fault_detector/state/visible_tags`   | `fault_detector_msgs/TagElementArray` | Tag node → BT / UI / tools |
 | Reachable AprilTags     | `fault_detector/state/reachable_tags` | `fault_detector_msgs/TagElementArray` | BT → UI / tools |
 | Command buffer contents | `fault_detector/command_buffer`       | `std_msgs/String`                     | BT → UI / tools |
 | Command tree status     | `fault_detector/command_tree_status`  | `std_msgs/String`                     | BT → UI / tools |
@@ -723,8 +727,10 @@ The exact functionality of each command will become clear either:
 
 # 7. Sensing Subtree
 
-The Sensing Tree handles all incoming data and system inputs. This includes sensor data (e.g., detected AprilTags, robot poses) and, as already mentioned, user
-commands from the UI. Its main goal is to keep the system aware of its surroundings and incoming requests in real-time.
+The Sensing Tree handles incoming state and system inputs. Raw AprilTag
+observation is deliberately outside the tree so that TF callbacks, detection
+queues, freshness expiry, and state publication continue at a fixed rate even
+while another tree branch is busy.
 
 As shown in the **Sensing Tree overview diagram** below (see Figure 6),  
 the Sensing Subtree runs several behaviours in parallel, including:
@@ -734,45 +740,48 @@ the Sensing Subtree runs several behaviours in parallel, including:
   see the dedicated section: [The Command Subscriber](#621-the-command-subscriber).
 - [**Localization Pose Subscriber:**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Flast_localization_pose.py) Subscribes to and stores the
   robot’s most recent localization pose.
-- **ScanForTags Sequence:** A nested sequence that manages tag detection through both the Spot’s built-in cameras
-  and the arm-mounted hand camera.
+- **ScanForTags Sequence:** A nested sequence that consumes the independently
+  published tag snapshots and derives tree-owned state.
 
 The ScanForTags Sequence combines multiple components:
 
-- [**DetectVisibleTags**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fdetect_visible_tags.py) and [**HandCameraTagDetection**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fhand_camera_tag_detection.py) are responsible for scanning for AprilTags.
+- **TagStateSubscriber** copies fresh `base_tags` and `visible_tags` topic
+  snapshots onto the blackboard. It does not subscribe to raw TF or detections.
 - [**CheckTagReachability**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcheck_tag_reachability.py) determines whether a detected tag is
   reachable.
+- **PublishReachableTags** publishes the tree-derived reachable subset.
 - [**VisibleTagToMap**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fvisible_tag_to_map.py) transforms the detected tag poses into the global
   SLAM map frame if mapping is used.
 
-The AprilTag detection is based on both the Spot driver’s integrated fiducial detection (which publishes AprilTags
-directly into the TF tree) and the external [`apriltag_ros`](https://github.com/AprilRobotics/apriltag_ros) package.
+The standalone `tag_observation_node` combines the Spot driver’s integrated
+fiducial detection, which publishes AprilTags into the TF tree, with the external
+[`apriltag_ros`](https://github.com/AprilRobotics/apriltag_ros) package.
 The additional use of [`apriltag_ros`](https://github.com/AprilRobotics/apriltag_ros) is necessary since the Spot driver does not include the arm-mounted camera
 in its fiducials detection. This allows the arm to move independently, scan for reference tags beyond the main camera’s field of view, and then navigate to precise scanning points.
 
 ![sensing_subtree_diagram.png](images/System_Design/sensing_subtree_diagram.png)
 
-*Figure 6: The Sensing Subtree, running tag sensing, localization, and command reception behaviours in parallel.*
+*Figure 6: The Sensing Subtree, consuming tag state alongside localization and command reception.*
 
 ## 7.1 Design Rationale
 
 The Sensing Subtree is designed to:
 
 - **Separate perception from decision-making:**  
-  All raw and preprocessed sensor information is written to the blackboard before it is used elsewhere in the Behaviour Tree. This keeps control logic
-  independent of specific sensor implementations and simplifies testing.
+  The tag observation process owns raw sensor and TF state. The Behaviour Tree
+  consumes typed ROS snapshots and owns only decisions such as reachability.
 
 - **Support parallel, non-blocking sensing:**  
-  Command reception, localization updates, and tag detection run in parallel behaviours. This ensures that slow operations in one sensing component (e.g. tag
-  detection) do not block others (e.g. command reception).
+  Tag observation continues independently of tree traversal. Command reception,
+  localization updates, and tag-state consumption remain lightweight tree work.
 
 - **Unify multiple perception sources:**  
   By combining Spot’s built-in fiducial detector with [`apriltag_ros`](https://github.com/AprilRobotics/apriltag_ros) on the arm camera, the system can use tags detected anywhere in the robot’s field of view,
-  while presenting them in a common representation on the blackboard.
+  while presenting them as common `TagElementArray` state topics.
 
 - **Provide reusable, high-level tag information:**  
   The reachability check and map-frame transform are handled once in the Sensing Subtree. Downstream behaviours (navigation, manipulation, relocalization, UI
-  feedback) can work directly with [`visible_tags`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fdetect_visible_tags.py), [`reachable_tags`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcheck_tag_reachability.py), and [`visible_tags_map_frame`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fvisible_tag_to_map.py) without duplicating TF or reachability logic.
+  feedback) can work directly with `visible_tags`, [`reachable_tags`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcheck_tag_reachability.py), and [`visible_tags_map_frame`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fvisible_tag_to_map.py) without duplicating TF or reachability logic.
 
 ## 7.2 Tag Handling
 
@@ -915,21 +924,26 @@ Key aspects:
 Operators and external tools should be able to see what the system is doing without inspecting internal BT structures. Text topics provide the concise display,
 while `CommandStatus` supplies machine-readable correlation and queue state.
 
-## 8.3 Tag State Publishing (PublishTagStates)
+## 8.3 Tag State Publishing
 
-[`PublishTagStates`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fvisible_tag_publisher.py) publishes the current sets of visible and reachable tags from the blackboard:
+Tag state publication is split according to ownership:
 
-- `fault_detector/state/visible_tags`: all AprilTags currently detected.
-- `fault_detector/state/reachable_tags`: subset that the manipulator can reach.
+- `tag_observation_node` publishes `fault_detector/state/base_tags` and
+  `fault_detector/state/visible_tags` at its own fixed rate.
+- `PublishReachableTags` publishes `fault_detector/state/reachable_tags` after
+  the Behaviour Tree applies the manipulator reachability rule.
 
 Key aspects:
 
-- Reads `visible_tags` and `reachable_tags` (both dictionaries `id → TagElement`) from the blackboard.
-- Converts them into `TagElementArray` messages and publishes each cycle.
-- Designed to be run after the Sensing Subtree has updated tag information.
+- Raw detections and TF lookups never execute inside a tree tick.
+- Base-camera observation timestamps determine freshness while filtered TF
+  provides the stable pose geometry.
+- Hand-camera observations are retained briefly while exact-time TF becomes
+  available.
+- The BT subscriber clears its snapshots when state publication becomes stale.
 
 **Rationale:**  
-This behaviour provides a clean separation between internal functions and external consumers. UIs, planners, or external agents can reason about tags
+This split provides a clean separation between observation, decisions, and external consumers. UIs, planners, or external agents can reason about tags
 based solely on these topics, without needing direct access to TF or the blackboard.
 
 ## 8.4 Landmark-Based Relocalization (LandmarkRelocalizer)

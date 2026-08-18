@@ -23,10 +23,8 @@ from fault_detector_spot.application.behaviour_tree import (
     CloseGripperAction,
     CommandManager,
     CommandSubscriber,
-    DetectVisibleTags,
     EnableLocalization,
     EnableSLAM,
-    HandCameraTagDetection,
     HelperInitializer,
     LandmarkRelocalizer,
     ManipulatorGetGoalTag,
@@ -36,7 +34,7 @@ from fault_detector_spot.application.behaviour_tree import (
     NavigateToGoalPose,
     NewCommandGuard,
     PublishLiveInspectionObject,
-    PublishTagStates,
+    PublishReachableTags,
     PublishZeroVel,
     ReadyArmActionSimple,
     ResetEstopFlag,
@@ -46,6 +44,7 @@ from fault_detector_spot.application.behaviour_tree import (
     StopMapping,
     StowArmActionSimple,
     SwapMap,
+    TagStateSubscriber,
     ToggleGripperAction,
     VisibleTagToMap,
     WaitForDuration,
@@ -94,59 +93,11 @@ def create_behavior_tree(node: rclpy.node.Node):
 
 
 def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
-    base_frame = read_parameter(
-        node,
-        "tag_sensing.base_frame",
-        "body",
-    )
-    base_frame_pattern = read_parameter(
-        node,
-        "tag_sensing.base_frame_pattern",
-        r"(?<!filtered_)fiducial_(\d+)",
-    )
-    hand_tag_frame_prefix = read_parameter(
-        node,
-        "tag_sensing.hand_tag_frame_prefix",
-        "tag36h11:",
-    )
-    hand_detection_topic = read_parameter(
-        node,
-        "tag_sensing.hand_detection_topic",
-        "/detections",
-    )
-    base_max_age_sec = float(
+    tag_state_timeout_sec = float(
         read_parameter(
             node,
-            "tag_sensing.base_max_age_sec",
+            "tag_sensing.state_timeout_sec",
             1.5,
-        )
-    )
-    hand_max_age_sec = float(
-        read_parameter(
-            node,
-            "tag_sensing.hand_max_age_sec",
-            1.0,
-        )
-    )
-    hand_tf_pending_sec = float(
-        read_parameter(
-            node,
-            "tag_sensing.hand_tf_pending_sec",
-            0.5,
-        )
-    )
-    hand_max_hamming = int(
-        read_parameter(
-            node,
-            "tag_sensing.hand_max_hamming",
-            0,
-        )
-    )
-    hand_min_decision_margin = float(
-        read_parameter(
-            node,
-            "tag_sensing.hand_min_decision_margin",
-            0.0,
         )
     )
     probe_max_age_sec = float(
@@ -187,21 +138,9 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         name="ScanForTags",
         memory=True,
     )
-    detect = DetectVisibleTags(
-        name="DetectBaseTags",
-        frame_pattern=base_frame_pattern,
-        target_frame=base_frame,
-        max_age_sec=base_max_age_sec,
-    )
-    hand_detect = HandCameraTagDetection(
-        name="DetectHandTags",
-        detection_topic=hand_detection_topic,
-        target_frame=base_frame,
-        tag_frame_prefix=hand_tag_frame_prefix,
-        max_age_sec=hand_max_age_sec,
-        tf_pending_sec=hand_tf_pending_sec,
-        max_hamming=hand_max_hamming,
-        min_decision_margin=hand_min_decision_margin,
+    tag_state_subscriber = TagStateSubscriber(
+        name="TagStateSubscriber",
+        state_timeout_sec=tag_state_timeout_sec,
     )
     live_object_resolver = ResolveLiveInspectionObject(
         object_id=active_object_id,
@@ -217,8 +156,8 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     in_range_checker = CheckTagReachability(
         name="CheckTagReachability"
     )
-    tag_publisher = PublishTagStates(
-        name="TagPublisher"
+    reachable_tag_publisher = PublishReachableTags(
+        name="ReachableTagPublisher"
     )
     slam_helper = get_helper_container(node).slam_helper
     world_frame_transformer = VisibleTagToMap(
@@ -226,12 +165,11 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         name="VisibleTagToMap",
     )
     tag_scan_sequence.add_children([
-        detect,
-        hand_detect,
+        tag_state_subscriber,
         live_object_resolver,
         live_object_publisher,
         in_range_checker,
-        tag_publisher,
+        reachable_tag_publisher,
         world_frame_transformer,
     ])
     sensing_seq.add_children([

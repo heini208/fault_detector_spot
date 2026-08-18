@@ -13,6 +13,9 @@
     tag_sensing.hand_max_hamming: 0
     tag_sensing.hand_min_decision_margin: 0.0
 
+    tag_sensing.publish_period_sec: 0.05
+    tag_sensing.state_timeout_sec: 1.5
+
     tag_sensing.probe_max_age_sec: 1.5
 
     inspection.active_object_id: ''

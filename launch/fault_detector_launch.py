@@ -99,6 +99,16 @@ def generate_launch_description():
         ),
         Node(
             package="fault_detector_spot",
+            executable="tag_observation_node",
+            name="tag_observation",
+            output="screen",
+            parameters=[
+                tag_sensing_config,
+                {"use_sim_time": use_sim_time},
+            ],
+        ),
+        Node(
+            package="fault_detector_spot",
             executable="record_manager",
             name="record_manager",
             output="screen",

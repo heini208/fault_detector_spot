@@ -49,13 +49,15 @@ from fault_detector_spot.application.behaviour_tree.behaviours.buffer_and_status
 )
 from fault_detector_spot.sensing.behaviours.check_tag_reachability import CheckTagReachability
 from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import CommandSubscriber
-from fault_detector_spot.sensing.behaviours.detect_visible_tags import DetectVisibleTags
-from fault_detector_spot.sensing.behaviours.hand_camera_tag_detection import HandCameraTagDetection
-from fault_detector_spot.sensing.behaviours.visible_tag_publisher import PublishTagStates
+from fault_detector_spot.sensing.behaviours.tag_state_subscriber import (
+    TagStateSubscriber,
+)
+from fault_detector_spot.sensing.behaviours.visible_tag_publisher import (
+    PublishReachableTags,
+)
 from fault_detector_spot.sensing.behaviours.visible_tag_to_map import VisibleTagToMap
 
 __all__ = [
-    "DetectVisibleTags",
     "CommandSubscriber",
     "ManipulatorGetGoalTag",
     "ManipulatorMoveArmAction",
@@ -71,8 +73,8 @@ __all__ = [
     "WaitForDuration",
     "BufferStatusPublisher",
     "ManipulatorMoveRelativeAction",
-    "HandCameraTagDetection",
-    "PublishTagStates",
+    "TagStateSubscriber",
+    "PublishReachableTags",
     "ToggleGripperAction",
     "CloseGripperAction",
     "EnableSLAM",

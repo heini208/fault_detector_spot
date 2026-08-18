@@ -5,6 +5,47 @@ import rclpy
 from fault_detector_msgs.msg import TagElement, TagElementArray
 from rclpy.node import Node
 
+from fault_detector_spot.shared.ros.qos_profiles import TAG_STATE_QOS
+
+
+class PublishReachableTags(py_trees.behaviour.Behaviour):
+    """Publish the reachability set derived by the behavior tree."""
+
+    def __init__(self, name: str = "PublishReachableTags"):
+        super().__init__(name)
+        self.node: Optional[Node] = None
+        self.publisher = None
+        self.blackboard = self.attach_blackboard_client()
+
+    def setup(self, **kwargs):
+        self.node = kwargs.get("node")
+        if self.node is None:
+            raise RuntimeError(f"{self.name}: no ROS node provided")
+        self.publisher = self.node.create_publisher(
+            TagElementArray,
+            "fault_detector/state/reachable_tags",
+            TAG_STATE_QOS,
+        )
+        self.blackboard.register_key(
+            "reachable_tags",
+            access=py_trees.common.Access.READ,
+        )
+        return True
+
+    def update(self):
+        reachable_tags = getattr(
+            self.blackboard,
+            "reachable_tags",
+            {},
+        )
+        message = TagElementArray()
+        message.elements = list(reachable_tags.values())
+        self.publisher.publish(message)
+        self.feedback_message = (
+            f"Published {len(reachable_tags)} reachable tag(s)"
+        )
+        return py_trees.common.Status.SUCCESS
+
 
 class PublishTagStates(py_trees.behaviour.Behaviour):
     """
