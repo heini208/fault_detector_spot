@@ -28,9 +28,6 @@ from fault_detector_spot.manipulation.move_close_to_surface_interface import (
 )
 
 
-INITIAL_DISTANCE_CONSISTENCY_TOLERANCE_M = 0.020
-
-
 class MoveCloseToSurfaceStatus(Enum):
     """Terminal and non-terminal operation states."""
 
@@ -61,6 +58,9 @@ class MoveCloseToSurfaceOperation:
         minimum_surface_span_sec: float = 1.0,
         surface_stability_tolerance_m: float = 0.005,
         force_contact_threshold_n: float = 5.0,
+        force_near_target_threshold_n: float = 3.0,
+        force_near_target_distance_m: float = 0.020,
+        force_baseline_max_component_span_n: float = 3.0,
         force_contact_consecutive_samples: int = 2,
         force_stale_timeout_sec: float = 1.5,
         maximum_contact_retries: int = 3,
@@ -96,6 +96,15 @@ class MoveCloseToSurfaceOperation:
             surface_stability_tolerance_m
         )
         self.force_contact_threshold_n = float(force_contact_threshold_n)
+        self.force_near_target_threshold_n = float(
+            force_near_target_threshold_n
+        )
+        self.force_near_target_distance_m = float(
+            force_near_target_distance_m
+        )
+        self.force_baseline_max_component_span_n = float(
+            force_baseline_max_component_span_n
+        )
         self.force_contact_consecutive_samples = int(
             force_contact_consecutive_samples
         )
@@ -203,26 +212,12 @@ class MoveCloseToSurfaceOperation:
                 minimum_span_sec=self.minimum_surface_span_sec,
                 stability_tolerance_m=self.surface_stability_tolerance_m,
             )
-            mismatch = abs(
-                aggregate.distance_m
-                - self._command.aligned_preapproach_distance_m
-            )
-            if mismatch > INITIAL_DISTANCE_CONSISTENCY_TOLERANCE_M:
-                raise RuntimeError(
-                    "Initial sensor-frame surface distance "
-                    f"{aggregate.distance_m:.3f} m disagrees with the "
-                    "aligned pre-approach distance "
-                    f"{self._command.aligned_preapproach_distance_m:.3f} m "
-                    f"by {mismatch:.3f} m. Verify that the active sensor "
-                    "probe-frame origin is at the physical probe tip and "
-                    "that the aligned pose is current."
-                )
             current_probe = self._state_source.current_probe_pose_execution(
                 self._sensor_id
             )
             if aggregate.verified:
                 self.feedback_message = (
-                    "Surface stand-off already reached: "
+                    "Surface stand-off already reached from live measurement: "
                     f"{aggregate.distance_m:.4f} m"
                 )
                 return MoveCloseToSurfaceStatus.SUCCESS
@@ -247,8 +242,11 @@ class MoveCloseToSurfaceOperation:
             self._phase_started = self._baseline_receipt_not_before
             self._phase = "force_baseline"
             self.feedback_message = (
-                "Surface estimate frozen at "
-                f"{aggregate.distance_m:.4f} m; collecting force baseline"
+                "Surface estimate frozen from live sensor-frame distance at "
+                f"{aggregate.distance_m:.4f} m; target "
+                f"{self._command.target_surface_distance_m:.4f} m; planned "
+                f"travel {self._plan.planned_travel_m:.4f} m; collecting "
+                "force baseline"
             )
             return MoveCloseToSurfaceStatus.RUNNING
         except Exception as exception:
@@ -273,7 +271,12 @@ class MoveCloseToSurfaceOperation:
                 receipt_not_before=self._baseline_receipt_not_before,
                 maximum_age_sec=self.force_baseline_timeout_sec,
             )
-            baseline = estimate_force_baseline(samples)
+            baseline = estimate_force_baseline(
+                samples,
+                maximum_allowed_component_span_n=(
+                    self.force_baseline_max_component_span_n
+                ),
+            )
         except Exception as exception:
             if (
                 time.monotonic() - self._phase_started
@@ -321,6 +324,9 @@ class MoveCloseToSurfaceOperation:
             )
         self._previous_probe_pose = current_probe
         self._requested_step_m = evaluation.requested_step_m
+        self._force_threshold_n = self._force_threshold_for(
+            evaluation.remaining_inward_travel_m
+        )
         hand_pose = self._state_source.current_hand_pose_execution()
         inward = self._plan.inward_direction()
         target = PoseData(
@@ -336,7 +342,8 @@ class MoveCloseToSurfaceOperation:
         self._phase = "moving"
         self.feedback_message = (
             "Moving toward frozen surface estimate by "
-            f"{self._requested_step_m:.4f} m "
+            f"{self._requested_step_m:.4f} m with "
+            f"{self._force_threshold_n:.2f} N force guard "
             f"(step {self._approach_steps}/{self.maximum_approach_steps})"
         )
         return MoveCloseToSurfaceStatus.RUNNING
@@ -507,6 +514,7 @@ class MoveCloseToSurfaceOperation:
         self._force_baseline = None
         self._probe_axis_hand = None
         self._force_contact_count = 0
+        self._force_threshold_n = self.force_contact_threshold_n
         self._requested_step_m = 0.0
         self._approach_steps = 0
         self._phase = "sampling"
@@ -547,7 +555,7 @@ class MoveCloseToSurfaceOperation:
             self._force_baseline,
             self._probe_axis_hand,
         )
-        if delta.total_force_n >= self.force_contact_threshold_n:
+        if delta.total_force_n >= self._force_threshold_n:
             self._force_contact_count += 1
         else:
             self._force_contact_count = 0
@@ -557,7 +565,19 @@ class MoveCloseToSurfaceOperation:
             "Possible contact: end-effector force delta "
             f"{delta.total_force_n:.2f} N total, "
             f"{delta.axial_force_n:+.2f} N axial, "
-            f"{delta.lateral_force_n:.2f} N lateral"
+            f"{delta.lateral_force_n:.2f} N lateral exceeded "
+            f"{self._force_threshold_n:.2f} N threshold"
+        )
+
+    def _force_threshold_for(self, remaining_inward_travel_m: float) -> float:
+        remaining = max(0.0, float(remaining_inward_travel_m))
+        fraction = min(1.0, remaining / self.force_near_target_distance_m)
+        return (
+            self.force_near_target_threshold_n
+            + (
+                self.force_contact_threshold_n
+                - self.force_near_target_threshold_n
+            ) * fraction
         )
 
     def _validate_axis_guard(self, evaluation):
@@ -698,6 +718,7 @@ class MoveCloseToSurfaceOperation:
         self._probe_axis_hand = None
         self._force_last_receipt = 0.0
         self._force_contact_count = 0
+        self._force_threshold_n = self.force_contact_threshold_n
         self._requested_step_m = 0.0
         self._approach_steps = 0
         self._settle_deadline = 0.0
@@ -719,6 +740,9 @@ class MoveCloseToSurfaceOperation:
             self.minimum_surface_span_sec,
             self.surface_stability_tolerance_m,
             self.force_contact_threshold_n,
+            self.force_near_target_threshold_n,
+            self.force_near_target_distance_m,
+            self.force_baseline_max_component_span_n,
             self.force_stale_timeout_sec,
             self.recovery_step_m,
             self.maximum_lateral_drift_m,
@@ -726,6 +750,10 @@ class MoveCloseToSurfaceOperation:
         )
         if any(not math.isfinite(value) or value <= 0.0 for value in positive):
             raise ValueError("Close-surface configuration values must be positive")
+        if self.force_near_target_threshold_n > self.force_contact_threshold_n:
+            raise ValueError(
+                "Near-target force threshold must not exceed the normal threshold"
+            )
         if self.maximum_approach_steps < 1:
             raise ValueError("Maximum surface approach steps must be positive")
         if self.maximum_step_m > 0.010 + 1e-12:
