@@ -62,14 +62,15 @@ def test_absolute_motion_is_one_probe_target_semantic_arm_primitive():
 
 
 def test_tag_aligned_absolute_motion_uses_relative_to_tag_with_zero_rotation():
+    angle = math.radians(35.0) * 0.5
     command = ProbeSetupMotionCommandFactory().absolute(
         PoseData(
             position=Vector3Data(x=0.5, y=0.2, z=-0.1),
             orientation=QuaternionData(
-                x=0.1,
-                y=0.2,
-                z=0.3,
-                w=0.9,
+                x=0.0,
+                y=0.0,
+                z=math.sin(angle),
+                w=math.cos(angle),
             ),
         ),
         tag(),
