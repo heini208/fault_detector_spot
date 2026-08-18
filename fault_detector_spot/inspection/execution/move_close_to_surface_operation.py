@@ -312,7 +312,7 @@ class MoveCloseToSurfaceOperation:
                 y=hand_pose.position.y + inward.y * self._requested_step_m,
                 z=hand_pose.position.z + inward.z * self._requested_step_m,
             ),
-            orientation=hand_pose.orientation,
+            orientation=self._recovery_hand_pose.orientation,
         )
         self._approach_steps += 1
         self._send_pose_goal(target, self.motion_duration_sec)
