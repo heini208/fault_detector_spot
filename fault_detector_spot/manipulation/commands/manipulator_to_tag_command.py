@@ -30,6 +30,8 @@ _YAW_90_SIN = sin(pi / 4)
 _YAW_90_COS = cos(pi / 4)
 _PITCH_45_SIN = sin(pi / 8)
 _PITCH_45_COS = cos(pi / 8)
+_TAG_FACING_PITCH_SIN = sin(pi / 4)
+_TAG_FACING_PITCH_COS = cos(pi / 4)
 
 
 class ManipulatorToTagCommand(MoveToTagCommand):
@@ -102,8 +104,17 @@ class ManipulatorToTagCommand(MoveToTagCommand):
         transformer: TFListenerWrapper,
     ) -> PoseStamped:
         if self.orientation_mode == OrientationModes.TAG_ORIENTATION:
-            pose.pose.orientation = self._combine_orientations(
+            tag_facing_orientation = self._combine_orientations(
                 pose.pose.orientation,
+                Quaternion(
+                    x=0.0,
+                    y=_TAG_FACING_PITCH_SIN,
+                    z=0.0,
+                    w=_TAG_FACING_PITCH_COS,
+                ),
+            )
+            pose.pose.orientation = self._combine_orientations(
+                tag_facing_orientation,
                 self.offset.pose.orientation,
             )
         elif self.orientation_mode == OrientationModes.CUSTOM_ORIENTATION:

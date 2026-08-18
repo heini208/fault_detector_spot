@@ -4,7 +4,10 @@ import numpy as np
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
 
 import rclpy
-from fault_detector_spot.application.commanding.command_ids import TagFrames
+from fault_detector_spot.application.commanding.command_ids import (
+    OrientationModes,
+    TagFrames,
+)
 from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import ActionClientBehaviour
 from fault_detector_spot.application.behaviour_tree.commands.move_command import MoveCommand
 from fault_detector_spot.application.behaviour_tree.commands.move_to_tag_command import (
@@ -59,7 +62,6 @@ class MoveCommandAction(ActionClientBehaviour):
             cmd = self._get_last_command()
             if cmd is None:
                 return Status.FAILURE
-            # Tag offset handling for MoveCommand
             if isinstance(cmd, MoveCommand):
                 ok = self._resolve_and_transform_offset_if_tag(cmd)
                 if not ok:
@@ -69,7 +71,6 @@ class MoveCommandAction(ActionClientBehaviour):
                 source_frame = cmd.offset.header.frame_id
                 final_frame = GRAV_ALIGNED_BODY_FRAME_NAME
 
-                # TF checks with updated frame IDs
                 if not self._can_transform(target_frame, source_frame):
                     self.feedback_message = f"Waiting for TF: {source_frame} -> {target_frame}"
                     return Status.RUNNING
@@ -110,12 +111,32 @@ class MoveCommandAction(ActionClientBehaviour):
                 cmd.offset.pose.orientation.w,
             ]
 
-            rotated_orientation = cmd._rotate_only_yaw_into_frame(quat, resolved, cmd.target_frame, self.tf_listener)
-            offset_vec = np.array([cmd.offset.pose.position.x, cmd.offset.pose.position.y, cmd.offset.pose.position.z])
-            rotated_vector = cmd._rotate_vector_into_frame_yaw_only(offset_vec, resolved, cmd.target_frame,
-                                                                    self.tf_listener)
+            if (
+                getattr(cmd, "orientation_mode", None)
+                == OrientationModes.TAG_ORIENTATION
+            ):
+                rotated_orientation = quat
+            else:
+                rotated_orientation = cmd._rotate_only_yaw_into_frame(
+                    quat,
+                    resolved,
+                    cmd.target_frame,
+                    self.tf_listener,
+                )
+            offset_vec = np.array(
+                [
+                    cmd.offset.pose.position.x,
+                    cmd.offset.pose.position.y,
+                    cmd.offset.pose.position.z,
+                ]
+            )
+            rotated_vector = cmd._rotate_vector_into_frame_yaw_only(
+                offset_vec,
+                resolved,
+                cmd.target_frame,
+                self.tf_listener,
+            )
 
-            # Build new offset in target (body) frame
             new_offset = PoseStamped()
             new_offset.header.frame_id = cmd.target_frame
             new_offset.pose.position.x = rotated_vector[0]
