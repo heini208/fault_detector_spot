@@ -110,7 +110,7 @@ class ProbeRefinementFinalizationCoordinator:
             )
             context = self.coordinator.context(context_id, client_id)
             snapshot = (
-                self.coordinator.approve_verified_probe_for_finalization(
+                self.coordinator.approve_probe_geometry_for_finalization(
                     context,
                     request_id,
                 )

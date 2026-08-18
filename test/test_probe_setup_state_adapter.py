@@ -112,22 +112,18 @@ def test_refinement_state_becomes_immutable_server_snapshot():
     )
     assert refinement.pending_motion.request_id == "1" * 32
     assert refinement.recovery_required
-    assert not refinement.surface_distance_verified
 
 
 def test_wizard_navigation_cannot_change_server_refinement_snapshot():
     refinement = probe_setup_state_to_view(refinement_state()).refinement
 
     refinement.active_stage = RefinementStage.SAFE_APPROACH
-    with pytest.raises(AttributeError):
-        refinement.surface_distance_verified = True
 
     assert refinement.active_stage is RefinementStage.SAFE_APPROACH
     assert (
         refinement.snapshot.server_active_stage
         is RefinementStage.ALIGNMENT
     )
-    assert not refinement.surface_distance_verified
 
     with pytest.raises(TypeError):
         refinement.motion_states[RefinementStage.ALIGNMENT] = (

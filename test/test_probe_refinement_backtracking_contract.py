@@ -19,7 +19,6 @@ def refinement_state():
             RefinementStage.ALIGNMENT: RefinementMotionState.REACHED,
             RefinementStage.PROBE: RefinementMotionState.REACHED,
         },
-        surface_distance_verified=True,
     )
 
 
@@ -40,7 +39,6 @@ def test_safe_approach_motion_invalidates_downstream_physical_reach():
     assert refinement.motion_states[RefinementStage.PROBE] is (
         RefinementMotionState.NOT_TESTED
     )
-    assert not refinement.surface_distance_verified
 
 
 def test_alignment_motion_invalidates_only_probe_physical_reach():
@@ -60,7 +58,6 @@ def test_alignment_motion_invalidates_only_probe_physical_reach():
     assert refinement.motion_states[RefinementStage.PROBE] is (
         RefinementMotionState.NOT_TESTED
     )
-    assert not refinement.surface_distance_verified
 
 
 def test_motion_preparation_invalidates_downstream_before_dispatch():

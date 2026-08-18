@@ -1,4 +1,4 @@
-"""Contract guards for the final geometry helper cleanup."""
+"""Contract guards for shared transform boundary hardening."""
 
 from pathlib import Path
 
@@ -18,11 +18,3 @@ def test_shared_transform_boundary_fails_closed_on_invalid_geometry():
     assert "Transform matrix has an invalid homogeneous row" in transforms
     assert "Transform rotation matrix is not orthonormal" in transforms
     assert "Transform rotation matrix is not proper" in transforms
-
-
-def test_probe_setup_state_adapter_no_longer_writes_legacy_surface_verification():
-    adapter = source("inspection/setup/probe_setup_state_adapter.py")
-
-    assert "surface_verification_state" not in adapter
-    assert "surface_verification_request_id" not in adapter
-    assert "surface_recovery_required" not in adapter

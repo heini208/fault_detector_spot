@@ -13,6 +13,11 @@ from fault_detector_spot.application.coordinators.setup_coordinator import (
 from fault_detector_spot.application.setup.setup_operation_registry import (
     SetupOperationRegistry,
 )
+from fault_detector_spot.inspection.geometry.pose import (
+    add_vectors,
+    scale_vector,
+)
+from fault_detector_spot.inspection.geometry.rotation import rotate_vector
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     Vector3Data,
@@ -31,12 +36,9 @@ from fault_detector_spot.inspection.setup.alignment_orientation import (
     tag_aligned_probe_orientation,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
-    add_vectors,
     approve_probe_pose,
     approve_safe_approach_pose,
     approve_surface_alignment_pose,
-    rotate_vector,
-    scale_vector,
 )
 
 
@@ -173,9 +175,6 @@ class ProbeRefinementController:
         refinement = self.require_refinement(draft)
         refinement.active_stage = stage
         self._invalidate_downstream_motion_state(refinement, stage)
-        surface_correction = (
-            motion.kind is ProbeMotionKind.ADJUST_PROBE_DISTANCE
-        )
         if motion.relative:
             command = self._relative_motion_command(
                 draft,
@@ -183,11 +182,7 @@ class ProbeRefinementController:
                 attachment,
             )
             target = refinement.candidate_pose(stage)
-            purpose = (
-                "surface-distance correction"
-                if surface_correction
-                else f"{stage.value} adjustment"
-            )
+            purpose = f"{stage.value} adjustment"
         else:
             target = refinement.candidate_pose(stage)
             if stage is RefinementStage.ALIGNMENT:
@@ -229,9 +224,7 @@ class ProbeRefinementController:
             stage=stage,
             purpose=purpose,
             target_pose_object=deepcopy(target),
-            updates_candidate=(
-                motion.relative and not surface_correction
-            ),
+            updates_candidate=motion.relative,
             verify_achieved_pose=not motion.relative,
         )
         refinement.begin_motion(pending_motion)
@@ -341,8 +334,6 @@ class ProbeRefinementController:
             refinement.motion_states[downstream_stage] = (
                 RefinementMotionState.NOT_TESTED
             )
-        if downstream:
-            refinement.surface_distance_verified = False
 
     def add_listener(self, listener) -> None:
         self._operations.add_listener(listener)
@@ -404,8 +395,6 @@ class ProbeRefinementController:
             ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH,
         }:
             return RefinementStage.ALIGNMENT
-        if kind is ProbeMotionKind.ADJUST_PROBE_DISTANCE:
-            return RefinementStage.PROBE
         raise ValueError(
             f"Unsupported probe setup motion: {kind}"
         )

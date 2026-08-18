@@ -109,7 +109,7 @@ def test_close_surface_behavior_has_no_probe_setup_context_dependency():
 
 def test_finalization_keeps_aligned_pose_as_execution_authority():
     source = inspect.getsource(
-        ProbeFinalizationController.approve_verified_probe
+        ProbeFinalizationController.approve_probe_geometry
     )
 
     assert "current_probe_pose" not in source

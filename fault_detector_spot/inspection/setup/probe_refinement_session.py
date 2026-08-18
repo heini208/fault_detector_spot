@@ -1,21 +1,22 @@
 """State and safety rules for supervised probe-point refinement."""
 
-import math
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional
 
-from fault_detector_spot.application.commanding.request_identity import validate_request_id
-
+from fault_detector_spot.application.commanding.request_identity import (
+    validate_request_id,
+)
+from fault_detector_spot.inspection.geometry.pose import (
+    add_vectors,
+    scale_vector,
+)
+from fault_detector_spot.inspection.geometry.rotation import rotate_vector
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from .reference_probe_setup import (
     ReferenceProbeSetup,
-    add_vectors,
     derive_aligned_preapproach_pose,
-    rotate_vector,
-    scale_vector,
-    subtract_vectors,
 )
 
 
@@ -45,7 +46,6 @@ class PendingRefinementMotion:
     purpose: str
     target_pose_object: PoseData
     updates_candidate: bool = True
-    axial_correction_m: float = 0.0
     command_id: str = "move_to_tag"
     verify_achieved_pose: bool = True
 
@@ -70,10 +70,8 @@ class ProbeRefinementSession:
     )
     active_stage: RefinementStage = RefinementStage.SAFE_APPROACH
     pending_motion: Optional[PendingRefinementMotion] = None
-    surface_distance_verified: bool = False
     recovery_required: bool = False
     recovery_message: str = ""
-    cumulative_inward_travel_m: float = 0.0
     saved: bool = False
 
     @classmethod
@@ -170,7 +168,6 @@ class ProbeRefinementSession:
     ) -> None:
         """Update draft geometry from a verified achieved tip pose."""
         achieved_pose_object.validate()
-        self.surface_distance_verified = False
         self.saved = False
         if stage == RefinementStage.SAFE_APPROACH:
             self.candidate_poses[stage] = deepcopy(achieved_pose_object)
@@ -298,8 +295,6 @@ class ProbeRefinementSession:
             raise RuntimeError(
                 "Reach the aligned pre-approach during this workflow first"
             )
-        if motion.axial_correction_m != 0.0:
-            self._reserve_axial_correction(motion.axial_correction_m)
         self.pending_motion = motion
         self.motion_states[motion.stage] = RefinementMotionState.MOVING
 
@@ -312,17 +307,7 @@ class ProbeRefinementSession:
         motion = self._matching_motion(request_id)
         achieved_pose_object.validate()
         if motion.updates_candidate:
-            if (
-                motion.stage == RefinementStage.PROBE
-                and motion.axial_correction_m != 0.0
-            ):
-                self.candidate_poses[RefinementStage.PROBE] = deepcopy(
-                    achieved_pose_object
-                )
-                self.draft_approved[RefinementStage.PROBE] = False
-                self.surface_distance_verified = False
-            else:
-                self.set_candidate(motion.stage, achieved_pose_object)
+            self.set_candidate(motion.stage, achieved_pose_object)
         self.motion_states[motion.stage] = RefinementMotionState.REACHED
         self.pending_motion = None
 
@@ -340,8 +325,6 @@ class ProbeRefinementSession:
         """Fail the current movement without changing its candidate."""
         motion = self._matching_motion(request_id)
         self.motion_states[motion.stage] = RefinementMotionState.FAILED
-        if motion.axial_correction_m != 0.0:
-            self.require_recovery(message)
         self.pending_motion = None
 
     def _matching_motion(
@@ -355,52 +338,15 @@ class ProbeRefinementSession:
             raise RuntimeError("Motion result request ID does not match")
         return self.pending_motion
 
-    def mark_surface_verified(self, achieved_pose_object: PoseData) -> None:
-        """Record three stable in-tolerance post-settle measurements."""
-        if (
-            self.motion_states[RefinementStage.ALIGNMENT]
-            != RefinementMotionState.REACHED
-        ):
-            raise RuntimeError(
-                "Aligned pre-approach has not been reached"
-            )
-        self.set_candidate(RefinementStage.PROBE, achieved_pose_object)
-        self.surface_distance_verified = True
-        self.motion_states[RefinementStage.PROBE] = (
-            RefinementMotionState.REACHED
-        )
-
-    def approve_verified_probe(self) -> None:
-        """Approve the already verified probe candidate without resampling."""
-        if not self.surface_distance_verified:
-            raise RuntimeError(
-                "Surface distance must be verified before probe approval"
-            )
-        if (
-            self.motion_states[RefinementStage.PROBE]
-            != RefinementMotionState.REACHED
-        ):
-            raise RuntimeError(
-                "Verified probe pose has not been reached"
-            )
-        pose = self.candidate_pose(RefinementStage.PROBE)
-        pose.validate()
-        self.approved_poses[RefinementStage.PROBE] = deepcopy(pose)
-        self.draft_approved[RefinementStage.PROBE] = True
-        self.saved = False
-
     def require_recovery(self, message: str) -> None:
-        """Block refinement until a verified retraction succeeds."""
+        """Block refinement until a successful retraction completes."""
         self.recovery_required = True
         self.recovery_message = message.strip() or "Retraction required"
-        self.surface_distance_verified = False
 
     def complete_retraction(self) -> None:
         """Return the session to the aligned pre-approach state."""
         self.recovery_required = False
         self.recovery_message = ""
-        self.cumulative_inward_travel_m = 0.0
-        self.surface_distance_verified = False
         self.motion_states[RefinementStage.ALIGNMENT] = (
             RefinementMotionState.REACHED
         )
@@ -420,7 +366,6 @@ class ProbeRefinementSession:
                 else self.calculated_pose(stage)
             )
             self.draft_approved[stage] = approved is not None
-        self.surface_distance_verified = False
         self.pending_motion = None
         for stage in RefinementStage:
             self.motion_states[stage] = RefinementMotionState.NOT_TESTED
@@ -436,30 +381,6 @@ class ProbeRefinementSession:
         return (
             self.calculated_setup.surface_target
             .aligned_preapproach_distance_m
-        )
-
-    @property
-    def maximum_inward_travel_m(self) -> float:
-        """Return the bounded setup travel from aligned pose plus margin."""
-        return (
-            self.aligned_preapproach_distance_m
-            - self.target_surface_distance_m
-            + 0.01
-        )
-
-    def _reserve_axial_correction(self, inward_correction_m: float) -> None:
-        if not math.isfinite(inward_correction_m):
-            raise ValueError("Surface correction must be finite")
-        proposed = (
-            self.cumulative_inward_travel_m + inward_correction_m
-        )
-        if proposed > self.maximum_inward_travel_m + 1e-12:
-            raise ValueError(
-                "Cumulative inward travel exceeds the configured limit"
-            )
-        self.cumulative_inward_travel_m = proposed
-        self.require_recovery(
-            "Probe moved away from the aligned pre-approach pose"
         )
 
     def _derive_probe_pose(self, aligned_pose_object: PoseData) -> PoseData:

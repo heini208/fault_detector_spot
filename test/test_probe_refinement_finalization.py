@@ -43,21 +43,6 @@ def _setup():
     )
 
 
-def test_verified_probe_approval_preserves_distance_verification():
-    session = ProbeRefinementSession.create(_setup())
-    achieved = _pose(-0.021)
-    session.motion_states[RefinementStage.ALIGNMENT] = (
-        RefinementMotionState.REACHED
-    )
-    session.mark_surface_verified(achieved)
-
-    session.approve_verified_probe()
-
-    assert session.surface_distance_verified
-    assert session.stage_is_approved(RefinementStage.PROBE)
-    assert session.approved_pose(RefinementStage.PROBE) == achieved
-
-
 def test_recovery_stays_set_until_complete_retraction():
     session = ProbeRefinementSession.create(_setup())
     session.require_recovery("Probe moved inward")

@@ -59,12 +59,13 @@ class ProbeFinalizationController:
         with self.state_lock:
             self._active[context.context_id] = normalized
 
-    def approve_verified_probe(
+    def approve_probe_geometry(
         self,
         context,
         draft,
         request_id: str,
     ) -> None:
+        """Approve the probe geometry derived from the aligned pose."""
         self.require(context, request_id)
         refinement = self.refinement_controller.require_refinement(
             draft
@@ -160,7 +161,8 @@ class ProbeFinalizationController:
             setup.probe_pose_approved,
         )):
             raise ValueError(
-                "All three probe poses must be approved"
+                "All three setup requirements must be approved: "
+                "safe approach, aligned pre-approach, and probe geometry"
             )
         point = self._build_probe_point(
             draft,

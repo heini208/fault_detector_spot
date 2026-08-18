@@ -526,16 +526,16 @@ class ProbeSetupCoordinator:
             )
             return self.snapshot(context)
 
-    def approve_verified_probe_for_finalization(
+    def approve_probe_geometry_for_finalization(
         self,
         context: SetupContextSnapshot,
         request_id: str,
     ) -> ProbeSetupSnapshot:
-        """Approve the converged probe candidate without another TF sample."""
+        """Approve derived probe geometry without another TF sample."""
         with self._context_lock(context):
             self.setup_coordinator.require_current(context)
             draft = self._selected_draft(context)
-            self.finalization_controller.approve_verified_probe(
+            self.finalization_controller.approve_probe_geometry(
                 context,
                 draft,
                 request_id,

@@ -114,10 +114,6 @@ class ProbeRefinementPresentation:
         return self._snapshot.aligned_preapproach_distance_m
 
     @property
-    def surface_distance_verified(self) -> bool:
-        return False
-
-    @property
     def candidate_poses(self) -> Mapping:
         return self._snapshot.candidate_poses
 

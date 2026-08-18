@@ -23,8 +23,11 @@ def test_motion_kind_mapping_is_owned_by_refinement_controller():
         ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH
     ) is RefinementStage.ALIGNMENT
     assert ProbeRefinementController.motion_stage(
-        ProbeMotionKind.ADJUST_PROBE_DISTANCE
-    ) is RefinementStage.PROBE
+        ProbeMotionKind.ADJUST_SAFE_APPROACH
+    ) is RefinementStage.SAFE_APPROACH
+    assert ProbeRefinementController.motion_stage(
+        ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH
+    ) is RefinementStage.ALIGNMENT
 
 
 def test_refinement_requirement_rejects_missing_session():

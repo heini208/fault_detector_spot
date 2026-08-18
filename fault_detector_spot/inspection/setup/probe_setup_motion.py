@@ -19,6 +19,7 @@ from fault_detector_spot.application.commanding.semantic_command import (
     SemanticTag,
     StampedPose,
 )
+from fault_detector_spot.inspection.geometry.pose import compose_poses
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
@@ -26,9 +27,6 @@ from fault_detector_spot.inspection.model.models import (
 )
 from fault_detector_spot.inspection.model.sensor_models import (
     sensor_probe_frame,
-)
-from fault_detector_spot.inspection.setup.reference_probe_setup import (
-    compose_poses,
 )
 from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
 
@@ -44,7 +42,6 @@ class ProbeMotionKind(str, Enum):
     MOVE_ALIGNED_PREAPPROACH = "move_aligned_preapproach"
     ADJUST_SAFE_APPROACH = "adjust_safe_approach"
     ADJUST_ALIGNED_PREAPPROACH = "adjust_aligned_preapproach"
-    ADJUST_PROBE_DISTANCE = "adjust_probe_distance"
 
 
 class ProbeMotionFrame(str, Enum):
@@ -150,7 +147,6 @@ class ProbeMotionRequest:
         return self.kind in {
             ProbeMotionKind.ADJUST_SAFE_APPROACH,
             ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH,
-            ProbeMotionKind.ADJUST_PROBE_DISTANCE,
         }
 
 

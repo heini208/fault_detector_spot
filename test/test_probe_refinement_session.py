@@ -5,7 +5,9 @@ import math
 
 import pytest
 
-from fault_detector_spot.application.commanding.request_identity import new_request_id
+from fault_detector_spot.application.commanding.request_identity import (
+    new_request_id,
+)
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
@@ -61,14 +63,13 @@ def calculated_setup():
     return initialize_reference_probe_setup(target)
 
 
-def motion(stage, target, purpose="test", correction=0.0):
+def motion(stage, target, purpose="test"):
     """Create a pending motion for state-machine tests."""
     return PendingRefinementMotion(
         request_id=new_request_id(),
         stage=stage,
         purpose=purpose,
         target_pose_object=target,
-        axial_correction_m=correction,
     )
 
 
@@ -151,10 +152,9 @@ def test_distance_geometry_update_preserves_reached_setup_stages():
     )
     assert updated.stage_is_approved(RefinementStage.SAFE_APPROACH)
     assert updated.stage_is_approved(RefinementStage.ALIGNMENT)
-    assert not updated.surface_distance_verified
 
 
-def test_motion_requires_safe_then_aligned_in_current_workflow():
+def test_alignment_motion_requires_safe_approach_in_current_workflow():
     session = ProbeRefinementSession.create(calculated_setup())
 
     with pytest.raises(RuntimeError, match="safe approach"):
@@ -167,14 +167,10 @@ def test_motion_requires_safe_then_aligned_in_current_workflow():
         RefinementMotionState.REACHED
     )
 
-    with pytest.raises(RuntimeError, match="aligned pre-approach"):
-        session.begin_motion(
-            motion(RefinementStage.PROBE, pose(x=0.06))
-        )
-
-    reach(session, RefinementStage.ALIGNMENT, pose(x=0.08))
-    session.begin_motion(motion(RefinementStage.PROBE, pose(x=0.06)))
-    assert session.motion_states[RefinementStage.PROBE] == (
+    session.begin_motion(
+        motion(RefinementStage.ALIGNMENT, pose(x=0.08))
+    )
+    assert session.motion_states[RefinementStage.ALIGNMENT] == (
         RefinementMotionState.MOVING
     )
 
@@ -195,59 +191,6 @@ def test_alignment_candidate_derives_probe_with_shared_orientation():
     assert probe.position.y == pytest.approx(0.15)
     assert probe.position.z == pytest.approx(0.30)
     assert probe.orientation == aligned.orientation
-
-
-def test_axial_correction_is_bounded_and_keeps_aligned_candidate():
-    session = ProbeRefinementSession.create(calculated_setup())
-    reach(session, RefinementStage.SAFE_APPROACH, pose(x=0.30))
-    reach(session, RefinementStage.ALIGNMENT, pose(x=0.08))
-    aligned_before = session.candidate_pose(RefinementStage.ALIGNMENT)
-
-    pending = motion(
-        RefinementStage.PROBE,
-        pose(x=0.06),
-        correction=0.02,
-    )
-    session.begin_motion(pending)
-    session.complete_motion(pending.request_id, pose(x=0.06))
-
-    assert session.recovery_required
-    assert session.cumulative_inward_travel_m == pytest.approx(0.02)
-    assert session.candidate_pose(RefinementStage.ALIGNMENT) == aligned_before
-    assert session.candidate_pose(RefinementStage.PROBE) == pose(x=0.06)
-
-    with pytest.raises(ValueError, match="configured limit"):
-        session.begin_motion(
-            motion(
-                RefinementStage.PROBE,
-                pose(x=-0.01),
-                correction=0.05,
-            )
-        )
-
-
-def test_verified_probe_rebuilds_retraction_pose_and_requires_approval():
-    session = ProbeRefinementSession.create(calculated_setup())
-    reach(session, RefinementStage.SAFE_APPROACH, pose(x=0.30))
-    reach(session, RefinementStage.ALIGNMENT, pose(x=0.08))
-    achieved = pose(
-        x=0.04,
-        y=0.02,
-        orientation=yaw_quaternion(10.0),
-    )
-
-    session.mark_surface_verified(achieved)
-
-    aligned = session.candidate_pose(RefinementStage.ALIGNMENT)
-    assert session.surface_distance_verified
-    assert not session.stage_is_approved(RefinementStage.PROBE)
-    assert aligned.orientation == achieved.orientation
-    assert aligned.position.x == pytest.approx(
-        achieved.position.x - 0.05 * math.cos(math.radians(10.0))
-    )
-    assert aligned.position.y == pytest.approx(
-        achieved.position.y - 0.05 * math.sin(math.radians(10.0))
-    )
 
 
 def test_discard_restores_only_explicitly_approved_candidates():
@@ -273,15 +216,14 @@ def test_discard_restores_only_explicitly_approved_candidates():
     )
 
 
-def test_successful_retraction_clears_only_recovery_evidence():
+def test_successful_retraction_clears_recovery_evidence():
     session = ProbeRefinementSession.create(calculated_setup())
     session.require_recovery("inward motion")
-    session.cumulative_inward_travel_m = 0.04
 
     session.complete_retraction()
 
     assert not session.recovery_required
-    assert session.cumulative_inward_travel_m == 0.0
+    assert session.recovery_message == ""
     assert session.motion_states[RefinementStage.ALIGNMENT] == (
         RefinementMotionState.REACHED
     )

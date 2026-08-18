@@ -1,4 +1,4 @@
-"""Regression guard for final probe setup split."""
+"""Regression guard for probe finalization ownership."""
 
 import ast
 from pathlib import Path
@@ -13,15 +13,13 @@ def _source():
     ).read_text(encoding="utf-8")
 
 
-def test_probe_setup_delegates_only_refinement_and_finalization_state():
+def test_probe_setup_delegates_refinement_and_finalization_state():
     source = _source()
 
-    assert "ProbeSurfaceVerificationController" not in source
-    assert "ProbeSurfaceVerificationRunner" not in source
     assert "ProbeFinalizationController" in source
+    assert "ProbeRefinementController" in source
     assert "_finalizations" not in source
     assert "def _persist_probe_point(" not in source
-    assert "def _surface_verification_session(" not in source
     assert "def _require_finalization(" not in source
 
 
