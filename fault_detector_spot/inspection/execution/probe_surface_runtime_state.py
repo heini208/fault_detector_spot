@@ -94,14 +94,15 @@ class ProbeSurfaceRuntimeStateSource:
             state = deepcopy(self._attachment_state)
         if state is None:
             raise ValueError("Sensor attachment state is unavailable")
-        if state.status == SensorAttachmentState.STATUS_CONFIRMATION_PENDING:
+        if state.status in {
+            SensorAttachmentState.STATUS_CONFIRMATION_PENDING,
+            SensorAttachmentState.STATUS_NO_SENSOR,
+        }:
             raise ValueError("Sensor attachment confirmation is pending")
         if state.status == SensorAttachmentState.STATUS_ACTIVE:
-            sensor_id = state.active_sensor_id.strip()
-            if not sensor_id:
-                raise ValueError("Active sensor attachment has no sensor ID")
-        elif state.status == SensorAttachmentState.STATUS_NO_SENSOR:
-            sensor_id = BARE_HAND_MOTION_ID
+            sensor_id = (
+                state.active_sensor_id.strip() or BARE_HAND_MOTION_ID
+            )
         else:
             raise ValueError("Sensor attachment state is invalid")
         return sensor_id, int(state.attachment_revision)
