@@ -84,6 +84,9 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
             goal.target_surface_distance_m = (
                 command.target_surface_distance_m
             )
+            goal.aligned_preapproach_distance_m = (
+                command.aligned_preapproach_distance_m
+            )
             self._send_goal_future = self._client.send_goal_async(
                 goal,
                 feedback_callback=self._receive_feedback,
