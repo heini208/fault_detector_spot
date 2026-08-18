@@ -11,6 +11,9 @@ from fault_detector_spot.inspection.sensing.surface_distance_validation import (
 from fault_detector_spot.inspection.geometry.rotation import rotate_vector
 
 
+DEFAULT_MINIMUM_STEP_M = 0.002
+
+
 @dataclass(frozen=True)
 class ProbeSurfaceApproachPlan:
     """Frozen fitted surface geometry for one close-range approach attempt."""
@@ -156,6 +159,7 @@ def evaluate_probe_surface_approach(
     current_probe_pose_execution: PoseData,
     maximum_step_m: float,
     tolerance_m: float,
+    minimum_step_m: float = DEFAULT_MINIMUM_STEP_M,
 ) -> ProbeSurfaceApproachEvaluation:
     """Estimate remaining stand-off from current probe kinematics."""
     if not isinstance(plan, ProbeSurfaceApproachPlan):
@@ -166,11 +170,20 @@ def evaluate_probe_surface_approach(
         "Maximum surface approach step",
     )
     require_positive_finite_distance(
+        minimum_step_m,
+        "Minimum surface approach step",
+    )
+    require_positive_finite_distance(
         tolerance_m,
         "Surface approach tolerance",
     )
     maximum_step_m = float(maximum_step_m)
+    minimum_step_m = float(minimum_step_m)
     tolerance_m = float(tolerance_m)
+    if minimum_step_m > maximum_step_m:
+        raise ValueError(
+            "Minimum surface approach step must not exceed maximum step"
+        )
 
     inward = _normalized(
         Vector3Data(*plan.inward_direction_execution),
@@ -239,8 +252,13 @@ def evaluate_probe_surface_approach(
             raise ValueError(
                 "Surface target is not reachable within maximum travel"
             )
-        requested_step_m = min(
+        normal_step_m = max(
+            minimum_step_m,
             remaining_inward_travel_m * 0.5,
+        )
+        requested_step_m = min(
+            remaining_inward_travel_m,
+            normal_step_m,
             maximum_step_m,
             remaining_guard_m,
         )
@@ -300,6 +318,7 @@ def _norm(vector: Vector3Data) -> float:
 
 
 __all__ = [
+    "DEFAULT_MINIMUM_STEP_M",
     "ProbeSurfaceApproachEvaluation",
     "ProbeSurfaceApproachPlan",
     "evaluate_probe_surface_approach",
