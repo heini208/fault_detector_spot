@@ -226,6 +226,11 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     robot_command_resources = (
         get_helper_container(node).robot_command_resources
     )
+    close_surface_action_name = read_parameter(
+        node,
+        "close_surface.action_name",
+        "fault_detector/manipulation/move_close_to_surface",
+    )
     specs = [
         (
             CommandID.STOW_ARM,
@@ -268,7 +273,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             CommandID.MOVE_CLOSE_TO_SURFACE,
             lambda n: ManipulatorMoveCloseToSurfaceAction(
                 name="MoveCloseToSurfaceAction",
-                robot_command_resources=robot_command_resources,
+                action_name=close_surface_action_name,
             ),
         ),
         (

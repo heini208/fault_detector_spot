@@ -13,14 +13,23 @@ from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_from_euler,
 )
 from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
+from fault_detector_spot.inspection.execution.move_close_to_surface_operation import (
+    MoveCloseToSurfaceOperation,
+)
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.manipulation.behaviours.manipulator_move_close_to_surface_action import (
-    ManipulatorMoveCloseToSurfaceAction,
-)
+
+
+def operation(**kwargs):
+    return MoveCloseToSurfaceOperation(
+        node=object(),
+        state_source=object(),
+        robot_command_client=object(),
+        **kwargs,
+    )
 
 
 def pose(orientation=None):
@@ -43,7 +52,7 @@ def plane(normal=None):
 
 
 def test_default_travel_matches_40_ten_millimeter_steps():
-    action = ManipulatorMoveCloseToSurfaceAction()
+    action = operation()
 
     assert action.maximum_step_m == pytest.approx(0.010)
     assert action.maximum_approach_steps == 40
@@ -51,14 +60,14 @@ def test_default_travel_matches_40_ten_millimeter_steps():
 
 
 def test_default_surface_sampling_uses_five_frames_over_one_second():
-    action = ManipulatorMoveCloseToSurfaceAction()
+    action = operation()
 
     assert action.minimum_surface_samples == 5
     assert action.minimum_surface_span_sec == pytest.approx(1.0)
 
 
 def test_default_force_stale_timeout_tolerates_normal_motion_gaps():
-    action = ManipulatorMoveCloseToSurfaceAction()
+    action = operation()
 
     assert action.force_stale_timeout_sec == pytest.approx(1.5)
 
@@ -71,7 +80,7 @@ def test_force_guard_uses_configured_stale_timeout_for_sample_age():
             self.maximum_age_sec = maximum_age_sec
             raise ValueError("No force sample")
 
-    action = ManipulatorMoveCloseToSurfaceAction(
+    action = operation(
         force_stale_timeout_sec=1.25,
     )
     action._state_source = StateSource()
@@ -83,12 +92,12 @@ def test_force_guard_uses_configured_stale_timeout_for_sample_age():
 
 def test_configuration_rejects_step_larger_than_ten_millimeters():
     with pytest.raises(ValueError, match="0.010 m"):
-        ManipulatorMoveCloseToSurfaceAction(maximum_step_m=0.0101)
+        operation(maximum_step_m=0.0101)
 
 
 def test_configuration_rejects_travel_unreachable_with_step_count():
     with pytest.raises(ValueError, match="step-count limit"):
-        ManipulatorMoveCloseToSurfaceAction(
+        operation(
             maximum_step_m=0.005,
             maximum_approach_steps=40,
             maximum_travel_m=0.201,
@@ -143,7 +152,7 @@ def test_runtime_axis_error_is_measured_against_surface_normal():
 
 
 def test_action_rejects_initial_surface_misalignment_before_force_baseline():
-    action = ManipulatorMoveCloseToSurfaceAction(
+    action = operation(
         maximum_axis_error_rad=math.radians(5.0)
     )
     plan = freeze_probe_surface_approach(

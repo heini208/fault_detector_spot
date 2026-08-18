@@ -299,12 +299,20 @@ class ProbeSurfaceRuntimeStateSource:
 
     def close(self) -> None:
         """Destroy ROS resources owned by this source."""
-        self.node.destroy_subscription(self._hand_depth_subscription)
-        self.node.destroy_subscription(
-            self._hand_depth_camera_info_subscription
+        subscriptions = (
+            "_hand_depth_subscription",
+            "_hand_depth_camera_info_subscription",
+            "_force_subscription",
+            "_attachment_subscription",
         )
-        self.node.destroy_subscription(self._force_subscription)
-        self.node.destroy_subscription(self._attachment_subscription)
+        for attribute in subscriptions:
+            subscription = getattr(self, attribute, None)
+            if subscription is not None:
+                self.node.destroy_subscription(subscription)
+                setattr(self, attribute, None)
+        if self._tf_listener is not None:
+            self._tf_listener.unregister()
+            self._tf_listener = None
         with self._lock:
             self._hand_depth_history.clear()
             self._end_effector_force_history.clear()

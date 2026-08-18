@@ -97,6 +97,21 @@ Refer to the [System Design](System_Design.md) Document’s **Available Commands
 
 Any UI or agent can publish here. The Behaviour Tree’s `CommandSubscriber` receives these messages, converts them into internal command objects, and appends them to the command buffer on the blackboard.
 
+### 2.2 Internal Close-Surface Action
+
+The Behaviour Tree delegates `MOVE_CLOSE_TO_SURFACE` to a dedicated process:
+
+- **Action:** `fault_detector/manipulation/move_close_to_surface`
+- **Type:** `fault_detector_msgs/action/MoveCloseToSurface`
+- **Goal:** request ID and positive target probe-to-surface distance
+- **Result:** success flag and terminal detail
+- **Feedback:** execution phase and current detail
+
+The action server owns hand-depth history, camera calibration, end-effector
+force history, attachment state, TF lookup, incremental robot commands, and
+recovery. The Behaviour Tree owns only command selection, result handling, and
+goal cancellation.
+
 #### 2.1.1 Example: Simple command (no extra context)
 
 To toggle the gripper:

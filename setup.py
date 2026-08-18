@@ -36,6 +36,8 @@ setup(
             'fault_detector_spot.ui.ros.available_frames_publisher:main',
             'tag_observation_node = '
             'fault_detector_spot.sensing.tag_observation_node:main',
+            'move_close_to_surface_node = '
+            'fault_detector_spot.manipulation.move_close_to_surface_node:main',
             'lidar_self_filter = fault_detector_spot.mapping.ros.lidar_self_filter:main',
         ],
     },

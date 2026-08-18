@@ -27,6 +27,12 @@ def generate_launch_description():
         "tag_sensing.yaml",
     )
 
+    close_surface_config = os.path.join(
+        pkg,
+        "config",
+        "close_surface.yaml",
+    )
+
     use_sim_time = LaunchConfiguration("use_sim_time")
     navigation_map_root = LaunchConfiguration("navigation_map_root")
     recording_root = LaunchConfiguration("recording_root")
@@ -64,6 +70,7 @@ def generate_launch_description():
             output="screen",
             parameters=[
                 tag_sensing_config,
+                close_surface_config,
                 {
                     "use_sim_time": use_sim_time,
                     "navigation.map_root": navigation_map_root,
@@ -104,6 +111,16 @@ def generate_launch_description():
             output="screen",
             parameters=[
                 tag_sensing_config,
+                {"use_sim_time": use_sim_time},
+            ],
+        ),
+        Node(
+            package="fault_detector_spot",
+            executable="move_close_to_surface_node",
+            name="move_close_to_surface",
+            output="screen",
+            parameters=[
+                close_surface_config,
                 {"use_sim_time": use_sim_time},
             ],
         ),

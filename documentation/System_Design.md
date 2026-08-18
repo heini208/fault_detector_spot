@@ -300,6 +300,7 @@ The core ROS2 nodes of the Fault Detector Spot system are started using a unifie
     - [`bt_runner`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fbt_runner.py) (behaviour tree execution node)
     - [`apriltag_node`](https://github.com/christianrauch/apriltag_ros) (AprilTag perception via `apriltag_ros`)
     - `tag_observation_node` (tag fusion, TF resolution, freshness, and state publishing)
+    - `move_close_to_surface_node` (force-guarded surface approach action server)
     - [`record_manager`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Frecord_manager_node.py) (command recording and playback)
 
 This launch file can be invoked, for example, with:
@@ -664,6 +665,12 @@ and cancellation.
     - [`ManipulatorMoveRelativeAction`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_relative_action.py)
     - [`BaseMoveToTagAction`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_to_tag_action.py)
 
+`ManipulatorMoveCloseToSurfaceAction` is deliberately different. It is a thin
+client for the internal `MoveCloseToSurface` ROS action. Its dedicated server
+process owns continuous depth, force, attachment, and TF state plus the Spot
+robot-command sequence. Tree ticks therefore cannot delay sensor collection or
+create repeated runtime subscriptions.
+
 ### 6.3.2 Other Commands (`py_trees.behaviour.Behaviour`)
 
 Some commands do **not** use the ROS2 `RobotCommand` action driver. Instead, they interact with:
@@ -707,6 +714,7 @@ The exact functionality of each command will become clear either:
 | MOVE_ARM_TO_TAG               | [ManipulatorGetGoalTag](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_get_goal_tag.py) → [ManipulatorMoveArmAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_arm_action.py) |
 | MOVE_BASE_TO_TAG              | [BaseGetGoalTag](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_get_goal_tag.py) → [BaseMoveToTagAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_to_tag_action.py)    |
 | MOVE_ARM_RELATIVE             | [ManipulatorMoveRelativeAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_relative_action.py)                                                                                                                 |
+| MOVE_CLOSE_TO_SURFACE         | `ManipulatorMoveCloseToSurfaceAction` → dedicated `MoveCloseToSurface` ROS action server                                                                                                                                                           |
 | MOVE_BASE_RELATIVE            | [BaseMoveRelativeAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_relative_action.py)                                                                                                                     |
 | STAND_UP                      | [StandUpActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fstand_up_action.py)                                                                                                                                              |
 | WAIT_TIME                     | [WaitForDuration](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fwait_for_duration.py)                                                                                                                                                   |

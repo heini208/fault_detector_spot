@@ -3,8 +3,11 @@
 import math
 
 import pytest
-from py_trees.common import Status
 
+from fault_detector_spot.inspection.execution.move_close_to_surface_operation import (
+    MoveCloseToSurfaceOperation,
+    MoveCloseToSurfaceStatus,
+)
 from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_from_euler,
     rotation_distance_rad,
@@ -14,9 +17,15 @@ from fault_detector_spot.inspection.model.models import (
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.manipulation.behaviours.manipulator_move_close_to_surface_action import (
-    ManipulatorMoveCloseToSurfaceAction,
-)
+
+
+def operation(**kwargs):
+    return MoveCloseToSurfaceOperation(
+        node=object(),
+        state_source=object(),
+        robot_command_client=object(),
+        **kwargs,
+    )
 
 
 def pose(x=0.0, y=0.0, z=0.0, orientation=None):
@@ -35,7 +44,7 @@ class RecoveryStateSource:
 
 
 def test_diagonal_recovery_step_is_bounded_by_euclidean_distance():
-    action = ManipulatorMoveCloseToSurfaceAction(recovery_step_m=0.040)
+    action = operation(recovery_step_m=0.040)
     action._state_source = RecoveryStateSource(pose())
     action._recovery_hand_pose = pose(x=0.040, y=0.040)
     action._phase = "recovery_prepare"
@@ -46,7 +55,7 @@ def test_diagonal_recovery_step_is_bounded_by_euclidean_distance():
 
     result = action._update_recovery_prepare()
 
-    assert result is Status.RUNNING
+    assert result is MoveCloseToSurfaceStatus.RUNNING
     assert len(sent) == 1
     target = sent[0]
     distance = math.sqrt(
@@ -65,7 +74,7 @@ def test_diagonal_recovery_step_is_bounded_by_euclidean_distance():
 
 def test_recovery_configuration_rejects_more_than_40_mm():
     with pytest.raises(ValueError, match="0.040 m"):
-        ManipulatorMoveCloseToSurfaceAction(recovery_step_m=0.0401)
+        operation(recovery_step_m=0.0401)
 
 
 def test_rotation_distance_is_sign_invariant():

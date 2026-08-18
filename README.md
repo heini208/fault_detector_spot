@@ -121,6 +121,7 @@ The **primary launch file** is `fault_detector_launch.py`, which starts:
 - `bt_runner` – main behaviour tree node
 - `apriltag_node` – AprilTag detection for hand camera (`apriltag_ros`)
 - `tag_observation_node` – tag fusion, TF resolution, and state publishing
+- `move_close_to_surface_node` – force-guarded surface approach action server
 - `record_manager` – command recording & playback node
 
 From your ROS 2 workspace:

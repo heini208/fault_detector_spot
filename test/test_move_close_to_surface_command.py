@@ -21,8 +21,14 @@ from fault_detector_spot.application.ros.semantic_command_adapter import (
     semantic_command_from_message,
     semantic_command_to_message,
 )
+from fault_detector_spot.inspection.execution.move_close_to_surface_operation import (
+    MoveCloseToSurfaceOperation,
+)
 from fault_detector_spot.manipulation.behaviours.manipulator_move_close_to_surface_action import (
     ManipulatorMoveCloseToSurfaceAction,
+)
+from fault_detector_spot.manipulation.move_close_to_surface_node import (
+    MoveCloseToSurfaceNode,
 )
 from fault_detector_spot.manipulation.commands.move_close_to_surface_command import (
     MoveCloseToSurfaceCommand,
@@ -90,8 +96,26 @@ def test_behaviour_tree_registers_close_surface_action():
     assert "ManipulatorMoveCloseToSurfaceAction" in source
 
 
-def test_close_surface_behavior_has_no_probe_setup_context_dependency():
+def test_close_surface_bt_behavior_is_only_an_action_client():
     source = inspect.getsource(ManipulatorMoveCloseToSurfaceAction)
+
+    assert "ActionClient" in source
+    assert "MoveCloseToSurface.Goal" in source
+    assert "ProbeSurfaceRuntimeStateSource" not in source
+    assert "surface_distance_samples" not in source
+    assert "end_effector_force" not in source
+
+
+def test_close_surface_server_owns_runtime_operation():
+    source = inspect.getsource(MoveCloseToSurfaceNode)
+
+    assert "ProbeSurfaceRuntimeStateSource" in source
+    assert "MoveCloseToSurfaceOperation" in source
+    assert "ActionServer" in source
+
+
+def test_close_surface_operation_has_no_probe_setup_context_dependency():
+    source = inspect.getsource(MoveCloseToSurfaceOperation)
 
     for forbidden in (
         "context_id",

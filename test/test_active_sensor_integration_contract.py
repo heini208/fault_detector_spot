@@ -41,9 +41,13 @@ def test_close_surface_runtime_resolves_active_attachment_without_setup_context(
     runtime = source(
         "inspection/execution/probe_surface_runtime_state.py"
     )
-    action = source(
+    operation = source(
+        "inspection/execution/move_close_to_surface_operation.py"
+    )
+    client = source(
         "manipulation/behaviours/manipulator_move_close_to_surface_action.py"
     )
+    server = source("manipulation/move_close_to_surface_node.py")
     application = source("application/api/application_api_node.py")
 
     assert "def active_attachment(" in runtime
@@ -51,7 +55,9 @@ def test_close_surface_runtime_resolves_active_attachment_without_setup_context(
     assert "attachment_revision" in runtime
     assert "probe_setup_coordinator" not in runtime
     assert "setup_context" not in runtime
-    assert "active_attachment()" in action
+    assert "active_attachment()" in operation
+    assert "ProbeSurfaceRuntimeStateSource" not in client
+    assert "ProbeSurfaceRuntimeStateSource" in server
     assert "ExecuteOperation" in application
     assert "ProbeSurfaceVerificationApi" not in application
 

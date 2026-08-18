@@ -1,0 +1,30 @@
+/**:
+  ros__parameters:
+    close_surface.action_name: 'fault_detector/manipulation/move_close_to_surface'
+    close_surface.robot_name: ''
+
+    close_surface.motion_duration_sec: 2.0
+    close_surface.settle_sec: 0.5
+    close_surface.sample_timeout_sec: 3.0
+    close_surface.force_baseline_timeout_sec: 2.0
+
+    close_surface.maximum_step_m: 0.010
+    close_surface.tolerance_m: 0.005
+    close_surface.maximum_travel_m: 0.400
+    close_surface.maximum_approach_steps: 40
+
+    close_surface.minimum_surface_samples: 5
+    close_surface.minimum_surface_span_sec: 1.0
+    close_surface.surface_stability_tolerance_m: 0.005
+
+    close_surface.force_contact_threshold_n: 5.0
+    close_surface.force_contact_consecutive_samples: 2
+    close_surface.force_stale_timeout_sec: 1.5
+
+    close_surface.maximum_contact_retries: 3
+    close_surface.recovery_step_m: 0.040
+    close_surface.maximum_recovery_steps: 20
+
+    close_surface.maximum_lateral_drift_m: 0.010
+    close_surface.maximum_axis_error_rad: 0.08726646259971647
+    close_surface.minimum_step_progress_ratio: 0.25
