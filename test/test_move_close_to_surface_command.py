@@ -35,15 +35,20 @@ from fault_detector_spot.manipulation.commands.move_close_to_surface_command imp
 )
 
 
-def test_operational_intent_requires_only_positive_surface_distance():
+def close_surface_intent(target=0.05, aligned=0.20):
     intent = OperationalIntent()
     intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
-    intent.target_surface_distance_m = 0.05
+    intent.target_surface_distance_m = target
+    intent.aligned_preapproach_distance_m = aligned
+    return intent
 
-    command = operational_intent_to_command(intent)
+
+def test_operational_intent_requires_surface_and_aligned_distances():
+    command = operational_intent_to_command(close_surface_intent())
 
     assert command.command_id is CommandID.MOVE_CLOSE_TO_SURFACE
     assert command.target_surface_distance_m == pytest.approx(0.05)
+    assert command.aligned_preapproach_distance_m == pytest.approx(0.20)
     assert command.inspection.object_id == ""
     assert command.inspection.routine_id == ""
     assert command.inspection.probe_point_id == ""
@@ -51,18 +56,23 @@ def test_operational_intent_requires_only_positive_surface_distance():
 
 
 def test_operational_intent_rejects_invalid_surface_distance():
-    intent = OperationalIntent()
-    intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+    intent = close_surface_intent(target=0.0)
 
     with pytest.raises(ValueError, match="Target surface distance"):
         operational_intent_to_command(intent)
 
 
-def test_surface_distance_survives_command_payload_round_trip():
-    intent = OperationalIntent()
-    intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
-    intent.target_surface_distance_m = 0.037
-    command = operational_intent_to_command(intent)
+def test_operational_intent_rejects_aligned_distance_at_target():
+    intent = close_surface_intent(target=0.05, aligned=0.05)
+
+    with pytest.raises(ValueError, match="must exceed target"):
+        operational_intent_to_command(intent)
+
+
+def test_surface_distances_survive_command_payload_round_trip():
+    command = operational_intent_to_command(
+        close_surface_intent(target=0.037, aligned=0.23)
+    )
 
     restored = semantic_command_from_message(
         semantic_command_to_message(command)
@@ -70,6 +80,7 @@ def test_surface_distance_survives_command_payload_round_trip():
 
     assert restored.command_id is CommandID.MOVE_CLOSE_TO_SURFACE
     assert restored.target_surface_distance_m == pytest.approx(0.037)
+    assert restored.aligned_preapproach_distance_m == pytest.approx(0.23)
 
 
 def test_bt_command_rejects_non_positive_distance():
@@ -78,6 +89,7 @@ def test_bt_command_rejects_non_positive_distance():
             CommandID.MOVE_CLOSE_TO_SURFACE,
             stamp=object(),
             target_surface_distance_m=0.0,
+            aligned_preapproach_distance_m=0.20,
         )
 
 
@@ -87,6 +99,7 @@ def test_command_subscriber_builds_close_surface_command():
     assert "CommandID.MOVE_CLOSE_TO_SURFACE" in source
     assert "MoveCloseToSurfaceCommand" in source
     assert "target_surface_distance_m" in source
+    assert "aligned_preapproach_distance_m" in source
 
 
 def test_behaviour_tree_registers_close_surface_action():
@@ -126,6 +139,7 @@ def test_close_surface_operation_has_no_probe_setup_context_dependency():
     ):
         assert forbidden not in source
     assert "target_surface_distance_m" in source
+    assert "aligned_preapproach_distance_m" in source
     assert "active_attachment" in source
     assert "surface_distance_samples" in source
     assert "end_effector_force" in source
