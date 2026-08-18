@@ -1,5 +1,6 @@
 """Tests for extracted probe refinement controller."""
 
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -35,3 +36,19 @@ def test_refinement_requirement_rejects_missing_session():
         ProbeRefinementController.require_refinement(
             SimpleNamespace(refinement=None)
         )
+
+
+def test_unapproved_tag_alignment_uses_relative_to_tag_mode():
+    source = inspect.getsource(ProbeRefinementController.prepare_motion)
+
+    assert "ProbeAlignmentOrientationMode.TAG" in source
+    assert "OrientationModes.TAG_ORIENTATION.value" in source
+    assert "orientation_mode=orientation_mode" in source
+
+
+def test_approved_alignment_replays_saved_candidate_without_realigning():
+    source = inspect.getsource(ProbeRefinementController.prepare_motion)
+
+    assert "replay_approved_candidate" in source
+    assert "refinement.stage_is_approved(stage)" in source
+    assert "if not replay_approved_candidate:" in source
