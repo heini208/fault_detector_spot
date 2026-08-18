@@ -33,7 +33,7 @@ def test_pause_keeps_authoritative_presentation():
     assert "inspection_workspace_splitter.setEnabled(True)" in source
 
 
-def test_emergency_stop_allows_close_without_retraction():
+def test_emergency_stop_allows_close_without_ending_refinement():
     stop_source = inspect.getsource(
         FinalizingInspectionControls.handle_refinement_emergency_stop
     )
@@ -44,8 +44,13 @@ def test_emergency_stop_allows_close_without_retraction():
     assert "_refinement_emergency_stop_requested = True" in stop_source
     assert "super().handle_refinement_emergency_stop()" in stop_source
     assert "_refinement_emergency_stop_requested" in close_source
-    assert "super().request_close_refinement_workflow()" in close_source
-    assert "return True" in close_source
+    assert "OPERATION_END_REFINEMENT" in close_source
+    emergency_branch = close_source.split(
+        "if self._refinement_emergency_stop_requested:",
+        1,
+    )[1].split("presentation =", 1)[0]
+    assert "OPERATION_END_REFINEMENT" not in emergency_branch
+    assert "return True" in emergency_branch
 
 
 def test_resuming_refinement_restores_normal_close_guard():
