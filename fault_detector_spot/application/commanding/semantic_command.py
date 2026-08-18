@@ -124,6 +124,7 @@ class SemanticCommand:
     orientation_mode: str = ""
     wait_time: float = 0.0
     target_surface_distance_m: float = 0.0
+    aligned_preapproach_distance_m: float = 0.0
     map_name: str = ""
     waypoint_name: str = ""
     inspection: InspectionSelection = field(
@@ -172,6 +173,14 @@ class SemanticCommand:
             _finite(
                 self.target_surface_distance_m,
                 "Target surface distance",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "aligned_preapproach_distance_m",
+            _finite(
+                self.aligned_preapproach_distance_m,
+                "Aligned pre-approach distance",
             ),
         )
         object.__setattr__(self, "map_name", self.map_name.strip())
