@@ -1,10 +1,16 @@
+import math
+
 import py_trees
 from fault_detector_msgs.msg import CommandStatus
 from py_trees.common import Status
+from spot_msgs.msg import PowerState
+from std_msgs.msg import Float32
+
+from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 
 
 class BufferStatusPublisher(py_trees.behaviour.Behaviour):
-    """Publish correlated internal status for the active semantic request."""
+    """Publish correlated command status and current robot battery percentage."""
 
     def __init__(self, name: str = "CmdStatusPub"):
         super().__init__(name)
@@ -12,6 +18,10 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         self.last_structured_status = None
         self.last_terminal_request_id = ""
         self.structured_status_pub = None
+        self.battery_percentage_pub = None
+        self.battery_state_sub = None
+        self.latest_battery_percentage = None
+        self.last_battery_percentage = None
         self.node = None
 
     def setup(self, **kwargs) -> bool:
@@ -20,6 +30,17 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         self.structured_status_pub = self.node.create_publisher(
             CommandStatus,
             "fault_detector/_internal/command_status",
+            10,
+        )
+        self.battery_percentage_pub = self.node.create_publisher(
+            Float32,
+            "fault_detector/state/battery_percentage",
+            LATCHED_QOS,
+        )
+        self.battery_state_sub = self.node.create_subscription(
+            PowerState,
+            "/status/power_states",
+            self._process_power_state,
             10,
         )
         self.blackboard.register_key(
@@ -45,6 +66,8 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         return True
 
     def update(self) -> Status:
+        self._publish_battery_percentage_if_changed()
+
         if self.blackboard.command_buffer is None:
             buffer_list = []
         else:
@@ -78,6 +101,21 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
                 )
 
         return Status.SUCCESS
+
+    def _process_power_state(self, message: PowerState) -> None:
+        percentage = float(message.locomotion_charge_percentage)
+        if not math.isfinite(percentage):
+            return
+        self.latest_battery_percentage = min(100.0, max(0.0, percentage))
+
+    def _publish_battery_percentage_if_changed(self) -> None:
+        percentage = self.latest_battery_percentage
+        if percentage is None or percentage == self.last_battery_percentage:
+            return
+        message = Float32()
+        message.data = percentage
+        self.battery_percentage_pub.publish(message)
+        self.last_battery_percentage = percentage
 
     def _log_info(self, message: str) -> None:
         logger_factory = getattr(self.node, "get_logger", None)
