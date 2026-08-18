@@ -10,6 +10,9 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QWidget,
 )
+from std_msgs.msg import Float32
+
+from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 
 
 class StatusOverviewPanel(QFrame):
@@ -30,6 +33,8 @@ class StatusOverviewPanel(QFrame):
     ):
         super().__init__(parent)
         self.setFrameShape(QFrame.StyledPanel)
+        self.battery_label = QLabel("Battery: Unknown")
+        self.battery_subscription = None
 
         layout = QGridLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -58,6 +63,10 @@ class StatusOverviewPanel(QFrame):
             QSizePolicy.Maximum,
             QSizePolicy.Preferred,
         )
+        self.battery_label.setSizePolicy(
+            QSizePolicy.Maximum,
+            QSizePolicy.Preferred,
+        )
 
         sensor_widget = QWidget()
         sensor_layout = QHBoxLayout(sensor_widget)
@@ -67,6 +76,8 @@ class StatusOverviewPanel(QFrame):
         sensor_layout.addWidget(sensor_indicator_label)
         sensor_layout.addWidget(sensor_status_label)
         sensor_layout.addWidget(sensor_confirm_button)
+        sensor_layout.addSpacing(8)
+        sensor_layout.addWidget(self.battery_label)
         sensor_layout.addStretch()
 
         layout.addWidget(status_label, 0, 0)
@@ -84,6 +95,21 @@ class StatusOverviewPanel(QFrame):
 
         self.sensor_widget = sensor_widget
         self.grid_layout = layout
+        self._init_battery_subscription(parent)
+
+    def _init_battery_subscription(self, parent) -> None:
+        node = getattr(parent, "node", None)
+        if node is None:
+            return
+        self.battery_subscription = node.create_subscription(
+            Float32,
+            "fault_detector/state/battery_percentage",
+            self._process_battery_percentage,
+            LATCHED_QOS,
+        )
+
+    def _process_battery_percentage(self, message: Float32) -> None:
+        self.battery_label.setText(f"Battery: {message.data:.0f}%")
 
     @staticmethod
     def _configure_status_label(label: QLabel) -> None:
