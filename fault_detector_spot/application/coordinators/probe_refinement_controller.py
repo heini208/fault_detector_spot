@@ -4,6 +4,9 @@ import math
 from copy import deepcopy
 from dataclasses import replace
 
+from fault_detector_spot.application.commanding.command_ids import (
+    OrientationModes,
+)
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
 )
@@ -185,17 +188,30 @@ class ProbeRefinementController:
             purpose = f"{stage.value} adjustment"
         else:
             target = refinement.candidate_pose(stage)
+            orientation_mode = OrientationModes.CUSTOM_ORIENTATION.value
             if stage is RefinementStage.ALIGNMENT:
-                candidate = self._alignment_target(
-                    draft,
-                    target,
-                    motion,
-                    attachment,
+                replay_approved_candidate = (
+                    refinement.stage_is_approved(stage)
+                    and not motion.orientation_only
                 )
-                refinement.set_candidate(stage, candidate)
-                target = candidate
+                if not replay_approved_candidate:
+                    candidate = self._alignment_target(
+                        draft,
+                        target,
+                        motion,
+                        attachment,
+                    )
+                    refinement.set_candidate(stage, candidate)
+                    target = candidate
+                    if (
+                        motion.alignment_orientation_mode
+                        is ProbeAlignmentOrientationMode.TAG
+                    ):
+                        orientation_mode = (
+                            OrientationModes.TAG_ORIENTATION.value
+                        )
                 if motion.orientation_only:
-                    target = deepcopy(candidate)
+                    target = deepcopy(target)
                     target.position = deepcopy(
                         self.current_probe_pose(
                             draft,
@@ -206,6 +222,7 @@ class ProbeRefinementController:
                 draft,
                 target,
                 attachment,
+                orientation_mode=orientation_mode,
             )
             purpose = (
                 "alignment orientation"
@@ -623,6 +640,7 @@ class ProbeRefinementController:
         draft,
         target,
         attachment,
+        orientation_mode=OrientationModes.CUSTOM_ORIENTATION.value,
     ):
         definition = self.object_repository.load(
             draft.selected_object_id
@@ -634,6 +652,7 @@ class ProbeRefinementController:
             target,
             tag,
             attachment.motion_sensor_id,
+            orientation_mode=orientation_mode,
         )
 
     def _relative_motion_command(
