@@ -90,6 +90,33 @@ def test_force_guard_uses_configured_stale_timeout_for_sample_age():
     assert action._state_source.maximum_age_sec == pytest.approx(1.25)
 
 
+def test_force_guard_becomes_more_sensitive_near_target():
+    action = operation(
+        force_contact_threshold_n=5.0,
+        force_near_target_threshold_n=3.0,
+        force_near_target_distance_m=0.020,
+    )
+
+    assert action._force_threshold_for(0.030) == pytest.approx(5.0)
+    assert action._force_threshold_for(0.020) == pytest.approx(5.0)
+    assert action._force_threshold_for(0.010) == pytest.approx(4.0)
+    assert action._force_threshold_for(0.000) == pytest.approx(3.0)
+
+
+def test_default_force_baseline_allows_normal_stationary_sensor_noise():
+    action = operation()
+
+    assert action.force_baseline_max_component_span_n == pytest.approx(3.0)
+
+
+def test_configuration_rejects_near_target_threshold_above_normal_threshold():
+    with pytest.raises(ValueError, match="Near-target force threshold"):
+        operation(
+            force_contact_threshold_n=4.0,
+            force_near_target_threshold_n=4.1,
+        )
+
+
 def test_configuration_rejects_step_larger_than_ten_millimeters():
     with pytest.raises(ValueError, match="0.010 m"):
         operation(maximum_step_m=0.0101)
