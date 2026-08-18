@@ -22,6 +22,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._surface_move_succeeded = False
         self._surface_move_target_m = None
         self._surface_move_alignment_pose = None
+        self._refinement_emergency_stop_requested = False
 
     def handle_capture_reference_view(self):
         """Submit camera selections to the server-owned capture action."""
@@ -59,6 +60,33 @@ class FinalizingInspectionControls(InspectionControls):
             "Reference capture running"
         )
         return True
+
+    def handle_refinement_emergency_stop(self):
+        self._refinement_emergency_stop_requested = True
+        return super().handle_refinement_emergency_stop()
+
+    def request_close_refinement_workflow(self):
+        if not self._refinement_emergency_stop_requested:
+            return super().request_close_refinement_workflow()
+        if hasattr(self, "inspection_workspace_splitter"):
+            self.inspection_workspace_splitter.setEnabled(True)
+        self.start_probe_refinement_button.setText(
+            "Resume Probe Point Position Refinement Workflow"
+        )
+        self.refinement_summary_status_label.setText(
+            "Refinement paused after emergency stop."
+        )
+        return True
+
+    def resume_refinement_dialog(self):
+        resumed = super().resume_refinement_dialog()
+        if resumed:
+            self._refinement_emergency_stop_requested = False
+        return resumed
+
+    def _finish_refinement_workflow_close(self):
+        self._refinement_emergency_stop_requested = False
+        return super()._finish_refinement_workflow_close()
 
     def handle_test_surface_distance(self):
         presentation = self._require_refinement_presentation()
