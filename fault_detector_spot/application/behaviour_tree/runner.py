@@ -270,48 +270,75 @@ def get_helper_container(node: rclpy.node.Node):
     return helper_initializer
 
 
+def close_helper_container():
+    """Close and forget process-wide helper resources."""
+    global helper_initializer
+    if helper_initializer is None:
+        return
+    helper_initializer.close()
+    helper_initializer = None
+
+
 def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     command_selector = py_trees.composites.Selector(
         name="CommandSelector",
         memory=True,
     )
     slam_helper = get_helper_container(node).slam_helper
+    robot_command_resources = (
+        get_helper_container(node).robot_command_resources
+    )
     specs = [
         (
             CommandID.STOW_ARM,
-            lambda n: StowArmActionSimple(name="StowArmAction"),
+            lambda n: StowArmActionSimple(
+                name="StowArmAction",
+                robot_command_resources=robot_command_resources,
+            ),
         ),
         (
             CommandID.READY_ARM,
-            lambda n: ReadyArmActionSimple(name="ReadyArmAction"),
+            lambda n: ReadyArmActionSimple(
+                name="ReadyArmAction",
+                robot_command_resources=robot_command_resources,
+            ),
         ),
         (
             CommandID.TOGGLE_GRIPPER,
-            lambda n: ToggleGripperAction(name="ToggleGripperAction"),
+            lambda n: ToggleGripperAction(
+                name="ToggleGripperAction",
+                robot_command_resources=robot_command_resources,
+            ),
         ),
         (CommandID.MOVE_ARM_TO_TAG, build_manipulator_goal_tree),
         (CommandID.MOVE_BASE_TO_TAG, build_base_goal_tree),
         (
             CommandID.MOVE_BASE_RELATIVE,
             lambda n: BaseMoveRelativeAction(
-                name="BaseMoveRelativeAction"
+                name="BaseMoveRelativeAction",
+                robot_command_resources=robot_command_resources,
             ),
         ),
         (
             CommandID.MOVE_ARM_RELATIVE,
             lambda n: ManipulatorMoveRelativeAction(
-                name="MoveArmRelativeAction"
+                name="MoveArmRelativeAction",
+                robot_command_resources=robot_command_resources,
             ),
         ),
         (
             CommandID.MOVE_CLOSE_TO_SURFACE,
             lambda n: ManipulatorMoveCloseToSurfaceAction(
-                name="MoveCloseToSurfaceAction"
+                name="MoveCloseToSurfaceAction",
+                robot_command_resources=robot_command_resources,
             ),
         ),
         (
             CommandID.STAND_UP,
-            lambda n: StandUpActionSimple(name="StandUpAction"),
+            lambda n: StandUpActionSimple(
+                name="StandUpAction",
+                robot_command_resources=robot_command_resources,
+            ),
         ),
         (
             CommandID.WAIT_TIME,
@@ -319,7 +346,9 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         ),
         (
             CommandID.CLOSE_GRIPPER,
-            lambda n: CloseGripperAction(),
+            lambda n: CloseGripperAction(
+                robot_command_resources=robot_command_resources,
+            ),
         ),
         (
             CommandID.STOP_BASE,
@@ -368,8 +397,17 @@ def build_cancelable_command_tree(
         with_save=False,
         name="ESTOP MAPPING",
     )
-    stow_cancel = StowArmActionSimple(name="StowArmCancel")
-    close_gripper = CloseGripperAction(name="CloseGripperAction")
+    robot_command_resources = (
+        get_helper_container(node).robot_command_resources
+    )
+    stow_cancel = StowArmActionSimple(
+        name="StowArmCancel",
+        robot_command_resources=robot_command_resources,
+    )
+    close_gripper = CloseGripperAction(
+        name="CloseGripperAction",
+        robot_command_resources=robot_command_resources,
+    )
     reset_estop = ResetEstopFlag(name="ResetEStopFlag")
 
     cancel_seq = py_trees.composites.Sequence(
@@ -504,7 +542,10 @@ def build_manipulator_goal_tree(
         name="GetGoalTagPosition"
     )
     move_arm = ManipulatorMoveArmAction(
-        name="MoveArm"
+        name="MoveArm",
+        robot_command_resources=(
+            get_helper_container(node).robot_command_resources
+        ),
     )
     manipulation.add_children([
         get_goal,
@@ -524,7 +565,10 @@ def build_base_goal_tree(
         name="BaseGetGoalTag"
     )
     move_base = BaseMoveToTagAction(
-        name="BaseMoveToTagAction"
+        name="BaseMoveToTagAction",
+        robot_command_resources=(
+            get_helper_container(node).robot_command_resources
+        ),
     )
     base_sequence.add_children([
         get_goal,
@@ -594,6 +638,7 @@ def main(args=None):
             f"Behavior tree setup failed: {exception}"
         )
         tree.shutdown()
+        close_helper_container()
         rclpy.try_shutdown()
         sys.exit(1)
 
@@ -616,9 +661,9 @@ def main(args=None):
         pass
     finally:
         executor.shutdown()
-
-    tree.shutdown()
-    rclpy.shutdown()
+        tree.shutdown()
+        close_helper_container()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

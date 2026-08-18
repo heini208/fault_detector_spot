@@ -11,8 +11,13 @@ class StandUpActionSimple(SimpleSpotAction):
     Returns RUNNING while in flight, SUCCESS on completion, FAILURE on error.
     """
 
-    def __init__(self, name: str = "StandUpAction", robot_name: str = ""):
-        super().__init__(name, robot_name)
+    def __init__(
+        self,
+        name: str = "StandUpAction",
+        robot_name: str = "",
+        robot_command_resources=None,
+    ):
+        super().__init__(name, robot_name, robot_command_resources)
 
     def _build_goal(self) -> RobotCommand.Goal:
         # Construct the synchro stand command goal

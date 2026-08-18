@@ -23,9 +23,9 @@ class BaseMoveToTagAction(MoveCommandAction):
         name="BaseMoveToTagAction",
         robot_name="",
         duration=3.0,
+        robot_command_resources=None,
     ):
-        super().__init__(name)
-        self.robot_name = robot_name
+        super().__init__(name, robot_name, robot_command_resources)
         self.duration = duration
 
     def _build_goal(self) -> RobotCommand.Goal:

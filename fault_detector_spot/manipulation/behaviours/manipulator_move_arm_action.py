@@ -16,9 +16,14 @@ class ManipulatorMoveArmAction(MoveCommandAction):
     Uses ActionClientBehaviour for all lifecycle phases, customizing only client init and goal build.
     """
 
-    def __init__(self, name="ManipulatorMoveArmAction", robot_name="", duration=3.0):
-        super().__init__(name)
-        self.robot_name = robot_name
+    def __init__(
+        self,
+        name="ManipulatorMoveArmAction",
+        robot_name="",
+        duration=3.0,
+        robot_command_resources=None,
+    ):
+        super().__init__(name, robot_name, robot_command_resources)
         self.duration = duration
 
     def setup(self, **kwargs):

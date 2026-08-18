@@ -7,8 +7,13 @@ from py_trees.blackboard import Blackboard
 
 
 class ToggleGripperAction(SimpleSpotAction):
-    def __init__(self, name="ToggleGripperAction", robot_name=""):
-        super().__init__(name, robot_name)
+    def __init__(
+        self,
+        name="ToggleGripperAction",
+        robot_name="",
+        robot_command_resources=None,
+    ):
+        super().__init__(name, robot_name, robot_command_resources)
         self.blackboard = self.attach_blackboard_client()
         self.blackboard.register_key(key="gripper_open", access=Access.WRITE)
         self.blackboard.gripper_open = False

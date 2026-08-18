@@ -21,9 +21,13 @@ from fault_detector_spot.navigation.commands.base_move_relative_command import (
 class BaseMoveRelativeAction(MoveCommandAction):
     """Move the robot base relative to its current pose at low speed."""
 
-    def __init__(self, name="BaseMoveRelativeAction", robot_name=""):
-        super().__init__(name)
-        self.robot_name = robot_name
+    def __init__(
+        self,
+        name="BaseMoveRelativeAction",
+        robot_name="",
+        robot_command_resources=None,
+    ):
+        super().__init__(name, robot_name, robot_command_resources)
 
     def setup(self, **kwargs):
         super().setup(**kwargs)

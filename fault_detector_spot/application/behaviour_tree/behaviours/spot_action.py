@@ -1,5 +1,4 @@
 import synchros2.scope as ros_scope
-from synchros2.action_client import ActionClientWrapper
 from synchros2.utilities import namespace_with
 
 import py_trees
@@ -129,14 +128,29 @@ class SimpleSpotAction(ActionClientBehaviour):
     Implements _init_client and _send_goal using ActionClientWrapper.
     """
 
-    def __init__(self, name: str, robot_name: str = ""):
+    def __init__(
+        self,
+        name: str,
+        robot_name: str = "",
+        robot_command_resources=None,
+    ):
         super().__init__(name)
         self.robot_name = robot_name
+        self.robot_command_resources = robot_command_resources
 
     def _init_client(self) -> bool:
         try:
             action_ns = namespace_with(self.robot_name, "robot_command")
-            if self._client is None:
+            if self.robot_command_resources is not None:
+                self._client = (
+                    self.robot_command_resources.get_action_client(
+                        self.node,
+                        self.robot_name,
+                    )
+                )
+            elif self._client is None:
+                from synchros2.action_client import ActionClientWrapper
+
                 self._client = ActionClientWrapper(
                     RobotCommand,
                     action_ns,

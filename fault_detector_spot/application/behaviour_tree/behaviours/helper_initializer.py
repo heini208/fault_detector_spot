@@ -4,16 +4,20 @@ from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
 from fault_detector_spot.shared.persistence.runtime_paths import (
     default_map_root,
 )
+from fault_detector_spot.application.behaviour_tree.behaviours.robot_command_resources import (
+    RobotCommandResources,
+)
 
 
 class HelperInitializer(py_trees.behaviour.Behaviour):
-    """Initialize the shared mapping and navigation runtime helpers."""
+    """Initialize resources shared by the behavior-tree runtime."""
 
     def __init__(self, name: str, node):
         super().__init__(name)
         self.node = node
         self.slam_helper = None
         self.nav2_helper = None
+        self.robot_command_resources = RobotCommandResources()
 
     def setup(self, timeout):
         self.bb_client = self.attach_blackboard_client()
@@ -45,3 +49,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
 
     def update(self):
         return py_trees.common.Status.SUCCESS
+
+    def close(self):
+        """Close shared ROS entities that are not tree children."""
+        self.robot_command_resources.close()

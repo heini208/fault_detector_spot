@@ -7,8 +7,13 @@ from py_trees.blackboard import Blackboard
 
 
 class CloseGripperAction(SimpleSpotAction):
-    def __init__(self, name="CloseGripperAction", robot_name=""):
-        super().__init__(name, robot_name)
+    def __init__(
+        self,
+        name="CloseGripperAction",
+        robot_name="",
+        robot_command_resources=None,
+    ):
+        super().__init__(name, robot_name, robot_command_resources)
 
     def _build_goal(self) -> RobotCommand.Goal:
         cmd = RobotCommandBuilder.claw_gripper_open_fraction_command(0.0)

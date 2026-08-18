@@ -49,8 +49,8 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
         tolerance_m: float = 0.005,
         maximum_travel_m: float = 0.400,
         maximum_approach_steps: int = 40,
-        minimum_surface_samples: int = 3,
-        minimum_surface_span_sec: float = 0.5,
+        minimum_surface_samples: int = 5,
+        minimum_surface_span_sec: float = 1.0,
         surface_stability_tolerance_m: float = 0.005,
         force_contact_threshold_n: float = 5.0,
         force_contact_consecutive_samples: int = 2,
@@ -61,6 +61,7 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
         maximum_lateral_drift_m: float = 0.010,
         maximum_axis_error_rad: float = math.radians(5.0),
         minimum_step_progress_ratio: float = 0.25,
+        robot_command_resources=None,
     ):
         super().__init__(name)
         self.robot_name = robot_name
@@ -88,10 +89,12 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
         self.maximum_lateral_drift_m = float(maximum_lateral_drift_m)
         self.maximum_axis_error_rad = float(maximum_axis_error_rad)
         self.minimum_step_progress_ratio = float(minimum_step_progress_ratio)
+        self.robot_command_resources = robot_command_resources
         self._validate_configuration()
 
         self.node = None
         self._client = None
+        self._owns_client = False
         self._state_source = None
         self.blackboard = self.attach_blackboard_client()
         self.blackboard.register_key(key="last_command", access=Access.READ)
@@ -114,20 +117,32 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
         if self._state_source is None:
             self._state_source = ProbeSurfaceRuntimeStateSource(self.node)
         if self._client is None:
-            action_ns = namespace_with(self.robot_name, "robot_command")
-            self._client = ActionClientWrapper(
-                RobotCommand,
-                action_ns,
-                self.node,
-                wait_for_server=False,
-            )
+            if self.robot_command_resources is not None:
+                self._client = (
+                    self.robot_command_resources.get_action_client(
+                        self.node,
+                        self.robot_name,
+                    )
+                )
+            else:
+                action_ns = namespace_with(self.robot_name, "robot_command")
+                self._client = ActionClientWrapper(
+                    RobotCommand,
+                    action_ns,
+                    self.node,
+                    wait_for_server=False,
+                )
+                self._owns_client = True
 
     def shutdown(self):
         self._cancel_active_goal()
         if self._state_source is not None:
             self._state_source.close()
             self._state_source = None
+        if self._owns_client and self._client is not None:
+            self._client.destroy()
         self._client = None
+        self._owns_client = False
 
     def initialise(self):
         self._clear_runtime()

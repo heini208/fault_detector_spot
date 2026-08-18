@@ -1,6 +1,7 @@
 """Safety invariants for the standalone close-surface approach."""
 
 import math
+import time
 
 import pytest
 
@@ -49,11 +50,11 @@ def test_default_travel_matches_40_ten_millimeter_steps():
     assert action.maximum_travel_m == pytest.approx(0.400)
 
 
-def test_default_surface_sampling_uses_three_frames_over_half_second():
+def test_default_surface_sampling_uses_five_frames_over_one_second():
     action = ManipulatorMoveCloseToSurfaceAction()
 
-    assert action.minimum_surface_samples == 3
-    assert action.minimum_surface_span_sec == pytest.approx(0.5)
+    assert action.minimum_surface_samples == 5
+    assert action.minimum_surface_span_sec == pytest.approx(1.0)
 
 
 def test_default_force_stale_timeout_tolerates_normal_motion_gaps():
@@ -64,18 +65,17 @@ def test_default_force_stale_timeout_tolerates_normal_motion_gaps():
 
 def test_force_guard_uses_configured_stale_timeout_for_sample_age():
     class StateSource:
-        def __init__(self):
-            self.maximum_age_sec = None
+        maximum_age_sec = None
 
-        def latest_end_effector_force(self, maximum_age_sec):
+        def latest_end_effector_force(self, maximum_age_sec=None):
             self.maximum_age_sec = maximum_age_sec
-            raise ValueError("no sample")
+            raise ValueError("No force sample")
 
     action = ManipulatorMoveCloseToSurfaceAction(
-        force_stale_timeout_sec=1.25
+        force_stale_timeout_sec=1.25,
     )
     action._state_source = StateSource()
-    action._force_last_receipt = 10**12
+    action._force_last_receipt = time.monotonic()
 
     assert action._check_force_guard() is None
     assert action._state_source.maximum_age_sec == pytest.approx(1.25)

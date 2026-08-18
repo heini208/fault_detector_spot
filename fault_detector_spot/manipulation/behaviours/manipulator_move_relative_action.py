@@ -20,8 +20,12 @@ class ManipulatorMoveRelativeAction(MoveCommandAction):
 
     def __init__(self,
                  name: str = "ManipulatorMoveRelativeAction",
-                 duration: float = 2):
-        super().__init__(name)
+                 duration: float = 2,
+                 robot_command_resources=None):
+        super().__init__(
+            name,
+            robot_command_resources=robot_command_resources,
+        )
         self.duration = duration
 
 

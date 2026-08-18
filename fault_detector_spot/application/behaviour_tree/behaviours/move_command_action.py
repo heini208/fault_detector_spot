@@ -15,9 +15,6 @@ from fault_detector_spot.application.behaviour_tree.commands.move_to_tag_command
 )
 from geometry_msgs.msg import PoseStamped
 from py_trees.common import Status, Access
-from spot_msgs.action import RobotCommand
-from synchros2.action_client import ActionClientWrapper
-from synchros2.tf_listener_wrapper import TFListenerWrapper
 from synchros2.utilities import namespace_with
 
 
@@ -29,11 +26,17 @@ class MoveCommandAction(ActionClientBehaviour):
     BEFORE delegating to the ActionClientBehaviour lifecycle.
     """
 
-    def __init__(self, name: str, robot_name: str = ""):
+    def __init__(
+        self,
+        name: str,
+        robot_name: str = "",
+        robot_command_resources=None,
+    ):
         super().__init__(name)
-        self.tf_listener: TFListenerWrapper = None
+        self.tf_listener = None
         self.blackboard = self.attach_blackboard_client()
         self.robot_name = robot_name
+        self.robot_command_resources = robot_command_resources
         self.blackboard.register_key(key="last_command", access=Access.READ)
 
     def setup(self, **kwargs):
@@ -41,10 +44,31 @@ class MoveCommandAction(ActionClientBehaviour):
 
     def _init_client(self) -> bool:
         action_ns = namespace_with(self.robot_name, "robot_command")
-        if self._client is None:
-            self._client = ActionClientWrapper(RobotCommand, action_ns, self.node)
-        if self.tf_listener is None:
-            self.tf_listener = TFListenerWrapper(self.node)
+        if self.robot_command_resources is not None:
+            self._client = self.robot_command_resources.get_action_client(
+                self.node,
+                self.robot_name,
+            )
+            self.tf_listener = (
+                self.robot_command_resources.get_tf_listener(self.node)
+            )
+        else:
+            from spot_msgs.action import RobotCommand
+            from synchros2.action_client import ActionClientWrapper
+            from synchros2.tf_listener_wrapper import TFListenerWrapper
+
+            if self._client is None:
+                self._client = ActionClientWrapper(
+                    RobotCommand,
+                    action_ns,
+                    self.node,
+                    wait_for_server=False,
+                )
+            if self.tf_listener is None:
+                self.tf_listener = TFListenerWrapper(self.node)
+        if not self._client.wait_for_server(timeout_sec=0.0):
+            self.feedback_message = f"Action server '{action_ns}' unavailable"
+            return False
         self.initialized = True
         return True
 

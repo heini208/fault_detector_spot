@@ -40,8 +40,40 @@ def test_action_initialization_reuses_ros_resources():
     )
 
     assert "if self._client is None:" in spot_action
-    assert "if self._client is None:" in move_action
-    assert "if self.tf_listener is None:" in move_action
+    assert "get_action_client" in spot_action
+    assert "get_action_client" in move_action
+    assert "get_tf_listener" in move_action
+
+
+def test_behavior_tree_uses_one_robot_command_resource_owner():
+    resources = _read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "robot_command_resources.py"
+    )
+    helper = _read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "helper_initializer.py"
+    )
+    runner = _read(
+        "fault_detector_spot/application/behaviour_tree/runner.py"
+    )
+
+    assert resources.count("ActionClientWrapper(") == 1
+    assert resources.count("TFListenerWrapper(") == 1
+    assert "self.robot_command_resources = RobotCommandResources()" in helper
+    assert "helper_initializer.close()" in runner
+    assert runner.count("robot_command_resources=") >= 10
+
+
+def test_shared_robot_command_resources_have_explicit_teardown():
+    resources = _read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "robot_command_resources.py"
+    )
+
+    close = _method_source(resources, "close")
+    assert "tf_listener.shutdown" in close
+    assert "client.destroy" in close
 
 
 def test_terminal_goal_paths_do_not_send_cancel_requests():
