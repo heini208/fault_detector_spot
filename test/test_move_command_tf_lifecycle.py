@@ -44,6 +44,32 @@ def test_action_initialization_reuses_ros_resources():
     assert "if self.tf_listener is None:" in move_action
 
 
+def test_terminal_goal_paths_do_not_send_cancel_requests():
+    source = _read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "spot_action.py"
+    )
+    acceptance = _method_source(
+        source,
+        "_phase_wait_for_acceptance",
+    )
+    result = _method_source(source, "_phase_wait_for_result")
+
+    assert "_cancel_goal" not in acceptance
+    assert "_cancel_goal" not in result
+
+
+def test_interrupted_active_goal_still_requests_cancellation():
+    source = _read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "spot_action.py"
+    )
+    terminate = _method_source(source, "terminate")
+
+    assert "new_status == Status.INVALID" in terminate
+    assert "self._cancel_goal(self.goal_handle)" in terminate
+
+
 def test_move_goal_preparation_exceptions_fail_the_behavior():
     source = _read(
         "fault_detector_spot/application/behaviour_tree/behaviours/"

@@ -74,7 +74,6 @@ class ActionClientBehaviour(py_trees.behaviour.Behaviour):
             self.goal_handle = self.send_goal_future.result()
             if not self.goal_handle.accepted:
                 self.feedback_message = "Goal rejected"
-                self._cancel_goal(self.goal_handle)
                 self._reset_state()
                 return Status.FAILURE
             self.get_result_future = self.goal_handle.get_result_async()
@@ -90,7 +89,6 @@ class ActionClientBehaviour(py_trees.behaviour.Behaviour):
             success = getattr(result, "success", False)
             self.feedback_message = "Succeeded" if success else f"Failed: {result}"
             status = Status.SUCCESS if success else Status.FAILURE
-            self._cancel_goal(self.goal_handle)
             self._reset_state()
             return status
         return None
