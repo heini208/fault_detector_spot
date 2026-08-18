@@ -149,14 +149,13 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         return message
 
     def _current_failure_detail(self, request_id: str) -> str:
-        failure_request_id = getattr(
-            self.blackboard,
-            "command_failure_request_id",
-            "",
-        )
+        try:
+            failure_request_id = self.blackboard.command_failure_request_id
+            detail = self.blackboard.command_failure_detail
+        except (AttributeError, KeyError):
+            return ""
         if not request_id or failure_request_id != request_id:
             return ""
-        detail = getattr(self.blackboard, "command_failure_detail", "")
         return detail.strip() if isinstance(detail, str) else ""
 
     def _current_request_buffer_count(self, buffer_list):

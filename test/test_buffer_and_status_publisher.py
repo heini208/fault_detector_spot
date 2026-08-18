@@ -22,6 +22,18 @@ class FakePublisher:
         self.messages.append(message)
 
 
+class MissingFailureMetadataBlackboard(SimpleNamespace):
+    """Match py_trees missing-key semantics for optional failure metadata."""
+
+    def __getattr__(self, name):
+        if name in {
+            "command_failure_request_id",
+            "command_failure_detail",
+        }:
+            raise KeyError(name)
+        raise AttributeError(name)
+
+
 def behavior(status=Status.SUCCESS, command_id="move_to_tag"):
     """Create a publisher with isolated blackboard data."""
     result = BufferStatusPublisher()
@@ -136,3 +148,18 @@ def test_failure_detail_from_another_request_is_not_reused():
     assert message.detail == (
         "BT execution failed for move_close_to_surface"
     )
+
+
+def test_missing_failure_metadata_uses_generic_failure_status():
+    result = behavior(Status.FAILURE, "move_to_tag")
+    result.blackboard = MissingFailureMetadataBlackboard(
+        command_buffer=[],
+        command_tree_status=Status.FAILURE,
+        last_command=result.blackboard.last_command,
+    )
+
+    assert result.update() == Status.SUCCESS
+
+    message = result.structured_status_pub.messages[0]
+    assert message.state == message.STATE_FAILED
+    assert message.detail == "BT execution failed for move_to_tag"
