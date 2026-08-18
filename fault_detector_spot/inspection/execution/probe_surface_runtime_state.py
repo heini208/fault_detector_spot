@@ -165,12 +165,16 @@ class ProbeSurfaceRuntimeStateSource:
         samples = []
         errors = []
         now = time.monotonic()
+        post_start_count = 0
+        eligible_count = 0
         for receipt_time, depth_image in history:
             if receipt_time + 1e-9 < receipt_not_before:
                 continue
+            post_start_count += 1
             age = now - receipt_time
             if age < -1e-9 or age > maximum_age_sec:
                 continue
+            eligible_count += 1
             try:
                 stamp = Time.from_msg(depth_image.header.stamp)
                 if stamp.nanoseconds <= 0:
@@ -196,7 +200,30 @@ class ProbeSurfaceRuntimeStateSource:
             except Exception as exception:
                 errors.append(str(exception))
         if len(samples) < minimum_samples:
-            detail = errors[-1] if errors else "no fresh depth frames"
+            if errors:
+                detail = (
+                    f"{eligible_count} eligible frame(s), "
+                    f"{len(errors)} rejected; last error: {errors[-1]}"
+                )
+            else:
+                newest_age = (
+                    now - history[-1][0]
+                    if history
+                    else None
+                )
+                newest_detail = (
+                    f"{newest_age:.3f}s"
+                    if newest_age is not None
+                    else "none"
+                )
+                detail = (
+                    "no eligible depth frames "
+                    f"(buffered={len(history)}, "
+                    f"post_start={post_start_count}, "
+                    f"within_age={eligible_count}, "
+                    f"newest_age={newest_detail}, "
+                    f"max_age={maximum_age_sec:.3f}s)"
+                )
             raise ValueError(
                 "Need at least "
                 f"{minimum_samples} fresh registered hand-depth sample"
