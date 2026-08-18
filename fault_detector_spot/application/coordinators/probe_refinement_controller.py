@@ -309,10 +309,6 @@ class ProbeRefinementController:
                     status.operation.request_id,
                     achieved,
                 )
-                if motion.orientation_only:
-                    refinement.motion_states[
-                        RefinementStage.ALIGNMENT
-                    ] = RefinementMotionState.NOT_TESTED
             except Exception as exception:
                 refinement.fail_motion(
                     status.operation.request_id,
@@ -755,4 +751,3 @@ class ProbeRefinementController:
 
 
 __all__ = ["ProbeRefinementController"]
-
