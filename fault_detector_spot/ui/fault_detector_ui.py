@@ -656,7 +656,7 @@ class Fault_Detector_UI(QWidget):
             )
         return request_id
 
-    def execute_probe_surface_verification(self):
+    def execute_move_close_to_surface(self):
         if self.application_client is None:
             self._process_application_error("ROS is unavailable")
             return None

@@ -51,7 +51,6 @@ class ProbeRefinementSnapshot:
     motion_request_id: str
     recovery_required: bool
     recovery_message: str
-    surface_distance_verified: bool
     target_surface_distance_m: float
     aligned_preapproach_distance_m: float
 
@@ -116,7 +115,7 @@ class ProbeRefinementPresentation:
 
     @property
     def surface_distance_verified(self) -> bool:
-        return self._snapshot.surface_distance_verified
+        return False
 
     @property
     def candidate_poses(self) -> Mapping:
@@ -349,10 +348,6 @@ def _refinement(state, calculated, setup):
         motion_request_id=state.motion_request_id,
         recovery_required=bool(state.refinement_recovery_required),
         recovery_message=state.refinement_recovery_message,
-        surface_distance_verified=(
-            state.surface_verification_state
-            == ProbeSetupState.SURFACE_VERIFICATION_CONVERGED
-        ),
         target_surface_distance_m=float(
             state.target_surface_distance_m
         ),

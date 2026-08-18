@@ -35,7 +35,8 @@ def test_inspection_ui_does_not_own_robot_sensing_runtime():
     for value in forbidden:
         assert value not in source
 
-    assert "execute_probe_surface_verification" in source
+    assert "execute_move_close_to_surface" in source
+    assert "execute_probe_surface_verification" not in source
     assert "ProbeSetupMotionIntent" in source
 
 

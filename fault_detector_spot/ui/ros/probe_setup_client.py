@@ -397,13 +397,6 @@ class ProbeSetupClient(QObject):
             int(state.state),
             int(state.revision),
             state.detail,
-            state.surface_verification_request_id,
-            int(state.surface_verification_state),
-            bool(state.has_surface_distance_measurement),
-            float(state.measured_surface_distance_m),
-            float(state.surface_distance_error_m),
-            int(state.surface_verification_iteration),
-            bool(state.surface_recovery_required),
             bool(state.refinement_recovery_required),
             state.refinement_recovery_message,
         )

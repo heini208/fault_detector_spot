@@ -135,6 +135,6 @@ def test_refine_tab_uses_stage_safe_controls(application, tmp_path):
     assert "back" not in controls.refinement_buttons["alignment"]
     assert controls.refinement_buttons["probe"] == {}
     assert controls.test_surface_distance_button.text() == (
-        "Test Surface Distance"
+        "Move Close to Surface"
     )
     assert not controls.test_surface_distance_button.isEnabled()

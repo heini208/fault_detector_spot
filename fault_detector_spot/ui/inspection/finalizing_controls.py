@@ -16,7 +16,6 @@ from .controls import InspectionControls
 class FinalizingInspectionControls(InspectionControls):
     """Route physical setup workflows through server-owned APIs."""
 
-
     def __init__(self, ui):
         super().__init__(ui)
         self._surface_test_active = False

@@ -68,9 +68,6 @@ def refinement_state():
     state.motion_request_id = "1" * 32
     state.refinement_recovery_required = True
     state.refinement_recovery_message = "Retract"
-    state.surface_verification_state = (
-        ProbeSetupState.SURFACE_VERIFICATION_CONVERGED
-    )
     return state
 
 
@@ -115,7 +112,7 @@ def test_refinement_state_becomes_immutable_server_snapshot():
     )
     assert refinement.pending_motion.request_id == "1" * 32
     assert refinement.recovery_required
-    assert refinement.surface_distance_verified
+    assert not refinement.surface_distance_verified
 
 
 def test_wizard_navigation_cannot_change_server_refinement_snapshot():
@@ -123,14 +120,14 @@ def test_wizard_navigation_cannot_change_server_refinement_snapshot():
 
     refinement.active_stage = RefinementStage.SAFE_APPROACH
     with pytest.raises(AttributeError):
-        refinement.surface_distance_verified = False
+        refinement.surface_distance_verified = True
 
     assert refinement.active_stage is RefinementStage.SAFE_APPROACH
     assert (
         refinement.snapshot.server_active_stage
         is RefinementStage.ALIGNMENT
     )
-    assert refinement.surface_distance_verified
+    assert not refinement.surface_distance_verified
 
     with pytest.raises(TypeError):
         refinement.motion_states[RefinementStage.ALIGNMENT] = (

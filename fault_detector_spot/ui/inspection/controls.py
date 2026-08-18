@@ -82,7 +82,6 @@ class InspectionControls(UIControlHelper):
     """Render probe setup state and submit typed user intent."""
 
     def __init__(self, parent_ui):
-        """Create controls backed by the remote probe setup API."""
         self._probe_setup_state = None
         self._reference_rgb_size = None
         self._reference_depth_image = None
@@ -110,12 +109,10 @@ class InspectionControls(UIControlHelper):
         self.refresh_setup_state()
 
     def add_rows(self, layout):
-        """Add the rows constructed during initialization."""
         for row in self.rows:
             layout.addLayout(row)
 
     def init_ros_communication(self):
-        """Connect presentation callbacks to the probe setup client."""
         if self.node is None:
             return
         client = getattr(self.ui, "probe_setup_client", None)
@@ -128,10 +125,8 @@ class InspectionControls(UIControlHelper):
             )
 
     def make_rows(self):
-        """Create a compact inspection setup workspace."""
         self._make_management_dialog()
         self._create_reference_widgets()
-
         workspace = QVBoxLayout()
         workspace.setSpacing(6)
         workspace.addLayout(self._make_saved_definitions_row())
@@ -155,9 +150,7 @@ class InspectionControls(UIControlHelper):
         self.delete_object_button.setToolTip(
             "Delete the object selected above and all of its routines"
         )
-        self.delete_object_button.clicked.connect(
-            self.handle_delete_object
-        )
+        self.delete_object_button.clicked.connect(self.handle_delete_object)
         row.addWidget(self.delete_object_button)
 
         row.addWidget(QLabel("Routine:"))
@@ -173,9 +166,7 @@ class InspectionControls(UIControlHelper):
         self.delete_routine_button.setToolTip(
             "Delete the currently selected routine"
         )
-        self.delete_routine_button.clicked.connect(
-            self.handle_delete_routine
-        )
+        self.delete_routine_button.clicked.connect(self.handle_delete_routine)
         row.addWidget(self.delete_routine_button)
 
         self.refresh_definitions_button = QPushButton("Refresh")
@@ -301,7 +292,6 @@ class InspectionControls(UIControlHelper):
         dialog_layout.addWidget(close_buttons)
 
     def show_management_dialog(self):
-        """Show clean creation forms with the current object selected."""
         selected_object_id = (
             self.saved_object_dropdown.currentData() or ""
         )
@@ -323,7 +313,6 @@ class InspectionControls(UIControlHelper):
         self.management_dialog.activateWindow()
 
     def handle_application_state(self, _status):
-        """Keep the top-level application-state callback presentation-only."""
         return None
 
     def _update_create_routine_button(self, _index=None):
@@ -350,8 +339,7 @@ class InspectionControls(UIControlHelper):
         )
 
         self.reference_pixel_value_label = self._fixed_readout_label(
-            "—",
-            130,
+            "—", 130
         )
         self.clear_reference_pixel_button = QPushButton("Clear Point")
         self.clear_reference_pixel_button.setEnabled(False)
@@ -362,16 +350,13 @@ class InspectionControls(UIControlHelper):
             self._fixed_readout_label("—", 210)
         )
         self.reference_surface_x_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_surface_y_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_surface_z_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_depth_pixel_value_label = (
             self._fixed_readout_label("—", 145)
@@ -380,16 +365,13 @@ class InspectionControls(UIControlHelper):
             self._fixed_readout_label("No point", 155)
         )
         self.reference_normal_x_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_normal_y_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_normal_z_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_normal_samples_value_label = (
             self._fixed_readout_label("—", 70)
@@ -434,32 +416,25 @@ class InspectionControls(UIControlHelper):
             )
         )
         self.reference_target_status_label = self._fixed_readout_label(
-            "No point",
-            155,
+            "No point", 155
         )
         self.reference_target_x_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_target_y_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_target_z_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_target_roll_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_target_pitch_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_target_yaw_value_label = self._fixed_readout_label(
-            "—",
-            80,
+            "—", 80
         )
         self.reference_preapproach_x_value_label = (
             self._fixed_readout_label("—", 80)
@@ -472,8 +447,7 @@ class InspectionControls(UIControlHelper):
         )
 
         self.reference_setup_status_label = self._fixed_readout_label(
-            "No point",
-            210,
+            "No point", 210
         )
         self.move_calculated_approach_button = QPushButton(
             "Move to Candidate"
@@ -481,9 +455,7 @@ class InspectionControls(UIControlHelper):
         self.use_current_approach_button = QPushButton(
             "Approve Current Pose"
         )
-        self.move_aligned_pose_button = QPushButton(
-            "Move to Candidate"
-        )
+        self.move_aligned_pose_button = QPushButton("Move to Candidate")
         self.use_current_alignment_button = QPushButton(
             "Approve Current Pose"
         )
@@ -599,11 +571,11 @@ class InspectionControls(UIControlHelper):
             self._fixed_readout_label("—", 90)
         )
         self.test_surface_distance_button = QPushButton(
-            "Test Surface Distance"
+            "Move Close to Surface"
         )
         self.test_surface_distance_button.setToolTip(
-            "Measure fresh hand-camera depth and command one bounded "
-            "correction along the probe axis"
+            "Run the standalone bounded close-surface command from the "
+            "approved aligned pre-approach pose"
         )
         self.surface_distance_test_status_label = QLabel(
             "Waiting for aligned pre-approach approval"
@@ -615,7 +587,7 @@ class InspectionControls(UIControlHelper):
         self.surface_distance_tolerance_field.setFixedWidth(90)
         self.surface_distance_tolerance_field.setReadOnly(True)
         self.surface_distance_tolerance_field.setToolTip(
-            "Server-owned surface verification policy"
+            "Close-surface command success tolerance"
         )
         self.surface_distance_tolerance_field.setValidator(
             self._bounded_number_validator(
@@ -1252,6 +1224,7 @@ class InspectionControls(UIControlHelper):
                 "coordinated execution workflow."
             )
         self.save_probe_point_status_label.setText(status)
+
     @staticmethod
     def _is_positive_number(text):
         try:
@@ -1333,7 +1306,9 @@ class InspectionControls(UIControlHelper):
         if not view_id:
             self._show_setup_error(
                 "Select Reference Point",
-                ValueError("The selected preview has no reference view ID"),
+                ValueError(
+                    "The selected preview has no reference view ID"
+                ),
             )
             return
         self._handle_reference_image_point_changed(u, v)
@@ -1411,48 +1386,6 @@ class InspectionControls(UIControlHelper):
             str(dropdown.currentData() or "")
             for dropdown in self.reference_camera_dropdowns
         ]
-
-    def _render_surface_verification_state(self, state):
-        if not hasattr(self, "surface_distance_test_status_label"):
-            return
-        if state.surface_distance_tolerance_m > 0.0:
-            self.surface_distance_tolerance_field.setText(
-                f"{state.surface_distance_tolerance_m:.3f}"
-            )
-        if state.has_surface_distance_measurement:
-            self.live_surface_distance_value_label.setText(
-                self._format_readout_value(
-                    state.measured_surface_distance_m,
-                    4,
-                )
-            )
-            self.surface_distance_delta_value_label.setText(
-                self._format_readout_value(
-                    state.surface_distance_error_m,
-                    4,
-                )
-            )
-        if not state.surface_verification_request_id:
-            return
-        labels = {
-            ProbeSetupState.SURFACE_VERIFICATION_SAMPLING: "Sampling",
-            ProbeSetupState.SURFACE_VERIFICATION_MOVING: "Moving",
-            ProbeSetupState.SURFACE_VERIFICATION_SETTLING: "Settling",
-            ProbeSetupState.SURFACE_VERIFICATION_CONVERGED: "Verified",
-            ProbeSetupState.SURFACE_VERIFICATION_FAILED: "Failed",
-            ProbeSetupState.SURFACE_VERIFICATION_CANCELLED: "Cancelled",
-            ProbeSetupState.SURFACE_VERIFICATION_RECOVERY_REQUIRED: (
-                "Recovery required"
-            ),
-        }
-        label = labels.get(
-            state.surface_verification_state,
-            "Surface verification",
-        )
-        detail = state.detail.strip()
-        self.surface_distance_test_status_label.setText(
-            f"{label}: {detail}" if detail else label
-        )
 
     def _submit_probe_setup(self, intent):
         if not hasattr(self.ui, "execute_probe_setup"):
@@ -1565,7 +1498,9 @@ class InspectionControls(UIControlHelper):
         )
         try:
             if presentation is not None and presentation.recovery_required:
-                raise ValueError("Retract before changing surface distances")
+                raise ValueError(
+                    "Retract before changing surface distances"
+                )
             target = self._distance_value(
                 self.refinement_dialog.target_distance_field,
                 "Desired surface distance",
@@ -1602,30 +1537,24 @@ class InspectionControls(UIControlHelper):
         self._refresh_refinement_dialog()
         return True
 
-
     @property
     def selected_surface_point(self):
-        """Return the transient projected reference surface point."""
         return self._selected_surface_point
 
     @property
     def selected_surface_normal(self):
-        """Return the transient local surface-normal estimate."""
         return self._selected_surface_normal
 
     @property
     def selected_approach_direction(self):
-        """Return the transient outward surface direction."""
         return self._selected_approach_direction
 
     @property
     def selected_surface_target(self):
-        """Return the transient target and aligned pre-approach poses."""
         return self._selected_surface_target
 
     @property
     def selected_probe_setup(self):
-        """Return the transient user-approved probe setup state."""
         return self._probe_setup
 
     def _clear_selected_surface_point(self):
@@ -1787,7 +1716,6 @@ class InspectionControls(UIControlHelper):
         )
 
     def handle_start_probe_refinement(self):
-        """Start or resume one server-owned supervised refinement workflow."""
         if self._refinement_presentation is not None:
             return self.resume_refinement_dialog()
         intent = ProbeSetupIntent()
@@ -1795,7 +1723,6 @@ class InspectionControls(UIControlHelper):
         return self._submit_probe_setup(intent) is not None
 
     def pause_refinement_dialog(self):
-        """Hide the popup without discarding authoritative refinement state."""
         presentation = self._refinement_presentation
         if presentation is None:
             return True
@@ -1806,7 +1733,8 @@ class InspectionControls(UIControlHelper):
             return False
         if presentation.recovery_required:
             self.refinement_recovery_status_label.setText(
-                "Retract Without Saving is required before hiding this workflow."
+                "Retract Without Saving is required before hiding this "
+                "workflow."
             )
             return False
         self.inspection_workspace_splitter.setEnabled(True)
@@ -1819,7 +1747,6 @@ class InspectionControls(UIControlHelper):
         return True
 
     def resume_refinement_dialog(self):
-        """Reopen the popup at the retained authoritative stage."""
         presentation = self._refinement_presentation
         if presentation is None:
             return False
@@ -1832,7 +1759,6 @@ class InspectionControls(UIControlHelper):
         return True
 
     def request_close_refinement_workflow(self):
-        """Treat popup Close as pause, not workflow destruction."""
         return self.pause_refinement_dialog()
 
     def _finish_refinement_workflow_close(self):
@@ -1850,14 +1776,15 @@ class InspectionControls(UIControlHelper):
         self._update_probe_setup_status_widgets()
 
     def handle_refinement_back(self):
-        """Navigate backward without commanding movement."""
         presentation = self._require_refinement_presentation()
         if presentation.recovery_required:
             self.refinement_recovery_status_label.setText(
                 "Retract Without Saving before navigating backward."
             )
             return False
-        index = ProbeRefinementDialog.STAGES.index(presentation.active_stage)
+        index = ProbeRefinementDialog.STAGES.index(
+            presentation.active_stage
+        )
         if index == 0:
             return False
         self.refinement_dialog.show_stage(
@@ -1866,7 +1793,6 @@ class InspectionControls(UIControlHelper):
         return True
 
     def handle_refinement_next(self):
-        """Advance only when the current pose has been approved."""
         presentation = self._require_refinement_presentation()
         stage = presentation.active_stage
         if not presentation.stage_is_approved(stage):
@@ -1923,15 +1849,18 @@ class InspectionControls(UIControlHelper):
             labels["status"].setText(status)
 
         self.approach_step_status_label.setText(
-            presentation.motion_states[RefinementStage.SAFE_APPROACH].value
+            presentation.motion_states[
+                RefinementStage.SAFE_APPROACH
+            ].value
         )
         self.alignment_step_status_label.setText(
-            presentation.motion_states[RefinementStage.ALIGNMENT].value
+            presentation.motion_states[
+                RefinementStage.ALIGNMENT
+            ].value
         )
-        probe_state = presentation.motion_states[RefinementStage.PROBE].value
-        if presentation.surface_distance_verified:
-            probe_state = "Surface Distance Verified"
-        self.probe_step_status_label.setText(probe_state)
+        self.probe_step_status_label.setText(
+            presentation.motion_states[RefinementStage.PROBE].value
+        )
 
         pending = presentation.pending_motion is not None
         current = presentation.active_stage
@@ -2004,8 +1933,12 @@ class InspectionControls(UIControlHelper):
         self.retract_without_saving_button.setEnabled(
             presentation.recovery_required and not pending
         )
-        distances_editable = not pending and not presentation.recovery_required
-        self.reference_target_distance_field.setEnabled(distances_editable)
+        distances_editable = (
+            not pending and not presentation.recovery_required
+        )
+        self.reference_target_distance_field.setEnabled(
+            distances_editable
+        )
         self.reference_preapproach_distance_field.setEnabled(
             distances_editable
         )
@@ -2115,7 +2048,9 @@ class InspectionControls(UIControlHelper):
     def _require_refinement_presentation(self):
         presentation = self._refinement_presentation
         if presentation is None:
-            raise RuntimeError("Probe refinement workflow is not active")
+            raise RuntimeError(
+                "Probe refinement workflow is not active"
+            )
         return presentation
 
     def handle_move_to_approach_pose(self):
@@ -2123,7 +2058,9 @@ class InspectionControls(UIControlHelper):
         return self._send_refinement_motion(
             RefinementStage.SAFE_APPROACH,
             "safe approach candidate",
-            presentation.candidate_pose(RefinementStage.SAFE_APPROACH),
+            presentation.candidate_pose(
+                RefinementStage.SAFE_APPROACH
+            ),
         )
 
     def handle_move_to_aligned_pose(self):
@@ -2135,7 +2072,9 @@ class InspectionControls(UIControlHelper):
         if self._calculated_surface_probe_orientation is None:
             self._show_setup_error(
                 "Orient to Calculated Surface",
-                ValueError("Calculate the live hand-facing surface first"),
+                ValueError(
+                    "Calculate the live hand-facing surface first"
+                ),
             )
             return False
         index = self.alignment_orientation_mode_dropdown.findData(
@@ -2205,7 +2144,10 @@ class InspectionControls(UIControlHelper):
     def _clear_live_surface_orientation(self):
         self._calculated_surface_probe_orientation = None
         self._calculated_surface_hand_orientation = None
-        if hasattr(self, "calculated_surface_orientation_value_label"):
+        if hasattr(
+            self,
+            "calculated_surface_orientation_value_label",
+        ):
             self.calculated_surface_orientation_value_label.setText(
                 "Not calculated"
             )
@@ -2218,8 +2160,8 @@ class InspectionControls(UIControlHelper):
         self._show_setup_error(
             "Move to Probe Pose",
             ValueError(
-                "Direct probe-pose movement is disabled. Use Test Surface "
-                "Distance from the reached aligned pre-approach pose."
+                "Direct probe-pose movement is disabled. Use Move Close "
+                "to Surface from the reached aligned pre-approach pose."
             ),
         )
         return False
@@ -2237,12 +2179,16 @@ class InspectionControls(UIControlHelper):
                     "pre-approach pose"
                 )
             if presentation.active_stage != stage_value:
-                raise ValueError("The requested refinement stage is inactive")
+                raise ValueError(
+                    "The requested refinement stage is inactive"
+                )
             if presentation.motion_states[stage_value] not in (
                 RefinementMotionState.REACHED,
                 RefinementMotionState.FAILED,
             ):
-                raise ValueError("Reach the current candidate before adjusting")
+                raise ValueError(
+                    "Reach the current candidate before adjusting"
+                )
             translation_step = self._bounded_positive_value(
                 self.refine_translation_step_field,
                 "Translation step",
@@ -2281,19 +2227,18 @@ class InspectionControls(UIControlHelper):
         return True
 
     def handle_test_surface_distance(self):
-        if not hasattr(
-            self.ui,
-            "execute_probe_surface_verification",
-        ):
-            return self.show_setup_unavailable("Surface verification")
-        request_id = self.ui.execute_probe_surface_verification()
+        if not hasattr(self.ui, "execute_move_close_to_surface"):
+            return self.show_setup_unavailable(
+                "Move close to surface"
+            )
+        request_id = self.ui.execute_move_close_to_surface()
         if request_id is None:
             self.surface_distance_test_status_label.setText(
-                "Surface verification action is unavailable"
+                "Move close to surface is unavailable"
             )
             return False
         self.surface_distance_test_status_label.setText(
-            "Surface verification running"
+            "Move close to surface running"
         )
         return True
 
@@ -2320,17 +2265,15 @@ class InspectionControls(UIControlHelper):
         pitch, yaw = rotations[action]
         return Vector3Data.zero(), pitch, yaw
 
-
     def handle_use_current_as_probe(self):
         self._show_setup_error(
             "Capture Probe Pose",
             ValueError(
-                "Probe approval requires verified live surface distance "
-                "and Approve and Retract"
+                "Probe approval requires a successful Move Close to "
+                "Surface followed by Approve and Retract"
             ),
         )
         return False
-
 
     def _send_alignment_motion(self, orientation_only):
         intent = ProbeSetupMotionIntent()
@@ -2437,7 +2380,9 @@ class InspectionControls(UIControlHelper):
         try:
             return values[selection]
         except KeyError as exception:
-            raise ValueError("Select a valid refinement frame") from exception
+            raise ValueError(
+                "Select a valid refinement frame"
+            ) from exception
 
     def _write_motion_tolerances(self, intent):
         intent.position_tolerance_m = self._distance_value(
@@ -2456,16 +2401,19 @@ class InspectionControls(UIControlHelper):
         request_id = client.execute_motion(intent)
         if request_id is None:
             return False
-        self._set_status_text(f"Probe setup motion submitted: {label}")
+        self._set_status_text(
+            f"Probe setup motion submitted: {label}"
+        )
         return True
 
     def handle_refinement_emergency_stop(self):
-        """Request the application-level emergency stop."""
         self.ui.handle_emergency_stop()
 
     def _require_probe_setup(self):
         if self._probe_setup is None:
-            raise ValueError("No calculated probe setup is available")
+            raise ValueError(
+                "No calculated probe setup is available"
+            )
         return self._probe_setup
 
     def _show_setup_error(self, title, exception):
@@ -2476,14 +2424,15 @@ class InspectionControls(UIControlHelper):
         if self.status_label is not None:
             self.status_label.setText(text)
 
-
     @staticmethod
     def _distance_value(field, label):
         text = field.text().strip()
         try:
             value = float(text)
         except ValueError as exception:
-            raise ValueError(f"{label} must be a number") from exception
+            raise ValueError(
+                f"{label} must be a number"
+            ) from exception
         if value <= 0.0:
             raise ValueError(f"{label} must be positive")
         return value
@@ -2492,7 +2441,9 @@ class InspectionControls(UIControlHelper):
     def _bounded_positive_value(field, label, maximum):
         value = InspectionControls._distance_value(field, label)
         if value > maximum:
-            raise ValueError(f"{label} must not exceed {maximum:g}")
+            raise ValueError(
+                f"{label} must not exceed {maximum:g}"
+            )
         return value
 
     def _required_text(self, field, label):
@@ -2503,7 +2454,6 @@ class InspectionControls(UIControlHelper):
         return None
 
     def refresh_setup_state(self):
-        """Request the current immutable probe setup snapshot."""
         client = getattr(self.ui, "probe_setup_client", None)
         if client is None or not client.context_id:
             return False
@@ -2516,17 +2466,16 @@ class InspectionControls(UIControlHelper):
         desired_object_id=None,
         desired_routine_id=None,
     ):
-        """Refresh definitions through the server-owned setup context."""
         return self.refresh_setup_state()
 
     def apply_setup_state(self, state):
-        """Render one authoritative probe setup snapshot."""
         if not isinstance(state, ProbeSetupState):
-            raise TypeError("Expected a ProbeSetupState message")
+            raise TypeError(
+                "Expected a ProbeSetupState message"
+            )
         view = probe_setup_state_to_view(state)
         previous_views = tuple(self._reference_slot_view_ids)
         self._probe_setup_state = state
-        self._render_surface_verification_state(state)
         self._apply_object_and_routine_lists(state)
         self._apply_probe_setup_view(view)
         signature = (
@@ -2534,13 +2483,20 @@ class InspectionControls(UIControlHelper):
             state.selected_routine_id,
             tuple(state.reference_view_ids),
         )
-        if signature != getattr(self, "_preview_signature", None):
+        if signature != getattr(
+            self,
+            "_preview_signature",
+            None,
+        ):
             self._preview_signature = signature
             self._request_reference_previews(state)
         elif previous_views != tuple(self._reference_slot_view_ids):
             self._restore_authoritative_selection()
         if state.state == ProbeSetupState.STATE_FAILED:
-            self._set_setup_status("Unavailable", state.detail)
+            self._set_setup_status(
+                "Unavailable",
+                state.detail,
+            )
         else:
             self._set_status_text(state.detail)
         return True
@@ -2548,7 +2504,10 @@ class InspectionControls(UIControlHelper):
     def _apply_object_and_routine_lists(self, state):
         self.saved_object_dropdown.blockSignals(True)
         self.saved_object_dropdown.clear()
-        self.saved_object_dropdown.addItem("Select saved object", None)
+        self.saved_object_dropdown.addItem(
+            "Select saved object",
+            None,
+        )
         for object_id in state.object_ids:
             self.saved_object_dropdown.addItem(object_id, object_id)
         object_index = self.saved_object_dropdown.findData(
@@ -2586,7 +2545,10 @@ class InspectionControls(UIControlHelper):
             None,
         )
         for routine_id in state.routine_ids:
-            self.saved_routine_dropdown.addItem(routine_id, routine_id)
+            self.saved_routine_dropdown.addItem(
+                routine_id,
+                routine_id,
+            )
         routine_index = self.saved_routine_dropdown.findData(
             state.selected_routine_id
         )
@@ -2599,8 +2561,12 @@ class InspectionControls(UIControlHelper):
             bool(state.selected_object_id)
         )
         self.delete_routine_button.setEnabled(
-            bool(state.selected_object_id and state.selected_routine_id)
+            bool(
+                state.selected_object_id
+                and state.selected_routine_id
+            )
         )
+
     def _apply_probe_setup_view(self, view):
         state = view.message
         self._selected_surface_point = view.projected_point
@@ -2616,7 +2582,8 @@ class InspectionControls(UIControlHelper):
             self._clear_selected_surface_point()
             return
         self.reference_pixel_value_label.setText(
-            f"u={state.reference_pixel_u}, v={state.reference_pixel_v}"
+            f"u={state.reference_pixel_u}, "
+            f"v={state.reference_pixel_v}"
         )
         self.clear_reference_pixel_button.setEnabled(True)
 
@@ -2627,23 +2594,39 @@ class InspectionControls(UIControlHelper):
             )
             return
         point = view.projected_point
-        self.reference_surface_frame_value_label.setText(point.frame_id)
-        self.reference_surface_frame_value_label.setToolTip(point.frame_id)
+        self.reference_surface_frame_value_label.setText(
+            point.frame_id
+        )
+        self.reference_surface_frame_value_label.setToolTip(
+            point.frame_id
+        )
         self.reference_surface_x_value_label.setText(
-            self._format_readout_value(point.point_camera.x, 3)
+            self._format_readout_value(
+                point.point_camera.x,
+                3,
+            )
         )
         self.reference_surface_y_value_label.setText(
-            self._format_readout_value(point.point_camera.y, 3)
+            self._format_readout_value(
+                point.point_camera.y,
+                3,
+            )
         )
         self.reference_surface_z_value_label.setText(
-            self._format_readout_value(point.point_camera.z, 3)
+            self._format_readout_value(
+                point.point_camera.z,
+                3,
+            )
         )
         mapped = point.mapped_pixel
         sampled = point.sampled_pixel
         self.reference_depth_pixel_value_label.setText(
             f"{sampled.u},{sampled.v}"
             if sampled == mapped
-            else f"{mapped.u},{mapped.v} to {sampled.u},{sampled.v}"
+            else (
+                f"{mapped.u},{mapped.v} to "
+                f"{sampled.u},{sampled.v}"
+            )
         )
         self._set_projection_status("Ready")
 
@@ -2660,19 +2643,31 @@ class InspectionControls(UIControlHelper):
         else:
             normal = view.surface_normal
             self.reference_normal_x_value_label.setText(
-                self._format_readout_value(normal.normal_camera.x, 3)
+                self._format_readout_value(
+                    normal.normal_camera.x,
+                    3,
+                )
             )
             self.reference_normal_y_value_label.setText(
-                self._format_readout_value(normal.normal_camera.y, 3)
+                self._format_readout_value(
+                    normal.normal_camera.y,
+                    3,
+                )
             )
             self.reference_normal_z_value_label.setText(
-                self._format_readout_value(normal.normal_camera.z, 3)
+                self._format_readout_value(
+                    normal.normal_camera.z,
+                    3,
+                )
             )
             self.reference_normal_samples_value_label.setText(
                 str(normal.sample_count)
             )
             self.reference_normal_rmse_value_label.setText(
-                self._format_readout_value(normal.plane_rmse_m, 4)
+                self._format_readout_value(
+                    normal.plane_rmse_m,
+                    4,
+                )
             )
             self._set_normal_status("Ready")
 
@@ -2684,9 +2679,16 @@ class InspectionControls(UIControlHelper):
         else:
             source_text = {
                 APPROACH_SOURCE_SURFACE_FIT: "Surface fit",
-                APPROACH_SOURCE_TAG_X_SELECTED: "Calibrated tag +X",
-            }.get(view.approach_direction.source, "Unknown")
-            self.reference_approach_source_value_label.setText(source_text)
+                APPROACH_SOURCE_TAG_X_SELECTED: (
+                    "Calibrated tag +X"
+                ),
+            }.get(
+                view.approach_direction.source,
+                "Unknown",
+            )
+            self.reference_approach_source_value_label.setText(
+                source_text
+            )
             self._set_approach_status("Ready")
 
         if view.setup is None:
@@ -2721,7 +2723,9 @@ class InspectionControls(UIControlHelper):
         self._refresh_refinement_dialog()
 
     def _request_reference_previews(self, state):
-        self._clear_reference_previews("Loading reference preview")
+        self._clear_reference_previews(
+            "Loading reference preview"
+        )
         self._reference_slot_view_ids = ["", "", ""]
         if not state.selected_routine_id:
             self.reference_view_status_label.setText(
@@ -2745,15 +2749,18 @@ class InspectionControls(UIControlHelper):
             client.request_preview(view_id)
 
     def apply_reference_preview(self, response):
-        """Render one preview only if it belongs to the current snapshot."""
         state = self._probe_setup_state
         if (
             state is None
-            or response.reference_view_id not in state.reference_view_ids
+            or response.reference_view_id
+            not in state.reference_view_ids
         ):
             return False
         slot_index = int(response.slot_index)
-        if slot_index < 0 or slot_index >= len(self.reference_view_widgets):
+        if (
+            slot_index < 0
+            or slot_index >= len(self.reference_view_widgets)
+        ):
             self.apply_reference_preview_error(
                 response.reference_view_id,
                 f"Invalid reference preview slot: {slot_index}",
@@ -2767,7 +2774,10 @@ class InspectionControls(UIControlHelper):
         )
         widget = self.reference_view_widgets[slot_index]
         widget.blockSignals(True)
-        widget.set_ros_image(response.image, valid_region=region)
+        widget.set_ros_image(
+            response.image,
+            valid_region=region,
+        )
         widget.blockSignals(False)
         self._reference_slot_view_ids[slot_index] = (
             response.reference_view_id
@@ -2775,7 +2785,9 @@ class InspectionControls(UIControlHelper):
         dropdown = self.reference_camera_dropdowns[slot_index]
         dropdown.blockSignals(True)
         camera_index = dropdown.findData(response.camera_id)
-        dropdown.setCurrentIndex(camera_index if camera_index >= 0 else 0)
+        dropdown.setCurrentIndex(
+            camera_index if camera_index >= 0 else 0
+        )
         dropdown.blockSignals(False)
         self.reference_view_status_label.setText(
             "Reference view: remote preview ready"
@@ -2785,7 +2797,10 @@ class InspectionControls(UIControlHelper):
 
     def apply_reference_preview_error(self, view_id, detail):
         state = self._probe_setup_state
-        if state is None or view_id not in state.reference_view_ids:
+        if (
+            state is None
+            or view_id not in state.reference_view_ids
+        ):
             return False
         self.reference_view_status_label.setText(
             "Reference view: preview unavailable"
@@ -2819,10 +2834,15 @@ class InspectionControls(UIControlHelper):
         state = self._probe_setup_state
         if not object_id:
             return False
-        if state is not None and object_id == state.selected_object_id:
+        if (
+            state is not None
+            and object_id == state.selected_object_id
+        ):
             return True
         intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_SELECT_OBJECT
+        intent.operation = (
+            ProbeSetupIntent.OPERATION_SELECT_OBJECT
+        )
         intent.object_id = object_id
         return self._submit_probe_setup(intent) is not None
 
@@ -2839,7 +2859,9 @@ class InspectionControls(UIControlHelper):
         ):
             return True
         intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_SELECT_ROUTINE
+        intent.operation = (
+            ProbeSetupIntent.OPERATION_SELECT_ROUTINE
+        )
         intent.object_id = object_id
         intent.routine_id = routine_id
         self._clear_live_surface_orientation()
@@ -2851,9 +2873,14 @@ class InspectionControls(UIControlHelper):
         object_ids=None,
     ):
         state = self._probe_setup_state
-        values = list(object_ids or (
-            state.object_ids if state is not None else ()
-        ))
+        values = list(
+            object_ids
+            or (
+                state.object_ids
+                if state is not None
+                else ()
+            )
+        )
         self.routine_parent_object_dropdown.blockSignals(True)
         self.routine_parent_object_dropdown.clear()
         self.routine_parent_object_dropdown.addItem(
@@ -2886,8 +2913,13 @@ class InspectionControls(UIControlHelper):
             None,
         )
         for routine_id in routines:
-            self.saved_routine_dropdown.addItem(routine_id, routine_id)
-        index = self.saved_routine_dropdown.findData(desired_routine_id)
+            self.saved_routine_dropdown.addItem(
+                routine_id,
+                routine_id,
+            )
+        index = self.saved_routine_dropdown.findData(
+            desired_routine_id
+        )
         self.saved_routine_dropdown.setCurrentIndex(
             index if index >= 0 else 0
         )
@@ -2895,10 +2927,12 @@ class InspectionControls(UIControlHelper):
 
     def _schedule_repository_refresh(self):
         for delay_ms in (250, 1000, 3500):
-            QTimer.singleShot(delay_ms, self.refresh_setup_state)
+            QTimer.singleShot(
+                delay_ms,
+                self.refresh_setup_state,
+            )
 
     def handle_create_object(self):
-        """Submit one server-owned object creation transaction."""
         object_id = self._required_text(
             self.object_id_field,
             "an object ID",
@@ -2915,7 +2949,12 @@ class InspectionControls(UIControlHelper):
             self.reference_tag_family_field,
             "a reference tag family",
         )
-        if None in (object_id, display_name, tag_id_text, tag_family):
+        if None in (
+            object_id,
+            display_name,
+            tag_id_text,
+            tag_family,
+        ):
             return False
         try:
             tag_id = int(tag_id_text)
@@ -2928,7 +2967,9 @@ class InspectionControls(UIControlHelper):
             )
             return False
         intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_CREATE_OBJECT
+        intent.operation = (
+            ProbeSetupIntent.OPERATION_CREATE_OBJECT
+        )
         intent.object_id = object_id
         intent.object_display_name = display_name
         intent.reference_tag_id = tag_id
@@ -2942,7 +2983,6 @@ class InspectionControls(UIControlHelper):
         return submitted
 
     def handle_create_routine(self):
-        """Submit one server-owned routine creation transaction."""
         object_id = self.routine_parent_object_dropdown.currentData()
         if not object_id:
             self.show_warning(
@@ -2961,7 +3001,9 @@ class InspectionControls(UIControlHelper):
         if None in (routine_id, display_name):
             return False
         intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_CREATE_ROUTINE
+        intent.operation = (
+            ProbeSetupIntent.OPERATION_CREATE_ROUTINE
+        )
         intent.object_id = object_id
         intent.routine_id = routine_id
         intent.routine_display_name = display_name
@@ -2972,11 +3014,11 @@ class InspectionControls(UIControlHelper):
         return submitted
 
     def handle_capture_reference_view(self):
-        """Keep capture unavailable until its execution action is migrated."""
-        return self.show_setup_unavailable("Reference capture")
+        return self.show_setup_unavailable(
+            "Reference capture"
+        )
 
     def handle_delete_object(self):
-        """Submit one server-owned object deletion transaction."""
         object_id = self.saved_object_dropdown.currentData()
         if not object_id:
             self.show_warning(
@@ -2993,12 +3035,13 @@ class InspectionControls(UIControlHelper):
         ):
             return False
         intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_DELETE_OBJECT
+        intent.operation = (
+            ProbeSetupIntent.OPERATION_DELETE_OBJECT
+        )
         intent.object_id = object_id
         return self._submit_probe_setup(intent) is not None
 
     def handle_delete_routine(self):
-        """Submit one server-owned routine deletion transaction."""
         object_id = self.saved_object_dropdown.currentData()
         routine_id = self.saved_routine_dropdown.currentData()
         if not object_id or not routine_id:
@@ -3016,29 +3059,33 @@ class InspectionControls(UIControlHelper):
         ):
             return False
         intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_DELETE_ROUTINE
+        intent.operation = (
+            ProbeSetupIntent.OPERATION_DELETE_ROUTINE
+        )
         intent.object_id = object_id
         intent.routine_id = routine_id
         return self._submit_probe_setup(intent) is not None
 
     def handle_use_current_as_approach(self):
-        """Request approval of the server-observed safe pose."""
         intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_APPROVE_SAFE_POSE
+        intent.operation = (
+            ProbeSetupIntent.OPERATION_APPROVE_SAFE_POSE
+        )
         return self._submit_probe_setup(intent) is not None
 
     def handle_use_current_alignment(self):
-        """Request approval of the server-observed aligned pose."""
         intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_APPROVE_ALIGNED_POSE
+        intent.operation = (
+            ProbeSetupIntent.OPERATION_APPROVE_ALIGNED_POSE
+        )
         return self._submit_probe_setup(intent) is not None
 
     def handle_approve_and_retract(self):
-        """Fail closed until approval, save, and retraction are coordinated."""
         return self.show_setup_unavailable(
             "Probe approval, persistence, and retraction"
         )
 
     def handle_retract_without_saving(self):
-        """Fail closed until retraction is delegated to the server."""
-        return self.show_setup_unavailable("Probe retraction")
+        return self.show_setup_unavailable(
+            "Probe retraction"
+        )
