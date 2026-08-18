@@ -82,6 +82,27 @@ def test_evaluation_uses_frozen_plane_without_new_depth():
     assert not evaluation.reached
 
 
+def test_evaluation_halves_remaining_travel_near_target():
+    plan = freeze_probe_surface_approach(
+        current_probe_pose_execution=_pose(),
+        surface_plane_probe=_plane(),
+        target_distance_m=0.05,
+        maximum_travel_m=0.27,
+    )
+
+    evaluation = evaluate_probe_surface_approach(
+        plan,
+        current_probe_pose_execution=_pose(x=0.236),
+        maximum_step_m=0.01,
+        tolerance_m=0.005,
+    )
+
+    assert evaluation.estimated_distance_m == pytest.approx(0.064)
+    assert evaluation.remaining_inward_travel_m == pytest.approx(0.014)
+    assert evaluation.requested_step_m == pytest.approx(0.007)
+    assert not evaluation.reached
+
+
 def test_tilted_plane_changes_required_axis_travel():
     normal = Vector3Data(
         x=-math.cos(math.radians(30.0)),
