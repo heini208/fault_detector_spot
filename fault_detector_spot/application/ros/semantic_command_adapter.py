@@ -77,6 +77,9 @@ def semantic_command_from_message(
         orientation_mode=message.orientation_mode,
         wait_time=message.wait_time,
         target_surface_distance_m=message.target_surface_distance_m,
+        aligned_preapproach_distance_m=(
+            message.aligned_preapproach_distance_m
+        ),
         map_name=message.map_name,
         waypoint_name=message.waypoint_name,
         inspection=InspectionSelection(
@@ -107,6 +110,9 @@ def semantic_command_to_message(
     message.wait_time = float(command.wait_time)
     message.target_surface_distance_m = float(
         command.target_surface_distance_m
+    )
+    message.aligned_preapproach_distance_m = float(
+        command.aligned_preapproach_distance_m
     )
     message.map_name = command.map_name
     message.waypoint_name = command.waypoint_name
