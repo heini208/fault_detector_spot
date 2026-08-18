@@ -152,7 +152,10 @@ class MoveCloseToSurfaceNode(Node):
         if self._shutdown.is_set():
             return GoalResponse.REJECT
         target = float(goal_request.target_surface_distance_m)
+        aligned = float(goal_request.aligned_preapproach_distance_m)
         if not math.isfinite(target) or target <= 0.0:
+            return GoalResponse.REJECT
+        if not math.isfinite(aligned) or aligned <= target:
             return GoalResponse.REJECT
         if not goal_request.request_id.strip():
             return GoalResponse.REJECT
@@ -173,6 +176,9 @@ class MoveCloseToSurfaceNode(Node):
             command = MoveCloseToSurfaceRequest(
                 target_surface_distance_m=(
                     goal.target_surface_distance_m
+                ),
+                aligned_preapproach_distance_m=(
+                    goal.aligned_preapproach_distance_m
                 ),
                 request_id=goal.request_id,
             )
