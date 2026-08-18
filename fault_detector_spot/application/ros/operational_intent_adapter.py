@@ -168,10 +168,19 @@ def operational_intent_to_command(
         intent.intent
         == OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
     ):
-        _positive_distance(
+        target = _positive_distance(
             intent.target_surface_distance_m,
             "Target surface distance",
         )
+        aligned = _positive_distance(
+            intent.aligned_preapproach_distance_m,
+            "Aligned pre-approach distance",
+        )
+        if aligned <= target:
+            raise ValueError(
+                "Aligned pre-approach distance must exceed target surface "
+                "distance"
+            )
     if (
         intent.intent
         == OperationalIntent.INTENT_MOVE_TO_WAYPOINT
@@ -209,6 +218,9 @@ def operational_intent_to_command(
         wait_time=float(intent.duration_sec),
         target_surface_distance_m=float(
             intent.target_surface_distance_m
+        ),
+        aligned_preapproach_distance_m=float(
+            intent.aligned_preapproach_distance_m
         ),
         map_name=intent.map_name,
         waypoint_name=intent.waypoint_name,
