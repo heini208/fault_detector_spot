@@ -3,7 +3,11 @@
 import math
 from copy import deepcopy
 
-from fault_detector_msgs.msg import ApplicationCommandState, OperationalIntent
+from fault_detector_msgs.msg import (
+    ApplicationCommandState,
+    OperationalIntent,
+    ProbeSetupIntent,
+)
 
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
@@ -66,15 +70,46 @@ class FinalizingInspectionControls(InspectionControls):
         return super().handle_refinement_emergency_stop()
 
     def request_close_refinement_workflow(self):
-        if not self._refinement_emergency_stop_requested:
-            return super().request_close_refinement_workflow()
+        if self._refinement_emergency_stop_requested:
+            if hasattr(self, "inspection_workspace_splitter"):
+                self.inspection_workspace_splitter.setEnabled(True)
+            self.start_probe_refinement_button.setText(
+                "Resume Probe Point Position Refinement Workflow"
+            )
+            self.refinement_summary_status_label.setText(
+                "Refinement paused after emergency stop."
+            )
+            return True
+
+        presentation = self._refinement_presentation
+        if presentation is None:
+            return True
+        if presentation.pending_motion is not None:
+            self.refinement_recovery_status_label.setText(
+                "Wait for the active movement and settle check."
+            )
+            return False
+        if (
+            presentation.recovery_required
+            or self._distance_failure_requires_retraction
+        ):
+            self.refinement_recovery_status_label.setText(
+                "Retract Without Saving is required before closing this "
+                "workflow."
+            )
+            return False
+
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_END_REFINEMENT
+        if self._submit_probe_setup(intent) is None:
+            return False
         if hasattr(self, "inspection_workspace_splitter"):
             self.inspection_workspace_splitter.setEnabled(True)
         self.start_probe_refinement_button.setText(
             "Resume Probe Point Position Refinement Workflow"
         )
         self.refinement_summary_status_label.setText(
-            "Refinement paused after emergency stop."
+            "Ending refinement workflow."
         )
         return True
 
@@ -225,10 +260,16 @@ class FinalizingInspectionControls(InspectionControls):
             presentation.motion_states[RefinementStage.ALIGNMENT]
             is RefinementMotionState.REACHED
         )
+        retraction_required = (
+            presentation.recovery_required
+            or self._distance_failure_requires_retraction
+        )
         self.retract_without_saving_button.setEnabled(
-            probe_page
-            and alignment_reached
-            and not pending
+            not pending
+            and (
+                retraction_required
+                or (probe_page and alignment_reached)
+            )
         )
         self._update_save_probe_point_state()
 
