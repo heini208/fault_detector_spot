@@ -49,12 +49,12 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
         tolerance_m: float = 0.005,
         maximum_travel_m: float = 0.400,
         maximum_approach_steps: int = 40,
-        minimum_surface_samples: int = 5,
-        minimum_surface_span_sec: float = 1.0,
+        minimum_surface_samples: int = 3,
+        minimum_surface_span_sec: float = 0.5,
         surface_stability_tolerance_m: float = 0.005,
         force_contact_threshold_n: float = 5.0,
         force_contact_consecutive_samples: int = 2,
-        force_stale_timeout_sec: float = 0.5,
+        force_stale_timeout_sec: float = 1.5,
         maximum_contact_retries: int = 3,
         recovery_step_m: float = 0.040,
         maximum_recovery_steps: int = 20,
@@ -517,7 +517,9 @@ class ManipulatorMoveCloseToSurfaceAction(py_trees.behaviour.Behaviour):
     def _check_force_guard(self):
         now = time.monotonic()
         try:
-            sample = self._state_source.latest_end_effector_force()
+            sample = self._state_source.latest_end_effector_force(
+                maximum_age_sec=self.force_stale_timeout_sec,
+            )
         except Exception as exception:
             if now - self._force_last_receipt > self.force_stale_timeout_sec:
                 return (

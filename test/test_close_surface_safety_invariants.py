@@ -49,6 +49,38 @@ def test_default_travel_matches_40_ten_millimeter_steps():
     assert action.maximum_travel_m == pytest.approx(0.400)
 
 
+def test_default_surface_sampling_uses_three_frames_over_half_second():
+    action = ManipulatorMoveCloseToSurfaceAction()
+
+    assert action.minimum_surface_samples == 3
+    assert action.minimum_surface_span_sec == pytest.approx(0.5)
+
+
+def test_default_force_stale_timeout_tolerates_normal_motion_gaps():
+    action = ManipulatorMoveCloseToSurfaceAction()
+
+    assert action.force_stale_timeout_sec == pytest.approx(1.5)
+
+
+def test_force_guard_uses_configured_stale_timeout_for_sample_age():
+    class StateSource:
+        def __init__(self):
+            self.maximum_age_sec = None
+
+        def latest_end_effector_force(self, maximum_age_sec):
+            self.maximum_age_sec = maximum_age_sec
+            raise ValueError("no sample")
+
+    action = ManipulatorMoveCloseToSurfaceAction(
+        force_stale_timeout_sec=1.25
+    )
+    action._state_source = StateSource()
+    action._force_last_receipt = 10**12
+
+    assert action._check_force_guard() is None
+    assert action._state_source.maximum_age_sec == pytest.approx(1.25)
+
+
 def test_configuration_rejects_step_larger_than_ten_millimeters():
     with pytest.raises(ValueError, match="0.010 m"):
         ManipulatorMoveCloseToSurfaceAction(maximum_step_m=0.0101)
