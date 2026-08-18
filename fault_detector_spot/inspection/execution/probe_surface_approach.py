@@ -240,7 +240,7 @@ def evaluate_probe_surface_approach(
                 "Surface target is not reachable within maximum travel"
             )
         requested_step_m = min(
-            remaining_inward_travel_m,
+            remaining_inward_travel_m * 0.5,
             maximum_step_m,
             remaining_guard_m,
         )
