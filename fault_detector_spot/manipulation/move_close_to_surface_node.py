@@ -101,6 +101,18 @@ class MoveCloseToSurfaceNode(Node):
                 "close_surface.force_contact_threshold_n",
                 5.0,
             )),
+            force_near_target_threshold_n=float(self._parameter(
+                "close_surface.force_near_target_threshold_n",
+                3.0,
+            )),
+            force_near_target_distance_m=float(self._parameter(
+                "close_surface.force_near_target_distance_m",
+                0.020,
+            )),
+            force_baseline_max_component_span_n=float(self._parameter(
+                "close_surface.force_baseline_max_component_span_n",
+                3.0,
+            )),
             force_contact_consecutive_samples=int(self._parameter(
                 "close_surface.force_contact_consecutive_samples",
                 2,
