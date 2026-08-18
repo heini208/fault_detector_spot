@@ -436,7 +436,7 @@ def test_probe_motion_uses_active_sensor_attachment(tmp_path):
     assert operation.request.command.motion_sensor_id == "hand"
 
 
-def test_alignment_defaults_to_tag_aligned_hand_without_changing_position(
+def test_alignment_defaults_to_tag_aligned_probe_without_changing_position(
     tmp_path,
 ):
     probe, _ = coordinator(tmp_path)
@@ -470,7 +470,7 @@ def test_alignment_defaults_to_tag_aligned_hand_without_changing_position(
 
     target = draft.refinement.pending_motion.target_pose_object
     assert target.position == original.position
-    assert target.orientation == QuaternionData.identity()
+    assert target.orientation == pitch_quaternion(90.0)
 
 
 def test_calculated_surface_alignment_changes_orientation_only(tmp_path):
