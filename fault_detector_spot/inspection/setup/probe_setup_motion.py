@@ -158,9 +158,15 @@ class ProbeSetupMotionCommandFactory:
         target_probe_pose_object: PoseData,
         reference_tag: TagElement,
         motion_sensor_id: str,
+        orientation_mode: str = OrientationModes.CUSTOM_ORIENTATION.value,
     ) -> SemanticCommand:
         target_probe_pose_object.validate()
         sensor_id = self._required_sensor_id(motion_sensor_id)
+        if orientation_mode not in {
+            OrientationModes.CUSTOM_ORIENTATION.value,
+            OrientationModes.TAG_ORIENTATION.value,
+        }:
+            raise ValueError("Unsupported probe setup orientation mode")
 
         frame_id = reference_tag.pose.header.frame_id.strip()
         if not frame_id:
@@ -189,6 +195,21 @@ class ProbeSetupMotionCommandFactory:
             ),
         )
 
+        if orientation_mode == OrientationModes.TAG_ORIENTATION.value:
+            offset_orientation = CommandQuaternion(
+                x=0.0,
+                y=0.0,
+                z=0.0,
+                w=1.0,
+            )
+        else:
+            offset_orientation = CommandQuaternion(
+                x=body_to_probe.orientation.x,
+                y=body_to_probe.orientation.y,
+                z=body_to_probe.orientation.z,
+                w=body_to_probe.orientation.w,
+            )
+
         offset = StampedPose(
             frame_id=frame_id,
             stamp_sec=int(reference_tag.pose.header.stamp.sec),
@@ -198,12 +219,7 @@ class ProbeSetupMotionCommandFactory:
                 y=body_to_probe.position.y - body_to_object.position.y,
                 z=body_to_probe.position.z - body_to_object.position.z,
             ),
-            orientation=CommandQuaternion(
-                x=body_to_probe.orientation.x,
-                y=body_to_probe.orientation.y,
-                z=body_to_probe.orientation.z,
-                w=body_to_probe.orientation.w,
-            ),
+            orientation=offset_orientation,
         )
 
         return SemanticCommand(
@@ -213,7 +229,7 @@ class ProbeSetupMotionCommandFactory:
                 pose=tag_pose,
             ),
             offset=offset,
-            orientation_mode=OrientationModes.CUSTOM_ORIENTATION.value,
+            orientation_mode=orientation_mode,
             motion_sensor_id=sensor_id,
         )
 
