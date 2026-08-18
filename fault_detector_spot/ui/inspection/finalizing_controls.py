@@ -86,7 +86,13 @@ class FinalizingInspectionControls(InspectionControls):
 
     def _finish_refinement_workflow_close(self):
         self._refinement_emergency_stop_requested = False
-        return super()._finish_refinement_workflow_close()
+        result = super()._finish_refinement_workflow_close()
+        if (
+            hasattr(self, "refinement_dialog")
+            and self.refinement_dialog.isVisible()
+        ):
+            self.refinement_dialog.close_after_completion()
+        return result
 
     def handle_test_surface_distance(self):
         presentation = self._require_refinement_presentation()
