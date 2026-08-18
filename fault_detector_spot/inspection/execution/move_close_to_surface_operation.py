@@ -10,7 +10,11 @@ from bosdyn_msgs.conversions import convert
 from spot_msgs.action import RobotCommand
 from synchros2.utilities import namespace_with
 
-from fault_detector_spot.inspection.geometry.rotation import rotate_vector
+from fault_detector_spot.inspection.execution.probe_surface_approach import (
+    evaluate_probe_surface_approach,
+    freeze_probe_surface_approach,
+)
+from fault_detector_spot.inspection.geometry.rotation import rotation_distance_rad
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.sensing.end_effector_force import (
     estimate_force_baseline,
@@ -85,9 +89,13 @@ class MoveCloseToSurfaceOperation:
         self.maximum_approach_steps = int(maximum_approach_steps)
         self.minimum_surface_samples = int(minimum_surface_samples)
         self.minimum_surface_span_sec = float(minimum_surface_span_sec)
-        self.surface_stability_tolerance_m = float(surface_stability_tolerance_m)
+        self.surface_stability_tolerance_m = float(
+            surface_stability_tolerance_m
+        )
         self.force_contact_threshold_n = float(force_contact_threshold_n)
-        self.force_contact_consecutive_samples = int(force_contact_consecutive_samples)
+        self.force_contact_consecutive_samples = int(
+            force_contact_consecutive_samples
+        )
         self.force_stale_timeout_sec = float(force_stale_timeout_sec)
         self.maximum_contact_retries = int(maximum_contact_retries)
         self.recovery_step_m = float(recovery_step_m)
@@ -140,7 +148,10 @@ class MoveCloseToSurfaceOperation:
                 self._phase in {"moving", "settling"}
                 and self._recovery_hand_pose is not None
             ):
-                return self._begin_motion_recovery(str(exception), retryable=False)
+                return self._begin_motion_recovery(
+                    str(exception),
+                    retryable=False,
+                )
             return self._fail(str(exception))
 
     @property
@@ -152,7 +163,6 @@ class MoveCloseToSurfaceOperation:
         try:
             sensor_id, revision = self._state_source.active_attachment()
             recovery_pose = self._state_source.current_hand_pose_execution()
-            probe_pose = self._state_source.current_probe_pose_execution(sensor_id)
         except Exception as exception:
             if time.monotonic() - self._phase_started < self.sample_timeout_sec:
                 self.feedback_message = f"Waiting for probe runtime state: {exception}"
@@ -162,10 +172,7 @@ class MoveCloseToSurfaceOperation:
         self._sensor_id = sensor_id
         self._attachment_revision = revision
         self._recovery_hand_pose = recovery_pose
-        self._approach_axis_execution = self._probe_axis_execution(probe_pose)
-        self._approach_start_probe_pose = probe_pose
-        self._previous_probe_pose = probe_pose
-        self._begin_surface_sampling(reset_motion=True)
+        self._start_sampling()
         return MoveCloseToSurfaceStatus.RUNNING
 
     def _update_sampling(self) -> MoveCloseToSurfaceStatus:
@@ -196,33 +203,37 @@ class MoveCloseToSurfaceOperation:
             current_probe = self._state_source.current_probe_pose_execution(
                 self._sensor_id
             )
-            self._validate_axis_guard(current_probe)
             if aggregate.verified:
                 self.feedback_message = (
-                    "Reached requested surface stand-off from live depth: "
+                    "Surface stand-off already reached: "
                     f"{aggregate.distance_m:.4f} m"
                 )
                 return MoveCloseToSurfaceStatus.SUCCESS
-            correction = aggregate.correction.inward_correction_m
-            if correction < -1e-9:
-                return self._begin_motion_recovery(
-                    "Live depth reports the sensor closer than the requested "
-                    f"stand-off ({aggregate.distance_m:.4f} m < "
-                    f"{self._command.target_surface_distance_m:.4f} m)",
-                    retryable=False,
+            if aggregate.surface_plane_probe is None:
+                raise RuntimeError(
+                    "Stable surface sampling did not produce surface geometry"
                 )
-            self._pending_surface_distance_m = aggregate.distance_m
-            self._pending_step_m = correction
-            if self._force_baseline is None:
-                self._baseline_receipt_not_before = time.monotonic()
-                self._phase_started = self._baseline_receipt_not_before
-                self._phase = "force_baseline"
-                self.feedback_message = (
-                    "Live surface distance "
-                    f"{aggregate.distance_m:.4f} m; collecting force baseline"
+            self._plan = freeze_probe_surface_approach(
+                current_probe_pose_execution=current_probe,
+                surface_plane_probe=aggregate.surface_plane_probe,
+                target_distance_m=self._command.target_surface_distance_m,
+                maximum_travel_m=self.maximum_travel_m,
+            )
+            if self._plan.initial_axis_error_rad > self.maximum_axis_error_rad:
+                raise ValueError(
+                    "Probe axis is not aligned with the estimated surface: "
+                    f"{math.degrees(self._plan.initial_axis_error_rad):.2f} deg "
+                    f"> {math.degrees(self.maximum_axis_error_rad):.2f} deg"
                 )
-                return MoveCloseToSurfaceStatus.RUNNING
-            return self._prepare_next_approach_step()
+            self._previous_probe_pose = current_probe
+            self._baseline_receipt_not_before = time.monotonic()
+            self._phase_started = self._baseline_receipt_not_before
+            self._phase = "force_baseline"
+            self.feedback_message = (
+                "Surface estimate frozen at "
+                f"{aggregate.distance_m:.4f} m; collecting force baseline"
+            )
+            return MoveCloseToSurfaceStatus.RUNNING
         except Exception as exception:
             last_error = exception
 
@@ -233,7 +244,7 @@ class MoveCloseToSurfaceOperation:
                 f"{len(self._surface_samples)} valid frame(s)"
             )
         self.feedback_message = (
-            "Collecting live surface distance: "
+            "Collecting initial surface distance: "
             f"{len(self._surface_samples)} valid frame(s); {last_error}"
         )
         return MoveCloseToSurfaceStatus.RUNNING
@@ -247,7 +258,10 @@ class MoveCloseToSurfaceOperation:
             )
             baseline = estimate_force_baseline(samples)
         except Exception as exception:
-            if time.monotonic() - self._phase_started < self.force_baseline_timeout_sec:
+            if (
+                time.monotonic() - self._phase_started
+                < self.force_baseline_timeout_sec
+            ):
                 self.feedback_message = f"Collecting force baseline: {exception}"
                 return MoveCloseToSurfaceStatus.RUNNING
             return self._fail(
@@ -256,31 +270,42 @@ class MoveCloseToSurfaceOperation:
             )
 
         self._force_baseline = baseline
-        self._force_last_receipt = max(sample.receipt_time for sample in samples)
+        self._force_last_receipt = max(
+            sample.receipt_time for sample in samples
+        )
         self._force_contact_count = 0
-        self._probe_axis_hand = self._state_source.probe_axis_hand(self._sensor_id)
+        self._probe_axis_hand = self._state_source.probe_axis_hand(
+            self._sensor_id
+        )
         return self._prepare_next_approach_step()
 
     def _prepare_next_approach_step(self) -> MoveCloseToSurfaceStatus:
-        if self._pending_step_m <= 0.0:
-            return self._fail("Live surface sampling produced no inward correction")
+        current_probe = self._state_source.current_probe_pose_execution(
+            self._sensor_id
+        )
+        evaluation = evaluate_probe_surface_approach(
+            self._plan,
+            current_probe_pose_execution=current_probe,
+            maximum_step_m=self.maximum_step_m,
+            tolerance_m=self.tolerance_m,
+        )
+        self._validate_axis_guard(evaluation)
+        if evaluation.reached:
+            self.feedback_message = (
+                "Reached requested surface stand-off from frozen estimate: "
+                f"{evaluation.estimated_distance_m:.4f} m"
+            )
+            return MoveCloseToSurfaceStatus.SUCCESS
+
         if self._approach_steps >= self.maximum_approach_steps:
             return self._begin_motion_recovery(
                 "Surface approach exceeded the maximum step count",
                 retryable=False,
             )
-        if self._achieved_inward_travel_m + self._pending_step_m > self.maximum_travel_m + 1e-9:
-            return self._begin_motion_recovery(
-                "Surface approach would exceed the maximum travel limit",
-                retryable=False,
-            )
-
-        current_probe = self._state_source.current_probe_pose_execution(self._sensor_id)
-        self._validate_axis_guard(current_probe)
         self._previous_probe_pose = current_probe
-        self._requested_step_m = self._pending_step_m
+        self._requested_step_m = evaluation.requested_step_m
         hand_pose = self._state_source.current_hand_pose_execution()
-        inward = self._approach_axis_execution
+        inward = self._plan.inward_direction()
         target = PoseData(
             position=Vector3Data(
                 x=hand_pose.position.x + inward.x * self._requested_step_m,
@@ -293,8 +318,8 @@ class MoveCloseToSurfaceOperation:
         self._send_pose_goal(target, self.motion_duration_sec)
         self._phase = "moving"
         self.feedback_message = (
-            f"Live distance {self._pending_surface_distance_m:.4f} m; "
-            f"moving toward surface by {self._requested_step_m:.4f} m "
+            "Moving toward frozen surface estimate by "
+            f"{self._requested_step_m:.4f} m "
             f"(step {self._approach_steps}/{self.maximum_approach_steps})"
         )
         return MoveCloseToSurfaceStatus.RUNNING
@@ -333,22 +358,28 @@ class MoveCloseToSurfaceOperation:
         if time.monotonic() < self._settle_deadline:
             return MoveCloseToSurfaceStatus.RUNNING
 
-        current_probe = self._state_source.current_probe_pose_execution(self._sensor_id)
+        current_probe = self._state_source.current_probe_pose_execution(
+            self._sensor_id
+        )
+        evaluation = evaluate_probe_surface_approach(
+            self._plan,
+            current_probe_pose_execution=current_probe,
+            maximum_step_m=self.maximum_step_m,
+            tolerance_m=self.tolerance_m,
+        )
         try:
+            self._validate_axis_guard(evaluation)
             achieved, lateral = self._validate_step_motion(current_probe)
         except Exception as exception:
             return self._begin_motion_recovery(
                 f"Surface trajectory guard: {exception}",
                 retryable=False,
             )
-        self._achieved_inward_travel_m += max(0.0, achieved)
-        self._previous_probe_pose = current_probe
         self.feedback_message = (
             f"Step settled: inward {achieved:.4f} m, lateral {lateral:.4f} m; "
-            "remeasuring live surface distance"
+            f"estimated distance {evaluation.estimated_distance_m:.4f} m"
         )
-        self._begin_surface_sampling(reset_motion=False)
-        return MoveCloseToSurfaceStatus.RUNNING
+        return self._prepare_next_approach_step()
 
     def _begin_motion_recovery(
         self,
@@ -377,10 +408,24 @@ class MoveCloseToSurfaceOperation:
 
     def _update_recovery_prepare(self) -> MoveCloseToSurfaceStatus:
         current = self._state_source.current_hand_pose_execution()
-        remaining = self._translation_between(current, self._recovery_hand_pose)
+        remaining = self._translation_between(
+            current,
+            self._recovery_hand_pose,
+        )
         distance = self._norm(remaining)
         if distance <= 0.005:
+            orientation_error = rotation_distance_rad(
+                current.orientation,
+                self._recovery_hand_pose.orientation,
+            )
+            if orientation_error > self.maximum_axis_error_rad:
+                return self._fail(
+                    "Surface recovery reached the start position with an "
+                    "excessive orientation error of "
+                    f"{math.degrees(orientation_error):.2f} deg"
+                )
             return self._finish_recovery()
+
         if self._recovery_steps >= self.maximum_recovery_steps:
             return self._fail(
                 "Surface recovery could not reach the original aligned "
@@ -417,19 +462,13 @@ class MoveCloseToSurfaceOperation:
 
     def _finish_recovery(self) -> MoveCloseToSurfaceStatus:
         detail = self._recovery_detail
-        if self._recovery_retryable and self._retries_used < self.maximum_contact_retries:
+        if (
+            self._recovery_retryable
+            and self._retries_used < self.maximum_contact_retries
+        ):
             self._retries_used += 1
             self._recovery_steps = 0
-            probe_pose = self._state_source.current_probe_pose_execution(self._sensor_id)
-            self._approach_axis_execution = self._probe_axis_execution(probe_pose)
-            self._approach_start_probe_pose = probe_pose
-            self._previous_probe_pose = probe_pose
-            self._force_baseline = None
-            self._probe_axis_hand = None
-            self._force_contact_count = 0
-            self._achieved_inward_travel_m = 0.0
-            self._approach_steps = 0
-            self._begin_surface_sampling(reset_motion=False)
+            self._start_sampling()
             self.feedback_message = (
                 "Recovered after force contact; retry "
                 f"{self._retries_used}/{self.maximum_contact_retries}"
@@ -442,28 +481,26 @@ class MoveCloseToSurfaceOperation:
             )
         return self._fail(detail)
 
-    def _begin_surface_sampling(self, reset_motion: bool):
+    def _start_sampling(self):
         self._surface_samples = {}
         self._sample_receipt_not_before = time.monotonic()
         self._phase_started = self._sample_receipt_not_before
-        self._pending_surface_distance_m = 0.0
-        self._pending_step_m = 0.0
-        if reset_motion:
-            self._force_baseline = None
-            self._probe_axis_hand = None
-            self._force_contact_count = 0
-            self._requested_step_m = 0.0
-            self._approach_steps = 0
-            self._achieved_inward_travel_m = 0.0
+        self._plan = None
+        self._previous_probe_pose = None
+        self._force_baseline = None
+        self._probe_axis_hand = None
+        self._force_contact_count = 0
+        self._requested_step_m = 0.0
+        self._approach_steps = 0
         self._phase = "sampling"
-        self.feedback_message = "Collecting live surface distance"
-
-    def _start_sampling(self):
-        self._begin_surface_sampling(reset_motion=True)
+        self.feedback_message = "Collecting initial live surface distance"
 
     def _require_attachment_unchanged(self):
         sensor_id, revision = self._state_source.active_attachment()
-        if sensor_id != self._sensor_id or revision != self._attachment_revision:
+        if (
+            sensor_id != self._sensor_id
+            or revision != self._attachment_revision
+        ):
             raise RuntimeError(
                 "Sensor attachment changed during close-surface movement"
             )
@@ -506,17 +543,15 @@ class MoveCloseToSurfaceOperation:
             f"{delta.lateral_force_n:.2f} N lateral"
         )
 
-    def _validate_axis_guard(self, current_probe: PoseData):
-        current_axis = self._probe_axis_execution(current_probe)
-        error = self._angle_between(self._approach_axis_execution, current_axis)
-        if error > self.maximum_axis_error_rad:
+    def _validate_axis_guard(self, evaluation):
+        if evaluation.axis_error_rad > self.maximum_axis_error_rad:
             raise RuntimeError(
-                "Probe axis rotated away from the approved approach axis by "
-                f"{math.degrees(error):.2f} deg"
+                "Probe axis rotated away from the frozen surface normal by "
+                f"{math.degrees(evaluation.axis_error_rad):.2f} deg"
             )
 
     def _validate_step_motion(self, current_probe: PoseData):
-        self._validate_axis_guard(current_probe)
+        inward = self._plan.inward_direction()
         previous = self._previous_probe_pose.position
         current = current_probe.position
         delta = Vector3Data(
@@ -524,8 +559,11 @@ class MoveCloseToSurfaceOperation:
             y=current.y - previous.y,
             z=current.z - previous.z,
         )
-        inward = self._approach_axis_execution
-        achieved = delta.x * inward.x + delta.y * inward.y + delta.z * inward.z
+        achieved = (
+            delta.x * inward.x
+            + delta.y * inward.y
+            + delta.z * inward.z
+        )
         lateral_vector = Vector3Data(
             x=delta.x - inward.x * achieved,
             y=delta.y - inward.y * achieved,
@@ -544,8 +582,6 @@ class MoveCloseToSurfaceOperation:
                 f"requested {self._requested_step_m:.4f} m, "
                 f"achieved {achieved:.4f} m"
             )
-        if self._achieved_inward_travel_m + max(0.0, achieved) > self.maximum_travel_m + 1e-9:
-            raise RuntimeError("surface approach exceeded the maximum travel limit")
         return achieved, lateral
 
     def _send_pose_goal(self, pose: PoseData, duration_sec: float):
@@ -639,17 +675,13 @@ class MoveCloseToSurfaceOperation:
         self._surface_samples = {}
         self._sample_receipt_not_before = 0.0
         self._baseline_receipt_not_before = 0.0
-        self._approach_axis_execution = None
-        self._approach_start_probe_pose = None
+        self._plan = None
         self._previous_probe_pose = None
         self._force_baseline = None
         self._probe_axis_hand = None
         self._force_last_receipt = 0.0
         self._force_contact_count = 0
         self._requested_step_m = 0.0
-        self._pending_surface_distance_m = 0.0
-        self._pending_step_m = 0.0
-        self._achieved_inward_travel_m = 0.0
         self._approach_steps = 0
         self._settle_deadline = 0.0
         self._recovery_detail = ""
@@ -681,7 +713,9 @@ class MoveCloseToSurfaceOperation:
             raise ValueError("Maximum surface approach steps must be positive")
         if self.maximum_step_m > 0.010 + 1e-12:
             raise ValueError("Surface approach step must not exceed 0.010 m")
-        reachable_travel_m = self.maximum_step_m * self.maximum_approach_steps
+        reachable_travel_m = (
+            self.maximum_step_m * self.maximum_approach_steps
+        )
         if self.maximum_travel_m > reachable_travel_m + 1e-12:
             raise ValueError(
                 "Maximum surface approach travel exceeds the configured "
@@ -701,26 +735,6 @@ class MoveCloseToSurfaceOperation:
             raise ValueError(
                 "Minimum surface-step progress ratio must be in (0, 1]"
             )
-
-    @staticmethod
-    def _probe_axis_execution(pose: PoseData) -> Vector3Data:
-        return rotate_vector(
-            pose.orientation,
-            Vector3Data(x=1.0, y=0.0, z=0.0),
-        )
-
-    @staticmethod
-    def _angle_between(first: Vector3Data, second: Vector3Data) -> float:
-        first_norm = MoveCloseToSurfaceOperation._norm(first)
-        second_norm = MoveCloseToSurfaceOperation._norm(second)
-        if first_norm <= 1e-12 or second_norm <= 1e-12:
-            raise ValueError("Probe approach axis cannot be zero")
-        dot = (
-            first.x * second.x
-            + first.y * second.y
-            + first.z * second.z
-        ) / (first_norm * second_norm)
-        return math.acos(max(-1.0, min(1.0, dot)))
 
     @staticmethod
     def _translation_between(current: PoseData, target: PoseData) -> Vector3Data:
