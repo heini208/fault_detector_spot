@@ -1,7 +1,6 @@
 """Add server-owned probe finalization to inspection controls."""
 
 import math
-from copy import deepcopy
 
 from fault_detector_msgs.msg import (
     ApplicationCommandState,
@@ -9,7 +8,6 @@ from fault_detector_msgs.msg import (
     ProbeSetupIntent,
 )
 
-from fault_detector_spot.inspection.geometry.rotation import rotation_distance_rad
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
     RefinementStage,
@@ -26,7 +24,6 @@ class FinalizingInspectionControls(InspectionControls):
         self._surface_test_active = False
         self._surface_move_succeeded = False
         self._surface_move_target_m = None
-        self._surface_move_alignment_pose = None
         self._refinement_emergency_stop_requested = False
 
     def handle_capture_reference_view(self):
@@ -137,9 +134,6 @@ class FinalizingInspectionControls(InspectionControls):
         self._surface_move_target_m = float(
             presentation.target_surface_distance_m
         )
-        self._surface_move_alignment_pose = deepcopy(
-            presentation.candidate_pose(RefinementStage.ALIGNMENT)
-        )
         self._update_save_probe_point_state()
 
         intent = OperationalIntent()
@@ -210,35 +204,13 @@ class FinalizingInspectionControls(InspectionControls):
             not self._surface_move_succeeded
             or presentation is None
             or self._surface_move_target_m is None
-            or self._surface_move_alignment_pose is None
         ):
             return False
-        if not math.isclose(
+        return math.isclose(
             presentation.target_surface_distance_m,
             self._surface_move_target_m,
             rel_tol=0.0,
             abs_tol=1e-6,
-        ):
-            return False
-        return self._surface_alignment_unchanged(
-            presentation.candidate_pose(RefinementStage.ALIGNMENT),
-            self._surface_move_alignment_pose,
-        )
-
-    @staticmethod
-    def _surface_alignment_unchanged(current, tested):
-        position_error = math.sqrt(
-            (current.position.x - tested.position.x) ** 2
-            + (current.position.y - tested.position.y) ** 2
-            + (current.position.z - tested.position.z) ** 2
-        )
-        orientation_error = rotation_distance_rad(
-            current.orientation,
-            tested.orientation,
-        )
-        return (
-            position_error <= 0.0005
-            and orientation_error <= math.radians(0.25)
         )
 
     def _update_save_probe_point_state(self, _value=None):
@@ -286,8 +258,9 @@ class FinalizingInspectionControls(InspectionControls):
             self._surface_test_active = False
             self._surface_move_succeeded = False
             self._surface_move_target_m = None
-            self._surface_move_alignment_pose = None
             return
+        if presentation.active_stage is not RefinementStage.PROBE:
+            self._surface_move_succeeded = False
         pending = presentation.pending_motion is not None
         probe_page = presentation.active_stage is RefinementStage.PROBE
         alignment_reached = (
