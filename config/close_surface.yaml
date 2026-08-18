@@ -18,6 +18,9 @@
     close_surface.surface_stability_tolerance_m: 0.005
 
     close_surface.force_contact_threshold_n: 5.0
+    close_surface.force_near_target_threshold_n: 3.0
+    close_surface.force_near_target_distance_m: 0.020
+    close_surface.force_baseline_max_component_span_n: 3.0
     close_surface.force_contact_consecutive_samples: 2
     close_surface.force_stale_timeout_sec: 1.5
 
