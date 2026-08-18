@@ -28,6 +28,9 @@ from fault_detector_spot.manipulation.move_close_to_surface_interface import (
 )
 
 
+INITIAL_DISTANCE_CONSISTENCY_TOLERANCE_M = 0.020
+
+
 class MoveCloseToSurfaceStatus(Enum):
     """Terminal and non-terminal operation states."""
 
@@ -200,6 +203,20 @@ class MoveCloseToSurfaceOperation:
                 minimum_span_sec=self.minimum_surface_span_sec,
                 stability_tolerance_m=self.surface_stability_tolerance_m,
             )
+            mismatch = abs(
+                aggregate.distance_m
+                - self._command.aligned_preapproach_distance_m
+            )
+            if mismatch > INITIAL_DISTANCE_CONSISTENCY_TOLERANCE_M:
+                raise RuntimeError(
+                    "Initial sensor-frame surface distance "
+                    f"{aggregate.distance_m:.3f} m disagrees with the "
+                    "aligned pre-approach distance "
+                    f"{self._command.aligned_preapproach_distance_m:.3f} m "
+                    f"by {mismatch:.3f} m. Verify that the active sensor "
+                    "probe-frame origin is at the physical probe tip and "
+                    "that the aligned pose is current."
+                )
             current_probe = self._state_source.current_probe_pose_execution(
                 self._sensor_id
             )
