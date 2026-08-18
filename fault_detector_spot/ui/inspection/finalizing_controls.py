@@ -9,6 +9,7 @@ from fault_detector_msgs.msg import (
     ProbeSetupIntent,
 )
 
+from fault_detector_spot.inspection.geometry.rotation import rotation_distance_rad
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
     RefinementStage,
@@ -140,9 +141,26 @@ class FinalizingInspectionControls(InspectionControls):
             presentation.candidate_pose(RefinementStage.ALIGNMENT)
         )
         self._update_save_probe_point_state()
-        submitted = super().handle_test_surface_distance()
-        self._surface_test_active = bool(submitted)
-        return submitted
+
+        intent = OperationalIntent()
+        intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+        intent.target_surface_distance_m = float(
+            presentation.target_surface_distance_m
+        )
+        intent.aligned_preapproach_distance_m = float(
+            presentation.aligned_preapproach_distance_m
+        )
+        request_id = self.ui.execute_operation(intent)
+        if request_id is None:
+            self.surface_distance_test_status_label.setText(
+                "Move close to surface is unavailable"
+            )
+            return False
+        self._surface_test_active = True
+        self.surface_distance_test_status_label.setText(
+            "Move close to surface running"
+        )
+        return True
 
     def handle_application_state(self, status):
         """Track only this UI's standalone close-surface test command."""
@@ -199,12 +217,28 @@ class FinalizingInspectionControls(InspectionControls):
             presentation.target_surface_distance_m,
             self._surface_move_target_m,
             rel_tol=0.0,
-            abs_tol=1e-9,
+            abs_tol=1e-6,
         ):
             return False
-        return self._poses_equivalent(
+        return self._surface_alignment_unchanged(
             presentation.candidate_pose(RefinementStage.ALIGNMENT),
             self._surface_move_alignment_pose,
+        )
+
+    @staticmethod
+    def _surface_alignment_unchanged(current, tested):
+        position_error = math.sqrt(
+            (current.position.x - tested.position.x) ** 2
+            + (current.position.y - tested.position.y) ** 2
+            + (current.position.z - tested.position.z) ** 2
+        )
+        orientation_error = rotation_distance_rad(
+            current.orientation,
+            tested.orientation,
+        )
+        return (
+            position_error <= 0.0005
+            and orientation_error <= math.radians(0.25)
         )
 
     def _update_save_probe_point_state(self, _value=None):
