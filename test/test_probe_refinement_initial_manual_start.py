@@ -101,7 +101,6 @@ def draft_for(setup):
         geometry=SimpleNamespace(probe_setup=calculated_setup()),
         setup=setup,
         refinement=None,
-        surface_verification=object(),
     )
 
 
@@ -120,7 +119,7 @@ def test_new_safe_approach_starts_from_current_live_probe_pose():
         RefinementMotionState.REACHED
     )
     assert not refinement.stage_is_approved(RefinementStage.SAFE_APPROACH)
-    assert draft.surface_verification is None
+    assert not hasattr(draft, "surface_verification")
 
 
 def test_existing_approved_safe_pose_is_not_replaced_by_current_pose():
@@ -132,7 +131,6 @@ def test_existing_approved_safe_pose_is_not_replaced_by_current_pose():
         geometry=SimpleNamespace(probe_setup=calculated),
         setup=setup,
         refinement=None,
-        surface_verification=None,
     )
     controller = CurrentPoseRefinementController(current)
 

@@ -92,7 +92,6 @@ class ProbeRefinementController:
             refinement.active_stage = RefinementStage.SAFE_APPROACH
             with self.state_lock:
                 draft.refinement = refinement
-                draft.surface_verification = None
                 self._attachment_reservations[id(draft)] = reservation
         except Exception:
             reservation.release()
@@ -104,7 +103,6 @@ class ProbeRefinementController:
         draft.refinement.discard_unapproved_candidates()
         with self.state_lock:
             draft.refinement = None
-            draft.surface_verification = None
         self._release_attachment(draft)
         return True
 
@@ -112,7 +110,6 @@ class ProbeRefinementController:
         """Discard runtime refinement and release its frozen attachment."""
         with self.state_lock:
             draft.refinement = None
-            draft.surface_verification = None
         self._release_attachment(draft)
 
     def approve(self, draft, stage: RefinementStage) -> None:
@@ -246,7 +243,6 @@ class ProbeRefinementController:
         return operation
 
     def require_operation(self, operation):
-        """Return registry metadata for one prepared probe motion."""
         tracked = self._operations.owned(
             operation.request_id,
             operation.context,
@@ -674,7 +670,6 @@ class ProbeRefinementController:
         )
 
     def motion_attachment(self):
-        """Return geometry frozen by the active refinement workflow."""
         return self._active_attachment()
 
     def _active_attachment(self, draft=None):

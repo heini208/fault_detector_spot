@@ -2,15 +2,15 @@
 
 from dataclasses import dataclass
 
+from fault_detector_spot.inspection.geometry.pose import (
+    compose_poses,
+    probe_pose_to_hand_pose,
+)
+from fault_detector_spot.inspection.geometry.rotation import rotate_vector
 from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     PoseData,
     Vector3Data,
-)
-from fault_detector_spot.inspection.setup.reference_probe_setup import (
-    compose_poses,
-    probe_pose_to_hand_pose,
-    rotate_vector,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
@@ -55,7 +55,6 @@ def resolve_probe_execution_target(
     object_pose_execution: PoseData,
     execution_frame: str = "odom",
 ) -> ProbeExecutionTarget:
-    """Compose one saved probe point with active attachment geometry."""
     if not isinstance(attachment, MotionAttachmentSnapshot):
         raise TypeError("Expected a motion attachment snapshot")
     inspection_object.validate()
@@ -120,7 +119,6 @@ def resolve_probe_execution_geometry(
     execution_frame: str = "odom",
     attachment_revision: int = 0,
 ) -> ProbeExecutionTarget:
-    """Resolve one immutable safe/aligned geometry snapshot."""
     for value, label in (
         (object_id, "Object ID"),
         (routine_id, "Routine ID"),
