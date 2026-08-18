@@ -61,6 +61,33 @@ def test_absolute_motion_is_one_probe_target_semantic_arm_primitive():
     )
 
 
+def test_tag_aligned_absolute_motion_uses_relative_to_tag_with_zero_rotation():
+    command = ProbeSetupMotionCommandFactory().absolute(
+        PoseData(
+            position=Vector3Data(x=0.5, y=0.2, z=-0.1),
+            orientation=QuaternionData(
+                x=0.1,
+                y=0.2,
+                z=0.3,
+                w=0.9,
+            ),
+        ),
+        tag(),
+        "hall_probe",
+        orientation_mode=OrientationModes.TAG_ORIENTATION.value,
+    )
+
+    assert command.command_id is CommandID.MOVE_ARM_TO_TAG
+    assert command.orientation_mode == OrientationModes.TAG_ORIENTATION.value
+    assert command.offset.position.x == pytest.approx(0.5)
+    assert command.offset.position.y == pytest.approx(0.2)
+    assert command.offset.position.z == pytest.approx(-0.1)
+    assert command.offset.orientation.x == pytest.approx(0.0)
+    assert command.offset.orientation.y == pytest.approx(0.0)
+    assert command.offset.orientation.z == pytest.approx(0.0)
+    assert command.offset.orientation.w == pytest.approx(1.0)
+
+
 def test_relative_motion_is_one_semantic_relative_arm_primitive():
     command = ProbeSetupMotionCommandFactory().relative(
         "probe_hall_probe",
@@ -78,8 +105,6 @@ def test_relative_motion_is_one_semantic_relative_arm_primitive():
     assert command.motion_sensor_id == "hall_probe"
 
 
-
-
 def test_sensor_relative_frame_uses_real_hand_when_no_sensor_is_attached():
     frame = ProbeSetupMotionCommandFactory.frame_id(
         ProbeMotionFrame.SENSOR,
@@ -88,6 +113,7 @@ def test_sensor_relative_frame_uses_real_hand_when_no_sensor_is_attached():
     )
 
     assert frame == "hand"
+
 
 def test_motion_request_rejects_oversized_manual_adjustment():
     request = ProbeMotionRequest(
