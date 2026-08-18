@@ -101,3 +101,31 @@ def test_rotation_distance_matches_known_angle():
     assert rotation_distance_rad(first, second) == pytest.approx(
         math.radians(7.5)
     )
+
+
+def test_trajectory_guard_measures_lateral_drift_per_step():
+    action = operation(maximum_lateral_drift_m=0.010)
+    action._approach_axis_execution = Vector3Data(x=1.0, y=0.0, z=0.0)
+    action._previous_probe_pose = pose(x=0.050, y=0.0100)
+    action._requested_step_m = 0.010
+    action._achieved_inward_travel_m = 0.050
+
+    achieved, lateral = action._validate_step_motion(
+        pose(x=0.060, y=0.0102)
+    )
+
+    assert achieved == pytest.approx(0.010)
+    assert lateral == pytest.approx(0.0002)
+
+
+def test_trajectory_guard_rejects_actual_per_step_lateral_drift():
+    action = operation(maximum_lateral_drift_m=0.010)
+    action._approach_axis_execution = Vector3Data(x=1.0, y=0.0, z=0.0)
+    action._previous_probe_pose = pose()
+    action._requested_step_m = 0.010
+    action._achieved_inward_travel_m = 0.0
+
+    with pytest.raises(RuntimeError, match="per-step lateral drift"):
+        action._validate_step_motion(
+            pose(x=0.010, y=0.0102)
+        )
