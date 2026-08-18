@@ -12,10 +12,7 @@ from fault_detector_spot.inspection.geometry.open3d_depth import (
 from fault_detector_spot.inspection.geometry.rotation import (
     rotation_from_quaternion,
 )
-from fault_detector_spot.inspection.geometry.surface_plane import (
-    SurfacePlane,
-    fit_surface_plane,
-)
+from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ImageRegion,
@@ -72,22 +69,14 @@ def measure_probe_surface_distance(
     maximum_distance_m: float = 0.50,
     minimum_samples: int = 12,
     minimum_valid_pixel_ratio: float = 0.20,
-    maximum_plane_rmse_m: float = 0.020,
-    minimum_plane_inlier_ratio: float = 0.60,
-    minimum_tangent_spread_m: float = 0.0005,
-    ransac_iterations: int = 100,
 ) -> SurfaceDistanceSample:
-    """Fit the supported surface intersecting probe local positive X."""
-    _validate_parameters(
+    """Estimate surface distance directly ahead of probe local positive X."""
+    _validate_measurement_parameters(
         axis_radius_m,
         minimum_distance_m,
         maximum_distance_m,
         minimum_samples,
         minimum_valid_pixel_ratio,
-        maximum_plane_rmse_m,
-        minimum_plane_inlier_ratio,
-        minimum_tangent_spread_m,
-        ransac_iterations,
     )
     probe_to_camera_pose.validate()
     cloud = create_organized_depth_point_cloud(depth_image, camera_info)
@@ -100,17 +89,19 @@ def measure_probe_surface_distance(
         cloud.points_camera[valid_rows, valid_columns],
         dtype=np.float64,
     )
-    probe_points = _transform_points(
-        camera_points,
-        probe_to_camera_pose,
-    )
+    probe_points = _transform_points(camera_points, probe_to_camera_pose)
 
     axial = probe_points[:, 0]
     radial_squared = probe_points[:, 1] ** 2 + probe_points[:, 2] ** 2
+    axis_mask = radial_squared <= axis_radius_m ** 2
+    axis_count = int(np.count_nonzero(axis_mask))
+    if axis_count == 0:
+        raise ValueError("Live depth has no support along probe local +X")
+
     roi_mask = (
-        (axial >= minimum_distance_m)
+        axis_mask
+        & (axial >= minimum_distance_m)
         & (axial <= maximum_distance_m)
-        & (radial_squared <= axis_radius_m ** 2)
     )
     candidate_count = int(np.count_nonzero(roi_mask))
     if candidate_count < minimum_samples:
@@ -118,33 +109,19 @@ def measure_probe_surface_distance(
             "Live depth has insufficient support along probe local +X"
         )
 
-    candidate_points = probe_points[roi_mask]
-    plane = fit_surface_plane(
-        candidate_points,
-        "probe",
-        maximum_plane_rmse_m,
-        max(minimum_samples, 3),
-        minimum_plane_inlier_ratio,
-        ransac_iterations,
-        minimum_tangent_spread_m,
-    ).oriented_toward(Vector3Data(x=0.0, y=0.0, z=0.0))
-
-    normal_x = float(plane.normal.x)
-    if normal_x >= -1e-6:
-        raise ValueError(
-            "Fitted surface does not face the probe along local +X"
-        )
-    distance_m = _positive_x_plane_intersection(plane)
-    if not minimum_distance_m <= distance_m <= maximum_distance_m:
-        raise ValueError(
-            "Fitted surface intersection is outside the probe distance range"
-        )
-
-    valid_pixel_ratio = float(plane.inlier_count / candidate_count)
+    valid_pixel_ratio = float(candidate_count / axis_count)
     if valid_pixel_ratio < minimum_valid_pixel_ratio:
         raise ValueError(
-            "Live depth fitted-surface support ratio is too low"
+            "Live depth valid support ratio along probe local +X is too low"
         )
+
+    candidate_distances = np.asarray(axial[roi_mask], dtype=np.float64)
+    distance_m = float(np.median(candidate_distances))
+    if not math.isfinite(distance_m):
+        raise ValueError("Estimated probe surface distance is not finite")
+    spread_m = float(
+        np.median(np.abs(candidate_distances - distance_m))
+    )
 
     selected_rows = valid_rows[roi_mask]
     selected_columns = valid_columns[roi_mask]
@@ -155,16 +132,26 @@ def measure_probe_surface_distance(
         height=int(np.max(selected_rows) - np.min(selected_rows) + 1),
     )
     source_region.validate()
+
+    reference_plane = SurfacePlane(
+        point=Vector3Data(x=distance_m, y=0.0, z=0.0),
+        normal=Vector3Data(x=-1.0, y=0.0, z=0.0),
+        frame_id="probe",
+        inlier_count=candidate_count,
+        sample_count=axis_count,
+        inlier_ratio=valid_pixel_ratio,
+        rmse_m=spread_m,
+    )
     stamp = depth_image.header.stamp
     return SurfaceDistanceSample(
         distance_m=distance_m,
         stamp_seconds=float(stamp.sec) + float(stamp.nanosec) * 1e-9,
         frame_id=frame_id,
-        sample_count=plane.inlier_count,
+        sample_count=candidate_count,
         valid_pixel_ratio=valid_pixel_ratio,
-        spread_m=plane.rmse_m,
+        spread_m=spread_m,
         source_region=source_region,
-        surface_plane_probe=plane,
+        surface_plane_probe=reference_plane,
     )
 
 
@@ -245,9 +232,7 @@ def aggregate_surface_distance_samples(
     frames = {sample.frame_id for sample in selected}
     if len(frames) != 1:
         raise ValueError("Surface-distance frames do not share one frame")
-    sample_span = (
-        selected[-1].stamp_seconds - selected[0].stamp_seconds
-    )
+    sample_span = selected[-1].stamp_seconds - selected[0].stamp_seconds
     if sample_span + 1e-9 < minimum_span_sec:
         raise ValueError(
             "Depth frames do not span the required sampling window"
@@ -286,7 +271,8 @@ def aggregate_surface_distance_samples(
         raise RuntimeError("Verified distance produced a correction")
 
     fitted_samples = [
-        sample for sample in selected
+        sample
+        for sample in selected
         if sample.surface_plane_probe is not None
     ]
     representative = _representative_fitted_sample(
@@ -322,28 +308,13 @@ def _representative_fitted_sample(samples, median_distance_m):
     )
 
 
-def _positive_x_plane_intersection(plane: SurfacePlane) -> float:
-    normal = plane.normal_array()
-    point = plane.point_array()
-    denominator = float(normal[0])
-    if abs(denominator) <= 1e-6:
-        raise ValueError("Surface plane is nearly parallel to probe local +X")
-    distance = float(np.dot(normal, point) / denominator)
-    if not math.isfinite(distance) or distance <= 0.0:
-        raise ValueError("Surface plane does not intersect probe local +X ahead")
-    return distance
-
-
 def _transform_points(points: np.ndarray, pose: PoseData) -> np.ndarray:
     pose.validate()
     translation = np.array(
         [pose.position.x, pose.position.y, pose.position.z],
         dtype=float,
     )
-    return (
-        rotation_from_quaternion(pose.orientation).apply(points)
-        + translation
-    )
+    return rotation_from_quaternion(pose.orientation).apply(points) + translation
 
 
 def _frame_id(depth_image, camera_info):
@@ -369,23 +340,17 @@ def _recent_sample_window(samples, minimum_samples, minimum_span_sec):
     return samples
 
 
-def _validate_parameters(
+def _validate_measurement_parameters(
     axis_radius_m,
     minimum_distance_m,
     maximum_distance_m,
     minimum_samples,
     minimum_valid_pixel_ratio,
-    maximum_plane_rmse_m,
-    minimum_plane_inlier_ratio,
-    minimum_tangent_spread_m,
-    ransac_iterations,
 ):
     for label, value in (
         ("Probe-axis radius", axis_radius_m),
         ("Minimum surface distance", minimum_distance_m),
         ("Maximum surface distance", maximum_distance_m),
-        ("Maximum surface-plane RMSE", maximum_plane_rmse_m),
-        ("Minimum tangent spread", minimum_tangent_spread_m),
     ):
         if not math.isfinite(value) or value <= 0.0:
             raise ValueError(f"{label} must be positive and finite")
@@ -399,15 +364,10 @@ def _validate_parameters(
         or minimum_samples <= 0
     ):
         raise ValueError("Minimum surface samples must be a positive integer")
-    for label, value in (
-        ("Minimum valid-pixel ratio", minimum_valid_pixel_ratio),
-        ("Minimum plane inlier ratio", minimum_plane_inlier_ratio),
-    ):
-        if not math.isfinite(value) or not 0.0 < value <= 1.0:
-            raise ValueError(f"{label} must be in the interval (0, 1]")
     if (
-        isinstance(ransac_iterations, bool)
-        or not isinstance(ransac_iterations, int)
-        or ransac_iterations <= 0
+        not math.isfinite(minimum_valid_pixel_ratio)
+        or not 0.0 < minimum_valid_pixel_ratio <= 1.0
     ):
-        raise ValueError("RANSAC iteration count must be positive")
+        raise ValueError(
+            "Minimum valid-pixel ratio must be in the interval (0, 1]"
+        )
