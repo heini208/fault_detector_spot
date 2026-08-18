@@ -4,9 +4,13 @@ import math
 
 import pytest
 
+import fault_detector_spot.inspection.execution.move_close_to_surface_operation as move_close_module
 from fault_detector_spot.inspection.execution.move_close_to_surface_operation import (
     MoveCloseToSurfaceOperation,
     MoveCloseToSurfaceStatus,
+)
+from fault_detector_spot.inspection.execution.probe_surface_approach import (
+    ProbeSurfaceApproachEvaluation,
 )
 from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_from_euler,
@@ -41,6 +45,18 @@ class RecoveryStateSource:
 
     def current_hand_pose_execution(self):
         return self.current_pose
+
+
+class ApproachStateSource:
+    def __init__(self, probe_pose, hand_pose):
+        self.probe_pose = probe_pose
+        self.hand_pose = hand_pose
+
+    def current_probe_pose_execution(self, _sensor_id):
+        return self.probe_pose
+
+    def current_hand_pose_execution(self):
+        return self.hand_pose
 
 
 class FrozenPlan:
@@ -132,3 +148,49 @@ def test_trajectory_guard_rejects_actual_per_step_lateral_drift():
         action._validate_step_motion(
             pose(x=0.010, y=0.0102)
         )
+
+
+def test_approach_step_commands_original_aligned_orientation(monkeypatch):
+    aligned_orientation = quaternion_from_euler("z", math.radians(2.0))
+    drifted_orientation = quaternion_from_euler("z", math.radians(4.0))
+    action = operation()
+    action._sensor_id = "sensor"
+    action._plan = FrozenPlan()
+    action._recovery_hand_pose = pose(orientation=aligned_orientation)
+    action._state_source = ApproachStateSource(
+        probe_pose=pose(orientation=drifted_orientation),
+        hand_pose=pose(x=0.100, orientation=drifted_orientation),
+    )
+    action._approach_steps = 0
+
+    evaluation = ProbeSurfaceApproachEvaluation(
+        estimated_distance_m=0.100,
+        remaining_inward_travel_m=0.010,
+        traveled_inward_m=0.0,
+        lateral_offset_m=0.0,
+        axis_error_rad=0.0,
+        requested_step_m=0.010,
+        reached=False,
+    )
+    monkeypatch.setattr(
+        move_close_module,
+        "evaluate_probe_surface_approach",
+        lambda *args, **kwargs: evaluation,
+    )
+
+    sent = []
+    action._send_pose_goal = lambda target, duration: sent.append(target)
+
+    result = action._prepare_next_approach_step()
+
+    assert result is MoveCloseToSurfaceStatus.RUNNING
+    assert len(sent) == 1
+    assert sent[0].position.x == pytest.approx(0.110)
+    assert rotation_distance_rad(
+        sent[0].orientation,
+        aligned_orientation,
+    ) == pytest.approx(0.0)
+    assert rotation_distance_rad(
+        sent[0].orientation,
+        drifted_orientation,
+    ) > 0.0
