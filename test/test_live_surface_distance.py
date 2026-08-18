@@ -1,4 +1,4 @@
-"""Tests for live fitted-plane surface distance and correction."""
+"""Tests for live sensor-frame surface distance and correction."""
 
 import math
 import struct
@@ -53,10 +53,10 @@ def planar_depth(width=21, height=21, depth_m=0.20):
     return image, info
 
 
-def probe_to_camera_pose():
+def probe_to_camera_pose(offset_m=0.10):
     half_angle = math.radians(90.0) * 0.5
     return PoseData(
-        position=Vector3Data(x=-0.10, y=0.0, z=0.0),
+        position=Vector3Data(x=-offset_m, y=0.0, z=0.0),
         orientation=QuaternionData(
             x=0.0,
             y=math.sin(half_angle),
@@ -109,7 +109,7 @@ def fitted_plane(distance_m):
     )
 
 
-def test_measurement_reports_fitted_positive_x_tip_to_surface_distance():
+def test_measurement_reports_positive_x_sensor_to_surface_distance():
     image, info = planar_depth()
 
     sample = measure_probe_surface_distance(
@@ -122,8 +122,28 @@ def test_measurement_reports_fitted_positive_x_tip_to_surface_distance():
     assert sample.frame_id == "hand_depth"
     assert sample.stamp_seconds == pytest.approx(10.0)
     assert sample.sample_count >= 12
-    assert sample.surface_plane_probe is not None
-    assert sample.surface_plane_probe.normal.x == pytest.approx(-1.0, abs=1e-5)
+
+
+def test_measurement_uses_attached_sensor_origin_not_camera_origin():
+    image, info = planar_depth(depth_m=0.25)
+
+    short_sensor = measure_probe_surface_distance(
+        image,
+        info,
+        probe_to_camera_pose(offset_m=0.05),
+    )
+    long_sensor = measure_probe_surface_distance(
+        image,
+        info,
+        probe_to_camera_pose(offset_m=0.15),
+    )
+
+    assert short_sensor.distance_m == pytest.approx(0.20, abs=1e-5)
+    assert long_sensor.distance_m == pytest.approx(0.10, abs=1e-5)
+    assert short_sensor.distance_m - long_sensor.distance_m == pytest.approx(
+        0.10,
+        abs=1e-5,
+    )
 
 
 def test_measurement_rejects_surface_behind_probe_axis():
@@ -321,7 +341,7 @@ def test_aggregate_uses_newest_plane_when_median_distance_ties():
     assert result.surface_plane_probe is newer_plane
 
 
-def test_aggregate_keeps_plane_optional_for_legacy_non_geometry_samples():
+def test_aggregate_keeps_plane_optional_for_non_geometry_samples():
     samples = [
         distance_sample(0.079, 10.0),
         distance_sample(0.080, 10.1),
