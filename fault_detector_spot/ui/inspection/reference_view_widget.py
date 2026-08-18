@@ -199,7 +199,7 @@ class ReferenceViewWidget(QLabel):
             self.image_point_cleared.emit()
 
     def set_selected_image_point(self, point: ImagePoint) -> None:
-        """Render one authoritative source-image selection."""
+        """Select one source-image pixel through the normal change signal."""
         if self._unrotated_source_image is None:
             return
         local_u = point.u - self._source_offset.u
@@ -209,7 +209,10 @@ class ReferenceViewWidget(QLabel):
             and 0 <= local_v < self._unrotated_source_height
         ):
             raise ValueError("Reference point is outside the preview")
+        changed = self._selected_image_point != point
         self._set_selected_image_point(point)
+        if changed:
+            self.image_point_changed.emit(point.u, point.v)
 
     def resizeEvent(self, event) -> None:
         """Rescale the displayed copy when the widget changes size."""
@@ -259,11 +262,12 @@ class ReferenceViewWidget(QLabel):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        """Finish one marker drag on left-button release."""
+        """Commit one marker selection on left-button release."""
         if event.button() == Qt.LeftButton and self._dragging_marker:
             point = self._widget_to_image_point(event.pos(), clamp=True)
             if point is not None:
                 self._set_selected_image_point(point)
+                self.image_point_changed.emit(point.u, point.v)
             self._dragging_marker = False
             event.accept()
             return
@@ -287,7 +291,6 @@ class ReferenceViewWidget(QLabel):
             return
         self._selected_image_point = point
         self.update()
-        self.image_point_changed.emit(point.u, point.v)
 
     def _widget_to_image_point(
         self,

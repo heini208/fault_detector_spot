@@ -91,7 +91,7 @@ def test_click_selects_native_image_pixel(application):
     assert point is not None
     assert point.u == pytest.approx(123, abs=1)
     assert point.v == pytest.approx(87, abs=1)
-    assert changed[-1] == (point.u, point.v)
+    assert changed == [(point.u, point.v)]
 
 
 def test_click_in_letterbox_margin_is_ignored(application):
@@ -168,6 +168,66 @@ def test_dragging_clamps_marker_to_image_bounds(application):
     assert point is not None
     assert point.u == 399
     assert point.v == 199
+
+
+def test_dragging_emits_only_final_committed_pixel(application):
+    widget = make_widget(application)
+    changed = []
+    widget.image_point_changed.connect(
+        lambda u, v: changed.append((u, v))
+    )
+    start = source_pixel_position(widget, 50, 50)
+    middle = source_pixel_position(widget, 150, 75)
+    final = source_pixel_position(widget, 250, 100)
+
+    send_mouse(
+        widget,
+        QEvent.MouseButtonPress,
+        start,
+        Qt.LeftButton,
+        Qt.LeftButton,
+    )
+    send_mouse(
+        widget,
+        QEvent.MouseMove,
+        middle,
+        Qt.NoButton,
+        Qt.LeftButton,
+    )
+    assert changed == []
+
+    send_mouse(
+        widget,
+        QEvent.MouseMove,
+        final,
+        Qt.NoButton,
+        Qt.LeftButton,
+    )
+    assert changed == []
+
+    send_mouse(
+        widget,
+        QEvent.MouseButtonRelease,
+        final,
+        Qt.LeftButton,
+        Qt.NoButton,
+    )
+
+    point = widget.selected_image_point
+    assert changed == [(point.u, point.v)]
+
+
+def test_programmatic_selection_preserves_change_signal(application):
+    widget = make_widget(application)
+    changed = []
+    widget.image_point_changed.connect(
+        lambda u, v: changed.append((u, v))
+    )
+
+    widget.set_selected_image_point(ImagePoint(u=80, v=60))
+
+    assert widget.selected_image_point == ImagePoint(u=80, v=60)
+    assert changed == [(80, 60)]
 
 
 def test_clear_selection_emits_and_removes_marker(application):
