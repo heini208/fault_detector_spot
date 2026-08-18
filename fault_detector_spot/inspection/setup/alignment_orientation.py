@@ -17,14 +17,21 @@ from fault_detector_spot.inspection.setup.reference_probe_setup import (
 
 ALIGNMENT_ORIENTATION_TAG = "tag"
 ALIGNMENT_ORIENTATION_CALCULATED_SURFACE = "calculated_surface"
+_TAG_FACING_PITCH_SIN = math.sin(math.pi / 4.0)
+_TAG_FACING_PITCH_COS = math.cos(math.pi / 4.0)
 
 
 def tag_aligned_probe_orientation(
     hand_to_probe_orientation: QuaternionData,
 ) -> QuaternionData:
-    """Return the probe orientation produced by a tag-aligned hand."""
+    """Return the probe orientation produced by relative-to-tag mode."""
     hand_to_probe_orientation.validate()
-    return deepcopy(hand_to_probe_orientation)
+    return QuaternionData(
+        x=0.0,
+        y=_TAG_FACING_PITCH_SIN,
+        z=0.0,
+        w=_TAG_FACING_PITCH_COS,
+    )
 
 
 def surface_aligned_probe_orientation(
