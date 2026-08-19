@@ -12,6 +12,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-22.04
+    container:
+      image: ghcr.io/rai-opensource/spot_ros2_jammy_humble:main
 
     steps:
       - name: Checkout fault_detector_spot
@@ -25,36 +27,51 @@ jobs:
           repository: heini208/fault_detector_msgs
           path: ros_ws/src/fault_detector_msgs
 
-      - name: Setup ROS 2 Humble
-        uses: ros-tooling/setup-ros@v0.7
+      - name: Checkout pinned Spot ROS 2
+        uses: actions/checkout@v4
         with:
-          required-ros-distributions: humble
+          repository: RAI-Opensource/spot_ros2
+          ref: dbbac7a0afac1766ad43151f8a4b55651066bff1
+          submodules: recursive
+          path: spot_underlay/src/spot_ros2
 
-      - name: Checkout Spot ROS 2
+      - name: Restore Spot ROS 2 underlay
+        id: spot-cache
+        uses: actions/cache@v4
+        with:
+          path: spot_underlay/install
+          key: spot-ros2-humble-dbbac7a0afac1766ad43151f8a4b55651066bff1
+
+      - name: Build Spot ROS 2 underlay
+        if: steps.spot-cache.outputs.cache-hit != 'true'
+        working-directory: spot_underlay
+        shell: bash
         run: |
-          git clone --recursive https://github.com/RAI-Opensource/spot_ros2.git ros_ws/src/spot_ros2
+          source /opt/ros/humble/setup.bash
+          colcon build --merge-install
 
-      - name: Install Spot ROS 2 dependencies
-        working-directory: ros_ws/src/spot_ros2
-        run: ./install_spot_ros2.sh
-
-      - name: Install workspace dependencies
-        working-directory: ros_ws
-        run: |
-          rosdep update
-          rosdep install --from-paths src --ignore-src --rosdistro humble -r -y
-
-      - name: Build workspace
+      - name: Install fault_detector_spot dependencies
         working-directory: ros_ws
         shell: bash
         run: |
           source /opt/ros/humble/setup.bash
-          colcon build --symlink-install
+          source ../spot_underlay/install/setup.bash
+          rosdep update
+          rosdep install --from-paths src --ignore-src --rosdistro humble -r -y
+
+      - name: Build fault_detector_msgs
+        working-directory: ros_ws
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source ../spot_underlay/install/setup.bash
+          colcon build --merge-install --packages-select fault_detector_msgs
 
       - name: Run fault_detector_spot tests
         working-directory: ros_ws/src/fault_detector_spot
         shell: bash
         run: |
           source /opt/ros/humble/setup.bash
+          source ../../../spot_underlay/install/setup.bash
           source ../../install/setup.bash
           python3 -m pytest -q -m 'not linter'
