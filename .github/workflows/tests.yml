@@ -40,7 +40,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: spot_underlay/install
-          key: spot-ros2-humble-dbbac7a0afac1766ad43151f8a4b55651066bff1
+          key: spot-ros2-humble-dbbac7a0afac1766ad43151f8a4b55651066bff1-v2
 
       - name: Build Spot ROS 2 underlay
         if: steps.spot-cache.outputs.cache-hit != 'true'
@@ -50,14 +50,18 @@ jobs:
           source /opt/ros/humble/setup.bash
           colcon build --merge-install
 
-      - name: Install fault_detector_spot dependencies
-        working-directory: ros_ws
+      - name: Install test dependencies
         shell: bash
         run: |
           source /opt/ros/humble/setup.bash
-          source ../spot_underlay/install/setup.bash
+          source spot_underlay/install/setup.bash
           rosdep update
-          rosdep install --from-paths src --ignore-src --rosdistro humble -r -y
+          rosdep install \
+            --from-paths ros_ws/src spot_underlay/src/spot_ros2 \
+            --ignore-src \
+            --rosdistro humble \
+            -r \
+            -y
 
       - name: Build fault_detector_msgs
         working-directory: ros_ws
