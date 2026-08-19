@@ -1,19 +1,23 @@
 name: Tests
 
 on:
-  push:
-    branches:
-      - main
-      - "feature/**"
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
 
 jobs:
   test:
     runs-on: ubuntu-22.04
     container:
-      image: ghcr.io/rai-opensource/spot_ros2_jammy_humble:main
+      image: ghcr.io/heini208/fault-detector-ci:humble-v1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    env:
+      QT_QPA_PLATFORM: offscreen
 
     steps:
       - name: Checkout fault_detector_spot
@@ -27,42 +31,12 @@ jobs:
           repository: heini208/fault_detector_msgs
           path: ros_ws/src/fault_detector_msgs
 
-      - name: Checkout pinned Spot ROS 2
-        uses: actions/checkout@v4
-        with:
-          repository: RAI-Opensource/spot_ros2
-          ref: dbbac7a0afac1766ad43151f8a4b55651066bff1
-          submodules: recursive
-          path: spot_underlay/src/spot_ros2
-
-      - name: Install test dependencies
-        shell: bash
-        run: |
-          source /opt/ros/humble/setup.bash
-          rosdep update
-          rosdep install \
-            --from-paths ros_ws/src \
-            --ignore-src \
-            --rosdistro humble \
-            --skip-keys "spot_ros2 spot_msgs spot_wrapper spot_common synchros2 bosdyn_msgs" \
-            -r \
-            -y
-
-      - name: Build required Spot packages
-        working-directory: spot_underlay
-        shell: bash
-        run: |
-          source /opt/ros/humble/setup.bash
-          colcon build \
-            --merge-install \
-            --packages-up-to spot_msgs spot_common synchros2
-
       - name: Build fault_detector_msgs
         working-directory: ros_ws
         shell: bash
         run: |
           source /opt/ros/humble/setup.bash
-          source ../spot_underlay/install/setup.bash
+          source /opt/fault_detector_underlay/setup.bash
           colcon build --merge-install --packages-select fault_detector_msgs
 
       - name: Run fault_detector_spot tests
@@ -70,6 +44,6 @@ jobs:
         shell: bash
         run: |
           source /opt/ros/humble/setup.bash
-          source ../../../spot_underlay/install/setup.bash
+          source /opt/fault_detector_underlay/setup.bash
           source ../../install/setup.bash
           python3 -m pytest -q -m 'not linter'
