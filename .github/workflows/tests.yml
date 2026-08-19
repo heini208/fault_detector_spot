@@ -35,33 +35,27 @@ jobs:
           submodules: recursive
           path: spot_underlay/src/spot_ros2
 
-      - name: Restore Spot ROS 2 underlay
-        id: spot-cache
-        uses: actions/cache@v4
-        with:
-          path: spot_underlay/install
-          key: spot-ros2-humble-dbbac7a0afac1766ad43151f8a4b55651066bff1-v2
-
-      - name: Build Spot ROS 2 underlay
-        if: steps.spot-cache.outputs.cache-hit != 'true'
-        working-directory: spot_underlay
-        shell: bash
-        run: |
-          source /opt/ros/humble/setup.bash
-          colcon build --merge-install
-
       - name: Install test dependencies
         shell: bash
         run: |
           source /opt/ros/humble/setup.bash
-          source spot_underlay/install/setup.bash
           rosdep update
           rosdep install \
-            --from-paths ros_ws/src spot_underlay/src/spot_ros2 \
+            --from-paths ros_ws/src \
             --ignore-src \
             --rosdistro humble \
+            --skip-keys "spot_ros2 spot_msgs spot_wrapper spot_common synchros2 bosdyn_msgs" \
             -r \
             -y
+
+      - name: Build required Spot packages
+        working-directory: spot_underlay
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build \
+            --merge-install \
+            --packages-up-to spot_msgs spot_common synchros2
 
       - name: Build fault_detector_msgs
         working-directory: ros_ws
