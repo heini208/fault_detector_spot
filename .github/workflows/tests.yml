@@ -1,0 +1,60 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout fault_detector_spot
+        uses: actions/checkout@v4
+        with:
+          path: ros_ws/src/fault_detector_spot
+
+      - name: Checkout fault_detector_msgs
+        uses: actions/checkout@v4
+        with:
+          repository: heini208/fault_detector_msgs
+          path: ros_ws/src/fault_detector_msgs
+
+      - name: Setup ROS 2 Humble
+        uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: humble
+
+      - name: Checkout Spot ROS 2
+        run: |
+          git clone --recursive https://github.com/RAI-Opensource/spot_ros2.git ros_ws/src/spot_ros2
+
+      - name: Install Spot ROS 2 dependencies
+        working-directory: ros_ws/src/spot_ros2
+        run: ./install_spot_ros2.sh
+
+      - name: Install workspace dependencies
+        working-directory: ros_ws
+        run: |
+          rosdep update
+          rosdep install --from-paths src --ignore-src --rosdistro humble -r -y
+
+      - name: Build workspace
+        working-directory: ros_ws
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --symlink-install
+
+      - name: Run fault_detector_spot tests
+        working-directory: ros_ws/src/fault_detector_spot
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source ../../install/setup.bash
+          python3 -m pytest -q -m 'not linter'
