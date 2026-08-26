@@ -133,7 +133,7 @@ def test_close_surface_server_owns_runtime_operation():
     assert "ActionServer" in source
 
 
-def test_close_surface_operation_has_no_probe_setup_context_dependency():
+def test_close_surface_operation_uses_live_geometry_without_setup_context():
     source = inspect.getsource(MoveCloseToSurfaceOperation)
 
     for forbidden in (
@@ -145,9 +145,10 @@ def test_close_surface_operation_has_no_probe_setup_context_dependency():
     ):
         assert forbidden not in source
     assert "target_surface_distance_m" in source
-    assert "aligned_preapproach_distance_m" in source
     assert "active_attachment" in source
     assert "surface_distance_samples" in source
+    assert "surface_plane_probe" in source
+    assert "freeze_probe_surface_approach" in source
     assert "end_effector_force" in source
 
 
