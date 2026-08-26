@@ -7,6 +7,9 @@ import pytest
 from fault_detector_msgs.msg import OperationalIntent
 
 from fault_detector_spot.application.behaviour_tree import runner
+from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import (
+    WorkflowActionBehaviour,
+)
 from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
     CommandSubscriber,
 )
@@ -112,7 +115,10 @@ def test_behaviour_tree_registers_close_surface_action():
 def test_close_surface_bt_behavior_is_only_an_action_client():
     source = inspect.getsource(ManipulatorMoveCloseToSurfaceAction)
 
-    assert "ActionClient" in source
+    assert issubclass(
+        ManipulatorMoveCloseToSurfaceAction,
+        WorkflowActionBehaviour,
+    )
     assert "MoveCloseToSurface.Goal" in source
     assert "ProbeSurfaceRuntimeStateSource" not in source
     assert "surface_distance_samples" not in source

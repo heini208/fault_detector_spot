@@ -24,7 +24,7 @@ def test_bt_close_surface_behavior_is_transport_only():
         "manipulator_move_close_to_surface_action.py"
     )
 
-    assert "ActionClient(" in client
+    assert "WorkflowActionBehaviour" in client
     assert "MoveCloseToSurface.Goal" in client
     assert "ProbeSurfaceRuntimeStateSource" not in client
     assert "Image" not in client

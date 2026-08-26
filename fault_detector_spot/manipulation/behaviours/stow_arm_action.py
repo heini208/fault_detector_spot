@@ -2,10 +2,12 @@ import py_trees
 from spot_msgs.action import RobotCommand
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_msgs.conversions import convert
-from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import SimpleSpotAction
+from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import (
+    RobotCommandActionBehaviour,
+)
 
 
-class StowArmActionSimple(SimpleSpotAction):
+class StowArmActionSimple(RobotCommandActionBehaviour):
     """
     Sends a Spot arm_stow command via RobotCommand action asynchronously.
     Returns RUNNING while in flight, SUCCESS on completion, FAILURE on error.

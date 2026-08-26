@@ -231,6 +231,16 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         "close_surface.action_name",
         "fault_detector/manipulation/move_close_to_surface",
     )
+    close_surface_goal_response_timeout_sec = read_parameter(
+        node,
+        "close_surface.goal_response_timeout_sec",
+        2.0,
+    )
+    close_surface_action_timeout_sec = read_parameter(
+        node,
+        "close_surface.action_timeout_sec",
+        600.0,
+    )
     specs = [
         (
             CommandID.STOW_ARM,
@@ -274,6 +284,10 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             lambda n: ManipulatorMoveCloseToSurfaceAction(
                 name="MoveCloseToSurfaceAction",
                 action_name=close_surface_action_name,
+                goal_response_timeout_sec=(
+                    close_surface_goal_response_timeout_sec
+                ),
+                result_timeout_sec=close_surface_action_timeout_sec,
             ),
         ),
         (

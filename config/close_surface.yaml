@@ -2,6 +2,8 @@
   ros__parameters:
     close_surface.action_name: 'fault_detector/manipulation/move_close_to_surface'
     close_surface.robot_name: ''
+    close_surface.goal_response_timeout_sec: 2.0
+    close_surface.action_timeout_sec: 600.0
 
     close_surface.motion_duration_sec: 2.0
     close_surface.settle_sec: 0.5

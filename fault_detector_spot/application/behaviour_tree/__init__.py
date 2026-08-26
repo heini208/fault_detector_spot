@@ -4,7 +4,6 @@ from fault_detector_spot.application.behaviour_tree.behaviours.command_manager i
 from fault_detector_spot.application.behaviour_tree.behaviours.helper_initializer import HelperInitializer
 from fault_detector_spot.application.behaviour_tree.behaviours.new_command_guard import NewCommandGuard
 from fault_detector_spot.application.behaviour_tree.behaviours.reset_estop_flag import ResetEstopFlag
-from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import SimpleSpotAction
 from fault_detector_spot.application.behaviour_tree.behaviours.wait_for_duration import WaitForDuration
 from fault_detector_spot.inspection.behaviours.publish_live_inspection_object import (
     PublishLiveInspectionObject,

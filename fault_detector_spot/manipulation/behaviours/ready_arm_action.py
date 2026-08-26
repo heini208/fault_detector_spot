@@ -1,10 +1,12 @@
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_msgs.conversions import convert
 from spot_msgs.action import RobotCommand
-from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import SimpleSpotAction
+from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import (
+    RobotCommandActionBehaviour,
+)
 
 
-class ReadyArmActionSimple(SimpleSpotAction):
+class ReadyArmActionSimple(RobotCommandActionBehaviour):
     def __init__(
         self,
         name="ReadyArmAction",

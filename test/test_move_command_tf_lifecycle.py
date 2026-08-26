@@ -2,6 +2,13 @@
 
 from pathlib import Path
 
+from fault_detector_spot.application.behaviour_tree.behaviours.move_command_action import (
+    MoveCommandAction,
+)
+from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import (
+    RobotCommandActionBehaviour,
+)
+
 
 ROOT = Path(__file__).parents[1]
 
@@ -41,7 +48,7 @@ def test_action_initialization_reuses_ros_resources():
 
     assert "if self._client is None:" in spot_action
     assert "get_action_client" in spot_action
-    assert "get_action_client" in move_action
+    assert issubclass(MoveCommandAction, RobotCommandActionBehaviour)
     assert "get_tf_listener" in move_action
 
 
@@ -99,7 +106,7 @@ def test_interrupted_active_goal_still_requests_cancellation():
     terminate = _method_source(source, "terminate")
 
     assert "new_status == Status.INVALID" in terminate
-    assert "self._cancel_goal(self.goal_handle)" in terminate
+    assert "self._request_cancel()" in terminate
 
 
 def test_move_goal_preparation_exceptions_fail_the_behavior():

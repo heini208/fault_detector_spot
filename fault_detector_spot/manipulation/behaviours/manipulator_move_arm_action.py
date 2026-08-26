@@ -13,7 +13,7 @@ from synchros2.utilities import namespace_with
 class ManipulatorMoveArmAction(MoveCommandAction):
     """
     Executes a Spot arm movement to the blackboard's goal_tag_pose via RobotCommand action.
-    Uses ActionClientBehaviour for all lifecycle phases, customizing only client init and goal build.
+    Uses the shared bounded action lifecycle and only builds the arm goal.
     """
 
     def __init__(

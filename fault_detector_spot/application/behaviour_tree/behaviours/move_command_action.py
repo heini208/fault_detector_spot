@@ -8,22 +8,23 @@ from fault_detector_spot.application.commanding.command_ids import (
     OrientationModes,
     TagFrames,
 )
-from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import ActionClientBehaviour
+from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import (
+    RobotCommandActionBehaviour,
+)
 from fault_detector_spot.application.behaviour_tree.commands.move_command import MoveCommand
 from fault_detector_spot.application.behaviour_tree.commands.move_to_tag_command import (
     MoveToTagCommand,
 )
 from geometry_msgs.msg import PoseStamped
-from py_trees.common import Status, Access
-from synchros2.utilities import namespace_with
+from py_trees.common import Status
 
 
-class MoveCommandAction(ActionClientBehaviour):
+class MoveCommandAction(RobotCommandActionBehaviour):
     """
     Intermediate base class for actions that execute a MoveCommand.
 
     It overrides update() to ensure all necessary TF frames are available
-    BEFORE delegating to the ActionClientBehaviour lifecycle.
+    BEFORE delegating to the bounded action-client lifecycle.
     """
 
     def __init__(
@@ -32,45 +33,27 @@ class MoveCommandAction(ActionClientBehaviour):
         robot_name: str = "",
         robot_command_resources=None,
     ):
-        super().__init__(name)
+        super().__init__(
+            name,
+            robot_name=robot_name,
+            robot_command_resources=robot_command_resources,
+        )
         self.tf_listener = None
-        self.blackboard = self.attach_blackboard_client()
-        self.robot_name = robot_name
-        self.robot_command_resources = robot_command_resources
-        self.blackboard.register_key(key="last_command", access=Access.READ)
 
     def setup(self, **kwargs):
         super().setup(**kwargs)
 
     def _init_client(self) -> bool:
-        action_ns = namespace_with(self.robot_name, "robot_command")
         if self.robot_command_resources is not None:
-            self._client = self.robot_command_resources.get_action_client(
-                self.node,
-                self.robot_name,
-            )
             self.tf_listener = (
                 self.robot_command_resources.get_tf_listener(self.node)
             )
         else:
-            from spot_msgs.action import RobotCommand
-            from synchros2.action_client import ActionClientWrapper
             from synchros2.tf_listener_wrapper import TFListenerWrapper
 
-            if self._client is None:
-                self._client = ActionClientWrapper(
-                    RobotCommand,
-                    action_ns,
-                    self.node,
-                    wait_for_server=False,
-                )
             if self.tf_listener is None:
                 self.tf_listener = TFListenerWrapper(self.node)
-        if not self._client.wait_for_server(timeout_sec=0.0):
-            self.feedback_message = f"Action server '{action_ns}' unavailable"
-            return False
-        self.initialized = True
-        return True
+        return super()._init_client()
 
     def _phase_send_goal(self) -> Status | None:
         try:
