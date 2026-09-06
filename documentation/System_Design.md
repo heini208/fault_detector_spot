@@ -302,12 +302,19 @@ The core ROS2 nodes of the Fault Detector Spot system are started using a unifie
     - `tag_observation_node` (tag fusion, TF resolution, freshness, and state publishing)
     - `move_close_to_surface_node` (force-guarded surface approach action server)
     - [`record_manager`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Frecord_manager_node.py) (command recording and playback)
+    - `micro_ros_agent` (UDP bridge for ESP32 sensor mounts, automatically respawned after failure)
 
 This launch file can be invoked, for example, with:
 
 ```
 ros2 launch fault_detector_spot fault_detector_launch.py
 ```
+
+The sensor bridge uses UDP/IPv4 port `8888` by default. The launch arguments
+`launch_micro_ros_agent`, `micro_ros_agent_transport`,
+`micro_ros_agent_port`, and `micro_ros_agent_verbosity` allow deployment-time
+configuration. The separate `microros_ws` overlay must be sourced before the
+system launch so ROS 2 can resolve the Agent executable.
 
 ---
 

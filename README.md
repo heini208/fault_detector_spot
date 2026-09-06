@@ -123,19 +123,39 @@ The **primary launch file** is `fault_detector_launch.py`, which starts:
 - `tag_observation_node` – tag fusion, TF resolution, and state publishing
 - `move_close_to_surface_node` – force-guarded surface approach action server
 - `record_manager` – command recording & playback node
+- `micro_ros_agent` – UDP bridge for ESP32 micro-ROS sensor mounts
 
 From your ROS 2 workspace:
 
 ```bash
+source /opt/ros/humble/setup.bash
+source ~/Projects/spot/spot_sensor/microros_ws/install/local_setup.bash
 source install/setup.bash
 
 ros2 launch fault_detector_spot fault_detector_launch.py
+```
+
+The Agent defaults to UDP/IPv4 port `8888`, matching the sensor-mount firmware.
+Its transport, port, and log level are configurable launch arguments:
+
+```bash
+ros2 launch fault_detector_spot fault_detector_launch.py \
+  micro_ros_agent_port:=8888 micro_ros_agent_verbosity:=4
+```
+
+To run an Agent separately for debugging, disable the managed process so two
+Agents do not compete for the same UDP port:
+
+```bash
+ros2 launch fault_detector_spot fault_detector_launch.py \
+  launch_micro_ros_agent:=false
 ```
 
 Requirements:
 
 - Spot is powered on and connected to the ROS machine (via `spot_ros2` configuration).
 - `fault_detector_msgs` and `spot_ros2` are built and sourced.
+- The `microros_ws` overlay containing `micro_ros_agent` is built and sourced.
 - AprilTag config file (e.g. `config/my_tags.yaml`) matches your tags in the environment.
 
 ### 4.2 Simulation / reduced setup

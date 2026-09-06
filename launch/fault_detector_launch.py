@@ -3,6 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -36,6 +37,14 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     navigation_map_root = LaunchConfiguration("navigation_map_root")
     recording_root = LaunchConfiguration("recording_root")
+    launch_micro_ros_agent = LaunchConfiguration("launch_micro_ros_agent")
+    micro_ros_agent_transport = LaunchConfiguration(
+        "micro_ros_agent_transport"
+    )
+    micro_ros_agent_port = LaunchConfiguration("micro_ros_agent_port")
+    micro_ros_agent_verbosity = LaunchConfiguration(
+        "micro_ros_agent_verbosity"
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -52,6 +61,41 @@ def generate_launch_description():
             "recording_root",
             default_value=str(default_recording_root()),
             description="Persistent semantic command recording directory",
+        ),
+        DeclareLaunchArgument(
+            "launch_micro_ros_agent",
+            default_value="true",
+            description="Start the micro-ROS Agent for ESP32 sensor mounts",
+        ),
+        DeclareLaunchArgument(
+            "micro_ros_agent_transport",
+            default_value="udp4",
+            description="micro-ROS Agent transport",
+        ),
+        DeclareLaunchArgument(
+            "micro_ros_agent_port",
+            default_value="8888",
+            description="UDP port used by the micro-ROS Agent",
+        ),
+        DeclareLaunchArgument(
+            "micro_ros_agent_verbosity",
+            default_value="4",
+            description="micro-ROS Agent log verbosity (0-6)",
+        ),
+        Node(
+            package="micro_ros_agent",
+            executable="micro_ros_agent",
+            output="screen",
+            arguments=[
+                micro_ros_agent_transport,
+                "--port",
+                micro_ros_agent_port,
+                "-v",
+                micro_ros_agent_verbosity,
+            ],
+            condition=IfCondition(launch_micro_ros_agent),
+            respawn=True,
+            respawn_delay=2.0,
         ),
         Node(
             package="fault_detector_spot",
