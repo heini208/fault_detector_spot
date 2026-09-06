@@ -71,21 +71,21 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
         1,
         1,
     )
-    assert layout.getItemPosition(layout.indexOf(panel.sensor_widget)) == (
-        1,
-        2,
-        1,
-        1,
-    )
-    assert panel.sensor_widget.layout().indexOf(sensor_indicator) >= 0
-    assert panel.sensor_widget.layout().indexOf(sensor) >= 0
-    assert panel.sensor_widget.layout().indexOf(confirm) >= 0
-    assert layout.getItemPosition(layout.indexOf(panel.agent_widget)) == (
+    assert layout.getItemPosition(layout.indexOf(panel.hardware_widget)) == (
         2,
         0,
         1,
         3,
     )
+    hardware_layout = panel.hardware_widget.layout()
+    assert hardware_layout.indexOf(panel.agent_widget) >= 0
+    assert hardware_layout.indexOf(panel.sensor_widget) >= 0
+    assert hardware_layout.indexOf(panel.agent_widget) < (
+        hardware_layout.indexOf(panel.sensor_widget)
+    )
+    assert panel.sensor_widget.layout().indexOf(sensor_indicator) >= 0
+    assert panel.sensor_widget.layout().indexOf(sensor) >= 0
+    assert panel.sensor_widget.layout().indexOf(confirm) >= 0
     assert panel.agent_widget.layout().indexOf(agent_indicator) >= 0
     assert panel.agent_widget.layout().indexOf(agent_endpoint) >= 0
     assert panel.agent_widget.layout().indexOf(agent_copy) >= 0
@@ -97,4 +97,6 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
     assert sensor.sizePolicy().horizontalPolicy() == QSizePolicy.Maximum
     sensor_layout = panel.sensor_widget.layout()
     assert sensor_layout.indexOf(sensor) + 1 == sensor_layout.indexOf(confirm)
-    assert sensor_layout.itemAt(sensor_layout.count() - 1).spacerItem() is not None
+    assert hardware_layout.itemAt(
+        hardware_layout.count() - 1
+    ).spacerItem() is not None

@@ -83,7 +83,7 @@ def test_battery_percentage_is_clamped_to_valid_display_range():
     assert behavior.latest_battery_percentage == 100.0
 
 
-def test_status_panel_subscribes_and_places_battery_after_sensor(application):
+def test_status_panel_subscribes_and_places_battery_in_global_row(application):
     parent = QWidget()
     parent.node = FakeNode()
     sensor_status = QLabel("Probe")
@@ -108,9 +108,12 @@ def test_status_panel_subscribes_and_places_battery_after_sensor(application):
     assert subscription_args[0] is Float32
     assert subscription_args[1] == "fault_detector/state/battery_percentage"
 
-    sensor_layout = panel.sensor_widget.layout()
-    assert sensor_layout.indexOf(panel.battery_label) > sensor_layout.indexOf(
-        confirm
+    layout = panel.grid_layout
+    assert layout.getItemPosition(layout.indexOf(panel.battery_label)) == (
+        1,
+        2,
+        1,
+        1,
     )
 
     message = Float32()

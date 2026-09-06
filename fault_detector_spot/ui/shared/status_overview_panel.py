@@ -78,9 +78,6 @@ class StatusOverviewPanel(QFrame):
         sensor_layout.addWidget(sensor_indicator_label)
         sensor_layout.addWidget(sensor_status_label)
         sensor_layout.addWidget(sensor_confirm_button)
-        sensor_layout.addSpacing(8)
-        sensor_layout.addWidget(self.battery_label)
-        sensor_layout.addStretch()
 
         agent_widget = QWidget()
         agent_layout = QHBoxLayout(agent_widget)
@@ -90,7 +87,15 @@ class StatusOverviewPanel(QFrame):
         agent_layout.addWidget(agent_indicator_label)
         agent_layout.addWidget(agent_endpoint_button)
         agent_layout.addWidget(agent_copy_button)
-        agent_layout.addStretch()
+
+        hardware_widget = QWidget()
+        hardware_layout = QHBoxLayout(hardware_widget)
+        hardware_layout.setContentsMargins(0, 0, 0, 0)
+        hardware_layout.setSpacing(4)
+        hardware_layout.addWidget(agent_widget)
+        hardware_layout.addSpacing(14)
+        hardware_layout.addWidget(sensor_widget)
+        hardware_layout.addStretch()
 
         layout.addWidget(status_label, 0, 0)
         layout.addWidget(command_status_label, 0, 1)
@@ -99,8 +104,8 @@ class StatusOverviewPanel(QFrame):
 
         layout.addWidget(buffer_label, 1, 0)
         layout.addWidget(visible_label, 1, 1)
-        layout.addWidget(sensor_widget, 1, 2)
-        layout.addWidget(agent_widget, 2, 0, 1, 3)
+        layout.addWidget(self.battery_label, 1, 2)
+        layout.addWidget(hardware_widget, 2, 0, 1, 3)
 
         layout.setColumnStretch(0, 2)
         layout.setColumnStretch(1, 2)
@@ -108,6 +113,7 @@ class StatusOverviewPanel(QFrame):
 
         self.sensor_widget = sensor_widget
         self.agent_widget = agent_widget
+        self.hardware_widget = hardware_widget
         self.grid_layout = layout
         self._init_battery_subscription(parent)
 
