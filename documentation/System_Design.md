@@ -325,9 +325,12 @@ resolve the Agent executable.
 
 The sensor-head connection authority polls the ROS graph for exact
 `fault_detector_msgs/srv/SetSensorAcquisition` services under
-`/fault_detector/sensors/<sensor_id>/set_acquisition`. It compares discovered
-IDs with the authoritative pending or active `SensorAttachmentState`, applies a
-three-second disappearance grace period, and publishes the resulting typed
+`/fault_detector/sensors/<sensor_id>/set_acquisition`. Sensor firmware enables
+the Micro XRCE-DDS client's hard-liveliness check with a three-second timeout.
+The Agent probes an inactive XRCE session and destroys it when the device no
+longer responds, which also removes the stale DDS service after abrupt power
+loss. The authority compares discovered IDs with the pending or active
+`SensorAttachmentState` and publishes the typed
 `fault_detector/state/sensor_head_connection` snapshot. Agent availability,
 physical attachment, and sensor-head reachability are therefore separate facts.
 

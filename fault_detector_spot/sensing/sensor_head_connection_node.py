@@ -2,7 +2,7 @@
 
 import re
 import time
-from typing import Dict, Iterable, Optional, Sequence, Tuple
+from typing import Iterable, Optional, Sequence, Tuple
 
 from fault_detector_msgs.msg import (
     MicroRosAgentState,
@@ -43,33 +43,6 @@ def discovered_sensor_ids(
         if match is not None:
             sensor_ids.add(match.group(1))
     return tuple(sorted(sensor_ids))
-
-
-class SensorHeadPresenceTracker:
-    """Keep brief ROS graph dropouts from flickering connection state."""
-
-    def __init__(self, absence_grace_sec: float = 3.0):
-        """Configure how long a missing graph endpoint remains present."""
-        self.absence_grace_sec = max(0.0, float(absence_grace_sec))
-        self._last_seen: Dict[str, float] = {}
-
-    def observe(
-        self,
-        sensor_ids: Iterable[str],
-        now: Optional[float] = None,
-    ) -> Tuple[str, ...]:
-        """Record one graph observation and return grace-filtered IDs."""
-        observed_at = time.monotonic() if now is None else float(now)
-        for sensor_id in sensor_ids:
-            self._last_seen[sensor_id] = observed_at
-        expired = []
-        for sensor_id, last_seen_at in self._last_seen.items():
-            age = observed_at - last_seen_at
-            if age > self.absence_grace_sec:
-                expired.append(sensor_id)
-        for sensor_id in expired:
-            del self._last_seen[sensor_id]
-        return tuple(sorted(self._last_seen))
 
 
 def selected_sensor_id(attachment: SensorAttachmentState) -> str:
@@ -141,7 +114,6 @@ class SensorHeadConnectionNode(Node):
         """Create graph polling, attachment, Agent, and state endpoints."""
         super().__init__("sensor_head_connection")
         self.declare_parameter("sensor_head.poll_period_sec", 1.0)
-        self.declare_parameter("sensor_head.absence_grace_sec", 3.0)
         self.declare_parameter("sensor_head.agent_stale_after_sec", 3.0)
 
         poll_period = max(
@@ -149,9 +121,6 @@ class SensorHeadConnectionNode(Node):
             float(
                 self.get_parameter("sensor_head.poll_period_sec").value
             ),
-        )
-        absence_grace = float(
-            self.get_parameter("sensor_head.absence_grace_sec").value
         )
         self.agent_stale_after_sec = max(
             0.2,
@@ -162,7 +131,6 @@ class SensorHeadConnectionNode(Node):
             ),
         )
 
-        self._presence = SensorHeadPresenceTracker(absence_grace)
         self._attachment = None
         self._agent_running = None
         self._agent_received_at = None
@@ -206,13 +174,12 @@ class SensorHeadConnectionNode(Node):
     def poll(self) -> SensorHeadConnectionState:
         """Inspect the graph and publish one connection snapshot."""
         now = time.monotonic()
-        observed = discovered_sensor_ids(
+        connected = discovered_sensor_ids(
             self.get_service_names_and_types()
         )
-        connected = self._presence.observe(observed, now)
-        agent_running = self._fresh_agent_state(now)
-        if agent_running is False:
-            connected = ()
+        agent_running = (
+            True if connected else self._fresh_agent_state(now)
+        )
         state, expected, detail = classify_connection(
             agent_running,
             self._attachment,

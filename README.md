@@ -166,11 +166,11 @@ ros2 launch fault_detector_spot fault_detector_launch.py \
 ```
 
 The hardware row reports physical attachment and network connection separately.
-The attachment remains the confirmed source of hand-to-probe geometry; a head
-is considered connected when it exposes the exact typed service
-`/fault_detector/sensors/<sensor_id>/set_acquisition`. Brief graph dropouts are
-held for three seconds to avoid status flicker. A different connected ID is
-shown as a mismatch and is never substituted automatically.
+The attachment remains the confirmed source of hand-to-probe geometry. The host
+discovers a head from its exact typed acquisition service. Each ESP32 enables
+Micro XRCE-DDS hard liveliness, so the Agent removes the service when that
+client stops responding. A different connected ID is shown as a mismatch and
+is never substituted automatically.
 
 The **Sensor Mounts** tab lists connected head IDs above the editable Mount ID
 field. `Use ID` copies the selected detected ID into the form, avoiding manual

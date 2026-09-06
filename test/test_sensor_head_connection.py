@@ -6,7 +6,6 @@ from fault_detector_msgs.msg import (
 )
 
 from fault_detector_spot.sensing.sensor_head_connection_node import (
-    SensorHeadPresenceTracker,
     classify_connection,
     discovered_sensor_ids,
 )
@@ -39,17 +38,6 @@ def test_discovery_requires_exact_namespace_and_service_type():
     )
 
     assert discovered_sensor_ids(services) == ("bmm150_probe",)
-
-
-def test_presence_tracker_applies_disappearance_grace_period():
-    """Keep a missing service briefly, then remove it deterministically."""
-    tracker = SensorHeadPresenceTracker(absence_grace_sec=3.0)
-
-    assert tracker.observe(("bmm150_probe",), now=10.0) == (
-        "bmm150_probe",
-    )
-    assert tracker.observe((), now=12.9) == ("bmm150_probe",)
-    assert tracker.observe((), now=13.1) == ()
 
 
 def test_confirmed_matching_head_is_reported_connected():
