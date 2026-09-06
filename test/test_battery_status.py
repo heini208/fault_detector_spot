@@ -49,6 +49,9 @@ def make_status_panel(parent=None):
         QLabel("●"),
         QLabel("No sensor"),
         QPushButton("✓"),
+        QLabel("●"),
+        QPushButton("192.0.2.10:8888"),
+        QPushButton("Copy"),
         QPushButton("EMERGENCY STOP"),
         parent,
     )
@@ -94,6 +97,9 @@ def test_status_panel_subscribes_and_places_battery_after_sensor(application):
         QLabel("●"),
         sensor_status,
         confirm,
+        QLabel("●"),
+        QPushButton("192.0.2.10:8888"),
+        QPushButton("Copy"),
         QPushButton("EMERGENCY STOP"),
         parent,
     )

@@ -33,6 +33,7 @@ from .navigation.base_movement_controls import BaseMovementControls
 from .navigation.controls import NavigationControls
 from .recording.controls import RecordingControls
 from .ros.application_client import ApplicationClient
+from .ros.micro_ros_agent_status_client import MicroRosAgentStatusClient
 from .ros.navigation_setup_client import NavigationSetupClient
 from .ros.probe_setup_client import ProbeSetupClient
 from .ros.sensor_attachment_client import SensorAttachmentClient
@@ -68,6 +69,25 @@ class Fault_Detector_UI(QWidget):
         self.sensor_confirm_button.clicked.connect(
             self._request_sensor_state_confirmation
         )
+        self.agent_indicator_label = QLabel("●")
+        self.agent_indicator_label.setAlignment(Qt.AlignCenter)
+        self.agent_indicator_label.setFixedWidth(12)
+        self.agent_endpoint_button = QPushButton("Show IP")
+        self.agent_endpoint_button.setCheckable(True)
+        self.agent_endpoint_button.setEnabled(False)
+        self.agent_endpoint_button.toggled.connect(
+            self._set_agent_endpoint_visibility
+        )
+        self.agent_copy_button = QPushButton("Copy")
+        self.agent_copy_button.setVisible(False)
+        self.agent_copy_button.clicked.connect(
+            self._copy_agent_configuration
+        )
+        self._agent_endpoint_text = "IP unavailable"
+        self._agent_command = ""
+        self._agent_endpoint_visible = False
+        self._agent_status_stale = True
+        self.set_micro_ros_agent_status(None)
         self.set_sensor_status("unknown")
         self._buffer_text = "Buffer: []"
 
@@ -79,6 +99,7 @@ class Fault_Detector_UI(QWidget):
         self.probe_setup_client = None
         self.sensor_attachment_client = None
         self.sensor_registry_client = None
+        self.micro_ros_agent_status_client = None
         self._sensor_definitions = {}
         self._sensor_attachment_state = None
         self.inspection_object_root = self._inspection_root_parameter()
@@ -131,6 +152,9 @@ class Fault_Detector_UI(QWidget):
             self.sensor_indicator_label,
             self.sensor_status_label,
             self.sensor_confirm_button,
+            self.agent_indicator_label,
+            self.agent_endpoint_button,
+            self.agent_copy_button,
             self._make_estop_button(),
             self,
         )
@@ -168,6 +192,89 @@ class Fault_Detector_UI(QWidget):
         )
         self.sensor_indicator_label.setToolTip(tooltip)
         self.sensor_status_label.setText(sensor_name.strip() or "Unknown")
+
+    def set_micro_ros_agent_status(
+        self,
+        running,
+        address: str = "",
+        port: int = 0,
+        detail: str = "Agent status unavailable",
+    ) -> None:
+        if running is True:
+            color = "#2E7D32"
+            state_text = "Running"
+        elif running is False:
+            color = "#C62828"
+            state_text = "Not running"
+        else:
+            color = "#757575"
+            state_text = "Status unavailable"
+        self.agent_indicator_label.setStyleSheet(
+            f"color: {color}; font-size: 14px;"
+        )
+        self.agent_indicator_label.setToolTip(
+            f"{state_text}. {detail}".strip()
+        )
+
+        normalized_address = address.strip()
+        normalized_port = int(port)
+        if normalized_address and normalized_port > 0:
+            self._agent_endpoint_text = (
+                f"{normalized_address}:{normalized_port}"
+            )
+            self._agent_command = (
+                f"set-agent {normalized_address} {normalized_port}"
+            )
+            self.agent_endpoint_button.setEnabled(True)
+        else:
+            self._agent_endpoint_text = "IP unavailable"
+            self._agent_command = ""
+            self._agent_endpoint_visible = False
+            self.agent_endpoint_button.setEnabled(False)
+            self.agent_endpoint_button.setToolTip(detail)
+        self._refresh_agent_endpoint_visibility()
+
+    def _set_agent_endpoint_visibility(self, visible: bool) -> None:
+        self._agent_endpoint_visible = bool(visible and self._agent_command)
+        self._refresh_agent_endpoint_visibility()
+
+    def _refresh_agent_endpoint_visibility(self) -> None:
+        visible = bool(self._agent_endpoint_visible and self._agent_command)
+        self.agent_endpoint_button.blockSignals(True)
+        self.agent_endpoint_button.setChecked(visible)
+        self.agent_endpoint_button.blockSignals(False)
+        self.agent_copy_button.setVisible(visible)
+        if not self._agent_command:
+            self.agent_endpoint_button.setText("IP unavailable")
+            return
+        if visible:
+            self.agent_endpoint_button.setText(self._agent_endpoint_text)
+            self.agent_endpoint_button.setToolTip("Click to hide Agent IP")
+            self.agent_copy_button.setToolTip(
+                f"Copy: {self._agent_command}"
+            )
+            return
+        self.agent_endpoint_button.setText("Show IP")
+        self.agent_endpoint_button.setToolTip("Click to show Agent IP")
+
+    def _process_micro_ros_agent_status(self, state) -> None:
+        self._agent_status_stale = False
+        self.set_micro_ros_agent_status(
+            bool(state.running),
+            state.advertised_address,
+            int(state.port),
+            state.detail,
+        )
+
+    def _copy_agent_configuration(self) -> None:
+        if not self._agent_command:
+            return
+        QApplication.clipboard().setText(self._agent_command)
+        self.agent_copy_button.setText("Copied")
+        QTimer.singleShot(1200, self._restore_agent_copy_button_text)
+
+    def _restore_agent_copy_button_text(self) -> None:
+        self.agent_copy_button.setText("Copy")
 
     def _process_sensor_definitions(self, definitions):
         definitions = tuple(definitions)
@@ -446,6 +553,12 @@ class Fault_Detector_UI(QWidget):
 
     def init_ros_communication(self):
         self.application_client = ApplicationClient(self.node)
+        self.micro_ros_agent_status_client = MicroRosAgentStatusClient(
+            self.node
+        )
+        self.micro_ros_agent_status_client.state_changed.connect(
+            self._process_micro_ros_agent_status
+        )
         self.sensor_registry_client = SensorRegistryClient(self.node)
         self.sensor_registry_client.definitions_changed.connect(
             self._process_sensor_definitions
@@ -528,6 +641,20 @@ class Fault_Detector_UI(QWidget):
     def _spin_and_refresh(self):
         if self.node:
             rclpy.spin_once(self.node, timeout_sec=0.001)
+        client = self.micro_ros_agent_status_client
+        if (
+            client is not None
+            and client.is_stale()
+            and not self._agent_status_stale
+        ):
+            self._agent_status_stale = True
+            last_state = client.last_state
+            self.set_micro_ros_agent_status(
+                None,
+                getattr(last_state, "advertised_address", ""),
+                getattr(last_state, "port", 0),
+                "Agent status updates stopped",
+            )
         parts = []
         for tag_id in sorted(self.visible_tags.keys()):
             color = "green" if tag_id in self.reachable_tags else "red"
@@ -750,6 +877,8 @@ class Fault_Detector_UI(QWidget):
             self.sensor_registry_client.destroy()
         if self.sensor_attachment_client is not None:
             self.sensor_attachment_client.destroy()
+        if self.micro_ros_agent_status_client is not None:
+            self.micro_ros_agent_status_client.destroy()
         if self.application_client is not None:
             self.application_client.destroy()
         event.accept()

@@ -28,6 +28,9 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
     sensor_indicator = QLabel("●")
     sensor = QLabel("No sensor")
     confirm = QPushButton("✓")
+    agent_indicator = QLabel("●")
+    agent_endpoint = QPushButton("192.0.2.10:8888")
+    agent_copy = QPushButton("Copy")
     estop = QPushButton("EMERGENCY STOP")
 
     panel = StatusOverviewPanel(
@@ -39,6 +42,9 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
         sensor_indicator,
         sensor,
         confirm,
+        agent_indicator,
+        agent_endpoint,
+        agent_copy,
         estop,
     )
     layout = panel.grid_layout
@@ -74,6 +80,15 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
     assert panel.sensor_widget.layout().indexOf(sensor_indicator) >= 0
     assert panel.sensor_widget.layout().indexOf(sensor) >= 0
     assert panel.sensor_widget.layout().indexOf(confirm) >= 0
+    assert layout.getItemPosition(layout.indexOf(panel.agent_widget)) == (
+        2,
+        0,
+        1,
+        3,
+    )
+    assert panel.agent_widget.layout().indexOf(agent_indicator) >= 0
+    assert panel.agent_widget.layout().indexOf(agent_endpoint) >= 0
+    assert panel.agent_widget.layout().indexOf(agent_copy) >= 0
 
     assert buffer_label.sizePolicy().horizontalPolicy() == (
         QSizePolicy.Expanding

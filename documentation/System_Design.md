@@ -312,9 +312,15 @@ ros2 launch fault_detector_spot fault_detector_launch.py
 
 The sensor bridge uses UDP/IPv4 port `8888` by default. The launch arguments
 `launch_micro_ros_agent`, `micro_ros_agent_transport`,
-`micro_ros_agent_port`, and `micro_ros_agent_verbosity` allow deployment-time
-configuration. The separate `microros_ws` overlay must be sourced before the
-system launch so ROS 2 can resolve the Agent executable.
+`micro_ros_agent_port`, `micro_ros_agent_address`, and
+`micro_ros_agent_verbosity` allow deployment-time configuration. A dedicated
+host status node verifies that the Agent process owns the configured UDP port
+and publishes its advertised LAN endpoint. The UI treats missing status updates
+as stale and presents process state as a colored indicator. The endpoint remains
+hidden by default, can be explicitly revealed and hidden again, and exposes a
+separate copy control for the complete ESP32 `set-agent` command. The separate
+`microros_ws` overlay must be sourced before the system launch so ROS 2 can
+resolve the Agent executable.
 
 ---
 

@@ -42,6 +42,7 @@ def generate_launch_description():
         "micro_ros_agent_transport"
     )
     micro_ros_agent_port = LaunchConfiguration("micro_ros_agent_port")
+    micro_ros_agent_address = LaunchConfiguration("micro_ros_agent_address")
     micro_ros_agent_verbosity = LaunchConfiguration(
         "micro_ros_agent_verbosity"
     )
@@ -78,6 +79,13 @@ def generate_launch_description():
             description="UDP port used by the micro-ROS Agent",
         ),
         DeclareLaunchArgument(
+            "micro_ros_agent_address",
+            default_value="auto",
+            description=(
+                "LAN IPv4 advertised to sensor mounts, or auto to detect it"
+            ),
+        ),
+        DeclareLaunchArgument(
             "micro_ros_agent_verbosity",
             default_value="4",
             description="micro-ROS Agent log verbosity (0-6)",
@@ -96,6 +104,18 @@ def generate_launch_description():
             condition=IfCondition(launch_micro_ros_agent),
             respawn=True,
             respawn_delay=2.0,
+        ),
+        Node(
+            package="fault_detector_spot",
+            executable="micro_ros_agent_status",
+            name="micro_ros_agent_status",
+            output="screen",
+            parameters=[{
+                "agent.transport": micro_ros_agent_transport,
+                "agent.port": micro_ros_agent_port,
+                "agent.advertised_address": micro_ros_agent_address,
+                "use_sim_time": use_sim_time,
+            }],
         ),
         Node(
             package="fault_detector_spot",

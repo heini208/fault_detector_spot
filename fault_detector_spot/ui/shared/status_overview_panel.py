@@ -10,9 +10,8 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QWidget,
 )
-from std_msgs.msg import Float32
-
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
+from std_msgs.msg import Float32
 
 
 class StatusOverviewPanel(QFrame):
@@ -28,6 +27,9 @@ class StatusOverviewPanel(QFrame):
         sensor_indicator_label: QLabel,
         sensor_status_label: QLabel,
         sensor_confirm_button: QPushButton,
+        agent_indicator_label: QLabel,
+        agent_endpoint_button: QPushButton,
+        agent_copy_button: QPushButton,
         estop_button: QPushButton,
         parent=None,
     ):
@@ -80,6 +82,16 @@ class StatusOverviewPanel(QFrame):
         sensor_layout.addWidget(self.battery_label)
         sensor_layout.addStretch()
 
+        agent_widget = QWidget()
+        agent_layout = QHBoxLayout(agent_widget)
+        agent_layout.setContentsMargins(0, 0, 0, 0)
+        agent_layout.setSpacing(4)
+        agent_layout.addWidget(QLabel("micro-ROS Agent:"))
+        agent_layout.addWidget(agent_indicator_label)
+        agent_layout.addWidget(agent_endpoint_button)
+        agent_layout.addWidget(agent_copy_button)
+        agent_layout.addStretch()
+
         layout.addWidget(status_label, 0, 0)
         layout.addWidget(command_status_label, 0, 1)
         layout.addWidget(navigation_mode_label, 0, 2)
@@ -88,12 +100,14 @@ class StatusOverviewPanel(QFrame):
         layout.addWidget(buffer_label, 1, 0)
         layout.addWidget(visible_label, 1, 1)
         layout.addWidget(sensor_widget, 1, 2)
+        layout.addWidget(agent_widget, 2, 0, 1, 3)
 
         layout.setColumnStretch(0, 2)
         layout.setColumnStretch(1, 2)
         layout.setColumnStretch(2, 2)
 
         self.sensor_widget = sensor_widget
+        self.agent_widget = agent_widget
         self.grid_layout = layout
         self._init_battery_subscription(parent)
 

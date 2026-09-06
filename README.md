@@ -143,6 +143,18 @@ ros2 launch fault_detector_spot fault_detector_launch.py \
   micro_ros_agent_port:=8888 micro_ros_agent_verbosity:=4
 ```
 
+The status overview shows a green/red Agent indicator while keeping the
+advertised endpoint hidden by default. Click `Show IP` to reveal `IPv4:port`;
+the adjacent `Copy` button copies the complete ESP32 serial command, for example
+`set-agent 192.168.178.69 8888`. Click the endpoint again to hide it. The address
+is selected from the host's default IPv4 route. On hosts with multiple routes
+(for example a VPN), override it explicitly:
+
+```bash
+ros2 launch fault_detector_spot fault_detector_launch.py \
+  micro_ros_agent_address:=192.168.178.69
+```
+
 To run an Agent separately for debugging, disable the managed process so two
 Agents do not compete for the same UDP port:
 

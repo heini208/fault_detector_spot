@@ -16,9 +16,11 @@ def test_primary_launch_manages_configurable_micro_ros_agent():
     assert '"launch_micro_ros_agent"' in source
     assert 'default_value="udp4"' in source
     assert 'default_value="8888"' in source
+    assert 'default_value="auto"' in source
     assert "condition=IfCondition(launch_micro_ros_agent)" in source
     assert "respawn=True" in source
     assert "respawn_delay=2.0" in source
+    assert 'executable="micro_ros_agent_status"' in source
 
 
 def test_package_declares_micro_ros_agent_runtime_dependency():
