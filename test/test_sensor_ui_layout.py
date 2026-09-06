@@ -102,6 +102,44 @@ def test_create_form_accepts_test_as_mount_id(application):
     assert intents[0].display_name == "Test sensor"
 
 
+def test_detected_head_id_is_optional_autofill(application):
+    controls = SensorControls()
+    connection = SimpleNamespace(
+        status=SimpleNamespace(value="unassigned"),
+        expected_sensor_id="",
+        connected_sensor_ids=("bmm150_probe",),
+        detail="Connected sensor head is not assigned",
+    )
+
+    controls.apply_sensor_head_connection(connection)
+
+    assert controls.mount_id_field.text() == ""
+    assert controls.detected_mount_dropdown.currentData() == "bmm150_probe"
+    assert controls.use_detected_mount_button.isEnabled()
+
+    controls.use_detected_mount_button.click()
+
+    assert controls.mount_id_field.text() == "bmm150_probe"
+    controls.mount_id_field.setText("manual_offline_probe")
+    assert controls.mount_id_field.text() == "manual_offline_probe"
+
+
+def test_no_connected_head_does_not_disable_manual_creation(application):
+    controls = SensorControls()
+    connection = SimpleNamespace(
+        status=SimpleNamespace(value="no_heads"),
+        expected_sensor_id="",
+        connected_sensor_ids=(),
+        detail="No sensor heads are connected",
+    )
+
+    controls.apply_sensor_head_connection(connection)
+
+    assert not controls.use_detected_mount_button.isEnabled()
+    assert controls.mount_id_field.isEnabled()
+    assert controls.save_mount_button.isEnabled()
+
+
 def test_existing_id_requires_explicit_edit_mode(application):
     controls = SensorControls()
     controls.apply_definitions((definition(),))

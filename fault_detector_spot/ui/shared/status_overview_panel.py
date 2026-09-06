@@ -27,6 +27,8 @@ class StatusOverviewPanel(QFrame):
         sensor_indicator_label: QLabel,
         sensor_status_label: QLabel,
         sensor_confirm_button: QPushButton,
+        sensor_connection_indicator_label: QLabel,
+        sensor_connection_status_label: QLabel,
         agent_indicator_label: QLabel,
         agent_endpoint_button: QPushButton,
         agent_copy_button: QPushButton,
@@ -78,6 +80,10 @@ class StatusOverviewPanel(QFrame):
         sensor_layout.addWidget(sensor_indicator_label)
         sensor_layout.addWidget(sensor_status_label)
         sensor_layout.addWidget(sensor_confirm_button)
+        sensor_layout.addSpacing(8)
+        sensor_layout.addWidget(QLabel("Head:"))
+        sensor_layout.addWidget(sensor_connection_indicator_label)
+        sensor_layout.addWidget(sensor_connection_status_label)
 
         agent_widget = QWidget()
         agent_layout = QHBoxLayout(agent_widget)

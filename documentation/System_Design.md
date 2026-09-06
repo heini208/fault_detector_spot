@@ -303,6 +303,7 @@ The core ROS2 nodes of the Fault Detector Spot system are started using a unifie
     - `move_close_to_surface_node` (force-guarded surface approach action server)
     - [`record_manager`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Frecord_manager_node.py) (command recording and playback)
     - `micro_ros_agent` (UDP bridge for ESP32 sensor mounts, automatically respawned after failure)
+    - `sensor_head_connection` (typed sensor endpoint discovery and attachment-ID matching)
 
 This launch file can be invoked, for example, with:
 
@@ -321,6 +322,20 @@ hidden by default, can be explicitly revealed and hidden again, and exposes a
 separate copy control for the complete ESP32 `set-agent` command. The separate
 `microros_ws` overlay must be sourced before the system launch so ROS 2 can
 resolve the Agent executable.
+
+The sensor-head connection authority polls the ROS graph for exact
+`fault_detector_msgs/srv/SetSensorAcquisition` services under
+`/fault_detector/sensors/<sensor_id>/set_acquisition`. It compares discovered
+IDs with the authoritative pending or active `SensorAttachmentState`, applies a
+three-second disappearance grace period, and publishes the resulting typed
+`fault_detector/state/sensor_head_connection` snapshot. Agent availability,
+physical attachment, and sensor-head reachability are therefore separate facts.
+
+The UI exposes discovered IDs only as optional mount-definition autofill.
+Offline definitions remain valid and can be selected and physically confirmed.
+Motion admission continues to depend solely on confirmed hand-to-probe geometry;
+network reachability neither enables nor disables movement and never rewrites
+attachment state.
 
 ---
 

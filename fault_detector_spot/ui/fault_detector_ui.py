@@ -37,9 +37,13 @@ from .ros.micro_ros_agent_status_client import MicroRosAgentStatusClient
 from .ros.navigation_setup_client import NavigationSetupClient
 from .ros.probe_setup_client import ProbeSetupClient
 from .ros.sensor_attachment_client import SensorAttachmentClient
+from .ros.sensor_head_connection_client import SensorHeadConnectionClient
 from .ros.sensor_registry_client import SensorRegistryClient
 from .sensor.controls import SensorControls
-from .sensor.models import SensorAttachmentViewStatus
+from .sensor.models import (
+    SensorAttachmentViewStatus,
+    SensorHeadConnectionViewStatus,
+)
 from .shared.status_overview_panel import StatusOverviewPanel
 
 
@@ -69,6 +73,10 @@ class Fault_Detector_UI(QWidget):
         self.sensor_confirm_button.clicked.connect(
             self._request_sensor_state_confirmation
         )
+        self.sensor_connection_indicator_label = QLabel("●")
+        self.sensor_connection_indicator_label.setAlignment(Qt.AlignCenter)
+        self.sensor_connection_indicator_label.setFixedWidth(12)
+        self.sensor_connection_status_label = QLabel("Unknown")
         self.agent_indicator_label = QLabel("●")
         self.agent_indicator_label.setAlignment(Qt.AlignCenter)
         self.agent_indicator_label.setFixedWidth(12)
@@ -89,6 +97,7 @@ class Fault_Detector_UI(QWidget):
         self._agent_status_stale = True
         self.set_micro_ros_agent_status(None)
         self.set_sensor_status("unknown")
+        self.set_sensor_connection_status("unknown")
         self._buffer_text = "Buffer: []"
 
         self.visible_tags = {}
@@ -99,9 +108,12 @@ class Fault_Detector_UI(QWidget):
         self.probe_setup_client = None
         self.sensor_attachment_client = None
         self.sensor_registry_client = None
+        self.sensor_head_connection_client = None
         self.micro_ros_agent_status_client = None
         self._sensor_definitions = {}
         self._sensor_attachment_state = None
+        self._sensor_head_connection_state = None
+        self._sensor_connection_stale = True
         self.inspection_object_root = self._inspection_root_parameter()
 
         if self.node:
@@ -152,6 +164,8 @@ class Fault_Detector_UI(QWidget):
             self.sensor_indicator_label,
             self.sensor_status_label,
             self.sensor_confirm_button,
+            self.sensor_connection_indicator_label,
+            self.sensor_connection_status_label,
             self.agent_indicator_label,
             self.agent_endpoint_button,
             self.agent_copy_button,
@@ -234,6 +248,27 @@ class Fault_Detector_UI(QWidget):
             self.agent_endpoint_button.setToolTip(detail)
         self._refresh_agent_endpoint_visibility()
 
+    def set_sensor_connection_status(
+        self,
+        status: str,
+        text: str = "Unknown",
+        detail: str = "Sensor-head status unavailable",
+    ) -> None:
+        colors = {
+            "connected": "#2E7D32",
+            "unassigned": "#EF6C00",
+            "mismatch": "#C62828",
+            "offline": "#757575",
+            "unknown": "#757575",
+        }
+        color = colors.get(status, colors["unknown"])
+        self.sensor_connection_indicator_label.setStyleSheet(
+            f"color: {color}; font-size: 14px;"
+        )
+        self.sensor_connection_indicator_label.setToolTip(detail)
+        self.sensor_connection_status_label.setText(text)
+        self.sensor_connection_status_label.setToolTip(detail)
+
     def _set_agent_endpoint_visibility(self, visible: bool) -> None:
         self._agent_endpoint_visible = bool(visible and self._agent_command)
         self._refresh_agent_endpoint_visibility()
@@ -292,6 +327,13 @@ class Fault_Detector_UI(QWidget):
             self.sensor_controls.apply_attachment_state(state)
         self._refresh_sensor_status()
 
+    def _process_sensor_head_connection_state(self, state):
+        self._sensor_connection_stale = False
+        self._sensor_head_connection_state = state
+        if hasattr(self, "sensor_controls"):
+            self.sensor_controls.apply_sensor_head_connection(state)
+        self._refresh_sensor_connection_status()
+
     def _sensor_display_name(self, sensor_id):
         definition = self._sensor_definitions.get(sensor_id)
         if definition is not None:
@@ -325,6 +367,48 @@ class Fault_Detector_UI(QWidget):
         )
         self.set_sensor_status("confirmed", sensor_name)
         self.sensor_confirm_button.setEnabled(False)
+
+    def _refresh_sensor_connection_status(self):
+        state = self._sensor_head_connection_state
+        if state is None:
+            self.set_sensor_connection_status("unknown")
+            return
+        connected = tuple(state.connected_sensor_ids)
+        if state.status is SensorHeadConnectionViewStatus.MATCHED:
+            self.set_sensor_connection_status(
+                "connected", "Connected", state.detail
+            )
+            return
+        if state.status is SensorHeadConnectionViewStatus.UNASSIGNED:
+            text = (
+                f"Unassigned: {connected[0]}"
+                if len(connected) == 1
+                else f"{len(connected)} unassigned"
+            )
+            self.set_sensor_connection_status(
+                "unassigned", text, state.detail
+            )
+            return
+        if state.status is SensorHeadConnectionViewStatus.MISMATCH:
+            self.set_sensor_connection_status(
+                "mismatch", "ID mismatch", state.detail
+            )
+            return
+        if state.status is SensorHeadConnectionViewStatus.NO_HEADS:
+            text = "Offline" if state.expected_sensor_id else "No head"
+            self.set_sensor_connection_status(
+                "offline", text, state.detail
+            )
+            return
+        if (
+            state.status
+            is SensorHeadConnectionViewStatus.AGENT_UNAVAILABLE
+        ):
+            self.set_sensor_connection_status(
+                "offline", "Agent unavailable", state.detail
+            )
+            return
+        self.set_sensor_connection_status("unknown", detail=state.detail)
 
     def _request_sensor_state_confirmation(self):
         state = self._sensor_attachment_state
@@ -579,6 +663,12 @@ class Fault_Detector_UI(QWidget):
         self.sensor_attachment_client.request_rejected.connect(
             self._process_application_error
         )
+        self.sensor_head_connection_client = SensorHeadConnectionClient(
+            self.node
+        )
+        self.sensor_head_connection_client.state_changed.connect(
+            self._process_sensor_head_connection_state
+        )
         self.application_client.state_changed.connect(
             self._process_application_state
         )
@@ -655,6 +745,20 @@ class Fault_Detector_UI(QWidget):
                 getattr(last_state, "port", 0),
                 "Agent status updates stopped",
             )
+        sensor_client = self.sensor_head_connection_client
+        if (
+            sensor_client is not None
+            and sensor_client.is_stale()
+            and not self._sensor_connection_stale
+        ):
+            self._sensor_connection_stale = True
+            self._sensor_head_connection_state = None
+            self.set_sensor_connection_status(
+                "unknown",
+                detail="Sensor-head status updates stopped",
+            )
+            if hasattr(self, "sensor_controls"):
+                self.sensor_controls.apply_sensor_head_connection(None)
         parts = []
         for tag_id in sorted(self.visible_tags.keys()):
             color = "green" if tag_id in self.reachable_tags else "red"
@@ -877,6 +981,8 @@ class Fault_Detector_UI(QWidget):
             self.sensor_registry_client.destroy()
         if self.sensor_attachment_client is not None:
             self.sensor_attachment_client.destroy()
+        if self.sensor_head_connection_client is not None:
+            self.sensor_head_connection_client.destroy()
         if self.micro_ros_agent_status_client is not None:
             self.micro_ros_agent_status_client.destroy()
         if self.application_client is not None:

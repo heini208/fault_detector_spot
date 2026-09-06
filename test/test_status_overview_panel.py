@@ -28,6 +28,8 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
     sensor_indicator = QLabel("●")
     sensor = QLabel("No sensor")
     confirm = QPushButton("✓")
+    sensor_connection_indicator = QLabel("●")
+    sensor_connection = QLabel("Connected")
     agent_indicator = QLabel("●")
     agent_endpoint = QPushButton("192.0.2.10:8888")
     agent_copy = QPushButton("Copy")
@@ -42,6 +44,8 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
         sensor_indicator,
         sensor,
         confirm,
+        sensor_connection_indicator,
+        sensor_connection,
         agent_indicator,
         agent_endpoint,
         agent_copy,
@@ -86,6 +90,10 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
     assert panel.sensor_widget.layout().indexOf(sensor_indicator) >= 0
     assert panel.sensor_widget.layout().indexOf(sensor) >= 0
     assert panel.sensor_widget.layout().indexOf(confirm) >= 0
+    assert panel.sensor_widget.layout().indexOf(
+        sensor_connection_indicator
+    ) >= 0
+    assert panel.sensor_widget.layout().indexOf(sensor_connection) >= 0
     assert panel.agent_widget.layout().indexOf(agent_indicator) >= 0
     assert panel.agent_widget.layout().indexOf(agent_endpoint) >= 0
     assert panel.agent_widget.layout().indexOf(agent_copy) >= 0

@@ -124,6 +124,8 @@ The **primary launch file** is `fault_detector_launch.py`, which starts:
 - `move_close_to_surface_node` – force-guarded surface approach action server
 - `record_manager` – command recording & playback node
 - `micro_ros_agent` – UDP bridge for ESP32 micro-ROS sensor mounts
+- `sensor_head_connection` – discovers acquisition endpoints and matches their
+  IDs to the selected physical sensor mount
 
 From your ROS 2 workspace:
 
@@ -162,6 +164,19 @@ Agents do not compete for the same UDP port:
 ros2 launch fault_detector_spot fault_detector_launch.py \
   launch_micro_ros_agent:=false
 ```
+
+The hardware row reports physical attachment and network connection separately.
+The attachment remains the confirmed source of hand-to-probe geometry; a head
+is considered connected when it exposes the exact typed service
+`/fault_detector/sensors/<sensor_id>/set_acquisition`. Brief graph dropouts are
+held for three seconds to avoid status flicker. A different connected ID is
+shown as a mismatch and is never substituted automatically.
+
+The **Sensor Mounts** tab lists connected head IDs above the editable Mount ID
+field. `Use ID` copies the selected detected ID into the form, avoiding manual
+transcription. Detection is optional: users can still type, save, select, and
+physically confirm an offline sensor definition. Connection state does not gate
+arm movement and does not modify physical attachment state.
 
 Requirements:
 

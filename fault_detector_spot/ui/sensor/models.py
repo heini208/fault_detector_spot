@@ -12,6 +12,17 @@ class SensorAttachmentViewStatus(str, Enum):
     ACTIVE = "active"
 
 
+class SensorHeadConnectionViewStatus(str, Enum):
+    """Presentation states for a sensor head connected through the Agent."""
+
+    UNKNOWN = "unknown"
+    AGENT_UNAVAILABLE = "agent_unavailable"
+    NO_HEADS = "no_heads"
+    UNASSIGNED = "unassigned"
+    MATCHED = "matched"
+    MISMATCH = "mismatch"
+
+
 @dataclass(frozen=True)
 class SensorDefinitionView:
     """Presentation data for one registered physical sensor."""
@@ -39,9 +50,20 @@ class SensorAttachmentView:
         return self.pending_sensor_id or self.active_sensor_id
 
 
+@dataclass(frozen=True)
+class SensorHeadConnectionView:
+    """Presentation data for discovered sensor heads and ID matching."""
+
+    status: SensorHeadConnectionViewStatus
+    expected_sensor_id: str
+    connected_sensor_ids: tuple
+    detail: str
+
+
 __all__ = [
     "SensorAttachmentView",
     "SensorAttachmentViewStatus",
     "SensorDefinitionView",
+    "SensorHeadConnectionView",
+    "SensorHeadConnectionViewStatus",
 ]
-

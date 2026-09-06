@@ -21,6 +21,7 @@ def test_primary_launch_manages_configurable_micro_ros_agent():
     assert "respawn=True" in source
     assert "respawn_delay=2.0" in source
     assert 'executable="micro_ros_agent_status"' in source
+    assert 'executable="sensor_head_connection"' in source
 
 
 def test_package_declares_micro_ros_agent_runtime_dependency():

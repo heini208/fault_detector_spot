@@ -47,6 +47,7 @@ class SensorControls(QWidget):
         super().__init__(parent)
         self._definitions = {}
         self._attachment_state = None
+        self._head_connection_state = None
         self._editing_sensor_id = ""
         self._build_ui()
         self._connect_intents()
@@ -107,6 +108,8 @@ class SensorControls(QWidget):
         self.attachment_name_value = QLabel("—")
         self.attachment_status_value = QLabel("Waiting for state")
         self.attachment_probe_frame_value = QLabel("—")
+        self.head_connection_value = QLabel("Waiting for state")
+        self.head_connection_value.setWordWrap(True)
 
         layout.addWidget(QLabel("Selected mount:"), 0, 0)
         layout.addWidget(self.attachment_name_value, 0, 1)
@@ -114,6 +117,8 @@ class SensorControls(QWidget):
         layout.addWidget(self.attachment_status_value, 0, 3)
         layout.addWidget(QLabel("Probe frame:"), 1, 0)
         layout.addWidget(self.attachment_probe_frame_value, 1, 1, 1, 3)
+        layout.addWidget(QLabel("Sensor head:"), 2, 0)
+        layout.addWidget(self.head_connection_value, 2, 1, 1, 3)
 
         self.active_mount_dropdown = QComboBox()
         self.active_mount_dropdown.addItem(
@@ -133,7 +138,7 @@ class SensorControls(QWidget):
         action_row.addWidget(self.select_mount_button)
         action_row.addWidget(self.clear_attachment_button)
 
-        layout.addLayout(action_row, 2, 0, 1, 4)
+        layout.addLayout(action_row, 3, 0, 1, 4)
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(3, 1)
         return group
@@ -187,6 +192,20 @@ class SensorControls(QWidget):
 
         self.mount_id_field = QLineEdit()
         self.mount_id_field.setPlaceholderText("e.g. test or bmm150_mount")
+        self.detected_mount_dropdown = QComboBox()
+        self.detected_mount_dropdown.addItem(
+            "No connected sensor heads",
+            "",
+        )
+        self.detected_mount_dropdown.setEnabled(False)
+        self.use_detected_mount_button = QPushButton("Use ID")
+        self.use_detected_mount_button.setEnabled(False)
+        detected_id_row = QWidget()
+        detected_id_layout = QHBoxLayout(detected_id_row)
+        detected_id_layout.setContentsMargins(0, 0, 0, 0)
+        detected_id_layout.setSpacing(6)
+        detected_id_layout.addWidget(self.detected_mount_dropdown, 1)
+        detected_id_layout.addWidget(self.use_detected_mount_button)
         self.display_name_field = QLineEdit()
         self.display_name_field.setPlaceholderText(
             "Human-readable sensor mount name"
@@ -197,6 +216,7 @@ class SensorControls(QWidget):
         )
         self.probe_frame_field.setReadOnly(True)
 
+        form.addRow("Detected head ID:", detected_id_row)
         form.addRow("Mount ID:", self.mount_id_field)
         form.addRow("Display name:", self.display_name_field)
         form.addRow("Probe frame:", self.probe_frame_field)
@@ -301,6 +321,9 @@ class SensorControls(QWidget):
         self.discard_mount_button.clicked.connect(
             self.clear_sensor_definition
         )
+        self.use_detected_mount_button.clicked.connect(
+            self._use_detected_mount_id
+        )
         self.mount_id_field.textChanged.connect(
             self._update_probe_frame_preview
         )
@@ -355,6 +378,31 @@ class SensorControls(QWidget):
         self._refresh_registry_actions()
         self._refresh_save_availability()
 
+    def apply_sensor_head_connection(self, state) -> None:
+        """Render discovered IDs without constraining manual creation."""
+        self._head_connection_state = state
+        selected_id = self.detected_mount_dropdown.currentData() or ""
+        connected_ids = (
+            tuple(state.connected_sensor_ids) if state is not None else ()
+        )
+        self.detected_mount_dropdown.blockSignals(True)
+        self.detected_mount_dropdown.clear()
+        for sensor_id in connected_ids:
+            self.detected_mount_dropdown.addItem(sensor_id, sensor_id)
+        if connected_ids:
+            index = self.detected_mount_dropdown.findData(selected_id)
+            self.detected_mount_dropdown.setCurrentIndex(
+                index if index >= 0 else 0
+            )
+        else:
+            self.detected_mount_dropdown.addItem(
+                "No connected sensor heads",
+                "",
+            )
+        self.detected_mount_dropdown.blockSignals(False)
+        self._render_head_connection_state()
+        self._refresh_detected_mount_actions()
+
     def edit_selected_sensor(self) -> None:
         """Open the selected stored sensor in the definition form."""
         definition = self._selected_definition()
@@ -381,6 +429,7 @@ class SensorControls(QWidget):
         )
         self._set_transform_fields_editable(True)
         self._refresh_save_availability()
+        self._refresh_detected_mount_actions()
 
     def clear_sensor_definition(self) -> None:
         """Reset the definition form to create a new sensor mount."""
@@ -401,6 +450,7 @@ class SensorControls(QWidget):
             "Manual transform. Enter a new mount ID and save."
         )
         self.mount_id_field.setFocus()
+        self._refresh_detected_mount_actions()
 
     def mark_sensor_save_pending(self) -> None:
         """Prevent duplicate submissions while the registry is saving."""
@@ -411,6 +461,7 @@ class SensorControls(QWidget):
         self.transform_status_value.setText(
             "Saving sensor transform..."
         )
+        self._refresh_detected_mount_actions()
 
     def finish_sensor_save(
         self,
@@ -432,6 +483,7 @@ class SensorControls(QWidget):
         self.discard_mount_button.setEnabled(True)
         self.transform_status_value.setText(detail)
         self._refresh_save_availability()
+        self._refresh_detected_mount_actions()
 
     def finish_sensor_deletion(
         self,
@@ -494,6 +546,48 @@ class SensorControls(QWidget):
             index = self.active_mount_dropdown.findData(selected_id)
             if index >= 0:
                 self.active_mount_dropdown.setCurrentIndex(index)
+
+    def _render_head_connection_state(self) -> None:
+        state = self._head_connection_state
+        if state is None:
+            self.head_connection_value.setText("Status unavailable")
+            self.head_connection_value.setToolTip("")
+            return
+        status_name = getattr(state.status, "value", str(state.status))
+        connected = tuple(state.connected_sensor_ids)
+        values = {
+            "unknown": "Status unavailable",
+            "agent_unavailable": "Agent unavailable",
+            "no_heads": "Offline" if state.expected_sensor_id else "None",
+            "unassigned": "Unassigned: " + ", ".join(connected),
+            "matched": f"Connected: {state.expected_sensor_id}",
+            "mismatch": "Mismatch: " + ", ".join(connected),
+        }
+        self.head_connection_value.setText(
+            values.get(status_name, "Status unavailable")
+        )
+        self.head_connection_value.setToolTip(state.detail)
+
+    def _use_detected_mount_id(self) -> None:
+        if self._editing_sensor_id:
+            return
+        sensor_id = self.detected_mount_dropdown.currentData() or ""
+        if not sensor_id:
+            return
+        self.mount_id_field.setText(sensor_id)
+        self.transform_status_value.setText(
+            "Detected head ID copied. Enter its display name and transform."
+        )
+
+    def _refresh_detected_mount_actions(self) -> None:
+        has_id = bool(self.detected_mount_dropdown.currentData() or "")
+        enabled = (
+            has_id
+            and not self._editing_sensor_id
+            and not self.mount_id_field.isReadOnly()
+        )
+        self.detected_mount_dropdown.setEnabled(enabled)
+        self.use_detected_mount_button.setEnabled(enabled)
 
     def _request_selected_mount(self) -> None:
         sensor_id = self.active_mount_dropdown.currentData() or ""

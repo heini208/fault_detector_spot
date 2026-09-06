@@ -119,6 +119,13 @@ def generate_launch_description():
         ),
         Node(
             package="fault_detector_spot",
+            executable="sensor_head_connection",
+            name="sensor_head_connection",
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
+        ),
+        Node(
+            package="fault_detector_spot",
             executable="fault_detector_ui",
             name="fault_detector_ui",
             output="screen",
