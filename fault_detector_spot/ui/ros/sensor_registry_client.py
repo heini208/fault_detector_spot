@@ -1,7 +1,7 @@
 """ROS client for the physical sensor definition registry."""
 
 from PyQt5.QtCore import QObject, pyqtSignal
-from fault_detector_msgs.msg import SensorDefinitionArray
+from fault_detector_msgs.msg import SensorChannel, SensorDefinitionArray
 from fault_detector_msgs.srv import (
     AddSensor,
     DeleteSensor,
@@ -15,7 +15,10 @@ from fault_detector_spot.inspection.model.sensor_models import (
     sensor_probe_frame,
 )
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
-from fault_detector_spot.ui.sensor.models import SensorDefinitionView
+from fault_detector_spot.ui.sensor.models import (
+    SensorChannelView,
+    SensorDefinitionView,
+)
 
 
 class SensorRegistryClient(QObject):
@@ -59,6 +62,7 @@ class SensorRegistryClient(QObject):
         display_name: str,
         translation_m,
         rotation_degrees,
+        channels=(),
     ):
         """Create one manually configured sensor definition."""
         return self._save_sensor(
@@ -69,6 +73,7 @@ class SensorRegistryClient(QObject):
             display_name,
             translation_m,
             rotation_degrees,
+            channels,
         )
 
     def update_sensor(
@@ -77,6 +82,7 @@ class SensorRegistryClient(QObject):
         display_name: str,
         translation_m,
         rotation_degrees,
+        channels=(),
     ):
         """Replace one existing sensor definition."""
         return self._save_sensor(
@@ -87,6 +93,7 @@ class SensorRegistryClient(QObject):
             display_name,
             translation_m,
             rotation_degrees,
+            channels,
         )
 
     def delete_sensor(self, sensor_id: str):
@@ -118,6 +125,7 @@ class SensorRegistryClient(QObject):
         display_name,
         translation_m,
         rotation_degrees,
+        channels,
     ):
         if not client.service_is_ready():
             result_signal.emit(
@@ -146,6 +154,9 @@ class SensorRegistryClient(QObject):
         request.sensor.hand_to_probe.orientation.y = quaternion.y
         request.sensor.hand_to_probe.orientation.z = quaternion.z
         request.sensor.hand_to_probe.orientation.w = quaternion.w
+        request.sensor.channels = [
+            self._channel_message(channel) for channel in channels
+        ]
 
         future = client.call_async(request)
         future.add_done_callback(
@@ -186,7 +197,23 @@ class SensorRegistryClient(QObject):
                 orientation.w,
             ),
             rotation_degrees=rpy_degrees_from_quaternion(orientation),
+            channels=tuple(
+                SensorChannelView(
+                    channel_id=channel.channel_id,
+                    topic=channel.topic,
+                    message_type=channel.message_type,
+                )
+                for channel in sensor.channels
+            ),
         )
+
+    @staticmethod
+    def _channel_message(channel):
+        message = SensorChannel()
+        message.channel_id = str(channel.channel_id).strip()
+        message.topic = str(channel.topic).strip()
+        message.message_type = str(channel.message_type).strip()
+        return message
 
     def _handle_deletion_result(self, future, sensor_id):
         try:

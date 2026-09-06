@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -25,6 +26,15 @@ from PyQt5.QtWidgets import (
 
 
 @dataclass(frozen=True)
+class SensorChannelIntent:
+    """Describe one channel entered in the sensor-mount form."""
+
+    channel_id: str
+    topic: str
+    message_type: str
+
+
+@dataclass(frozen=True)
 class SensorDefinitionIntent:
     """Describe one manually entered physical sensor transform."""
 
@@ -32,6 +42,7 @@ class SensorDefinitionIntent:
     display_name: str
     translation_m: tuple
     rotation_degrees: tuple
+    channels: tuple = ()
 
 
 class SensorControls(QWidget):
@@ -48,6 +59,7 @@ class SensorControls(QWidget):
         self._definitions = {}
         self._attachment_state = None
         self._head_connection_state = None
+        self._topic_message_types = {}
         self._editing_sensor_id = ""
         self._build_ui()
         self._connect_intents()
@@ -250,6 +262,7 @@ class SensorControls(QWidget):
         actions.addWidget(self.save_mount_button)
 
         outer.addLayout(form)
+        outer.addWidget(self._build_channels_group())
         outer.addItem(
             QSpacerItem(
                 0,
@@ -259,6 +272,73 @@ class SensorControls(QWidget):
             )
         )
         outer.addLayout(actions)
+        return group
+
+    def _build_channels_group(self) -> QGroupBox:
+        group = QGroupBox("Acquisition channels")
+        layout = QVBoxLayout(group)
+
+        help_text = QLabel(
+            "Add the ROS streams produced by this mount. Available topics "
+            "and types are suggested from the live ROS graph; offline "
+            "values can still be entered manually."
+        )
+        help_text.setWordWrap(True)
+
+        self.channel_table = QTableWidget(0, 3)
+        self.channel_table.setHorizontalHeaderLabels(
+            ("Channel ID", "ROS topic", "Message type")
+        )
+        channel_header = self.channel_table.horizontalHeader()
+        channel_header.setSectionResizeMode(
+            0,
+            QHeaderView.ResizeToContents,
+        )
+        channel_header.setSectionResizeMode(1, QHeaderView.Stretch)
+        channel_header.setSectionResizeMode(2, QHeaderView.Stretch)
+        self.channel_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.channel_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.channel_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.channel_table.setMinimumHeight(120)
+
+        editor = QGridLayout()
+        self.channel_id_field = QLineEdit()
+        self.channel_id_field.setPlaceholderText("e.g. magnetic_field")
+        self.channel_topic_field = QComboBox()
+        self.channel_topic_field.setEditable(True)
+        self.channel_topic_field.setInsertPolicy(QComboBox.NoInsert)
+        self.channel_topic_field.lineEdit().setPlaceholderText(
+            "/sensors/example/topic"
+        )
+        self.channel_message_type_field = QComboBox()
+        self.channel_message_type_field.setEditable(True)
+        self.channel_message_type_field.setInsertPolicy(QComboBox.NoInsert)
+        self.channel_message_type_field.lineEdit().setPlaceholderText(
+            "sensor_msgs/msg/MagneticField"
+        )
+
+        editor.addWidget(QLabel("Channel ID:"), 0, 0)
+        editor.addWidget(self.channel_id_field, 0, 1)
+        editor.addWidget(QLabel("ROS topic:"), 1, 0)
+        editor.addWidget(self.channel_topic_field, 1, 1)
+        editor.addWidget(QLabel("Message type:"), 2, 0)
+        editor.addWidget(self.channel_message_type_field, 2, 1)
+        editor.setColumnStretch(1, 1)
+
+        self.save_channel_button = QPushButton("Add Channel")
+        self.new_channel_button = QPushButton("New Channel")
+        self.remove_channel_button = QPushButton("Remove Selected")
+        self.remove_channel_button.setEnabled(False)
+        actions = QHBoxLayout()
+        actions.addWidget(self.save_channel_button)
+        actions.addWidget(self.new_channel_button)
+        actions.addWidget(self.remove_channel_button)
+        actions.addStretch()
+
+        layout.addWidget(help_text)
+        layout.addWidget(self.channel_table)
+        layout.addLayout(editor)
+        layout.addLayout(actions)
         return group
 
     def _build_configuration_group(self) -> QGroupBox:
@@ -327,6 +407,21 @@ class SensorControls(QWidget):
         self.mount_id_field.textChanged.connect(
             self._update_probe_frame_preview
         )
+        self.channel_table.itemSelectionChanged.connect(
+            self._populate_selected_channel
+        )
+        self.channel_topic_field.currentTextChanged.connect(
+            self._apply_topic_type_suggestion
+        )
+        self.save_channel_button.clicked.connect(
+            self._save_channel_row
+        )
+        self.new_channel_button.clicked.connect(
+            self._clear_channel_editor
+        )
+        self.remove_channel_button.clicked.connect(
+            self._remove_selected_channel
+        )
 
     def apply_definitions(self, definitions) -> None:
         """Render the authoritative physical sensor registry."""
@@ -378,6 +473,25 @@ class SensorControls(QWidget):
         self._refresh_registry_actions()
         self._refresh_save_availability()
 
+    def apply_topic_suggestions(self, suggestions) -> None:
+        """Offer live graph topics and types without restricting input."""
+        self._topic_message_types = {
+            suggestion.topic: tuple(suggestion.message_types)
+            for suggestion in suggestions
+        }
+        current_topic = self.channel_topic_field.currentText()
+        self.channel_topic_field.blockSignals(True)
+        self.channel_topic_field.clear()
+        self.channel_topic_field.addItems(
+            sorted(self._topic_message_types)
+        )
+        self.channel_topic_field.setEditText(current_topic)
+        self.channel_topic_field.blockSignals(False)
+        self._refresh_message_type_suggestions(
+            current_topic,
+            select_advertised=False,
+        )
+
     def apply_sensor_head_connection(self, state) -> None:
         """Render discovered IDs without constraining manual creation."""
         self._head_connection_state = state
@@ -424,6 +538,7 @@ class SensorControls(QWidget):
             definition.rotation_degrees,
         ):
             field.setText(self._format_number(value))
+        self._set_channel_rows(definition.channels)
         self.transform_status_value.setText(
             "Editing manual transform. Saving overwrites this sensor."
         )
@@ -443,7 +558,9 @@ class SensorControls(QWidget):
             *self.rotation_fields,
         ):
             field.setText("0.0")
+        self._set_channel_rows(())
         self._set_transform_fields_editable(True)
+        self._set_channel_fields_editable(True)
         self.save_mount_button.setEnabled(True)
         self.discard_mount_button.setEnabled(True)
         self.transform_status_value.setText(
@@ -456,6 +573,7 @@ class SensorControls(QWidget):
         """Prevent duplicate submissions while the registry is saving."""
         self.mount_id_field.setReadOnly(True)
         self._set_transform_fields_editable(False)
+        self._set_channel_fields_editable(False)
         self.save_mount_button.setEnabled(False)
         self.discard_mount_button.setEnabled(False)
         self.transform_status_value.setText(
@@ -480,6 +598,7 @@ class SensorControls(QWidget):
             return
         self.mount_id_field.setReadOnly(bool(self._editing_sensor_id))
         self._set_transform_fields_editable(True)
+        self._set_channel_fields_editable(True)
         self.discard_mount_button.setEnabled(True)
         self.transform_status_value.setText(detail)
         self._refresh_save_availability()
@@ -656,6 +775,7 @@ class SensorControls(QWidget):
             display_name=display_name,
             translation_m=translation,
             rotation_degrees=rotation,
+            channels=self._channel_values(),
         )
 
     def _refresh_registry_actions(self) -> None:
@@ -728,6 +848,175 @@ class SensorControls(QWidget):
             *self.rotation_fields,
         ):
             field.setReadOnly(not editable)
+
+    def _set_channel_fields_editable(self, editable: bool) -> None:
+        self.channel_table.setEnabled(editable)
+        self.channel_id_field.setReadOnly(not editable)
+        self.channel_topic_field.setEnabled(editable)
+        self.channel_message_type_field.setEnabled(editable)
+        self.save_channel_button.setEnabled(editable)
+        self.new_channel_button.setEnabled(editable)
+        self.remove_channel_button.setEnabled(
+            editable and self.channel_table.currentRow() >= 0
+        )
+
+    def _set_channel_rows(self, channels) -> None:
+        self.channel_table.setRowCount(0)
+        for channel in channels:
+            self._append_channel_row(
+                channel.channel_id,
+                channel.topic,
+                channel.message_type,
+            )
+        self._clear_channel_editor()
+
+    def _append_channel_row(
+        self,
+        channel_id: str,
+        topic: str,
+        message_type: str,
+    ) -> None:
+        row = self.channel_table.rowCount()
+        self.channel_table.insertRow(row)
+        for column, value in enumerate(
+            (channel_id, topic, message_type)
+        ):
+            item = QTableWidgetItem(value)
+            item.setToolTip(value)
+            self.channel_table.setItem(
+                row,
+                column,
+                item,
+            )
+
+    def _selected_channel_row(self) -> int:
+        row = self.channel_table.currentRow()
+        return row if 0 <= row < self.channel_table.rowCount() else -1
+
+    def _populate_selected_channel(self) -> None:
+        row = self._selected_channel_row()
+        selected = row >= 0
+        self.remove_channel_button.setEnabled(
+            selected and self.channel_table.isEnabled()
+        )
+        self.save_channel_button.setText(
+            "Update Channel" if selected else "Add Channel"
+        )
+        if not selected:
+            return
+        self.channel_id_field.setText(
+            self.channel_table.item(row, 0).text()
+        )
+        self.channel_topic_field.setEditText(
+            self.channel_table.item(row, 1).text()
+        )
+        self.channel_message_type_field.setEditText(
+            self.channel_table.item(row, 2).text()
+        )
+
+    def _clear_channel_editor(self) -> None:
+        self.channel_table.clearSelection()
+        self.channel_table.setCurrentCell(-1, -1)
+        self.channel_id_field.clear()
+        self.channel_topic_field.setEditText("")
+        self.channel_message_type_field.setEditText("")
+        self.save_channel_button.setText("Add Channel")
+        self.remove_channel_button.setEnabled(False)
+
+    def _save_channel_row(self) -> None:
+        values = (
+            self.channel_id_field.text().strip(),
+            self.channel_topic_field.currentText().strip(),
+            self.channel_message_type_field.currentText().strip(),
+        )
+        labels = ("Channel ID", "ROS topic", "Message type")
+        for value, label in zip(values, labels):
+            if not value:
+                self.transform_status_value.setText(
+                    f"{label} must not be empty."
+                )
+                return
+
+        selected_row = self._selected_channel_row()
+        for row in range(self.channel_table.rowCount()):
+            if row == selected_row:
+                continue
+            if self.channel_table.item(row, 0).text() == values[0]:
+                self.transform_status_value.setText(
+                    f"Channel ID '{values[0]}' already exists."
+                )
+                return
+
+        if selected_row < 0:
+            self._append_channel_row(*values)
+        else:
+            for column, value in enumerate(values):
+                self.channel_table.item(
+                    selected_row,
+                    column,
+                ).setText(value)
+        self.transform_status_value.setText(
+            f"Configured channel '{values[0]}'."
+        )
+        self._clear_channel_editor()
+
+    def _remove_selected_channel(self) -> None:
+        row = self._selected_channel_row()
+        if row < 0:
+            return
+        channel_id = self.channel_table.item(row, 0).text()
+        self.channel_table.removeRow(row)
+        self.transform_status_value.setText(
+            f"Removed channel '{channel_id}' from this form."
+        )
+        self._clear_channel_editor()
+
+    def _apply_topic_type_suggestion(self, topic: str) -> None:
+        self._refresh_message_type_suggestions(
+            topic,
+            select_advertised=True,
+        )
+
+    def _refresh_message_type_suggestions(
+        self,
+        topic: str,
+        select_advertised: bool,
+    ) -> None:
+        current_type = self.channel_message_type_field.currentText()
+        advertised = self._topic_message_types.get(topic.strip(), ())
+        all_types = tuple(
+            sorted(
+                {
+                    message_type
+                    for types in self._topic_message_types.values()
+                    for message_type in types
+                }
+            )
+        )
+        values = tuple(dict.fromkeys((*advertised, *all_types)))
+        self.channel_message_type_field.blockSignals(True)
+        self.channel_message_type_field.clear()
+        self.channel_message_type_field.addItems(values)
+        if select_advertised and advertised:
+            selected_type = (
+                current_type
+                if current_type in advertised
+                else advertised[0]
+            )
+        else:
+            selected_type = current_type
+        self.channel_message_type_field.setEditText(selected_type)
+        self.channel_message_type_field.blockSignals(False)
+
+    def _channel_values(self) -> tuple:
+        return tuple(
+            SensorChannelIntent(
+                channel_id=self.channel_table.item(row, 0).text(),
+                topic=self.channel_table.item(row, 1).text(),
+                message_type=self.channel_table.item(row, 2).text(),
+            )
+            for row in range(self.channel_table.rowCount())
+        )
 
     def _append_definition_row(self, definition) -> None:
         row = self.mount_table.rowCount()
@@ -807,4 +1096,8 @@ class SensorControls(QWidget):
         self.empty_registry_label.setVisible(False)
 
 
-__all__ = ["SensorControls", "SensorDefinitionIntent"]
+__all__ = [
+    "SensorChannelIntent",
+    "SensorControls",
+    "SensorDefinitionIntent",
+]

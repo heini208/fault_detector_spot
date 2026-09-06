@@ -39,6 +39,9 @@ from .ros.probe_setup_client import ProbeSetupClient
 from .ros.sensor_attachment_client import SensorAttachmentClient
 from .ros.sensor_head_connection_client import SensorHeadConnectionClient
 from .ros.sensor_registry_client import SensorRegistryClient
+from .ros.sensor_topic_suggestion_client import (
+    SensorTopicSuggestionClient,
+)
 from .sensor.controls import SensorControls
 from .sensor.models import (
     SensorAttachmentViewStatus,
@@ -108,9 +111,11 @@ class Fault_Detector_UI(QWidget):
         self.probe_setup_client = None
         self.sensor_attachment_client = None
         self.sensor_registry_client = None
+        self.sensor_topic_suggestion_client = None
         self.sensor_head_connection_client = None
         self.micro_ros_agent_status_client = None
         self._sensor_definitions = {}
+        self._sensor_topic_suggestions = ()
         self._sensor_attachment_state = None
         self._sensor_head_connection_state = None
         self._sensor_connection_stale = True
@@ -136,6 +141,9 @@ class Fault_Detector_UI(QWidget):
         )
         self.sensor_controls.delete_requested.connect(
             self._delete_sensor_definition
+        )
+        self.sensor_controls.apply_topic_suggestions(
+            self._sensor_topic_suggestions
         )
         self.create_user_interface()
 
@@ -321,6 +329,11 @@ class Fault_Detector_UI(QWidget):
             self.sensor_controls.apply_definitions(definitions)
         self._refresh_sensor_status()
 
+    def _process_sensor_topic_suggestions(self, suggestions):
+        self._sensor_topic_suggestions = tuple(suggestions)
+        if hasattr(self, "sensor_controls"):
+            self.sensor_controls.apply_topic_suggestions(suggestions)
+
     def _process_sensor_attachment_state(self, state):
         self._sensor_attachment_state = state
         if hasattr(self, "sensor_controls"):
@@ -461,6 +474,7 @@ class Fault_Detector_UI(QWidget):
                 intent.display_name,
                 intent.translation_m,
                 intent.rotation_degrees,
+                intent.channels,
             )
         except (TypeError, ValueError) as exception:
             self.sensor_controls.finish_sensor_save(
@@ -656,6 +670,13 @@ class Fault_Detector_UI(QWidget):
         self.sensor_registry_client.deletion_finished.connect(
             self._process_sensor_deletion_result
         )
+        self.sensor_topic_suggestion_client = (
+            SensorTopicSuggestionClient(self.node)
+        )
+        self.sensor_topic_suggestion_client.suggestions_changed.connect(
+            self._process_sensor_topic_suggestions
+        )
+        self.sensor_topic_suggestion_client.poll()
         self.sensor_attachment_client = SensorAttachmentClient(self.node)
         self.sensor_attachment_client.state_changed.connect(
             self._process_sensor_attachment_state
@@ -979,6 +1000,8 @@ class Fault_Detector_UI(QWidget):
             self.navigation_setup_client.destroy()
         if self.sensor_registry_client is not None:
             self.sensor_registry_client.destroy()
+        if self.sensor_topic_suggestion_client is not None:
+            self.sensor_topic_suggestion_client.destroy()
         if self.sensor_attachment_client is not None:
             self.sensor_attachment_client.destroy()
         if self.sensor_head_connection_client is not None:

@@ -10,6 +10,7 @@ import pytest
 from PyQt5.QtWidgets import QApplication
 
 from fault_detector_spot.ui.sensor.controls import SensorControls
+from fault_detector_spot.ui.sensor.models import SensorTopicSuggestion
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -22,6 +23,7 @@ def definition(
     display_name="Test sensor",
     position=(0.20, -0.01, 0.03),
     rotation_degrees=(0.0, 0.0, 90.0),
+    channels=(),
 ):
     return SimpleNamespace(
         sensor_id=sensor_id,
@@ -30,6 +32,19 @@ def definition(
         position=position,
         orientation=(0.0, 0.0, 0.0, 1.0),
         rotation_degrees=rotation_degrees,
+        channels=channels,
+    )
+
+
+def channel(
+    channel_id="magnetic_field",
+    topic="/sensors/bmm150_probe/magnetic_field",
+    message_type="sensor_msgs/msg/MagneticField",
+):
+    return SimpleNamespace(
+        channel_id=channel_id,
+        topic=topic,
+        message_type=message_type,
     )
 
 
@@ -100,6 +115,102 @@ def test_create_form_accepts_test_as_mount_id(application):
     assert len(intents) == 1
     assert intents[0].sensor_id == "test"
     assert intents[0].display_name == "Test sensor"
+    assert intents[0].channels == ()
+
+
+def test_mount_form_adds_channel_to_definition_intent(application):
+    controls = SensorControls()
+    controls.mount_id_field.setText("bmm150_probe")
+    controls.display_name_field.setText("BMM150 probe")
+    controls.channel_id_field.setText("magnetic_field")
+    controls.channel_topic_field.setEditText(
+        "/sensors/bmm150_probe/magnetic_field"
+    )
+    controls.channel_message_type_field.setEditText(
+        "sensor_msgs/msg/MagneticField"
+    )
+    controls.save_channel_button.click()
+    intents = []
+    controls.create_requested.connect(intents.append)
+
+    controls.save_mount_button.click()
+
+    assert controls.channel_table.rowCount() == 1
+    assert len(intents) == 1
+    assert intents[0].channels[0].channel_id == "magnetic_field"
+    assert intents[0].channels[0].topic == (
+        "/sensors/bmm150_probe/magnetic_field"
+    )
+
+
+def test_live_topic_suggestion_fills_advertised_message_type(application):
+    controls = SensorControls()
+    controls.apply_topic_suggestions(
+        (
+            SensorTopicSuggestion(
+                topic="/sensors/bmm150_probe/magnetic_field",
+                message_types=("sensor_msgs/msg/MagneticField",),
+            ),
+        )
+    )
+
+    controls.channel_topic_field.setCurrentText(
+        "/sensors/bmm150_probe/magnetic_field"
+    )
+
+    assert controls.channel_topic_field.findText(
+        "/sensors/bmm150_probe/magnetic_field"
+    ) >= 0
+    assert controls.channel_message_type_field.currentText() == (
+        "sensor_msgs/msg/MagneticField"
+    )
+
+
+def test_live_suggestions_preserve_manually_entered_offline_channel(
+    application,
+):
+    controls = SensorControls()
+    controls.channel_topic_field.setEditText("/offline/custom/value")
+    controls.channel_message_type_field.setEditText(
+        "custom_msgs/msg/Value"
+    )
+
+    controls.apply_topic_suggestions(
+        (
+            SensorTopicSuggestion(
+                topic="/online/value",
+                message_types=("std_msgs/msg/Float64",),
+            ),
+        )
+    )
+
+    assert controls.channel_topic_field.currentText() == (
+        "/offline/custom/value"
+    )
+    assert controls.channel_message_type_field.currentText() == (
+        "custom_msgs/msg/Value"
+    )
+
+
+def test_edit_mount_populates_and_updates_channel_rows(application):
+    controls = SensorControls()
+    controls.apply_definitions((definition(channels=(channel(),)),))
+    controls.apply_attachment_state(attachment("active"))
+    controls.mount_table.selectRow(0)
+    controls.edit_mount_button.click()
+
+    assert controls.channel_table.rowCount() == 1
+    assert controls.channel_table.item(0, 0).text() == "magnetic_field"
+
+    controls.channel_table.selectRow(0)
+    controls.channel_id_field.setText("field")
+    controls.save_channel_button.click()
+    updates = []
+    controls.update_requested.connect(updates.append)
+    controls.save_mount_button.click()
+
+    assert len(updates) == 1
+    assert updates[0].channels[0].channel_id == "field"
 
 
 def test_detected_head_id_is_optional_autofill(application):

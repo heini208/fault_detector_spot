@@ -3,6 +3,7 @@
 from threading import RLock
 
 from fault_detector_msgs.msg import (
+    SensorChannel as SensorChannelMessage,
     SensorDefinition as SensorDefinitionMessage,
     SensorDefinitionArray,
 )
@@ -20,6 +21,7 @@ from fault_detector_spot.inspection.model.models import (
 )
 from fault_detector_spot.inspection.model.sensor_models import (
     SENSOR_PARENT_FRAME,
+    SensorChannel,
     SensorDefinition,
 )
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
@@ -188,6 +190,18 @@ class SensorRegistryApi:
         message.hand_to_probe.orientation.y = orientation.y
         message.hand_to_probe.orientation.z = orientation.z
         message.hand_to_probe.orientation.w = orientation.w
+        message.channels = [
+            SensorRegistryApi._channel_message(channel)
+            for channel in definition.channels
+        ]
+        return message
+
+    @staticmethod
+    def _channel_message(channel: SensorChannel) -> SensorChannelMessage:
+        message = SensorChannelMessage()
+        message.channel_id = channel.channel_id
+        message.topic = channel.topic
+        message.message_type = channel.message_type
         return message
 
     @staticmethod
@@ -197,6 +211,14 @@ class SensorRegistryApi:
         definition = SensorDefinition(
             sensor_id=message.sensor_id,
             display_name=message.display_name,
+            channels=tuple(
+                SensorChannel(
+                    channel_id=channel.channel_id,
+                    topic=channel.topic,
+                    message_type=channel.message_type,
+                )
+                for channel in message.channels
+            ),
             hand_to_probe=PoseData(
                 position=Vector3Data(
                     x=message.hand_to_probe.position.x,

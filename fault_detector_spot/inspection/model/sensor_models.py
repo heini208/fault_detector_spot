@@ -91,12 +91,70 @@ def rpy_degrees_from_quaternion(
 
 
 @dataclass(frozen=True)
+class SensorChannel:
+    """One configured ROS measurement stream on a sensor mount."""
+
+    channel_id: str
+    topic: str
+    message_type: str
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SensorChannel":
+        """Create a channel from serialized YAML data."""
+        if not isinstance(data, dict):
+            raise ValueError("sensor channel must be an object")
+        return cls(
+            channel_id=str(data["channel_id"]),
+            topic=str(data["topic"]),
+            message_type=str(data["message_type"]),
+        )
+
+    def validate(self) -> None:
+        """Validate persistent identity and ROS interface text."""
+        validate_storage_name(self.channel_id, "channel ID")
+        for value, label in (
+            (self.topic, "Channel topic"),
+            (self.message_type, "Channel message type"),
+        ):
+            if not isinstance(value, str):
+                raise TypeError(f"{label} must be a string")
+            if not value:
+                raise ValueError(f"{label} must not be empty")
+            if value != value.strip():
+                raise ValueError(
+                    f"{label} must not contain surrounding whitespace"
+                )
+        if not self.topic.startswith("/"):
+            raise ValueError("Channel topic must be an absolute ROS topic")
+        if any(character.isspace() for character in self.topic):
+            raise ValueError("Channel topic must not contain whitespace")
+        message_type_parts = self.message_type.split("/")
+        if (
+            len(message_type_parts) != 3
+            or message_type_parts[1] != "msg"
+            or not all(message_type_parts)
+        ):
+            raise ValueError(
+                "Channel message type must use package/msg/Type format"
+            )
+
+    def to_dict(self) -> Dict[str, str]:
+        """Serialize the channel for the sensor YAML document."""
+        return {
+            "channel_id": self.channel_id,
+            "topic": self.topic,
+            "message_type": self.message_type,
+        }
+
+
+@dataclass(frozen=True)
 class SensorDefinition:
     """One physical sensor mounted relative to the Spot hand."""
 
     sensor_id: str
     display_name: str
     hand_to_probe: PoseData
+    channels: Tuple[SensorChannel, ...] = ()
 
     @property
     def probe_frame(self) -> str:
@@ -108,10 +166,17 @@ class SensorDefinition:
         """Create a definition from serialized YAML data."""
         if not isinstance(data, dict):
             raise ValueError("sensor definition must be an object")
+        raw_channels = data.get("channels", ())
+        if not isinstance(raw_channels, (list, tuple)):
+            raise ValueError("sensor channels must be an array")
         return cls(
             sensor_id=str(data["sensor_id"]),
             display_name=str(data["display_name"]),
             hand_to_probe=PoseData.from_dict(data["hand_to_probe"]),
+            channels=tuple(
+                SensorChannel.from_dict(channel)
+                for channel in raw_channels
+            ),
         )
 
     def validate(self) -> None:
@@ -128,6 +193,18 @@ class SensorDefinition:
                 "Sensor display name must not contain surrounding whitespace"
             )
         self.hand_to_probe.validate()
+        seen_channel_ids = set()
+        for channel in self.channels:
+            if not isinstance(channel, SensorChannel):
+                raise TypeError(
+                    "Sensor channels must contain SensorChannel values"
+                )
+            channel.validate()
+            if channel.channel_id in seen_channel_ids:
+                raise ValueError(
+                    f"Duplicate channel ID: {channel.channel_id}"
+                )
+            seen_channel_ids.add(channel.channel_id)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the sensor definition."""
@@ -135,6 +212,9 @@ class SensorDefinition:
             "sensor_id": self.sensor_id,
             "display_name": self.display_name,
             "hand_to_probe": self.hand_to_probe.to_dict(),
+            "channels": [
+                channel.to_dict() for channel in self.channels
+            ],
         }
 
 
@@ -229,11 +309,13 @@ def sensor_definition_from_values(
     roll_degrees: float,
     pitch_degrees: float,
     yaw_degrees: float,
+    channels: Tuple[SensorChannel, ...] = (),
 ) -> SensorDefinition:
     """Create and validate a sensor definition from UI transform values."""
     definition = SensorDefinition(
         sensor_id=sensor_id,
         display_name=display_name,
+        channels=tuple(channels),
         hand_to_probe=PoseData(
             position=Vector3Data(x=x, y=y, z=z),
             orientation=quaternion_from_rpy_degrees(

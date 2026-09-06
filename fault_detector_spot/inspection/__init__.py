@@ -38,6 +38,7 @@ from fault_detector_spot.inspection.model.resolved_object_pose import (
 from fault_detector_spot.inspection.model.sensor_models import (
     MotionAttachmentSnapshot,
     SENSOR_PARENT_FRAME,
+    SensorChannel,
     SensorDefinition,
     sensor_definition_from_values,
     sensor_probe_frame,
@@ -75,6 +76,7 @@ __all__ = [
     "ReferenceView",
     "ResolvedObjectPose",
     "SENSOR_PARENT_FRAME",
+    "SensorChannel",
     "SensorDefinition",
     "SensorRepository",
     "Vector3Data",

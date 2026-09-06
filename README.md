@@ -178,6 +178,13 @@ transcription. Detection is optional: users can still type, save, select, and
 physically confirm an offline sensor definition. Connection state does not gate
 arm movement and does not modify physical attachment state.
 
+Each mount definition also owns zero or more generic acquisition channels. A
+channel stores a stable channel ID, a complete ROS topic, and its
+`package/msg/Type`. The setup form polls the live ROS graph and offers current
+topics and advertised message types as editable suggestions. Manual topics and
+types remain valid for offline sensors. Mounts with no channels remain valid for
+geometry and movement; a later acquisition request will require channels.
+
 Requirements:
 
 - Spot is powered on and connected to the ROS machine (via `spot_ros2` configuration).

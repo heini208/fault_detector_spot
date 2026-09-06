@@ -33,6 +33,24 @@ class SensorDefinitionView:
     position: tuple
     orientation: tuple
     rotation_degrees: tuple
+    channels: tuple = ()
+
+
+@dataclass(frozen=True)
+class SensorChannelView:
+    """Presentation data for one configured measurement channel."""
+
+    channel_id: str
+    topic: str
+    message_type: str
+
+
+@dataclass(frozen=True)
+class SensorTopicSuggestion:
+    """One live ROS topic and its advertised message types."""
+
+    topic: str
+    message_types: tuple
 
 
 @dataclass(frozen=True)
@@ -63,7 +81,9 @@ class SensorHeadConnectionView:
 __all__ = [
     "SensorAttachmentView",
     "SensorAttachmentViewStatus",
+    "SensorChannelView",
     "SensorDefinitionView",
     "SensorHeadConnectionView",
     "SensorHeadConnectionViewStatus",
+    "SensorTopicSuggestion",
 ]

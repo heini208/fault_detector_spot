@@ -102,6 +102,7 @@ def test_registry_client_maps_definition_without_attachment_state():
             position=position,
             orientation=orientation,
         ),
+        channels=(),
     )
 
     view = client._definition_view(sensor)

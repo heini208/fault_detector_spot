@@ -27,6 +27,7 @@ from fault_detector_spot.application.controllers.sensor_registry_controller impo
     SensorRegistryController,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
+    SensorChannel,
     sensor_definition_from_values,
 )
 from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (
@@ -258,6 +259,31 @@ def test_add_sensor_persists_and_publishes_definition(tmp_path):
     assert stored.hand_to_probe.position.x == pytest.approx(0.20)
     assert api._static_broadcaster.transforms == [stored]
     assert api.published == [(stored,)]
+
+
+def test_registry_ros_definition_round_trips_channels():
+    channel = SensorChannel(
+        channel_id="magnetic_field",
+        topic="/sensors/bmm150_probe/magnetic_field",
+        message_type="sensor_msgs/msg/MagneticField",
+    )
+    original = sensor_definition_from_values(
+        "bmm150_probe",
+        "BMM150 probe",
+        0.2,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        channels=(channel,),
+    )
+
+    message = SensorRegistryApi._definition_message(original)
+    restored = SensorRegistryApi._definition_from_message(message)
+
+    assert restored == original
+    assert message.channels[0].channel_id == "magnetic_field"
 
 
 def test_update_sensor_rejects_current_attachment(tmp_path):

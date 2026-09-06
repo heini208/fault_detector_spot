@@ -82,6 +82,13 @@ def test_create_sensor_builds_hand_to_probe_request(application):
         "Test sensor",
         (0.20, -0.01, 0.03),
         (0.0, 0.0, 90.0),
+        (
+            SimpleNamespace(
+                channel_id="magnetic_field",
+                topic="/sensors/bmm150_probe/magnetic_field",
+                message_type="sensor_msgs/msg/MagneticField",
+            ),
+        ),
     )
 
     assert future is not None
@@ -98,6 +105,14 @@ def test_create_sensor_builds_hand_to_probe_request(application):
     )
     assert request.sensor.hand_to_probe.orientation.w == pytest.approx(
         math.sqrt(0.5)
+    )
+    assert len(request.sensor.channels) == 1
+    assert request.sensor.channels[0].channel_id == "magnetic_field"
+    assert request.sensor.channels[0].topic == (
+        "/sensors/bmm150_probe/magnetic_field"
+    )
+    assert request.sensor.channels[0].message_type == (
+        "sensor_msgs/msg/MagneticField"
     )
 
 
@@ -144,6 +159,13 @@ def test_definition_view_exposes_rotation_for_edit_form(application):
                 w=math.sqrt(0.5),
             ),
         ),
+        channels=(
+            SimpleNamespace(
+                channel_id="magnetic_field",
+                topic="/sensors/test/magnetic_field",
+                message_type="sensor_msgs/msg/MagneticField",
+            ),
+        ),
     )
 
     view = client._definition_view(sensor)
@@ -152,6 +174,8 @@ def test_definition_view_exposes_rotation_for_edit_form(application):
     assert view.probe_frame == "test_probe"
     assert view.position == pytest.approx((0.1, 0.2, 0.3))
     assert view.rotation_degrees == pytest.approx((0.0, 0.0, 90.0))
+    assert view.channels[0].channel_id == "magnetic_field"
+    assert view.channels[0].topic == "/sensors/test/magnetic_field"
 
 
 def test_create_sensor_rejects_incomplete_transform(application):

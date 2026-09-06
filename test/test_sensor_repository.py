@@ -4,6 +4,7 @@ import pytest
 import yaml
 
 from fault_detector_spot.inspection.model.sensor_models import (
+    SensorChannel,
     SensorDefinition,
     sensor_definition_from_values,
 )
@@ -61,6 +62,36 @@ def test_create_load_and_list_sensor_definition(tmp_path):
     assert data["sensor_id"] == "test"
     assert data["hand_to_probe"]["position"]["x"] == pytest.approx(0.20)
     assert "probe_frame" not in data
+
+
+def test_repository_persists_sensor_channels_in_mount_yaml(tmp_path):
+    repository = SensorRepository(tmp_path)
+    channel = SensorChannel(
+        channel_id="magnetic_field",
+        topic="/sensors/bmm150_probe/magnetic_field",
+        message_type="sensor_msgs/msg/MagneticField",
+    )
+    stored = sensor_definition_from_values(
+        "bmm150_probe",
+        "BMM150 probe",
+        0.2,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        channels=(channel,),
+    )
+
+    repository.create(stored)
+
+    assert repository.load("bmm150_probe").channels == (channel,)
+    data = yaml.safe_load(
+        repository.get_sensor_path("bmm150_probe").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert data["channels"] == [channel.to_dict()]
 
 
 def test_create_rejects_existing_active_sensor_id(tmp_path):

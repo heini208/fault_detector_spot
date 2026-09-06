@@ -340,6 +340,21 @@ Motion admission continues to depend solely on confirmed hand-to-probe geometry;
 network reachability neither enables nor disables movement and never rewrites
 attachment state.
 
+The same persistent `SensorDefinition` owns its acquisition description as a
+tuple of immutable `SensorChannel` values. Each channel contains `channel_id`,
+an absolute ROS `topic`, and a complete `message_type`. Duplicate channel IDs
+inside one mount are invalid. The registry ROS DTO carries these nested channels
+through the existing add/update/list interfaces, and the mount YAML stores them
+beside `hand_to_probe`. Older YAML documents without `channels` load as an empty
+tuple, preserving geometry-only mounts.
+
+Channel setup remains presentation-only in the Sensor Mounts workspace. A UI
+ROS adapter polls the graph for advertised topic/type pairs, excluding ROS
+plumbing topics, and supplies editable suggestions to the form. Suggestions do
+not constrain persistence: an offline topic or custom message type can still be
+entered manually. The UI does not resolve message classes, subscribe to sensor
+data, or own acquisition state.
+
 ---
 
 # 3. Data Flow Summary

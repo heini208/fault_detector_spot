@@ -7,6 +7,7 @@ import pytest
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
+    SensorChannel,
     SensorDefinition,
     quaternion_from_rpy_degrees,
     rpy_degrees_from_quaternion,
@@ -33,6 +34,93 @@ def test_sensor_definition_round_trip_and_derived_frame():
     assert restored == definition
     assert restored.probe_frame == "bmm150_01_probe"
     assert sensor_probe_frame("bmm150_01") == "bmm150_01_probe"
+
+
+def test_sensor_definition_round_trips_configured_channels():
+    channel = SensorChannel(
+        channel_id="magnetic_field",
+        topic="/sensors/bmm150_probe/magnetic_field",
+        message_type="sensor_msgs/msg/MagneticField",
+    )
+    definition = sensor_definition_from_values(
+        "bmm150_probe",
+        "BMM150 probe",
+        0.2,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        channels=(channel,),
+    )
+
+    restored = SensorDefinition.from_dict(definition.to_dict())
+
+    assert restored == definition
+    assert restored.channels == (channel,)
+
+
+def test_legacy_sensor_definition_without_channels_loads_empty():
+    definition = sensor_definition_from_values(
+        "legacy_probe",
+        "Legacy probe",
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+    data = definition.to_dict()
+    del data["channels"]
+
+    assert SensorDefinition.from_dict(data).channels == ()
+
+
+def test_duplicate_channel_ids_are_rejected():
+    channel = SensorChannel(
+        "field",
+        "/sensors/probe/field",
+        "sensor_msgs/msg/MagneticField",
+    )
+    definition = SensorDefinition(
+        sensor_id="probe",
+        display_name="Probe",
+        hand_to_probe=PoseData.identity(),
+        channels=(channel, channel),
+    )
+
+    with pytest.raises(ValueError, match="Duplicate channel ID"):
+        definition.validate()
+
+
+@pytest.mark.parametrize(
+    ("channel", "message"),
+    (
+        (SensorChannel("", "/topic", "std_msgs/msg/String"), "channel ID"),
+        (SensorChannel("value", "", "std_msgs/msg/String"), "topic"),
+        (
+            SensorChannel("value", "relative/topic", "std_msgs/msg/String"),
+            "absolute ROS topic",
+        ),
+        (SensorChannel("value", "/topic", ""), "message type"),
+        (
+            SensorChannel("value", "/topic", "std_msgs/String"),
+            "package/msg/Type",
+        ),
+        (
+            SensorChannel(
+                "../value",
+                "/topic",
+                "std_msgs/msg/String",
+            ),
+            "channel ID",
+        ),
+    ),
+)
+def test_invalid_sensor_channels_are_rejected(channel, message):
+    with pytest.raises(ValueError, match=message):
+        channel.validate()
 
 
 def test_short_test_sensor_id_is_valid():
