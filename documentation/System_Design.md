@@ -386,6 +386,34 @@ A persisted measurement requires at least one configured channel. A later
 acquisition coordinator will implement the optional-sensor policy by returning
 success without constructing an empty recording when acquisition is skipped.
 
+`RosTopicRecordingSource` owns the temporary subscription for one `ros_topic`
+channel. It resolves the configured `package/msg/Type` through the ROS runtime
+when acquisition starts and uses the sensor-data QoS profile so both reliable
+and best-effort publishers can be captured. Each JSONL row has this envelope:
+
+```json
+{
+  "receive_time_ns": 8000000019,
+  "source_time_ns": 5000000023,
+  "data": {}
+}
+```
+
+`source_time_ns` is `null` when the message has no valid `header.stamp`; the
+complete recursively converted ROS message remains under `data`. Subscriptions
+are destroyed before recording finalization, and only the first accepted sample
+emits the readiness callback used by the later coordinator.
+
+`SpotGeometryRecordingSource` is an internal timer source for a
+`spot_geometry` channel. It creates no ROS publisher or synthetic topic and is
+inactive outside an open recording. At a configurable rate (10 Hz by default),
+it stores the frozen object pose and live `body`, `hand`, and probe poses in the
+execution frame, together with the probe pose expressed in the object frame.
+Short TF lookups prevent one unavailable transform from blocking acquisition;
+repeated identical TF errors are coalesced until a successful sample. The two
+source implementations expose the same first-sample and error callback shape,
+allowing the acquisition coordinator to own lifecycle and readiness uniformly.
+
 ---
 
 # 3. Data Flow Summary

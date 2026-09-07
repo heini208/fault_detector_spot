@@ -196,6 +196,15 @@ channel snapshot, attachment revision, lifecycle state, and sample counts.
 Recording directories and files are created exclusively and are never silently
 overwritten.
 
+ROS-topic channels are activated only for an open measurement. Their configured
+`package/msg/Type` is resolved at runtime, and each received message is converted
+to JSON with both its optional `header.stamp` source time and the host receipt
+time. The derived Spot-geometry source likewise exists only during a recording.
+It samples at a configurable rate (10 Hz by default) and stores the frozen
+object pose together with live body, hand, and probe poses in `odom`, plus the
+probe pose expressed relative to the inspection object. It writes directly to
+its channel file and does not introduce a synthetic ROS topic.
+
 Requirements:
 
 - Spot is powered on and connected to the ROS machine (via `spot_ros2` configuration).
