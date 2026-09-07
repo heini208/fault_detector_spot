@@ -27,6 +27,9 @@ class StatusOverviewPanel(QFrame):
         sensor_indicator_label: QLabel,
         sensor_status_label: QLabel,
         sensor_confirm_button: QPushButton,
+        sensor_recording_indicator_label: QLabel,
+        sensor_recording_button: QPushButton,
+        open_measurements_button: QPushButton,
         sensor_connection_indicator_label: QLabel,
         sensor_connection_status_label: QLabel,
         agent_indicator_label: QLabel,
@@ -80,6 +83,11 @@ class StatusOverviewPanel(QFrame):
         sensor_layout.addWidget(sensor_indicator_label)
         sensor_layout.addWidget(sensor_status_label)
         sensor_layout.addWidget(sensor_confirm_button)
+        sensor_layout.addSpacing(8)
+        sensor_layout.addWidget(QLabel("Recording:"))
+        sensor_layout.addWidget(sensor_recording_indicator_label)
+        sensor_layout.addWidget(sensor_recording_button)
+        sensor_layout.addWidget(open_measurements_button)
         sensor_layout.addSpacing(8)
         sensor_layout.addWidget(QLabel("Head:"))
         sensor_layout.addWidget(sensor_connection_indicator_label)

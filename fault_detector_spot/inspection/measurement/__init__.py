@@ -3,6 +3,7 @@
 from .measurement_models import (
     MeasurementCompletionState,
     MeasurementRecording,
+    validate_measurement_context,
 )
 from .measurement_repository import MeasurementRepository
 from .ros_topic_recording_source import (
@@ -18,4 +19,5 @@ __all__ = [
     "RosTopicRecordingSource",
     "SpotGeometryRecordingSource",
     "message_source_time_ns",
+    "validate_measurement_context",
 ]

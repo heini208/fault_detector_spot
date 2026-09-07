@@ -190,6 +190,10 @@ sensors. Mounts with no channels remain valid for geometry and movement.
 Generic measurement persistence now uses one JSONL file per configured channel
 under
 `measurements/<object>/<routine>/<probe-point>/<UTC-date>/<start-timestamp>/`.
+Independent recordings from the header instead use
+`measurements/manual/<UTC-date>/<start-timestamp>/`.
+Trailing context levels are optional, so object-only and object/routine
+recordings omit the missing directories.
 That recording directory contains `metadata.json` and one
 `<channel-id>.jsonl` file per channel. The sidecar preserves the sensor ID,
 channel snapshot, attachment revision, lifecycle state, and sample counts.
@@ -217,11 +221,15 @@ immediate skipped success and creates no empty measurement directory.
 All lifecycle transitions (`IDLE`, `STARTING`, `RECORDING`, `STOPPING`, and
 `FAILED`) are published latched on
 `fault_detector/application/sensor_acquisition_state`. This is the state the
-later UI button and saved workflow commands consume; neither will maintain a
-private recording flag. Geometry TF subscriptions and the startup watchdog are
-allocated only for an active applicable recording. The launch file exposes only
-the measurement root; timeout and sampling defaults stay local until there is a
-demonstrated need to configure them.
+header's Sensor section consumes for its Record / Stop control; the UI does not
+maintain a private recording flag. The same control submits the
+recordable `start_sensor_recording` and `stop_sensor_recording` semantic
+commands used during saved-workflow playback. A neighboring Folder button opens
+the configured measurement root in the desktop file manager. Geometry TF
+subscriptions and the startup watchdog are allocated only for an active
+applicable recording. The launch file exposes only the measurement root;
+timeout and sampling defaults stay local until there is a demonstrated need to
+configure them.
 
 Requirements:
 

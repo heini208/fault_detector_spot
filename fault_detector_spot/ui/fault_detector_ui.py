@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import signal
 import sys
+from pathlib import Path
 
-from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QColor, QFont, QFontMetrics
+from PyQt5.QtCore import QTimer, Qt, QUrl
+from PyQt5.QtGui import QColor, QDesktopServices, QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -25,6 +26,9 @@ from fault_detector_msgs.msg import (
 from fault_detector_spot.shared.ros.qos_profiles import (
     LATCHED_QOS,
 )
+from fault_detector_spot.shared.persistence.runtime_paths import (
+    default_measurement_root,
+)
 from rclpy.node import Node
 
 from .inspection.finalizing_controls import FinalizingInspectionControls
@@ -37,6 +41,7 @@ from .ros.micro_ros_agent_status_client import MicroRosAgentStatusClient
 from .ros.navigation_setup_client import NavigationSetupClient
 from .ros.probe_setup_client import ProbeSetupClient
 from .ros.sensor_attachment_client import SensorAttachmentClient
+from .ros.sensor_acquisition_client import SensorAcquisitionClient
 from .ros.sensor_head_connection_client import SensorHeadConnectionClient
 from .ros.sensor_registry_client import SensorRegistryClient
 from .ros.sensor_topic_suggestion_client import (
@@ -44,10 +49,21 @@ from .ros.sensor_topic_suggestion_client import (
 )
 from .sensor.controls import SensorControls
 from .sensor.models import (
+    SensorAcquisitionViewStatus,
     SensorAttachmentViewStatus,
     SensorHeadConnectionViewStatus,
 )
 from .shared.status_overview_panel import StatusOverviewPanel
+
+
+_SENSOR_RECORDING_PRESENTATIONS = {
+    SensorAcquisitionViewStatus.IDLE: ("#757575", "Idle"),
+    SensorAcquisitionViewStatus.STARTING: ("#EF6C00", "Starting"),
+    SensorAcquisitionViewStatus.RECORDING: ("#2E7D32", "Recording"),
+    SensorAcquisitionViewStatus.STOPPING: ("#EF6C00", "Stopping"),
+    SensorAcquisitionViewStatus.FAILED: ("#C62828", "Failed"),
+    SensorAcquisitionViewStatus.UNAVAILABLE: ("#757575", "Unavailable"),
+}
 
 
 class Fault_Detector_UI(QWidget):
@@ -56,6 +72,7 @@ class Fault_Detector_UI(QWidget):
         self.node = node
         self.setWindowTitle("Fault Detector Spot")
         self.resize(700, 600)
+        self.measurement_root = self._measurement_root_parameter()
 
         self.status_label = QLabel("Status: Waiting for connection")
         self.buffer_label = QLabel("Buffer: []")
@@ -67,6 +84,20 @@ class Fault_Detector_UI(QWidget):
         self.sensor_indicator_label.setAlignment(Qt.AlignCenter)
         self.sensor_indicator_label.setFixedWidth(12)
         self.sensor_status_label = QLabel("Unknown")
+        self.sensor_recording_indicator_label = QLabel("●")
+        self.sensor_recording_indicator_label.setAlignment(Qt.AlignCenter)
+        self.sensor_recording_indicator_label.setFixedWidth(12)
+        self.sensor_recording_button = QPushButton("Record")
+        self.sensor_recording_button.clicked.connect(
+            self._toggle_sensor_recording
+        )
+        self.open_measurements_button = QPushButton("Folder")
+        self.open_measurements_button.setToolTip(
+            "Open all saved sensor measurements"
+        )
+        self.open_measurements_button.clicked.connect(
+            self.open_measurement_directory
+        )
         self.sensor_confirm_button = QPushButton("✓")
         self.sensor_confirm_button.setFixedSize(24, 24)
         self.sensor_confirm_button.setToolTip(
@@ -101,6 +132,7 @@ class Fault_Detector_UI(QWidget):
         self.set_micro_ros_agent_status(None)
         self.set_sensor_status("unknown")
         self.set_sensor_connection_status("unknown")
+        self.set_sensor_acquisition_state(None)
         self._buffer_text = "Buffer: []"
 
         self.visible_tags = {}
@@ -113,6 +145,7 @@ class Fault_Detector_UI(QWidget):
         self.sensor_registry_client = None
         self.sensor_topic_suggestion_client = None
         self.sensor_head_connection_client = None
+        self.sensor_acquisition_client = None
         self.micro_ros_agent_status_client = None
         self._sensor_definitions = {}
         self._sensor_topic_suggestions = ()
@@ -172,6 +205,9 @@ class Fault_Detector_UI(QWidget):
             self.sensor_indicator_label,
             self.sensor_status_label,
             self.sensor_confirm_button,
+            self.sensor_recording_indicator_label,
+            self.sensor_recording_button,
+            self.open_measurements_button,
             self.sensor_connection_indicator_label,
             self.sensor_connection_status_label,
             self.agent_indicator_label,
@@ -276,6 +312,36 @@ class Fault_Detector_UI(QWidget):
         self.sensor_connection_indicator_label.setToolTip(detail)
         self.sensor_connection_status_label.setText(text)
         self.sensor_connection_status_label.setToolTip(detail)
+
+    def set_sensor_acquisition_state(self, state) -> None:
+        """Render authoritative sensor recording state in the header."""
+        self._sensor_acquisition_state = state
+        status = (
+            state.status
+            if state is not None
+            else SensorAcquisitionViewStatus.UNAVAILABLE
+        )
+        color, label = _SENSOR_RECORDING_PRESENTATIONS[status]
+        detail = getattr(state, "detail", "")
+        self.sensor_recording_indicator_label.setStyleSheet(
+            f"color: {color}; font-size: 14px;"
+        )
+        self.sensor_recording_indicator_label.setToolTip(
+            f"{label}. {detail}".strip()
+        )
+        self.sensor_recording_button.setToolTip(
+            f"{label}. {detail}".strip()
+        )
+        is_recording = status is SensorAcquisitionViewStatus.RECORDING
+        is_busy = status in {
+            SensorAcquisitionViewStatus.STARTING,
+            SensorAcquisitionViewStatus.STOPPING,
+            SensorAcquisitionViewStatus.UNAVAILABLE,
+        }
+        self.sensor_recording_button.setText(
+            "Stop" if is_recording else "Record"
+        )
+        self.sensor_recording_button.setEnabled(not is_busy)
 
     def _set_agent_endpoint_visibility(self, visible: bool) -> None:
         self._agent_endpoint_visible = bool(visible and self._agent_command)
@@ -580,6 +646,34 @@ class Fault_Detector_UI(QWidget):
         value = self.node.get_parameter(parameter_name).value
         return value.strip() or None
 
+    def _measurement_root_parameter(self) -> Path:
+        default_root = default_measurement_root()
+        if self.node is None:
+            return default_root
+        parameter_name = "measurement.root"
+        if not self.node.has_parameter(parameter_name):
+            self.node.declare_parameter(parameter_name, str(default_root))
+        configured_root = str(
+            self.node.get_parameter(parameter_name).value
+        ).strip()
+        return Path(configured_root or default_root).expanduser()
+
+    def open_measurement_directory(self) -> bool:
+        """Open the configured sensor measurement root in the file manager."""
+        try:
+            self.measurement_root.mkdir(parents=True, exist_ok=True)
+        except OSError as exception:
+            self._process_application_error(str(exception))
+            return False
+        opened = QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(self.measurement_root))
+        )
+        if not opened:
+            self._process_application_error(
+                f"Could not open {self.measurement_root}"
+            )
+        return bool(opened)
+
     def _make_estop_button(self) -> QPushButton:
         if hasattr(self, "estop_button"):
             return self.estop_button
@@ -689,6 +783,10 @@ class Fault_Detector_UI(QWidget):
         )
         self.sensor_head_connection_client.state_changed.connect(
             self._process_sensor_head_connection_state
+        )
+        self.sensor_acquisition_client = SensorAcquisitionClient(self.node)
+        self.sensor_acquisition_client.state_changed.connect(
+            self._process_sensor_acquisition_state
         )
         self.application_client.state_changed.connect(
             self._process_application_state
@@ -840,6 +938,24 @@ class Fault_Detector_UI(QWidget):
 
     def _process_application_error(self, detail):
         self.status_label.setText(f"Operation rejected: {detail}")
+
+    def _process_sensor_acquisition_state(self, state):
+        self.set_sensor_acquisition_state(state)
+
+    def _toggle_sensor_recording(self):
+        state = self._sensor_acquisition_state
+        if state is None:
+            return None
+        return self._request_sensor_recording(
+            state.status is not SensorAcquisitionViewStatus.RECORDING
+        )
+
+    def _request_sensor_recording(self, start):
+        if self.sensor_acquisition_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        intent = self.sensor_acquisition_client.make_intent(start)
+        return self.execute_operation(intent)
 
     def _open_navigation_setup(self):
         if self.navigation_setup_client is None:
@@ -1006,6 +1122,8 @@ class Fault_Detector_UI(QWidget):
             self.sensor_attachment_client.destroy()
         if self.sensor_head_connection_client is not None:
             self.sensor_head_connection_client.destroy()
+        if self.sensor_acquisition_client is not None:
+            self.sensor_acquisition_client.destroy()
         if self.micro_ros_agent_status_client is not None:
             self.micro_ros_agent_status_client.destroy()
         if self.application_client is not None:

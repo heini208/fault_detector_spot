@@ -14,13 +14,11 @@ from fault_detector_spot.inspection.measurement import (
     MeasurementRecording,
     RosTopicRecordingSource,
     SpotGeometryRecordingSource,
+    validate_measurement_context,
 )
 from fault_detector_spot.inspection.model.models import PoseData
 from fault_detector_spot.inspection.model.sensor_models import (
     SensorChannelSource,
-)
-from fault_detector_spot.shared.persistence.file_storage import (
-    validate_storage_name,
 )
 
 
@@ -41,19 +39,19 @@ class SensorAcquisitionRequest:
     object_id: str
     routine_id: str
     probe_point_id: str
-    object_pose_execution: PoseData
+    object_pose_execution: PoseData | None
     execution_frame: str = "odom"
 
     def validate(self):
-        for value, label in (
-            (self.object_id, "object ID"),
-            (self.routine_id, "routine ID"),
-            (self.probe_point_id, "probe point ID"),
-        ):
-            validate_storage_name(value, label)
+        validate_measurement_context(
+            self.object_id,
+            self.routine_id,
+            self.probe_point_id,
+        )
         if not self.execution_frame.strip():
             raise ValueError("Execution frame must not be empty")
-        self.object_pose_execution.validate()
+        if self.object_pose_execution is not None:
+            self.object_pose_execution.validate()
 
 
 @dataclass(frozen=True)
@@ -255,6 +253,10 @@ class SensorAcquisitionCoordinator:
         )
         tf_buffer = None
         if geometry:
+            if request.object_pose_execution is None:
+                raise RuntimeError(
+                    "Live inspection object pose is unavailable"
+                )
             tf_buffer = tf2_ros.Buffer()
             session.tf_listener = tf2_ros.TransformListener(
                 tf_buffer,

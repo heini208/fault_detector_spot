@@ -71,6 +71,9 @@ from fault_detector_spot.application.coordinators.probe_setup_coordinator import
 from fault_detector_spot.application.coordinators.sensor_acquisition_coordinator import (
     SensorAcquisitionCoordinator,
 )
+from fault_detector_spot.application.coordinators.sensor_acquisition_command_handler import (
+    SensorAcquisitionCommandHandler,
+)
 from fault_detector_spot.application.api.probe_setup_motion_api import (
     ProbeSetupMotionApi,
 )
@@ -223,6 +226,16 @@ class ApplicationApiNode(Node):
         self.sensor_acquisition_api = SensorAcquisitionApi(
             self,
             self.sensor_acquisition_coordinator,
+        )
+        self.sensor_acquisition_command_handler = (
+            SensorAcquisitionCommandHandler(
+                self,
+                self.command_controller,
+                self.sensor_acquisition_coordinator,
+            )
+        )
+        self.command_transport.set_local_dispatch(
+            self.sensor_acquisition_command_handler.dispatch
         )
         self.probe_setup_motion_state = (
             probe_setup_motion_state_source.ProbeSetupMotionStateSource(self)
@@ -495,6 +508,7 @@ class ApplicationApiNode(Node):
         self.probe_setup_motion_api.close()
         self.probe_setup_api.close()
         self.navigation_setup_api.close()
+        self.sensor_acquisition_command_handler.close()
         self.sensor_acquisition_api.close()
         self.sensor_acquisition_coordinator.close()
         self.sensor_attachment_api.close()

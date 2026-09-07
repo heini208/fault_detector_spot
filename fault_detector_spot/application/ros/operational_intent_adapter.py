@@ -16,6 +16,9 @@ from fault_detector_spot.application.commanding.semantic_command import (
 from fault_detector_spot.application.ros.semantic_command_adapter import (
     stamped_pose_from_message,
 )
+from fault_detector_spot.inspection.measurement import (
+    validate_measurement_context,
+)
 
 
 _INTENT_COMMAND_IDS = {
@@ -55,6 +58,12 @@ _INTENT_COMMAND_IDS = {
     OperationalIntent.INTENT_WAIT: CommandID.WAIT_TIME,
     OperationalIntent.INTENT_EXECUTE_PROBE_POINT: (
         CommandID.EXECUTE_PROBE_POINT
+    ),
+    OperationalIntent.INTENT_START_SENSOR_RECORDING: (
+        CommandID.START_SENSOR_RECORDING
+    ),
+    OperationalIntent.INTENT_STOP_SENSOR_RECORDING: (
+        CommandID.STOP_SENSOR_RECORDING
     ),
 }
 
@@ -190,15 +199,18 @@ def operational_intent_to_command(
             intent.waypoint_name,
             "Waypoint name",
         )
-    if (
-        intent.intent
-        == OperationalIntent.INTENT_EXECUTE_PROBE_POINT
-    ):
+    if intent.intent == OperationalIntent.INTENT_EXECUTE_PROBE_POINT:
         _required_text(intent.object_id, "Object ID")
         _required_text(intent.routine_id, "Routine ID")
         _required_text(
             intent.probe_point_id,
             "Probe point ID",
+        )
+    if intent.intent == OperationalIntent.INTENT_START_SENSOR_RECORDING:
+        validate_measurement_context(
+            intent.object_id,
+            intent.routine_id,
+            intent.probe_point_id,
         )
 
     tag = None

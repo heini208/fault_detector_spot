@@ -10,6 +10,7 @@ from typing import Any, Dict, Mapping, Optional, TextIO, Tuple, Union
 from fault_detector_spot.inspection.measurement.measurement_models import (
     MeasurementCompletionState,
     MeasurementRecording,
+    validate_measurement_context,
 )
 from fault_detector_spot.shared.persistence.file_storage import (
     atomic_write_text,
@@ -236,13 +237,11 @@ class MeasurementRepository:
         self,
         recording: MeasurementRecording,
     ) -> Path:
-        return (
-            self.root_dir
-            / recording.object_id
-            / recording.routine_id
-            / recording.probe_point_id
-            / self._date_name(recording.started_at_ns)
-            / self._timestamp_name(recording.started_at_ns)
+        return self._directory_from_identity(
+            recording.object_id,
+            recording.routine_id,
+            recording.probe_point_id,
+            recording.started_at_ns,
         )
 
     def _metadata_path_from_identity(
@@ -254,25 +253,40 @@ class MeasurementRepository:
         sensor_id: str,
         started_at_ns: int,
     ) -> Path:
-        for value, label in (
-            (object_id, "object ID"),
-            (routine_id, "routine ID"),
-            (probe_point_id, "probe point ID"),
-            (sensor_id, "sensor ID"),
-        ):
-            validate_storage_name(value, label)
+        validate_measurement_context(
+            object_id,
+            routine_id,
+            probe_point_id,
+        )
+        validate_storage_name(sensor_id, "sensor ID")
         MeasurementRecording._validate_timestamp(
             started_at_ns,
             "Start timestamp",
         )
+        return self._directory_from_identity(
+            object_id,
+            routine_id,
+            probe_point_id,
+            started_at_ns,
+        ) / self.METADATA_FILE
+
+    def _directory_from_identity(
+        self,
+        object_id: str,
+        routine_id: str,
+        probe_point_id: str,
+        started_at_ns: int,
+    ) -> Path:
+        context = tuple(filter(None, (
+            object_id,
+            routine_id,
+            probe_point_id,
+        )))
+        context_root = self.root_dir.joinpath(*(context or ("manual",)))
         return (
-            self.root_dir
-            / object_id
-            / routine_id
-            / probe_point_id
+            context_root
             / self._date_name(started_at_ns)
             / self._timestamp_name(started_at_ns)
-            / self.METADATA_FILE
         )
 
     @staticmethod

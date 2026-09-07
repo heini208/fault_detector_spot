@@ -4,6 +4,7 @@ from fault_detector_msgs.msg import OperationalIntent
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.semantic_command import (
+    InspectionSelection,
     SemanticCommand,
 )
 from fault_detector_spot.application.ros.operational_intent_adapter import (
@@ -83,6 +84,33 @@ def test_translates_probe_execution_selection():
     assert command.inspection.object_id == "motor_a"
     assert command.inspection.routine_id == "magnetic_scan"
     assert command.inspection.probe_point_id == "bearing_1"
+
+
+def test_translates_sensor_recording_intents():
+    start = OperationalIntent()
+    start.intent = OperationalIntent.INTENT_START_SENSOR_RECORDING
+    start.object_id = "motor_a"
+    start.routine_id = "magnetic_scan"
+    start.probe_point_id = "bearing_1"
+
+    start_command = operational_intent_to_command(start)
+
+    assert start_command.command_id is CommandID.START_SENSOR_RECORDING
+    assert start_command.inspection.object_id == "motor_a"
+
+    stop = OperationalIntent()
+    stop.intent = OperationalIntent.INTENT_STOP_SENSOR_RECORDING
+
+    assert (
+        operational_intent_to_command(stop).command_id
+        is CommandID.STOP_SENSOR_RECORDING
+    )
+
+    manual_start = OperationalIntent()
+    manual_start.intent = OperationalIntent.INTENT_START_SENSOR_RECORDING
+    assert operational_intent_to_command(
+        manual_start
+    ).inspection == InspectionSelection()
 
 
 def test_rejects_unspecified_intent():

@@ -19,6 +19,28 @@ class MeasurementCompletionState(str, Enum):
     CANCELLED = "cancelled"
 
 
+def validate_measurement_context(
+    object_id: str,
+    routine_id: str,
+    probe_point_id: str,
+) -> None:
+    """Validate an optional object/routine/probe hierarchy."""
+    values = (
+        (object_id, "object ID"),
+        (routine_id, "routine ID"),
+        (probe_point_id, "probe point ID"),
+    )
+    for value, label in values:
+        if not isinstance(value, str):
+            raise TypeError(f"{label} must be a string")
+        if value:
+            validate_storage_name(value, label)
+    if routine_id and not object_id:
+        raise ValueError("Routine ID requires an object ID")
+    if probe_point_id and not routine_id:
+        raise ValueError("Probe point ID requires a routine ID")
+
+
 @dataclass(frozen=True)
 class MeasurementRecording:
     """Self-contained metadata snapshot for one probe measurement."""
@@ -110,13 +132,12 @@ class MeasurementRecording:
 
     def validate(self) -> None:
         """Validate recording identity, lifecycle, and channel snapshot."""
-        for value, label in (
-            (self.object_id, "object ID"),
-            (self.routine_id, "routine ID"),
-            (self.probe_point_id, "probe point ID"),
-            (self.sensor_id, "sensor ID"),
-        ):
-            validate_storage_name(value, label)
+        validate_measurement_context(
+            self.object_id,
+            self.routine_id,
+            self.probe_point_id,
+        )
+        validate_storage_name(self.sensor_id, "sensor ID")
         if (
             isinstance(self.attachment_revision, bool)
             or not isinstance(self.attachment_revision, int)

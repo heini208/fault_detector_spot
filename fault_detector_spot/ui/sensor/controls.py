@@ -24,7 +24,6 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-
 @dataclass(frozen=True)
 class SensorChannelIntent:
     """Describe one channel entered in the sensor-mount form."""
@@ -161,6 +160,7 @@ class SensorControls(QWidget):
         action_row.addWidget(self.clear_attachment_button)
 
         layout.addLayout(action_row, 3, 0, 1, 4)
+
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(3, 1)
         return group

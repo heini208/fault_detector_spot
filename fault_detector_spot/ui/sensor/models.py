@@ -23,6 +23,17 @@ class SensorHeadConnectionViewStatus(str, Enum):
     MISMATCH = "mismatch"
 
 
+class SensorAcquisitionViewStatus(str, Enum):
+    """Presentation states for sensor measurement recording."""
+
+    UNAVAILABLE = "unavailable"
+    IDLE = "idle"
+    STARTING = "starting"
+    RECORDING = "recording"
+    STOPPING = "stopping"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True)
 class SensorDefinitionView:
     """Presentation data for one registered physical sensor."""
@@ -79,9 +90,20 @@ class SensorHeadConnectionView:
     detail: str
 
 
+@dataclass(frozen=True)
+class SensorAcquisitionView:
+    """Presentation data for authoritative acquisition state."""
+
+    status: SensorAcquisitionViewStatus
+    sensor_id: str
+    detail: str
+
+
 __all__ = [
     "SensorAttachmentView",
     "SensorAttachmentViewStatus",
+    "SensorAcquisitionView",
+    "SensorAcquisitionViewStatus",
     "SensorChannelView",
     "SensorDefinitionView",
     "SensorHeadConnectionView",

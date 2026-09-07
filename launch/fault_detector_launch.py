@@ -138,7 +138,10 @@ def generate_launch_description():
             output="screen",
             parameters=[
                 tag_sensing_config,
-                {"use_sim_time": use_sim_time},
+                {
+                    "use_sim_time": use_sim_time,
+                    "measurement.root": measurement_root,
+                },
             ],
         ),
         Node(

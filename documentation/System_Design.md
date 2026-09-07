@@ -373,6 +373,13 @@ measurements/<object>/<routine>/<probe-point>/<UTC-date>/<exact-start-timestamp>
     <channel-id>.jsonl
 ```
 
+A fully empty context uses
+`measurements/manual/<UTC-date>/<exact-start-timestamp>/`, with empty context
+IDs retained in metadata. Context is an optional ordered prefix: object-only
+and object/routine recordings omit trailing directories, while a routine
+without an object or a probe point without a routine is invalid. Complete
+inspection recordings use the full object/routine/probe-point hierarchy.
+
 The sensor identity is stored in `metadata.json`; the timestamp directory
 groups all channels from the same measurement. The repository keeps channel
 files open for efficient appends, exposes explicit flush behavior, and fsyncs
@@ -448,6 +455,18 @@ The current state is published with depth-one transient-local QoS on
 boundary for UI, workflow, and future API clients, regardless of which command
 source initiated start or stop. The UI therefore never infers recording state
 from its own button click.
+
+`start_sensor_recording` and `stop_sensor_recording` are regular semantic
+commands in the serialized application command lane. The command recorder
+therefore captures and replays them without a sensor-specific recording format.
+Start remains running while the coordinator is `STARTING` and succeeds only
+after the coordinator reaches `RECORDING`, or immediately when acquisition is
+safely skipped. Stop succeeds after finalization returns the coordinator to
+`IDLE`. A small in-process command handler bridges only these two commands to
+the coordinator; all other commands continue to the Behavior Tree unchanged.
+The header's Sensor section renders the authoritative state and submits these
+same commands, so commands started by playback update the button identically.
+Sensor Mounts remains limited to attachment and configuration concerns.
 
 ---
 

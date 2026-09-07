@@ -142,3 +142,55 @@ def test_repository_rejects_recording_identity_collision(tmp_path):
         metadata_only_repository.create(recording())
 
     assert metadata_path.read_text(encoding="utf-8") == "existing"
+
+
+@pytest.mark.parametrize(
+    ("context", "directories"),
+    (
+        (("", "", ""), ("manual",)),
+        (("motor_01", "", ""), ("motor_01",)),
+        (
+            ("motor_01", "magnetic_scan", ""),
+            ("motor_01", "magnetic_scan"),
+        ),
+    ),
+)
+def test_optional_context_uses_only_present_directories(
+    tmp_path,
+    context,
+    directories,
+):
+    repository = MeasurementRepository(tmp_path)
+    active = MeasurementRecording.start(
+        object_id=context[0],
+        routine_id=context[1],
+        probe_point_id=context[2],
+        sensor_id="environmental_probe",
+        attachment_revision=4,
+        started_at_ns=STARTED_AT_NS,
+        configured_channels=channels(),
+    )
+
+    assert repository.get_metadata_path(active) == (
+        tmp_path.joinpath(*directories)
+        / "2026-09-02"
+        / "2026-09-02T17-55-31.438271923Z"
+        / "metadata.json"
+    )
+
+
+@pytest.mark.parametrize(
+    "context",
+    (("", "scan", ""), ("motor", "", "bearing")),
+)
+def test_optional_context_rejects_hierarchy_gaps(context):
+    with pytest.raises(ValueError, match="requires"):
+        MeasurementRecording.start(
+            object_id=context[0],
+            routine_id=context[1],
+            probe_point_id=context[2],
+            sensor_id="environmental_probe",
+            attachment_revision=4,
+            started_at_ns=STARTED_AT_NS,
+            configured_channels=channels(),
+        )

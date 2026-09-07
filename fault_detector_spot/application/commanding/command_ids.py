@@ -24,6 +24,8 @@ class CommandID(str, Enum):
     MOVE_BASE_TO_TAG = "move_base_to_tag"
     MOVE_BASE_RELATIVE = "move_base_relative"
     EXECUTE_PROBE_POINT = "execute_probe_point"
+    START_SENSOR_RECORDING = "start_sensor_recording"
+    STOP_SENSOR_RECORDING = "stop_sensor_recording"
 
 
 class OrientationModes(str, Enum):

@@ -36,6 +36,7 @@ class RosCommandTransport:
             raise TypeError("Expected a CommandController")
         self.node = node
         self.controller = controller
+        self._local_dispatch = None
         self._dispatch_publisher = node.create_publisher(
             CommandRequestMessage,
             dispatch_topic,
@@ -70,9 +71,15 @@ class RosCommandTransport:
         self.controller.add_accepted_listener(self._publish_accepted)
         self.controller.add_status_listener(self._publish_controller_status)
         self.controller.configure_dispatch(
-            self._publish_dispatch,
+            self._dispatch,
             self._dispatch_consumer_ready,
         )
+
+    def set_local_dispatch(self, dispatch) -> None:
+        """Set the optional in-process command handler."""
+        if dispatch is not None and not callable(dispatch):
+            raise TypeError("Local dispatch must be callable")
+        self._local_dispatch = dispatch
 
     def submit_message(self, message: CommandRequestMessage) -> bool:
         """Validate one ROS submission before it enters the command queue."""
@@ -112,6 +119,14 @@ class RosCommandTransport:
         cancel = getattr(self._poll_timer, "cancel", None)
         if callable(cancel):
             cancel()
+
+    def _dispatch(self, request) -> None:
+        if (
+            self._local_dispatch is not None
+            and self._local_dispatch(request)
+        ):
+            return
+        self._publish_dispatch(request)
 
     def _publish_dispatch(self, request) -> None:
         message = command_request_to_message(request)
