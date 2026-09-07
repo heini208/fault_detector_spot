@@ -22,6 +22,7 @@ from fault_detector_spot.inspection.model.models import (
 from fault_detector_spot.inspection.model.sensor_models import (
     SENSOR_PARENT_FRAME,
     SensorChannel,
+    SensorChannelSource,
     SensorDefinition,
 )
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
@@ -202,6 +203,7 @@ class SensorRegistryApi:
         message.channel_id = channel.channel_id
         message.topic = channel.topic
         message.message_type = channel.message_type
+        message.source_kind = channel.source_kind.value
         return message
 
     @staticmethod
@@ -216,6 +218,10 @@ class SensorRegistryApi:
                     channel_id=channel.channel_id,
                     topic=channel.topic,
                     message_type=channel.message_type,
+                    source_kind=SensorChannelSource(
+                        channel.source_kind
+                        or SensorChannelSource.ROS_TOPIC.value
+                    ),
                 )
                 for channel in message.channels
             ),

@@ -341,38 +341,46 @@ network reachability neither enables nor disables movement and never rewrites
 attachment state.
 
 The same persistent `SensorDefinition` owns its acquisition description as a
-tuple of immutable `SensorChannel` values. Each channel contains `channel_id`,
-an absolute ROS `topic`, and a complete `message_type`. Duplicate channel IDs
-inside one mount are invalid. The registry ROS DTO carries these nested channels
+tuple of immutable `SensorChannel` values. Each channel contains `channel_id`
+and an explicit `source_kind`. A `ros_topic` source requires an absolute ROS
+`topic` and complete `message_type`; a `spot_geometry` source is derived
+inside the acquisition runtime and has neither. Duplicate channel IDs inside
+one mount are invalid. The registry ROS DTO carries these nested channels
 through the existing add/update/list interfaces, and the mount YAML stores them
-beside `hand_to_probe`. Older YAML documents without `channels` load as an empty
-tuple, preserving geometry-only mounts.
+beside `hand_to_probe`. Older channels without `source_kind` load as
+`ros_topic`; older definitions without `channels` remain valid geometry-only
+mounts.
 
 Channel setup remains presentation-only in the Sensor Mounts workspace. A UI
 ROS adapter polls the graph for advertised topic/type pairs, excluding ROS
 plumbing topics, and supplies editable suggestions to the form. Suggestions do
 not constrain persistence: an offline topic or custom message type can still be
-entered manually. The UI does not resolve message classes, subscribe to sensor
-data, or own acquisition state.
+entered manually. New-mount forms start with a removable `spot_geometry`
+channel; editing an existing mount renders exactly its saved channels so a
+user's removal remains authoritative. The UI does not resolve message classes,
+subscribe to sensor data, or own acquisition state.
 
 Measurement persistence is owned by `MeasurementRepository`, outside the UI
 and Behavior Tree. A `MeasurementRecording` uses the natural identity
 `object_id/routine_id/probe_point_id/sensor_id/started_at_ns` and snapshots the
 configured channels plus attachment revision. Its lifecycle is `recording`,
-`complete`, `failed`, or `cancelled`. Each channel receives one exclusive
-JSONL file at:
+`complete`, `failed`, or `cancelled`. Each execution receives one exclusive
+directory containing metadata and one JSONL file per channel:
 
 ```text
-measurements/<object>/<routine>/<probe-point>/<UTC-date>/<sensor>/<channel>/<exact-start-timestamp>.jsonl
+measurements/<object>/<routine>/<probe-point>/<UTC-date>/<exact-start-timestamp>/
+    metadata.json
+    <channel-id>.jsonl
 ```
 
-Every channel from the same measurement uses the identical UTC start timestamp.
-The repository keeps channel files open for efficient appends, exposes explicit
-flush behavior, and fsyncs them during finalization. It atomically replaces a
-sidecar containing the final state, channel definitions, finish timestamp, and
-sample counts. Initial `recording` metadata and already-written channel files
-remain available if finalization fails. Path construction and collision
-protection are not duplicated outside this repository.
+The sensor identity is stored in `metadata.json`; the timestamp directory
+groups all channels from the same measurement. The repository keeps channel
+files open for efficient appends, exposes explicit flush behavior, and fsyncs
+them during finalization. It atomically replaces metadata containing the final
+state, channel definitions, finish timestamp, and sample counts. Initial
+`recording` metadata and already-written channel files remain available if
+finalization fails. Path construction and collision protection are not
+duplicated outside this repository.
 
 A persisted measurement requires at least one configured channel. A later
 acquisition coordinator will implement the optional-sensor policy by returning

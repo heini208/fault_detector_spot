@@ -28,6 +28,7 @@ from fault_detector_spot.application.controllers.sensor_registry_controller impo
 )
 from fault_detector_spot.inspection.model.sensor_models import (
     SensorChannel,
+    SensorChannelSource,
     sensor_definition_from_values,
 )
 from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (
@@ -276,7 +277,15 @@ def test_registry_ros_definition_round_trips_channels():
         0.0,
         0.0,
         0.0,
-        channels=(channel,),
+        channels=(
+            channel,
+            SensorChannel(
+                channel_id="spot_geometry",
+                topic="",
+                message_type="",
+                source_kind=SensorChannelSource.SPOT_GEOMETRY,
+            ),
+        ),
     )
 
     message = SensorRegistryApi._definition_message(original)
@@ -284,6 +293,12 @@ def test_registry_ros_definition_round_trips_channels():
 
     assert restored == original
     assert message.channels[0].channel_id == "magnetic_field"
+    assert message.channels[0].source_kind == (
+        SensorChannelSource.ROS_TOPIC.value
+    )
+    assert restored.channels[1].source_kind == (
+        SensorChannelSource.SPOT_GEOMETRY
+    )
 
 
 def test_update_sensor_rejects_current_attachment(tmp_path):

@@ -43,6 +43,7 @@ class SensorChannelView:
     channel_id: str
     topic: str
     message_type: str
+    source_kind: str = "ros_topic"
 
 
 @dataclass(frozen=True)

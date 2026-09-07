@@ -8,6 +8,7 @@ from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     SensorChannel,
+    SensorChannelSource,
     SensorDefinition,
     quaternion_from_rpy_degrees,
     rpy_degrees_from_quaternion,
@@ -51,13 +52,26 @@ def test_sensor_definition_round_trips_configured_channels():
         0.0,
         0.0,
         0.0,
-        channels=(channel,),
+        channels=(
+            channel,
+            SensorChannel(
+                channel_id="spot_geometry",
+                topic="",
+                message_type="",
+                source_kind=SensorChannelSource.SPOT_GEOMETRY,
+            ),
+        ),
     )
 
     restored = SensorDefinition.from_dict(definition.to_dict())
 
     assert restored == definition
-    assert restored.channels == (channel,)
+    assert restored.channels == definition.channels
+    legacy_channel = channel.to_dict()
+    del legacy_channel["source_kind"]
+    assert SensorChannel.from_dict(legacy_channel).source_kind == (
+        SensorChannelSource.ROS_TOPIC
+    )
 
 
 def test_legacy_sensor_definition_without_channels_loads_empty():
@@ -115,6 +129,15 @@ def test_duplicate_channel_ids_are_rejected():
                 "std_msgs/msg/String",
             ),
             "channel ID",
+        ),
+        (
+            SensorChannel(
+                "geometry",
+                "/tf",
+                "tf2_msgs/msg/TFMessage",
+                SensorChannelSource.SPOT_GEOMETRY,
+            ),
+            "must not define a ROS topic",
         ),
     ),
 )

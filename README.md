@@ -179,19 +179,22 @@ physically confirm an offline sensor definition. Connection state does not gate
 arm movement and does not modify physical attachment state.
 
 Each mount definition also owns zero or more generic acquisition channels. A
-channel stores a stable channel ID, a complete ROS topic, and its
-`package/msg/Type`. The setup form polls the live ROS graph and offers current
-topics and advertised message types as editable suggestions. Manual topics and
-types remain valid for offline sensors. Mounts with no channels remain valid for
-geometry and movement; a later acquisition request will require channels.
+channel has a stable channel ID and an explicit source kind. ROS-topic channels
+store a complete topic and `package/msg/Type`; the derived `spot_geometry`
+source is recorded directly without pretending to be a ROS topic. New mount
+forms include a removable `spot_geometry` channel by default. The setup form
+polls the live ROS graph and offers current topics and advertised message types
+as editable suggestions. Manual topics and types remain valid for offline
+sensors. Mounts with no channels remain valid for geometry and movement.
 
 Generic measurement persistence now uses one JSONL file per configured channel
 under
-`measurements/<object>/<routine>/<probe-point>/<UTC-date>/<sensor>/<channel>/`.
-All channels from one execution share the same nanosecond-resolution start
-timestamp filename. A repository-managed metadata sidecar preserves the sensor
+`measurements/<object>/<routine>/<probe-point>/<UTC-date>/<start-timestamp>/`.
+That recording directory contains `metadata.json` and one
+`<channel-id>.jsonl` file per channel. The sidecar preserves the sensor ID,
 channel snapshot, attachment revision, lifecycle state, and sample counts.
-Files are created exclusively and are never silently overwritten.
+Recording directories and files are created exclusively and are never silently
+overwritten.
 
 Requirements:
 

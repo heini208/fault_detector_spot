@@ -3,6 +3,7 @@
 import math
 import re
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Dict, Tuple
 
 from .models import PoseData, QuaternionData, Vector3Data
@@ -14,6 +15,13 @@ from fault_detector_spot.shared.persistence.file_storage import (
 SENSOR_PARENT_FRAME = "hand"
 BARE_HAND_MOTION_ID = SENSOR_PARENT_FRAME
 _SENSOR_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+class SensorChannelSource(str, Enum):
+    """Supported origins for one recorded channel."""
+
+    ROS_TOPIC = "ros_topic"
+    SPOT_GEOMETRY = "spot_geometry"
 
 
 def sensor_probe_frame(sensor_id: str) -> str:
@@ -92,11 +100,12 @@ def rpy_degrees_from_quaternion(
 
 @dataclass(frozen=True)
 class SensorChannel:
-    """One configured ROS measurement stream on a sensor mount."""
+    """One configured measurement stream on a sensor mount."""
 
     channel_id: str
     topic: str
     message_type: str
+    source_kind: SensorChannelSource = SensorChannelSource.ROS_TOPIC
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SensorChannel":
@@ -107,23 +116,39 @@ class SensorChannel:
             channel_id=str(data["channel_id"]),
             topic=str(data["topic"]),
             message_type=str(data["message_type"]),
+            source_kind=SensorChannelSource(
+                data.get("source_kind", SensorChannelSource.ROS_TOPIC.value)
+            ),
         )
 
     def validate(self) -> None:
-        """Validate persistent identity and ROS interface text."""
+        """Validate persistent identity and source-specific configuration."""
         validate_storage_name(self.channel_id, "channel ID")
+        if not isinstance(self.source_kind, SensorChannelSource):
+            raise TypeError(
+                "Channel source kind must be a SensorChannelSource"
+            )
         for value, label in (
             (self.topic, "Channel topic"),
             (self.message_type, "Channel message type"),
         ):
             if not isinstance(value, str):
                 raise TypeError(f"{label} must be a string")
-            if not value:
-                raise ValueError(f"{label} must not be empty")
             if value != value.strip():
                 raise ValueError(
                     f"{label} must not contain surrounding whitespace"
                 )
+        if self.source_kind == SensorChannelSource.SPOT_GEOMETRY:
+            if self.topic or self.message_type:
+                raise ValueError(
+                    "Spot geometry channels must not define a ROS topic "
+                    "or message type"
+                )
+            return
+        if not self.topic:
+            raise ValueError("Channel topic must not be empty")
+        if not self.message_type:
+            raise ValueError("Channel message type must not be empty")
         if not self.topic.startswith("/"):
             raise ValueError("Channel topic must be an absolute ROS topic")
         if any(character.isspace() for character in self.topic):
@@ -144,6 +169,7 @@ class SensorChannel:
             "channel_id": self.channel_id,
             "topic": self.topic,
             "message_type": self.message_type,
+            "source_kind": self.source_kind.value,
         }
 
 

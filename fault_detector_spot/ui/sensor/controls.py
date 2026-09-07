@@ -32,6 +32,15 @@ class SensorChannelIntent:
     channel_id: str
     topic: str
     message_type: str
+    source_kind: str = "ros_topic"
+
+
+_DEFAULT_GEOMETRY_CHANNEL = SensorChannelIntent(
+    channel_id="spot_geometry",
+    topic="",
+    message_type="",
+    source_kind="spot_geometry",
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +72,7 @@ class SensorControls(QWidget):
         self._editing_sensor_id = ""
         self._build_ui()
         self._connect_intents()
+        self._set_channel_rows((_DEFAULT_GEOMETRY_CHANNEL,))
 
     def _build_ui(self) -> None:
         page_layout = QVBoxLayout(self)
@@ -291,23 +301,27 @@ class SensorControls(QWidget):
         content_layout.setContentsMargins(0, 0, 0, 0)
 
         help_text = QLabel(
-            "Add the ROS streams produced by this mount. Available topics "
-            "and types are suggested from the live ROS graph; offline "
-            "values can still be entered manually."
+            "Add ROS streams or derived Spot geometry to each measurement. "
+            "Available topics and types are suggested from the live ROS "
+            "graph; offline values can still be entered manually."
         )
         help_text.setWordWrap(True)
 
-        self.channel_table = QTableWidget(0, 3)
+        self.channel_table = QTableWidget(0, 4)
         self.channel_table.setHorizontalHeaderLabels(
-            ("Channel ID", "ROS topic", "Message type")
+            ("Channel ID", "Source", "ROS topic", "Message type")
         )
         channel_header = self.channel_table.horizontalHeader()
         channel_header.setSectionResizeMode(
             0,
             QHeaderView.ResizeToContents,
         )
-        channel_header.setSectionResizeMode(1, QHeaderView.Stretch)
+        channel_header.setSectionResizeMode(
+            1,
+            QHeaderView.ResizeToContents,
+        )
         channel_header.setSectionResizeMode(2, QHeaderView.Stretch)
+        channel_header.setSectionResizeMode(3, QHeaderView.Stretch)
         self.channel_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.channel_table.setSelectionMode(QTableWidget.SingleSelection)
         self.channel_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -316,6 +330,12 @@ class SensorControls(QWidget):
         editor = QGridLayout()
         self.channel_id_field = QLineEdit()
         self.channel_id_field.setPlaceholderText("e.g. magnetic_field")
+        self.channel_source_field = QComboBox()
+        self.channel_source_field.addItem("ROS topic", "ros_topic")
+        self.channel_source_field.addItem(
+            "Spot geometry",
+            "spot_geometry",
+        )
         self.channel_topic_field = QComboBox()
         self.channel_topic_field.setEditable(True)
         self.channel_topic_field.setInsertPolicy(QComboBox.NoInsert)
@@ -331,10 +351,12 @@ class SensorControls(QWidget):
 
         editor.addWidget(QLabel("Channel ID:"), 0, 0)
         editor.addWidget(self.channel_id_field, 0, 1)
-        editor.addWidget(QLabel("ROS topic:"), 1, 0)
-        editor.addWidget(self.channel_topic_field, 1, 1)
-        editor.addWidget(QLabel("Message type:"), 2, 0)
-        editor.addWidget(self.channel_message_type_field, 2, 1)
+        editor.addWidget(QLabel("Source:"), 1, 0)
+        editor.addWidget(self.channel_source_field, 1, 1)
+        editor.addWidget(QLabel("ROS topic:"), 2, 0)
+        editor.addWidget(self.channel_topic_field, 2, 1)
+        editor.addWidget(QLabel("Message type:"), 3, 0)
+        editor.addWidget(self.channel_message_type_field, 3, 1)
         editor.setColumnStretch(1, 1)
 
         self.save_channel_button = QPushButton("Add Channel")
@@ -436,6 +458,9 @@ class SensorControls(QWidget):
         )
         self.channel_topic_field.currentTextChanged.connect(
             self._apply_topic_type_suggestion
+        )
+        self.channel_source_field.currentIndexChanged.connect(
+            self._apply_channel_source
         )
         self.save_channel_button.clicked.connect(
             self._save_channel_row
@@ -582,7 +607,7 @@ class SensorControls(QWidget):
             *self.rotation_fields,
         ):
             field.setText("0.0")
-        self._set_channel_rows(())
+        self._set_channel_rows((_DEFAULT_GEOMETRY_CHANNEL,))
         self._set_transform_fields_editable(True)
         self._set_channel_fields_editable(True)
         self.save_mount_button.setEnabled(True)
@@ -876,8 +901,8 @@ class SensorControls(QWidget):
     def _set_channel_fields_editable(self, editable: bool) -> None:
         self.channel_table.setEnabled(editable)
         self.channel_id_field.setReadOnly(not editable)
-        self.channel_topic_field.setEnabled(editable)
-        self.channel_message_type_field.setEnabled(editable)
+        self.channel_source_field.setEnabled(editable)
+        self._apply_channel_source()
         self.save_channel_button.setEnabled(editable)
         self.new_channel_button.setEnabled(editable)
         self.remove_channel_button.setEnabled(
@@ -889,6 +914,7 @@ class SensorControls(QWidget):
         for channel in channels:
             self._append_channel_row(
                 channel.channel_id,
+                getattr(channel, "source_kind", "ros_topic"),
                 channel.topic,
                 channel.message_type,
             )
@@ -897,21 +923,45 @@ class SensorControls(QWidget):
     def _append_channel_row(
         self,
         channel_id: str,
+        source_kind: str,
         topic: str,
         message_type: str,
     ) -> None:
+        source_kind = getattr(source_kind, "value", source_kind)
         row = self.channel_table.rowCount()
         self.channel_table.insertRow(row)
+        self._set_channel_row(
+            row,
+            channel_id,
+            source_kind,
+            topic,
+            message_type,
+        )
+
+    def _set_channel_row(
+        self,
+        row: int,
+        channel_id: str,
+        source_kind: str,
+        topic: str,
+        message_type: str,
+    ) -> None:
         for column, value in enumerate(
-            (channel_id, topic, message_type)
-        ):
-            item = QTableWidgetItem(value)
-            item.setToolTip(value)
-            self.channel_table.setItem(
-                row,
-                column,
-                item,
+            (
+                channel_id,
+                self._source_label(source_kind),
+                topic,
+                message_type,
             )
+        ):
+            item = self.channel_table.item(row, column)
+            if item is None:
+                item = QTableWidgetItem()
+                self.channel_table.setItem(row, column, item)
+            item.setText(value)
+            item.setToolTip(value)
+            if column == 1:
+                item.setData(Qt.UserRole, source_kind)
 
     def _selected_channel_row(self) -> int:
         row = self.channel_table.currentRow()
@@ -931,30 +981,54 @@ class SensorControls(QWidget):
         self.channel_id_field.setText(
             self.channel_table.item(row, 0).text()
         )
+        source_kind = (
+            self.channel_table.item(row, 1).data(Qt.UserRole)
+            or "ros_topic"
+        )
+        source_index = self.channel_source_field.findData(source_kind)
+        self.channel_source_field.setCurrentIndex(
+            source_index if source_index >= 0 else 0
+        )
         self.channel_topic_field.setEditText(
-            self.channel_table.item(row, 1).text()
+            self.channel_table.item(row, 2).text()
         )
         self.channel_message_type_field.setEditText(
-            self.channel_table.item(row, 2).text()
+            self.channel_table.item(row, 3).text()
         )
 
     def _clear_channel_editor(self) -> None:
         self.channel_table.clearSelection()
         self.channel_table.setCurrentCell(-1, -1)
         self.channel_id_field.clear()
+        self.channel_source_field.setCurrentIndex(
+            self.channel_source_field.findData("ros_topic")
+        )
         self.channel_topic_field.setEditText("")
         self.channel_message_type_field.setEditText("")
         self.save_channel_button.setText("Add Channel")
         self.remove_channel_button.setEnabled(False)
 
     def _save_channel_row(self) -> None:
-        values = (
-            self.channel_id_field.text().strip(),
-            self.channel_topic_field.currentText().strip(),
-            self.channel_message_type_field.currentText().strip(),
+        channel_id = self.channel_id_field.text().strip()
+        source_kind = self.channel_source_field.currentData()
+        topic = self.channel_topic_field.currentText().strip()
+        message_type = (
+            self.channel_message_type_field.currentText().strip()
         )
-        labels = ("Channel ID", "ROS topic", "Message type")
-        for value, label in zip(values, labels):
+        if source_kind == "spot_geometry":
+            topic = ""
+            message_type = ""
+        values = (channel_id, source_kind, topic, message_type)
+        required = (
+            ((channel_id, "Channel ID"),)
+            if source_kind == "spot_geometry"
+            else (
+                (channel_id, "Channel ID"),
+                (topic, "ROS topic"),
+                (message_type, "Message type"),
+            )
+        )
+        for value, label in required:
             if not value:
                 self.transform_status_value.setText(
                     f"{label} must not be empty."
@@ -974,13 +1048,9 @@ class SensorControls(QWidget):
         if selected_row < 0:
             self._append_channel_row(*values)
         else:
-            for column, value in enumerate(values):
-                self.channel_table.item(
-                    selected_row,
-                    column,
-                ).setText(value)
+            self._set_channel_row(selected_row, *values)
         self.transform_status_value.setText(
-            f"Configured channel '{values[0]}'."
+            f"Configured channel '{channel_id}'."
         )
         self._clear_channel_editor()
 
@@ -1000,6 +1070,19 @@ class SensorControls(QWidget):
             topic,
             select_advertised=True,
         )
+
+    def _apply_channel_source(self, _index=None) -> None:
+        is_ros_topic = (
+            self.channel_source_field.currentData() == "ros_topic"
+        )
+        editable = self.channel_table.isEnabled()
+        self.channel_topic_field.setEnabled(editable and is_ros_topic)
+        self.channel_message_type_field.setEnabled(
+            editable and is_ros_topic
+        )
+        if not is_ros_topic:
+            self.channel_topic_field.setEditText("")
+            self.channel_message_type_field.setEditText("")
 
     def _refresh_message_type_suggestions(
         self,
@@ -1036,11 +1119,22 @@ class SensorControls(QWidget):
         return tuple(
             SensorChannelIntent(
                 channel_id=self.channel_table.item(row, 0).text(),
-                topic=self.channel_table.item(row, 1).text(),
-                message_type=self.channel_table.item(row, 2).text(),
+                source_kind=(
+                    self.channel_table.item(row, 1).data(Qt.UserRole)
+                    or "ros_topic"
+                ),
+                topic=self.channel_table.item(row, 2).text(),
+                message_type=self.channel_table.item(row, 3).text(),
             )
             for row in range(self.channel_table.rowCount())
         )
+
+    @staticmethod
+    def _source_label(source_kind: str) -> str:
+        return {
+            "ros_topic": "ROS topic",
+            "spot_geometry": "Spot geometry",
+        }.get(source_kind, source_kind)
 
     def _append_definition_row(self, definition) -> None:
         row = self.mount_table.rowCount()

@@ -40,11 +40,13 @@ def channel(
     channel_id="magnetic_field",
     topic="/sensors/bmm150_probe/magnetic_field",
     message_type="sensor_msgs/msg/MagneticField",
+    source_kind="ros_topic",
 ):
     return SimpleNamespace(
         channel_id=channel_id,
         topic=topic,
         message_type=message_type,
+        source_kind=source_kind,
     )
 
 
@@ -115,6 +117,10 @@ def test_create_form_accepts_test_as_mount_id(application):
     controls.apply_definitions(())
     controls.mount_id_field.setText("test")
     controls.display_name_field.setText("Test sensor")
+    assert controls.channel_table.rowCount() == 1
+    assert controls.channel_table.item(0, 0).text() == "spot_geometry"
+    controls.channel_table.selectRow(0)
+    controls.remove_channel_button.click()
     intents = []
     controls.create_requested.connect(intents.append)
 
@@ -143,10 +149,12 @@ def test_mount_form_adds_channel_to_definition_intent(application):
 
     controls.save_mount_button.click()
 
-    assert controls.channel_table.rowCount() == 1
+    assert controls.channel_table.rowCount() == 2
     assert len(intents) == 1
-    assert intents[0].channels[0].channel_id == "magnetic_field"
-    assert intents[0].channels[0].topic == (
+    assert intents[0].channels[0].channel_id == "spot_geometry"
+    assert intents[0].channels[0].source_kind == "spot_geometry"
+    assert intents[0].channels[1].channel_id == "magnetic_field"
+    assert intents[0].channels[1].topic == (
         "/sensors/bmm150_probe/magnetic_field"
     )
 

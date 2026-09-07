@@ -74,14 +74,12 @@ def test_repository_writes_channels_and_final_metadata(tmp_path):
         / "magnetic_scan"
         / "bearing_front"
         / "2026-09-02"
-        / "environmental_probe"
+        / "2026-09-02T17-55-31.438271923Z"
     )
-    expected_name = "2026-09-02T17-55-31.438271923Z.jsonl"
-    assert magnetic_path == (
-        expected_prefix / "magnetic_field" / expected_name
-    )
-    assert temperature_path == (
-        expected_prefix / "temperature" / expected_name
+    assert magnetic_path == expected_prefix / "magnetic_field.jsonl"
+    assert temperature_path == expected_prefix / "temperature.jsonl"
+    assert repository.get_metadata_path(active) == (
+        expected_prefix / "metadata.json"
     )
 
     repository.append_sample(

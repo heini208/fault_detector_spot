@@ -114,6 +114,7 @@ def test_create_sensor_builds_hand_to_probe_request(application):
     assert request.sensor.channels[0].message_type == (
         "sensor_msgs/msg/MagneticField"
     )
+    assert request.sensor.channels[0].source_kind == "ros_topic"
 
 
 def test_update_sensor_uses_dedicated_update_service(application):
@@ -176,6 +177,7 @@ def test_definition_view_exposes_rotation_for_edit_form(application):
     assert view.rotation_degrees == pytest.approx((0.0, 0.0, 90.0))
     assert view.channels[0].channel_id == "magnetic_field"
     assert view.channels[0].topic == "/sensors/test/magnetic_field"
+    assert view.channels[0].source_kind == "ros_topic"
 
 
 def test_create_sensor_rejects_incomplete_transform(application):

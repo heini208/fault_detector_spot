@@ -202,6 +202,10 @@ class SensorRegistryClient(QObject):
                     channel_id=channel.channel_id,
                     topic=channel.topic,
                     message_type=channel.message_type,
+                    source_kind=(
+                        getattr(channel, "source_kind", "")
+                        or "ros_topic"
+                    ),
                 )
                 for channel in sensor.channels
             ),
@@ -213,6 +217,10 @@ class SensorRegistryClient(QObject):
         message.channel_id = str(channel.channel_id).strip()
         message.topic = str(channel.topic).strip()
         message.message_type = str(channel.message_type).strip()
+        source_kind = getattr(channel, "source_kind", "ros_topic")
+        message.source_kind = str(
+            getattr(source_kind, "value", source_kind)
+        ).strip()
         return message
 
     def _handle_deletion_result(self, future, sensor_id):

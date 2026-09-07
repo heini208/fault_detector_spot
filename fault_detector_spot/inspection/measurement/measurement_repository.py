@@ -28,7 +28,7 @@ class MeasurementRepository:
     """Own measurement paths, open channel files, and metadata."""
 
     CHANNEL_SUFFIX = ".jsonl"
-    METADATA_SUFFIX = ".metadata.json"
+    METADATA_FILE = "metadata.json"
 
     def __init__(
         self,
@@ -63,20 +63,14 @@ class MeasurementRepository:
         }:
             raise KeyError(f"Unknown configured channel: {channel_id}")
         return (
-            self._sensor_directory(recording)
-            / channel_id
-            / f"{self._timestamp_name(recording.started_at_ns)}"
-            f"{self.CHANNEL_SUFFIX}"
+            self._recording_directory(recording)
+            / f"{channel_id}{self.CHANNEL_SUFFIX}"
         )
 
     def get_metadata_path(self, recording: MeasurementRecording) -> Path:
         """Return the sidecar path for complete recording metadata."""
         recording.validate()
-        return (
-            self._sensor_directory(recording)
-            / f"{self._timestamp_name(recording.started_at_ns)}"
-            f"{self.METADATA_SUFFIX}"
-        )
+        return self._recording_directory(recording) / self.METADATA_FILE
 
     def create(
         self,
@@ -238,7 +232,7 @@ class MeasurementRepository:
             raise RuntimeError("Measurement recording is not open")
         return context
 
-    def _sensor_directory(
+    def _recording_directory(
         self,
         recording: MeasurementRecording,
     ) -> Path:
@@ -248,7 +242,7 @@ class MeasurementRepository:
             / recording.routine_id
             / recording.probe_point_id
             / self._date_name(recording.started_at_ns)
-            / recording.sensor_id
+            / self._timestamp_name(recording.started_at_ns)
         )
 
     def _metadata_path_from_identity(
@@ -277,9 +271,8 @@ class MeasurementRepository:
             / routine_id
             / probe_point_id
             / self._date_name(started_at_ns)
-            / sensor_id
-            / f"{self._timestamp_name(started_at_ns)}"
-            f"{self.METADATA_SUFFIX}"
+            / self._timestamp_name(started_at_ns)
+            / self.METADATA_FILE
         )
 
     @staticmethod
