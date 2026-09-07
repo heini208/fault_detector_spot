@@ -44,7 +44,6 @@ class ProbeExecutionTarget:
     orientation_tolerance_rad: float
     measurement_duration_sec: float
     aligned_preapproach_distance_m: float
-    sensor_path: str | None
 
 
 def resolve_probe_execution_target(
@@ -95,7 +94,6 @@ def resolve_probe_execution_target(
         aligned_preapproach_distance_m=(
             probe_point.aligned_preapproach_distance_m
         ),
-        sensor_path=probe_point.sensor_path,
         object_pose_execution=object_pose_execution,
         execution_frame=execution_frame,
     )
@@ -114,7 +112,6 @@ def resolve_probe_execution_geometry(
     orientation_tolerance_rad: float,
     measurement_duration_sec: float,
     aligned_preapproach_distance_m: float,
-    sensor_path: str | None,
     object_pose_execution: PoseData,
     execution_frame: str = "odom",
     attachment_revision: int = 0,
@@ -190,5 +187,4 @@ def resolve_probe_execution_geometry(
         orientation_tolerance_rad=orientation_tolerance_rad,
         measurement_duration_sec=measurement_duration_sec,
         aligned_preapproach_distance_m=aligned_preapproach_distance_m,
-        sensor_path=sensor_path,
     )

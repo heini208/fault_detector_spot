@@ -185,6 +185,14 @@ topics and advertised message types as editable suggestions. Manual topics and
 types remain valid for offline sensors. Mounts with no channels remain valid for
 geometry and movement; a later acquisition request will require channels.
 
+Generic measurement persistence now uses one JSONL file per configured channel
+under
+`measurements/<object>/<routine>/<probe-point>/<UTC-date>/<sensor>/<channel>/`.
+All channels from one execution share the same nanosecond-resolution start
+timestamp filename. A repository-managed metadata sidecar preserves the sensor
+channel snapshot, attachment revision, lifecycle state, and sample counts.
+Files are created exclusively and are never silently overwritten.
+
 Requirements:
 
 - Spot is powered on and connected to the ROS machine (via `spot_ros2` configuration).

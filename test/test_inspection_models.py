@@ -113,6 +113,16 @@ def test_probe_point_round_trip_preserves_execution_geometry():
     assert "aligned_preapproach_pose_object" in serialized
 
 
+def test_legacy_probe_sensor_path_is_ignored_on_load():
+    serialized = make_probe().to_dict()
+    serialized["sensor_path"] = "magnetic/field"
+
+    restored = ProbePoint.from_dict(serialized)
+
+    assert not hasattr(restored, "sensor_path")
+    assert "sensor_path" not in restored.to_dict()
+
+
 @pytest.mark.parametrize(
     "distance",
     [0.0, -0.01, 0.059, float("inf"), float("nan")],

@@ -194,7 +194,6 @@ def test_recapture_preserves_probe_geometry_and_clears_provenance(
         aligned_preapproach_distance_m=0.08,
         reference_pixel=ImagePoint(u=1, v=0),
         reference_view_id="slot1_hand",
-        sensor_path="magnetic/field",
     )
     routine.probe_points.append(original_probe)
     repository.object_repository.save(definition)

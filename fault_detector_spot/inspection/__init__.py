@@ -46,6 +46,11 @@ from fault_detector_spot.inspection.model.sensor_models import (
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
 )
+from fault_detector_spot.inspection.measurement import (
+    MeasurementCompletionState,
+    MeasurementRecording,
+    MeasurementRepository,
+)
 from fault_detector_spot.shared.geometry.transforms import (
     compose_poses,
     inverse_pose,
@@ -61,6 +66,9 @@ __all__ = [
     "InspectionObject",
     "InspectionRoutine",
     "LiveObjectPoseResolver",
+    "MeasurementCompletionState",
+    "MeasurementRecording",
+    "MeasurementRepository",
     "MotionAttachmentSnapshot",
     "ObjectPoseState",
     "ObjectRepository",

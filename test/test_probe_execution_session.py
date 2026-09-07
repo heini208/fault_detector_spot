@@ -134,6 +134,7 @@ def test_loaded_configuration_freezes_aligned_preapproach_geometry(tmp_path):
         0.0,
     )
     assert not hasattr(session.configuration, "probe_pose_object")
+    assert not hasattr(session.configuration, "sensor_path")
 
 
 def test_loaded_configuration_freezes_active_sensor_attachment(

@@ -130,6 +130,7 @@ def test_resolves_safe_and_aligned_targets_in_execution_frame():
     assert target.target_surface_distance_m == pytest.approx(0.03)
     assert target.aligned_preapproach_distance_m == pytest.approx(0.10)
     assert target.measurement_duration_sec == pytest.approx(1.5)
+    assert not hasattr(target, "sensor_path")
     assert not hasattr(target, "nominal_probe_pose_execution")
     assert not hasattr(target, "nominal_hand_pose_execution")
 

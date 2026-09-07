@@ -138,7 +138,6 @@ class ProbeExecutionConfiguration:
     orientation_tolerance_rad: float
     measurement_duration_sec: float
     aligned_preapproach_distance_m: float
-    sensor_path: Optional[str]
 
     @classmethod
     def load(
@@ -198,7 +197,6 @@ class ProbeExecutionConfiguration:
             aligned_preapproach_distance_m=float(
                 probe_point.aligned_preapproach_distance_m
             ),
-            sensor_path=probe_point.sensor_path,
         )
 
     def resolve_target(
@@ -227,7 +225,6 @@ class ProbeExecutionConfiguration:
             aligned_preapproach_distance_m=(
                 self.aligned_preapproach_distance_m
             ),
-            sensor_path=self.sensor_path,
             object_pose_execution=object_pose_execution,
             execution_frame=execution_frame,
         )

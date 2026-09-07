@@ -300,14 +300,12 @@ class ProbePoint:
     aligned_preapproach_distance_m: float
     reference_pixel: Optional[ImagePoint] = None
     reference_view_id: Optional[str] = None
-    sensor_path: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProbePoint":
         data = _require_dict(data, "probe_point")
         pixel = data.get("reference_pixel")
         reference_view_id = data.get("reference_view_id")
-        sensor_path = data.get("sensor_path")
         return cls(
             probe_point_id=str(data["probe_point_id"]),
             display_name=str(data["display_name"]),
@@ -340,11 +338,6 @@ class ProbePoint:
             reference_view_id=(
                 str(reference_view_id)
                 if reference_view_id is not None
-                else None
-            ),
-            sensor_path=(
-                str(sensor_path)
-                if sensor_path is not None
                 else None
             ),
         )
@@ -398,8 +391,6 @@ class ProbePoint:
                 self.reference_view_id,
                 "Probe point reference view ID",
             )
-        if self.sensor_path is not None:
-            _require_text(self.sensor_path, "Sensor path")
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -433,8 +424,6 @@ class ProbePoint:
             result[
                 "reference_view_id"
             ] = self.reference_view_id
-        if self.sensor_path is not None:
-            result["sensor_path"] = self.sensor_path
         return result
 
 

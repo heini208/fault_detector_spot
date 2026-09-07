@@ -355,6 +355,29 @@ not constrain persistence: an offline topic or custom message type can still be
 entered manually. The UI does not resolve message classes, subscribe to sensor
 data, or own acquisition state.
 
+Measurement persistence is owned by `MeasurementRepository`, outside the UI
+and Behavior Tree. A `MeasurementRecording` uses the natural identity
+`object_id/routine_id/probe_point_id/sensor_id/started_at_ns` and snapshots the
+configured channels plus attachment revision. Its lifecycle is `recording`,
+`complete`, `failed`, or `cancelled`. Each channel receives one exclusive
+JSONL file at:
+
+```text
+measurements/<object>/<routine>/<probe-point>/<UTC-date>/<sensor>/<channel>/<exact-start-timestamp>.jsonl
+```
+
+Every channel from the same measurement uses the identical UTC start timestamp.
+The repository keeps channel files open for efficient appends, exposes explicit
+flush behavior, and fsyncs them during finalization. It atomically replaces a
+sidecar containing the final state, channel definitions, finish timestamp, and
+sample counts. Initial `recording` metadata and already-written channel files
+remain available if finalization fails. Path construction and collision
+protection are not duplicated outside this repository.
+
+A persisted measurement requires at least one configured channel. A later
+acquisition coordinator will implement the optional-sensor policy by returning
+success without constructing an empty recording when acquisition is skipped.
+
 ---
 
 # 3. Data Flow Summary
@@ -535,6 +558,12 @@ safety decisions.
 Long-running, cancellable workflows use ROS2 actions instead of the generic command buffer. The saved probe-point execution contract is
 `ExecuteProbePoint.action`. Its goal contains semantic object, routine, and probe-point IDs, while the ROS2 action goal UUID provides execution correlation,
 feedback, cancellation, and terminal result state.
+
+`ProbePoint` owns execution geometry and `measurement_duration_sec`, but it
+does not own a sensor output path. Acquisition inputs are resolved from the
+confirmed sensor mount's `SensorDefinition.channels`. Legacy object files that
+still contain `sensor_path` remain readable; the obsolete key is ignored and
+is removed the next time the object is saved.
 
 Although multiple specialized message types could have been defined for each command variation, this approach was intentionally avoided. While having distinct
 message definitions would provide stronger type safety, it would also increase the development effort required when introducing new command types. The chosen
