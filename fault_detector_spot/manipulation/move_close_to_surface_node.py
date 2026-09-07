@@ -270,7 +270,7 @@ def main(args=None):
         node.request_shutdown()
         executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

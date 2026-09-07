@@ -52,4 +52,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
 
     def close(self):
         """Close shared ROS entities that are not tree children."""
-        self.robot_command_resources.close()
+        try:
+            self.slam_helper.close()
+        finally:
+            self.robot_command_resources.close()

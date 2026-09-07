@@ -14,6 +14,7 @@ from fault_detector_spot.shared.persistence.runtime_paths import (
     default_map_root,
 )
 from fault_detector_spot.shared.ros.process_lifecycle import (
+    is_process_group_running,
     terminate_process_group,
 )
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
@@ -50,6 +51,9 @@ class RTABHelper:
         self._runtime_lock = RLock()
         self._runtime_future = None
         self._runtime_operation = ""
+        self._closing = False
+        self._executor_closed = False
+        self._closed = False
         self.init_blackboard_keys()
         self.init_ros_publishers()
 
@@ -129,6 +133,8 @@ class RTABHelper:
         **kwargs,
     ) -> bool:
         with self._runtime_lock:
+            if self._closing:
+                raise RuntimeError("Mapping runtime is shutting down")
             self._reap_completed_runtime_operation()
             if self._runtime_future is not None:
                 return False
@@ -240,6 +246,41 @@ class RTABHelper:
     def stop_nav2(self):
         if not self.nav2_helper.stop():
             raise RuntimeError("Nav2 launch process did not terminate")
+        return True
+
+    def close(self):
+        """Stop asynchronous work, then terminate every owned process group."""
+        with self._runtime_lock:
+            if self._closed:
+                return True
+            self._closing = True
+            executor_closed = self._executor_closed
+
+        if not executor_closed:
+            self._runtime_executor.shutdown(
+                wait=True,
+                cancel_futures=True,
+            )
+            with self._runtime_lock:
+                self._executor_closed = True
+                future = self._runtime_future
+                operation_name = self._runtime_operation
+                self._runtime_future = None
+                self._runtime_operation = ""
+
+            if future is not None and future.done():
+                try:
+                    future.result()
+                except Exception as exception:
+                    self.node.get_logger().warning(
+                        "Mapping runtime operation "
+                        f"'{operation_name}' failed during shutdown: "
+                        f"{exception}"
+                    )
+
+        self.stop_without_save()
+        with self._runtime_lock:
+            self._closed = True
         return True
 
     def _call_service(
@@ -360,7 +401,7 @@ class RTABHelper:
             f"use_sim_time:={self._use_sim_time_launch_arg()}",
         ]
 
-        proc = subprocess.Popen(args, preexec_fn=os.setsid)
+        proc = subprocess.Popen(args, start_new_session=True)
 
         self.bb.slam_launch_process = proc
         self.bb.slam_runtime_mode = (
@@ -428,7 +469,7 @@ class RTABHelper:
             f"use_sim_time:={self._use_sim_time_launch_arg()}",
         ]
 
-        proc = subprocess.Popen(args, preexec_fn=os.setsid)
+        proc = subprocess.Popen(args, start_new_session=True)
 
         self.bb.slam_launch_process = proc
         self.bb.slam_runtime_mode = self.MODE_LOCALIZATION
@@ -457,9 +498,7 @@ class RTABHelper:
 
     def is_rtabmap_running(self) -> bool:
         proc = getattr(self.bb, "slam_launch_process", None)
-        if proc is None:
-            return False
-        return proc.poll() is None
+        return is_process_group_running(proc)
 
     def get_running_mode(self) -> str:
         if not self.is_rtabmap_running():

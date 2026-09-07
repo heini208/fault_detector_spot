@@ -149,6 +149,8 @@ def generate_launch_description():
             executable="bt_runner",
             name="bt_runner",
             output="screen",
+            sigterm_timeout="45.0",
+            sigkill_timeout="5.0",
             parameters=[
                 tag_sensing_config,
                 close_surface_config,

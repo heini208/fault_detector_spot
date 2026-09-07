@@ -1,8 +1,6 @@
 """Build and run the main robot behavior tree."""
 
-import signal
 import sys
-import time
 from typing import Callable
 
 import py_trees
@@ -56,8 +54,6 @@ from fault_detector_spot.navigation.behaviours.last_localization_pose import (
 
 
 helper_initializer: HelperInitializer = None
-stop_mapping_behavior = None
-stop_mapping_tree = None
 
 
 def read_parameter(node, name, default):
@@ -554,29 +550,7 @@ def build_navigate_to_goal_pose_tree(
     return sequence
 
 
-def ctrl_c_handler(sig, frame):
-    global stop_mapping_behavior, stop_mapping_tree
-
-    if stop_mapping_behavior is None or stop_mapping_tree is None:
-        return
-
-    node = stop_mapping_behavior.helper.node
-    node.get_logger().info(
-        "Ctrl-C received, running StopMapping behaviour..."
-    )
-    while (
-        stop_mapping_behavior.update()
-        != py_trees.common.Status.SUCCESS
-    ):
-        time.sleep(0.1)
-    node.get_logger().info(
-        "StopMapping completed, exiting..."
-    )
-
-
 def main(args=None):
-    global stop_mapping_behavior, stop_mapping_tree
-
     rclpy.init(args=args)
     node = rclpy.create_node("bt_driver")
     root = create_root(node)
@@ -594,21 +568,16 @@ def main(args=None):
         node.get_logger().error(
             f"Behavior tree setup failed: {exception}"
         )
-        tree.shutdown()
-        close_helper_container()
-        rclpy.try_shutdown()
+        try:
+            close_helper_container()
+        finally:
+            try:
+                tree.shutdown()
+            finally:
+                rclpy.try_shutdown()
         sys.exit(1)
 
     start_tree_ticking(tree)
-
-    slam_helper = get_helper_container(tree.node).slam_helper
-    stop_mapping_behavior = StopMapping(
-        slam_helper,
-        with_save=False,
-    )
-    stop_mapping_behavior.setup(node=tree.node)
-    stop_mapping_tree = tree
-    signal.signal(signal.SIGINT, ctrl_c_handler)
 
     executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(tree.node)
@@ -617,10 +586,16 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        executor.shutdown()
-        tree.shutdown()
-        close_helper_container()
-        rclpy.shutdown()
+        try:
+            executor.shutdown()
+        finally:
+            try:
+                close_helper_container()
+            finally:
+                try:
+                    tree.shutdown()
+                finally:
+                    rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

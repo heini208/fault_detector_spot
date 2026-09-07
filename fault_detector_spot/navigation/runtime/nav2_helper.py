@@ -6,6 +6,7 @@ import py_trees
 from ament_index_python.packages import get_package_share_directory
 
 from fault_detector_spot.shared.ros.process_lifecycle import (
+    is_process_group_running,
     terminate_process_group,
 )
 
@@ -87,7 +88,7 @@ class Nav2Helper:
             )
         args.extend(launch_args)
 
-        proc = subprocess.Popen(args, preexec_fn=os.setsid)
+        proc = subprocess.Popen(args, start_new_session=True)
         self.bb.nav2_launch_process = proc
         self.node.get_logger().info(
             f"[Nav2Helper] Started Nav2 with PID {proc.pid}"
@@ -124,9 +125,7 @@ class Nav2Helper:
             "nav2_launch_process",
             None,
         )
-        if proc is None:
-            return False
-        return proc.poll() is None
+        return is_process_group_running(proc)
 
     def wait_until_active(self, timeout_sec=10):
         start_time = time.time()
