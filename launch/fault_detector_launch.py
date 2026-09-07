@@ -9,6 +9,7 @@ from launch_ros.actions import Node
 
 from fault_detector_spot.shared.persistence.runtime_paths import (
     default_map_root,
+    default_measurement_root,
     default_recording_root,
 )
 
@@ -37,6 +38,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     navigation_map_root = LaunchConfiguration("navigation_map_root")
     recording_root = LaunchConfiguration("recording_root")
+    measurement_root = LaunchConfiguration("measurement_root")
     launch_micro_ros_agent = LaunchConfiguration("launch_micro_ros_agent")
     micro_ros_agent_transport = LaunchConfiguration(
         "micro_ros_agent_transport"
@@ -62,6 +64,11 @@ def generate_launch_description():
             "recording_root",
             default_value=str(default_recording_root()),
             description="Persistent semantic command recording directory",
+        ),
+        DeclareLaunchArgument(
+            "measurement_root",
+            default_value=str(default_measurement_root()),
+            description="Persistent sensor measurement directory",
         ),
         DeclareLaunchArgument(
             "launch_micro_ros_agent",
@@ -158,6 +165,7 @@ def generate_launch_description():
                 {
                     "use_sim_time": use_sim_time,
                     "navigation.map_root": navigation_map_root,
+                    "measurement.root": measurement_root,
                 },
             ],
         ),

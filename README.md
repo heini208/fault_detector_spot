@@ -205,6 +205,24 @@ object pose together with live body, hand, and probe poses in `odom`, plus the
 probe pose expressed relative to the inspection object. It writes directly to
 its channel file and does not introduce a synthetic ROS topic.
 
+`SensorAcquisitionCoordinator` is the single runtime owner of this process.
+For physical channels under `/sensors/<sensor-id>/...`, it creates the local
+subscriptions before enabling the matching ESP32 service and reports
+`RECORDING` only after both the service acknowledgement and the first physical
+sample arrive. Unrelated channels such as `/odom` cannot satisfy that readiness
+condition. Stop first closes the local inputs, then disables the head, waits for
+its acknowledgement, and finalizes metadata. A missing physical head is an
+immediate skipped success and creates no empty measurement directory.
+
+All lifecycle transitions (`IDLE`, `STARTING`, `RECORDING`, `STOPPING`, and
+`FAILED`) are published latched on
+`fault_detector/application/sensor_acquisition_state`. This is the state the
+later UI button and saved workflow commands consume; neither will maintain a
+private recording flag. Geometry TF subscriptions and the startup watchdog are
+allocated only for an active applicable recording. The launch file exposes only
+the measurement root; timeout and sampling defaults stay local until there is a
+demonstrated need to configure them.
+
 Requirements:
 
 - Spot is powered on and connected to the ROS machine (via `spot_ros2` configuration).

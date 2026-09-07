@@ -25,3 +25,8 @@ def default_map_root() -> Path:
 def default_recording_root() -> Path:
     """Return the default persistent recording storage directory."""
     return fault_detector_runtime_root() / "recordings"
+
+
+def default_measurement_root() -> Path:
+    """Return the default persistent sensor measurement directory."""
+    return fault_detector_runtime_root() / "measurements"

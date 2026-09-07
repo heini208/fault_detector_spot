@@ -60,6 +60,7 @@ class RosTopicRecordingSource:
         qos_profile=qos_profile_sensor_data,
         message_type_resolver=get_message,
         message_converter=message_to_ordereddict,
+        callback_group=None,
     ):
         """Configure a source without subscribing until :meth:`start`."""
         if channel.source_kind != SensorChannelSource.ROS_TOPIC:
@@ -77,6 +78,7 @@ class RosTopicRecordingSource:
         self._qos_profile = qos_profile
         self._message_type_resolver = message_type_resolver
         self._message_converter = message_converter
+        self._callback_group = callback_group
         self._subscription = None
         self._active = False
         self._first_sample_received = False
@@ -108,11 +110,17 @@ class RosTopicRecordingSource:
             self._last_error_text = None
             self._active = True
             try:
+                subscription_options = {}
+                if self._callback_group is not None:
+                    subscription_options["callback_group"] = (
+                        self._callback_group
+                    )
                 self._subscription = self._node.create_subscription(
                     message_type,
                     self._channel.topic,
                     self._receive_message,
                     self._qos_profile,
+                    **subscription_options,
                 )
             except Exception:
                 self._active = False

@@ -19,6 +19,9 @@ from ament_index_python.packages import get_package_share_directory
 from fault_detector_spot.application.api.sensor_attachment_api import (
     SensorAttachmentApi,
 )
+from fault_detector_spot.application.api.sensor_acquisition_api import (
+    SensorAcquisitionApi,
+)
 from fault_detector_spot.application.api.sensor_registry_api import (
     SensorRegistryApi,
 )
@@ -65,6 +68,9 @@ from fault_detector_spot.application.coordinators.probe_reference_capture_coordi
 from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
 )
+from fault_detector_spot.application.coordinators.sensor_acquisition_coordinator import (
+    SensorAcquisitionCoordinator,
+)
 from fault_detector_spot.application.api.probe_setup_motion_api import (
     ProbeSetupMotionApi,
 )
@@ -89,6 +95,7 @@ from fault_detector_spot.application.coordinators.navigation_setup_coordinator i
 from fault_detector_spot.navigation.setup.navigation_setup_state_source import (
     NavigationSetupStateSource,
 )
+from fault_detector_spot.inspection.measurement import MeasurementRepository
 
 
 _TERMINAL_STATES = frozenset({
@@ -165,10 +172,14 @@ class ApplicationApiNode(Node):
         )
         self.declare_parameter("inspection.object_root", "")
         self.declare_parameter("sensor.root", "")
+        self.declare_parameter("measurement.root", "")
         object_root = self.get_parameter(
             "inspection.object_root"
         ).value.strip()
         sensor_root = self.get_parameter("sensor.root").value.strip()
+        measurement_root = self.get_parameter(
+            "measurement.root"
+        ).value.strip()
         reference_repository = MultiReferenceViewRepository(
             object_root or None
         )
@@ -193,6 +204,25 @@ class ApplicationApiNode(Node):
         self.sensor_attachment_api = SensorAttachmentApi(
             self,
             self.sensor_attachment_controller,
+        )
+        self.sensor_acquisition_coordinator = SensorAcquisitionCoordinator(
+            node=self,
+            measurement_repository=MeasurementRepository(
+                measurement_root or None
+            ),
+            sensor_attachment_controller=(
+                self.sensor_attachment_controller
+            ),
+            sensor_repository=sensor_repository,
+            error_handler=(
+                lambda exception: self.get_logger().error(
+                    f"Sensor acquisition callback failed: {exception}"
+                )
+            ),
+        )
+        self.sensor_acquisition_api = SensorAcquisitionApi(
+            self,
+            self.sensor_acquisition_coordinator,
         )
         self.probe_setup_motion_state = (
             probe_setup_motion_state_source.ProbeSetupMotionStateSource(self)
@@ -465,6 +495,8 @@ class ApplicationApiNode(Node):
         self.probe_setup_motion_api.close()
         self.probe_setup_api.close()
         self.navigation_setup_api.close()
+        self.sensor_acquisition_api.close()
+        self.sensor_acquisition_coordinator.close()
         self.sensor_attachment_api.close()
         self.sensor_registry_api.close()
         self.command_controller.remove_request_preparer(

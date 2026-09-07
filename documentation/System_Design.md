@@ -414,6 +414,41 @@ repeated identical TF errors are coalesced until a successful sample. The two
 source implementations expose the same first-sample and error callback shape,
 allowing the acquisition coordinator to own lifecycle and readiness uniformly.
 
+`SensorAcquisitionCoordinator` is the sole lifecycle authority. A start request
+contains the object, routine, and probe-point identity plus the frozen object
+pose in the execution frame. The coordinator snapshots the confirmed sensor
+definition and attachment revision at execution time. If no sensor is attached,
+the definition has no channels, or a required physical head is offline, start
+returns immediate idle success and creates no empty directory. This preserves
+the ability of workflows to run recordings that are independent of the sensor
+head.
+
+Physical head channels are identified by the explicit firmware namespace
+`/sensors/<sensor-id>/...`; other selected ROS topics such as `/odom` or map
+state are auxiliary channels. The coordinator opens every configured channel,
+creates all subscriptions, and only then calls
+`/fault_detector/sensors/<sensor-id>/set_acquisition`. It transitions from
+`STARTING` to `RECORDING` after both the service acknowledgement and the first
+physical-channel sample. Auxiliary or geometry samples cannot accidentally
+claim that the head is producing data. When no physical channel is configured,
+the first sample from any configured channel establishes readiness without
+toggling the firmware.
+
+Stop transitions through `STOPPING`, prevents further local appends, requests
+firmware disablement when applicable, and waits for its acknowledgement before
+finalizing the recording. Startup and stop deadlines prevent a workflow from
+remaining blocked indefinitely. Shutdown performs a best-effort firmware stop
+and synchronously cancels/finalizes local storage. TF listener and watchdog
+resources exist only for the active session and are released on every terminal
+path.
+
+The current state is published with depth-one transient-local QoS on
+`fault_detector/application/sensor_acquisition_state` using the typed
+`SensorAcquisitionState` message. This topic is the authoritative observation
+boundary for UI, workflow, and future API clients, regardless of which command
+source initiated start or stop. The UI therefore never infers recording state
+from its own button click.
+
 ---
 
 # 3. Data Flow Summary
