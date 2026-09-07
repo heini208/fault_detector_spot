@@ -28,6 +28,9 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
     sensor_indicator = QLabel("●")
     sensor = QLabel("No sensor")
     confirm = QPushButton("✓")
+    recording_indicator = QLabel("●")
+    recording_button = QPushButton("Record")
+    open_measurements = QPushButton("Folder")
     sensor_connection_indicator = QLabel("●")
     sensor_connection = QLabel("Connected")
     agent_indicator = QLabel("●")
@@ -44,6 +47,9 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
         sensor_indicator,
         sensor,
         confirm,
+        recording_indicator,
+        recording_button,
+        open_measurements,
         sensor_connection_indicator,
         sensor_connection,
         agent_indicator,
@@ -90,6 +96,9 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
     assert panel.sensor_widget.layout().indexOf(sensor_indicator) >= 0
     assert panel.sensor_widget.layout().indexOf(sensor) >= 0
     assert panel.sensor_widget.layout().indexOf(confirm) >= 0
+    assert panel.sensor_widget.layout().indexOf(recording_indicator) >= 0
+    assert panel.sensor_widget.layout().indexOf(recording_button) >= 0
+    assert panel.sensor_widget.layout().indexOf(open_measurements) >= 0
     assert panel.sensor_widget.layout().indexOf(
         sensor_connection_indicator
     ) >= 0
