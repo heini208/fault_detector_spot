@@ -933,8 +933,22 @@ class Fault_Detector_UI(QWidget):
         )
         self.buffer_label.setToolTip(self._buffer_text)
         self._refresh_buffer_label()
+        self._show_local_command_failure(state, intent_name)
         if hasattr(self, "inspection_controls"):
             self.inspection_controls.handle_application_state(state)
+
+    def _show_local_command_failure(self, state, intent_name):
+        if state.state != ApplicationCommandState.STATE_FAILED:
+            return
+        client_id = getattr(self.application_client, "client_id", "")
+        if not client_id or state.client_id != client_id:
+            return
+        title = intent_name.replace("_", " ").title()
+        QMessageBox.warning(
+            self,
+            f"{title} failed",
+            state.detail or "The command failed without further detail.",
+        )
 
     def _process_application_error(self, detail):
         self.status_label.setText(f"Operation rejected: {detail}")
