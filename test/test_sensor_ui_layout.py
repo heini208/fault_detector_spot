@@ -83,6 +83,14 @@ def test_sensor_definition_form_is_immediately_editable(application):
     ]
 
 
+def test_acquisition_channels_are_collapsed_by_default(application):
+    controls = SensorControls()
+
+    assert controls.channel_content.isHidden()
+    controls.channel_toggle_button.click()
+    assert not controls.channel_content.isHidden()
+
+
 def test_current_attachment_does_not_expose_internal_revision(application):
     controls = SensorControls()
 
@@ -151,6 +159,10 @@ def test_live_topic_suggestion_fills_advertised_message_type(application):
                 topic="/sensors/bmm150_probe/magnetic_field",
                 message_types=("sensor_msgs/msg/MagneticField",),
             ),
+            SensorTopicSuggestion(
+                topic="/active_map",
+                message_types=("nav_msgs/msg/OccupancyGrid",),
+            ),
         )
     )
 
@@ -161,6 +173,9 @@ def test_live_topic_suggestion_fills_advertised_message_type(application):
     assert controls.channel_topic_field.findText(
         "/sensors/bmm150_probe/magnetic_field"
     ) >= 0
+    assert controls.channel_topic_field.itemText(0) == (
+        "/sensors/bmm150_probe/magnetic_field"
+    )
     assert controls.channel_message_type_field.currentText() == (
         "sensor_msgs/msg/MagneticField"
     )

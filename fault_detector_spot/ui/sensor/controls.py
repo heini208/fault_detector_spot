@@ -275,8 +275,20 @@ class SensorControls(QWidget):
         return group
 
     def _build_channels_group(self) -> QGroupBox:
-        group = QGroupBox("Acquisition channels")
+        group = QGroupBox()
         layout = QVBoxLayout(group)
+
+        self.channel_toggle_button = QPushButton(
+            "Show acquisition channels"
+        )
+        self.channel_toggle_button.setCheckable(True)
+        self.channel_toggle_button.toggled.connect(
+            self._set_channels_expanded
+        )
+
+        self.channel_content = QWidget()
+        content_layout = QVBoxLayout(self.channel_content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
 
         help_text = QLabel(
             "Add the ROS streams produced by this mount. Available topics "
@@ -335,11 +347,23 @@ class SensorControls(QWidget):
         actions.addWidget(self.remove_channel_button)
         actions.addStretch()
 
-        layout.addWidget(help_text)
-        layout.addWidget(self.channel_table)
-        layout.addLayout(editor)
-        layout.addLayout(actions)
+        content_layout.addWidget(help_text)
+        content_layout.addWidget(self.channel_table)
+        content_layout.addLayout(editor)
+        content_layout.addLayout(actions)
+
+        layout.addWidget(self.channel_toggle_button)
+        layout.addWidget(self.channel_content)
+        self._set_channels_expanded(False)
         return group
+
+    def _set_channels_expanded(self, expanded: bool) -> None:
+        self.channel_content.setVisible(expanded)
+        self.channel_toggle_button.setText(
+            "Hide acquisition channels"
+            if expanded
+            else "Show acquisition channels"
+        )
 
     def _build_configuration_group(self) -> QGroupBox:
         group = QGroupBox("Configuration")
@@ -483,7 +507,7 @@ class SensorControls(QWidget):
         self.channel_topic_field.blockSignals(True)
         self.channel_topic_field.clear()
         self.channel_topic_field.addItems(
-            sorted(self._topic_message_types)
+            self._topic_message_types
         )
         self.channel_topic_field.setEditText(current_topic)
         self.channel_topic_field.blockSignals(False)

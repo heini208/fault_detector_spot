@@ -32,6 +32,7 @@ def test_topic_suggestions_are_sorted_and_filter_ros_plumbing():
     suggestions = normalize_topic_suggestions(
         (
             ("/rosout", ("rcl_interfaces/msg/Log",)),
+            ("/camera/image", ("sensor_msgs/msg/Image",)),
             ("sensors/z", ("std_msgs/msg/Float64",)),
             ("/sensors/a", ("std_msgs/msg/String",)),
         )
@@ -40,6 +41,7 @@ def test_topic_suggestions_are_sorted_and_filter_ros_plumbing():
     assert [value.topic for value in suggestions] == [
         "/sensors/a",
         "/sensors/z",
+        "/camera/image",
     ]
     assert suggestions[0].message_types == ("std_msgs/msg/String",)
 

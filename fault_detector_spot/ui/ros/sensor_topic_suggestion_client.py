@@ -33,7 +33,15 @@ def normalize_topic_suggestions(topics_and_types):
                 message_types=normalized_types,
             )
         )
-    return tuple(sorted(suggestions, key=lambda value: value.topic))
+    return tuple(
+        sorted(
+            suggestions,
+            key=lambda value: (
+                not value.topic.startswith("/sensors/"),
+                value.topic,
+            ),
+        )
+    )
 
 
 class SensorTopicSuggestionClient(QObject):
