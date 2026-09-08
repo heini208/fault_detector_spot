@@ -103,6 +103,14 @@ class SensorAcquisitionCommandHandler:
                 str(exception),
             )
             return
+        # A start can finish immediately when acquisition is safely skipped.
+        if state.status is SensorAcquisitionStatus.IDLE:
+            self._finish(
+                request.request_id,
+                CommandControllerState.SUCCEEDED,
+                state.detail,
+            )
+            return
         self._handle_acquisition_state(state)
 
     def _start_request(self, command) -> SensorAcquisitionRequest:

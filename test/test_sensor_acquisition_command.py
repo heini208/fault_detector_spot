@@ -2,6 +2,8 @@
 
 from threading import RLock
 
+import pytest
+
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
@@ -35,15 +37,17 @@ class FakeController:
 
 
 class FakeCoordinator:
-    def __init__(self):
+    def __init__(self, start_state):
         self.request = None
+        self.start_state = start_state
 
     def start(self, request):
         self.request = request
-        return SensorAcquisitionState(SensorAcquisitionStatus.STARTING)
+        return self.start_state
 
 
-def test_start_command_finishes_only_after_recording_state():
+@pytest.mark.parametrize("offline", [False, True])
+def test_start_command_waits_for_recording_or_completes_offline_skip(offline):
     command = SemanticCommand(
         CommandID.START_SENSOR_RECORDING,
         inspection=InspectionSelection(),
@@ -58,18 +62,31 @@ def test_start_command_finishes_only_after_recording_state():
         SensorAcquisitionCommandHandler
     )
     handler.controller = FakeController(request.request_id)
-    handler.coordinator = FakeCoordinator()
+    start_state = SensorAcquisitionState(
+        SensorAcquisitionStatus.IDLE if offline else SensorAcquisitionStatus.STARTING,
+        detail="Sensor head is offline; acquisition skipped" if offline else "Starting",
+    )
+    handler.coordinator = FakeCoordinator(start_state)
     handler._lock = RLock()
     handler._live_object = None
     handler._pending_request = None
 
     handler._execute(request)
 
+    assert handler.coordinator.request.object_id == ""
+    assert handler.coordinator.request.object_pose_execution is not None
+    if offline:
+        assert [status.state for status in handler.controller.statuses] == [
+            CommandControllerState.RUNNING,
+            CommandControllerState.SUCCEEDED,
+        ]
+        assert handler.controller.statuses[-1].detail == start_state.detail
+        assert handler._pending_request is None
+        return
+
     assert [status.state for status in handler.controller.statuses] == [
         CommandControllerState.RUNNING
     ]
-    assert handler.coordinator.request.object_id == ""
-    assert handler.coordinator.request.object_pose_execution is not None
 
     handler._handle_acquisition_state(SensorAcquisitionState(
         SensorAcquisitionStatus.RECORDING,
