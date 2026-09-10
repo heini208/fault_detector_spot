@@ -1,20 +1,17 @@
-from bosdyn.client.robot_command import RobotCommandBuilder
-
-from bosdyn_msgs.conversions import convert
-from fault_detector_spot.application.behaviour_tree.commands.move_command import (
-    MoveCommand,
+from fault_detector_spot.application.behaviour_tree.behaviours.move_command_action import (
+    MoveCommandAction,
 )
-from fault_detector_spot.application.behaviour_tree.behaviours.move_command_action import MoveCommandAction
-from geometry_msgs.msg import PoseStamped
+from fault_detector_spot.manipulation.arm_movement_executor import (
+    ArmMovementExecutor,
+)
+from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import (
+    ManipulatorToTagCommand,
+)
 from spot_msgs.action import RobotCommand
-from synchros2.utilities import namespace_with
 
 
 class ManipulatorMoveArmAction(MoveCommandAction):
-    """
-    Executes a Spot arm movement to the blackboard's goal_tag_pose via RobotCommand action.
-    Uses the shared bounded action lifecycle and only builds the arm goal.
-    """
+    """Execute the Cartesian hand target produced by a tag movement command."""
 
     def __init__(
         self,
@@ -25,28 +22,38 @@ class ManipulatorMoveArmAction(MoveCommandAction):
     ):
         super().__init__(name, robot_name, robot_command_resources)
         self.duration = duration
+        self.arm_movement_executor = None
 
-    def setup(self, **kwargs):
-        super().setup(**kwargs)
+    def _init_client(self) -> bool:
+        initialized = super()._init_client()
+        if not initialized:
+            return False
+        if self.robot_command_resources is not None:
+            self.arm_movement_executor = (
+                self.robot_command_resources.get_arm_movement_executor(
+                    self.node,
+                    self.robot_name,
+                )
+            )
+        elif self.arm_movement_executor is None:
+            self.arm_movement_executor = ArmMovementExecutor(
+                self.tf_listener,
+                robot_name=self.robot_name,
+            )
+        return True
 
     def _build_goal(self) -> RobotCommand.Goal:
-        # Fetch and validate desired pose
-        if not isinstance(self.blackboard.last_command, MoveCommand):
+        command = self.blackboard.last_command
+        if not isinstance(command, ManipulatorToTagCommand):
             raise RuntimeError(
-                f"Expected ManipulatorMoveCommand on blackboard.last_command, got {type(self.blackboard.last_command).__name__}")
+                "Expected ManipulatorToTagCommand, got "
+                f"{type(command).__name__}"
+            )
+        if self.arm_movement_executor is None:
+            raise RuntimeError("Arm movement executor is unavailable")
 
-        target: PoseStamped = self.blackboard.last_command.compute_goal_pose(self.tf_listener)
-        cmd = RobotCommandBuilder.arm_pose_command(
-            target.pose.position.x,
-            target.pose.position.y,
-            target.pose.position.z,
-            target.pose.orientation.w,
-            target.pose.orientation.x,
-            target.pose.orientation.y,
-            target.pose.orientation.z,
-            namespace_with(self.robot_name, target.header.frame_id),
-            self.duration
+        target = command.compute_goal_pose(self.tf_listener)
+        return self.arm_movement_executor.pose(
+            target,
+            self.duration,
         )
-        goal = RobotCommand.Goal()
-        convert(cmd, goal.command)
-        return goal

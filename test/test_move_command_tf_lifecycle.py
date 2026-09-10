@@ -127,8 +127,7 @@ def test_move_goal_tf_lookups_are_nonblocking():
         "move_command.py",
         "fault_detector_spot/application/behaviour_tree/commands/"
         "move_to_tag_command.py",
-        "fault_detector_spot/manipulation/behaviours/"
-        "manipulator_move_relative_action.py",
+        "fault_detector_spot/manipulation/arm_movement_executor.py",
     )
 
     for path in paths:

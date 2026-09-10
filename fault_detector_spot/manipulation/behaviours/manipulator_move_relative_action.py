@@ -1,61 +1,60 @@
 #!/usr/bin/env python3
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
-from bosdyn.client.robot_command import RobotCommandBuilder
-
-import tf2_geometry_msgs
-from bosdyn_msgs.conversions import convert
-from fault_detector_spot.application.behaviour_tree.commands.move_command import (
-    MoveCommand,
+from fault_detector_spot.application.behaviour_tree.behaviours.move_command_action import (
+    MoveCommandAction,
 )
-# CHANGED: Import intermediate class
-from fault_detector_spot.application.behaviour_tree.behaviours.move_command_action import MoveCommandAction
+from fault_detector_spot.manipulation.arm_movement_executor import (
+    ArmMovementExecutor,
+)
+from fault_detector_spot.manipulation.commands.manipulator_move_relative_command import (
+    ManipulatorMoveRelativeCommand,
+)
 from spot_msgs.action import RobotCommand
-from synchros2.utilities import namespace_with
 
 
 class ManipulatorMoveRelativeAction(MoveCommandAction):
-    """
-    Moves the arm based on a MoveCommand. Inherits TF safety checks from MoveCommandAction.
-    """
+    """Execute one relative Cartesian arm movement."""
 
-    def __init__(self,
-                 name: str = "ManipulatorMoveRelativeAction",
-                 duration: float = 2,
-                 robot_command_resources=None):
+    def __init__(
+        self,
+        name: str = "ManipulatorMoveRelativeAction",
+        duration: float = 2.0,
+        robot_command_resources=None,
+    ):
         super().__init__(
             name,
             robot_command_resources=robot_command_resources,
         )
         self.duration = duration
+        self.arm_movement_executor = None
 
+    def _init_client(self) -> bool:
+        initialized = super()._init_client()
+        if not initialized:
+            return False
+        if self.robot_command_resources is not None:
+            self.arm_movement_executor = (
+                self.robot_command_resources.get_arm_movement_executor(
+                    self.node,
+                    self.robot_name,
+                )
+            )
+        elif self.arm_movement_executor is None:
+            self.arm_movement_executor = ArmMovementExecutor(
+                self.tf_listener,
+                robot_name=self.robot_name,
+            )
+        return True
 
     def _build_goal(self) -> RobotCommand.Goal:
-        cmd = self.blackboard.last_command
-        if not isinstance(cmd, MoveCommand):
-            raise RuntimeError(f"Expected MoveCommand, got {type(cmd)}")
-
-        arm_cmd = self.get_goal_cmd()
-        goal = RobotCommand.Goal()
-        convert(arm_cmd, goal.command)
-        return goal
-
-    def get_goal_cmd(self):
-        cmd_obj = self.blackboard.last_command
-        # TF is guaranteed by update() in base class
-        pose_in_target = cmd_obj.compute_goal_pose(self.tf_listener)
-
-        tf_to_body = self.tf_listener.lookup_a_tform_b(
-            GRAV_ALIGNED_BODY_FRAME_NAME,
-            pose_in_target.header.frame_id,
-            timeout_sec=0.0
+        command = self.blackboard.last_command
+        if not isinstance(command, ManipulatorMoveRelativeCommand):
+            raise RuntimeError(
+                "Expected ManipulatorMoveRelativeCommand, got "
+                f"{type(command).__name__}"
+            )
+        if self.arm_movement_executor is None:
+            raise RuntimeError("Arm movement executor is unavailable")
+        return self.arm_movement_executor.relative(
+            command,
+            self.duration,
         )
-        pose_in_body = tf2_geometry_msgs.do_transform_pose_stamped(pose_in_target, tf_to_body)
-
-        arm_cmd = RobotCommandBuilder.arm_pose_command(
-            pose_in_body.pose.position.x, pose_in_body.pose.position.y, pose_in_body.pose.position.z,
-            pose_in_body.pose.orientation.w, pose_in_body.pose.orientation.x, pose_in_body.pose.orientation.y,
-            pose_in_body.pose.orientation.z,
-            namespace_with(self.robot_name, GRAV_ALIGNED_BODY_FRAME_NAME),
-            self.duration
-        )
-        return arm_cmd

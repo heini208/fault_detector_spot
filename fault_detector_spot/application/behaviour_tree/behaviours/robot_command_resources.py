@@ -7,11 +7,14 @@ from synchros2.action_client import ActionClientWrapper
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 from synchros2.utilities import namespace_with
 
+from fault_detector_spot.manipulation.arm_movement_executor import (
+    ArmMovementExecutor,
+)
 from fault_detector_spot.manipulation.arm_state_source import ArmStateSource
 
 
 class RobotCommandResources:
-    """Share robot-command clients, TF, and arm state within one ROS node."""
+    """Share robot-command clients, TF, arm state, and arm movement helpers."""
 
     def __init__(self):
         self._lock = RLock()
@@ -19,6 +22,7 @@ class RobotCommandResources:
         self._clients = {}
         self._tf_listener = None
         self._arm_state_source = None
+        self._arm_movement_executors = {}
 
     def get_action_client(self, node, robot_name: str = ""):
         """Return the single RobotCommand client for a robot namespace."""
@@ -52,6 +56,19 @@ class RobotCommandResources:
                 self._arm_state_source = ArmStateSource(node)
             return self._arm_state_source
 
+    def get_arm_movement_executor(self, node, robot_name: str = ""):
+        """Return the shared Cartesian arm movement executor."""
+        with self._lock:
+            self._bind_node(node)
+            executor = self._arm_movement_executors.get(robot_name)
+            if executor is None:
+                executor = ArmMovementExecutor(
+                    self.get_tf_listener(node),
+                    robot_name=robot_name,
+                )
+                self._arm_movement_executors[robot_name] = executor
+            return executor
+
     def close(self):
         """Destroy every ROS entity owned by this resource container."""
         with self._lock:
@@ -61,6 +78,7 @@ class RobotCommandResources:
             clients = tuple(self._clients.values())
             self._tf_listener = None
             self._arm_state_source = None
+            self._arm_movement_executors.clear()
             self._clients.clear()
             self._node = None
 
