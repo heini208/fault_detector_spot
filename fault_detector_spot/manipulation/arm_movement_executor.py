@@ -1,5 +1,6 @@
 """Shared construction of Cartesian Spot arm movements."""
 
+from copy import deepcopy
 import math
 
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
@@ -14,14 +15,26 @@ import tf2_geometry_msgs
 class ArmMovementExecutor:
     """Resolve generic arm targets and build their RobotCommand goals."""
 
-    def __init__(self, tf_listener, robot_name: str = ""):
+    def __init__(
+        self,
+        tf_listener,
+        tag_state_source=None,
+        robot_name: str = "",
+    ):
         if tf_listener is None:
-            raise ValueError("ArmMovementExecutor requires a TF listener")
+            raise ValueError(
+                "ArmMovementExecutor requires a TF listener"
+            )
         self.tf_listener = tf_listener
+        self.tag_state_source = tag_state_source
         self.robot_name = robot_name
 
-    def relative(self, command, duration_sec: float) -> RobotCommand.Goal:
-        """Build a relative arm movement in Spot's gravity-aligned body frame."""
+    def relative(
+        self,
+        command,
+        duration_sec: float,
+    ) -> RobotCommand.Goal:
+        """Build a relative movement in gravity-aligned body frame."""
         if command is None or not callable(
             getattr(command, "compute_goal_pose", None)
         ):
@@ -36,6 +49,36 @@ class ArmMovementExecutor:
             execution_frame=GRAV_ALIGNED_BODY_FRAME_NAME,
         )
 
+    def tag_pose(
+        self,
+        command,
+        duration_sec: float,
+    ) -> RobotCommand.Goal:
+        """Resolve the latest reachable tag and build its arm goal."""
+        if self.tag_state_source is None:
+            raise RuntimeError(
+                "Tag arm movement requires a tag state source"
+            )
+        if command is None or not hasattr(command, "tag_id"):
+            raise TypeError(
+                "Tag arm movement requires a command with tag_id"
+            )
+        if not callable(getattr(command, "compute_goal_pose", None)):
+            raise TypeError(
+                "Tag arm movement requires compute_goal_pose()"
+            )
+
+        tag_id = int(command.tag_id)
+        tag = self.tag_state_source.reachable_tag(tag_id)
+        if tag is None:
+            raise RuntimeError(
+                f"Tag {tag_id} is not currently reachable"
+            )
+
+        command.tag_pose = deepcopy(tag.pose)
+        target = command.compute_goal_pose(self.tf_listener)
+        return self.pose(target, duration_sec)
+
     def pose(
         self,
         target: PoseStamped,
@@ -47,7 +90,9 @@ class ArmMovementExecutor:
             raise TypeError("Arm pose target must be a PoseStamped")
         duration = float(duration_sec)
         if not math.isfinite(duration) or duration <= 0.0:
-            raise ValueError("Arm movement duration must be positive and finite")
+            raise ValueError(
+                "Arm movement duration must be positive and finite"
+            )
 
         target_frame = target.header.frame_id.strip()
         if not target_frame:
@@ -61,9 +106,11 @@ class ArmMovementExecutor:
                 target_frame,
                 timeout_sec=0.0,
             )
-            normalized_target = tf2_geometry_msgs.do_transform_pose_stamped(
-                target,
-                transform,
+            normalized_target = (
+                tf2_geometry_msgs.do_transform_pose_stamped(
+                    target,
+                    transform,
+                )
             )
             target_frame = normalized_frame
 

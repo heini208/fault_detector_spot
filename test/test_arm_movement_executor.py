@@ -1,6 +1,6 @@
 """Focused tests for shared Cartesian arm movement construction."""
 
-from types import SimpleNamespace
+from copy import deepcopy
 
 import pytest
 from geometry_msgs.msg import PoseStamped, TransformStamped
@@ -33,6 +33,34 @@ class FakeRelativeCommand:
         return self.target
 
 
+class FakeTag:
+    def __init__(self, tag_id, pose):
+        self.id = tag_id
+        self.pose = pose
+
+
+class FakeTagStateSource:
+    def __init__(self, tags):
+        self.tags = tags
+        self.requests = []
+
+    def reachable_tag(self, tag_id):
+        self.requests.append(tag_id)
+        tag = self.tags.get(tag_id)
+        return None if tag is None else deepcopy(tag)
+
+
+class FakeTagCommand:
+    def __init__(self, tag_id):
+        self.tag_id = tag_id
+        self.tag_pose = PoseStamped()
+        self.calls = []
+
+    def compute_goal_pose(self, transformer):
+        self.calls.append(transformer)
+        return deepcopy(self.tag_pose)
+
+
 def _capture_builder(monkeypatch):
     captured = {}
 
@@ -45,11 +73,17 @@ def _capture_builder(monkeypatch):
         "arm_pose_command",
         build,
     )
-    monkeypatch.setattr(executor_module, "convert", lambda source, target: None)
+    monkeypatch.setattr(
+        executor_module,
+        "convert",
+        lambda source, target: None,
+    )
     return captured
 
 
-def test_relative_motion_is_normalized_to_gravity_aligned_body(monkeypatch):
+def test_relative_motion_is_normalized_to_gravity_aligned_body(
+    monkeypatch,
+):
     target = PoseStamped()
     target.header.frame_id = "hand"
     target.pose.position.x = 0.10
@@ -84,6 +118,42 @@ def test_relative_motion_is_normalized_to_gravity_aligned_body(monkeypatch):
     assert args[2] == pytest.approx(0.0)
     assert args[7] == executor_module.GRAV_ALIGNED_BODY_FRAME_NAME
     assert args[8] == pytest.approx(2.0)
+
+
+def test_tag_pose_uses_latest_reachable_tag_snapshot(monkeypatch):
+    pose = PoseStamped()
+    pose.header.frame_id = "body"
+    pose.pose.position.x = 0.7
+    pose.pose.orientation.w = 1.0
+
+    source = FakeTagStateSource({7: FakeTag(7, pose)})
+    transformer = FakeTransformer()
+    command = FakeTagCommand(7)
+    captured = _capture_builder(monkeypatch)
+    executor = ArmMovementExecutor(
+        transformer,
+        tag_state_source=source,
+    )
+
+    executor.tag_pose(command, 3.0)
+
+    assert source.requests == [7]
+    assert command.calls == [transformer]
+    assert command.tag_pose is not pose
+    assert command.tag_pose.pose.position.x == pytest.approx(0.7)
+    assert captured["args"][0] == pytest.approx(0.7)
+    assert captured["args"][7] == "body"
+    assert captured["args"][8] == pytest.approx(3.0)
+
+
+def test_tag_pose_rejects_tag_that_is_not_reachable():
+    executor = ArmMovementExecutor(
+        FakeTransformer(),
+        tag_state_source=FakeTagStateSource({}),
+    )
+
+    with pytest.raises(RuntimeError, match="not currently reachable"):
+        executor.tag_pose(FakeTagCommand(7), 3.0)
 
 
 def test_pose_motion_preserves_supplied_target_frame(monkeypatch):

@@ -10,11 +10,13 @@ from synchros2.utilities import namespace_with
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
 )
-from fault_detector_spot.manipulation.arm_state_source import ArmStateSource
+from fault_detector_spot.manipulation.arm_state_source import (
+    ArmStateSource,
+)
 
 
 class RobotCommandResources:
-    """Share robot-command clients, TF, arm state, and arm movement helpers."""
+    """Share robot-command clients, TF, arm state, and arm execution."""
 
     def __init__(self):
         self._lock = RLock()
@@ -49,14 +51,19 @@ class RobotCommandResources:
             return self._tf_listener
 
     def get_arm_state_source(self, node):
-        """Return the process-wide authoritative manipulator state source."""
+        """Return the authoritative manipulator state source."""
         with self._lock:
             self._bind_node(node)
             if self._arm_state_source is None:
                 self._arm_state_source = ArmStateSource(node)
             return self._arm_state_source
 
-    def get_arm_movement_executor(self, node, robot_name: str = ""):
+    def get_arm_movement_executor(
+        self,
+        node,
+        tag_state_source=None,
+        robot_name: str = "",
+    ):
         """Return the shared Cartesian arm movement executor."""
         with self._lock:
             self._bind_node(node)
@@ -64,9 +71,18 @@ class RobotCommandResources:
             if executor is None:
                 executor = ArmMovementExecutor(
                     self.get_tf_listener(node),
+                    tag_state_source=tag_state_source,
                     robot_name=robot_name,
                 )
                 self._arm_movement_executors[robot_name] = executor
+            elif (
+                tag_state_source is not None
+                and executor.tag_state_source is not tag_state_source
+            ):
+                raise RuntimeError(
+                    "Arm movement executor already uses another "
+                    "tag state source"
+                )
             return executor
 
     def close(self):
@@ -84,9 +100,13 @@ class RobotCommandResources:
 
         resources = []
         if tf_listener is not None:
-            resources.append(("TF listener", tf_listener.shutdown))
+            resources.append(
+                ("TF listener", tf_listener.shutdown)
+            )
         if arm_state_source is not None:
-            resources.append(("arm state source", arm_state_source.destroy))
+            resources.append(
+                ("arm state source", arm_state_source.destroy)
+            )
         resources.extend(
             ("RobotCommand action client", client.destroy)
             for client in clients
@@ -97,12 +117,15 @@ class RobotCommandResources:
             except Exception as exception:
                 if node is not None:
                     node.get_logger().warning(
-                        f"Could not close shared {resource_name}: {exception}"
+                        f"Could not close shared {resource_name}: "
+                        f"{exception}"
                     )
 
     def _bind_node(self, node):
         if node is None:
-            raise RuntimeError("RobotCommandResources requires a ROS node")
+            raise RuntimeError(
+                "RobotCommandResources requires a ROS node"
+            )
         if self._node is None:
             self._node = node
             return

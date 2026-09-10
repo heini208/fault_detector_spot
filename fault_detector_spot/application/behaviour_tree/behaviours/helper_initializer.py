@@ -7,6 +7,7 @@ from fault_detector_spot.shared.persistence.runtime_paths import (
 from fault_detector_spot.application.behaviour_tree.behaviours.robot_command_resources import (
     RobotCommandResources,
 )
+from fault_detector_spot.sensing.tag_state_source import TagStateSource
 
 
 class HelperInitializer(py_trees.behaviour.Behaviour):
@@ -17,11 +18,30 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
         self.node = node
         self.slam_helper = None
         self.nav2_helper = None
+        self.tag_state_source = None
         self.robot_command_resources = RobotCommandResources()
 
     def setup(self, timeout):
         self.bb_client = self.attach_blackboard_client()
         self.robot_command_resources.get_arm_state_source(self.node)
+
+        if not self.node.has_parameter(
+            "tag_sensing.state_timeout_sec"
+        ):
+            self.node.declare_parameter(
+                "tag_sensing.state_timeout_sec",
+                1.5,
+            )
+        tag_state_timeout_sec = float(
+            self.node.get_parameter(
+                "tag_sensing.state_timeout_sec"
+            ).value
+        )
+        if self.tag_state_source is None:
+            self.tag_state_source = TagStateSource(
+                self.node,
+                stale_after_sec=tag_state_timeout_sec,
+            )
 
         if not self.node.has_parameter("navigation.map_root"):
             self.node.declare_parameter(
@@ -54,6 +74,12 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
     def close(self):
         """Close shared ROS entities that are not tree children."""
         try:
-            self.slam_helper.close()
+            if self.slam_helper is not None:
+                self.slam_helper.close()
         finally:
-            self.robot_command_resources.close()
+            try:
+                if self.tag_state_source is not None:
+                    self.tag_state_source.destroy()
+                    self.tag_state_source = None
+            finally:
+                self.robot_command_resources.close()

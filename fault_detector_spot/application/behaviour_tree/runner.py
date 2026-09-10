@@ -23,11 +23,9 @@ from fault_detector_spot.application.behaviour_tree import (
     EnableLocalization,
     EnableSLAM,
     HelperInitializer,
+    ArmMovementAction,
     LandmarkRelocalizer,
-    ManipulatorGetGoalTag,
-    ManipulatorMoveArmAction,
     ManipulatorMoveCloseToSurfaceAction,
-    ManipulatorMoveRelativeAction,
     NavigateToGoalPose,
     NewCommandGuard,
     PublishLiveInspectionObject,
@@ -209,9 +207,9 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         memory=True,
     )
     slam_helper = get_helper_container(node).slam_helper
-    robot_command_resources = (
-        get_helper_container(node).robot_command_resources
-    )
+    helper = get_helper_container(node)
+    robot_command_resources = helper.robot_command_resources
+    tag_state_source = helper.tag_state_source
     close_surface_action_name = read_parameter(
         node,
         "close_surface.action_name",
@@ -249,7 +247,14 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
                 robot_command_resources=robot_command_resources,
             ),
         ),
-        (CommandID.MOVE_ARM_TO_TAG, build_manipulator_goal_tree),
+        (
+            CommandID.MOVE_ARM_TO_TAG,
+            lambda n: ArmMovementAction(
+                name="MoveArmToTagAction",
+                tag_state_source=tag_state_source,
+                robot_command_resources=robot_command_resources,
+            ),
+        ),
         (CommandID.MOVE_BASE_TO_TAG, build_base_goal_tree),
         (
             CommandID.MOVE_BASE_RELATIVE,
@@ -260,8 +265,9 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         ),
         (
             CommandID.MOVE_ARM_RELATIVE,
-            lambda n: ManipulatorMoveRelativeAction(
+            lambda n: ArmMovementAction(
                 name="MoveArmRelativeAction",
+                tag_state_source=tag_state_source,
                 robot_command_resources=robot_command_resources,
             ),
         ),
@@ -473,28 +479,6 @@ def match_command_checker(
         ),
     )
 
-
-def build_manipulator_goal_tree(
-    node: rclpy.node.Node,
-) -> py_trees.behaviour.Behaviour:
-    manipulation = py_trees.composites.Sequence(
-        "ManipulationSequence",
-        memory=True,
-    )
-    get_goal = ManipulatorGetGoalTag(
-        name="GetGoalTagPosition"
-    )
-    move_arm = ManipulatorMoveArmAction(
-        name="MoveArm",
-        robot_command_resources=(
-            get_helper_container(node).robot_command_resources
-        ),
-    )
-    manipulation.add_children([
-        get_goal,
-        move_arm,
-    ])
-    return manipulation
 
 
 def build_base_goal_tree(
