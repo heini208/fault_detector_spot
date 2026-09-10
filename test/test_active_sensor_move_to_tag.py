@@ -19,10 +19,9 @@ from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import
 
 
 class FakeTransformer:
-    """Return fixed body and hand-to-probe transforms."""
+    """Return fixed body and tag transforms."""
 
-    def __init__(self, hand_to_probe):
-        self.hand_to_probe = hand_to_probe
+    def __init__(self):
         self.calls = []
 
     def lookup_a_tform_b(self, frame_a, frame_b, timeout_sec=0.0):
@@ -53,9 +52,9 @@ class FakeTransformer:
                 math.cos(half_yaw) * root_half
             )
             return transform
-        if frame_a == "hand" and frame_b == "hall_probe_probe":
-            return self.hand_to_probe
-        raise AssertionError(f"Unexpected TF lookup: {frame_a} <- {frame_b}")
+        raise AssertionError(
+            f"Unexpected TF lookup: {frame_a} <- {frame_b}"
+        )
 
 
 def target_command(sensor_id):
@@ -113,34 +112,11 @@ def resolver(transformer):
     return action
 
 
-def test_tag_move_places_active_probe_target_not_hand_at_requested_pose():
-    hand_to_probe = TransformStamped()
-    hand_to_probe.header.frame_id = "hand"
-    hand_to_probe.child_frame_id = "hall_probe_probe"
-    hand_to_probe.transform.translation.x = 0.2
-    half_yaw = math.radians(90.0) * 0.5
-    hand_to_probe.transform.rotation.z = math.sin(half_yaw)
-    hand_to_probe.transform.rotation.w = math.cos(half_yaw)
-
-    goal = target_command("hall_probe").compute_goal_pose(
-        FakeTransformer(hand_to_probe)
-    )
+def test_tag_command_returns_requested_probe_pose_not_hand_pose():
+    transformer = FakeTransformer()
+    goal = target_command("hall_probe").compute_goal_pose(transformer)
 
     assert goal.header.frame_id == "body"
-    assert goal.pose.position.x == pytest.approx(1.0)
-    assert goal.pose.position.y == pytest.approx(0.2)
-    assert goal.pose.position.z == pytest.approx(0.0)
-    assert goal.pose.orientation.x == pytest.approx(0.0)
-    assert goal.pose.orientation.y == pytest.approx(0.0)
-    assert goal.pose.orientation.z == pytest.approx(-math.sqrt(0.5))
-    assert goal.pose.orientation.w == pytest.approx(math.sqrt(0.5))
-
-
-def test_no_sensor_uses_bare_hand_without_extra_probe_transform():
-    transformer = FakeTransformer(TransformStamped())
-    goal = target_command("hand").compute_goal_pose(transformer)
-
-    assert ("hand", "hand") not in transformer.calls
     assert goal.pose.position.x == pytest.approx(1.0)
     assert goal.pose.position.y == pytest.approx(0.0)
     assert goal.pose.position.z == pytest.approx(0.0)
@@ -148,10 +124,36 @@ def test_no_sensor_uses_bare_hand_without_extra_probe_transform():
     assert goal.pose.orientation.y == pytest.approx(0.0)
     assert goal.pose.orientation.z == pytest.approx(0.0)
     assert goal.pose.orientation.w == pytest.approx(1.0)
+    assert not any(
+        frame_a == "hand"
+        for frame_a, _ in transformer.calls
+    )
+
+
+def test_bare_hand_and_sensor_commands_share_probe_target_geometry():
+    transformer = FakeTransformer()
+
+    sensor_goal = target_command("hall_probe").compute_goal_pose(
+        transformer
+    )
+    hand_goal = target_command("hand").compute_goal_pose(transformer)
+
+    assert sensor_goal.pose.position.x == pytest.approx(
+        hand_goal.pose.position.x
+    )
+    assert sensor_goal.pose.position.y == pytest.approx(
+        hand_goal.pose.position.y
+    )
+    assert sensor_goal.pose.orientation.z == pytest.approx(
+        hand_goal.pose.orientation.z
+    )
+    assert sensor_goal.pose.orientation.w == pytest.approx(
+        hand_goal.pose.orientation.w
+    )
 
 
 def test_relative_to_tag_keeps_orientation_offset_local_to_tag():
-    transformer = FakeTransformer(TransformStamped())
+    transformer = FakeTransformer()
     command = tag_alias_command(OrientationModes.TAG_ORIENTATION.value)
 
     assert resolver(transformer)._resolve_and_transform_offset_if_tag(command)
@@ -164,20 +166,26 @@ def test_relative_to_tag_keeps_orientation_offset_local_to_tag():
 
 
 def test_custom_zero_orientation_still_uses_tag_heading():
-    transformer = FakeTransformer(TransformStamped())
-    command = tag_alias_command(OrientationModes.CUSTOM_ORIENTATION.value)
+    transformer = FakeTransformer()
+    command = tag_alias_command(
+        OrientationModes.CUSTOM_ORIENTATION.value
+    )
 
     assert resolver(transformer)._resolve_and_transform_offset_if_tag(command)
 
     half_yaw = math.radians(25.0) * 0.5
     assert command.offset.pose.orientation.x == pytest.approx(0.0)
     assert command.offset.pose.orientation.y == pytest.approx(0.0)
-    assert command.offset.pose.orientation.z == pytest.approx(math.sin(half_yaw))
-    assert command.offset.pose.orientation.w == pytest.approx(math.cos(half_yaw))
+    assert command.offset.pose.orientation.z == pytest.approx(
+        math.sin(half_yaw)
+    )
+    assert command.offset.pose.orientation.w == pytest.approx(
+        math.cos(half_yaw)
+    )
 
 
 def test_relative_to_tag_points_probe_positive_x_along_tag_negative_z():
-    transformer = FakeTransformer(TransformStamped())
+    transformer = FakeTransformer()
     command = tag_alias_command(OrientationModes.TAG_ORIENTATION.value)
 
     assert resolver(transformer)._resolve_and_transform_offset_if_tag(command)

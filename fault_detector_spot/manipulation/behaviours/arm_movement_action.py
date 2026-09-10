@@ -75,7 +75,7 @@ class ArmMovementAction(MoveCommandAction):
             )
 
         if isinstance(command, ManipulatorToTagCommand):
-            return executor.tag_pose(
+            return executor.tag_probe(
                 command,
                 self.tag_duration_sec,
             )

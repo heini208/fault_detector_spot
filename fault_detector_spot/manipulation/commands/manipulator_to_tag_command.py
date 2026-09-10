@@ -12,16 +12,6 @@ from fault_detector_spot.inspection.geometry.rotation import (
     multiply_quaternions,
 )
 from fault_detector_spot.inspection.model.models import QuaternionData
-from fault_detector_spot.inspection.model.sensor_models import (
-    BARE_HAND_MOTION_ID,
-    sensor_probe_frame,
-)
-from fault_detector_spot.shared.geometry.transforms import (
-    compose_poses,
-    inverse_pose,
-    pose_data_to_pose,
-)
-from fault_detector_spot.shared.ros.tf_transforms import transform_to_pose_data
 from geometry_msgs.msg import PoseStamped, Quaternion
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 
@@ -35,7 +25,7 @@ _TAG_FACING_PITCH_COS = cos(pi / 4)
 
 
 class ManipulatorToTagCommand(MoveToTagCommand):
-    """Move the active probe point to a tag-relative target pose."""
+    """Describe an active-probe target relative to an AprilTag."""
 
     def __init__(
         self,
@@ -63,40 +53,9 @@ class ManipulatorToTagCommand(MoveToTagCommand):
         self,
         transformer: TFListenerWrapper,
     ) -> PoseStamped:
+        """Return the desired active-probe pose, not a hand pose."""
         result = super().compute_goal_pose(transformer)
-        result = self._apply_orientation_mode(result, transformer)
-        return self._probe_target_to_hand_target(result, transformer)
-
-    def _probe_target_to_hand_target(
-        self,
-        probe_target: PoseStamped,
-        transformer: TFListenerWrapper,
-    ) -> PoseStamped:
-        if self.motion_sensor_id == BARE_HAND_MOTION_ID:
-            return probe_target
-        if not self.motion_sensor_id:
-            raise ValueError(
-                "Manipulator tag motion requires attachment geometry"
-            )
-        if transformer is None:
-            raise RuntimeError(
-                "Manipulator tag motion requires TF for sensor geometry"
-            )
-
-        probe_frame = sensor_probe_frame(self.motion_sensor_id)
-        hand_to_probe = transformer.lookup_a_tform_b(
-            "hand",
-            probe_frame,
-            timeout_sec=0.0,
-        )
-        hand_to_probe_pose = pose_data_to_pose(
-            transform_to_pose_data(hand_to_probe)
-        )
-        probe_target.pose = compose_poses(
-            probe_target.pose,
-            inverse_pose(hand_to_probe_pose),
-        )
-        return probe_target
+        return self._apply_orientation_mode(result, transformer)
 
     def _apply_orientation_mode(
         self,
