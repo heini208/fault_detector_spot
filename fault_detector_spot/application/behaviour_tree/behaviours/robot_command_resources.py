@@ -7,6 +7,9 @@ from synchros2.action_client import ActionClientWrapper
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 from synchros2.utilities import namespace_with
 
+from fault_detector_spot.manipulation.arm_motion_speed import (
+    ArmMotionSpeedPolicy,
+)
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
 )
@@ -24,6 +27,7 @@ class RobotCommandResources:
         self._clients = {}
         self._tf_listener = None
         self._arm_state_source = None
+        self._arm_motion_speed_policy = None
         self._arm_movement_executors = {}
 
     def get_action_client(self, node, robot_name: str = ""):
@@ -69,10 +73,15 @@ class RobotCommandResources:
             self._bind_node(node)
             executor = self._arm_movement_executors.get(robot_name)
             if executor is None:
+                if self._arm_motion_speed_policy is None:
+                    self._arm_motion_speed_policy = (
+                        ArmMotionSpeedPolicy.from_node(node)
+                    )
                 executor = ArmMovementExecutor(
                     self.get_tf_listener(node),
                     tag_state_source=tag_state_source,
                     robot_name=robot_name,
+                    speed_policy=self._arm_motion_speed_policy,
                 )
                 self._arm_movement_executors[robot_name] = executor
             elif (
@@ -94,6 +103,7 @@ class RobotCommandResources:
             clients = tuple(self._clients.values())
             self._tf_listener = None
             self._arm_state_source = None
+            self._arm_motion_speed_policy = None
             self._arm_movement_executors.clear()
             self._clients.clear()
             self._node = None

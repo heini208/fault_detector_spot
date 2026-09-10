@@ -35,6 +35,12 @@ def generate_launch_description():
         "close_surface.yaml",
     )
 
+    arm_motion_config = os.path.join(
+        pkg,
+        "config",
+        "arm_motion.yaml",
+    )
+
     use_sim_time = LaunchConfiguration("use_sim_time")
     navigation_map_root = LaunchConfiguration("navigation_map_root")
     recording_root = LaunchConfiguration("recording_root")
@@ -154,6 +160,7 @@ def generate_launch_description():
             parameters=[
                 tag_sensing_config,
                 close_surface_config,
+                arm_motion_config,
                 {
                     "use_sim_time": use_sim_time,
                     "navigation.map_root": navigation_map_root,

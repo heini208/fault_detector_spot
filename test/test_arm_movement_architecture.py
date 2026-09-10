@@ -34,31 +34,45 @@ def test_executor_owns_probe_to_hand_conversion():
     assert "def probe_pose(" in executor
     assert "def tag_probe(" in executor
     assert "def probe_relative(" in executor
-    assert "sensor_probe_frame" in executor
-    assert "compose_poses" in executor
-    assert "inverse_pose" in executor
+    assert "_probe_target_to_hand_target" in executor
 
     assert "_probe_target_to_hand_target" not in command
     assert "sensor_probe_frame" not in command
     assert "hand_to_probe" not in command
 
 
-def test_tag_probe_uses_live_tag_then_probe_pose():
+def test_public_arm_api_exposes_speed_not_duration():
     executor = read(
         "fault_detector_spot/manipulation/arm_movement_executor.py"
     )
-
-    assert "reachable_tag(tag_id)" in executor
-    assert "command.tag_pose = deepcopy(tag.pose)" in executor
-    assert "return self.probe_pose(" in executor
-
-
-def test_arm_behavior_routes_tag_motion_through_tag_probe():
     action = read(
         "fault_detector_spot/manipulation/behaviours/"
         "arm_movement_action.py"
     )
 
-    assert "executor.relative(" in action
-    assert "executor.tag_probe(" in action
-    assert "executor.tag_pose(" not in action
+    for signature in (
+        "def relative(",
+        "def pose(",
+        "def probe_pose(",
+        "def tag_probe(",
+        "def probe_relative(",
+    ):
+        assert signature in executor
+
+    assert "relative_duration_sec" not in action
+    assert "tag_duration_sec" not in action
+    assert "DEFAULT_RELATIVE_DURATION_SEC" not in action
+    assert "DEFAULT_TAG_DURATION_SEC" not in action
+    assert "executor.relative(command)" in action
+    assert "executor.tag_probe(command)" in action
+
+
+def test_duration_is_private_spot_translation_detail():
+    executor = read(
+        "fault_detector_spot/manipulation/arm_movement_executor.py"
+    )
+
+    assert "duration_between(" in executor
+    assert "def _build_pose_goal(" in executor
+    assert "duration_sec: float" in executor
+    assert "RobotCommandBuilder.arm_pose_command(" in executor
