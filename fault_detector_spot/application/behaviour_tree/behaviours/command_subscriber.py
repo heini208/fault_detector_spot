@@ -59,11 +59,13 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         name: str = "CommandSubscriber",
         request_topic: str = "fault_detector/_internal/commands/request",
         status_topic: str = "fault_detector/_internal/command_status",
+        defer_subscription: bool = False,
     ):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
         self.request_topic = request_topic
         self.status_topic = status_topic
+        self.defer_subscription = defer_subscription
         self.blackboard = None
         self._combination_command_builders = {
             CommandID.SCAN_ALL_IN_RANGE: self._scan_all_in_range,
@@ -99,9 +101,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def setup(self, **kwargs):
         try:
             self.node = kwargs["node"]
-            self._create_ui_subscribers()
             self.blackboard = self.attach_blackboard_client()
             self._register_blackboard_keys()
+            if not self.defer_subscription:
+                self.activate()
         except KeyError as exception:
             self.logger.error(
                 f"Could not retrieve node from kwargs: {exception}"
@@ -142,7 +145,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.feedback_message = f"Processed {processed_count} commands"
         return py_trees.common.Status.SUCCESS
 
-    def _create_ui_subscribers(self):
+    def activate(self):
+        """Advertise command consumption only after the runner finishes setup."""
+        if self.request_subscription is not None:
+            return
         self.request_status_publisher = self.node.create_publisher(
             CommandStatus,
             self.status_topic,

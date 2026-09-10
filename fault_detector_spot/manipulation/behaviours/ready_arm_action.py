@@ -6,7 +6,7 @@ from bosdyn.client.frame_helpers import (
     HAND_FRAME_NAME,
 )
 from bosdyn.client.robot_command import RobotCommandBuilder
-from bosdyn_msgs.conversions import convert
+from bosdyn_spot_api_msgs.conversions import convert
 from py_trees.common import Access, Status
 from spot_msgs.action import RobotCommand
 from synchros2.utilities import namespace_with

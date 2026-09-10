@@ -2,7 +2,7 @@ from bosdyn.api.geometry_pb2 import SE2VelocityLimit
 from bosdyn.client import math_helpers
 from bosdyn.client.frame_helpers import ODOM_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
-from bosdyn_msgs.conversions import convert
+from bosdyn_spot_api_msgs.conversions import convert
 from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
 from synchros2.utilities import namespace_with

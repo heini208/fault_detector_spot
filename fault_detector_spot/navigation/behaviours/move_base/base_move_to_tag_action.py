@@ -1,7 +1,7 @@
 from bosdyn.api.geometry_pb2 import SE2VelocityLimit
 from bosdyn.client import math_helpers
 from bosdyn.client.robot_command import RobotCommandBuilder
-from bosdyn_msgs.conversions import convert
+from bosdyn_spot_api_msgs.conversions import convert
 from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
 

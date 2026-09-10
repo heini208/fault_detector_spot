@@ -6,7 +6,7 @@ import time
 
 from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
-from bosdyn_msgs.conversions import convert
+from bosdyn_spot_api_msgs.conversions import convert
 from spot_msgs.action import RobotCommand
 from synchros2.utilities import namespace_with
 

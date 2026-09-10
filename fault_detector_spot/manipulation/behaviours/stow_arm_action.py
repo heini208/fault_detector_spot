@@ -1,7 +1,7 @@
 import py_trees
 from spot_msgs.action import RobotCommand
 from bosdyn.client.robot_command import RobotCommandBuilder
-from bosdyn_msgs.conversions import convert
+from bosdyn_spot_api_msgs.conversions import convert
 from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import (
     RobotCommandActionBehaviour,
 )

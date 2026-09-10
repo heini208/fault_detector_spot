@@ -21,6 +21,7 @@
   <exec_depend>spot_ros2</exec_depend>
   <exec_depend>synchros2</exec_depend>
   <exec_depend>bosdyn_api_msgs</exec_depend>
+  <exec_depend>bosdyn_spot_api_msgs</exec_depend>
   <exec_depend>bosdyn_msgs</exec_depend>
   <exec_depend>spot_msgs</exec_depend>
   <exec_depend>spot_wrapper</exec_depend>
