@@ -21,6 +21,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
 
     def setup(self, timeout):
         self.bb_client = self.attach_blackboard_client()
+        self.robot_command_resources.get_arm_state_source(self.node)
 
         if not self.node.has_parameter("navigation.map_root"):
             self.node.declare_parameter(

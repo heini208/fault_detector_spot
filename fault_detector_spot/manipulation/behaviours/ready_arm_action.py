@@ -1,4 +1,5 @@
 import math
+import time
 
 from bosdyn.client.frame_helpers import (
     GRAV_ALIGNED_BODY_FRAME_NAME,
@@ -6,7 +7,7 @@ from bosdyn.client.frame_helpers import (
 )
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_msgs.conversions import convert
-from py_trees.common import Status
+from py_trees.common import Access, Status
 from spot_msgs.action import RobotCommand
 from synchros2.utilities import namespace_with
 
@@ -18,9 +19,13 @@ from fault_detector_spot.manipulation.arm_state_source import ArmStowState
 
 READY_LIFT_DISTANCE_PARAMETER = "arm.ready_lift_distance_m"
 READY_DURATION_PARAMETER = "arm.ready_duration_sec"
+READY_STATE_TIMEOUT_PARAMETER = "arm.ready_state_timeout_sec"
+READY_TF_TIMEOUT_PARAMETER = "arm.ready_tf_timeout_sec"
 READY_DEPLOYED_TIMEOUT_PARAMETER = "arm.ready_deployed_timeout_sec"
 DEFAULT_READY_LIFT_DISTANCE_M = 0.10
 DEFAULT_READY_DURATION_SEC = 2.0
+DEFAULT_READY_STATE_TIMEOUT_SEC = 2.0
+DEFAULT_READY_TF_TIMEOUT_SEC = 2.0
 DEFAULT_READY_DEPLOYED_TIMEOUT_SEC = 2.0
 
 
@@ -32,12 +37,29 @@ class ReadyArmActionSimple(RobotCommandActionBehaviour):
         name="ReadyArmAction",
         robot_name="",
         robot_command_resources=None,
+        monotonic_clock=time.monotonic,
     ):
-        super().__init__(name, robot_name, robot_command_resources)
+        super().__init__(
+            name,
+            robot_name,
+            robot_command_resources,
+            monotonic_clock=monotonic_clock,
+        )
         self.tf_listener = None
         self.arm_state_source = None
+        self._state_wait_started = None
+        self._tf_wait_started = None
+        self._hand_transform = None
         self._movement_completed = False
         self._verification_started = None
+        self.blackboard.register_key(
+            "command_failure_request_id",
+            access=Access.WRITE,
+        )
+        self.blackboard.register_key(
+            "command_failure_detail",
+            access=Access.WRITE,
+        )
 
     def setup(self, **kwargs):
         super().setup(**kwargs)
@@ -50,14 +72,21 @@ class ReadyArmActionSimple(RobotCommandActionBehaviour):
             DEFAULT_READY_DURATION_SEC,
         )
         self._declare_parameter(
+            READY_STATE_TIMEOUT_PARAMETER,
+            DEFAULT_READY_STATE_TIMEOUT_SEC,
+        )
+        self._declare_parameter(
+            READY_TF_TIMEOUT_PARAMETER,
+            DEFAULT_READY_TF_TIMEOUT_SEC,
+        )
+        self._declare_parameter(
             READY_DEPLOYED_TIMEOUT_PARAMETER,
             DEFAULT_READY_DEPLOYED_TIMEOUT_SEC,
         )
 
     def initialise(self):
-        self._movement_completed = False
-        self._verification_started = None
         super().initialise()
+        self._clear_failure_detail()
 
     def update(self) -> Status:
         if self._movement_completed:
@@ -73,8 +102,6 @@ class ReadyArmActionSimple(RobotCommandActionBehaviour):
 
     def terminate(self, new_status: Status):
         super().terminate(new_status)
-        self._movement_completed = False
-        self._verification_started = None
 
     def _init_client(self) -> bool:
         if self.robot_command_resources is None:
@@ -92,25 +119,62 @@ class ReadyArmActionSimple(RobotCommandActionBehaviour):
     def _phase_send_goal(self):
         if self.send_goal_future is None:
             state = self.arm_state_source.stow_state()
-            if state is None:
-                return self._fail(
-                    "Ready arm requires fresh manipulator stow state"
-                )
-            if state is ArmStowState.UNKNOWN:
-                return self._fail(
-                    "Spot reports an unknown manipulator stow state"
-                )
+            if state is None or state is ArmStowState.UNKNOWN:
+                return self._wait_for_stow_state()
+            self._state_wait_started = None
             if state is ArmStowState.DEPLOYED:
                 self.feedback_message = "Arm is already deployed"
                 return Status.SUCCESS
+            if self._hand_transform is None:
+                try:
+                    self._hand_transform = (
+                        self.tf_listener.lookup_a_tform_b(
+                            GRAV_ALIGNED_BODY_FRAME_NAME,
+                            HAND_FRAME_NAME,
+                            timeout_sec=0.0,
+                        )
+                    )
+                except Exception as exception:
+                    return self._wait_for_hand_transform(exception)
+                self._tf_wait_started = None
         return super()._phase_send_goal()
 
-    def _build_goal(self) -> RobotCommand.Goal:
-        transform = self.tf_listener.lookup_a_tform_b(
-            GRAV_ALIGNED_BODY_FRAME_NAME,
-            HAND_FRAME_NAME,
-            timeout_sec=0.0,
+    def _wait_for_stow_state(self) -> Status:
+        now = self._monotonic_clock()
+        if self._state_wait_started is None:
+            self._state_wait_started = now
+        timeout_sec = self._positive_parameter(
+            READY_STATE_TIMEOUT_PARAMETER
         )
+        if now - self._state_wait_started >= timeout_sec:
+            return self._fail(
+                "Fresh manipulator stow state was unavailable for "
+                f"{timeout_sec:.1f} s"
+            )
+        self.feedback_message = "Waiting for manipulator stow state"
+        return Status.RUNNING
+
+    def _wait_for_hand_transform(self, exception: Exception) -> Status:
+        now = self._monotonic_clock()
+        if self._tf_wait_started is None:
+            self._tf_wait_started = now
+        timeout_sec = self._positive_parameter(READY_TF_TIMEOUT_PARAMETER)
+        if now - self._tf_wait_started >= timeout_sec:
+            return self._fail(
+                "Ready arm hand transform "
+                f"{GRAV_ALIGNED_BODY_FRAME_NAME} -> {HAND_FRAME_NAME} "
+                f"was unavailable for {timeout_sec:.1f} s: {exception}"
+            )
+        self.feedback_message = (
+            "Waiting for ready-arm hand pose transform "
+            f"{GRAV_ALIGNED_BODY_FRAME_NAME} -> {HAND_FRAME_NAME}"
+        )
+        return Status.RUNNING
+
+    def _build_goal(self) -> RobotCommand.Goal:
+        transform = self._hand_transform
+        if transform is None:
+            raise RuntimeError("Ready arm hand pose transform is unavailable")
         translation = transform.transform.translation
         rotation = transform.transform.rotation
         lift_distance_m = self._positive_parameter(
@@ -157,6 +221,29 @@ class ReadyArmActionSimple(RobotCommandActionBehaviour):
 
         self.feedback_message = "Waiting for Spot to report arm deployed"
         return Status.RUNNING
+
+    def _reset_subclass_state(self) -> None:
+        self._state_wait_started = None
+        self._tf_wait_started = None
+        self._hand_transform = None
+        self._movement_completed = False
+        self._verification_started = None
+
+    def _clear_failure_detail(self) -> None:
+        request_id = self._current_request_id()
+        self.blackboard.command_failure_request_id = request_id
+        self.blackboard.command_failure_detail = ""
+
+    def _on_failure(self, detail: str) -> None:
+        self.blackboard.command_failure_request_id = self._current_request_id()
+        self.blackboard.command_failure_detail = detail
+
+    def _current_request_id(self) -> str:
+        try:
+            command = self.blackboard.last_command
+        except (AttributeError, KeyError):
+            return ""
+        return str(getattr(command, "request_id", "") or "")
 
     def _declare_parameter(self, name: str, default: float) -> None:
         if not self.node.has_parameter(name):
