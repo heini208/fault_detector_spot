@@ -17,7 +17,6 @@ from fault_detector_spot.application.behaviour_tree import (
     BaseMoveRelativeAction,
     BaseMoveToTagAction,
     BufferStatusPublisher,
-    CheckTagReachability,
     CloseGripperAction,
     CommandManager,
     CommandSubscriber,
@@ -32,7 +31,6 @@ from fault_detector_spot.application.behaviour_tree import (
     NavigateToGoalPose,
     NewCommandGuard,
     PublishLiveInspectionObject,
-    PublishReachableTags,
     PublishZeroVel,
     ReadyArmActionSimple,
     ResetEstopFlag,
@@ -149,12 +147,6 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     live_object_publisher = PublishLiveInspectionObject(
         name="PublishLiveInspectionObject",
     )
-    in_range_checker = CheckTagReachability(
-        name="CheckTagReachability"
-    )
-    reachable_tag_publisher = PublishReachableTags(
-        name="ReachableTagPublisher"
-    )
     slam_helper = get_helper_container(node).slam_helper
     world_frame_transformer = VisibleTagToMap(
         slam_helper=slam_helper,
@@ -164,8 +156,6 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         tag_state_subscriber,
         live_object_resolver,
         live_object_publisher,
-        in_range_checker,
-        reachable_tag_publisher,
         world_frame_transformer,
     ])
     sensing_seq.add_children([
