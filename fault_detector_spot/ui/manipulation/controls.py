@@ -1,9 +1,11 @@
 import math
 
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QMessageBox
 
 from fault_detector_msgs.msg import OperationalIntent, TagElement
 from fault_detector_spot.application.commanding.command_ids import OrientationModes
+from fault_detector_spot.manipulation.arm_state_source import ArmStateSource, ArmStowState
 from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
 
@@ -29,10 +31,18 @@ class ManipulationControls(UIControlHelper):
     def __init__(self, parent_ui: "Fault_Detector_UI"):
         self.offset_fields = {}
         self.orientation_combo = None
+        self.arm_state_source = None
+        self.arm_state_button = None
+        self.arm_state_timer = None
         super().__init__(parent_ui)
 
     def init_ros_communication(self):
-        pass
+        if self.node is None:
+            return
+        self.arm_state_source = ArmStateSource(self.node)
+        self.arm_state_timer = QTimer(self.ui)
+        self.arm_state_timer.timeout.connect(self.refresh_arm_state)
+        self.arm_state_timer.start(250)
 
     def make_rows(self) -> list:
         rows = [
@@ -43,6 +53,60 @@ class ManipulationControls(UIControlHelper):
             self._make_control_row()
         ]
         return rows
+
+    def refresh_arm_state(self):
+        if self.arm_state_button is None:
+            return
+        source = self.arm_state_source
+        state = source.stow_state() if source is not None else None
+        if state is ArmStowState.STOWED:
+            color = "#C62828"
+            text = "● Ready Arm"
+            detail = "Arm is stowed. Click to ready the arm."
+            enabled = True
+        elif state is ArmStowState.DEPLOYED:
+            color = "#2E7D32"
+            text = "● Stow Arm"
+            detail = "Arm is ready. Click to stow the arm."
+            enabled = True
+        else:
+            color = "#757575"
+            text = "● Arm state unknown"
+            enabled = False
+            if source is None or source.last_received_at is None:
+                detail = "Manipulator state is unavailable"
+            elif source.is_stale():
+                detail = "Manipulator state updates stopped"
+            else:
+                detail = "Spot reports an unknown arm stow state"
+        self.arm_state_button.setText(text)
+        self.arm_state_button.setStyleSheet(
+            f"color: {color}; font-weight: bold;"
+        )
+        self.arm_state_button.setToolTip(detail)
+        self.arm_state_button.setEnabled(enabled)
+
+    def _handle_arm_state_toggle(self):
+        source = self.arm_state_source
+        state = source.stow_state() if source is not None else None
+        if state is ArmStowState.STOWED:
+            return self.ui.handle_simple_operation(
+                OperationalIntent.INTENT_READY_ARM
+            )
+        if state is ArmStowState.DEPLOYED:
+            return self.ui.handle_simple_operation(
+                OperationalIntent.INTENT_STOW_ARM
+            )
+        self.refresh_arm_state()
+        return None
+
+    def destroy(self):
+        if self.arm_state_timer is not None:
+            self.arm_state_timer.stop()
+            self.arm_state_timer = None
+        if self.arm_state_source is not None:
+            self.arm_state_source.destroy()
+            self.arm_state_source = None
 
     def _make_tag_input_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -209,17 +273,29 @@ class ManipulationControls(UIControlHelper):
 
     def _make_control_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        buttons = [
-            ("Stand Up", OperationalIntent.INTENT_STAND_UP),
-            ("Ready Arm", OperationalIntent.INTENT_READY_ARM),
-            ("Stow Arm", OperationalIntent.INTENT_STOW_ARM),
+
+        stand_up_button = QPushButton("Stand Up")
+        stand_up_button.clicked.connect(
+            lambda _: self.ui.handle_simple_operation(
+                OperationalIntent.INTENT_STAND_UP
+            )
+        )
+        row.addWidget(stand_up_button)
+
+        self.arm_state_button = QPushButton("● Arm state unknown")
+        self.arm_state_button.clicked.connect(
+            lambda _: self._handle_arm_state_toggle()
+        )
+        row.addWidget(self.arm_state_button)
+        self.refresh_arm_state()
+
+        for label, intent_id in [
             ("Gripper Toggle", OperationalIntent.INTENT_TOGGLE_GRIPPER),
             (
                 "Reset State",
                 OperationalIntent.INTENT_RETURN_TO_ESTOP_STATE,
             ),
-        ]
-        for label, intent_id in buttons:
+        ]:
             btn = QPushButton(label)
             btn.clicked.connect(
                 lambda _, value=intent_id:
