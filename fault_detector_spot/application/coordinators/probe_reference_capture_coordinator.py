@@ -156,6 +156,11 @@ class ProbeReferenceCaptureCoordinator:
                         tag_id,
                         cancel_requested,
                     )
+                    capture_receipt_start = time.monotonic()
+                    capture_receipt_end = (
+                        capture_receipt_start
+                        + self.collection_duration_sec
+                    )
                     minimum_sequences = self._begin_collections(
                         synchronizers,
                         selected,
@@ -168,6 +173,11 @@ class ProbeReferenceCaptureCoordinator:
                     self.probe_setup_coordinator.require_current(context)
                     self._require_command_lane_idle()
                     reference_tag = self._stable_reference_tag(tag_id)
+                    reference_tags = self._historical_reference_tags(
+                        tag_id,
+                        capture_receipt_start,
+                        capture_receipt_end,
+                    )
                     self._require_tf_ready(
                         synchronizers,
                         selected,
@@ -204,7 +214,7 @@ class ProbeReferenceCaptureCoordinator:
                         routine_id,
                         self.node.get_clock().now(),
                         tag_id,
-                        (reference_tag,),
+                        reference_tags,
                         maximum_input_age_sec=(
                             self.maximum_input_age_sec
                         ),
@@ -376,6 +386,29 @@ class ProbeReferenceCaptureCoordinator:
                 f"for reference tag {tag_id}"
             )
         return tag
+
+    def _historical_reference_tags(
+        self,
+        tag_id,
+        receipt_not_before,
+        receipt_not_after,
+    ):
+        try:
+            tags = self.motion_state_source.reference_tag_history(
+                tag_id,
+                receipt_not_before,
+                receipt_not_after,
+            )
+        except ValueError as exception:
+            raise ReferenceViewCaptureNotReady(
+                str(exception)
+            ) from exception
+        if not tags:
+            raise ReferenceViewCaptureNotReady(
+                "No base-camera reference-tag observations were received "
+                "during the reference capture window"
+            )
+        return tags
 
     def _require_tf_ready(self, synchronizers, selected, reference_tag):
         timeout = Duration(seconds=self.transform_timeout_sec)

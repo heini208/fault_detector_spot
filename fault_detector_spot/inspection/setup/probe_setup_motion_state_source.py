@@ -137,7 +137,7 @@ class ProbeSetupMotionStateSource:
             history = tuple(self._base_tag_histories.get(tag_id, ()))
         samples = []
         messages_by_stamp = {}
-        for stamp_key, tag in history:
+        for _receipt_time, stamp_key, tag in history:
             stamp_seconds = float(stamp_key[0]) + float(stamp_key[1]) * 1e-9
             samples.append(
                 TagPoseSample(
@@ -165,6 +165,39 @@ class ProbeSetupMotionStateSource:
         tag.pose.pose.orientation.z = stable.pose.orientation.z
         tag.pose.pose.orientation.w = stable.pose.orientation.w
         return tag
+
+    def reference_tag_history(
+        self,
+        tag_id: int,
+        receipt_not_before: float,
+        receipt_not_after: float,
+    ):
+        """Return raw tag observations received inside one capture window."""
+        if isinstance(tag_id, bool) or not isinstance(tag_id, int):
+            raise TypeError("Reference tag ID must be an integer")
+        receipt_not_before = float(receipt_not_before)
+        receipt_not_after = float(receipt_not_after)
+        if (
+            not math.isfinite(receipt_not_before)
+            or not math.isfinite(receipt_not_after)
+        ):
+            raise ValueError(
+                "Reference tag receipt bounds must be finite"
+            )
+        if receipt_not_after < receipt_not_before:
+            raise ValueError(
+                "Reference tag receipt end must not precede its start"
+            )
+        with self._lock:
+            history = tuple(self._base_tag_histories.get(tag_id, ()))
+        return tuple(
+            deepcopy(tag)
+            for receipt_time, _stamp_key, tag in history
+            if (
+                receipt_time + 1e-9 >= receipt_not_before
+                and receipt_time <= receipt_not_after + 1e-9
+            )
+        )
 
     def gravity_aligned_object_pose(self, reference_tag_id: int) -> PoseData:
         """Return the tag-defined object pose in Spot's gravity frame."""
@@ -621,6 +654,7 @@ class ProbeSetupMotionStateSource:
         return pose
 
     def _receive_base_tags(self, message: TagElementArray) -> None:
+        receipt_time = time.monotonic()
         with self._lock:
             for tag in message.elements:
                 stamp = tag.pose.header.stamp
@@ -629,9 +663,11 @@ class ProbeSetupMotionStateSource:
                     int(tag.id),
                     deque(maxlen=BASE_TAG_HISTORY_MAX_SAMPLES),
                 )
-                if history and history[-1][0] == stamp_key:
+                if history and history[-1][1] == stamp_key:
                     continue
-                history.append((stamp_key, deepcopy(tag)))
+                history.append(
+                    (receipt_time, stamp_key, deepcopy(tag))
+                )
 
     def _receive_hand_depth(self, message: Image) -> None:
         with self._lock:

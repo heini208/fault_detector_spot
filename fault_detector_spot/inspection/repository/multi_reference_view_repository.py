@@ -303,14 +303,6 @@ class MultiReferenceViewRepository:
             raise ValueError(
                 "Reference captures must use one fixed frame"
             )
-        reference_tags = {
-            _tag_signature(capture.reference_tag)
-            for capture in normalized
-        }
-        if len(reference_tags) != 1:
-            raise ValueError(
-                "Reference captures must use one shared tag observation"
-            )
         for capture in normalized:
             if not capture.camera_id.strip():
                 raise ValueError("Reference camera ID must not be empty")
@@ -656,28 +648,6 @@ def _stamp_dict(stamp) -> dict:
 
 def _stamp_nanoseconds(stamp: dict) -> int:
     return stamp["sec"] * 1_000_000_000 + stamp["nanosec"]
-
-
-def _message_stamp_nanoseconds(message) -> int:
-    stamp = message.header.stamp
-    _validate_stamp(stamp.sec, stamp.nanosec, "Sensor input")
-    return stamp.sec * 1_000_000_000 + stamp.nanosec
-
-
-def _tag_signature(tag: TagElement) -> tuple:
-    pose = tag.pose.pose
-    return (
-        int(tag.id),
-        tag.pose.header.frame_id,
-        _message_stamp_nanoseconds(tag.pose),
-        float(pose.position.x),
-        float(pose.position.y),
-        float(pose.position.z),
-        float(pose.orientation.x),
-        float(pose.orientation.y),
-        float(pose.orientation.z),
-        float(pose.orientation.w),
-    )
 
 
 def _image_metadata(image: Image, stamp: dict) -> dict:

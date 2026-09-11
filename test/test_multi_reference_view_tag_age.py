@@ -16,8 +16,20 @@ class FakeSynchronizer:
     def __init__(self, inputs):
         self.inputs = inputs
 
-    def best_snapshot(self, minimum_input_sequence):
-        return self.inputs
+    def best_snapshot_with_timestamp_anchor(
+        self,
+        minimum_input_sequence,
+        anchor_timestamps_nanoseconds,
+    ):
+        stamp = self.inputs[0].header.stamp
+        rgb_stamp = stamp.sec * 1_000_000_000 + stamp.nanosec
+        anchor_index = min(
+            range(len(anchor_timestamps_nanoseconds)),
+            key=lambda index: abs(
+                anchor_timestamps_nanoseconds[index] - rgb_stamp
+            ),
+        )
+        return (*self.inputs, anchor_index)
 
     def collection_diagnostics(self, minimum_sequence):
         return "valid"
@@ -179,7 +191,7 @@ def test_future_camera_image_is_rejected(monkeypatch):
         )
 
 
-def test_closest_shared_tag_is_selected_after_camera_pairing(
+def test_closest_tag_is_selected_for_the_camera_triplet(
     monkeypatch,
 ):
     patch_pose_resolver(monkeypatch)

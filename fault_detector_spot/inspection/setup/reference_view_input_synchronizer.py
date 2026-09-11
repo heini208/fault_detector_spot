@@ -207,6 +207,70 @@ class ReferenceViewInputSynchronizer:
             depth_camera_info,
         )
 
+    def best_snapshot_with_timestamp_anchor(
+        self,
+        minimum_input_sequence: int,
+        anchor_timestamps_nanoseconds,
+    ):
+        """Return the closest RGB-depth-anchor triplet in the window."""
+        anchor_timestamps = tuple(anchor_timestamps_nanoseconds)
+        if not anchor_timestamps:
+            return None
+        for timestamp in anchor_timestamps:
+            if (
+                isinstance(timestamp, bool)
+                or not isinstance(timestamp, int)
+                or timestamp <= 0
+            ):
+                raise ValueError(
+                    "Timestamp anchors must be positive integer nanoseconds"
+                )
+
+        self._validate_sequence(minimum_input_sequence)
+        now_nanoseconds = time.monotonic_ns()
+        with self._lock:
+            collection = self._collection
+            if collection is None:
+                raise RuntimeError(
+                    "No reference-view collection is active"
+                )
+            if (
+                collection.minimum_input_sequence
+                != minimum_input_sequence
+            ):
+                raise RuntimeError(
+                    "The active collection does not match the request"
+                )
+            if now_nanoseconds < collection.ends_at_nanoseconds:
+                raise RuntimeError(
+                    "Reference-view collection is not complete"
+                )
+            if (
+                collection.rgb_camera_info is None
+                or collection.depth_camera_info is None
+            ):
+                return None
+            rgb_images = tuple(collection.rgb_images)
+            depth_images = tuple(collection.depth_images)
+            rgb_camera_info = deepcopy(collection.rgb_camera_info)
+            depth_camera_info = deepcopy(collection.depth_camera_info)
+
+        selected = self._select_best_triplet(
+            rgb_images,
+            depth_images,
+            anchor_timestamps,
+        )
+        if selected is None:
+            return None
+        rgb_image, depth_image, anchor_index = selected
+        return (
+            deepcopy(rgb_image),
+            deepcopy(depth_image),
+            rgb_camera_info,
+            depth_camera_info,
+            anchor_index,
+        )
+
     def input_diagnostics(self) -> str:
         """Describe the current warmup state for this camera."""
         with self._lock:
@@ -363,6 +427,52 @@ class ReferenceViewInputSynchronizer:
                 if best_score is None or score < best_score:
                     best_candidate = (rgb_image, depth_image)
                     best_score = score
+        return best_candidate
+
+    def _select_best_triplet(
+        self,
+        rgb_images,
+        depth_images,
+        anchor_timestamps_nanoseconds,
+    ):
+        best_candidate = None
+        best_score = None
+        for rgb_sequence, rgb_image in rgb_images:
+            rgb_stamp = self._image_stamp_nanoseconds(rgb_image)
+            if rgb_stamp <= 0:
+                continue
+            for depth_sequence, depth_image in depth_images:
+                depth_stamp = self._image_stamp_nanoseconds(depth_image)
+                if depth_stamp <= 0:
+                    continue
+                rgb_depth_skew = abs(rgb_stamp - depth_stamp)
+                if rgb_depth_skew > self._maximum_timestamp_skew_nanoseconds:
+                    continue
+                for anchor_index, anchor_stamp in enumerate(
+                    anchor_timestamps_nanoseconds
+                ):
+                    triplet_span = (
+                        max(rgb_stamp, depth_stamp, anchor_stamp)
+                        - min(rgb_stamp, depth_stamp, anchor_stamp)
+                    )
+                    rgb_anchor_skew = abs(rgb_stamp - anchor_stamp)
+                    score = (
+                        triplet_span,
+                        rgb_depth_skew,
+                        rgb_anchor_skew,
+                        -rgb_stamp,
+                        -depth_stamp,
+                        -rgb_sequence,
+                        -depth_sequence,
+                        anchor_index,
+                    )
+                    if best_score is None or score < best_score:
+                        best_candidate = (
+                            rgb_image,
+                            depth_image,
+                            anchor_index,
+                        )
+                        best_score = score
         return best_candidate
 
     def _format_diagnostics(

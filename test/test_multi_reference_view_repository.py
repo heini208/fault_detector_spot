@@ -291,7 +291,7 @@ def test_reload_rejects_calibration_metadata_mismatch(tmp_path):
         )
 
 
-def test_save_rejects_different_tag_observations_between_cameras(
+def test_save_allows_camera_specific_tag_observations(
     tmp_path,
 ):
     repository = MultiReferenceViewRepository(tmp_path)
@@ -300,9 +300,18 @@ def test_save_rejects_different_tag_observations_between_cameras(
     second = make_capture(1, "hand", 200)
     second.reference_tag.pose.header.stamp.nanosec = 51
 
-    with pytest.raises(ValueError, match="shared tag observation"):
-        repository.save_reference_views(
-            "motor_a",
-            "magnetic_scan",
-            [first, second],
-        )
+    repository.save_reference_views(
+        "motor_a",
+        "magnetic_scan",
+        [first, second],
+    )
+
+    loaded = repository.load_reference_views(
+        "motor_a",
+        "magnetic_scan",
+    )
+
+    assert [
+        capture.reference_tag.pose.header.stamp.nanosec
+        for capture in loaded
+    ] == [50, 51]

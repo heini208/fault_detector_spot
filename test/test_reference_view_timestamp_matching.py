@@ -1,4 +1,4 @@
-"""Tests for exhaustive RGB-depth timestamp matching."""
+"""Tests for RGB-depth and timestamp-anchor matching."""
 
 from collections import deque
 from threading import Lock
@@ -53,6 +53,28 @@ def test_selects_global_minimum_from_all_raw_combinations():
 
     assert selected[0].header.stamp.nanosec == 150_000_000
     assert selected[1].header.stamp.nanosec == 151_000_000
+
+
+def test_triplet_matching_can_choose_a_less_exact_rgb_depth_pair():
+    synchronizer = make_synchronizer()
+    rgb_images = [
+        (1, make_image(100_000_000)),
+        (2, make_image(145_000_000)),
+    ]
+    depth_images = [
+        (3, make_image(101_000_000)),
+        (4, make_image(149_000_000)),
+    ]
+
+    selected = synchronizer._select_best_triplet(
+        rgb_images,
+        depth_images,
+        (10_152_000_000,),
+    )
+
+    assert selected[0].header.stamp.nanosec == 145_000_000
+    assert selected[1].header.stamp.nanosec == 149_000_000
+    assert selected[2] == 0
 
 
 def test_rejects_every_pair_outside_limit():

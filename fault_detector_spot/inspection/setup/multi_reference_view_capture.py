@@ -71,17 +71,30 @@ def capture_reference_views(
         raise ValueError(
             "Maximum input age must be finite and non-negative"
         )
+    matching_reference_tags = _matching_reference_tags(
+        reference_tags,
+        reference_tag_id,
+    )
+    reference_tag_timestamps = tuple(
+        _stamp_nanoseconds(reference_tag.pose.header.stamp)
+        for reference_tag in matching_reference_tags
+    )
+
     snapshots = []
     for request in requests:
-        inputs = request.input_synchronizer.best_snapshot(
-            request.minimum_input_sequence,
+        inputs = (
+            request.input_synchronizer.best_snapshot_with_timestamp_anchor(
+                request.minimum_input_sequence,
+                reference_tag_timestamps,
+            )
         )
         if inputs is None:
             diagnostics = request.input_synchronizer.collection_diagnostics(
                 request.minimum_input_sequence,
             )
             raise ReferenceViewCaptureNotReady(
-                "No valid synchronized RGB and registered-depth pair was "
+                "No valid synchronized RGB, registered-depth, and "
+                "reference-tag triplet was "
                 f"collected for camera {request.camera_id}: {diagnostics}"
             )
         (
@@ -89,7 +102,9 @@ def capture_reference_views(
             depth_image,
             rgb_camera_info,
             depth_camera_info,
+            reference_tag_index,
         ) = inputs
+        reference_tag = matching_reference_tags[reference_tag_index]
         _require_fresh(
             current_time,
             rgb_image.header.stamp,
@@ -108,12 +123,8 @@ def capture_reference_views(
             depth_image,
             rgb_camera_info,
             depth_camera_info,
+            reference_tag,
         ))
-
-    reference_tag = _select_reference_tag(
-        reference_tags,
-        reference_tag_id,
-    )
 
     captures = []
     for (
@@ -122,6 +133,7 @@ def capture_reference_views(
         depth_image,
         rgb_camera_info,
         depth_camera_info,
+        reference_tag,
     ) in snapshots:
         reference_view = resolve_reference_view_pose(
             tf_buffer,
@@ -161,7 +173,7 @@ def capture_reference_views(
     )
 
 
-def _select_reference_tag(
+def _matching_reference_tags(
     reference_tags,
     reference_tag_id: int,
 ):
@@ -175,12 +187,9 @@ def _select_reference_tag(
             "No capture anchor is available for "
             f"reference tag {reference_tag_id}"
         )
-    return max(
-        candidates,
-        key=lambda reference_tag: _stamp_nanoseconds(
-            reference_tag.pose.header.stamp
-        ),
-    )
+    for reference_tag in candidates:
+        _stamp_nanoseconds(reference_tag.pose.header.stamp)
+    return candidates
 
 
 def _require_fresh(
