@@ -38,12 +38,13 @@ class BaseMovementControls(UIControlHelper):
 
     def _make_tag_input_row(self):
         row = QHBoxLayout()
-        self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Enter tag ID")
+        row.addWidget(QLabel("Tag:"))
+        self.tag_dropdown = QComboBox()
+        self.update_tags_dropdown()
 
         move_to_tag_btn = QPushButton("Move to Tag")
         move_to_tag_btn.clicked.connect(self.handle_move_to_tag)
-        row.addWidget(self.input_field)
+        row.addWidget(self.tag_dropdown)
         row.addWidget(move_to_tag_btn)
         return row
 
@@ -157,6 +158,10 @@ class BaseMovementControls(UIControlHelper):
 
     def update_frames_dropdown(self):
         self.ui.update_frames_dropdown(self.frames_dropdown)
+
+    def update_tags_dropdown(self):
+        self.ui.update_tags_dropdown(self.tag_dropdown)
+
     # ---------------------- Command Builders ----------------------
 
     def build_move_base_intent(self, intent_id):
@@ -164,7 +169,7 @@ class BaseMovementControls(UIControlHelper):
         intent.intent = intent_id
 
         # add tag info if available
-        text = self.input_field.text().strip()
+        text = self.tag_dropdown.currentText().strip()
         if text.isdigit() and int(text) in self.ui.visible_tags:
             tag_element = TagElement()
             tag_element.id = int(text)
@@ -205,7 +210,7 @@ class BaseMovementControls(UIControlHelper):
             self.ui.execute_operation(intent)
 
     def handle_move_to_tag(self):
-        text = self.input_field.text().strip()
+        text = self.tag_dropdown.currentText().strip()
         if not text.isdigit() or int(text) not in self.ui.visible_tags:
             self.show_warning(
                 "Tag Not Found",

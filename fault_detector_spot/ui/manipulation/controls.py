@@ -110,12 +110,13 @@ class ManipulationControls(UIControlHelper):
 
     def _make_tag_input_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Enter tag ID")
+        row.addWidget(QLabel("Tag:"))
+        self.tag_dropdown = QComboBox()
+        self.update_tags_dropdown()
 
         self.submit_button = QPushButton("Move to Tag")
         self.submit_button.clicked.connect(self.handle_tag_selection)
-        row.addWidget(self.input_field)
+        row.addWidget(self.tag_dropdown)
         row.addWidget(self.submit_button)
 
         row.addWidget(QLabel("Wait (s):"))
@@ -342,6 +343,9 @@ class ManipulationControls(UIControlHelper):
     def update_frames_dropdown(self):
         self.ui.update_frames_dropdown(self.frames_dropdown)
 
+    def update_tags_dropdown(self):
+        self.ui.update_tags_dropdown(self.tag_dropdown)
+
     def _euler_to_quaternion(self, roll, pitch, yaw) -> Quaternion:
         """Convert Euler angles (radians) to a Quaternion message."""
         cy = math.cos(yaw * 0.5)
@@ -373,7 +377,7 @@ class ManipulationControls(UIControlHelper):
         intent: OperationalIntent,
         suppress_warnings=False,
     ):
-        text = self.input_field.text().strip()
+        text = self.tag_dropdown.currentText().strip()
         if not text.isdigit():
             if not suppress_warnings:
                 self.show_warning("Invalid Input", "Please enter a numeric tag ID.")
@@ -457,8 +461,10 @@ class ManipulationControls(UIControlHelper):
         self.ui.execute_operation(intent)
 
     def handle_tag_selection(self):
-
-        intent = self.build_move_to_tag_intent()
+        try:
+            intent = self.build_move_to_tag_intent()
+        except TagNotFound:
+            return
 
         pos = intent.tag.pose.pose.position
         offset = intent.offset.pose.position

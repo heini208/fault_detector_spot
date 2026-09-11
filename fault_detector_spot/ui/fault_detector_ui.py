@@ -890,6 +890,8 @@ class Fault_Detector_UI(QWidget):
 
     def _process_visible_tags(self, msg: TagElementArray):
         self.visible_tags = {tag.id: tag for tag in msg.elements}
+        self.manipulation_controls.update_tags_dropdown()
+        self.base_movement_controls.update_tags_dropdown()
 
     def _process_reachable_tags(self, msg: TagElementArray):
         self.reachable_tags = {tag.id: tag for tag in msg.elements}
@@ -1197,6 +1199,21 @@ class Fault_Detector_UI(QWidget):
             )
 
         frames_dropdown.blockSignals(False)
+
+    def update_tags_dropdown(self, tags_dropdown):
+        previous_selection = tags_dropdown.currentText()
+        tag_ids = sorted(self.visible_tags)
+
+        tags_dropdown.blockSignals(True)
+        tags_dropdown.clear()
+        if tag_ids:
+            tags_dropdown.addItems([str(tag_id) for tag_id in tag_ids])
+            target_index = tags_dropdown.findText(previous_selection)
+            tags_dropdown.setCurrentIndex(max(0, target_index))
+        else:
+            tags_dropdown.addItem("no tags available")
+        tags_dropdown.setEnabled(bool(tag_ids))
+        tags_dropdown.blockSignals(False)
 
 
 def main(args=None):
