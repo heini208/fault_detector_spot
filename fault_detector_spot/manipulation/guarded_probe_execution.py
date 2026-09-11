@@ -1,12 +1,9 @@
 """Force guard state machine for one probe movement."""
 
 from copy import deepcopy
-from dataclasses import dataclass
 from enum import Enum
 import math
 import time
-
-from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.manipulation.arm_force_baseline import (
     ForceBaselineOutcome,
@@ -18,6 +15,9 @@ from fault_detector_spot.manipulation.arm_movement_result import (
 )
 from fault_detector_spot.manipulation.hand_settling_detector import (
     HandSettlingOutcome,
+)
+from fault_detector_spot.manipulation.probe_motion_planner import (
+    ProbeMotionPlan,
 )
 from fault_detector_spot.shared.geometry.movement_geometry import (
     MovementGeometryUnavailable,
@@ -34,23 +34,6 @@ class _Phase(Enum):
     POST_RETREAT_SETTLING = "post_retreat_settling"
 
 
-@dataclass(frozen=True)
-class GuardedProbePlan:
-    """Resolved low-level motion used by the force guard."""
-
-    goal: object
-    current_hand: PoseStamped
-    target_hand: PoseStamped
-    direction_x: float
-    direction_y: float
-    direction_z: float
-    linear_speed_mps: float
-    force_threshold_n: float | None
-    contact_consecutive_samples: int
-    motion_required: bool = True
-    force_guard_enabled: bool = True
-
-
 class GuardedProbeExecution:
     """Own force baseline, monitoring, stop confirmation, and retreat."""
 
@@ -59,6 +42,7 @@ class GuardedProbeExecution:
         arm_state_source,
         settling_detector,
         force_baseline_sampler,
+        force_contact_policy,
         start_goal,
         poll_goal,
         cancel_goal,
@@ -74,6 +58,7 @@ class GuardedProbeExecution:
             (arm_state_source, "arm state source"),
             (settling_detector, "settling detector"),
             (force_baseline_sampler, "force baseline sampler"),
+            (force_contact_policy, "force contact policy"),
         )
         for value, label in required:
             if value is None:
@@ -98,6 +83,7 @@ class GuardedProbeExecution:
         self.arm_state_source = arm_state_source
         self.settling_detector = settling_detector
         self.force_baseline_sampler = force_baseline_sampler
+        self.force_contact_policy = force_contact_policy
         self._start_goal = start_goal
         self._poll_goal = poll_goal
         self._cancel_goal = cancel_goal
@@ -126,7 +112,11 @@ class GuardedProbeExecution:
     def active(self) -> bool:
         return self._phase is not None
 
-    def start(self, plan_builder) -> ArmMovementUpdate:
+    def start(
+        self,
+        plan_builder,
+        force_threshold_n=None,
+    ) -> ArmMovementUpdate:
         if not callable(plan_builder):
             return ArmMovementUpdate(
                 ArmMovementOutcome.EXECUTION_ERROR,
@@ -134,6 +124,7 @@ class GuardedProbeExecution:
             )
         self.reset()
         self._plan_builder = plan_builder
+        self._force_threshold_override_n = force_threshold_n
         return self._prepare_plan()
 
     def poll(self) -> ArmMovementUpdate:
@@ -174,6 +165,8 @@ class GuardedProbeExecution:
         self._plan_builder = None
         self._plan = None
         self._force_baseline = None
+        self._force_threshold_override_n = None
+        self._force_threshold_n = None
         self._force_last_received_at = None
         self._force_contact_count = 0
         self._contact_detail = ""
@@ -245,6 +238,11 @@ class GuardedProbeExecution:
             )
 
         self._plan = plan
+        if not isinstance(plan, ProbeMotionPlan):
+            return self._terminal(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Guarded probe plan builder returned an invalid plan",
+            )
         if not plan.motion_required:
             return self._terminal(
                 ArmMovementOutcome.SUCCESS,
@@ -252,6 +250,16 @@ class GuardedProbeExecution:
             )
         if not plan.force_guard_enabled:
             return self._start_primary_motion_without_force_guard()
+        try:
+            self._force_threshold_n = self._resolve_force_threshold(
+                plan.linear_speed_mps,
+                self._force_threshold_override_n,
+            )
+        except Exception as exception:
+            return self._terminal(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                str(exception),
+            )
         return self._begin_force_baseline()
 
     def _start_primary_motion_without_force_guard(
@@ -314,7 +322,7 @@ class GuardedProbeExecution:
                 update.outcome,
                 f"{update.detail}; peak force delta "
                 f"{self._peak_force_delta_n:.2f} N, threshold "
-                f"{plan.force_threshold_n:.2f} N at "
+                f"{self._force_threshold_n:.2f} N at "
                 f"{plan.linear_speed_mps:.4f} m/s",
             )
         return self._terminal(update.outcome, update.detail)
@@ -372,29 +380,48 @@ class GuardedProbeExecution:
             self._peak_force_delta_n,
             delta_n,
         )
-        if plan.force_threshold_n is None:
+        threshold_n = self._force_threshold_n
+        if threshold_n is None:
             return self._begin_abort(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Translational force guard has no threshold",
             )
-        if delta_n >= plan.force_threshold_n:
+        if delta_n >= threshold_n:
             self._force_contact_count += 1
         else:
             self._force_contact_count = 0
 
         if (
             self._force_contact_count
-            < plan.contact_consecutive_samples
+            < self.force_contact_policy.consecutive_samples
         ):
             return None
 
         return self._begin_contact(
             "Contact detected from end-effector force delta "
             f"{delta_n:.2f} N exceeding "
-            f"{plan.force_threshold_n:.2f} N at "
+            f"{threshold_n:.2f} N at "
             f"{plan.linear_speed_mps:.4f} m/s; peak "
             f"{self._peak_force_delta_n:.2f} N"
         )
+
+    def _resolve_force_threshold(
+        self,
+        linear_speed_mps: float,
+        override_n,
+    ) -> float:
+        if override_n is None:
+            return self.force_contact_policy.threshold_for(
+                linear_speed_mps
+            )
+
+        threshold = float(override_n)
+        if not math.isfinite(threshold) or threshold <= 0.0:
+            raise ValueError(
+                "Guarded probe force threshold override must be "
+                "positive and finite"
+            )
+        return threshold
 
     def _force_timed_out(self, now: float) -> bool:
         if self._force_last_received_at is None:
@@ -600,7 +627,4 @@ class GuardedProbeExecution:
         return normalized
 
 
-__all__ = [
-    "GuardedProbeExecution",
-    "GuardedProbePlan",
-]
+__all__ = ["GuardedProbeExecution"]

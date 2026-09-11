@@ -18,7 +18,9 @@ from fault_detector_spot.manipulation.arm_movement_result import (
 from fault_detector_spot.manipulation.arm_state_source import HandForceSample
 from fault_detector_spot.manipulation.guarded_probe_execution import (
     GuardedProbeExecution,
-    GuardedProbePlan,
+)
+from fault_detector_spot.manipulation.probe_motion_planner import (
+    ProbeMotionPlan,
 )
 from fault_detector_spot.manipulation.hand_settling_detector import (
     HandSettlingOutcome,
@@ -93,6 +95,15 @@ class ImmediateBaseline:
         pass
 
 
+class FixedForcePolicy:
+
+    consecutive_samples = 2
+
+    @staticmethod
+    def threshold_for(_linear_speed_mps):
+        return 5.0
+
+
 class GoalDriver:
 
     def __init__(self):
@@ -128,7 +139,7 @@ def pose(x):
 
 
 def plan():
-    return GuardedProbePlan(
+    return ProbeMotionPlan(
         goal=object(),
         current_hand=pose(0.0),
         target_hand=pose(0.01),
@@ -136,17 +147,26 @@ def plan():
         direction_y=0.0,
         direction_z=0.0,
         linear_speed_mps=0.005,
-        force_threshold_n=5.0,
-        contact_consecutive_samples=2,
     )
 
 
-def execution(state, driver, clock, current_pose):
+def execution(
+    state,
+    driver,
+    clock,
+    current_pose,
+    force_policy=None,
+):
     settling = ImmediateSettling()
     guard = GuardedProbeExecution(
         arm_state_source=state,
         settling_detector=settling,
         force_baseline_sampler=ImmediateBaseline(),
+        force_contact_policy=(
+            force_policy
+            if force_policy is not None
+            else FixedForcePolicy()
+        ),
         start_goal=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
@@ -269,3 +289,49 @@ def test_stale_force_cancels_and_returns_force_stale_after_stop():
     assert failed.outcome is ArmMovementOutcome.FORCE_STALE
     assert driver.cancel_count == 1
     assert not guard.active
+
+
+class HighForcePolicy:
+
+    consecutive_samples = 2
+
+    @staticmethod
+    def threshold_for(_linear_speed_mps):
+        return 12.0
+
+
+def test_explicit_threshold_override_replaces_generic_policy():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(
+        state,
+        driver,
+        clock,
+        pose(0.008),
+        force_policy=HighForcePolicy(),
+    )
+
+    assert guard.start(
+        plan,
+        force_threshold_n=5.0,
+    ).outcome is ArmMovementOutcome.RUNNING
+
+    state.sample = HandForceSample(
+        received_at=0.1,
+        x_n=7.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    state.sample = HandForceSample(
+        received_at=0.2,
+        x_n=7.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    contact = guard.poll()
+
+    assert contact.outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 1

@@ -1,4 +1,4 @@
-"""Lock the arm executor boundary between guarded and low-level probe motion."""
+"""Lock the arm boundary between orchestration, planning, and force guard."""
 
 import ast
 from pathlib import Path
@@ -10,6 +10,12 @@ EXECUTOR = (
     / "fault_detector_spot"
     / "manipulation"
     / "arm_movement_executor.py"
+)
+PLANNER = (
+    ROOT
+    / "fault_detector_spot"
+    / "manipulation"
+    / "probe_motion_planner.py"
 )
 GUARD = (
     ROOT
@@ -75,9 +81,26 @@ def test_ready_arm_uses_low_level_probe_submission_not_force_guard():
     assert "guarded_probe_execution" not in method
 
 
+def test_executor_delegates_probe_geometry_to_planner():
+    executor = _source(EXECUTOR)
+    planner = _source(PLANNER)
+
+    for name in (
+        "resolve_relative",
+        "resolve_tag",
+        "resolve_probe_relative",
+        "build_plan",
+        "build_probe_goal",
+        "probe_target_to_hand_target",
+        "normalize_target",
+    ):
+        assert f"def {name}(" not in executor
+        assert f"def {name}(" in planner
+
+
 def test_force_guard_state_machine_is_not_inside_arm_executor():
-    executor_source = _source(EXECUTOR)
-    guard_source = _source(GUARD)
+    executor = _source(EXECUTOR)
+    guard = _source(GUARD)
 
     for name in (
         "_check_force_guard",
@@ -85,8 +108,27 @@ def test_force_guard_state_machine_is_not_inside_arm_executor():
         "_begin_retreat",
         "_handle_stop_settling",
     ):
-        assert f"def {name}(" not in executor_source
-        assert f"def {name}(" in guard_source
+        assert f"def {name}(" not in executor
+        assert f"def {name}(" in guard
+
+
+def test_force_threshold_policy_belongs_to_guard_not_motion_planner():
+    planner = _source(PLANNER)
+    guard = _source(GUARD)
+
+    assert "force_contact_policy" not in planner
+    assert "threshold_for(" not in planner
+    assert "force_contact_policy" in guard
+    assert "threshold_for(" in guard
+
+
+def test_executor_keeps_only_robot_command_translation():
+    executor = _source(EXECUTOR)
+
+    assert "RobotCommandBuilder.arm_pose_command" in executor
+    assert "RobotCommandBuilder.arm_stow_command" in executor
+    assert "tf2_geometry_msgs" not in executor
+    assert "MovementGeometryResolver" not in executor
 
 
 def test_robot_command_resource_parameter_calls_have_three_arguments():
@@ -105,18 +147,10 @@ def test_robot_command_resource_parameter_calls_have_three_arguments():
 
 
 def test_guard_does_not_define_a_separate_movement_speed():
-    executor_source = _source(EXECUTOR)
-    resources_source = _source(RESOURCES)
+    executor = _source(EXECUTOR)
+    planner = _source(PLANNER)
+    resources = _source(RESOURCES)
 
-    assert "guarded_linear_speed" not in executor_source
-    assert "GUARDED_LINEAR_SPEED" not in executor_source
-    assert "guarded_linear_speed" not in resources_source
-    assert "GUARDED_LINEAR_SPEED" not in resources_source
-
-
-def test_guard_uses_executor_default_or_explicit_speed():
-    source = _source(EXECUTOR)
-    method = _method_source(source, "_effective_guarded_speed")
-
-    assert "self.speed_policy.default_speed" in method
-    assert "return speed" in method
+    for source in (executor, planner, resources):
+        assert "guarded_linear_speed" not in source
+        assert "GUARDED_LINEAR_SPEED" not in source
