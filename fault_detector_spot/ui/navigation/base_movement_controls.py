@@ -128,6 +128,7 @@ class BaseMovementControls(UIControlHelper):
         row = QHBoxLayout()
         for label, cid in [
             ("Stand", OperationalIntent.INTENT_STAND_UP),
+            ("Sit", OperationalIntent.INTENT_SIT_DOWN),
             (
                 "Reset State",
                 OperationalIntent.INTENT_RETURN_TO_ESTOP_STATE,

@@ -95,6 +95,35 @@ def test_stand_uses_executor_lifecycle_until_success():
     assert not executor.active
 
 
+def test_sit_uses_executor_lifecycle_until_success():
+    send_future = ManualFuture()
+    result_future = ManualFuture()
+    client = FakeActionClient(send_future)
+    executor = BaseMovementExecutor(
+        tf_listener=object(),
+        action_client=client,
+    )
+    executor._build_sit_goal = lambda: object()
+
+    update = executor.sit()
+    assert update.outcome is BaseMovementOutcome.RUNNING
+    assert client.send_calls == 1
+
+    handle = FakeGoalHandle(result_future)
+    send_future.set_result(handle)
+    update = executor.poll()
+    assert update.outcome is BaseMovementOutcome.RUNNING
+
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=True)
+        )
+    )
+    update = executor.poll()
+    assert update.outcome is BaseMovementOutcome.SUCCESS
+    assert not executor.active
+
+
 def test_executor_rejects_second_base_operation_while_active():
     send_future = ManualFuture()
     executor = BaseMovementExecutor(

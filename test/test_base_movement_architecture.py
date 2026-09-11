@@ -27,11 +27,16 @@ def test_base_behaviour_hierarchy_matches_arm_structure():
         "fault_detector_spot/navigation/behaviours/"
         "stand_up_behaviour.py"
     )
+    sit = read(
+        "fault_detector_spot/navigation/behaviours/"
+        "sit_down_behaviour.py"
+    )
 
     assert "class MovementBehaviour(" in common
     assert "class BaseMovementBehaviour(MovementBehaviour)" in base
     assert "class BaseGoalBehaviour(BaseMovementBehaviour)" in goal
     assert "class StandUpBehaviour(BaseMovementBehaviour)" in stand
+    assert "class SitDownBehaviour(BaseMovementBehaviour)" in sit
 
 
 def test_runner_uses_one_base_goal_behaviour_for_relative_and_tag():
@@ -45,6 +50,8 @@ def test_runner_uses_one_base_goal_behaviour_for_relative_and_tag():
     assert "BaseGetGoalTag" not in runner
     assert "StandUpActionSimple" not in runner
     assert "StandUpBehaviour(" in runner
+    assert "SitDownBehaviour(" in runner
+    assert "CommandID.SIT_DOWN" in runner
 
 
 def test_base_behaviours_only_delegate_to_shared_executor():
@@ -60,14 +67,20 @@ def test_base_behaviours_only_delegate_to_shared_executor():
         "fault_detector_spot/navigation/behaviours/"
         "stand_up_behaviour.py"
     )
+    sit = read(
+        "fault_detector_spot/navigation/behaviours/"
+        "sit_down_behaviour.py"
+    )
 
     assert "get_base_movement_executor(" in base
     assert "return self.executor.relative(command)" in goal
     assert "return self.executor.tag(command)" in goal
     assert "return self.executor.stand()" in stand
+    assert "return self.executor.sit()" in sit
     assert "RobotCommandBuilder" not in base
     assert "RobotCommandBuilder" not in goal
     assert "RobotCommandBuilder" not in stand
+    assert "RobotCommandBuilder" not in sit
 
 
 def test_base_executor_inherits_lifecycle_and_owns_goal_building():
@@ -87,6 +100,7 @@ def test_base_executor_inherits_lifecycle_and_owns_goal_building():
     assert "cancel_goal_async(" not in executor
 
     assert "RobotCommandBuilder.synchro_stand_command()" in executor
+    assert "RobotCommandBuilder.synchro_sit_command()" in executor
     assert (
         "RobotCommandBuilder.synchro_se2_trajectory_point_command("
         in executor
@@ -94,6 +108,7 @@ def test_base_executor_inherits_lifecycle_and_owns_goal_building():
     assert "def relative(" in executor
     assert "def tag(" in executor
     assert "def stand(" in executor
+    assert "def sit(" in executor
 
 
 def test_base_tag_movement_uses_authoritative_live_visible_tag_state():
@@ -110,3 +125,21 @@ def test_base_tag_movement_uses_authoritative_live_visible_tag_state():
     assert "command.tag_pose = deepcopy(tag.pose)" in executor
     assert "command.tag_pose = deepcopy(tag.pose)" not in goal
     assert "_prepare_operation" not in goal
+
+
+def test_legacy_base_movement_behaviours_are_removed():
+    legacy = (
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "move_command_action.py",
+        "fault_detector_spot/navigation/behaviours/move_base/"
+        "base_get_goal_tag.py",
+        "fault_detector_spot/navigation/behaviours/move_base/"
+        "base_move_relative_action.py",
+        "fault_detector_spot/navigation/behaviours/move_base/"
+        "base_move_to_tag_action.py",
+        "fault_detector_spot/manipulation/behaviours/"
+        "stand_up_action.py",
+    )
+
+    for relative_path in legacy:
+        assert not (ROOT / relative_path).exists()

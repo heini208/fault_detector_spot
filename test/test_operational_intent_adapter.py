@@ -22,6 +22,16 @@ def test_translates_simple_operational_intent():
     assert command.command_id is CommandID.STAND_UP
 
 
+def test_translates_sit_down_operational_intent():
+    intent = OperationalIntent()
+    intent.intent = OperationalIntent.INTENT_SIT_DOWN
+
+    command = operational_intent_to_command(intent)
+
+    assert isinstance(command, SemanticCommand)
+    assert command.command_id is CommandID.SIT_DOWN
+
+
 def test_preserves_tag_motion_payload():
     intent = OperationalIntent()
     intent.intent = OperationalIntent.INTENT_MOVE_ARM_TO_TAG_AND_WAIT

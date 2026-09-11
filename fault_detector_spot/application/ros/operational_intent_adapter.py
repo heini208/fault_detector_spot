@@ -23,6 +23,7 @@ from fault_detector_spot.inspection.measurement import (
 
 _INTENT_COMMAND_IDS = {
     OperationalIntent.INTENT_STAND_UP: CommandID.STAND_UP,
+    OperationalIntent.INTENT_SIT_DOWN: CommandID.SIT_DOWN,
     OperationalIntent.INTENT_READY_ARM: CommandID.READY_ARM,
     OperationalIntent.INTENT_STOW_ARM: CommandID.STOW_ARM,
     OperationalIntent.INTENT_TOGGLE_GRIPPER: CommandID.TOGGLE_GRIPPER,

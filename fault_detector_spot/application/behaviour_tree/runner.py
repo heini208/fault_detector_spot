@@ -70,6 +70,9 @@ from fault_detector_spot.navigation.behaviours.base_goal_behaviour import (
 from fault_detector_spot.navigation.behaviours.stand_up_behaviour import (
     StandUpBehaviour,
 )
+from fault_detector_spot.navigation.behaviours.sit_down_behaviour import (
+    SitDownBehaviour,
+)
 from fault_detector_spot.navigation.behaviours.navigate_to_goal_pose import (
     NavigateToGoalPose,
 )
@@ -341,6 +344,13 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             CommandID.STAND_UP,
             lambda n: StandUpBehaviour(
                 name="StandUpBehaviour",
+                robot_command_resources=robot_command_resources,
+            ),
+        ),
+        (
+            CommandID.SIT_DOWN,
+            lambda n: SitDownBehaviour(
+                name="SitDownBehaviour",
                 robot_command_resources=robot_command_resources,
             ),
         ),

@@ -77,6 +77,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.STOW_ARM: self._simple_command,
             CommandID.READY_ARM: self._simple_command,
             CommandID.STAND_UP: self._simple_command,
+            CommandID.SIT_DOWN: self._simple_command,
             CommandID.TOGGLE_GRIPPER: self._simple_command,
             CommandID.CLOSE_GRIPPER: self._simple_command,
             CommandID.STOP_BASE: self._simple_command,

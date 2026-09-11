@@ -9,6 +9,7 @@ class CommandID(str, Enum):
     MOVE_ARM_RELATIVE = "move_arm_relative"
     MOVE_CLOSE_TO_SURFACE = "move_close_to_surface"
     STAND_UP = "stand_up"
+    SIT_DOWN = "sit_down"
     WAIT_TIME = "wait_time"
     EMERGENCY_CANCEL = "cancel_all"
     TOGGLE_GRIPPER = "toggle_gripper"

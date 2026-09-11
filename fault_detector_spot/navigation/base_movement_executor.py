@@ -99,6 +99,10 @@ class BaseMovementExecutor(MovementExecutor):
         """Start Spot's native stand command."""
         return self._start_goal(self._build_stand_goal)
 
+    def sit(self) -> BaseMovementUpdate:
+        """Start Spot's native sit command."""
+        return self._start_goal(self._build_sit_goal)
+
     def _build_relative_goal(self, command) -> RobotCommand.Goal:
         if command is None or not callable(
             getattr(command, "compute_goal_pose", None)
@@ -154,6 +158,12 @@ class BaseMovementExecutor(MovementExecutor):
 
     def _build_stand_goal(self) -> RobotCommand.Goal:
         command = RobotCommandBuilder.synchro_stand_command()
+        goal = RobotCommand.Goal()
+        convert(command, goal.command)
+        return goal
+
+    def _build_sit_goal(self) -> RobotCommand.Goal:
+        command = RobotCommandBuilder.synchro_sit_command()
         goal = RobotCommand.Goal()
         convert(command, goal.command)
         return goal
