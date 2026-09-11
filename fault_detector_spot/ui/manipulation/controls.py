@@ -147,11 +147,6 @@ class ManipulationControls(UIControlHelper):
         self.move_wait_button.clicked.connect(self.handle_move_and_wait)
         row.addWidget(self.move_wait_button)
 
-        self.scan_all_button = QPushButton("Scan all in range")
-        self.scan_all_button.clicked.connect(
-            lambda _: self.handle_scan_all_in_range()
-        )
-        row.addWidget(self.scan_all_button)
         row.addStretch()
         return row
 
@@ -439,24 +434,6 @@ class ManipulationControls(UIControlHelper):
         if not intent:
             return
         intent.duration_sec = self.duration_input.value()
-        self.ui.execute_operation(intent)
-
-    def handle_scan_all_in_range(self):
-        intent = OperationalIntent()
-        intent.intent = OperationalIntent.INTENT_SCAN_ALL_IN_RANGE
-        intent.duration_sec = self.duration_input.value()
-        intent = self.add_offset_to_intent(intent)
-        if not intent:
-            return
-
-        reply = self.ask_question(
-        "Confirm Scan",
-        f"Scan all reachable tags for {intent.duration_sec:.1f}s?"
-        )
-        if reply != QMessageBox.Yes:
-            self.status_label.setText("Scan canceled")
-            return
-
         self.ui.execute_operation(intent)
 
     def handle_move_and_wait(self):

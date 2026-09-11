@@ -11,7 +11,6 @@ class CommandID(str, Enum):
     STAND_UP = "stand_up"
     WAIT_TIME = "wait_time"
     EMERGENCY_CANCEL = "cancel_all"
-    SCAN_ALL_IN_RANGE = "scan_all_in_range"
     TOGGLE_GRIPPER = "toggle_gripper"
     CLOSE_GRIPPER = "close_gripper"
     ESTOP_STATE = "estop_state"

@@ -85,12 +85,12 @@ def test_request_metadata_reaches_internal_motion():
     assert command.recording_policy is RecordingPolicy.EXCLUDE
 
 
-def test_empty_request_translation_reports_correlated_failure():
-    request = semantic_request(CommandID.SCAN_ALL_IN_RANGE, "operator_ui")
+def test_empty_request_translation_reports_correlated_failure(monkeypatch):
+    request = semantic_request(CommandID.MOVE_ARM_RELATIVE, "operator_ui")
     subscriber = CommandSubscriber()
-    subscriber.blackboard = SimpleNamespace(
-        command_buffer=[],
-        reachable_tags={},
+    subscriber.blackboard = SimpleNamespace(command_buffer=[])
+    monkeypatch.setitem(
+        subscriber._combination_command_builders, CommandID.MOVE_ARM_RELATIVE, lambda _: []
     )
     subscriber.node = SimpleNamespace(get_clock=lambda: FakeClock())
     subscriber.request_status_publisher = FakePublisher()

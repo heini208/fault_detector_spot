@@ -60,7 +60,6 @@ Examples (non-exhaustive):
     - `STOW_ARM`
     - `TOGGLE_GRIPPER`
     - `CLOSE_GRIPPER`
-    - `SCAN_ALL_IN_RANGE`
 - Base:
     - `MOVE_BASE_TO_TAG`
     - `MOVE_BASE_RELATIVE`

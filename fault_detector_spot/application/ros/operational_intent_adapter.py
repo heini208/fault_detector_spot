@@ -37,9 +37,6 @@ _INTENT_COMMAND_IDS = {
     OperationalIntent.INTENT_MOVE_ARM_TO_TAG_AND_WAIT: (
         CommandID.MOVE_ARM_TO_TAG_AND_WAIT
     ),
-    OperationalIntent.INTENT_SCAN_ALL_IN_RANGE: (
-        CommandID.SCAN_ALL_IN_RANGE
-    ),
     OperationalIntent.INTENT_MOVE_ARM_RELATIVE: (
         CommandID.MOVE_ARM_RELATIVE
     ),

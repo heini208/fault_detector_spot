@@ -43,7 +43,7 @@ movements across multiple reference frames (Body, Odometry, and Map).
 | **Automation**        | Record & Playback    | Body  | Verifies playback of mixed tag-relative and relative movements | ✅ Pass | Video 9    |
 | **Automation**        | Record & Playback    | Odom  | Verifies playback consistency from different robot positions   | ✅ Pass | Video 10   |
 | **Automation**        | Emergency Stop       | N/A   | Verifies safety interrupt during playback                      | ❌ Fail | Video 12   |
-| **Combination**       | Scan All In Range    | N/A   | Verifies sequential scanning and dynamic filtering of tags     | ✅ Pass | Video 11   |
+| **Combination**       | Scan All In Range (removed; historical) | N/A   | Verifies sequential scanning and dynamic filtering of tags     | ✅ Pass | Video 11   |
 
 ## Observations & Notes
 
@@ -57,8 +57,7 @@ movements across multiple reference frames (Body, Odometry, and Map).
   Left/Right).
 - **Playback Robustness (Video 10):** Recording in the Odometry frame is highly robust. The system correctly executes the recorded path regardless of the
   robot's starting position or orientation.
-- **Scan Filtering (Video 11):** The `scan_all_in_range` command successfully dynamically filters targets. If a tag is moved out of physical range or view
-  during the sequence, the system correctly skips it.
+- **Historical Scan Filtering (Video 11):** The removed `scan_all_in_range` command filtered targets and skipped tags that moved out of range or view. This records past behavior, not an available command.
 - **CRITICAL SAFETY ISSUE (Video 12):** The Emergency Stop behavior was mixed. It successfully cleared the command buffer and stopped the overall playback
   sequence (preventing future commands from issuing). However, it **failed to immediately halt the currently executing manipulation movement**. The arm
   continued to finish its current trajectory rather than stopping instantly.
@@ -84,7 +83,7 @@ While basic commands, complex recording features, and directional movements func
 - ***Video 8:** [Tag-Relative Manipulator Movements (Map Frame) 2 -- Recommended Watch](https://www.youtube.com/watch?v=zHVklbptjsk)
 - **Video 9:** [Manipulator Recording & Playback (Body)](https://www.youtube.com/watch?v=aqEQCNawdbc)
 - ***Video 10:** [Manipulator Recording & Playback (Odom Frame) -- Recommended Watch](https://www.youtube.com/watch?v=6oHCDRIGcXg)
-- **Video 11:** [Scan All In Range Command](https://www.youtube.com/watch?v=Xi_xJR1xhAs)
+- **Video 11:** [Removed Scan All In Range Command (historical)](https://www.youtube.com/watch?v=Xi_xJR1xhAs)
 - **Video 12:** [Manipulator Emergency Stop during Playback](https://www.youtube.com/watch?v=pgF93NtzF0g)
 
 ---

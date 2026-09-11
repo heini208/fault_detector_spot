@@ -127,3 +127,11 @@ def test_public_contract_excludes_setup_intents():
         OperationalIntent,
         "INTENT_CAPTURE_REFERENCE_VIEW",
     )
+
+
+def test_rejects_retired_operational_intent():
+    intent = OperationalIntent()
+    intent.intent = 10
+
+    with pytest.raises(ValueError, match="Unsupported operational intent"):
+        operational_intent_to_command(intent)

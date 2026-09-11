@@ -29,7 +29,6 @@
    - [DELETE_LANDMARK](#deletelandmark)
 6. [System & Utility Commands](#system--utility-commands)
    - [WAIT_TIME](#waittime)
-   - [SCAN_ALL_IN_RANGE](#scanallinrange)
    - [EMERGENCY_CANCEL](#emergencycancel)
    - [ESTOP_STATE](#estopstate)
 
@@ -304,15 +303,6 @@
 - **Effects:** Delays the behavior tree execution.
 - **Feedback:** "Waiting...".
 - **Errors:** None.
-
-### SCAN_ALL_IN_RANGE
-- **Category:** Utility
-- **Description:** Performs a scanning routine (e.g., looking around with cameras) to detect all tags or objects in the immediate vicinity.
-- **Parameters:** None.
-- **Preconditions:** Cameras/Sensors active.
-- **Effects:** Updates the `visible_tags` or object list on the blackboard.
-- **Feedback:** "Scanning...".
-- **Errors:** Fails if sensors unavailable.
 
 ### EMERGENCY_CANCEL
 - **Category:** System

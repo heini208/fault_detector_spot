@@ -1,4 +1,3 @@
-from dataclasses import replace
 from typing import List, Optional
 
 import py_trees
@@ -26,7 +25,6 @@ from fault_detector_spot.application.ros.command_request_adapter import (
     command_request_from_message,
 )
 from fault_detector_spot.application.ros.semantic_command_adapter import (
-    stamped_pose_from_message,
     stamped_pose_to_message,
 )
 from fault_detector_spot.manipulation.commands.manipulator_move_relative_command import (
@@ -68,7 +66,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.defer_subscription = defer_subscription
         self.blackboard = None
         self._combination_command_builders = {
-            CommandID.SCAN_ALL_IN_RANGE: self._scan_all_in_range,
             CommandID.MOVE_ARM_TO_TAG: self._move_to_tag,
             CommandID.MOVE_ARM_TO_TAG_AND_WAIT: self._move_to_tag_and_wait,
             CommandID.MOVE_ARM_RELATIVE: self._move_arm_command_with_offset,
@@ -169,10 +166,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.register_key(
             key="estop_flag",
             access=py_trees.common.Access.WRITE,
-        )
-        self.blackboard.register_key(
-            key="reachable_tags",
-            access=py_trees.common.Access.READ,
         )
         self.blackboard.command_buffer = []
         self.blackboard.estop_flag = False
@@ -441,39 +434,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 command.wait_time,
             )
         )
-        return commands
-
-    def _scan_all_in_range(
-        self,
-        command: SemanticCommand,
-    ) -> List[ExecutionCommand]:
-        tags = self.blackboard.reachable_tags
-        if not tags:
-            return []
-
-        commands: List[ExecutionCommand] = []
-        for _, tag in sorted(tags.items()):
-            scan_command = replace(
-                command,
-                tag=SemanticTag(
-                    id=int(tag.id),
-                    pose=stamped_pose_from_message(tag.pose),
-                ),
-            )
-            commands.extend(self._move_to_tag_and_wait(scan_command))
-            commands.append(
-                ExecutionCommand(
-                    CommandID.STOW_ARM,
-                    self._create_command_stamp(),
-                )
-            )
-            commands.append(
-                WaitCommand(
-                    CommandID.WAIT_TIME,
-                    self._create_command_stamp(),
-                    0.2,
-                )
-            )
         return commands
 
     def _return_to_estop_state(
