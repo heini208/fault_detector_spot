@@ -214,6 +214,10 @@ def capture_builder(monkeypatch):
 
 def executor_with_client(transformer, **kwargs):
     client = kwargs.pop("action_client", FakeActionClient())
+    if "arm_state_source" not in kwargs:
+        kwargs["arm_state_source"] = FakeArmStateSource(
+            ArmStowState.DEPLOYED
+        )
     executor = ArmMovementExecutor(
         transformer,
         action_client=client,
@@ -674,6 +678,113 @@ def test_executor_rejects_overlapping_arm_movement(monkeypatch):
     assert first.outcome is ArmMovementOutcome.RUNNING
     assert second.outcome is ArmMovementOutcome.BUSY
     assert len(client.sent_goals) == 1
+
+
+def test_stowed_relative_prepares_before_resolving_requested_goal(
+    monkeypatch,
+):
+    relative = PoseStamped()
+    relative.header.frame_id = "hand"
+    relative.pose.position.x = 0.10
+    relative.pose.orientation.w = 1.0
+
+    frame = executor_module.GRAV_ALIGNED_BODY_FRAME_NAME
+    ready_transform = transform(
+        frame,
+        "hand",
+        x=0.2,
+        z=0.4,
+    )
+    deployed_transform = transform(
+        frame,
+        "hand",
+        x=1.0,
+        z=0.5,
+    )
+    transformer = FakeTransformer({
+        (frame, "hand"): ready_transform,
+    })
+    state = FakeArmStateSource(ArmStowState.STOWED)
+    ready_send_future = ManualFuture()
+    ready_result_future = ManualFuture()
+    ready_handle = FakeGoalHandle(
+        result_future=ready_result_future
+    )
+    client = FakeActionClient(
+        send_future=ready_send_future
+    )
+    captured = capture_builder(monkeypatch)
+    command = FakeRelativeCommand(relative)
+    executor, _ = executor_with_client(
+        transformer,
+        action_client=client,
+        arm_state_source=state,
+    )
+
+    started = executor.relative(command)
+
+    assert started.outcome is ArmMovementOutcome.RUNNING
+    assert command.calls == []
+    assert len(client.sent_goals) == 1
+
+    ready_send_future.set_result(ready_handle)
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+
+    ready_result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=True)
+        )
+    )
+    waiting = executor.poll()
+
+    assert waiting.outcome is ArmMovementOutcome.RUNNING
+    assert "deployed" in waiting.detail
+    assert command.calls == []
+
+    state.state = ArmStowState.DEPLOYED
+    transformer.transforms[(frame, "hand")] = deployed_transform
+    client.send_future = ManualFuture()
+
+    resumed = executor.poll()
+
+    assert resumed.outcome is ArmMovementOutcome.RUNNING
+    assert command.calls == [transformer]
+    assert len(client.sent_goals) == 2
+    assert captured["args"][0] == pytest.approx(1.10)
+
+
+def test_movement_reports_missing_arm_state_after_bounded_wait():
+    clock = ManualClock()
+    state = FakeArmStateSource(
+        None,
+        last_received_at=None,
+        stale=True,
+    )
+    executor, client = executor_with_client(
+        FakeTransformer(),
+        arm_state_source=state,
+        monotonic_clock=clock,
+        ready_state_timeout_sec=2.0,
+    )
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+
+    first = executor.pose(target)
+
+    assert first.outcome is ArmMovementOutcome.RUNNING
+    assert client.sent_goals == []
+
+    clock.now = 2.0
+    failed = executor.poll()
+
+    assert (
+        failed.outcome
+        is ArmMovementOutcome.ARM_STATE_UNAVAILABLE
+    )
+    assert "2.0 s" in failed.detail
+    assert client.sent_goals == []
+    assert not executor.active
 
 
 def test_prepare_noops_when_arm_is_already_deployed():

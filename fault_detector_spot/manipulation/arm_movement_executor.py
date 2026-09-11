@@ -81,6 +81,7 @@ class ArmMovementUpdate:
 
 class _ArmOperation(Enum):
     MOVEMENT = "movement"
+    MOVEMENT_PREPARE = "movement_prepare"
     PREPARE = "prepare"
     STOW = "stow"
 
@@ -153,6 +154,7 @@ class ArmMovementExecutor(MovementExecutor):
 
         self._operation = None
         self._operation_speed = None
+        self._movement_goal_builder = None
         self._state_wait_started = None
         self._tf_wait_started = None
         self._verification_started = None
@@ -254,10 +256,18 @@ class ArmMovementExecutor(MovementExecutor):
             return self._poll_state_confirmation()
 
         if self._send_goal_future is None:
-            if self._operation is _ArmOperation.PREPARE:
+            if self._operation in (
+                _ArmOperation.PREPARE,
+                _ArmOperation.MOVEMENT_PREPARE,
+            ):
                 return self._advance_prepare_start()
             if self._operation is _ArmOperation.STOW:
                 return self._advance_stow_start()
+            if (
+                self._operation is _ArmOperation.MOVEMENT
+                and self._pending_goal_builder is None
+            ):
+                return self._advance_movement_start()
             return super().poll()
 
         if self._goal_handle is None:
@@ -268,12 +278,15 @@ class ArmMovementExecutor(MovementExecutor):
     def _start_goal(self, goal_builder) -> ArmMovementUpdate:
         if self.active:
             return self._busy_update()
+        self._active = True
         self._operation = _ArmOperation.MOVEMENT
-        return super()._start_goal(goal_builder)
+        self._movement_goal_builder = goal_builder
+        return self._advance_movement_start()
 
     def _handle_successful_result(self, result):
         if self._operation in (
             _ArmOperation.PREPARE,
+            _ArmOperation.MOVEMENT_PREPARE,
             _ArmOperation.STOW,
         ):
             self._reset_goal_lifecycle()
@@ -285,9 +298,37 @@ class ArmMovementExecutor(MovementExecutor):
         super()._reset_operation()
         self._operation = None
         self._operation_speed = None
+        self._movement_goal_builder = None
         self._state_wait_started = None
         self._tf_wait_started = None
         self._verification_started = None
+
+    def _advance_movement_start(self) -> ArmMovementUpdate:
+        state = self._fresh_arm_state()
+        if state is None or state is ArmStowState.UNKNOWN:
+            return self._wait_for_arm_state(
+                self.ready_state_timeout_sec,
+                "Waiting for manipulator stow state before movement",
+            )
+
+        self._state_wait_started = None
+        if state is ArmStowState.STOWED:
+            self._operation = _ArmOperation.MOVEMENT_PREPARE
+            return self._advance_prepare_start()
+
+        return self._submit_movement_goal()
+
+    def _submit_movement_goal(self) -> ArmMovementUpdate:
+        goal_builder = self._movement_goal_builder
+        if goal_builder is None:
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Arm movement has no pending goal builder",
+            )
+
+        self._operation = _ArmOperation.MOVEMENT
+        self._pending_goal_builder = goal_builder
+        return self._submit_goal(goal_builder)
 
     def _advance_prepare_start(self) -> ArmMovementUpdate:
         state = self._fresh_arm_state()
@@ -299,6 +340,8 @@ class ArmMovementExecutor(MovementExecutor):
 
         self._state_wait_started = None
         if state is ArmStowState.DEPLOYED:
+            if self._operation is _ArmOperation.MOVEMENT_PREPARE:
+                return self._submit_movement_goal()
             return self._finish(
                 ArmMovementOutcome.SUCCESS,
                 "Arm is already deployed",
@@ -347,7 +390,10 @@ class ArmMovementExecutor(MovementExecutor):
         return self._submit_goal(self._build_stow_goal)
 
     def _poll_state_confirmation(self) -> ArmMovementUpdate:
-        if self._operation is _ArmOperation.PREPARE:
+        if self._operation in (
+            _ArmOperation.PREPARE,
+            _ArmOperation.MOVEMENT_PREPARE,
+        ):
             expected = ArmStowState.DEPLOYED
             timeout_sec = self.ready_deployed_timeout_sec
             success_detail = "Arm deployed"
@@ -371,6 +417,9 @@ class ArmMovementExecutor(MovementExecutor):
 
         state = self._fresh_arm_state()
         if state is expected:
+            if self._operation is _ArmOperation.MOVEMENT_PREPARE:
+                self._verification_started = None
+                return self._submit_movement_goal()
             return self._finish(
                 ArmMovementOutcome.SUCCESS,
                 success_detail,
