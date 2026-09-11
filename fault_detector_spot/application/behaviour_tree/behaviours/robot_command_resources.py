@@ -27,12 +27,19 @@ from fault_detector_spot.manipulation.arm_state_source import (
     ArmStateSource,
 )
 from fault_detector_spot.navigation.base_movement_executor import (
+    BASE_READY_STANDING_TIMEOUT_PARAMETER,
+    BASE_READY_STATE_TIMEOUT_PARAMETER,
+    DEFAULT_BASE_READY_STANDING_TIMEOUT_SEC,
+    DEFAULT_BASE_READY_STATE_TIMEOUT_SEC,
     BaseMovementExecutor,
+)
+from fault_detector_spot.navigation.posture_state_source import (
+    PostureStateSource,
 )
 
 
 class RobotCommandResources:
-    """Share RobotCommand clients, TF, and movement executors."""
+    """Share RobotCommand clients, TF, state, and movement executors."""
 
     def __init__(self):
         self._lock = RLock()
@@ -40,6 +47,7 @@ class RobotCommandResources:
         self._clients = {}
         self._tf_listener = None
         self._arm_state_source = None
+        self._posture_state_source = None
         self._arm_motion_speed_policy = None
         self._arm_movement_executors = {}
         self._base_movement_executors = {}
@@ -75,6 +83,14 @@ class RobotCommandResources:
             if self._arm_state_source is None:
                 self._arm_state_source = ArmStateSource(node)
             return self._arm_state_source
+
+    def get_posture_state_source(self, node):
+        """Return the authoritative base posture state source."""
+        with self._lock:
+            self._bind_node(node)
+            if self._posture_state_source is None:
+                self._posture_state_source = PostureStateSource(node)
+            return self._posture_state_source
 
     def get_arm_movement_executor(
         self,
@@ -158,6 +174,19 @@ class RobotCommandResources:
                         node,
                         robot_name,
                     ),
+                    posture_state_source=self.get_posture_state_source(
+                        node
+                    ),
+                    ready_state_timeout_sec=self._positive_parameter(
+                        node,
+                        BASE_READY_STATE_TIMEOUT_PARAMETER,
+                        DEFAULT_BASE_READY_STATE_TIMEOUT_SEC,
+                    ),
+                    ready_standing_timeout_sec=self._positive_parameter(
+                        node,
+                        BASE_READY_STANDING_TIMEOUT_PARAMETER,
+                        DEFAULT_BASE_READY_STANDING_TIMEOUT_SEC,
+                    ),
                     logger=node.get_logger(),
                 )
                 self._base_movement_executors[robot_name] = executor
@@ -177,6 +206,7 @@ class RobotCommandResources:
             node = self._node
             tf_listener = self._tf_listener
             arm_state_source = self._arm_state_source
+            posture_state_source = self._posture_state_source
             arm_executors = tuple(
                 self._arm_movement_executors.values()
             )
@@ -186,6 +216,7 @@ class RobotCommandResources:
             clients = tuple(self._clients.values())
             self._tf_listener = None
             self._arm_state_source = None
+            self._posture_state_source = None
             self._arm_motion_speed_policy = None
             self._arm_movement_executors.clear()
             self._base_movement_executors.clear()
@@ -208,6 +239,10 @@ class RobotCommandResources:
         if arm_state_source is not None:
             resources.append(
                 ("arm state source", arm_state_source.destroy)
+            )
+        if posture_state_source is not None:
+            resources.append(
+                ("posture state source", posture_state_source.destroy)
             )
         resources.extend(
             ("RobotCommand action client", client.destroy)

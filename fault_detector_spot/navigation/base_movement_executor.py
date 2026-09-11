@@ -20,11 +20,23 @@ from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_to_rpy,
 )
 from fault_detector_spot.inspection.model.models import QuaternionData
+from fault_detector_spot.navigation.posture_state_source import (
+    PostureState,
+)
 from fault_detector_spot.shared.execution.movement_executor import (
     DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC,
     DEFAULT_RESULT_TIMEOUT_SEC,
     MovementExecutor,
 )
+
+BASE_READY_STATE_TIMEOUT_PARAMETER = "base.ready_state_timeout_sec"
+BASE_READY_STANDING_TIMEOUT_PARAMETER = (
+    "base.ready_standing_timeout_sec"
+)
+
+DEFAULT_BASE_READY_STATE_TIMEOUT_SEC = 2.0
+DEFAULT_BASE_READY_STANDING_TIMEOUT_SEC = 2.0
+
 RELATIVE_LINEAR_SPEED_MPS = 0.10
 TAG_LINEAR_SPEED_MPS = 0.15
 ANGULAR_SPEED_RAD_S = 0.20
@@ -41,6 +53,9 @@ class BaseMovementOutcome(Enum):
     GOAL_REJECTED = "goal_rejected"
     RESULT_TIMEOUT = "result_timeout"
     MOTION_FAILED = "motion_failed"
+    POSTURE_STATE_UNAVAILABLE = "posture_state_unavailable"
+    POSTURE_STATE_STALE = "posture_state_stale"
+    POSTURE_STATE_UNKNOWN = "posture_state_unknown"
     EXECUTION_ERROR = "execution_error"
 
 
@@ -50,6 +65,13 @@ class BaseMovementUpdate:
 
     outcome: BaseMovementOutcome
     detail: str
+
+
+class _BaseOperation(Enum):
+    MOVEMENT = "movement"
+    MOVEMENT_STAND = "movement_stand"
+    STAND = "stand"
+    SIT = "sit"
 
 
 class BaseMovementExecutor(MovementExecutor):
@@ -65,6 +87,13 @@ class BaseMovementExecutor(MovementExecutor):
         tag_state_source=None,
         robot_name: str = "",
         action_client=None,
+        posture_state_source=None,
+        ready_state_timeout_sec: float = (
+            DEFAULT_BASE_READY_STATE_TIMEOUT_SEC
+        ),
+        ready_standing_timeout_sec: float = (
+            DEFAULT_BASE_READY_STANDING_TIMEOUT_SEC
+        ),
         goal_response_timeout_sec: float = (
             DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC
         ),
@@ -82,26 +111,179 @@ class BaseMovementExecutor(MovementExecutor):
             monotonic_clock=monotonic_clock,
             logger=logger,
         )
+        self.posture_state_source = posture_state_source
+        self.ready_state_timeout_sec = self._positive_timeout(
+            ready_state_timeout_sec,
+            "Base ready state timeout",
+        )
+        self.ready_standing_timeout_sec = self._positive_timeout(
+            ready_standing_timeout_sec,
+            "Base ready standing timeout",
+        )
+
+        self._operation = None
+        self._movement_goal_builder = None
+        self._state_wait_started = None
+        self._verification_started = None
 
     def relative(self, command) -> BaseMovementUpdate:
         """Start a relative SE2 base movement."""
-        return self._start_goal(
+        return self._start_movement_goal(
             lambda: self._build_relative_goal(command)
         )
 
     def tag(self, command) -> BaseMovementUpdate:
         """Start an SE2 base movement relative to a live visible tag."""
-        return self._start_goal(
+        return self._start_movement_goal(
             lambda: self._build_tag_goal(command)
         )
 
     def stand(self) -> BaseMovementUpdate:
-        """Start Spot's native stand command."""
-        return self._start_goal(self._build_stand_goal)
+        """Start Spot's native stand command directly."""
+        if self.active:
+            return self._busy_update()
+        self._operation = _BaseOperation.STAND
+        return super()._start_goal(self._build_stand_goal)
 
     def sit(self) -> BaseMovementUpdate:
-        """Start Spot's native sit command."""
-        return self._start_goal(self._build_sit_goal)
+        """Start Spot's native sit command directly."""
+        if self.active:
+            return self._busy_update()
+        self._operation = _BaseOperation.SIT
+        return super()._start_goal(self._build_sit_goal)
+
+    def poll(self) -> BaseMovementUpdate:
+        """Advance the active base operation without blocking."""
+        if not self.active or self._operation is None:
+            return BaseMovementUpdate(
+                BaseMovementOutcome.EXECUTION_ERROR,
+                "No base movement is active",
+            )
+
+        if self._verification_started is not None:
+            return self._poll_standing_confirmation()
+
+        if self._send_goal_future is None:
+            if (
+                self._operation is _BaseOperation.MOVEMENT
+                and self._pending_goal_builder is None
+            ):
+                return self._advance_movement_start()
+            return super().poll()
+
+        if self._goal_handle is None:
+            return self._poll_goal_response()
+
+        return self._poll_result()
+
+    def _start_movement_goal(self, goal_builder) -> BaseMovementUpdate:
+        if self.active:
+            return self._busy_update()
+        self._active = True
+        self._operation = _BaseOperation.MOVEMENT
+        self._movement_goal_builder = goal_builder
+        return self._advance_movement_start()
+
+    def _advance_movement_start(self) -> BaseMovementUpdate:
+        state = self._fresh_posture_state()
+        if state is None or state is PostureState.UNKNOWN:
+            return self._wait_for_posture_state()
+
+        self._state_wait_started = None
+        if state is PostureState.SITTING:
+            self._operation = _BaseOperation.MOVEMENT_STAND
+            return self._submit_goal(self._build_stand_goal)
+
+        return self._submit_movement_goal()
+
+    def _submit_movement_goal(self) -> BaseMovementUpdate:
+        goal_builder = self._movement_goal_builder
+        if goal_builder is None:
+            return self._finish(
+                BaseMovementOutcome.EXECUTION_ERROR,
+                "Base movement has no pending goal builder",
+            )
+
+        self._operation = _BaseOperation.MOVEMENT
+        self._pending_goal_builder = goal_builder
+        return self._submit_goal(goal_builder)
+
+    def _handle_successful_result(self, result):
+        if self._operation is _BaseOperation.MOVEMENT_STAND:
+            self._reset_goal_lifecycle()
+            self._verification_started = self._monotonic_clock()
+            return self._poll_standing_confirmation()
+        return super()._handle_successful_result(result)
+
+    def _poll_standing_confirmation(self) -> BaseMovementUpdate:
+        state = self._fresh_posture_state()
+        if state is PostureState.STANDING:
+            self._verification_started = None
+            return self._submit_movement_goal()
+
+        if not self._deadline_expired(
+            self._verification_started,
+            self.ready_standing_timeout_sec,
+        ):
+            return BaseMovementUpdate(
+                BaseMovementOutcome.RUNNING,
+                "Waiting for Spot to report standing",
+            )
+
+        outcome = self._posture_state_failure_outcome(state)
+        if (
+            outcome is BaseMovementOutcome.POSTURE_STATE_UNKNOWN
+            and state is not PostureState.UNKNOWN
+        ):
+            outcome = BaseMovementOutcome.MOTION_FAILED
+        return self._finish(
+            outcome,
+            "Stand movement completed, but Spot did not report "
+            "STANDING within "
+            f"{self.ready_standing_timeout_sec:.1f} s",
+        )
+
+    def _wait_for_posture_state(self) -> BaseMovementUpdate:
+        now = self._monotonic_clock()
+        if self._state_wait_started is None:
+            self._state_wait_started = now
+
+        if now - self._state_wait_started < self.ready_state_timeout_sec:
+            return BaseMovementUpdate(
+                BaseMovementOutcome.RUNNING,
+                "Waiting for fresh base posture before movement",
+            )
+
+        state = self._fresh_posture_state()
+        return self._finish(
+            self._posture_state_failure_outcome(state),
+            "Fresh base posture was unavailable for "
+            f"{self.ready_state_timeout_sec:.1f} s",
+        )
+
+    def _fresh_posture_state(self):
+        if self.posture_state_source is None:
+            return None
+        return self.posture_state_source.posture()
+
+    def _posture_state_failure_outcome(self, state):
+        source = self.posture_state_source
+        if source is None:
+            return BaseMovementOutcome.POSTURE_STATE_UNAVAILABLE
+        if getattr(source, "last_received_at", None) is None:
+            return BaseMovementOutcome.POSTURE_STATE_UNAVAILABLE
+        if source.is_stale():
+            return BaseMovementOutcome.POSTURE_STATE_STALE
+        if state is PostureState.UNKNOWN:
+            return BaseMovementOutcome.POSTURE_STATE_UNKNOWN
+        return BaseMovementOutcome.POSTURE_STATE_UNKNOWN
+
+    def _reset_operation(self) -> None:
+        super()._reset_operation()
+        self._operation = None
+        self._movement_goal_builder = None
+        self._state_wait_started = None
+        self._verification_started = None
 
     def _build_relative_goal(self, command) -> RobotCommand.Goal:
         if command is None or not callable(
@@ -240,7 +422,6 @@ class BaseMovementExecutor(MovementExecutor):
         goal = RobotCommand.Goal()
         convert(command, goal.command)
         return goal
-
 
 
 __all__ = [
