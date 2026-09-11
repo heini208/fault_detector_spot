@@ -3,6 +3,8 @@ import signal
 import sys
 from pathlib import Path
 
+from fault_detector_spot.navigation.posture_state_source import PostureStateSource
+
 from PyQt5.QtCore import QTimer, Qt, QUrl
 from PyQt5.QtGui import QColor, QDesktopServices, QFont, QFontMetrics
 from PyQt5.QtWidgets import (
@@ -157,6 +159,7 @@ class Fault_Detector_UI(QWidget):
         if self.node:
             self.init_ros_communication()
 
+        self.posture_state_source = PostureStateSource(self.node)
         self.manipulation_controls = ManipulationControls(self)
         self.recording_controls = RecordingControls(self)
         self.navigation_controls = NavigationControls(self)
@@ -1123,6 +1126,7 @@ class Fault_Detector_UI(QWidget):
         return False
 
     def closeEvent(self, event):
+        self.posture_state_source.destroy()
         self.timer.stop()
         self.navigation_setup_timer.stop()
         self.probe_setup_timer.stop()

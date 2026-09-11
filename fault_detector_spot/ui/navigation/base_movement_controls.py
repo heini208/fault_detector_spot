@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
 from fault_detector_msgs.msg import OperationalIntent, TagElement
 from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
+from ..shared.posture_toggle import PostureToggle
 from ..shared.movement_layout import control_group
 
 
@@ -126,9 +127,11 @@ class BaseMovementControls(UIControlHelper):
 
     def _make_navigation_buttons_row(self):
         row = QHBoxLayout()
+        self.posture_button = PostureToggle(
+            self.ui, getattr(self.ui, "posture_state_source", None)
+        )
+        row.addWidget(self.posture_button)
         for label, cid in [
-            ("Stand", OperationalIntent.INTENT_STAND_UP),
-            ("Sit", OperationalIntent.INTENT_SIT_DOWN),
             (
                 "Reset State",
                 OperationalIntent.INTENT_RETURN_TO_ESTOP_STATE,

@@ -8,6 +8,7 @@ from fault_detector_spot.application.commanding.command_ids import OrientationMo
 from fault_detector_spot.manipulation.arm_state_source import ArmStateSource, ArmStowState
 from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
+from ..shared.posture_toggle import PostureToggle
 from ..shared.movement_layout import control_group
 
 
@@ -294,13 +295,10 @@ class ManipulationControls(UIControlHelper):
     def _make_control_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
 
-        stand_up_button = QPushButton("Stand Up")
-        stand_up_button.clicked.connect(
-            lambda _: self.ui.handle_simple_operation(
-                OperationalIntent.INTENT_STAND_UP
-            )
+        self.posture_button = PostureToggle(
+            self.ui, getattr(self.ui, "posture_state_source", None)
         )
-        row.addWidget(stand_up_button)
+        row.addWidget(self.posture_button)
 
         self.arm_state_button = QPushButton("● Arm state unknown")
         self.arm_state_button.clicked.connect(

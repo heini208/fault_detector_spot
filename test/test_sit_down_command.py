@@ -33,7 +33,7 @@ def test_sit_down_command_is_wired_through_all_spot_layers():
         "fault_detector_spot/navigation/base_movement_executor.py"
     )
     ui = read(
-        "fault_detector_spot/ui/navigation/base_movement_controls.py"
+        "fault_detector_spot/ui/shared/posture_toggle.py"
     )
 
     assert 'SIT_DOWN = "sit_down"' in command_ids
@@ -47,4 +47,4 @@ def test_sit_down_command_is_wired_through_all_spot_layers():
     assert "return self.executor.sit()" in behaviour
     assert "def sit(" in executor
     assert "RobotCommandBuilder.synchro_sit_command()" in executor
-    assert '("Sit", OperationalIntent.INTENT_SIT_DOWN)' in ui
+    assert "self.ui.handle_simple_operation(OperationalIntent.INTENT_SIT_DOWN)" in ui
