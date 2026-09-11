@@ -121,3 +121,52 @@ def test_arm_action_reuses_tf_preparation_without_generic_action_lifecycle():
     assert "def _prepare_move_command(" in move_action
     assert "super().update()" not in action
     assert "super().terminate(" not in action
+
+
+
+def test_ready_and_stow_delegate_to_same_arm_executor():
+    executor = read(
+        "fault_detector_spot/manipulation/arm_movement_executor.py"
+    )
+    ready = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "ready_arm_action.py"
+    )
+    stow = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "stow_arm_action.py"
+    )
+
+    assert "def prepare(" in executor
+    assert "def stow(" in executor
+    assert "RobotCommandBuilder.arm_stow_command()" in executor
+
+    assert "arm_movement_executor.prepare()" in ready
+    assert "arm_movement_executor.stow()" in stow
+    assert "RobotCommandBuilder" not in ready
+    assert "RobotCommandBuilder" not in stow
+    assert "RobotCommandActionBehaviour" not in ready
+    assert "RobotCommandActionBehaviour" not in stow
+
+
+def test_ready_motion_uses_speed_policy_not_ready_duration_parameter():
+    executor = read(
+        "fault_detector_spot/manipulation/arm_movement_executor.py"
+    )
+    config = read("config/arm_motion.yaml")
+
+    assert "ready_duration" not in executor
+    assert "ready_duration" not in config
+    assert "_build_motion_goal(" in executor
+    assert "arm.ready_lift_distance_m" in config
+
+
+def test_shared_executor_always_owns_arm_state_source():
+    resources = read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "robot_command_resources.py"
+    )
+
+    assert "arm_state_source=self.get_arm_state_source(node)" in resources
+    assert "executor.tag_state_source is None" in resources
+    assert "executor.tag_state_source = tag_state_source" in resources

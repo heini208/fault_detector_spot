@@ -15,6 +15,9 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
     ArmMovementOutcome,
 )
+from fault_detector_spot.manipulation.arm_state_source import (
+    ArmStowState,
+)
 
 
 class ManualFuture:
@@ -94,6 +97,27 @@ class ManualClock:
 
     def __call__(self):
         return self.now
+
+
+class FakeArmStateSource:
+
+    def __init__(
+        self,
+        state,
+        last_received_at=0.0,
+        stale=False,
+    ):
+        self.state = state
+        self.last_received_at = last_received_at
+        self.stale = stale
+
+    def stow_state(self):
+        if self.stale:
+            return None
+        return self.state
+
+    def is_stale(self):
+        return self.stale
 
 
 class FakeTransformer:
@@ -650,3 +674,171 @@ def test_executor_rejects_overlapping_arm_movement(monkeypatch):
     assert first.outcome is ArmMovementOutcome.RUNNING
     assert second.outcome is ArmMovementOutcome.BUSY
     assert len(client.sent_goals) == 1
+
+
+def test_prepare_noops_when_arm_is_already_deployed():
+    state = FakeArmStateSource(ArmStowState.DEPLOYED)
+    executor, client = executor_with_client(
+        FakeTransformer(),
+        arm_state_source=state,
+    )
+
+    update = executor.prepare()
+
+    assert update.outcome is ArmMovementOutcome.SUCCESS
+    assert update.detail == "Arm is already deployed"
+    assert client.sent_goals == []
+    assert not executor.active
+
+
+def test_prepare_uses_shared_speed_and_verifies_deployed(monkeypatch):
+    current = transform(
+        executor_module.GRAV_ALIGNED_BODY_FRAME_NAME,
+        "hand",
+        x=0.2,
+        y=-0.1,
+        z=0.4,
+    )
+    transformer = FakeTransformer({
+        (
+            executor_module.GRAV_ALIGNED_BODY_FRAME_NAME,
+            "hand",
+        ): current,
+    })
+    state = FakeArmStateSource(ArmStowState.STOWED)
+    send_future = ManualFuture()
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future=result_future)
+    client = FakeActionClient(send_future=send_future)
+    captured = capture_builder(monkeypatch)
+    executor, _ = executor_with_client(
+        transformer,
+        action_client=client,
+        arm_state_source=state,
+    )
+
+    started = executor.prepare()
+
+    assert started.outcome is ArmMovementOutcome.RUNNING
+    args = captured["args"]
+    assert args[0] == pytest.approx(0.2)
+    assert args[1] == pytest.approx(-0.1)
+    assert args[2] == pytest.approx(0.5)
+    assert args[8] == pytest.approx(1.0)
+
+    send_future.set_result(handle)
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=True)
+        )
+    )
+    waiting = executor.poll()
+    assert waiting.outcome is ArmMovementOutcome.RUNNING
+    assert "deployed" in waiting.detail
+
+    state.state = ArmStowState.DEPLOYED
+    completed = executor.poll()
+
+    assert completed.outcome is ArmMovementOutcome.SUCCESS
+    assert completed.detail == "Arm deployed"
+    assert not executor.active
+
+
+def test_prepare_reports_missing_arm_state_after_bounded_wait():
+    clock = ManualClock()
+    state = FakeArmStateSource(
+        None,
+        last_received_at=None,
+        stale=True,
+    )
+    executor, client = executor_with_client(
+        FakeTransformer(),
+        arm_state_source=state,
+        monotonic_clock=clock,
+        ready_state_timeout_sec=2.0,
+    )
+
+    first = executor.prepare()
+    assert first.outcome is ArmMovementOutcome.RUNNING
+    assert client.sent_goals == []
+
+    clock.now = 2.0
+    failed = executor.poll()
+
+    assert (
+        failed.outcome
+        is ArmMovementOutcome.ARM_STATE_UNAVAILABLE
+    )
+    assert "2.0 s" in failed.detail
+    assert not executor.active
+
+
+def test_stow_noops_when_arm_is_already_stowed():
+    state = FakeArmStateSource(ArmStowState.STOWED)
+    executor, client = executor_with_client(
+        FakeTransformer(),
+        arm_state_source=state,
+    )
+
+    update = executor.stow()
+
+    assert update.outcome is ArmMovementOutcome.SUCCESS
+    assert update.detail == "Arm is already stowed"
+    assert client.sent_goals == []
+    assert not executor.active
+
+
+def test_stow_uses_native_command_and_verifies_stowed(monkeypatch):
+    state = FakeArmStateSource(ArmStowState.DEPLOYED)
+    send_future = ManualFuture()
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future=result_future)
+    client = FakeActionClient(send_future=send_future)
+    captured = {}
+
+    def build_stow():
+        captured["called"] = True
+        return object()
+
+    monkeypatch.setattr(
+        executor_module.RobotCommandBuilder,
+        "arm_stow_command",
+        build_stow,
+    )
+    monkeypatch.setattr(
+        executor_module,
+        "convert",
+        lambda source, target: None,
+    )
+    executor, _ = executor_with_client(
+        FakeTransformer(),
+        action_client=client,
+        arm_state_source=state,
+    )
+
+    started = executor.stow()
+
+    assert started.outcome is ArmMovementOutcome.RUNNING
+    assert captured["called"]
+    assert len(client.sent_goals) == 1
+
+    send_future.set_result(handle)
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=True)
+        )
+    )
+    waiting = executor.poll()
+    assert waiting.outcome is ArmMovementOutcome.RUNNING
+    assert "stowed" in waiting.detail
+
+    state.state = ArmStowState.STOWED
+    completed = executor.poll()
+
+    assert completed.outcome is ArmMovementOutcome.SUCCESS
+    assert completed.detail == "Arm stowed"
+    assert not executor.active

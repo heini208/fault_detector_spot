@@ -24,6 +24,9 @@ from fault_detector_spot.inspection.model.sensor_models import (
 from fault_detector_spot.manipulation.arm_motion_speed import (
     ArmMotionSpeedPolicy,
 )
+from fault_detector_spot.manipulation.arm_state_source import (
+    ArmStowState,
+)
 from fault_detector_spot.shared.geometry.transforms import (
     compose_poses,
     inverse_pose,
@@ -37,6 +40,18 @@ from fault_detector_spot.shared.ros.tf_transforms import (
 DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC = 2.0
 DEFAULT_RESULT_TIMEOUT_SEC = 30.0
 
+READY_LIFT_DISTANCE_PARAMETER = "arm.ready_lift_distance_m"
+READY_STATE_TIMEOUT_PARAMETER = "arm.ready_state_timeout_sec"
+READY_TF_TIMEOUT_PARAMETER = "arm.ready_tf_timeout_sec"
+READY_DEPLOYED_TIMEOUT_PARAMETER = "arm.ready_deployed_timeout_sec"
+STOW_STATE_TIMEOUT_PARAMETER = "arm.stow_state_timeout_sec"
+
+DEFAULT_READY_LIFT_DISTANCE_M = 0.10
+DEFAULT_READY_STATE_TIMEOUT_SEC = 2.0
+DEFAULT_READY_TF_TIMEOUT_SEC = 2.0
+DEFAULT_READY_DEPLOYED_TIMEOUT_SEC = 2.0
+DEFAULT_STOW_STATE_TIMEOUT_SEC = 2.0
+
 
 class ArmMovementOutcome(Enum):
     """Typed outcome of one executor lifecycle update."""
@@ -49,6 +64,9 @@ class ArmMovementOutcome(Enum):
     GOAL_REJECTED = "goal_rejected"
     RESULT_TIMEOUT = "result_timeout"
     MOTION_FAILED = "motion_failed"
+    ARM_STATE_UNAVAILABLE = "arm_state_unavailable"
+    ARM_STATE_STALE = "arm_state_stale"
+    ARM_STATE_UNKNOWN = "arm_state_unknown"
     EXECUTION_ERROR = "execution_error"
 
 
@@ -58,6 +76,12 @@ class ArmMovementUpdate:
 
     outcome: ArmMovementOutcome
     detail: str
+
+
+class _ArmOperation(Enum):
+    MOVEMENT = "movement"
+    PREPARE = "prepare"
+    STOW = "stow"
 
 
 class ArmMovementExecutor:
@@ -70,6 +94,14 @@ class ArmMovementExecutor:
         robot_name: str = "",
         speed_policy=None,
         action_client=None,
+        arm_state_source=None,
+        ready_lift_distance_m: float = DEFAULT_READY_LIFT_DISTANCE_M,
+        ready_state_timeout_sec: float = DEFAULT_READY_STATE_TIMEOUT_SEC,
+        ready_tf_timeout_sec: float = DEFAULT_READY_TF_TIMEOUT_SEC,
+        ready_deployed_timeout_sec: float = (
+            DEFAULT_READY_DEPLOYED_TIMEOUT_SEC
+        ),
+        stow_state_timeout_sec: float = DEFAULT_STOW_STATE_TIMEOUT_SEC,
         goal_response_timeout_sec: float = (
             DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC
         ),
@@ -93,6 +125,27 @@ class ArmMovementExecutor:
             else ArmMotionSpeedPolicy()
         )
         self.action_client = action_client
+        self.arm_state_source = arm_state_source
+        self.ready_lift_distance_m = self._positive_timeout(
+            ready_lift_distance_m,
+            "Ready arm lift distance",
+        )
+        self.ready_state_timeout_sec = self._positive_timeout(
+            ready_state_timeout_sec,
+            "Ready arm state timeout",
+        )
+        self.ready_tf_timeout_sec = self._positive_timeout(
+            ready_tf_timeout_sec,
+            "Ready arm TF timeout",
+        )
+        self.ready_deployed_timeout_sec = self._positive_timeout(
+            ready_deployed_timeout_sec,
+            "Ready arm deployed timeout",
+        )
+        self.stow_state_timeout_sec = self._positive_timeout(
+            stow_state_timeout_sec,
+            "Stow arm state timeout",
+        )
         self.goal_response_timeout_sec = self._positive_timeout(
             goal_response_timeout_sec,
             "Goal response timeout",
@@ -104,15 +157,20 @@ class ArmMovementExecutor:
         self._monotonic_clock = monotonic_clock
         self._logger = logger
 
+        self._operation = None
+        self._operation_speed = None
         self._send_goal_future = None
         self._goal_handle = None
         self._result_future = None
         self._goal_sent_monotonic = None
         self._result_started_monotonic = None
+        self._state_wait_started = None
+        self._tf_wait_started = None
+        self._verification_started = None
 
     @property
     def active(self) -> bool:
-        return self._send_goal_future is not None
+        return self._operation is not None
 
     def relative(
         self,
@@ -179,12 +237,43 @@ class ArmMovementExecutor:
             )
         )
 
+    def prepare(
+        self,
+        speed=None,
+    ) -> ArmMovementUpdate:
+        """Prepare a stowed arm with a short controlled upward motion."""
+        if self.active:
+            return self._busy_update()
+        self._operation = _ArmOperation.PREPARE
+        self._operation_speed = speed
+        return self._advance_prepare_start()
+
+    def stow(self) -> ArmMovementUpdate:
+        """Stow a deployed arm through Spot's native stow command."""
+        if self.active:
+            return self._busy_update()
+        self._operation = _ArmOperation.STOW
+        return self._advance_stow_start()
+
     def poll(self) -> ArmMovementUpdate:
-        """Advance the active RobotCommand lifecycle without blocking."""
-        if self._send_goal_future is None:
+        """Advance the active arm operation without blocking."""
+        if self._operation is None:
             return ArmMovementUpdate(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "No arm movement is active",
+            )
+
+        if self._verification_started is not None:
+            return self._poll_state_confirmation()
+
+        if self._send_goal_future is None:
+            if self._operation is _ArmOperation.PREPARE:
+                return self._advance_prepare_start()
+            if self._operation is _ArmOperation.STOW:
+                return self._advance_stow_start()
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Active arm movement has no RobotCommand goal",
             )
 
         if self._goal_handle is None:
@@ -193,23 +282,24 @@ class ArmMovementExecutor:
         return self._poll_result()
 
     def cancel(self) -> None:
-        """Request cancellation of the active movement and release it."""
+        """Request cancellation of the active operation and release it."""
         if not self.active:
             return
         self._request_cancel()
-        self._reset_lifecycle()
+        self._reset_operation()
 
     def shutdown(self) -> None:
         self.cancel()
 
     def _start_goal(self, goal_builder) -> ArmMovementUpdate:
         if self.active:
-            return ArmMovementUpdate(
-                ArmMovementOutcome.BUSY,
-                "Another arm movement is already active",
-            )
+            return self._busy_update()
+        self._operation = _ArmOperation.MOVEMENT
+        return self._submit_goal(goal_builder)
+
+    def _submit_goal(self, goal_builder) -> ArmMovementUpdate:
         if self.action_client is None:
-            return ArmMovementUpdate(
+            return self._finish(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Arm movement executor has no RobotCommand action client",
             )
@@ -219,7 +309,7 @@ class ArmMovementExecutor:
                 timeout_sec=0.0
             )
         except Exception as exception:
-            return ArmMovementUpdate(
+            return self._finish(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 f"RobotCommand action server check failed: {exception}",
             )
@@ -228,7 +318,7 @@ class ArmMovementExecutor:
                 self.robot_name,
                 "robot_command",
             )
-            return ArmMovementUpdate(
+            return self._finish(
                 ArmMovementOutcome.ACTION_SERVER_UNAVAILABLE,
                 f"Action server '{action_name}' unavailable",
             )
@@ -236,7 +326,7 @@ class ArmMovementExecutor:
         try:
             goal = goal_builder()
         except Exception as exception:
-            return ArmMovementUpdate(
+            return self._finish(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 f"Arm goal preparation failed: {exception}",
             )
@@ -244,12 +334,12 @@ class ArmMovementExecutor:
         try:
             future = self.action_client.send_goal_async(goal)
         except Exception as exception:
-            return ArmMovementUpdate(
+            return self._finish(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 f"Arm goal submission failed: {exception}",
             )
         if future is None:
-            return ArmMovementUpdate(
+            return self._finish(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "RobotCommand action client returned no goal future",
             )
@@ -346,6 +436,14 @@ class ArmMovementExecutor:
             )
 
         if bool(getattr(result, "success", False)):
+            if self._operation is _ArmOperation.PREPARE:
+                self._reset_goal_lifecycle()
+                self._verification_started = self._monotonic_clock()
+                return self._poll_state_confirmation()
+            if self._operation is _ArmOperation.STOW:
+                self._reset_goal_lifecycle()
+                self._verification_started = self._monotonic_clock()
+                return self._poll_state_confirmation()
             return self._finish(
                 ArmMovementOutcome.SUCCESS,
                 "Succeeded",
@@ -396,15 +494,202 @@ class ArmMovementExecutor:
             outcome,
             str(detail).strip(),
         )
-        self._reset_lifecycle()
+        self._reset_operation()
         return update
 
-    def _reset_lifecycle(self) -> None:
+    def _reset_goal_lifecycle(self) -> None:
         self._send_goal_future = None
         self._goal_handle = None
         self._result_future = None
         self._goal_sent_monotonic = None
         self._result_started_monotonic = None
+
+    def _reset_operation(self) -> None:
+        self._reset_goal_lifecycle()
+        self._operation = None
+        self._operation_speed = None
+        self._state_wait_started = None
+        self._tf_wait_started = None
+        self._verification_started = None
+
+    def _advance_prepare_start(self) -> ArmMovementUpdate:
+        state = self._fresh_arm_state()
+        if state is None or state is ArmStowState.UNKNOWN:
+            return self._wait_for_arm_state(
+                self.ready_state_timeout_sec,
+                "Waiting for manipulator stow state",
+            )
+
+        self._state_wait_started = None
+        if state is ArmStowState.DEPLOYED:
+            return self._finish(
+                ArmMovementOutcome.SUCCESS,
+                "Arm is already deployed",
+            )
+
+        try:
+            hand_transform = self.tf_listener.lookup_a_tform_b(
+                GRAV_ALIGNED_BODY_FRAME_NAME,
+                HAND_FRAME_NAME,
+                timeout_sec=0.0,
+            )
+        except Exception as exception:
+            return self._wait_for_ready_transform(exception)
+
+        self._tf_wait_started = None
+        current_hand = self._pose_from_transform(
+            hand_transform,
+            GRAV_ALIGNED_BODY_FRAME_NAME,
+        )
+        target_hand = deepcopy(current_hand)
+        target_hand.pose.position.z += self.ready_lift_distance_m
+
+        return self._submit_goal(
+            lambda: self._build_motion_goal(
+                current_hand,
+                target_hand,
+                self._operation_speed,
+            )
+        )
+
+    def _advance_stow_start(self) -> ArmMovementUpdate:
+        state = self._fresh_arm_state()
+        if state is None or state is ArmStowState.UNKNOWN:
+            return self._wait_for_arm_state(
+                self.stow_state_timeout_sec,
+                "Waiting for manipulator stow state",
+            )
+
+        self._state_wait_started = None
+        if state is ArmStowState.STOWED:
+            return self._finish(
+                ArmMovementOutcome.SUCCESS,
+                "Arm is already stowed",
+            )
+
+        return self._submit_goal(self._build_stow_goal)
+
+    def _poll_state_confirmation(self) -> ArmMovementUpdate:
+        if self._operation is _ArmOperation.PREPARE:
+            expected = ArmStowState.DEPLOYED
+            timeout_sec = self.ready_deployed_timeout_sec
+            success_detail = "Arm deployed"
+            failure_detail = (
+                "Ready arm movement completed, but Spot did not report "
+                f"DEPLOYED within {timeout_sec:.1f} s"
+            )
+        elif self._operation is _ArmOperation.STOW:
+            expected = ArmStowState.STOWED
+            timeout_sec = self.stow_state_timeout_sec
+            success_detail = "Arm stowed"
+            failure_detail = (
+                "Stow arm movement completed, but Spot did not report "
+                f"STOWED within {timeout_sec:.1f} s"
+            )
+        else:
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Arm state verification has no matching operation",
+            )
+
+        state = self._fresh_arm_state()
+        if state is expected:
+            return self._finish(
+                ArmMovementOutcome.SUCCESS,
+                success_detail,
+            )
+
+        if not self._deadline_expired(
+            self._verification_started,
+            timeout_sec,
+        ):
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                f"Waiting for Spot to report arm {expected.value}",
+            )
+
+        outcome = self._arm_state_failure_outcome(state)
+        if (
+            outcome is ArmMovementOutcome.ARM_STATE_UNKNOWN
+            and state is not ArmStowState.UNKNOWN
+        ):
+            outcome = ArmMovementOutcome.MOTION_FAILED
+        return self._finish(outcome, failure_detail)
+
+    def _wait_for_arm_state(
+        self,
+        timeout_sec: float,
+        detail: str,
+    ) -> ArmMovementUpdate:
+        now = self._monotonic_clock()
+        if self._state_wait_started is None:
+            self._state_wait_started = now
+
+        if now - self._state_wait_started < timeout_sec:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                detail,
+            )
+
+        state = self._fresh_arm_state()
+        outcome = self._arm_state_failure_outcome(state)
+        return self._finish(
+            outcome,
+            "Fresh manipulator stow state was unavailable for "
+            f"{timeout_sec:.1f} s",
+        )
+
+    def _wait_for_ready_transform(
+        self,
+        exception: Exception,
+    ) -> ArmMovementUpdate:
+        now = self._monotonic_clock()
+        if self._tf_wait_started is None:
+            self._tf_wait_started = now
+
+        if now - self._tf_wait_started < self.ready_tf_timeout_sec:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                "Waiting for ready-arm hand pose transform "
+                f"{GRAV_ALIGNED_BODY_FRAME_NAME} -> {HAND_FRAME_NAME}",
+            )
+
+        return self._finish(
+            ArmMovementOutcome.EXECUTION_ERROR,
+            "Ready arm hand transform "
+            f"{GRAV_ALIGNED_BODY_FRAME_NAME} -> {HAND_FRAME_NAME} "
+            f"was unavailable for {self.ready_tf_timeout_sec:.1f} s: "
+            f"{exception}",
+        )
+
+    def _fresh_arm_state(self):
+        if self.arm_state_source is None:
+            return None
+        return self.arm_state_source.stow_state()
+
+    def _arm_state_failure_outcome(self, state):
+        source = self.arm_state_source
+        if source is None:
+            return ArmMovementOutcome.ARM_STATE_UNAVAILABLE
+        if getattr(source, "last_received_at", None) is None:
+            return ArmMovementOutcome.ARM_STATE_UNAVAILABLE
+        if source.is_stale():
+            return ArmMovementOutcome.ARM_STATE_STALE
+        if state is ArmStowState.UNKNOWN:
+            return ArmMovementOutcome.ARM_STATE_UNKNOWN
+        return ArmMovementOutcome.ARM_STATE_UNKNOWN
+
+    def _busy_update(self) -> ArmMovementUpdate:
+        return ArmMovementUpdate(
+            ArmMovementOutcome.BUSY,
+            "Another arm movement is already active",
+        )
+
+    def _build_stow_goal(self) -> RobotCommand.Goal:
+        stow_command = RobotCommandBuilder.arm_stow_command()
+        goal = RobotCommand.Goal()
+        convert(stow_command, goal.command)
+        return goal
 
     def _build_relative_goal(
         self,

@@ -12,6 +12,16 @@ from fault_detector_spot.manipulation.arm_motion_speed import (
 )
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
+    DEFAULT_READY_DEPLOYED_TIMEOUT_SEC,
+    DEFAULT_READY_LIFT_DISTANCE_M,
+    DEFAULT_READY_STATE_TIMEOUT_SEC,
+    DEFAULT_READY_TF_TIMEOUT_SEC,
+    DEFAULT_STOW_STATE_TIMEOUT_SEC,
+    READY_DEPLOYED_TIMEOUT_PARAMETER,
+    READY_LIFT_DISTANCE_PARAMETER,
+    READY_STATE_TIMEOUT_PARAMETER,
+    READY_TF_TIMEOUT_PARAMETER,
+    STOW_STATE_TIMEOUT_PARAMETER,
 )
 from fault_detector_spot.manipulation.arm_state_source import (
     ArmStateSource,
@@ -86,17 +96,43 @@ class RobotCommandResources:
                         node,
                         robot_name,
                     ),
+                    arm_state_source=self.get_arm_state_source(node),
+                    ready_lift_distance_m=self._positive_parameter(
+                        node,
+                        READY_LIFT_DISTANCE_PARAMETER,
+                        DEFAULT_READY_LIFT_DISTANCE_M,
+                    ),
+                    ready_state_timeout_sec=self._positive_parameter(
+                        node,
+                        READY_STATE_TIMEOUT_PARAMETER,
+                        DEFAULT_READY_STATE_TIMEOUT_SEC,
+                    ),
+                    ready_tf_timeout_sec=self._positive_parameter(
+                        node,
+                        READY_TF_TIMEOUT_PARAMETER,
+                        DEFAULT_READY_TF_TIMEOUT_SEC,
+                    ),
+                    ready_deployed_timeout_sec=self._positive_parameter(
+                        node,
+                        READY_DEPLOYED_TIMEOUT_PARAMETER,
+                        DEFAULT_READY_DEPLOYED_TIMEOUT_SEC,
+                    ),
+                    stow_state_timeout_sec=self._positive_parameter(
+                        node,
+                        STOW_STATE_TIMEOUT_PARAMETER,
+                        DEFAULT_STOW_STATE_TIMEOUT_SEC,
+                    ),
                     logger=node.get_logger(),
                 )
                 self._arm_movement_executors[robot_name] = executor
-            elif (
-                tag_state_source is not None
-                and executor.tag_state_source is not tag_state_source
-            ):
-                raise RuntimeError(
-                    "Arm movement executor already uses another "
-                    "tag state source"
-                )
+            elif tag_state_source is not None:
+                if executor.tag_state_source is None:
+                    executor.tag_state_source = tag_state_source
+                elif executor.tag_state_source is not tag_state_source:
+                    raise RuntimeError(
+                        "Arm movement executor already uses another "
+                        "tag state source"
+                    )
             return executor
 
     def close(self):
@@ -142,6 +178,18 @@ class RobotCommandResources:
                         f"Could not close shared {resource_name}: "
                         f"{exception}"
                     )
+
+
+    @staticmethod
+    def _positive_parameter(node, name: str, default: float) -> float:
+        if not node.has_parameter(name):
+            node.declare_parameter(name, default)
+        value = float(node.get_parameter(name).value)
+        if value <= 0.0:
+            raise ValueError(
+                f"Parameter '{name}' must be positive"
+            )
+        return value
 
     def _bind_node(self, node):
         if node is None:
