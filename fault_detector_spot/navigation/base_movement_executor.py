@@ -108,6 +108,10 @@ class BaseMovementExecutor(MovementExecutor):
                 "compute_goal_pose()"
             )
 
+        command = self._prepare_move_command(
+            command,
+            ODOM_FRAME_NAME,
+        )
         target = command.compute_goal_pose(self.tf_listener)
         target = self._normalize_to_odom(target)
         return self._build_se2_goal(
@@ -137,6 +141,10 @@ class BaseMovementExecutor(MovementExecutor):
             )
 
         command.tag_pose = deepcopy(tag.pose)
+        command = self._prepare_move_command(
+            command,
+            ODOM_FRAME_NAME,
+        )
         target = command.compute_goal_pose(self.tf_listener)
         target = self._normalize_to_odom(target)
         return self._build_se2_goal(

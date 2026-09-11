@@ -28,8 +28,6 @@ class BaseMovementBehaviour(MovementBehaviour):
 
     def _ensure_executor(self) -> None:
         if self.executor is not None:
-            if self.tf_listener is None:
-                self.tf_listener = self.executor.tf_listener
             return
 
         if self.robot_command_resources is None:
@@ -45,7 +43,6 @@ class BaseMovementBehaviour(MovementBehaviour):
                 robot_name=self.robot_name,
             )
         )
-        self.tf_listener = self.executor.tf_listener
 
 
 __all__ = ["BaseMovementBehaviour"]

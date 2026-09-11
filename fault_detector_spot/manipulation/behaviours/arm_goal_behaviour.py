@@ -1,7 +1,5 @@
 """Behavior-tree adapter for geometric arm goal commands."""
 
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
-
 from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
     ArmMovementBehaviour,
 )
@@ -14,13 +12,7 @@ from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import
 
 
 class ArmGoalBehaviour(ArmMovementBehaviour):
-    """Prepare one arm goal and dispatch it to ArmMovementExecutor."""
-
-    def _prepare_operation(self):
-        return self._prepare_move_command(
-            self._last_command(),
-            final_frame=GRAV_ALIGNED_BODY_FRAME_NAME,
-        )
+    """Dispatch one arm goal to ArmMovementExecutor."""
 
     def _start_operation(self):
         command = self._last_command()

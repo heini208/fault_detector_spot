@@ -50,7 +50,7 @@ def test_arm_behavior_hierarchy_has_one_common_move_adapter():
     assert "class StowArmBehaviour(ArmMovementBehaviour)" in stow
 
 
-def test_common_movement_behaviour_adapts_tree_and_shared_goal_preparation():
+def test_common_movement_behaviour_only_adapts_tree_to_executor():
     move = read(
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "movement_behaviour.py"
@@ -62,8 +62,10 @@ def test_common_movement_behaviour_adapts_tree_and_shared_goal_preparation():
     assert "get_result_async" not in move
     assert "cancel_goal_async" not in move
     assert "RobotCommandBuilder" not in move
-    assert "def _prepare_move_command(" in move
-    assert "def _resolve_and_transform_offset_if_tag(" in move
+    assert "_prepare_move_command" not in move
+    assert "_resolve_and_transform_offset_if_tag" not in move
+    assert "_resolve_tag_alias" not in move
+    assert "_can_transform" not in move
 
 
 def test_ready_and_stow_are_small_executor_dispatchers():
@@ -86,16 +88,17 @@ def test_ready_and_stow_are_small_executor_dispatchers():
     assert "def terminate(" not in stow
 
 
-def test_arm_goal_behaviour_uses_shared_goal_preparation():
+def test_arm_goal_behaviour_only_dispatches_to_executor():
     goal = read(
         "fault_detector_spot/manipulation/behaviours/"
         "arm_goal_behaviour.py"
     )
 
-    assert "_prepare_move_command(" in goal
-    assert "GRAV_ALIGNED_BODY_FRAME_NAME" in goal
-    assert "_resolve_and_transform_offset_if_tag" not in goal
-    assert "_resolve_tag_alias" not in goal
+    assert "_prepare_operation" not in goal
+    assert "_prepare_move_command" not in goal
+    assert "GRAV_ALIGNED_BODY_FRAME_NAME" not in goal
+    assert "executor.relative(command)" in goal
+    assert "executor.tag_probe(command)" in goal
 
 
 def test_arm_executor_inherits_shared_robot_command_lifecycle():
@@ -198,3 +201,25 @@ def test_arm_and_base_executors_share_only_the_lifecycle_parent():
     assert "_handle_successful_result" in arm
     assert "_build_probe_motion_goal" in arm
     assert "_build_se2_goal" in base
+
+
+
+def test_shared_executor_owns_live_movement_geometry_preparation():
+    shared = read(
+        "fault_detector_spot/shared/execution/movement_executor.py"
+    )
+    geometry = read(
+        "fault_detector_spot/shared/geometry/movement_geometry.py"
+    )
+    arm = read(
+        "fault_detector_spot/manipulation/arm_movement_executor.py"
+    )
+    base = read(
+        "fault_detector_spot/navigation/base_movement_executor.py"
+    )
+
+    assert "MovementGeometryResolver(" in shared
+    assert "def _prepare_move_command(" in shared
+    assert "def resolve_and_transform_offset_if_tag(" in geometry
+    assert "_prepare_move_command(" in arm
+    assert "_prepare_move_command(" in base

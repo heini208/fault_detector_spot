@@ -5,6 +5,11 @@ import time
 
 from synchros2.utilities import namespace_with
 
+from fault_detector_spot.shared.geometry.movement_geometry import (
+    MovementGeometryResolver,
+    MovementGeometryUnavailable,
+)
+
 
 DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC = 2.0
 DEFAULT_RESULT_TIMEOUT_SEC = 30.0
@@ -51,6 +56,9 @@ class MovementExecutor:
         )
         self._monotonic_clock = monotonic_clock
         self._logger = logger
+        self.geometry_resolver = MovementGeometryResolver(
+            tf_listener
+        )
 
         self._active = False
         self._send_goal_future = None
@@ -58,6 +66,7 @@ class MovementExecutor:
         self._result_future = None
         self._goal_sent_monotonic = None
         self._result_started_monotonic = None
+        self._pending_goal_builder = None
 
     @property
     def active(self) -> bool:
@@ -72,6 +81,10 @@ class MovementExecutor:
             )
 
         if self._send_goal_future is None:
+            if self._pending_goal_builder is not None:
+                return self._submit_goal(
+                    self._pending_goal_builder
+                )
             return self._finish(
                 self.OUTCOME_TYPE.EXECUTION_ERROR,
                 f"Active {self.MOVEMENT_NAME} movement has no goal future",
@@ -97,6 +110,7 @@ class MovementExecutor:
             return self._busy_update()
 
         self._active = True
+        self._pending_goal_builder = goal_builder
         return self._submit_goal(goal_builder)
 
     def _submit_goal(self, goal_builder):
@@ -129,6 +143,11 @@ class MovementExecutor:
 
         try:
             goal = goal_builder()
+        except MovementGeometryUnavailable as exception:
+            return self._new_update(
+                self.OUTCOME_TYPE.RUNNING,
+                str(exception),
+            )
         except Exception as exception:
             return self._finish(
                 self.OUTCOME_TYPE.EXECUTION_ERROR,
@@ -151,6 +170,7 @@ class MovementExecutor:
                 "RobotCommand action client returned no goal future",
             )
 
+        self._pending_goal_builder = None
         self._send_goal_future = future
         self._goal_sent_monotonic = self._monotonic_clock()
         return self._new_update(
@@ -312,7 +332,18 @@ class MovementExecutor:
 
     def _reset_operation(self) -> None:
         self._reset_goal_lifecycle()
+        self._pending_goal_builder = None
         self._active = False
+
+    def _prepare_move_command(
+        self,
+        command,
+        final_frame: str,
+    ):
+        return self.geometry_resolver.prepare_move_command(
+            command,
+            final_frame,
+        )
 
     def _busy_update(self):
         return self._new_update(

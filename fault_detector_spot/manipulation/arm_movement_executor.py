@@ -258,10 +258,7 @@ class ArmMovementExecutor(MovementExecutor):
                 return self._advance_prepare_start()
             if self._operation is _ArmOperation.STOW:
                 return self._advance_stow_start()
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "Active arm movement has no RobotCommand goal",
-            )
+            return super().poll()
 
         if self._goal_handle is None:
             return self._poll_goal_response()
@@ -478,6 +475,10 @@ class ArmMovementExecutor(MovementExecutor):
                 "compute_goal_pose()"
             )
 
+        command = self._prepare_move_command(
+            command,
+            GRAV_ALIGNED_BODY_FRAME_NAME,
+        )
         relative_target = command.compute_goal_pose(
             self.tf_listener
         )
@@ -596,6 +597,10 @@ class ArmMovementExecutor(MovementExecutor):
             )
 
         command.tag_pose = deepcopy(tag.pose)
+        command = self._prepare_move_command(
+            command,
+            GRAV_ALIGNED_BODY_FRAME_NAME,
+        )
         probe_target = command.compute_goal_pose(
             self.tf_listener
         )

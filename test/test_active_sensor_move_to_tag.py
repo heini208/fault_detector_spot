@@ -10,8 +10,8 @@ from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
     OrientationModes,
 )
-from fault_detector_spot.manipulation.behaviours.arm_goal_behaviour import (
-    ArmGoalBehaviour,
+from fault_detector_spot.shared.geometry.movement_geometry import (
+    MovementGeometryResolver,
 )
 from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import (
     ManipulatorToTagCommand,
@@ -105,11 +105,10 @@ def tag_alias_command(orientation_mode):
 
 
 def resolver(transformer):
-    action = object.__new__(ArmGoalBehaviour)
-    action.tf_listener = transformer
-    action._resolve_tag_alias = lambda frame_id: "tag36h11:7"
-    action._can_transform = lambda to_frame, from_frame: True
-    return action
+    geometry = MovementGeometryResolver(transformer)
+    geometry.resolve_tag_alias = lambda frame_id: "tag36h11:7"
+    geometry.can_transform = lambda to_frame, from_frame: True
+    return geometry
 
 
 def test_tag_command_returns_requested_probe_pose_not_hand_pose():
@@ -158,7 +157,7 @@ def test_relative_to_tag_keeps_orientation_offset_local_to_tag():
 
     assert resolver(
         transformer
-    )._resolve_and_transform_offset_if_tag(command)
+    ).resolve_and_transform_offset_if_tag(command)
 
     assert command.offset.header.frame_id == "body"
     assert command.offset.pose.orientation.x == pytest.approx(0.0)
@@ -175,7 +174,7 @@ def test_custom_zero_orientation_still_uses_tag_heading():
 
     assert resolver(
         transformer
-    )._resolve_and_transform_offset_if_tag(command)
+    ).resolve_and_transform_offset_if_tag(command)
 
     half_yaw = math.radians(25.0) * 0.5
     assert command.offset.pose.orientation.x == pytest.approx(0.0)
@@ -194,7 +193,7 @@ def test_relative_to_tag_points_probe_positive_x_along_tag_negative_z():
 
     assert resolver(
         transformer
-    )._resolve_and_transform_offset_if_tag(command)
+    ).resolve_and_transform_offset_if_tag(command)
     goal = command.compute_goal_pose(transformer)
 
     half_yaw = math.radians(25.0) * 0.5

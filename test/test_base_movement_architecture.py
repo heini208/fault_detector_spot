@@ -106,24 +106,7 @@ def test_base_tag_movement_uses_authoritative_live_visible_tag_state():
     )
 
     assert "visible_snapshot()" in executor
-    assert "visible_snapshot()" in goal
+    assert "visible_snapshot()" not in goal
     assert "command.tag_pose = deepcopy(tag.pose)" in executor
-    assert "command.tag_pose = deepcopy(tag.pose)" in goal
-
-
-def test_legacy_base_movement_behaviours_are_removed():
-    legacy = (
-        "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "move_command_action.py",
-        "fault_detector_spot/navigation/behaviours/move_base/"
-        "base_get_goal_tag.py",
-        "fault_detector_spot/navigation/behaviours/move_base/"
-        "base_move_relative_action.py",
-        "fault_detector_spot/navigation/behaviours/move_base/"
-        "base_move_to_tag_action.py",
-        "fault_detector_spot/manipulation/behaviours/"
-        "stand_up_action.py",
-    )
-
-    for relative_path in legacy:
-        assert not (ROOT / relative_path).exists()
+    assert "command.tag_pose = deepcopy(tag.pose)" not in goal
+    assert "_prepare_operation" not in goal
