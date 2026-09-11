@@ -46,9 +46,6 @@ from fault_detector_spot.manipulation.behaviours.arm_goal_behaviour import (
 from fault_detector_spot.manipulation.behaviours.ready_arm_behaviour import (
     ReadyArmBehaviour,
 )
-from fault_detector_spot.manipulation.behaviours.stand_up_action import (
-    StandUpActionSimple,
-)
 from fault_detector_spot.manipulation.behaviours.stow_arm_behaviour import (
     StowArmBehaviour,
 )
@@ -67,14 +64,11 @@ from fault_detector_spot.navigation.behaviours.cancel_movement import (
 from fault_detector_spot.navigation.behaviours.landmark_relocalizer import (
     LandmarkRelocalizer,
 )
-from fault_detector_spot.navigation.behaviours.move_base.base_get_goal_tag import (
-    BaseGetGoalTag,
+from fault_detector_spot.navigation.behaviours.base_goal_behaviour import (
+    BaseGoalBehaviour,
 )
-from fault_detector_spot.navigation.behaviours.move_base.base_move_relative_action import (
-    BaseMoveRelativeAction,
-)
-from fault_detector_spot.navigation.behaviours.move_base.base_move_to_tag_action import (
-    BaseMoveToTagAction,
+from fault_detector_spot.navigation.behaviours.stand_up_behaviour import (
+    StandUpBehaviour,
 )
 from fault_detector_spot.navigation.behaviours.navigate_to_goal_pose import (
     NavigateToGoalPose,
@@ -308,11 +302,19 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
                 robot_command_resources=robot_command_resources,
             ),
         ),
-        (CommandID.MOVE_BASE_TO_TAG, build_base_goal_tree),
+        (
+            CommandID.MOVE_BASE_TO_TAG,
+            lambda n: BaseGoalBehaviour(
+                name="BaseToTagBehaviour",
+                tag_state_source=tag_state_source,
+                robot_command_resources=robot_command_resources,
+            ),
+        ),
         (
             CommandID.MOVE_BASE_RELATIVE,
-            lambda n: BaseMoveRelativeAction(
-                name="BaseMoveRelativeAction",
+            lambda n: BaseGoalBehaviour(
+                name="BaseRelativeBehaviour",
+                tag_state_source=tag_state_source,
                 robot_command_resources=robot_command_resources,
             ),
         ),
@@ -337,8 +339,8 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         ),
         (
             CommandID.STAND_UP,
-            lambda n: StandUpActionSimple(
-                name="StandUpAction",
+            lambda n: StandUpBehaviour(
+                name="StandUpBehaviour",
                 robot_command_resources=robot_command_resources,
             ),
         ),
@@ -532,29 +534,6 @@ def match_command_checker(
         ),
     )
 
-
-
-def build_base_goal_tree(
-    node: rclpy.node.Node,
-) -> py_trees.behaviour.Behaviour:
-    base_sequence = py_trees.composites.Sequence(
-        "BaseMoveToTagSequence",
-        memory=True,
-    )
-    get_goal = BaseGetGoalTag(
-        name="BaseGetGoalTag"
-    )
-    move_base = BaseMoveToTagAction(
-        name="BaseMoveToTagAction",
-        robot_command_resources=(
-            get_helper_container(node).robot_command_resources
-        ),
-    )
-    base_sequence.add_children([
-        get_goal,
-        move_base,
-    ])
-    return base_sequence
 
 
 def build_navigate_to_goal_pose_tree(

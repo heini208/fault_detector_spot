@@ -26,10 +26,13 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
 from fault_detector_spot.manipulation.arm_state_source import (
     ArmStateSource,
 )
+from fault_detector_spot.navigation.base_movement_executor import (
+    BaseMovementExecutor,
+)
 
 
 class RobotCommandResources:
-    """Share robot-command clients, TF, arm state, and arm execution."""
+    """Share RobotCommand clients, TF, and movement executors."""
 
     def __init__(self):
         self._lock = RLock()
@@ -39,6 +42,7 @@ class RobotCommandResources:
         self._arm_state_source = None
         self._arm_motion_speed_policy = None
         self._arm_movement_executors = {}
+        self._base_movement_executors = {}
 
     def get_action_client(self, node, robot_name: str = ""):
         """Return the single RobotCommand client for a robot namespace."""
@@ -135,6 +139,38 @@ class RobotCommandResources:
                     )
             return executor
 
+    def get_base_movement_executor(
+        self,
+        node,
+        tag_state_source=None,
+        robot_name: str = "",
+    ):
+        """Return the shared base movement executor."""
+        with self._lock:
+            self._bind_node(node)
+            executor = self._base_movement_executors.get(robot_name)
+            if executor is None:
+                executor = BaseMovementExecutor(
+                    self.get_tf_listener(node),
+                    tag_state_source=tag_state_source,
+                    robot_name=robot_name,
+                    action_client=self.get_action_client(
+                        node,
+                        robot_name,
+                    ),
+                    logger=node.get_logger(),
+                )
+                self._base_movement_executors[robot_name] = executor
+            elif tag_state_source is not None:
+                if executor.tag_state_source is None:
+                    executor.tag_state_source = tag_state_source
+                elif executor.tag_state_source is not tag_state_source:
+                    raise RuntimeError(
+                        "Base movement executor already uses another "
+                        "tag state source"
+                    )
+            return executor
+
     def close(self):
         """Destroy every ROS entity owned by this resource container."""
         with self._lock:
@@ -144,11 +180,15 @@ class RobotCommandResources:
             arm_executors = tuple(
                 self._arm_movement_executors.values()
             )
+            base_executors = tuple(
+                self._base_movement_executors.values()
+            )
             clients = tuple(self._clients.values())
             self._tf_listener = None
             self._arm_state_source = None
             self._arm_motion_speed_policy = None
             self._arm_movement_executors.clear()
+            self._base_movement_executors.clear()
             self._clients.clear()
             self._node = None
 
@@ -156,6 +196,10 @@ class RobotCommandResources:
         resources.extend(
             ("arm movement executor", executor.shutdown)
             for executor in arm_executors
+        )
+        resources.extend(
+            ("base movement executor", executor.shutdown)
+            for executor in base_executors
         )
         if tf_listener is not None:
             resources.append(
@@ -178,7 +222,6 @@ class RobotCommandResources:
                         f"Could not close shared {resource_name}: "
                         f"{exception}"
                     )
-
 
     @staticmethod
     def _positive_parameter(node, name: str, default: float) -> float:

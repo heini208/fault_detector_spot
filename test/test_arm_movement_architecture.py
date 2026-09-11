@@ -17,8 +17,8 @@ def test_runner_uses_one_arm_goal_behaviour_for_relative_and_tag():
 
     assert runner.count("ArmGoalBehaviour(") == 2
     assert "ArmMovementAction" not in runner
-    assert "ReadyArmBehaviourSimple" not in runner
-    assert "StowArmBehaviourSimple" not in runner
+    assert "ReadyArmActionSimple" not in runner
+    assert "StowArmActionSimple" not in runner
 
 
 def test_arm_behavior_hierarchy_has_one_common_move_adapter():
@@ -50,7 +50,7 @@ def test_arm_behavior_hierarchy_has_one_common_move_adapter():
     assert "class StowArmBehaviour(ArmMovementBehaviour)" in stow
 
 
-def test_common_movement_behaviour_only_adapts_tree_to_executor():
+def test_common_movement_behaviour_adapts_tree_and_shared_goal_preparation():
     move = read(
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "movement_behaviour.py"
@@ -62,6 +62,8 @@ def test_common_movement_behaviour_only_adapts_tree_to_executor():
     assert "get_result_async" not in move
     assert "cancel_goal_async" not in move
     assert "RobotCommandBuilder" not in move
+    assert "def _prepare_move_command(" in move
+    assert "def _resolve_and_transform_offset_if_tag(" in move
 
 
 def test_ready_and_stow_are_small_executor_dispatchers():
@@ -84,16 +86,16 @@ def test_ready_and_stow_are_small_executor_dispatchers():
     assert "def terminate(" not in stow
 
 
-def test_arm_goal_behaviour_keeps_goal_specific_tf_preparation():
+def test_arm_goal_behaviour_uses_shared_goal_preparation():
     goal = read(
         "fault_detector_spot/manipulation/behaviours/"
         "arm_goal_behaviour.py"
     )
 
-    assert "_prepare_move_command(command)" in goal
-    assert "_resolve_and_transform_offset_if_tag" in goal
-    assert "_resolve_tag_alias" in goal
+    assert "_prepare_move_command(" in goal
     assert "GRAV_ALIGNED_BODY_FRAME_NAME" in goal
+    assert "_resolve_and_transform_offset_if_tag" not in goal
+    assert "_resolve_tag_alias" not in goal
 
 
 def test_executor_still_owns_physical_robot_command_lifecycle():

@@ -4,9 +4,6 @@ from types import SimpleNamespace
 
 from builtin_interfaces.msg import Time
 import pytest
-from fault_detector_spot.application.behaviour_tree.behaviours.move_command_action import (
-    MoveCommandAction,
-)
 from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import (
     BoundedActionClientBehaviour,
     RobotCommandActionBehaviour,
@@ -95,7 +92,13 @@ class FakeActionClient:
 class ExampleBoundedAction(BoundedActionClientBehaviour):
     """Minimal concrete action used to exercise the base lifecycle."""
 
-    def __init__(self, client, clock, goal_timeout=2.0, result_timeout=3.0):
+    def __init__(
+        self,
+        client,
+        clock,
+        goal_timeout=2.0,
+        result_timeout=3.0,
+    ):
         super().__init__(
             "ExampleAction",
             goal_response_timeout_sec=goal_timeout,
@@ -136,20 +139,24 @@ def test_action_hierarchy_separates_robot_commands_and_typed_workflows():
         RobotCommandActionBehaviour,
         BoundedActionClientBehaviour,
     )
-    assert issubclass(MoveCommandAction, RobotCommandActionBehaviour)
-    assert issubclass(WorkflowActionBehaviour, BoundedActionClientBehaviour)
+    assert issubclass(
+        WorkflowActionBehaviour,
+        BoundedActionClientBehaviour,
+    )
     assert issubclass(
         ManipulatorMoveCloseToSurfaceAction,
         WorkflowActionBehaviour,
     )
     assert not issubclass(
         ManipulatorMoveCloseToSurfaceAction,
-        MoveCommandAction,
+        RobotCommandActionBehaviour,
     )
 
 
 @pytest.mark.parametrize("timeout", [None, 0.0, -1.0, float("inf")])
-def test_bounded_action_rejects_unbounded_or_invalid_result_timeouts(timeout):
+def test_bounded_action_rejects_unbounded_or_invalid_result_timeouts(
+    timeout,
+):
     with pytest.raises((TypeError, ValueError)):
         ExampleBoundedAction(
             FakeActionClient(ManualFuture()),
@@ -205,7 +212,9 @@ def test_close_surface_leaf_preserves_feedback_and_correlated_result_detail():
     handle = FakeGoalHandle(result_future)
     client = FakeActionClient(send_future)
     command = close_surface_command()
-    action = ManipulatorMoveCloseToSurfaceAction(monotonic_clock=clock)
+    action = ManipulatorMoveCloseToSurfaceAction(
+        monotonic_clock=clock
+    )
     action.blackboard = FakeBlackboard(last_command=command)
     action._client = client
     action.initialized = True
@@ -238,7 +247,10 @@ def test_close_surface_leaf_preserves_feedback_and_correlated_result_detail():
     )
     assert action.update() is Status.SUCCESS
     assert action.feedback_message == "Surface stand-off reached"
-    assert action.blackboard.command_failure_request_id == command.request_id
+    assert (
+        action.blackboard.command_failure_request_id
+        == command.request_id
+    )
     assert action.blackboard.command_failure_detail == ""
 
 
@@ -251,7 +263,9 @@ def test_close_surface_leaf_correlates_action_failure_detail():
     command = close_surface_command(
         "00000000-0000-4000-8000-000000000002"
     )
-    action = ManipulatorMoveCloseToSurfaceAction(monotonic_clock=clock)
+    action = ManipulatorMoveCloseToSurfaceAction(
+        monotonic_clock=clock
+    )
     action.blackboard = FakeBlackboard(last_command=command)
     action._client = FakeActionClient(send_future)
     action.initialized = True
@@ -269,5 +283,11 @@ def test_close_surface_leaf_correlates_action_failure_detail():
     )
 
     assert action.update() is Status.FAILURE
-    assert action.blackboard.command_failure_request_id == command.request_id
-    assert action.blackboard.command_failure_detail == "Force data became stale"
+    assert (
+        action.blackboard.command_failure_request_id
+        == command.request_id
+    )
+    assert (
+        action.blackboard.command_failure_detail
+        == "Force data became stale"
+    )

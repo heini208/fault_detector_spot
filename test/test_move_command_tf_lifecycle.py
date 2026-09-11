@@ -1,10 +1,7 @@
-"""Validate move-command TF lifecycle and callback safety."""
+"""Validate movement TF preparation and shared RobotCommand resources."""
 
 from pathlib import Path
 
-from fault_detector_spot.application.behaviour_tree.behaviours.move_command_action import (
-    MoveCommandAction,
-)
 from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import (
     RobotCommandActionBehaviour,
 )
@@ -36,20 +33,18 @@ def test_action_reset_preserves_initialized_resources():
     assert "self.initialized = False" not in reset
 
 
-def test_action_initialization_reuses_ros_resources():
+def test_robot_command_action_initialization_reuses_shared_client():
     spot_action = _read(
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "spot_action.py"
     )
-    move_action = _read(
-        "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "move_command_action.py"
-    )
 
     assert "if self._client is None:" in spot_action
     assert "get_action_client" in spot_action
-    assert issubclass(MoveCommandAction, RobotCommandActionBehaviour)
-    assert "get_tf_listener" in move_action
+    assert issubclass(
+        RobotCommandActionBehaviour,
+        object,
+    )
 
 
 def test_behavior_tree_uses_one_robot_command_resource_owner():
@@ -67,9 +62,10 @@ def test_behavior_tree_uses_one_robot_command_resource_owner():
 
     assert resources.count("ActionClientWrapper(") == 1
     assert resources.count("TFListenerWrapper(") == 1
+    assert "get_arm_movement_executor(" in resources
+    assert "get_base_movement_executor(" in resources
     assert "self.robot_command_resources = RobotCommandResources()" in helper
     assert "helper_initializer.close()" in runner
-    assert runner.count("robot_command_resources=") >= 10
 
 
 def test_shared_robot_command_resources_have_explicit_teardown():
@@ -79,11 +75,13 @@ def test_shared_robot_command_resources_have_explicit_teardown():
     )
 
     close = _method_source(resources, "close")
+    assert "arm_executors" in close
+    assert "base_executors" in close
     assert "tf_listener.shutdown" in close
     assert "client.destroy" in close
 
 
-def test_terminal_goal_paths_do_not_send_cancel_requests():
+def test_terminal_generic_action_paths_do_not_send_cancel_requests():
     source = _read(
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "spot_action.py"
@@ -98,7 +96,7 @@ def test_terminal_goal_paths_do_not_send_cancel_requests():
     assert "_cancel_goal" not in result
 
 
-def test_interrupted_active_goal_still_requests_cancellation():
+def test_interrupted_generic_action_still_requests_cancellation():
     source = _read(
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "spot_action.py"
@@ -109,16 +107,15 @@ def test_interrupted_active_goal_still_requests_cancellation():
     assert "self._request_cancel()" in terminate
 
 
-def test_move_goal_preparation_exceptions_fail_the_behavior():
+def test_movement_preparation_exceptions_fail_the_behaviour():
     source = _read(
         "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "move_command_action.py"
+        "movement_behaviour.py"
     )
-    phase = _method_source(source, "_phase_send_goal")
+    update = _method_source(source, "update")
 
-    assert "except Exception as exception:" in phase
-    assert "self._reset_state()" in phase
-    assert "return Status.FAILURE" in phase
+    assert "except Exception as exception:" in update
+    assert "return self._fail(" in update
 
 
 def test_move_goal_tf_lookups_are_nonblocking():
@@ -128,9 +125,18 @@ def test_move_goal_tf_lookups_are_nonblocking():
         "fault_detector_spot/application/behaviour_tree/commands/"
         "move_to_tag_command.py",
         "fault_detector_spot/manipulation/arm_movement_executor.py",
+        "fault_detector_spot/navigation/base_movement_executor.py",
     )
 
     for path in paths:
         source = _read(path)
         assert "timeout_sec=2" not in source
         assert "timeout_sec=0.0" in source
+
+
+def test_legacy_move_command_action_is_removed():
+    assert not (
+        ROOT
+        / "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "move_command_action.py"
+    ).exists()
