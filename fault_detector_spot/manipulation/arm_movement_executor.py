@@ -35,10 +35,11 @@ from fault_detector_spot.shared.geometry.transforms import (
 from fault_detector_spot.shared.ros.tf_transforms import (
     transform_to_pose_data,
 )
-
-
-DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC = 2.0
-DEFAULT_RESULT_TIMEOUT_SEC = 30.0
+from fault_detector_spot.shared.execution.movement_executor import (
+    DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC,
+    DEFAULT_RESULT_TIMEOUT_SEC,
+    MovementExecutor,
+)
 
 READY_LIFT_DISTANCE_PARAMETER = "arm.ready_lift_distance_m"
 READY_STATE_TIMEOUT_PARAMETER = "arm.ready_state_timeout_sec"
@@ -84,8 +85,12 @@ class _ArmOperation(Enum):
     STOW = "stow"
 
 
-class ArmMovementExecutor:
+class ArmMovementExecutor(MovementExecutor):
     """Resolve, submit, monitor, and cancel Cartesian arm movements."""
+
+    OUTCOME_TYPE = ArmMovementOutcome
+    UPDATE_TYPE = ArmMovementUpdate
+    MOVEMENT_NAME = "arm"
 
     def __init__(
         self,
@@ -109,22 +114,21 @@ class ArmMovementExecutor:
         monotonic_clock=time.monotonic,
         logger=None,
     ):
-        if tf_listener is None:
-            raise ValueError(
-                "ArmMovementExecutor requires a TF listener"
-            )
-        if not callable(monotonic_clock):
-            raise TypeError("Monotonic clock must be callable")
-
-        self.tf_listener = tf_listener
-        self.tag_state_source = tag_state_source
-        self.robot_name = robot_name
+        super().__init__(
+            tf_listener,
+            tag_state_source=tag_state_source,
+            robot_name=robot_name,
+            action_client=action_client,
+            goal_response_timeout_sec=goal_response_timeout_sec,
+            result_timeout_sec=result_timeout_sec,
+            monotonic_clock=monotonic_clock,
+            logger=logger,
+        )
         self.speed_policy = (
             speed_policy
             if speed_policy is not None
             else ArmMotionSpeedPolicy()
         )
-        self.action_client = action_client
         self.arm_state_source = arm_state_source
         self.ready_lift_distance_m = self._positive_timeout(
             ready_lift_distance_m,
@@ -146,31 +150,12 @@ class ArmMovementExecutor:
             stow_state_timeout_sec,
             "Stow arm state timeout",
         )
-        self.goal_response_timeout_sec = self._positive_timeout(
-            goal_response_timeout_sec,
-            "Goal response timeout",
-        )
-        self.result_timeout_sec = self._positive_timeout(
-            result_timeout_sec,
-            "Action result timeout",
-        )
-        self._monotonic_clock = monotonic_clock
-        self._logger = logger
 
         self._operation = None
         self._operation_speed = None
-        self._send_goal_future = None
-        self._goal_handle = None
-        self._result_future = None
-        self._goal_sent_monotonic = None
-        self._result_started_monotonic = None
         self._state_wait_started = None
         self._tf_wait_started = None
         self._verification_started = None
-
-    @property
-    def active(self) -> bool:
-        return self._operation is not None
 
     def relative(
         self,
@@ -244,6 +229,7 @@ class ArmMovementExecutor:
         """Prepare a stowed arm with a short controlled upward motion."""
         if self.active:
             return self._busy_update()
+        self._active = True
         self._operation = _ArmOperation.PREPARE
         self._operation_speed = speed
         return self._advance_prepare_start()
@@ -252,12 +238,13 @@ class ArmMovementExecutor:
         """Stow a deployed arm through Spot's native stow command."""
         if self.active:
             return self._busy_update()
+        self._active = True
         self._operation = _ArmOperation.STOW
         return self._advance_stow_start()
 
     def poll(self) -> ArmMovementUpdate:
         """Advance the active arm operation without blocking."""
-        if self._operation is None:
+        if not self.active or self._operation is None:
             return ArmMovementUpdate(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "No arm movement is active",
@@ -281,231 +268,24 @@ class ArmMovementExecutor:
 
         return self._poll_result()
 
-    def cancel(self) -> None:
-        """Request cancellation of the active operation and release it."""
-        if not self.active:
-            return
-        self._request_cancel()
-        self._reset_operation()
-
-    def shutdown(self) -> None:
-        self.cancel()
-
     def _start_goal(self, goal_builder) -> ArmMovementUpdate:
         if self.active:
             return self._busy_update()
         self._operation = _ArmOperation.MOVEMENT
-        return self._submit_goal(goal_builder)
+        return super()._start_goal(goal_builder)
 
-    def _submit_goal(self, goal_builder) -> ArmMovementUpdate:
-        if self.action_client is None:
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "Arm movement executor has no RobotCommand action client",
-            )
-
-        try:
-            server_ready = self.action_client.wait_for_server(
-                timeout_sec=0.0
-            )
-        except Exception as exception:
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                f"RobotCommand action server check failed: {exception}",
-            )
-        if not server_ready:
-            action_name = namespace_with(
-                self.robot_name,
-                "robot_command",
-            )
-            return self._finish(
-                ArmMovementOutcome.ACTION_SERVER_UNAVAILABLE,
-                f"Action server '{action_name}' unavailable",
-            )
-
-        try:
-            goal = goal_builder()
-        except Exception as exception:
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                f"Arm goal preparation failed: {exception}",
-            )
-
-        try:
-            future = self.action_client.send_goal_async(goal)
-        except Exception as exception:
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                f"Arm goal submission failed: {exception}",
-            )
-        if future is None:
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "RobotCommand action client returned no goal future",
-            )
-
-        self._send_goal_future = future
-        self._goal_sent_monotonic = self._monotonic_clock()
-        return ArmMovementUpdate(
-            ArmMovementOutcome.RUNNING,
-            "Goal sent",
-        )
-
-    def _poll_goal_response(self) -> ArmMovementUpdate:
-        if not self._send_goal_future.done():
-            if self._deadline_expired(
-                self._goal_sent_monotonic,
-                self.goal_response_timeout_sec,
-            ):
-                self._request_cancel()
-                return self._finish(
-                    ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT,
-                    "Action goal response timed out after "
-                    f"{self.goal_response_timeout_sec:.1f} s",
-                )
-            return ArmMovementUpdate(
-                ArmMovementOutcome.RUNNING,
-                "Waiting for goal acceptance",
-            )
-
-        try:
-            goal_handle = self._send_goal_future.result()
-        except Exception as exception:
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                f"Arm goal submission failed: {exception}",
-            )
-
-        if goal_handle is None or not goal_handle.accepted:
-            return self._finish(
-                ArmMovementOutcome.GOAL_REJECTED,
-                "Action goal was rejected",
-            )
-
-        self._goal_handle = goal_handle
-        try:
-            self._result_future = goal_handle.get_result_async()
-        except Exception as exception:
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                f"Action result request failed: {exception}",
-            )
-
-        if self._result_future is None:
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "RobotCommand goal returned no result future",
-            )
-
-        self._result_started_monotonic = self._monotonic_clock()
-        return ArmMovementUpdate(
-            ArmMovementOutcome.RUNNING,
-            "Goal accepted",
-        )
-
-    def _poll_result(self) -> ArmMovementUpdate:
-        if self._result_future is None:
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "Accepted arm goal has no result future",
-            )
-
-        if not self._result_future.done():
-            if self._deadline_expired(
-                self._result_started_monotonic,
-                self.result_timeout_sec,
-            ):
-                self._request_cancel()
-                return self._finish(
-                    ArmMovementOutcome.RESULT_TIMEOUT,
-                    "Action result timed out after "
-                    f"{self.result_timeout_sec:.1f} s",
-                )
-            return ArmMovementUpdate(
-                ArmMovementOutcome.RUNNING,
-                "Arm movement in progress",
-            )
-
-        try:
-            result_wrapper = self._result_future.result()
-            result = result_wrapper.result
-        except Exception as exception:
-            return self._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                f"Action result failed: {exception}",
-            )
-
-        if bool(getattr(result, "success", False)):
-            if self._operation is _ArmOperation.PREPARE:
-                self._reset_goal_lifecycle()
-                self._verification_started = self._monotonic_clock()
-                return self._poll_state_confirmation()
-            if self._operation is _ArmOperation.STOW:
-                self._reset_goal_lifecycle()
-                self._verification_started = self._monotonic_clock()
-                return self._poll_state_confirmation()
-            return self._finish(
-                ArmMovementOutcome.SUCCESS,
-                "Succeeded",
-            )
-
-        return self._finish(
-            ArmMovementOutcome.MOTION_FAILED,
-            self._command_failure_detail(result),
-        )
-
-    def _request_cancel(self) -> None:
-        handle = self._goal_handle
-        if handle is not None:
-            try:
-                handle.cancel_goal_async()
-            except Exception as exception:
-                self._log_error(
-                    f"Arm goal cancellation failed: {exception}"
-                )
-            return
-
-        future = self._send_goal_future
-        if future is None or future.done():
-            return
-
-        def cancel_when_accepted(done_future):
-            try:
-                accepted_handle = done_future.result()
-                if (
-                    accepted_handle is not None
-                    and accepted_handle.accepted
-                ):
-                    accepted_handle.cancel_goal_async()
-            except Exception as exception:
-                self._log_error(
-                    "Pending arm goal cancellation failed: "
-                    f"{exception}"
-                )
-
-        future.add_done_callback(cancel_when_accepted)
-
-    def _finish(
-        self,
-        outcome: ArmMovementOutcome,
-        detail: str,
-    ) -> ArmMovementUpdate:
-        update = ArmMovementUpdate(
-            outcome,
-            str(detail).strip(),
-        )
-        self._reset_operation()
-        return update
-
-    def _reset_goal_lifecycle(self) -> None:
-        self._send_goal_future = None
-        self._goal_handle = None
-        self._result_future = None
-        self._goal_sent_monotonic = None
-        self._result_started_monotonic = None
+    def _handle_successful_result(self, result):
+        if self._operation in (
+            _ArmOperation.PREPARE,
+            _ArmOperation.STOW,
+        ):
+            self._reset_goal_lifecycle()
+            self._verification_started = self._monotonic_clock()
+            return self._poll_state_confirmation()
+        return super()._handle_successful_result(result)
 
     def _reset_operation(self) -> None:
-        self._reset_goal_lifecycle()
+        super()._reset_operation()
         self._operation = None
         self._operation_speed = None
         self._state_wait_started = None
@@ -678,12 +458,6 @@ class ArmMovementExecutor:
         if state is ArmStowState.UNKNOWN:
             return ArmMovementOutcome.ARM_STATE_UNKNOWN
         return ArmMovementOutcome.ARM_STATE_UNKNOWN
-
-    def _busy_update(self) -> ArmMovementUpdate:
-        return ArmMovementUpdate(
-            ArmMovementOutcome.BUSY,
-            "Another arm movement is already active",
-        )
 
     def _build_stow_goal(self) -> RobotCommand.Goal:
         stow_command = RobotCommandBuilder.arm_stow_command()
@@ -1028,36 +802,6 @@ class ArmMovementExecutor:
         convert(command, goal.command)
         return goal
 
-    def _deadline_expired(self, started, timeout_sec) -> bool:
-        if started is None:
-            return False
-        return self._monotonic_clock() - started >= timeout_sec
-
-    @staticmethod
-    def _positive_timeout(value, label: str) -> float:
-        normalized = float(value)
-        if not math.isfinite(normalized) or normalized <= 0.0:
-            raise ValueError(
-                f"{label} must be positive and finite"
-            )
-        return normalized
-
-    @staticmethod
-    def _command_failure_detail(result) -> str:
-        detail = str(
-            getattr(result, "detail", "")
-            or getattr(result, "message", "")
-        ).strip()
-        if detail:
-            return detail
-        return f"Robot command failed: {result}"
-
-    def _log_error(self, message: str) -> None:
-        if self._logger is None:
-            return
-        log = getattr(self._logger, "error", None)
-        if callable(log):
-            log(message)
 
 
 __all__ = [

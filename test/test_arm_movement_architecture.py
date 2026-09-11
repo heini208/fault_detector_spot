@@ -98,7 +98,10 @@ def test_arm_goal_behaviour_uses_shared_goal_preparation():
     assert "_resolve_tag_alias" not in goal
 
 
-def test_executor_still_owns_physical_robot_command_lifecycle():
+def test_arm_executor_inherits_shared_robot_command_lifecycle():
+    shared = read(
+        "fault_detector_spot/shared/execution/movement_executor.py"
+    )
     executor = read(
         "fault_detector_spot/manipulation/arm_movement_executor.py"
     )
@@ -107,10 +110,14 @@ def test_executor_still_owns_physical_robot_command_lifecycle():
         "movement_behaviour.py"
     )
 
-    assert "send_goal_async(" in executor
-    assert "get_result_async(" in executor
-    assert "cancel_goal_async(" in executor
+    assert "class ArmMovementExecutor(MovementExecutor)" in executor
+    assert "send_goal_async(" in shared
+    assert "get_result_async(" in shared
+    assert "cancel_goal_async(" in shared
 
+    assert "send_goal_async(" not in executor
+    assert "get_result_async(" not in executor
+    assert "cancel_goal_async(" not in executor
     assert "send_goal_async(" not in move
     assert "get_result_async(" not in move
     assert "cancel_goal_async(" not in move
@@ -171,3 +178,23 @@ def test_public_arm_api_exposes_speed_not_duration():
     assert "duration_sec" not in goal
     assert "executor.relative(command)" in goal
     assert "executor.tag_probe(command)" in goal
+
+
+
+def test_arm_and_base_executors_share_only_the_lifecycle_parent():
+    arm = read(
+        "fault_detector_spot/manipulation/arm_movement_executor.py"
+    )
+    base = read(
+        "fault_detector_spot/navigation/base_movement_executor.py"
+    )
+    shared = read(
+        "fault_detector_spot/shared/execution/movement_executor.py"
+    )
+
+    assert "class MovementExecutor:" in shared
+    assert "class ArmMovementExecutor(MovementExecutor)" in arm
+    assert "class BaseMovementExecutor(MovementExecutor)" in base
+    assert "_handle_successful_result" in arm
+    assert "_build_probe_motion_goal" in arm
+    assert "_build_se2_goal" in base

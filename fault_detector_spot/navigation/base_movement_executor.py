@@ -20,10 +20,11 @@ from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_to_rpy,
 )
 from fault_detector_spot.inspection.model.models import QuaternionData
-
-
-DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC = 2.0
-DEFAULT_RESULT_TIMEOUT_SEC = 30.0
+from fault_detector_spot.shared.execution.movement_executor import (
+    DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC,
+    DEFAULT_RESULT_TIMEOUT_SEC,
+    MovementExecutor,
+)
 RELATIVE_LINEAR_SPEED_MPS = 0.10
 TAG_LINEAR_SPEED_MPS = 0.15
 ANGULAR_SPEED_RAD_S = 0.20
@@ -51,8 +52,12 @@ class BaseMovementUpdate:
     detail: str
 
 
-class BaseMovementExecutor:
+class BaseMovementExecutor(MovementExecutor):
     """Build, submit, monitor, and cancel Spot base movements."""
+
+    OUTCOME_TYPE = BaseMovementOutcome
+    UPDATE_TYPE = BaseMovementUpdate
+    MOVEMENT_NAME = "base"
 
     def __init__(
         self,
@@ -67,38 +72,16 @@ class BaseMovementExecutor:
         monotonic_clock=time.monotonic,
         logger=None,
     ):
-        if tf_listener is None:
-            raise ValueError(
-                "BaseMovementExecutor requires a TF listener"
-            )
-        if not callable(monotonic_clock):
-            raise TypeError("Monotonic clock must be callable")
-
-        self.tf_listener = tf_listener
-        self.tag_state_source = tag_state_source
-        self.robot_name = robot_name
-        self.action_client = action_client
-        self.goal_response_timeout_sec = self._positive_timeout(
-            goal_response_timeout_sec,
-            "Goal response timeout",
+        super().__init__(
+            tf_listener,
+            tag_state_source=tag_state_source,
+            robot_name=robot_name,
+            action_client=action_client,
+            goal_response_timeout_sec=goal_response_timeout_sec,
+            result_timeout_sec=result_timeout_sec,
+            monotonic_clock=monotonic_clock,
+            logger=logger,
         )
-        self.result_timeout_sec = self._positive_timeout(
-            result_timeout_sec,
-            "Action result timeout",
-        )
-        self._monotonic_clock = monotonic_clock
-        self._logger = logger
-
-        self._active = False
-        self._send_goal_future = None
-        self._goal_handle = None
-        self._result_future = None
-        self._goal_sent_monotonic = None
-        self._result_started_monotonic = None
-
-    @property
-    def active(self) -> bool:
-        return self._active
 
     def relative(self, command) -> BaseMovementUpdate:
         """Start a relative SE2 base movement."""
@@ -115,193 +98,6 @@ class BaseMovementExecutor:
     def stand(self) -> BaseMovementUpdate:
         """Start Spot's native stand command."""
         return self._start_goal(self._build_stand_goal)
-
-    def poll(self) -> BaseMovementUpdate:
-        """Advance the active base operation without blocking."""
-        if not self.active:
-            return BaseMovementUpdate(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                "No base movement is active",
-            )
-
-        if self._goal_handle is None:
-            return self._poll_goal_response()
-
-        return self._poll_result()
-
-    def cancel(self) -> None:
-        """Request cancellation of the active base operation."""
-        if not self.active:
-            return
-        self._request_cancel()
-        self._reset()
-
-    def shutdown(self) -> None:
-        self.cancel()
-
-    def _start_goal(self, goal_builder) -> BaseMovementUpdate:
-        if self.active:
-            return BaseMovementUpdate(
-                BaseMovementOutcome.BUSY,
-                "Another base movement is already active",
-            )
-
-        self._active = True
-        if self.action_client is None:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                "Base movement executor has no RobotCommand action client",
-            )
-
-        try:
-            server_ready = self.action_client.wait_for_server(
-                timeout_sec=0.0
-            )
-        except Exception as exception:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                f"RobotCommand action server check failed: {exception}",
-            )
-
-        if not server_ready:
-            action_name = namespace_with(
-                self.robot_name,
-                "robot_command",
-            )
-            return self._finish(
-                BaseMovementOutcome.ACTION_SERVER_UNAVAILABLE,
-                f"Action server '{action_name}' unavailable",
-            )
-
-        try:
-            goal = goal_builder()
-        except Exception as exception:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                f"Base goal preparation failed: {exception}",
-            )
-
-        try:
-            future = self.action_client.send_goal_async(goal)
-        except Exception as exception:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                f"Base goal submission failed: {exception}",
-            )
-
-        if future is None:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                "RobotCommand action client returned no goal future",
-            )
-
-        self._send_goal_future = future
-        self._goal_sent_monotonic = self._monotonic_clock()
-        return BaseMovementUpdate(
-            BaseMovementOutcome.RUNNING,
-            "Goal sent",
-        )
-
-    def _poll_goal_response(self) -> BaseMovementUpdate:
-        if self._send_goal_future is None:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                "Active base movement has no goal future",
-            )
-
-        if not self._send_goal_future.done():
-            if self._deadline_expired(
-                self._goal_sent_monotonic,
-                self.goal_response_timeout_sec,
-            ):
-                self._request_cancel()
-                return self._finish(
-                    BaseMovementOutcome.GOAL_RESPONSE_TIMEOUT,
-                    "Action goal response timed out after "
-                    f"{self.goal_response_timeout_sec:.1f} s",
-                )
-            return BaseMovementUpdate(
-                BaseMovementOutcome.RUNNING,
-                "Waiting for goal acceptance",
-            )
-
-        try:
-            goal_handle = self._send_goal_future.result()
-        except Exception as exception:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                f"Base goal submission failed: {exception}",
-            )
-
-        if goal_handle is None or not goal_handle.accepted:
-            return self._finish(
-                BaseMovementOutcome.GOAL_REJECTED,
-                "Action goal was rejected",
-            )
-
-        self._goal_handle = goal_handle
-        try:
-            self._result_future = goal_handle.get_result_async()
-        except Exception as exception:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                f"Action result request failed: {exception}",
-            )
-
-        if self._result_future is None:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                "RobotCommand goal returned no result future",
-            )
-
-        self._result_started_monotonic = self._monotonic_clock()
-        return BaseMovementUpdate(
-            BaseMovementOutcome.RUNNING,
-            "Goal accepted",
-        )
-
-    def _poll_result(self) -> BaseMovementUpdate:
-        if self._result_future is None:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                "Accepted base goal has no result future",
-            )
-
-        if not self._result_future.done():
-            if self._deadline_expired(
-                self._result_started_monotonic,
-                self.result_timeout_sec,
-            ):
-                self._request_cancel()
-                return self._finish(
-                    BaseMovementOutcome.RESULT_TIMEOUT,
-                    "Action result timed out after "
-                    f"{self.result_timeout_sec:.1f} s",
-                )
-            return BaseMovementUpdate(
-                BaseMovementOutcome.RUNNING,
-                "Base movement in progress",
-            )
-
-        try:
-            result_wrapper = self._result_future.result()
-            result = result_wrapper.result
-        except Exception as exception:
-            return self._finish(
-                BaseMovementOutcome.EXECUTION_ERROR,
-                f"Action result failed: {exception}",
-            )
-
-        if bool(getattr(result, "success", False)):
-            return self._finish(
-                BaseMovementOutcome.SUCCESS,
-                "Succeeded",
-            )
-
-        return self._finish(
-            BaseMovementOutcome.MOTION_FAILED,
-            self._command_failure_detail(result),
-        )
 
     def _build_relative_goal(self, command) -> RobotCommand.Goal:
         if command is None or not callable(
@@ -427,91 +223,6 @@ class BaseMovementExecutor:
         convert(command, goal.command)
         return goal
 
-    def _request_cancel(self) -> None:
-        handle = self._goal_handle
-        if handle is not None:
-            try:
-                handle.cancel_goal_async()
-            except Exception as exception:
-                self._log_error(
-                    f"Base goal cancellation failed: {exception}"
-                )
-            return
-
-        future = self._send_goal_future
-        if future is None or future.done():
-            return
-
-        def cancel_when_accepted(done_future):
-            try:
-                accepted_handle = done_future.result()
-                if (
-                    accepted_handle is not None
-                    and accepted_handle.accepted
-                ):
-                    accepted_handle.cancel_goal_async()
-            except Exception as exception:
-                self._log_error(
-                    "Pending base goal cancellation failed: "
-                    f"{exception}"
-                )
-
-        future.add_done_callback(cancel_when_accepted)
-
-    def _finish(
-        self,
-        outcome: BaseMovementOutcome,
-        detail: str,
-    ) -> BaseMovementUpdate:
-        update = BaseMovementUpdate(
-            outcome,
-            str(detail).strip(),
-        )
-        self._reset()
-        return update
-
-    def _reset(self) -> None:
-        self._active = False
-        self._send_goal_future = None
-        self._goal_handle = None
-        self._result_future = None
-        self._goal_sent_monotonic = None
-        self._result_started_monotonic = None
-
-    def _deadline_expired(
-        self,
-        started,
-        timeout_sec: float,
-    ) -> bool:
-        if started is None:
-            return False
-        return self._monotonic_clock() - started >= timeout_sec
-
-    @staticmethod
-    def _positive_timeout(value, label: str) -> float:
-        normalized = float(value)
-        if not math.isfinite(normalized) or normalized <= 0.0:
-            raise ValueError(
-                f"{label} must be positive and finite"
-            )
-        return normalized
-
-    @staticmethod
-    def _command_failure_detail(result) -> str:
-        detail = str(
-            getattr(result, "detail", "")
-            or getattr(result, "message", "")
-        ).strip()
-        if detail:
-            return detail
-        return f"Robot command failed: {result}"
-
-    def _log_error(self, message: str) -> None:
-        if self._logger is None:
-            return
-        log = getattr(self._logger, "error", None)
-        if callable(log):
-            log(message)
 
 
 __all__ = [

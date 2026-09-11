@@ -70,14 +70,22 @@ def test_base_behaviours_only_delegate_to_shared_executor():
     assert "RobotCommandBuilder" not in stand
 
 
-def test_base_executor_owns_robot_command_lifecycle_and_goal_building():
+def test_base_executor_inherits_lifecycle_and_owns_goal_building():
+    shared = read(
+        "fault_detector_spot/shared/execution/movement_executor.py"
+    )
     executor = read(
         "fault_detector_spot/navigation/base_movement_executor.py"
     )
 
-    assert "send_goal_async(" in executor
-    assert "get_result_async(" in executor
-    assert "cancel_goal_async(" in executor
+    assert "class BaseMovementExecutor(MovementExecutor)" in executor
+    assert "send_goal_async(" in shared
+    assert "get_result_async(" in shared
+    assert "cancel_goal_async(" in shared
+    assert "send_goal_async(" not in executor
+    assert "get_result_async(" not in executor
+    assert "cancel_goal_async(" not in executor
+
     assert "RobotCommandBuilder.synchro_stand_command()" in executor
     assert (
         "RobotCommandBuilder.synchro_se2_trajectory_point_command("
