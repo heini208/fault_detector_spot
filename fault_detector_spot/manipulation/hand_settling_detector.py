@@ -301,7 +301,7 @@ class HandSettlingDetector:
             self._stable_since = now
 
         stable_for = now - self._stable_since
-        if stable_for >= self.stable_duration_sec:
+        if stable_for + 1e-9 >= self.stable_duration_sec:
             self._active = False
             return HandSettlingUpdate(
                 HandSettlingOutcome.SETTLED,

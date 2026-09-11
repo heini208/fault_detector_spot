@@ -171,7 +171,7 @@ class ArmStateSource:
 
     @staticmethod
     def _read_hand_velocity(message, received_at):
-        field_mask = int(message.has_field)
+        field_mask = int(getattr(message, "has_field", 0))
         velocity_mask = int(
             ManipulatorState.VELOCITY_OF_HAND_IN_VISION_FIELD_SET
         )
@@ -202,7 +202,7 @@ class ArmStateSource:
 
     @staticmethod
     def _read_hand_force(message, received_at):
-        field_mask = int(message.has_field)
+        field_mask = int(getattr(message, "has_field", 0))
         force_mask = int(
             ManipulatorState
             .ESTIMATED_END_EFFECTOR_FORCE_IN_HAND_FIELD_SET

@@ -103,13 +103,11 @@ def test_unstable_candidate_resets_and_can_recover():
 
     clock.now = 0.4
     state.sample = force_sample(0.4, x=0.0)
-    sampler.poll()
-
-    clock.now = 0.5
-    state.sample = force_sample(0.5, x=-0.1)
     ready = sampler.poll()
 
     assert ready.outcome is ForceBaselineOutcome.READY
+    assert ready.baseline.sample_count == 3
+    assert ready.baseline.sample_span_sec == 0.2
 
 
 def test_missing_force_field_reports_unavailable_after_timeout():
