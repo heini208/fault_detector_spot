@@ -20,6 +20,11 @@
     arm.force_baseline.maximum_component_span_n: 3.0
     arm.force_baseline.timeout_sec: 2.0
 
-    arm.contact.calibration_linear_speeds_mps: [0.005]
-    arm.contact.calibration_force_delta_thresholds_n: [5.0]
+    arm.contact.minimum_force_delta_threshold_n: 3.0
+    arm.contact.reference_linear_speed_mps: 0.005
+    arm.contact.reference_force_delta_threshold_n: 5.0
+    arm.contact.maximum_force_delta_threshold_n: 10.0
     arm.contact.consecutive_samples: 2
+    arm.contact.force_stale_timeout_sec: 0.25
+    arm.contact.retreat_distance_m: 0.010
+    arm.contact.retreat_speed_mps: 0.010

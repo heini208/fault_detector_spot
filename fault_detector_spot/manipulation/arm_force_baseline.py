@@ -43,6 +43,7 @@ class HandForceBaseline:
     sample_count: int
     sample_span_sec: float
     maximum_component_span_n: float
+    last_received_at: float
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,7 @@ class ForceBaselineSampler:
         self.reset()
         self._active = True
         self._started_at = self._monotonic_clock()
+        self._receipt_not_before = self._started_at
         return self.poll()
 
     def poll(self) -> ForceBaselineUpdate:
@@ -177,6 +179,7 @@ class ForceBaselineSampler:
 
         if (
             sample is not None
+            and sample.received_at + 1e-9 >= self._receipt_not_before
             and sample.received_at != self._last_received_at
         ):
             self._last_received_at = sample.received_at
@@ -232,6 +235,7 @@ class ForceBaselineSampler:
         self._active = False
         self._started_at = None
         self._last_received_at = None
+        self._receipt_not_before = 0.0
         self._samples = []
         self._last_unstable_span = None
 
@@ -266,6 +270,7 @@ class ForceBaselineSampler:
             sample_count=len(self._samples),
             sample_span_sec=float(span_sec),
             maximum_component_span_n=float(maximum_span),
+            last_received_at=float(self._samples[-1].received_at),
         )
         return baseline
 

@@ -71,6 +71,7 @@ def test_baseline_requires_new_samples_and_minimum_span():
     assert ready.outcome is ForceBaselineOutcome.READY
     assert ready.baseline.sample_count == 3
     assert ready.baseline.sample_span_sec == 0.2
+    assert ready.baseline.last_received_at == 0.2
     assert ready.baseline.x_n == 1.0
 
 
@@ -146,3 +147,33 @@ def test_stale_manipulator_state_reports_force_stale():
     failed = sampler.poll()
 
     assert failed.outcome is ForceBaselineOutcome.FORCE_STALE
+
+
+def test_baseline_ignores_force_received_before_acquisition_started():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    state.sample = force_sample(0.5)
+    clock.now = 1.0
+    sampler = ForceBaselineSampler(
+        state,
+        minimum_samples=3,
+        minimum_span_sec=0.2,
+        timeout_sec=1.0,
+        monotonic_clock=clock,
+    )
+
+    first = sampler.start()
+
+    assert first.outcome is ForceBaselineOutcome.RUNNING
+
+    state.sample = force_sample(1.0)
+    sampler.poll()
+    clock.now = 1.1
+    state.sample = force_sample(1.1)
+    sampler.poll()
+    clock.now = 1.2
+    state.sample = force_sample(1.2)
+    ready = sampler.poll()
+
+    assert ready.outcome is ForceBaselineOutcome.READY
+    assert ready.baseline.last_received_at == 1.2

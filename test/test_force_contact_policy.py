@@ -1,42 +1,46 @@
-"""Tests for speed-calibrated contact thresholds."""
+"""Tests for continuous speed-aware force thresholds."""
 
 import pytest
 
 from fault_detector_spot.manipulation.force_contact_policy import (
-    ForceThresholdCalibration,
     SpeedAwareForceContactPolicy,
-    UncalibratedForceSpeed,
 )
 
 
-def test_single_calibration_accepts_only_its_speed():
-    policy = SpeedAwareForceContactPolicy(
-        [ForceThresholdCalibration(0.005, 5.0)]
+def policy():
+    return SpeedAwareForceContactPolicy(
+        minimum_threshold_n=3.0,
+        reference_speed_mps=0.005,
+        reference_threshold_n=5.0,
+        maximum_threshold_n=10.0,
+        consecutive_samples=2,
     )
 
-    assert policy.threshold_for(0.005) == pytest.approx(5.0)
 
-    with pytest.raises(UncalibratedForceSpeed):
-        policy.threshold_for(0.010)
-
-
-def test_policy_interpolates_between_measured_points():
-    policy = SpeedAwareForceContactPolicy([
-        ForceThresholdCalibration(0.005, 5.0),
-        ForceThresholdCalibration(0.015, 9.0),
-    ])
-
-    assert policy.threshold_for(0.010) == pytest.approx(7.0)
+def test_reference_speed_reproduces_existing_close_surface_threshold():
+    assert policy().threshold_for(0.005) == pytest.approx(5.0)
 
 
-def test_policy_never_extrapolates_outside_calibrated_range():
-    policy = SpeedAwareForceContactPolicy([
-        ForceThresholdCalibration(0.005, 5.0),
-        ForceThresholdCalibration(0.015, 9.0),
-    ])
+def test_threshold_scales_continuously_with_speed():
+    contact = policy()
 
-    with pytest.raises(UncalibratedForceSpeed):
-        policy.threshold_for(0.002)
+    assert contact.threshold_for(0.0025) == pytest.approx(4.0)
+    assert contact.threshold_for(0.0100) == pytest.approx(7.0)
 
-    with pytest.raises(UncalibratedForceSpeed):
-        policy.threshold_for(0.020)
+
+def test_threshold_is_capped_for_normal_arm_speed():
+    assert policy().threshold_for(0.10) == pytest.approx(10.0)
+
+
+def test_any_positive_speed_has_a_threshold():
+    contact = policy()
+
+    assert contact.threshold_for(0.001) > 0.0
+    assert contact.threshold_for(0.037) > 0.0
+    assert contact.threshold_for(0.10) > 0.0
+
+
+@pytest.mark.parametrize("speed", [0.0, -0.1, float("inf")])
+def test_invalid_speeds_are_rejected(speed):
+    with pytest.raises(ValueError):
+        policy().threshold_for(speed)

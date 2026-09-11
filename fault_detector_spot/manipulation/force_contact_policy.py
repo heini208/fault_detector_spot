@@ -1,96 +1,79 @@
-"""Speed-calibrated force threshold selection for guarded arm motion."""
+"""Continuous speed-aware force threshold for guarded arm motion."""
 
-from dataclasses import dataclass
 import math
 
 
-CONTACT_CALIBRATION_SPEEDS_PARAMETER = (
-    "arm.contact.calibration_linear_speeds_mps"
+CONTACT_MINIMUM_THRESHOLD_PARAMETER = (
+    "arm.contact.minimum_force_delta_threshold_n"
 )
-CONTACT_CALIBRATION_THRESHOLDS_PARAMETER = (
-    "arm.contact.calibration_force_delta_thresholds_n"
+CONTACT_REFERENCE_SPEED_PARAMETER = (
+    "arm.contact.reference_linear_speed_mps"
+)
+CONTACT_REFERENCE_THRESHOLD_PARAMETER = (
+    "arm.contact.reference_force_delta_threshold_n"
+)
+CONTACT_MAXIMUM_THRESHOLD_PARAMETER = (
+    "arm.contact.maximum_force_delta_threshold_n"
 )
 CONTACT_CONSECUTIVE_SAMPLES_PARAMETER = (
     "arm.contact.consecutive_samples"
 )
 
-DEFAULT_CONTACT_CALIBRATION_SPEEDS_MPS = (0.005,)
-DEFAULT_CONTACT_CALIBRATION_THRESHOLDS_N = (5.0,)
+DEFAULT_CONTACT_MINIMUM_THRESHOLD_N = 3.0
+DEFAULT_CONTACT_REFERENCE_SPEED_MPS = 0.005
+DEFAULT_CONTACT_REFERENCE_THRESHOLD_N = 5.0
+DEFAULT_CONTACT_MAXIMUM_THRESHOLD_N = 10.0
 DEFAULT_CONTACT_CONSECUTIVE_SAMPLES = 2
 
 
-class UncalibratedForceSpeed(ValueError):
-    """Raised when guarded motion requests an uncalibrated speed."""
-
-
-@dataclass(frozen=True)
-class ForceThresholdCalibration:
-    linear_speed_mps: float
-    force_delta_threshold_n: float
-
-    def __post_init__(self):
-        if (
-            not math.isfinite(float(self.linear_speed_mps))
-            or float(self.linear_speed_mps) <= 0.0
-        ):
-            raise ValueError(
-                "Force calibration speed must be positive and finite"
-            )
-        if (
-            not math.isfinite(float(self.force_delta_threshold_n))
-            or float(self.force_delta_threshold_n) <= 0.0
-        ):
-            raise ValueError(
-                "Force calibration threshold must be positive and finite"
-            )
-
-
 class SpeedAwareForceContactPolicy:
-    """Interpolate only between measured speed/threshold calibration points."""
+    """Scale force tolerance continuously with planned arm speed."""
 
     def __init__(
         self,
-        calibrations,
+        minimum_threshold_n: float = DEFAULT_CONTACT_MINIMUM_THRESHOLD_N,
+        reference_speed_mps: float = DEFAULT_CONTACT_REFERENCE_SPEED_MPS,
+        reference_threshold_n: float = (
+            DEFAULT_CONTACT_REFERENCE_THRESHOLD_N
+        ),
+        maximum_threshold_n: float = DEFAULT_CONTACT_MAXIMUM_THRESHOLD_N,
         consecutive_samples: int = DEFAULT_CONTACT_CONSECUTIVE_SAMPLES,
-        speed_tolerance_mps: float = 1e-6,
     ):
-        values = tuple(calibrations)
-        if not values:
+        self.minimum_threshold_n = self._positive(
+            minimum_threshold_n,
+            "Minimum force threshold",
+        )
+        self.reference_speed_mps = self._positive(
+            reference_speed_mps,
+            "Reference arm speed",
+        )
+        self.reference_threshold_n = self._positive(
+            reference_threshold_n,
+            "Reference force threshold",
+        )
+        self.maximum_threshold_n = self._positive(
+            maximum_threshold_n,
+            "Maximum force threshold",
+        )
+        if self.reference_threshold_n < self.minimum_threshold_n:
             raise ValueError(
-                "Force contact policy requires calibration points"
+                "Reference force threshold must not be below "
+                "the minimum threshold"
             )
-        if isinstance(consecutive_samples, bool) or int(consecutive_samples) < 1:
+        if self.maximum_threshold_n < self.reference_threshold_n:
+            raise ValueError(
+                "Maximum force threshold must not be below "
+                "the reference threshold"
+            )
+        if (
+            isinstance(consecutive_samples, bool)
+            or not isinstance(consecutive_samples, int)
+            or consecutive_samples < 1
+        ):
             raise ValueError(
                 "Force contact consecutive sample count must be positive"
             )
-        tolerance = float(speed_tolerance_mps)
-        if not math.isfinite(tolerance) or tolerance <= 0.0:
-            raise ValueError(
-                "Force calibration speed tolerance must be positive"
-            )
-
-        normalized = []
-        for value in values:
-            if not isinstance(value, ForceThresholdCalibration):
-                raise TypeError(
-                    "Force contact policy requires "
-                    "ForceThresholdCalibration values"
-                )
-            normalized.append(value)
-        normalized.sort(key=lambda value: value.linear_speed_mps)
-
-        speeds = [value.linear_speed_mps for value in normalized]
-        if any(
-            abs(second - first) <= tolerance
-            for first, second in zip(speeds, speeds[1:])
-        ):
-            raise ValueError(
-                "Force calibration speeds must be unique"
-            )
-
-        self.calibrations = tuple(normalized)
-        self.consecutive_samples = int(consecutive_samples)
-        self.speed_tolerance_mps = tolerance
+        self.consecutive_samples = consecutive_samples
 
     @classmethod
     def from_node(cls, node):
@@ -99,14 +82,22 @@ class SpeedAwareForceContactPolicy:
                 "SpeedAwareForceContactPolicy requires a ROS node"
             )
 
-        defaults = (
+        parameters = (
             (
-                CONTACT_CALIBRATION_SPEEDS_PARAMETER,
-                list(DEFAULT_CONTACT_CALIBRATION_SPEEDS_MPS),
+                CONTACT_MINIMUM_THRESHOLD_PARAMETER,
+                DEFAULT_CONTACT_MINIMUM_THRESHOLD_N,
             ),
             (
-                CONTACT_CALIBRATION_THRESHOLDS_PARAMETER,
-                list(DEFAULT_CONTACT_CALIBRATION_THRESHOLDS_N),
+                CONTACT_REFERENCE_SPEED_PARAMETER,
+                DEFAULT_CONTACT_REFERENCE_SPEED_MPS,
+            ),
+            (
+                CONTACT_REFERENCE_THRESHOLD_PARAMETER,
+                DEFAULT_CONTACT_REFERENCE_THRESHOLD_N,
+            ),
+            (
+                CONTACT_MAXIMUM_THRESHOLD_PARAMETER,
+                DEFAULT_CONTACT_MAXIMUM_THRESHOLD_N,
             ),
             (
                 CONTACT_CONSECUTIVE_SAMPLES_PARAMETER,
@@ -114,29 +105,23 @@ class SpeedAwareForceContactPolicy:
             ),
         )
         values = {}
-        for name, default in defaults:
+        for name, default in parameters:
             if not node.has_parameter(name):
                 node.declare_parameter(name, default)
             values[name] = node.get_parameter(name).value
 
-        speeds = tuple(
-            float(value)
-            for value in values[CONTACT_CALIBRATION_SPEEDS_PARAMETER]
-        )
-        thresholds = tuple(
-            float(value)
-            for value in values[CONTACT_CALIBRATION_THRESHOLDS_PARAMETER]
-        )
-        if len(speeds) != len(thresholds):
-            raise ValueError(
-                "Force calibration speed and threshold arrays must "
-                "have equal length"
-            )
-
         return cls(
-            calibrations=tuple(
-                ForceThresholdCalibration(speed, threshold)
-                for speed, threshold in zip(speeds, thresholds)
+            minimum_threshold_n=float(
+                values[CONTACT_MINIMUM_THRESHOLD_PARAMETER]
+            ),
+            reference_speed_mps=float(
+                values[CONTACT_REFERENCE_SPEED_PARAMETER]
+            ),
+            reference_threshold_n=float(
+                values[CONTACT_REFERENCE_THRESHOLD_PARAMETER]
+            ),
+            maximum_threshold_n=float(
+                values[CONTACT_MAXIMUM_THRESHOLD_PARAMETER]
             ),
             consecutive_samples=int(
                 values[CONTACT_CONSECUTIVE_SAMPLES_PARAMETER]
@@ -144,62 +129,43 @@ class SpeedAwareForceContactPolicy:
         )
 
     def threshold_for(self, linear_speed_mps: float) -> float:
-        """Return a calibrated threshold without extrapolating."""
+        """Return the bounded threshold for one planned translational speed."""
         speed = float(linear_speed_mps)
         if not math.isfinite(speed) or speed <= 0.0:
             raise ValueError(
                 "Guarded arm speed must be positive and finite"
             )
 
-        for calibration in self.calibrations:
-            if (
-                abs(calibration.linear_speed_mps - speed)
-                <= self.speed_tolerance_mps
-            ):
-                return calibration.force_delta_threshold_n
-
-        lower = None
-        upper = None
-        for calibration in self.calibrations:
-            if calibration.linear_speed_mps < speed:
-                lower = calibration
-                continue
-            if calibration.linear_speed_mps > speed:
-                upper = calibration
-                break
-
-        if lower is None or upper is None:
-            available = ", ".join(
-                f"{value.linear_speed_mps:.4f}"
-                for value in self.calibrations
-            )
-            raise UncalibratedForceSpeed(
-                f"No force threshold is calibrated for {speed:.4f} m/s. "
-                f"Calibrated speed range/points: {available} m/s"
-            )
-
-        fraction = (
-            (speed - lower.linear_speed_mps)
-            / (upper.linear_speed_mps - lower.linear_speed_mps)
+        speed_allowance_n = (
+            self.reference_threshold_n
+            - self.minimum_threshold_n
+        ) * (speed / self.reference_speed_mps)
+        threshold = self.minimum_threshold_n + speed_allowance_n
+        return min(
+            self.maximum_threshold_n,
+            max(self.minimum_threshold_n, threshold),
         )
-        return (
-            lower.force_delta_threshold_n
-            + fraction
-            * (
-                upper.force_delta_threshold_n
-                - lower.force_delta_threshold_n
+
+    @staticmethod
+    def _positive(value, label: str) -> float:
+        normalized = float(value)
+        if not math.isfinite(normalized) or normalized <= 0.0:
+            raise ValueError(
+                f"{label} must be positive and finite"
             )
-        )
+        return normalized
 
 
 __all__ = [
-    "CONTACT_CALIBRATION_SPEEDS_PARAMETER",
-    "CONTACT_CALIBRATION_THRESHOLDS_PARAMETER",
     "CONTACT_CONSECUTIVE_SAMPLES_PARAMETER",
-    "DEFAULT_CONTACT_CALIBRATION_SPEEDS_MPS",
-    "DEFAULT_CONTACT_CALIBRATION_THRESHOLDS_N",
+    "CONTACT_MAXIMUM_THRESHOLD_PARAMETER",
+    "CONTACT_MINIMUM_THRESHOLD_PARAMETER",
+    "CONTACT_REFERENCE_SPEED_PARAMETER",
+    "CONTACT_REFERENCE_THRESHOLD_PARAMETER",
     "DEFAULT_CONTACT_CONSECUTIVE_SAMPLES",
-    "ForceThresholdCalibration",
+    "DEFAULT_CONTACT_MAXIMUM_THRESHOLD_N",
+    "DEFAULT_CONTACT_MINIMUM_THRESHOLD_N",
+    "DEFAULT_CONTACT_REFERENCE_SPEED_MPS",
+    "DEFAULT_CONTACT_REFERENCE_THRESHOLD_N",
     "SpeedAwareForceContactPolicy",
-    "UncalibratedForceSpeed",
 ]

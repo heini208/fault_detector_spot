@@ -7,16 +7,25 @@ from synchros2.action_client import ActionClientWrapper
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 from synchros2.utilities import namespace_with
 
+from fault_detector_spot.manipulation.arm_force_baseline import (
+    ForceBaselineSampler,
+)
 from fault_detector_spot.manipulation.arm_motion_speed import (
     ArmMotionSpeedPolicy,
 )
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
+    CONTACT_RETREAT_DISTANCE_PARAMETER,
+    CONTACT_RETREAT_SPEED_PARAMETER,
+    DEFAULT_CONTACT_RETREAT_DISTANCE_M,
+    DEFAULT_CONTACT_RETREAT_SPEED_MPS,
+    DEFAULT_FORCE_STALE_TIMEOUT_SEC,
     DEFAULT_READY_DEPLOYED_TIMEOUT_SEC,
     DEFAULT_READY_LIFT_DISTANCE_M,
     DEFAULT_READY_STATE_TIMEOUT_SEC,
     DEFAULT_READY_TF_TIMEOUT_SEC,
     DEFAULT_STOW_STATE_TIMEOUT_SEC,
+    FORCE_STALE_TIMEOUT_PARAMETER,
     READY_DEPLOYED_TIMEOUT_PARAMETER,
     READY_LIFT_DISTANCE_PARAMETER,
     READY_STATE_TIMEOUT_PARAMETER,
@@ -25,6 +34,12 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
 )
 from fault_detector_spot.manipulation.arm_state_source import (
     ArmStateSource,
+)
+from fault_detector_spot.manipulation.force_contact_policy import (
+    SpeedAwareForceContactPolicy,
+)
+from fault_detector_spot.manipulation.hand_settling_detector import (
+    HandSettlingDetector,
 )
 from fault_detector_spot.navigation.base_movement_executor import (
     BASE_READY_STANDING_TIMEOUT_PARAMETER,
@@ -117,6 +132,33 @@ class RobotCommandResources:
                         robot_name,
                     ),
                     arm_state_source=self.get_arm_state_source(node),
+                    settling_detector=HandSettlingDetector.from_node(
+                        node,
+                        self.get_arm_state_source(node),
+                        self.get_tf_listener(node),
+                    ),
+                    force_baseline_sampler=ForceBaselineSampler.from_node(
+                        node,
+                        self.get_arm_state_source(node),
+                    ),
+                    force_contact_policy=(
+                        SpeedAwareForceContactPolicy.from_node(node)
+                    ),
+                    force_stale_timeout_sec=self._positive_parameter(
+                        node,
+                        FORCE_STALE_TIMEOUT_PARAMETER,
+                        DEFAULT_FORCE_STALE_TIMEOUT_SEC,
+                    ),
+                    contact_retreat_distance_m=self._positive_parameter(
+                        node,
+                        CONTACT_RETREAT_DISTANCE_PARAMETER,
+                        DEFAULT_CONTACT_RETREAT_DISTANCE_M,
+                    ),
+                    contact_retreat_speed_mps=self._positive_parameter(
+                        node,
+                        CONTACT_RETREAT_SPEED_PARAMETER,
+                        DEFAULT_CONTACT_RETREAT_SPEED_MPS,
+                    ),
                     ready_lift_distance_m=self._positive_parameter(
                         node,
                         READY_LIFT_DISTANCE_PARAMETER,
