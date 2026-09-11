@@ -44,9 +44,9 @@ class StatusOverviewPanel(QFrame):
         self.battery_subscription = None
 
         layout = QGridLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setContentsMargins(12, 10, 12, 10)
         layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(5)
+        layout.setVerticalSpacing(8)
 
         for label in (
             status_label,
@@ -76,22 +76,22 @@ class StatusOverviewPanel(QFrame):
         )
 
         sensor_widget = QWidget()
-        sensor_layout = QHBoxLayout(sensor_widget)
+        sensor_layout = QGridLayout(sensor_widget)
         sensor_layout.setContentsMargins(0, 0, 0, 0)
-        sensor_layout.setSpacing(4)
-        sensor_layout.addWidget(QLabel("Sensor:"))
-        sensor_layout.addWidget(sensor_indicator_label)
-        sensor_layout.addWidget(sensor_status_label)
-        sensor_layout.addWidget(sensor_confirm_button)
-        sensor_layout.addSpacing(8)
-        sensor_layout.addWidget(QLabel("Recording:"))
-        sensor_layout.addWidget(sensor_recording_indicator_label)
-        sensor_layout.addWidget(sensor_recording_button)
-        sensor_layout.addWidget(open_measurements_button)
-        sensor_layout.addSpacing(8)
-        sensor_layout.addWidget(QLabel("Head:"))
-        sensor_layout.addWidget(sensor_connection_indicator_label)
-        sensor_layout.addWidget(sensor_connection_status_label)
+        sensor_layout.setHorizontalSpacing(6)
+        sensor_layout.setVerticalSpacing(6)
+        sensor_layout.addWidget(QLabel("Sensor:"), 0, 0)
+        sensor_layout.addWidget(sensor_indicator_label, 0, 1)
+        sensor_layout.addWidget(sensor_status_label, 0, 2)
+        sensor_layout.addWidget(sensor_confirm_button, 0, 3)
+        sensor_layout.addWidget(QLabel("Recording:"), 0, 4)
+        sensor_layout.addWidget(sensor_recording_indicator_label, 0, 5)
+        sensor_layout.addWidget(sensor_recording_button, 0, 6)
+        sensor_layout.addWidget(open_measurements_button, 0, 7)
+        sensor_layout.addWidget(QLabel("Head:"), 1, 0)
+        sensor_layout.addWidget(sensor_connection_indicator_label, 1, 1)
+        sensor_layout.addWidget(sensor_connection_status_label, 1, 2, 1, 2)
+        sensor_layout.setColumnMinimumWidth(4, 85)
 
         agent_widget = QWidget()
         agent_layout = QHBoxLayout(agent_widget)
@@ -106,7 +106,7 @@ class StatusOverviewPanel(QFrame):
         hardware_layout = QHBoxLayout(hardware_widget)
         hardware_layout.setContentsMargins(0, 0, 0, 0)
         hardware_layout.setSpacing(4)
-        hardware_layout.addWidget(agent_widget)
+        hardware_layout.addWidget(agent_widget, alignment=Qt.AlignTop)
         hardware_layout.addSpacing(14)
         hardware_layout.addWidget(sensor_widget)
         hardware_layout.addStretch()
@@ -124,6 +124,11 @@ class StatusOverviewPanel(QFrame):
         layout.setColumnStretch(0, 2)
         layout.setColumnStretch(1, 2)
         layout.setColumnStretch(2, 2)
+
+        estop_button.setMinimumHeight(54)
+        status_label.setWordWrap(True)
+        buffer_label.setWordWrap(True)
+        visible_label.setWordWrap(True)
 
         self.sensor_widget = sensor_widget
         self.agent_widget = agent_widget

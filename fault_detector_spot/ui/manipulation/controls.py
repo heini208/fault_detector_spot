@@ -1,13 +1,14 @@
 import math
 
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QMessageBox
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QMessageBox
 
 from fault_detector_msgs.msg import OperationalIntent, TagElement
 from fault_detector_spot.application.commanding.command_ids import OrientationModes
 from fault_detector_spot.manipulation.arm_state_source import ArmStateSource, ArmStowState
 from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
+from ..shared.movement_layout import control_group
 
 
 class TagNotFound(Exception):
@@ -45,14 +46,21 @@ class ManipulationControls(UIControlHelper):
         self.arm_state_timer.start(250)
 
     def make_rows(self) -> list:
-        rows = [
-            self._make_tag_input_row(),
-            self._make_offset_row(),
-            self._make_orientation_offset_row(),
-            self._make_reset_fields_and_move_relative_row(),
-            self._make_control_row()
+        tag_row = self._make_tag_input_row()
+        position = self._make_offset_row()
+        orientation = self._make_orientation_offset_row()
+        offsets = QHBoxLayout()
+        offsets.setSpacing(20)
+        offsets.addLayout(position, 1)
+        offsets.addLayout(orientation, 1)
+        return [
+            control_group("Tag actions", tag_row),
+            control_group(
+                "Arm offset", offsets,
+                self._make_reset_fields_and_move_relative_row(),
+            ),
+            control_group("Robot actions", self._make_control_row()),
         ]
-        return rows
 
     def refresh_arm_state(self):
         if self.arm_state_button is None:
@@ -112,6 +120,7 @@ class ManipulationControls(UIControlHelper):
         row = QHBoxLayout()
         row.addWidget(QLabel("Tag:"))
         self.tag_dropdown = QComboBox()
+        self.tag_dropdown.setMinimumWidth(100)
         self.update_tags_dropdown()
 
         self.submit_button = QPushButton("Move to Tag")
@@ -143,24 +152,30 @@ class ManipulationControls(UIControlHelper):
             lambda _: self.handle_scan_all_in_range()
         )
         row.addWidget(self.scan_all_button)
+        row.addStretch()
         return row
 
     def _make_offset_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Positional Offset:"))
+        row = QVBoxLayout()
+        frame_row = QHBoxLayout()
 
         self.frames_dropdown = QComboBox()
-        row.addWidget(QLabel("Frame:"))
+        frame_row.addWidget(QLabel("Position (m) · Frame:"))
         self.update_frames_dropdown()
-        row.addWidget(self.frames_dropdown)
+        frame_row.addWidget(self.frames_dropdown)
+        frame_row.addStretch()
+        row.addLayout(frame_row)
 
         self._add_offset_controls(row)
 
         return row
 
     def _make_orientation_offset_row(self):
-        row = QHBoxLayout()
-        self.add_orientation_dropdown(row)
+        row = QVBoxLayout()
+        mode_row = QHBoxLayout()
+        self.add_orientation_dropdown(mode_row)
+        mode_row.addStretch()
+        row.addLayout(mode_row)
         self._add_orientation_offset_controls(row)
         return row
 
@@ -180,6 +195,7 @@ class ManipulationControls(UIControlHelper):
                 OperationalIntent.INTENT_MOVE_ARM_RELATIVE
             )
         )
+        row.addStretch()
         row.addWidget(self.move_by_offset_button)
 
         return row
@@ -205,17 +221,21 @@ class ManipulationControls(UIControlHelper):
         ]:
             dec = QPushButton(dec_txt)
             fld = QLineEdit()
-            fld.setFixedWidth(50)
+            fld.setFixedWidth(68)
             fld.setText(f"{self.DEFAULT_OFFSETS[axis]:.2f}")
             inc = QPushButton(inc_txt)
 
             dec.clicked.connect(lambda _, a=axis, d=dec_delta: self._change_offset(a, d))
             inc.clicked.connect(lambda _, a=axis, d=inc_delta: self._change_offset(a, d))
 
-            row.addWidget(QLabel(axis))
-            row.addWidget(dec)
-            row.addWidget(fld)
-            row.addWidget(inc)
+            axis_row = QHBoxLayout()
+            label = QLabel(axis)
+            label.setFixedWidth(42)
+            axis_row.addWidget(label)
+            axis_row.addWidget(dec, 1)
+            axis_row.addWidget(fld)
+            axis_row.addWidget(inc, 1)
+            row.addLayout(axis_row)
 
             self.offset_fields[axis] = fld
 
@@ -233,17 +253,21 @@ class ManipulationControls(UIControlHelper):
         for axis, dec_txt, inc_txt, dec_delta, inc_delta in controls:
             dec = QPushButton(dec_txt)
             fld = QLineEdit()
-            fld.setFixedWidth(50)
+            fld.setFixedWidth(68)
             fld.setText(f"{self.DEFAULT_ANGLES[axis]:.1f}")
             inc = QPushButton(inc_txt)
 
             dec.clicked.connect(lambda _, a=axis, d=dec_delta: self._change_angle(a, d))
             inc.clicked.connect(lambda _, a=axis, d=inc_delta: self._change_angle(a, d))
 
-            row.addWidget(QLabel(axis))
-            row.addWidget(dec)
-            row.addWidget(fld)
-            row.addWidget(inc)
+            axis_row = QHBoxLayout()
+            label = QLabel(axis)
+            label.setFixedWidth(42)
+            axis_row.addWidget(label)
+            axis_row.addWidget(dec, 1)
+            axis_row.addWidget(fld)
+            axis_row.addWidget(inc, 1)
+            row.addLayout(axis_row)
 
             self.offset_fields[axis] = fld
 
@@ -260,7 +284,7 @@ class ManipulationControls(UIControlHelper):
     def add_orientation_dropdown(self, row: QHBoxLayout):
         self.orientation_combo = QComboBox()
         self.orientation_combo.addItems([mode.value for mode in OrientationModes])
-        row.addWidget(QLabel("Orientation:"))
+        row.addWidget(QLabel("Rotation (°) · Mode:"))
         row.addWidget(self.orientation_combo)
 
     def _change_offset(self, axis: str, delta: float):

@@ -1,12 +1,13 @@
 import math
 
 from PyQt5.QtWidgets import (
-    QHBoxLayout, QPushButton, QLabel, QLineEdit, QComboBox, QMessageBox
+    QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QComboBox, QMessageBox
 )
 
 from fault_detector_msgs.msg import OperationalIntent, TagElement
 from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
+from ..shared.movement_layout import control_group
 
 
 class BaseMovementControls(UIControlHelper):
@@ -30,33 +31,37 @@ class BaseMovementControls(UIControlHelper):
 
     def make_rows(self):
         return [
-            self._make_tag_input_row(),
-            self._make_offset_row(),
-            self._make_reset_and_move_row(),
-            self._make_navigation_buttons_row()
+            control_group("Tag actions", self._make_tag_input_row()),
+            control_group("Base offset", self._make_offset_row(),
+                          self._make_reset_and_move_row()),
+            control_group("Robot actions", self._make_navigation_buttons_row())
         ]
 
     def _make_tag_input_row(self):
         row = QHBoxLayout()
         row.addWidget(QLabel("Tag:"))
         self.tag_dropdown = QComboBox()
+        self.tag_dropdown.setMinimumWidth(100)
         self.update_tags_dropdown()
 
         move_to_tag_btn = QPushButton("Move to Tag")
         move_to_tag_btn.clicked.connect(self.handle_move_to_tag)
         row.addWidget(self.tag_dropdown)
         row.addWidget(move_to_tag_btn)
+        row.addStretch()
         return row
 
     def _make_offset_row(self):
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Base Offset:"))
+        row = QVBoxLayout()
+        frame_row = QHBoxLayout()
 
         # Frame selection (same as ManipulationControls)
         self.frames_dropdown = QComboBox()
-        row.addWidget(QLabel("Frame:"))
+        frame_row.addWidget(QLabel("Frame:"))
         self.update_frames_dropdown()
-        row.addWidget(self.frames_dropdown)
+        frame_row.addWidget(self.frames_dropdown)
+        frame_row.addStretch()
+        row.addLayout(frame_row)
 
         # X/Y controls
         for axis, dec_txt, inc_txt, dec_delta, inc_delta in [
@@ -65,29 +70,39 @@ class BaseMovementControls(UIControlHelper):
         ]:
             dec = QPushButton(dec_txt)
             fld = QLineEdit()
-            fld.setFixedWidth(50)
+            fld.setFixedWidth(68)
             fld.setText(f"{self.DEFAULT_OFFSETS[axis]:.2f}")
             inc = QPushButton(inc_txt)
             dec.clicked.connect(lambda _, a=axis, d=dec_delta: self._change_offset(a, d))
             inc.clicked.connect(lambda _, a=axis, d=inc_delta: self._change_offset(a, d))
-            row.addWidget(QLabel(axis))
-            row.addWidget(dec)
-            row.addWidget(fld)
-            row.addWidget(inc)
+            axis_row = QHBoxLayout()
+            label = QLabel(f"{axis} (m)")
+            label.setFixedWidth(60)
+            axis_row.addWidget(label)
+            axis_row.addWidget(dec)
+            axis_row.addWidget(fld)
+            axis_row.addWidget(inc)
+            axis_row.addStretch()
+            row.addLayout(axis_row)
             self.offset_fields[axis] = fld
 
         # Rotation control (Yaw only)
-        row.addWidget(QLabel("Yaw:"))
+        yaw_row = QHBoxLayout()
+        label = QLabel("Yaw (°)")
+        label.setFixedWidth(60)
+        yaw_row.addWidget(label)
         dec = QPushButton("⟲ CCW")
         inc = QPushButton("⟳ CW")
         yaw_field = QLineEdit()
-        yaw_field.setFixedWidth(50)
+        yaw_field.setFixedWidth(68)
         yaw_field.setText(f"{self.DEFAULT_ANGLES['Yaw']:.1f}")
         dec.clicked.connect(lambda _, d=+5.0: self._change_angle("Yaw", d))
         inc.clicked.connect(lambda _, d=-5.0: self._change_angle("Yaw", d))
-        row.addWidget(dec)
-        row.addWidget(yaw_field)
-        row.addWidget(inc)
+        yaw_row.addWidget(dec)
+        yaw_row.addWidget(yaw_field)
+        yaw_row.addWidget(inc)
+        yaw_row.addStretch()
+        row.addLayout(yaw_row)
         self.offset_fields["Yaw"] = yaw_field
 
         return row
@@ -104,6 +119,7 @@ class BaseMovementControls(UIControlHelper):
 
         move_offset_btn = QPushButton("Move Base by Offset")
         move_offset_btn.clicked.connect(self.handle_move_base_relative)
+        row.addStretch()
         row.addWidget(move_offset_btn)
 
         return row

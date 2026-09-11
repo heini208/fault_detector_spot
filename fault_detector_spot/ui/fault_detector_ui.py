@@ -719,6 +719,7 @@ class Fault_Detector_UI(QWidget):
         manip_tab = QWidget()
         manip_layout = QVBoxLayout(manip_tab)
         self.manipulation_controls.add_rows(manip_layout)
+        manip_layout.addStretch()
         self.tabs.addTab(manip_tab, "Manipulation Control")
 
     def add_navigation_control_tab(self):
@@ -731,6 +732,7 @@ class Fault_Detector_UI(QWidget):
         base_tab = QWidget()
         base_layout = QVBoxLayout(base_tab)
         self.base_movement_controls.add_rows(base_layout)
+        base_layout.addStretch()
         self.tabs.addTab(base_tab, "Base Movement Control")
 
     def add_inspection_control_tab(self):
