@@ -147,6 +147,7 @@ def plan():
         direction_y=0.0,
         direction_z=0.0,
         linear_speed_mps=0.005,
+        direction_frame="body",
     )
 
 
@@ -170,7 +171,7 @@ def execution(
         start_goal=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
-        current_hand_pose=lambda: deepcopy(current_pose),
+        current_hand_pose=lambda _frame: deepcopy(current_pose),
         build_motion_goal=lambda current, target, speed: (
             current,
             target,
@@ -198,7 +199,7 @@ def test_contact_cancels_then_retreats_and_returns_contact():
 
     state.sample = HandForceSample(
         received_at=0.1,
-        x_n=7.0,
+        x_n=-5.0,
         y_n=2.0,
         z_n=3.0,
     )
@@ -206,7 +207,7 @@ def test_contact_cancels_then_retreats_and_returns_contact():
 
     state.sample = HandForceSample(
         received_at=0.2,
-        x_n=7.0,
+        x_n=-5.0,
         y_n=2.0,
         z_n=3.0,
     )
@@ -319,7 +320,7 @@ def test_explicit_threshold_override_replaces_generic_policy():
 
     state.sample = HandForceSample(
         received_at=0.1,
-        x_n=7.0,
+        x_n=-5.0,
         y_n=2.0,
         z_n=3.0,
     )
@@ -327,7 +328,7 @@ def test_explicit_threshold_override_replaces_generic_policy():
 
     state.sample = HandForceSample(
         received_at=0.2,
-        x_n=7.0,
+        x_n=-5.0,
         y_n=2.0,
         z_n=3.0,
     )
@@ -335,3 +336,43 @@ def test_explicit_threshold_override_replaces_generic_policy():
 
     assert contact.outcome is ArmMovementOutcome.RUNNING
     assert driver.cancel_count == 1
+
+
+def test_large_sideways_force_does_not_trigger_directional_contact():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.0))
+
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+
+    state.sample = HandForceSample(
+        received_at=0.1,
+        x_n=1.0,
+        y_n=22.0,
+        z_n=3.0,
+    )
+    update = guard.poll()
+
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 0
+
+
+def test_force_in_commanded_direction_does_not_count_as_obstacle_contact():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.0))
+
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+
+    state.sample = HandForceSample(
+        received_at=0.1,
+        x_n=8.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    update = guard.poll()
+
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 0

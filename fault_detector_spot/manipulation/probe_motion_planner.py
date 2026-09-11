@@ -52,6 +52,7 @@ class ProbeMotionPlan:
     direction_y: float
     direction_z: float
     linear_speed_mps: float
+    direction_frame: str = ""
     motion_required: bool = True
     force_guard_enabled: bool = True
 
@@ -304,6 +305,7 @@ class ProbeMotionPlanner:
                 direction_y=0.0,
                 direction_z=0.0,
                 linear_speed_mps=0.0,
+                direction_frame=target_frame,
                 motion_required=True,
                 force_guard_enabled=False,
             )
@@ -317,6 +319,7 @@ class ProbeMotionPlanner:
                 direction_y=0.0,
                 direction_z=0.0,
                 linear_speed_mps=0.0,
+                direction_frame=target_frame,
                 motion_required=True,
                 force_guard_enabled=False,
             )
@@ -329,6 +332,7 @@ class ProbeMotionPlanner:
             direction_y=dy / hand_distance,
             direction_z=dz / hand_distance,
             linear_speed_mps=hand_distance / duration_sec,
+            direction_frame=target_frame,
             motion_required=True,
             force_guard_enabled=True,
         )
@@ -387,9 +391,15 @@ class ProbeMotionPlanner:
             duration_sec,
         )
 
-    def current_hand_pose(self) -> PoseStamped:
+    def current_hand_pose(
+        self,
+        frame_id: str = GRAV_ALIGNED_BODY_FRAME_NAME,
+    ) -> PoseStamped:
+        normalized_frame = str(frame_id).strip()
+        if not normalized_frame:
+            normalized_frame = GRAV_ALIGNED_BODY_FRAME_NAME
         return self.current_pose(
-            GRAV_ALIGNED_BODY_FRAME_NAME,
+            normalized_frame,
             HAND_FRAME_NAME,
         )
 

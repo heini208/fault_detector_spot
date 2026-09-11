@@ -13,6 +13,9 @@ from fault_detector_spot.manipulation.arm_movement_result import (
     ArmMovementOutcome,
     ArmMovementUpdate,
 )
+from fault_detector_spot.manipulation.directional_force import (
+    directional_force_delta,
+)
 from fault_detector_spot.manipulation.hand_settling_detector import (
     HandSettlingOutcome,
 )
@@ -173,7 +176,9 @@ class GuardedProbeExecution:
         self._abort_outcome = None
         self._abort_detail = ""
         self._retreat_distance_m = 0.0
-        self._peak_force_delta_n = 0.0
+        self._peak_opposing_force_delta_n = 0.0
+        self._peak_total_force_delta_n = 0.0
+        self._last_hand_orientation = None
         self.settling_detector.reset()
         self.force_baseline_sampler.reset()
 
@@ -289,6 +294,9 @@ class GuardedProbeExecution:
 
         self._force_last_received_at = baseline.last_received_at
         self._force_contact_count = 0
+        self._last_hand_orientation = deepcopy(
+            plan.current_hand.pose.orientation
+        )
         self._phase = _Phase.MOVING
         update = self._start_goal(plan.goal)
         if update.outcome is ArmMovementOutcome.RUNNING:
@@ -320,8 +328,10 @@ class GuardedProbeExecution:
                 )
             return self._terminal(
                 update.outcome,
-                f"{update.detail}; peak force delta "
-                f"{self._peak_force_delta_n:.2f} N, threshold "
+                f"{update.detail}; peak opposing force delta "
+                f"{self._peak_opposing_force_delta_n:.2f} N, peak total "
+                f"force delta {self._peak_total_force_delta_n:.2f} N, "
+                f"directional threshold "
                 f"{self._force_threshold_n:.2f} N at "
                 f"{plan.linear_speed_mps:.4f} m/s",
             )
@@ -372,21 +382,52 @@ class GuardedProbeExecution:
                 "Guarded probe movement lost its force baseline or plan",
             )
 
-        dx = sample.x_n - baseline.x_n
-        dy = sample.y_n - baseline.y_n
-        dz = sample.z_n - baseline.z_n
-        delta_n = math.sqrt(dx * dx + dy * dy + dz * dz)
-        self._peak_force_delta_n = max(
-            self._peak_force_delta_n,
-            delta_n,
+        try:
+            hand_orientation = self._current_hand_orientation(plan)
+            force_delta = directional_force_delta(
+                baseline_force_hand=(
+                    baseline.x_n,
+                    baseline.y_n,
+                    baseline.z_n,
+                ),
+                current_force_hand=(
+                    sample.x_n,
+                    sample.y_n,
+                    sample.z_n,
+                ),
+                baseline_hand_orientation=(
+                    plan.current_hand.pose.orientation
+                ),
+                current_hand_orientation=hand_orientation,
+                movement_direction=(
+                    plan.direction_x,
+                    plan.direction_y,
+                    plan.direction_z,
+                ),
+            )
+        except Exception as exception:
+            return self._begin_abort(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Could not evaluate directional contact force: "
+                f"{exception}",
+            )
+
+        self._peak_opposing_force_delta_n = max(
+            self._peak_opposing_force_delta_n,
+            force_delta.opposing_n,
         )
+        self._peak_total_force_delta_n = max(
+            self._peak_total_force_delta_n,
+            force_delta.total_n,
+        )
+
         threshold_n = self._force_threshold_n
         if threshold_n is None:
             return self._begin_abort(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Translational force guard has no threshold",
             )
-        if delta_n >= threshold_n:
+        if force_delta.opposing_n >= threshold_n:
             self._force_contact_count += 1
         else:
             self._force_contact_count = 0
@@ -398,12 +439,38 @@ class GuardedProbeExecution:
             return None
 
         return self._begin_contact(
-            "Contact detected from end-effector force delta "
-            f"{delta_n:.2f} N exceeding "
-            f"{threshold_n:.2f} N at "
-            f"{plan.linear_speed_mps:.4f} m/s; peak "
-            f"{self._peak_force_delta_n:.2f} N"
+            "Contact detected from opposing end-effector force delta "
+            f"{force_delta.opposing_n:.2f} N exceeding directional "
+            f"threshold {threshold_n:.2f} N at "
+            f"{plan.linear_speed_mps:.4f} m/s; peak opposing "
+            f"{self._peak_opposing_force_delta_n:.2f} N, peak total "
+            f"{self._peak_total_force_delta_n:.2f} N"
         )
+
+    def _current_hand_orientation(self, plan):
+        frame_id = str(plan.direction_frame).strip()
+        if not frame_id:
+            raise ValueError(
+                "Guarded probe plan has no movement direction frame"
+            )
+
+        try:
+            current_hand = self._current_hand_pose(frame_id)
+        except Exception:
+            orientation = self._last_hand_orientation
+            if orientation is None:
+                raise
+            return orientation
+
+        if current_hand.header.frame_id.strip() != frame_id:
+            raise ValueError(
+                "Measured hand pose is not expressed in the movement "
+                f"direction frame '{frame_id}'"
+            )
+        self._last_hand_orientation = deepcopy(
+            current_hand.pose.orientation
+        )
+        return self._last_hand_orientation
 
     def _resolve_force_threshold(
         self,
@@ -500,7 +567,9 @@ class GuardedProbeExecution:
             )
 
         try:
-            current_hand = self._current_hand_pose()
+            current_hand = self._current_hand_pose(
+                plan.direction_frame
+            )
         except Exception as exception:
             return self._terminal(
                 ArmMovementOutcome.RETREAT_FAILED,
