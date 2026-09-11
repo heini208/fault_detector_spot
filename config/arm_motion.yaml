@@ -14,3 +14,12 @@
     arm.settling.angular_velocity_threshold_rad_s: 0.05
     arm.settling.stable_duration_sec: 0.40
     arm.settling.timeout_sec: 3.0
+
+    arm.force_baseline.minimum_samples: 10
+    arm.force_baseline.minimum_span_sec: 0.50
+    arm.force_baseline.maximum_component_span_n: 3.0
+    arm.force_baseline.timeout_sec: 2.0
+
+    arm.contact.calibration_linear_speeds_mps: [0.005]
+    arm.contact.calibration_force_delta_thresholds_n: [5.0]
+    arm.contact.consecutive_samples: 2

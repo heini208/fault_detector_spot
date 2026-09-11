@@ -48,6 +48,24 @@ class HandVelocitySample:
         )
 
 
+@dataclass(frozen=True)
+class HandForceSample:
+    """One measured end-effector force sample expressed in the hand frame."""
+
+    received_at: float
+    x_n: float
+    y_n: float
+    z_n: float
+
+    @property
+    def magnitude_n(self) -> float:
+        return math.sqrt(
+            self.x_n * self.x_n
+            + self.y_n * self.y_n
+            + self.z_n * self.z_n
+        )
+
+
 class ArmStateSource:
     """Cache fresh manipulator state published by the Spot driver."""
 
@@ -71,6 +89,7 @@ class ArmStateSource:
         self._lock = RLock()
         self._stow_state = ArmStowState.UNKNOWN
         self._hand_velocity_sample = None
+        self._hand_force_sample = None
         self._last_received_at = None
         self._subscription = node.create_subscription(
             ManipulatorState,
@@ -107,6 +126,19 @@ class ArmStateSource:
             return None
         return sample
 
+    def hand_force_sample(
+        self,
+        now: float = None,
+    ) -> HandForceSample | None:
+        """Return the latest fresh hand-frame end-effector force sample."""
+        current = self._monotonic_clock() if now is None else float(now)
+        with self._lock:
+            received_at = self._last_received_at
+            sample = self._hand_force_sample
+        if not self._is_fresh(received_at, current):
+            return None
+        return sample
+
     def is_stale(self, now: float = None) -> bool:
         current = self._monotonic_clock() if now is None else float(now)
         with self._lock:
@@ -127,9 +159,14 @@ class ArmStateSource:
             message,
             received_at,
         )
+        force_sample = self._read_hand_force(
+            message,
+            received_at,
+        )
         with self._lock:
             self._stow_state = state
             self._hand_velocity_sample = velocity_sample
+            self._hand_force_sample = force_sample
             self._last_received_at = received_at
 
     @staticmethod
@@ -163,6 +200,32 @@ class ArmStateSource:
             angular_z_rad_s=values[5],
         )
 
+    @staticmethod
+    def _read_hand_force(message, received_at):
+        field_mask = int(message.has_field)
+        force_mask = int(
+            ManipulatorState
+            .ESTIMATED_END_EFFECTOR_FORCE_IN_HAND_FIELD_SET
+        )
+        if not field_mask & force_mask:
+            return None
+
+        force = message.estimated_end_effector_force_in_hand
+        values = (
+            float(force.x),
+            float(force.y),
+            float(force.z),
+        )
+        if not all(math.isfinite(value) for value in values):
+            return None
+
+        return HandForceSample(
+            received_at=float(received_at),
+            x_n=values[0],
+            y_n=values[1],
+            z_n=values[2],
+        )
+
     def _is_fresh(self, received_at, current: float) -> bool:
         if received_at is None:
             return False
@@ -179,6 +242,7 @@ __all__ = [
     "ArmStateSource",
     "ArmStowState",
     "DEFAULT_ARM_STATE_STALE_AFTER_SEC",
+    "HandForceSample",
     "HandVelocitySample",
     "MANIPULATOR_STATE_TOPIC",
 ]
