@@ -18,8 +18,8 @@ from fault_detector_spot.application.commanding.command_ids import (
     OrientationModes,
     TagFrames,
 )
-from fault_detector_spot.manipulation.behaviours.move_arm_action import (
-    MoveArmAction,
+from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
+    ArmMovementBehaviour,
 )
 from fault_detector_spot.manipulation.commands.manipulator_move_relative_command import (
     ManipulatorMoveRelativeCommand,
@@ -29,7 +29,7 @@ from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import
 )
 
 
-class MoveArmGoalAction(MoveArmAction):
+class ArmGoalBehaviour(ArmMovementBehaviour):
     """Prepare one arm goal and dispatch it to ArmMovementExecutor."""
 
     def _prepare_operation(self):
@@ -205,4 +205,4 @@ class MoveArmGoalAction(MoveArmAction):
             return False
 
 
-__all__ = ["MoveArmGoalAction"]
+__all__ = ["ArmGoalBehaviour"]

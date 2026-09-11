@@ -5,7 +5,7 @@ from py_trees.common import Access, Status
 import synchros2.scope as ros_scope
 
 
-class MoveAction(py_trees.behaviour.Behaviour):
+class MovementBehaviour(py_trees.behaviour.Behaviour):
     """Translate executor updates into behavior-tree status."""
 
     RUNNING_OUTCOME = None
@@ -115,4 +115,4 @@ class MoveAction(py_trees.behaviour.Behaviour):
         return str(getattr(command, "request_id", "") or "")
 
 
-__all__ = ["MoveAction"]
+__all__ = ["MovementBehaviour"]

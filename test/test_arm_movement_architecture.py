@@ -10,50 +10,50 @@ def read(relative_path):
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_runner_uses_one_arm_goal_action_for_relative_and_tag():
+def test_runner_uses_one_arm_goal_behaviour_for_relative_and_tag():
     runner = read(
         "fault_detector_spot/application/behaviour_tree/runner.py"
     )
 
-    assert runner.count("MoveArmGoalAction(") == 2
+    assert runner.count("ArmGoalBehaviour(") == 2
     assert "ArmMovementAction" not in runner
-    assert "ReadyArmActionSimple" not in runner
-    assert "StowArmActionSimple" not in runner
+    assert "ReadyArmBehaviourSimple" not in runner
+    assert "StowArmBehaviourSimple" not in runner
 
 
 def test_arm_behavior_hierarchy_has_one_common_move_adapter():
     move = read(
         "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "move_action.py"
+        "movement_behaviour.py"
     )
     arm = read(
         "fault_detector_spot/manipulation/behaviours/"
-        "move_arm_action.py"
+        "arm_movement_behaviour.py"
     )
     goal = read(
         "fault_detector_spot/manipulation/behaviours/"
-        "move_arm_goal_action.py"
+        "arm_goal_behaviour.py"
     )
     ready = read(
         "fault_detector_spot/manipulation/behaviours/"
-        "ready_arm_action.py"
+        "ready_arm_behaviour.py"
     )
     stow = read(
         "fault_detector_spot/manipulation/behaviours/"
-        "stow_arm_action.py"
+        "stow_arm_behaviour.py"
     )
 
-    assert "class MoveAction(" in move
-    assert "class MoveArmAction(MoveAction)" in arm
-    assert "class MoveArmGoalAction(MoveArmAction)" in goal
-    assert "class ReadyArmAction(MoveArmAction)" in ready
-    assert "class StowArmAction(MoveArmAction)" in stow
+    assert "class MovementBehaviour(" in move
+    assert "class ArmMovementBehaviour(MovementBehaviour)" in arm
+    assert "class ArmGoalBehaviour(ArmMovementBehaviour)" in goal
+    assert "class ReadyArmBehaviour(ArmMovementBehaviour)" in ready
+    assert "class StowArmBehaviour(ArmMovementBehaviour)" in stow
 
 
-def test_common_move_action_only_adapts_tree_to_executor():
+def test_common_movement_behaviour_only_adapts_tree_to_executor():
     move = read(
         "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "move_action.py"
+        "movement_behaviour.py"
     )
 
     assert "self.executor.poll()" in move
@@ -67,11 +67,11 @@ def test_common_move_action_only_adapts_tree_to_executor():
 def test_ready_and_stow_are_small_executor_dispatchers():
     ready = read(
         "fault_detector_spot/manipulation/behaviours/"
-        "ready_arm_action.py"
+        "ready_arm_behaviour.py"
     )
     stow = read(
         "fault_detector_spot/manipulation/behaviours/"
-        "stow_arm_action.py"
+        "stow_arm_behaviour.py"
     )
 
     assert "return self.executor.prepare()" in ready
@@ -84,10 +84,10 @@ def test_ready_and_stow_are_small_executor_dispatchers():
     assert "def terminate(" not in stow
 
 
-def test_arm_goal_action_keeps_goal_specific_tf_preparation():
+def test_arm_goal_behaviour_keeps_goal_specific_tf_preparation():
     goal = read(
         "fault_detector_spot/manipulation/behaviours/"
-        "move_arm_goal_action.py"
+        "arm_goal_behaviour.py"
     )
 
     assert "_prepare_move_command(command)" in goal
@@ -102,7 +102,7 @@ def test_executor_still_owns_physical_robot_command_lifecycle():
     )
     move = read(
         "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "move_action.py"
+        "movement_behaviour.py"
     )
 
     assert "send_goal_async(" in executor
@@ -115,12 +115,18 @@ def test_executor_still_owns_physical_robot_command_lifecycle():
 
 
 
-def test_obsolete_arm_movement_action_is_removed():
-    assert not (
-        ROOT
-        / "fault_detector_spot/manipulation/behaviours/"
-        "arm_movement_action.py"
-    ).exists()
+def test_renamed_movement_behaviour_files_replace_old_action_names():
+    removed = (
+        "fault_detector_spot/application/behaviour_tree/behaviours/move_action.py",
+        "fault_detector_spot/manipulation/behaviours/move_arm_action.py",
+        "fault_detector_spot/manipulation/behaviours/move_arm_goal_action.py",
+        "fault_detector_spot/manipulation/behaviours/ready_arm_action.py",
+        "fault_detector_spot/manipulation/behaviours/stow_arm_action.py",
+        "fault_detector_spot/manipulation/behaviours/arm_movement_action.py",
+    )
+
+    for relative_path in removed:
+        assert not (ROOT / relative_path).exists()
 
 
 def test_executor_owns_probe_to_hand_conversion():
@@ -148,7 +154,7 @@ def test_public_arm_api_exposes_speed_not_duration():
     )
     goal = read(
         "fault_detector_spot/manipulation/behaviours/"
-        "move_arm_goal_action.py"
+        "arm_goal_behaviour.py"
     )
 
     for signature in (

@@ -1,14 +1,14 @@
 """Common behavior-tree adapter for arm executor operations."""
 
-from fault_detector_spot.application.behaviour_tree.behaviours.move_action import (
-    MoveAction,
+from fault_detector_spot.application.behaviour_tree.behaviours.movement_behaviour import (
+    MovementBehaviour,
 )
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementOutcome,
 )
 
 
-class MoveArmAction(MoveAction):
+class ArmMovementBehaviour(MovementBehaviour):
     """Provide one shared ArmMovementExecutor to arm actions."""
 
     RUNNING_OUTCOME = ArmMovementOutcome.RUNNING
@@ -49,4 +49,4 @@ class MoveArmAction(MoveAction):
         self.tf_listener = self.executor.tf_listener
 
 
-__all__ = ["MoveArmAction"]
+__all__ = ["ArmMovementBehaviour"]

@@ -8,14 +8,14 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementOutcome,
     ArmMovementUpdate,
 )
-from fault_detector_spot.manipulation.behaviours.move_arm_action import (
-    MoveArmAction,
+from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
+    ArmMovementBehaviour,
 )
-from fault_detector_spot.manipulation.behaviours.ready_arm_action import (
-    ReadyArmAction,
+from fault_detector_spot.manipulation.behaviours.ready_arm_behaviour import (
+    ReadyArmBehaviour,
 )
-from fault_detector_spot.manipulation.behaviours.stow_arm_action import (
-    StowArmAction,
+from fault_detector_spot.manipulation.behaviours.stow_arm_behaviour import (
+    StowArmBehaviour,
 )
 
 
@@ -54,9 +54,9 @@ def blackboard(request_id):
     )
 
 
-def test_ready_and_stow_share_move_arm_action():
-    assert issubclass(ReadyArmAction, MoveArmAction)
-    assert issubclass(StowArmAction, MoveArmAction)
+def test_ready_and_stow_share_arm_movement_behaviour():
+    assert issubclass(ReadyArmBehaviour, ArmMovementBehaviour)
+    assert issubclass(StowArmBehaviour, ArmMovementBehaviour)
 
 
 def test_ready_action_only_starts_prepare_then_polls():
@@ -70,7 +70,7 @@ def test_ready_action_only_starts_prepare_then_polls():
             "Arm deployed",
         ),
     )
-    action = ReadyArmAction(robot_command_resources=object())
+    action = ReadyArmBehaviour(robot_command_resources=object())
     action.executor = executor
     action.blackboard = blackboard("ready-request")
 
@@ -95,7 +95,7 @@ def test_stow_action_only_starts_stow_then_polls():
             "Arm stowed",
         ),
     )
-    action = StowArmAction(robot_command_resources=object())
+    action = StowArmBehaviour(robot_command_resources=object())
     action.executor = executor
     action.blackboard = blackboard("stow-request")
 
@@ -109,7 +109,7 @@ def test_stow_action_only_starts_stow_then_polls():
     assert executor.poll_calls == 1
 
 
-def test_common_move_action_cancels_executor_when_invalidated():
+def test_common_movement_behaviour_cancels_executor_when_invalidated():
     executor = FakeExecutor(
         ArmMovementUpdate(
             ArmMovementOutcome.RUNNING,
@@ -120,7 +120,7 @@ def test_common_move_action_cancels_executor_when_invalidated():
             "Moving",
         ),
     )
-    action = ReadyArmAction(robot_command_resources=object())
+    action = ReadyArmBehaviour(robot_command_resources=object())
     action.executor = executor
     action.blackboard = blackboard("ready-cancel")
 
@@ -131,7 +131,7 @@ def test_common_move_action_cancels_executor_when_invalidated():
     assert executor.cancel_calls == 1
 
 
-def test_common_move_action_preserves_correlated_failure_detail():
+def test_common_movement_behaviour_preserves_correlated_failure_detail():
     executor = FakeExecutor(
         ArmMovementUpdate(
             ArmMovementOutcome.ARM_STATE_STALE,
@@ -142,7 +142,7 @@ def test_common_move_action_preserves_correlated_failure_detail():
             "unused",
         ),
     )
-    action = StowArmAction(robot_command_resources=object())
+    action = StowArmBehaviour(robot_command_resources=object())
     action.executor = executor
     action.blackboard = blackboard("stow-failure")
 

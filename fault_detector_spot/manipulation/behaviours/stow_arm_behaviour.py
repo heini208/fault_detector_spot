@@ -1,16 +1,16 @@
 """Behavior-tree adapter for stowing the Spot arm."""
 
-from fault_detector_spot.manipulation.behaviours.move_arm_action import (
-    MoveArmAction,
+from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
+    ArmMovementBehaviour,
 )
 
 
-class StowArmAction(MoveArmAction):
+class StowArmBehaviour(ArmMovementBehaviour):
     """Request ArmMovementExecutor.stow()."""
 
     def __init__(
         self,
-        name: str = "StowArmAction",
+        name: str = "StowArmBehaviour",
         robot_name: str = "",
         robot_command_resources=None,
     ):
@@ -24,4 +24,4 @@ class StowArmAction(MoveArmAction):
         return self.executor.stow()
 
 
-__all__ = ["StowArmAction"]
+__all__ = ["StowArmBehaviour"]

@@ -1,16 +1,16 @@
 """Behavior-tree adapter for preparing the Spot arm."""
 
-from fault_detector_spot.manipulation.behaviours.move_arm_action import (
-    MoveArmAction,
+from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
+    ArmMovementBehaviour,
 )
 
 
-class ReadyArmAction(MoveArmAction):
+class ReadyArmBehaviour(ArmMovementBehaviour):
     """Request ArmMovementExecutor.prepare()."""
 
     def __init__(
         self,
-        name: str = "ReadyArmAction",
+        name: str = "ReadyArmBehaviour",
         robot_name: str = "",
         robot_command_resources=None,
     ):
@@ -24,4 +24,4 @@ class ReadyArmAction(MoveArmAction):
         return self.executor.prepare()
 
 
-__all__ = ["ReadyArmAction"]
+__all__ = ["ReadyArmBehaviour"]

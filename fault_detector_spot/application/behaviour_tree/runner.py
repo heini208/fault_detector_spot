@@ -40,17 +40,17 @@ from fault_detector_spot.manipulation.behaviours.close_gripper_action import (
 from fault_detector_spot.manipulation.behaviours.manipulator_move_close_to_surface_action import (
     ManipulatorMoveCloseToSurfaceAction,
 )
-from fault_detector_spot.manipulation.behaviours.move_arm_goal_action import (
-    MoveArmGoalAction,
+from fault_detector_spot.manipulation.behaviours.arm_goal_behaviour import (
+    ArmGoalBehaviour,
 )
-from fault_detector_spot.manipulation.behaviours.ready_arm_action import (
-    ReadyArmAction,
+from fault_detector_spot.manipulation.behaviours.ready_arm_behaviour import (
+    ReadyArmBehaviour,
 )
 from fault_detector_spot.manipulation.behaviours.stand_up_action import (
     StandUpActionSimple,
 )
-from fault_detector_spot.manipulation.behaviours.stow_arm_action import (
-    StowArmAction,
+from fault_detector_spot.manipulation.behaviours.stow_arm_behaviour import (
+    StowArmBehaviour,
 )
 from fault_detector_spot.manipulation.behaviours.toggle_gripper_action import (
     ToggleGripperAction,
@@ -281,15 +281,15 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     specs = [
         (
             CommandID.STOW_ARM,
-            lambda n: StowArmAction(
-                name="StowArmAction",
+            lambda n: StowArmBehaviour(
+                name="StowArmBehaviour",
                 robot_command_resources=robot_command_resources,
             ),
         ),
         (
             CommandID.READY_ARM,
-            lambda n: ReadyArmAction(
-                name="ReadyArmAction",
+            lambda n: ReadyArmBehaviour(
+                name="ReadyArmBehaviour",
                 robot_command_resources=robot_command_resources,
             ),
         ),
@@ -302,8 +302,8 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         ),
         (
             CommandID.MOVE_ARM_TO_TAG,
-            lambda n: MoveArmGoalAction(
-                name="MoveArmToTagAction",
+            lambda n: ArmGoalBehaviour(
+                name="ArmToTagBehaviour",
                 tag_state_source=tag_state_source,
                 robot_command_resources=robot_command_resources,
             ),
@@ -318,8 +318,8 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         ),
         (
             CommandID.MOVE_ARM_RELATIVE,
-            lambda n: MoveArmGoalAction(
-                name="MoveArmRelativeAction",
+            lambda n: ArmGoalBehaviour(
+                name="ArmRelativeBehaviour",
                 tag_state_source=tag_state_source,
                 robot_command_resources=robot_command_resources,
             ),
@@ -402,8 +402,8 @@ def build_cancelable_command_tree(
     robot_command_resources = (
         get_helper_container(node).robot_command_resources
     )
-    stow_cancel = StowArmAction(
-        name="StowArmCancel",
+    stow_cancel = StowArmBehaviour(
+        name="StowArmCancelBehaviour",
         robot_command_resources=robot_command_resources,
     )
     close_gripper = CloseGripperAction(

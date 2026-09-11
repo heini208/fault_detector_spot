@@ -10,8 +10,8 @@ from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
     OrientationModes,
 )
-from fault_detector_spot.manipulation.behaviours.move_arm_goal_action import (
-    MoveArmGoalAction,
+from fault_detector_spot.manipulation.behaviours.arm_goal_behaviour import (
+    ArmGoalBehaviour,
 )
 from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import (
     ManipulatorToTagCommand,
@@ -105,7 +105,7 @@ def tag_alias_command(orientation_mode):
 
 
 def resolver(transformer):
-    action = object.__new__(MoveArmGoalAction)
+    action = object.__new__(ArmGoalBehaviour)
     action.tf_listener = transformer
     action._resolve_tag_alias = lambda frame_id: "tag36h11:7"
     action._can_transform = lambda to_frame, from_frame: True
