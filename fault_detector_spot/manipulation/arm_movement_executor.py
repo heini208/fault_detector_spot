@@ -1,7 +1,10 @@
-"""Shared construction of Cartesian Spot arm movements."""
+"""Centralized Cartesian Spot arm movement execution."""
 
 from copy import deepcopy
+from dataclasses import dataclass
+from enum import Enum
 import math
+import time
 
 from bosdyn.client.frame_helpers import (
     GRAV_ALIGNED_BODY_FRAME_NAME,
@@ -31,8 +34,34 @@ from fault_detector_spot.shared.ros.tf_transforms import (
 )
 
 
+DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC = 2.0
+DEFAULT_RESULT_TIMEOUT_SEC = 30.0
+
+
+class ArmMovementOutcome(Enum):
+    """Typed outcome of one executor lifecycle update."""
+
+    RUNNING = "running"
+    SUCCESS = "success"
+    BUSY = "busy"
+    ACTION_SERVER_UNAVAILABLE = "action_server_unavailable"
+    GOAL_RESPONSE_TIMEOUT = "goal_response_timeout"
+    GOAL_REJECTED = "goal_rejected"
+    RESULT_TIMEOUT = "result_timeout"
+    MOTION_FAILED = "motion_failed"
+    EXECUTION_ERROR = "execution_error"
+
+
+@dataclass(frozen=True)
+class ArmMovementUpdate:
+    """Current nonblocking execution outcome and diagnostic detail."""
+
+    outcome: ArmMovementOutcome
+    detail: str
+
+
 class ArmMovementExecutor:
-    """Resolve controlled-frame targets into Spot hand commands."""
+    """Resolve, submit, monitor, and cancel Cartesian arm movements."""
 
     def __init__(
         self,
@@ -40,11 +69,21 @@ class ArmMovementExecutor:
         tag_state_source=None,
         robot_name: str = "",
         speed_policy=None,
+        action_client=None,
+        goal_response_timeout_sec: float = (
+            DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC
+        ),
+        result_timeout_sec: float = DEFAULT_RESULT_TIMEOUT_SEC,
+        monotonic_clock=time.monotonic,
+        logger=None,
     ):
         if tf_listener is None:
             raise ValueError(
                 "ArmMovementExecutor requires a TF listener"
             )
+        if not callable(monotonic_clock):
+            raise TypeError("Monotonic clock must be callable")
+
         self.tf_listener = tf_listener
         self.tag_state_source = tag_state_source
         self.robot_name = robot_name
@@ -53,13 +92,325 @@ class ArmMovementExecutor:
             if speed_policy is not None
             else ArmMotionSpeedPolicy()
         )
+        self.action_client = action_client
+        self.goal_response_timeout_sec = self._positive_timeout(
+            goal_response_timeout_sec,
+            "Goal response timeout",
+        )
+        self.result_timeout_sec = self._positive_timeout(
+            result_timeout_sec,
+            "Action result timeout",
+        )
+        self._monotonic_clock = monotonic_clock
+        self._logger = logger
+
+        self._send_goal_future = None
+        self._goal_handle = None
+        self._result_future = None
+        self._goal_sent_monotonic = None
+        self._result_started_monotonic = None
+
+    @property
+    def active(self) -> bool:
+        return self._send_goal_future is not None
 
     def relative(
         self,
         command,
         speed=None,
+    ) -> ArmMovementUpdate:
+        """Start a hand-relative movement."""
+        return self._start_goal(
+            lambda: self._build_relative_goal(command, speed)
+        )
+
+    def pose(
+        self,
+        target: PoseStamped,
+        execution_frame: str = "",
+        speed=None,
+    ) -> ArmMovementUpdate:
+        """Start an absolute hand-pose movement."""
+        return self._start_goal(
+            lambda: self._build_hand_pose_goal(
+                target,
+                execution_frame,
+                speed,
+            )
+        )
+
+    def probe_pose(
+        self,
+        probe_target: PoseStamped,
+        motion_sensor_id: str,
+        speed=None,
+    ) -> ArmMovementUpdate:
+        """Start an absolute active-probe movement."""
+        return self._start_goal(
+            lambda: self._build_probe_pose_goal(
+                probe_target,
+                motion_sensor_id,
+                speed,
+            )
+        )
+
+    def tag_probe(
+        self,
+        command,
+        speed=None,
+    ) -> ArmMovementUpdate:
+        """Start a probe movement to a target relative to a live tag."""
+        return self._start_goal(
+            lambda: self._build_tag_probe_goal(command, speed)
+        )
+
+    def probe_relative(
+        self,
+        offset: PoseStamped,
+        motion_sensor_id: str,
+        speed=None,
+    ) -> ArmMovementUpdate:
+        """Start a movement relative to the current active probe frame."""
+        return self._start_goal(
+            lambda: self._build_probe_relative_goal(
+                offset,
+                motion_sensor_id,
+                speed,
+            )
+        )
+
+    def poll(self) -> ArmMovementUpdate:
+        """Advance the active RobotCommand lifecycle without blocking."""
+        if self._send_goal_future is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "No arm movement is active",
+            )
+
+        if self._goal_handle is None:
+            return self._poll_goal_response()
+
+        return self._poll_result()
+
+    def cancel(self) -> None:
+        """Request cancellation of the active movement and release it."""
+        if not self.active:
+            return
+        self._request_cancel()
+        self._reset_lifecycle()
+
+    def shutdown(self) -> None:
+        self.cancel()
+
+    def _start_goal(self, goal_builder) -> ArmMovementUpdate:
+        if self.active:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.BUSY,
+                "Another arm movement is already active",
+            )
+        if self.action_client is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Arm movement executor has no RobotCommand action client",
+            )
+
+        try:
+            server_ready = self.action_client.wait_for_server(
+                timeout_sec=0.0
+            )
+        except Exception as exception:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"RobotCommand action server check failed: {exception}",
+            )
+        if not server_ready:
+            action_name = namespace_with(
+                self.robot_name,
+                "robot_command",
+            )
+            return ArmMovementUpdate(
+                ArmMovementOutcome.ACTION_SERVER_UNAVAILABLE,
+                f"Action server '{action_name}' unavailable",
+            )
+
+        try:
+            goal = goal_builder()
+        except Exception as exception:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"Arm goal preparation failed: {exception}",
+            )
+
+        try:
+            future = self.action_client.send_goal_async(goal)
+        except Exception as exception:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"Arm goal submission failed: {exception}",
+            )
+        if future is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "RobotCommand action client returned no goal future",
+            )
+
+        self._send_goal_future = future
+        self._goal_sent_monotonic = self._monotonic_clock()
+        return ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING,
+            "Goal sent",
+        )
+
+    def _poll_goal_response(self) -> ArmMovementUpdate:
+        if not self._send_goal_future.done():
+            if self._deadline_expired(
+                self._goal_sent_monotonic,
+                self.goal_response_timeout_sec,
+            ):
+                self._request_cancel()
+                return self._finish(
+                    ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT,
+                    "Action goal response timed out after "
+                    f"{self.goal_response_timeout_sec:.1f} s",
+                )
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                "Waiting for goal acceptance",
+            )
+
+        try:
+            goal_handle = self._send_goal_future.result()
+        except Exception as exception:
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"Arm goal submission failed: {exception}",
+            )
+
+        if goal_handle is None or not goal_handle.accepted:
+            return self._finish(
+                ArmMovementOutcome.GOAL_REJECTED,
+                "Action goal was rejected",
+            )
+
+        self._goal_handle = goal_handle
+        try:
+            self._result_future = goal_handle.get_result_async()
+        except Exception as exception:
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"Action result request failed: {exception}",
+            )
+
+        if self._result_future is None:
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "RobotCommand goal returned no result future",
+            )
+
+        self._result_started_monotonic = self._monotonic_clock()
+        return ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING,
+            "Goal accepted",
+        )
+
+    def _poll_result(self) -> ArmMovementUpdate:
+        if self._result_future is None:
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Accepted arm goal has no result future",
+            )
+
+        if not self._result_future.done():
+            if self._deadline_expired(
+                self._result_started_monotonic,
+                self.result_timeout_sec,
+            ):
+                self._request_cancel()
+                return self._finish(
+                    ArmMovementOutcome.RESULT_TIMEOUT,
+                    "Action result timed out after "
+                    f"{self.result_timeout_sec:.1f} s",
+                )
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                "Arm movement in progress",
+            )
+
+        try:
+            result_wrapper = self._result_future.result()
+            result = result_wrapper.result
+        except Exception as exception:
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"Action result failed: {exception}",
+            )
+
+        if bool(getattr(result, "success", False)):
+            return self._finish(
+                ArmMovementOutcome.SUCCESS,
+                "Succeeded",
+            )
+
+        return self._finish(
+            ArmMovementOutcome.MOTION_FAILED,
+            self._command_failure_detail(result),
+        )
+
+    def _request_cancel(self) -> None:
+        handle = self._goal_handle
+        if handle is not None:
+            try:
+                handle.cancel_goal_async()
+            except Exception as exception:
+                self._log_error(
+                    f"Arm goal cancellation failed: {exception}"
+                )
+            return
+
+        future = self._send_goal_future
+        if future is None or future.done():
+            return
+
+        def cancel_when_accepted(done_future):
+            try:
+                accepted_handle = done_future.result()
+                if (
+                    accepted_handle is not None
+                    and accepted_handle.accepted
+                ):
+                    accepted_handle.cancel_goal_async()
+            except Exception as exception:
+                self._log_error(
+                    "Pending arm goal cancellation failed: "
+                    f"{exception}"
+                )
+
+        future.add_done_callback(cancel_when_accepted)
+
+    def _finish(
+        self,
+        outcome: ArmMovementOutcome,
+        detail: str,
+    ) -> ArmMovementUpdate:
+        update = ArmMovementUpdate(
+            outcome,
+            str(detail).strip(),
+        )
+        self._reset_lifecycle()
+        return update
+
+    def _reset_lifecycle(self) -> None:
+        self._send_goal_future = None
+        self._goal_handle = None
+        self._result_future = None
+        self._goal_sent_monotonic = None
+        self._result_started_monotonic = None
+
+    def _build_relative_goal(
+        self,
+        command,
+        speed=None,
     ) -> RobotCommand.Goal:
-        """Move the hand to a target defined by a relative command."""
         if command is None or not callable(
             getattr(command, "compute_goal_pose", None)
         ):
@@ -104,13 +455,12 @@ class ArmMovementExecutor:
             speed,
         )
 
-    def pose(
+    def _build_hand_pose_goal(
         self,
         target: PoseStamped,
         execution_frame: str = "",
         speed=None,
     ) -> RobotCommand.Goal:
-        """Move the hand to an absolute target pose."""
         target_hand = self._normalize_target(
             target,
             execution_frame,
@@ -125,13 +475,12 @@ class ArmMovementExecutor:
             speed,
         )
 
-    def probe_pose(
+    def _build_probe_pose_goal(
         self,
         probe_target: PoseStamped,
         motion_sensor_id: str,
         speed=None,
     ) -> RobotCommand.Goal:
-        """Move the active probe frame to an absolute target pose."""
         if not isinstance(probe_target, PoseStamped):
             raise TypeError("Probe target must be a PoseStamped")
 
@@ -142,7 +491,7 @@ class ArmMovementExecutor:
             )
 
         if sensor_id == BARE_HAND_MOTION_ID:
-            return self.pose(
+            return self._build_hand_pose_goal(
                 probe_target,
                 speed=speed,
             )
@@ -162,12 +511,11 @@ class ArmMovementExecutor:
             speed,
         )
 
-    def tag_probe(
+    def _build_tag_probe_goal(
         self,
         command,
         speed=None,
     ) -> RobotCommand.Goal:
-        """Move the active probe to a target relative to a live tag."""
         if self.tag_state_source is None:
             raise RuntimeError(
                 "Tag probe movement requires a tag state source"
@@ -192,19 +540,18 @@ class ArmMovementExecutor:
         probe_target = command.compute_goal_pose(
             self.tf_listener
         )
-        return self.probe_pose(
+        return self._build_probe_pose_goal(
             probe_target,
             command.motion_sensor_id,
-            speed=speed,
+            speed,
         )
 
-    def probe_relative(
+    def _build_probe_relative_goal(
         self,
         offset: PoseStamped,
         motion_sensor_id: str,
         speed=None,
     ) -> RobotCommand.Goal:
-        """Move relative to the current active probe frame."""
         if not isinstance(offset, PoseStamped):
             raise TypeError(
                 "Probe-relative offset must be a PoseStamped"
@@ -396,5 +743,40 @@ class ArmMovementExecutor:
         convert(command, goal.command)
         return goal
 
+    def _deadline_expired(self, started, timeout_sec) -> bool:
+        if started is None:
+            return False
+        return self._monotonic_clock() - started >= timeout_sec
 
-__all__ = ["ArmMovementExecutor"]
+    @staticmethod
+    def _positive_timeout(value, label: str) -> float:
+        normalized = float(value)
+        if not math.isfinite(normalized) or normalized <= 0.0:
+            raise ValueError(
+                f"{label} must be positive and finite"
+            )
+        return normalized
+
+    @staticmethod
+    def _command_failure_detail(result) -> str:
+        detail = str(
+            getattr(result, "detail", "")
+            or getattr(result, "message", "")
+        ).strip()
+        if detail:
+            return detail
+        return f"Robot command failed: {result}"
+
+    def _log_error(self, message: str) -> None:
+        if self._logger is None:
+            return
+        log = getattr(self._logger, "error", None)
+        if callable(log):
+            log(message)
+
+
+__all__ = [
+    "ArmMovementExecutor",
+    "ArmMovementOutcome",
+    "ArmMovementUpdate",
+]

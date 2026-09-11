@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import math
+from types import SimpleNamespace
 
 import pytest
 from geometry_msgs.msg import PoseStamped, TransformStamped
@@ -12,10 +13,91 @@ from fault_detector_spot.manipulation.arm_motion_speed import (
 )
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
+    ArmMovementOutcome,
 )
 
 
+class ManualFuture:
+
+    def __init__(self):
+        self._done = False
+        self._result = None
+        self._exception = None
+        self._callbacks = []
+
+    def done(self):
+        return self._done
+
+    def result(self):
+        if self._exception is not None:
+            raise self._exception
+        return self._result
+
+    def set_result(self, result):
+        self._result = result
+        self._done = True
+        callbacks = tuple(self._callbacks)
+        self._callbacks.clear()
+        for callback in callbacks:
+            callback(self)
+
+    def set_exception(self, exception):
+        self._exception = exception
+        self._done = True
+        callbacks = tuple(self._callbacks)
+        self._callbacks.clear()
+        for callback in callbacks:
+            callback(self)
+
+    def add_done_callback(self, callback):
+        if self._done:
+            callback(self)
+            return
+        self._callbacks.append(callback)
+
+
+class FakeGoalHandle:
+
+    def __init__(self, result_future=None, accepted=True):
+        self.accepted = accepted
+        self.result_future = result_future or ManualFuture()
+        self.cancel_count = 0
+
+    def get_result_async(self):
+        return self.result_future
+
+    def cancel_goal_async(self):
+        self.cancel_count += 1
+        return ManualFuture()
+
+
+class FakeActionClient:
+
+    def __init__(self, send_future=None, server_ready=True):
+        self.send_future = send_future or ManualFuture()
+        self.server_ready = server_ready
+        self.sent_goals = []
+
+    def wait_for_server(self, timeout_sec=0.0):
+        assert timeout_sec == 0.0
+        return self.server_ready
+
+    def send_goal_async(self, goal):
+        self.sent_goals.append(goal)
+        return self.send_future
+
+
+class ManualClock:
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
 class FakeTransformer:
+
     def __init__(self, transforms=None):
         self.transforms = transforms or {}
         self.calls = []
@@ -31,6 +113,7 @@ class FakeTransformer:
 
 
 class FakeRelativeCommand:
+
     def __init__(self, target):
         self.target = target
         self.calls = []
@@ -41,12 +124,14 @@ class FakeRelativeCommand:
 
 
 class FakeTag:
+
     def __init__(self, tag_id, pose):
         self.id = tag_id
         self.pose = pose
 
 
 class FakeTagStateSource:
+
     def __init__(self, tags):
         self.tags = tags
         self.requests = []
@@ -58,6 +143,7 @@ class FakeTagStateSource:
 
 
 class FakeTagCommand:
+
     def __init__(self, tag_id, sensor_id, probe_target):
         self.tag_id = tag_id
         self.motion_sensor_id = sensor_id
@@ -82,7 +168,7 @@ def transform(parent, child, x=0.0, y=0.0, z=0.0, yaw=0.0):
     return result
 
 
-def _capture_builder(monkeypatch):
+def capture_builder(monkeypatch):
     captured = {}
 
     def build(*args):
@@ -100,6 +186,16 @@ def _capture_builder(monkeypatch):
         lambda source, target: None,
     )
     return captured
+
+
+def executor_with_client(transformer, **kwargs):
+    client = kwargs.pop("action_client", FakeActionClient())
+    executor = ArmMovementExecutor(
+        transformer,
+        action_client=client,
+        **kwargs,
+    )
+    return executor, client
 
 
 def test_relative_uses_current_and_absolute_goal_for_speed(monkeypatch):
@@ -120,11 +216,12 @@ def test_relative_uses_current_and_absolute_goal_for_speed(monkeypatch):
         ): current_transform,
     })
     command = FakeRelativeCommand(relative)
-    captured = _capture_builder(monkeypatch)
-    executor = ArmMovementExecutor(transformer)
+    captured = capture_builder(monkeypatch)
+    executor, client = executor_with_client(transformer)
 
-    executor.relative(command)
+    update = executor.relative(command)
 
+    assert update.outcome is ArmMovementOutcome.RUNNING
     assert command.calls == [transformer]
     assert transformer.calls == [
         (
@@ -133,6 +230,7 @@ def test_relative_uses_current_and_absolute_goal_for_speed(monkeypatch):
             0.0,
         )
     ]
+    assert len(client.sent_goals) == 1
     args = captured["args"]
     assert args[0] == pytest.approx(1.10)
     assert args[7] == executor_module.GRAV_ALIGNED_BODY_FRAME_NAME
@@ -158,8 +256,8 @@ def test_relative_speed_override_uses_same_current_to_goal_path(
             "hand",
         ): current_transform,
     })
-    captured = _capture_builder(monkeypatch)
-    executor = ArmMovementExecutor(transformer)
+    captured = capture_builder(monkeypatch)
+    executor, _ = executor_with_client(transformer)
 
     executor.relative(
         FakeRelativeCommand(relative),
@@ -186,8 +284,8 @@ def test_absolute_hand_pose_uses_current_to_goal_for_speed(monkeypatch):
     transformer = FakeTransformer({
         ("body", "hand"): current,
     })
-    captured = _capture_builder(monkeypatch)
-    executor = ArmMovementExecutor(transformer)
+    captured = capture_builder(monkeypatch)
+    executor, _ = executor_with_client(transformer)
 
     executor.pose(target)
 
@@ -217,8 +315,8 @@ def test_probe_pose_uses_probe_current_to_goal_for_speed(monkeypatch):
     target.pose.position.x = 0.7
     target.pose.orientation.w = 1.0
 
-    captured = _capture_builder(monkeypatch)
-    executor = ArmMovementExecutor(transformer)
+    captured = capture_builder(monkeypatch)
+    executor, _ = executor_with_client(transformer)
 
     executor.probe_pose(target, "hall_probe")
 
@@ -259,8 +357,8 @@ def test_tag_probe_forwards_speed_to_probe_motion(monkeypatch):
         "hall_probe",
         probe_target,
     )
-    captured = _capture_builder(monkeypatch)
-    executor = ArmMovementExecutor(
+    captured = capture_builder(monkeypatch)
+    executor, _ = executor_with_client(
         transformer,
         tag_state_source=source,
     )
@@ -304,8 +402,8 @@ def test_probe_relative_reuses_current_probe_transform(monkeypatch):
     offset.pose.position.x = 0.10
     offset.pose.orientation.w = 1.0
 
-    captured = _capture_builder(monkeypatch)
-    executor = ArmMovementExecutor(transformer)
+    captured = capture_builder(monkeypatch)
+    executor, _ = executor_with_client(transformer)
 
     executor.probe_relative(
         offset,
@@ -338,8 +436,8 @@ def test_bare_hand_probe_pose_uses_hand_speed_path(monkeypatch):
     transformer = FakeTransformer({
         ("body", "hand"): current,
     })
-    captured = _capture_builder(monkeypatch)
-    executor = ArmMovementExecutor(transformer)
+    captured = capture_builder(monkeypatch)
+    executor, _ = executor_with_client(transformer)
 
     executor.probe_pose(target, "hand")
 
@@ -349,8 +447,8 @@ def test_bare_hand_probe_pose_uses_hand_speed_path(monkeypatch):
     assert captured["args"][8] == pytest.approx(2.0)
 
 
-def test_tag_probe_rejects_unreachable_tag():
-    executor = ArmMovementExecutor(
+def test_tag_probe_rejects_unreachable_tag_as_typed_failure():
+    executor, client = executor_with_client(
         FakeTransformer(),
         tag_state_source=FakeTagStateSource({}),
     )
@@ -358,14 +456,17 @@ def test_tag_probe_rejects_unreachable_tag():
     target.header.frame_id = "body"
     target.pose.orientation.w = 1.0
 
-    with pytest.raises(RuntimeError, match="not currently reachable"):
-        executor.tag_probe(
-            FakeTagCommand(7, "hand", target)
-        )
+    update = executor.tag_probe(
+        FakeTagCommand(7, "hand", target)
+    )
+
+    assert update.outcome is ArmMovementOutcome.EXECUTION_ERROR
+    assert "not currently reachable" in update.detail
+    assert client.sent_goals == []
 
 
 def test_public_movement_methods_do_not_accept_duration():
-    executor = ArmMovementExecutor(FakeTransformer())
+    executor, _ = executor_with_client(FakeTransformer())
 
     target = PoseStamped()
     target.header.frame_id = "body"
@@ -373,3 +474,179 @@ def test_public_movement_methods_do_not_accept_duration():
 
     with pytest.raises(TypeError):
         executor.pose(target, duration_sec=2.0)
+
+
+def test_executor_owns_goal_acceptance_and_success_result(monkeypatch):
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+    transformer = FakeTransformer({
+        ("body", "hand"): transform("body", "hand"),
+    })
+    capture_builder(monkeypatch)
+
+    send_future = ManualFuture()
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future=result_future)
+    client = FakeActionClient(send_future=send_future)
+    executor, _ = executor_with_client(
+        transformer,
+        action_client=client,
+    )
+
+    assert executor.pose(target).outcome is ArmMovementOutcome.RUNNING
+    send_future.set_result(handle)
+
+    accepted = executor.poll()
+    assert accepted.outcome is ArmMovementOutcome.RUNNING
+    assert accepted.detail == "Goal accepted"
+
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=True)
+        )
+    )
+    completed = executor.poll()
+
+    assert completed.outcome is ArmMovementOutcome.SUCCESS
+    assert not executor.active
+
+
+def test_executor_reports_goal_rejection(monkeypatch):
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+    transformer = FakeTransformer({
+        ("body", "hand"): transform("body", "hand"),
+    })
+    capture_builder(monkeypatch)
+
+    send_future = ManualFuture()
+    client = FakeActionClient(send_future=send_future)
+    executor, _ = executor_with_client(
+        transformer,
+        action_client=client,
+    )
+
+    executor.pose(target)
+    send_future.set_result(
+        FakeGoalHandle(accepted=False)
+    )
+    update = executor.poll()
+
+    assert update.outcome is ArmMovementOutcome.GOAL_REJECTED
+    assert not executor.active
+
+
+def test_goal_response_timeout_cancels_goal_if_accepted_late(
+    monkeypatch,
+):
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+    transformer = FakeTransformer({
+        ("body", "hand"): transform("body", "hand"),
+    })
+    capture_builder(monkeypatch)
+
+    clock = ManualClock()
+    send_future = ManualFuture()
+    client = FakeActionClient(send_future=send_future)
+    executor, _ = executor_with_client(
+        transformer,
+        action_client=client,
+        monotonic_clock=clock,
+        goal_response_timeout_sec=2.0,
+    )
+
+    executor.pose(target)
+    clock.now = 2.0
+    update = executor.poll()
+
+    assert (
+        update.outcome
+        is ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT
+    )
+    handle = FakeGoalHandle()
+    send_future.set_result(handle)
+    assert handle.cancel_count == 1
+
+
+def test_result_timeout_requests_goal_cancellation(monkeypatch):
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+    transformer = FakeTransformer({
+        ("body", "hand"): transform("body", "hand"),
+    })
+    capture_builder(monkeypatch)
+
+    clock = ManualClock()
+    send_future = ManualFuture()
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future=result_future)
+    client = FakeActionClient(send_future=send_future)
+    executor, _ = executor_with_client(
+        transformer,
+        action_client=client,
+        monotonic_clock=clock,
+        result_timeout_sec=3.0,
+    )
+
+    executor.pose(target)
+    send_future.set_result(handle)
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+
+    clock.now = 3.0
+    update = executor.poll()
+
+    assert update.outcome is ArmMovementOutcome.RESULT_TIMEOUT
+    assert handle.cancel_count == 1
+    assert not executor.active
+
+
+def test_explicit_cancel_requests_goal_cancellation(monkeypatch):
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+    transformer = FakeTransformer({
+        ("body", "hand"): transform("body", "hand"),
+    })
+    capture_builder(monkeypatch)
+
+    send_future = ManualFuture()
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future=result_future)
+    client = FakeActionClient(send_future=send_future)
+    executor, _ = executor_with_client(
+        transformer,
+        action_client=client,
+    )
+
+    executor.pose(target)
+    send_future.set_result(handle)
+    executor.poll()
+
+    executor.cancel()
+
+    assert handle.cancel_count == 1
+    assert not executor.active
+
+
+def test_executor_rejects_overlapping_arm_movement(monkeypatch):
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+    transformer = FakeTransformer({
+        ("body", "hand"): transform("body", "hand"),
+    })
+    capture_builder(monkeypatch)
+
+    executor, client = executor_with_client(transformer)
+
+    first = executor.pose(target)
+    second = executor.pose(target)
+
+    assert first.outcome is ArmMovementOutcome.RUNNING
+    assert second.outcome is ArmMovementOutcome.BUSY
+    assert len(client.sent_goals) == 1

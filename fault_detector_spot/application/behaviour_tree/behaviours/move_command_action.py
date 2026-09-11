@@ -69,30 +69,37 @@ class MoveCommandAction(RobotCommandActionBehaviour):
             cmd = self._get_last_command()
             if cmd is None:
                 return Status.FAILURE
-            if isinstance(cmd, MoveCommand):
-                ok = self._resolve_and_transform_offset_if_tag(cmd)
-                if not ok:
-                    return Status.RUNNING
-
-                target_frame = cmd.target_frame
-                source_frame = cmd.offset.header.frame_id
-                final_frame = GRAV_ALIGNED_BODY_FRAME_NAME
-
-                if not self._can_transform(target_frame, source_frame):
-                    self.feedback_message = f"Waiting for TF: {source_frame} -> {target_frame}"
-                    return Status.RUNNING
-                if not self._can_transform(final_frame, target_frame):
-                    self.feedback_message = f"Waiting for TF: {target_frame} -> {final_frame}"
-                    return Status.RUNNING
-
-            if isinstance(cmd, MoveToTagCommand):
-                tag_frame = cmd.tag_pose.header.frame_id
-                target_frame = cmd.target_frame
-                if not self._can_transform(target_frame, tag_frame):
-                    self.feedback_message = f"Waiting for TF: {tag_frame} -> {target_frame}"
-                    return Status.RUNNING
+            readiness = self._prepare_move_command(cmd)
+            if readiness is not None:
+                return readiness
 
         return super()._phase_send_goal()
+
+    def _prepare_move_command(self, cmd) -> Status | None:
+        if isinstance(cmd, MoveCommand):
+            ok = self._resolve_and_transform_offset_if_tag(cmd)
+            if not ok:
+                return Status.RUNNING
+
+            target_frame = cmd.target_frame
+            source_frame = cmd.offset.header.frame_id
+            final_frame = GRAV_ALIGNED_BODY_FRAME_NAME
+
+            if not self._can_transform(target_frame, source_frame):
+                self.feedback_message = f"Waiting for TF: {source_frame} -> {target_frame}"
+                return Status.RUNNING
+            if not self._can_transform(final_frame, target_frame):
+                self.feedback_message = f"Waiting for TF: {target_frame} -> {final_frame}"
+                return Status.RUNNING
+
+        if isinstance(cmd, MoveToTagCommand):
+            tag_frame = cmd.tag_pose.header.frame_id
+            target_frame = cmd.target_frame
+            if not self._can_transform(target_frame, tag_frame):
+                self.feedback_message = f"Waiting for TF: {tag_frame} -> {target_frame}"
+                return Status.RUNNING
+
+        return None
 
     def _get_last_command(self):
         if not self.blackboard.exists("last_command") or self.blackboard.last_command is None:

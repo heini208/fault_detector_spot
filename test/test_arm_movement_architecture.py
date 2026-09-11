@@ -76,3 +76,48 @@ def test_duration_is_private_spot_translation_detail():
     assert "def _build_pose_goal(" in executor
     assert "duration_sec: float" in executor
     assert "RobotCommandBuilder.arm_pose_command(" in executor
+
+
+def test_executor_owns_robot_command_lifecycle():
+    executor = read(
+        "fault_detector_spot/manipulation/arm_movement_executor.py"
+    )
+    action = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "arm_movement_action.py"
+    )
+    resources = read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "robot_command_resources.py"
+    )
+
+    assert "send_goal_async(" in executor
+    assert "get_result_async(" in executor
+    assert "cancel_goal_async(" in executor
+    assert "def poll(" in executor
+    assert "def cancel(" in executor
+
+    assert "send_goal_async(" not in action
+    assert "get_result_async(" not in action
+    assert "cancel_goal_async(" not in action
+    assert "arm_movement_executor.poll()" in action
+    assert "arm_movement_executor.cancel()" in action
+
+    assert "action_client=self.get_action_client(" in resources
+    assert "executor.shutdown" in resources
+
+
+def test_arm_action_reuses_tf_preparation_without_generic_action_lifecycle():
+    action = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "arm_movement_action.py"
+    )
+    move_action = read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "move_command_action.py"
+    )
+
+    assert "_prepare_move_command(command)" in action
+    assert "def _prepare_move_command(" in move_action
+    assert "super().update()" not in action
+    assert "super().terminate(" not in action

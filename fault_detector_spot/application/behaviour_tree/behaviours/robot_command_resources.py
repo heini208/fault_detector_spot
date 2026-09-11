@@ -82,6 +82,11 @@ class RobotCommandResources:
                     tag_state_source=tag_state_source,
                     robot_name=robot_name,
                     speed_policy=self._arm_motion_speed_policy,
+                    action_client=self.get_action_client(
+                        node,
+                        robot_name,
+                    ),
+                    logger=node.get_logger(),
                 )
                 self._arm_movement_executors[robot_name] = executor
             elif (
@@ -100,6 +105,9 @@ class RobotCommandResources:
             node = self._node
             tf_listener = self._tf_listener
             arm_state_source = self._arm_state_source
+            arm_executors = tuple(
+                self._arm_movement_executors.values()
+            )
             clients = tuple(self._clients.values())
             self._tf_listener = None
             self._arm_state_source = None
@@ -109,6 +117,10 @@ class RobotCommandResources:
             self._node = None
 
         resources = []
+        resources.extend(
+            ("arm movement executor", executor.shutdown)
+            for executor in arm_executors
+        )
         if tf_listener is not None:
             resources.append(
                 ("TF listener", tf_listener.shutdown)
