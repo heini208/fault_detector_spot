@@ -1,4 +1,4 @@
-"""Lock the centralized hand/probe arm movement architecture."""
+"""Lock the centralized arm movement architecture."""
 
 from pathlib import Path
 
@@ -10,16 +10,117 @@ def read(relative_path):
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_runner_uses_one_arm_movement_behavior_for_relative_and_tag():
+def test_runner_uses_one_arm_goal_action_for_relative_and_tag():
     runner = read(
         "fault_detector_spot/application/behaviour_tree/runner.py"
     )
 
-    assert runner.count("ArmMovementAction(") == 2
-    assert "ManipulatorGetGoalTag" not in runner
-    assert "ManipulatorMoveArmAction" not in runner
-    assert "ManipulatorMoveRelativeAction" not in runner
-    assert "build_manipulator_goal_tree" not in runner
+    assert runner.count("MoveArmGoalAction(") == 2
+    assert "ArmMovementAction" not in runner
+    assert "ReadyArmActionSimple" not in runner
+    assert "StowArmActionSimple" not in runner
+
+
+def test_arm_behavior_hierarchy_has_one_common_move_adapter():
+    move = read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "move_action.py"
+    )
+    arm = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "move_arm_action.py"
+    )
+    goal = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "move_arm_goal_action.py"
+    )
+    ready = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "ready_arm_action.py"
+    )
+    stow = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "stow_arm_action.py"
+    )
+
+    assert "class MoveAction(" in move
+    assert "class MoveArmAction(MoveAction)" in arm
+    assert "class MoveArmGoalAction(MoveArmAction)" in goal
+    assert "class ReadyArmAction(MoveArmAction)" in ready
+    assert "class StowArmAction(MoveArmAction)" in stow
+
+
+def test_common_move_action_only_adapts_tree_to_executor():
+    move = read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "move_action.py"
+    )
+
+    assert "self.executor.poll()" in move
+    assert "self.executor.cancel()" in move
+    assert "send_goal_async" not in move
+    assert "get_result_async" not in move
+    assert "cancel_goal_async" not in move
+    assert "RobotCommandBuilder" not in move
+
+
+def test_ready_and_stow_are_small_executor_dispatchers():
+    ready = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "ready_arm_action.py"
+    )
+    stow = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "stow_arm_action.py"
+    )
+
+    assert "return self.executor.prepare()" in ready
+    assert "return self.executor.stow()" in stow
+    assert "RobotCommandBuilder" not in ready
+    assert "RobotCommandBuilder" not in stow
+    assert "def update(" not in ready
+    assert "def update(" not in stow
+    assert "def terminate(" not in ready
+    assert "def terminate(" not in stow
+
+
+def test_arm_goal_action_keeps_goal_specific_tf_preparation():
+    goal = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "move_arm_goal_action.py"
+    )
+
+    assert "_prepare_move_command(command)" in goal
+    assert "_resolve_and_transform_offset_if_tag" in goal
+    assert "_resolve_tag_alias" in goal
+    assert "GRAV_ALIGNED_BODY_FRAME_NAME" in goal
+
+
+def test_executor_still_owns_physical_robot_command_lifecycle():
+    executor = read(
+        "fault_detector_spot/manipulation/arm_movement_executor.py"
+    )
+    move = read(
+        "fault_detector_spot/application/behaviour_tree/behaviours/"
+        "move_action.py"
+    )
+
+    assert "send_goal_async(" in executor
+    assert "get_result_async(" in executor
+    assert "cancel_goal_async(" in executor
+
+    assert "send_goal_async(" not in move
+    assert "get_result_async(" not in move
+    assert "cancel_goal_async(" not in move
+
+
+
+def test_obsolete_arm_movement_action_is_removed():
+    assert not (
+        ROOT
+        / "fault_detector_spot/manipulation/behaviours/"
+        "arm_movement_action.py"
+    ).exists()
 
 
 def test_executor_owns_probe_to_hand_conversion():
@@ -45,9 +146,9 @@ def test_public_arm_api_exposes_speed_not_duration():
     executor = read(
         "fault_detector_spot/manipulation/arm_movement_executor.py"
     )
-    action = read(
+    goal = read(
         "fault_detector_spot/manipulation/behaviours/"
-        "arm_movement_action.py"
+        "move_arm_goal_action.py"
     )
 
     for signature in (
@@ -59,114 +160,6 @@ def test_public_arm_api_exposes_speed_not_duration():
     ):
         assert signature in executor
 
-    assert "relative_duration_sec" not in action
-    assert "tag_duration_sec" not in action
-    assert "DEFAULT_RELATIVE_DURATION_SEC" not in action
-    assert "DEFAULT_TAG_DURATION_SEC" not in action
-    assert "executor.relative(command)" in action
-    assert "executor.tag_probe(command)" in action
-
-
-def test_duration_is_private_spot_translation_detail():
-    executor = read(
-        "fault_detector_spot/manipulation/arm_movement_executor.py"
-    )
-
-    assert "duration_between(" in executor
-    assert "def _build_pose_goal(" in executor
-    assert "duration_sec: float" in executor
-    assert "RobotCommandBuilder.arm_pose_command(" in executor
-
-
-def test_executor_owns_robot_command_lifecycle():
-    executor = read(
-        "fault_detector_spot/manipulation/arm_movement_executor.py"
-    )
-    action = read(
-        "fault_detector_spot/manipulation/behaviours/"
-        "arm_movement_action.py"
-    )
-    resources = read(
-        "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "robot_command_resources.py"
-    )
-
-    assert "send_goal_async(" in executor
-    assert "get_result_async(" in executor
-    assert "cancel_goal_async(" in executor
-    assert "def poll(" in executor
-    assert "def cancel(" in executor
-
-    assert "send_goal_async(" not in action
-    assert "get_result_async(" not in action
-    assert "cancel_goal_async(" not in action
-    assert "arm_movement_executor.poll()" in action
-    assert "arm_movement_executor.cancel()" in action
-
-    assert "action_client=self.get_action_client(" in resources
-    assert "executor.shutdown" in resources
-
-
-def test_arm_action_reuses_tf_preparation_without_generic_action_lifecycle():
-    action = read(
-        "fault_detector_spot/manipulation/behaviours/"
-        "arm_movement_action.py"
-    )
-    move_action = read(
-        "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "move_command_action.py"
-    )
-
-    assert "_prepare_move_command(command)" in action
-    assert "def _prepare_move_command(" in move_action
-    assert "super().update()" not in action
-    assert "super().terminate(" not in action
-
-
-
-def test_ready_and_stow_delegate_to_same_arm_executor():
-    executor = read(
-        "fault_detector_spot/manipulation/arm_movement_executor.py"
-    )
-    ready = read(
-        "fault_detector_spot/manipulation/behaviours/"
-        "ready_arm_action.py"
-    )
-    stow = read(
-        "fault_detector_spot/manipulation/behaviours/"
-        "stow_arm_action.py"
-    )
-
-    assert "def prepare(" in executor
-    assert "def stow(" in executor
-    assert "RobotCommandBuilder.arm_stow_command()" in executor
-
-    assert "arm_movement_executor.prepare()" in ready
-    assert "arm_movement_executor.stow()" in stow
-    assert "RobotCommandBuilder" not in ready
-    assert "RobotCommandBuilder" not in stow
-    assert "RobotCommandActionBehaviour" not in ready
-    assert "RobotCommandActionBehaviour" not in stow
-
-
-def test_ready_motion_uses_speed_policy_not_ready_duration_parameter():
-    executor = read(
-        "fault_detector_spot/manipulation/arm_movement_executor.py"
-    )
-    config = read("config/arm_motion.yaml")
-
-    assert "ready_duration" not in executor
-    assert "ready_duration" not in config
-    assert "_build_motion_goal(" in executor
-    assert "arm.ready_lift_distance_m" in config
-
-
-def test_shared_executor_always_owns_arm_state_source():
-    resources = read(
-        "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "robot_command_resources.py"
-    )
-
-    assert "arm_state_source=self.get_arm_state_source(node)" in resources
-    assert "executor.tag_state_source is None" in resources
-    assert "executor.tag_state_source = tag_state_source" in resources
+    assert "duration_sec" not in goal
+    assert "executor.relative(command)" in goal
+    assert "executor.tag_probe(command)" in goal

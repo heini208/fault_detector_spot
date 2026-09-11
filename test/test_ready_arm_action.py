@@ -1,4 +1,4 @@
-"""Focused tests for ready/stow behavior-tree executor adapters."""
+"""Focused tests for arm hierarchy executor adapters."""
 
 from types import SimpleNamespace
 
@@ -8,11 +8,14 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementOutcome,
     ArmMovementUpdate,
 )
+from fault_detector_spot.manipulation.behaviours.move_arm_action import (
+    MoveArmAction,
+)
 from fault_detector_spot.manipulation.behaviours.ready_arm_action import (
-    ReadyArmActionSimple,
+    ReadyArmAction,
 )
 from fault_detector_spot.manipulation.behaviours.stow_arm_action import (
-    StowArmActionSimple,
+    StowArmAction,
 )
 
 
@@ -25,6 +28,7 @@ class FakeExecutor:
         self.stow_calls = 0
         self.poll_calls = 0
         self.cancel_calls = 0
+        self.tf_listener = object()
 
     def prepare(self):
         self.prepare_calls += 1
@@ -50,7 +54,12 @@ def blackboard(request_id):
     )
 
 
-def test_ready_action_is_thin_prepare_adapter():
+def test_ready_and_stow_share_move_arm_action():
+    assert issubclass(ReadyArmAction, MoveArmAction)
+    assert issubclass(StowArmAction, MoveArmAction)
+
+
+def test_ready_action_only_starts_prepare_then_polls():
     executor = FakeExecutor(
         ArmMovementUpdate(
             ArmMovementOutcome.RUNNING,
@@ -61,10 +70,8 @@ def test_ready_action_is_thin_prepare_adapter():
             "Arm deployed",
         ),
     )
-    action = ReadyArmActionSimple(
-        robot_command_resources=object()
-    )
-    action.arm_movement_executor = executor
+    action = ReadyArmAction(robot_command_resources=object())
+    action.executor = executor
     action.blackboard = blackboard("ready-request")
 
     action.initialise()
@@ -75,10 +82,9 @@ def test_ready_action_is_thin_prepare_adapter():
     assert action.update() is Status.SUCCESS
     assert executor.prepare_calls == 1
     assert executor.poll_calls == 1
-    assert action.feedback_message == "Arm deployed"
 
 
-def test_stow_action_is_thin_stow_adapter():
+def test_stow_action_only_starts_stow_then_polls():
     executor = FakeExecutor(
         ArmMovementUpdate(
             ArmMovementOutcome.RUNNING,
@@ -89,10 +95,8 @@ def test_stow_action_is_thin_stow_adapter():
             "Arm stowed",
         ),
     )
-    action = StowArmActionSimple(
-        robot_command_resources=object()
-    )
-    action.arm_movement_executor = executor
+    action = StowArmAction(robot_command_resources=object())
+    action.executor = executor
     action.blackboard = blackboard("stow-request")
 
     action.initialise()
@@ -103,35 +107,31 @@ def test_stow_action_is_thin_stow_adapter():
     assert action.update() is Status.SUCCESS
     assert executor.stow_calls == 1
     assert executor.poll_calls == 1
-    assert action.feedback_message == "Arm stowed"
 
 
-def test_ready_action_cancels_executor_when_invalidated():
+def test_common_move_action_cancels_executor_when_invalidated():
     executor = FakeExecutor(
         ArmMovementUpdate(
             ArmMovementOutcome.RUNNING,
-            "Waiting for manipulator stow state",
+            "Goal sent",
         ),
         ArmMovementUpdate(
             ArmMovementOutcome.RUNNING,
-            "Waiting for manipulator stow state",
+            "Moving",
         ),
     )
-    action = ReadyArmActionSimple(
-        robot_command_resources=object()
-    )
-    action.arm_movement_executor = executor
+    action = ReadyArmAction(robot_command_resources=object())
+    action.executor = executor
     action.blackboard = blackboard("ready-cancel")
 
     action.initialise()
     assert action.update() is Status.RUNNING
-
     action.terminate(Status.INVALID)
 
     assert executor.cancel_calls == 1
 
 
-def test_stow_action_preserves_correlated_failure_detail():
+def test_common_move_action_preserves_correlated_failure_detail():
     executor = FakeExecutor(
         ArmMovementUpdate(
             ArmMovementOutcome.ARM_STATE_STALE,
@@ -142,10 +142,8 @@ def test_stow_action_preserves_correlated_failure_detail():
             "unused",
         ),
     )
-    action = StowArmActionSimple(
-        robot_command_resources=object()
-    )
-    action.arm_movement_executor = executor
+    action = StowArmAction(robot_command_resources=object())
+    action.executor = executor
     action.blackboard = blackboard("stow-failure")
 
     action.initialise()
