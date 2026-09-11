@@ -9,3 +9,8 @@
     arm.ready_tf_timeout_sec: 2.0
     arm.ready_deployed_timeout_sec: 2.0
     arm.stow_state_timeout_sec: 2.0
+
+    arm.settling.linear_velocity_threshold_mps: 0.01
+    arm.settling.angular_velocity_threshold_rad_s: 0.05
+    arm.settling.stable_duration_sec: 0.40
+    arm.settling.timeout_sec: 3.0
