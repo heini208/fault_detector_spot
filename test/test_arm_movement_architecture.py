@@ -83,8 +83,8 @@ def test_ready_and_stow_are_small_executor_dispatchers():
     assert "RobotCommandBuilder" not in ready
     assert "RobotCommandBuilder" not in stow
     assert "def update(" not in ready
-    assert "def update(" not in stow
     assert "def terminate(" not in ready
+    assert "def update(" not in stow
     assert "def terminate(" not in stow
 
 
@@ -126,7 +126,6 @@ def test_arm_executor_inherits_shared_robot_command_lifecycle():
     assert "cancel_goal_async(" not in move
 
 
-
 def test_renamed_movement_behaviour_files_replace_old_action_names():
     removed = (
         "fault_detector_spot/application/behaviour_tree/behaviours/move_action.py",
@@ -141,9 +140,12 @@ def test_renamed_movement_behaviour_files_replace_old_action_names():
         assert not (ROOT / relative_path).exists()
 
 
-def test_executor_owns_probe_to_hand_conversion():
+def test_probe_motion_planner_owns_probe_to_hand_conversion():
     executor = read(
         "fault_detector_spot/manipulation/arm_movement_executor.py"
+    )
+    planner = read(
+        "fault_detector_spot/manipulation/probe_motion_planner.py"
     )
     command = read(
         "fault_detector_spot/manipulation/commands/"
@@ -153,7 +155,9 @@ def test_executor_owns_probe_to_hand_conversion():
     assert "def probe_pose(" in executor
     assert "def tag_probe(" in executor
     assert "def probe_relative(" in executor
-    assert "_probe_target_to_hand_target" in executor
+    assert "ProbeMotionPlanner(" in executor
+    assert "def probe_target_to_hand_target(" in planner
+    assert "def hand_to_probe_pose(" in planner
 
     assert "_probe_target_to_hand_target" not in command
     assert "sensor_probe_frame" not in command
@@ -183,10 +187,12 @@ def test_public_arm_api_exposes_speed_not_duration():
     assert "executor.tag_probe(command)" in goal
 
 
-
 def test_arm_and_base_executors_share_only_the_lifecycle_parent():
     arm = read(
         "fault_detector_spot/manipulation/arm_movement_executor.py"
+    )
+    planner = read(
+        "fault_detector_spot/manipulation/probe_motion_planner.py"
     )
     base = read(
         "fault_detector_spot/navigation/base_movement_executor.py"
@@ -199,20 +205,19 @@ def test_arm_and_base_executors_share_only_the_lifecycle_parent():
     assert "class ArmMovementExecutor(MovementExecutor)" in arm
     assert "class BaseMovementExecutor(MovementExecutor)" in base
     assert "_handle_successful_result" in arm
-    assert "_build_probe_motion_goal" in arm
+    assert "def build_probe_goal(" in planner
     assert "_build_se2_goal" in base
 
 
-
-def test_shared_executor_owns_live_movement_geometry_preparation():
+def test_probe_planner_owns_live_arm_geometry_preparation():
     shared = read(
         "fault_detector_spot/shared/execution/movement_executor.py"
     )
     geometry = read(
         "fault_detector_spot/shared/geometry/movement_geometry.py"
     )
-    arm = read(
-        "fault_detector_spot/manipulation/arm_movement_executor.py"
+    planner = read(
+        "fault_detector_spot/manipulation/probe_motion_planner.py"
     )
     base = read(
         "fault_detector_spot/navigation/base_movement_executor.py"
@@ -221,5 +226,6 @@ def test_shared_executor_owns_live_movement_geometry_preparation():
     assert "MovementGeometryResolver(" in shared
     assert "def _prepare_move_command(" in shared
     assert "def resolve_and_transform_offset_if_tag(" in geometry
-    assert "_prepare_move_command(" in arm
+    assert "MovementGeometryResolver(" in planner
+    assert "prepare_move_command(" in planner
     assert "_prepare_move_command(" in base

@@ -88,7 +88,7 @@ class ProbeMotionPlanner:
     ):
         normalized = self.normalize_target(
             target,
-            execution_frame.strip() or GRAV_ALIGNED_BODY_FRAME_NAME,
+            execution_frame,
         )
         return ResolvedProbeTarget(
             target=normalized,
@@ -250,14 +250,12 @@ class ProbeMotionPlanner:
                 "Guarded probe movement requires attachment geometry"
             )
 
-        target_probe = self.normalize_target(
-            probe_target,
-            GRAV_ALIGNED_BODY_FRAME_NAME,
-        )
+        target_probe = self.normalize_target(probe_target)
+        target_frame = target_probe.header.frame_id.strip()
         current_probe = resolved.current_probe
         if current_probe is None:
             current_probe = self.current_pose(
-                GRAV_ALIGNED_BODY_FRAME_NAME,
+                target_frame,
                 sensor_probe_frame(sensor_id),
             )
         effective_speed = self.effective_speed(speed)
@@ -271,10 +269,14 @@ class ProbeMotionPlanner:
             current_hand = deepcopy(current_probe)
             target_hand = deepcopy(target_probe)
         else:
-            current_hand = self.current_hand_pose()
-            target_hand = self.probe_target_to_hand_target(
+            hand_to_probe_pose = self.hand_to_probe_pose(sensor_id)
+            current_hand = self.probe_pose_to_hand_pose(
+                current_probe,
+                hand_to_probe_pose,
+            )
+            target_hand = self.probe_pose_to_hand_pose(
                 target_probe,
-                sensor_id,
+                hand_to_probe_pose,
             )
 
         probe_rotation = self.speed_policy._rotation_angle(
@@ -292,20 +294,20 @@ class ProbeMotionPlanner:
             hand_distance > 1e-6
             or probe_rotation > 1e-6
         )
+        goal = self._build_pose_goal(target_hand, duration_sec)
         if not motion_required:
             return ProbeMotionPlan(
-                goal=None,
+                goal=goal,
                 current_hand=deepcopy(current_hand),
                 target_hand=deepcopy(target_hand),
                 direction_x=0.0,
                 direction_y=0.0,
                 direction_z=0.0,
                 linear_speed_mps=0.0,
-                motion_required=False,
+                motion_required=True,
                 force_guard_enabled=False,
             )
 
-        goal = self._build_pose_goal(target_hand, duration_sec)
         if hand_distance <= 1e-6:
             return ProbeMotionPlan(
                 goal=goal,
@@ -346,12 +348,10 @@ class ProbeMotionPlanner:
                 "Probe movement requires attachment geometry"
             )
 
-        target_probe = self.normalize_target(
-            probe_target,
-            GRAV_ALIGNED_BODY_FRAME_NAME,
-        )
+        target_probe = self.normalize_target(probe_target)
+        target_frame = target_probe.header.frame_id.strip()
         current_probe = self.current_pose(
-            GRAV_ALIGNED_BODY_FRAME_NAME,
+            target_frame,
             sensor_probe_frame(sensor_id),
         )
         duration_sec = self.speed_policy.duration_between(
@@ -434,27 +434,38 @@ class ProbeMotionPlanner:
             target_frame,
         )
 
-    def probe_target_to_hand_target(
-        self,
-        probe_target: PoseStamped,
-        sensor_id: str,
-    ) -> PoseStamped:
+    def hand_to_probe_pose(self, sensor_id: str):
         probe_frame = sensor_probe_frame(sensor_id)
         hand_to_probe = self.tf_listener.lookup_a_tform_b(
             HAND_FRAME_NAME,
             probe_frame,
             timeout_sec=0.0,
         )
-        hand_to_probe_pose = pose_data_to_pose(
+        return pose_data_to_pose(
             transform_to_pose_data(hand_to_probe)
         )
 
-        hand_target = deepcopy(probe_target)
-        hand_target.pose = compose_poses(
-            probe_target.pose,
+    @staticmethod
+    def probe_pose_to_hand_pose(
+        probe_pose: PoseStamped,
+        hand_to_probe_pose,
+    ) -> PoseStamped:
+        hand_pose = deepcopy(probe_pose)
+        hand_pose.pose = compose_poses(
+            probe_pose.pose,
             inverse_pose(hand_to_probe_pose),
         )
-        return hand_target
+        return hand_pose
+
+    def probe_target_to_hand_target(
+        self,
+        probe_target: PoseStamped,
+        sensor_id: str,
+    ) -> PoseStamped:
+        return self.probe_pose_to_hand_pose(
+            probe_target,
+            self.hand_to_probe_pose(sensor_id),
+        )
 
     def effective_speed(self, speed):
         if speed is None:
@@ -465,9 +476,12 @@ class ProbeMotionPlanner:
             )
         return speed
 
+    @classmethod
+    def relative_command_is_noop(cls, command) -> bool:
+        return cls.pose_offset_is_noop(getattr(command, "offset", None))
+
     @staticmethod
-    def relative_command_is_noop(command) -> bool:
-        offset = getattr(command, "offset", None)
+    def pose_offset_is_noop(offset) -> bool:
         if not isinstance(offset, PoseStamped):
             return False
 

@@ -60,17 +60,24 @@ def planner():
     return value
 
 
-def test_zero_motion_plan_is_a_noop():
+def test_stationary_absolute_plan_keeps_low_level_goal_semantics():
     value = planner()
 
     plan = value.build_plan(
         lambda: value.resolved_target(target(), "hand")
     )
 
-    assert not plan.motion_required
+    assert plan.motion_required
     assert not plan.force_guard_enabled
-    assert plan.goal is None
-    assert value._test_goals == []
+    assert plan.goal is not None
+    assert len(value._test_goals) == 1
+
+
+def test_zero_relative_offset_is_detected_before_planning():
+    value = planner()
+    command = type("Command", (), {"offset": target()})()
+
+    assert value.relative_command_is_noop(command)
 
 
 def test_rotation_only_plan_keeps_orientation_functionality():
@@ -116,3 +123,28 @@ def test_default_speed_is_owned_by_motion_planner():
     speed = value.effective_speed(None)
 
     assert speed is value.speed_policy.default_speed
+
+
+def test_sensor_probe_plan_reuses_attachment_geometry_without_extra_hand_tf():
+    probe_frame = "hall_probe_probe"
+    tf = FakeTF({
+        ("body", probe_frame): transform("body", probe_frame, x=0.5),
+        ("hand", probe_frame): transform("hand", probe_frame, x=0.2),
+    })
+    goals = []
+    value = ProbeMotionPlanner(
+        tf_listener=tf,
+        speed_policy=ArmMotionSpeedPolicy(),
+        build_pose_goal=lambda pose, duration: goals.append(
+            (pose, duration)
+        ) or object(),
+    )
+    probe_target = target(x=0.7)
+
+    plan = value.build_plan(
+        lambda: value.resolved_target(probe_target, "hall_probe")
+    )
+
+    assert plan.motion_required
+    assert plan.force_guard_enabled
+    assert len(goals) == 1

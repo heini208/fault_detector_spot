@@ -60,6 +60,7 @@ DEFAULT_CONTACT_RETREAT_SPEED_MPS = 0.010
 
 class _ArmOperation:
     MOVEMENT = "movement"
+    GUARDED_WAIT_READY = "guarded_wait_ready"
     GUARDED_MOVEMENT = "guarded_movement"
     GUARDED_PREPARE = "guarded_prepare"
     PREPARE = "prepare"
@@ -254,6 +255,11 @@ class ArmMovementExecutor(MovementExecutor):
         force_threshold_n=None,
     ) -> ArmMovementUpdate:
         """Resolve a probe-relative target and execute it through the guard."""
+        if self.probe_motion_planner.pose_offset_is_noop(offset):
+            return ArmMovementUpdate(
+                ArmMovementOutcome.SUCCESS,
+                "Skipped zero arm movement",
+            )
         return self.guarded_probe(
             lambda: self.probe_motion_planner.resolve_probe_relative(
                 offset,
@@ -336,6 +342,9 @@ class ArmMovementExecutor(MovementExecutor):
         if self._verification_started is not None:
             return self._poll_state_confirmation()
 
+        if self._operation == _ArmOperation.GUARDED_WAIT_READY:
+            return self._advance_guarded_readiness()
+
         if self._operation == _ArmOperation.GUARDED_MOVEMENT:
             return self._poll_guarded_probe()
 
@@ -382,7 +391,7 @@ class ArmMovementExecutor(MovementExecutor):
             )
 
         self._active = True
-        self._operation = _ArmOperation.GUARDED_MOVEMENT
+        self._operation = _ArmOperation.GUARDED_WAIT_READY
         self._operation_speed = speed
         self._guarded_force_threshold_n = force_threshold_n
         self._guarded_plan_builder = lambda: (

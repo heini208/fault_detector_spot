@@ -65,16 +65,16 @@ def test_close_surface_runtime_resolves_active_attachment_without_setup_context(
 def test_tag_motion_converts_probe_target_to_hand_once():
     factory = source("inspection/setup/probe_setup_motion.py")
     command = source("manipulation/commands/manipulator_to_tag_command.py")
-    executor = source("manipulation/arm_movement_executor.py")
+    planner = source("manipulation/probe_motion_planner.py")
 
     assert "probe_pose_to_hand_pose" not in factory
     assert "_probe_target_to_hand_target" not in command
     assert "sensor_probe_frame" not in command
-    assert "def _probe_target_to_hand_target(" in executor
-    assert "transform_to_pose_data(hand_to_probe)" in executor
-    assert "inverse_pose(hand_to_probe_pose)" in executor
-    assert "compose_poses(" in executor
-    assert "tf_transformations" not in executor
+    assert "def probe_target_to_hand_target(" in planner
+    assert "transform_to_pose_data(hand_to_probe)" in planner
+    assert "inverse_pose(hand_to_probe_pose)" in planner
+    assert "compose_poses(" in planner
+    assert "tf_transformations" not in planner
 
 
 def test_future_probe_execution_configuration_accepts_active_sensor_snapshot():

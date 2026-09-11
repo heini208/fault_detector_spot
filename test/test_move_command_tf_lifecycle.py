@@ -29,7 +29,6 @@ def test_action_reset_preserves_initialized_resources():
         "spot_action.py"
     )
     reset = _method_source(source, "_reset_state")
-
     assert "self.initialized = False" not in reset
 
 
@@ -38,13 +37,9 @@ def test_robot_command_action_initialization_reuses_shared_client():
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "spot_action.py"
     )
-
     assert "if self._client is None:" in spot_action
     assert "get_action_client" in spot_action
-    assert issubclass(
-        RobotCommandActionBehaviour,
-        object,
-    )
+    assert issubclass(RobotCommandActionBehaviour, object)
 
 
 def test_behavior_tree_uses_one_robot_command_resource_owner():
@@ -56,10 +51,7 @@ def test_behavior_tree_uses_one_robot_command_resource_owner():
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "helper_initializer.py"
     )
-    runner = _read(
-        "fault_detector_spot/application/behaviour_tree/runner.py"
-    )
-
+    runner = _read("fault_detector_spot/application/behaviour_tree/runner.py")
     assert resources.count("ActionClientWrapper(") == 1
     assert resources.count("TFListenerWrapper(") == 1
     assert "get_arm_movement_executor(" in resources
@@ -74,7 +66,6 @@ def test_shared_robot_command_resources_have_explicit_teardown():
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "robot_command_resources.py"
     )
-
     close = _method_source(resources, "close")
     assert "arm_executors" in close
     assert "base_executors" in close
@@ -89,12 +80,8 @@ def test_terminal_generic_action_paths_do_not_send_cancel_requests():
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "spot_action.py"
     )
-    acceptance = _method_source(
-        source,
-        "_phase_wait_for_acceptance",
-    )
+    acceptance = _method_source(source, "_phase_wait_for_acceptance")
     result = _method_source(source, "_phase_wait_for_result")
-
     assert "_cancel_goal" not in acceptance
     assert "_cancel_goal" not in result
 
@@ -105,7 +92,6 @@ def test_interrupted_generic_action_still_requests_cancellation():
         "spot_action.py"
     )
     terminate = _method_source(source, "terminate")
-
     assert "new_status == Status.INVALID" in terminate
     assert "self._request_cancel()" in terminate
 
@@ -116,7 +102,6 @@ def test_movement_preparation_exceptions_fail_the_behaviour():
         "movement_behaviour.py"
     )
     update = _method_source(source, "update")
-
     assert "except Exception as exception:" in update
     assert "return self._fail(" in update
 
@@ -127,10 +112,9 @@ def test_move_goal_tf_lookups_are_nonblocking():
         "move_command.py",
         "fault_detector_spot/application/behaviour_tree/commands/"
         "move_to_tag_command.py",
-        "fault_detector_spot/manipulation/arm_movement_executor.py",
+        "fault_detector_spot/manipulation/probe_motion_planner.py",
         "fault_detector_spot/navigation/base_movement_executor.py",
     )
-
     for path in paths:
         source = _read(path)
         assert "timeout_sec=2" not in source
