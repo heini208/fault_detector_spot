@@ -46,6 +46,7 @@
   <exec_depend>rtabmap_odom</exec_depend>
   <exec_depend>rtabmap_util</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
 

@@ -326,3 +326,33 @@ The behaviour tree (`bt_runner`) interacts with Nav2 via the `NavigateToGoalPose
 
 For detailed behaviour descriptions and design rationale, always refer back to  
 [System_Design.md](documentation%2FSystem_Design.md), [detailed_command_descriptions.md](documentation%2Fdetailed_command_descriptions.md) and the [`fault_detector_msgs`](https://github.com/heini208/fault_detector_msgs) message definitions.
+
+## Arm-motion settings
+
+[config/arm_motion.yaml](config/arm_motion.yaml) is the single source of defaults
+for arm speed, ready offsets, settling, force baseline, contact detection,
+retreat, and contact telemetry. Editing an existing value requires no Python
+changes. The file is loaded once per process; edits apply on the next start.
+ROS launch/parameter overrides still take precedence over the YAML defaults.
+Explicit constructor arguments take precedence over both (useful in tests).
+
+To add a setting, add its `arm.*` key under `/**: ros__parameters` in the YAML,
+then read it in the code that uses it:
+
+```python
+from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
+
+config = ArmMotionParameters(node)  # omit node for standalone code
+value = config.get("new_setting")  # reads arm.new_setting
+```
+
+Every YAML key is declared automatically on the node. There is no separate
+parameter-name/default registry or resource-container entry to maintain. Keep
+any physical constraints (such as positive distances) in the consuming code.
+Missing keys and invalid value types raise errors instead of silently selecting
+a Python fallback. Use YAML numbers and booleans, not quoted numeric strings.
+
+Checkout execution reads the checkout's config; installed execution reads
+`share/fault_detector_spot/config/arm_motion.yaml`. An installed copy must be
+updated through the normal package installation workflow. Other configuration
+files are unaffected by this arm-motion refactor.

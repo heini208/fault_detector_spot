@@ -7,20 +7,9 @@ import time
 
 from bosdyn.client.frame_helpers import HAND_FRAME_NAME, VISION_FRAME_NAME
 
-
-LINEAR_VELOCITY_THRESHOLD_PARAMETER = (
-    "arm.settling.linear_velocity_threshold_mps"
+from fault_detector_spot.manipulation.arm_motion_parameters import (
+    ArmMotionParameters,
 )
-ANGULAR_VELOCITY_THRESHOLD_PARAMETER = (
-    "arm.settling.angular_velocity_threshold_rad_s"
-)
-STABLE_DURATION_PARAMETER = "arm.settling.stable_duration_sec"
-SETTLING_TIMEOUT_PARAMETER = "arm.settling.timeout_sec"
-
-DEFAULT_LINEAR_VELOCITY_THRESHOLD_MPS = 0.01
-DEFAULT_ANGULAR_VELOCITY_THRESHOLD_RAD_S = 0.05
-DEFAULT_STABLE_DURATION_SEC = 0.40
-DEFAULT_SETTLING_TIMEOUT_SEC = 3.0
 
 
 class HandSettlingOutcome(str, Enum):
@@ -46,16 +35,26 @@ class HandSettlingDetector:
         self,
         arm_state_source,
         tf_listener,
-        linear_velocity_threshold_mps: float = (
-            DEFAULT_LINEAR_VELOCITY_THRESHOLD_MPS
-        ),
-        angular_velocity_threshold_rad_s: float = (
-            DEFAULT_ANGULAR_VELOCITY_THRESHOLD_RAD_S
-        ),
-        stable_duration_sec: float = DEFAULT_STABLE_DURATION_SEC,
-        timeout_sec: float = DEFAULT_SETTLING_TIMEOUT_SEC,
+        linear_velocity_threshold_mps=None,
+        angular_velocity_threshold_rad_s=None,
+        stable_duration_sec=None,
+        timeout_sec=None,
         monotonic_clock=time.monotonic,
+        config=None,
     ):
+        config = config if config is not None else ArmMotionParameters()
+        linear_velocity_threshold_mps = config.get(
+            "settling.linear_velocity_threshold_mps", linear_velocity_threshold_mps
+        )
+        angular_velocity_threshold_rad_s = config.get(
+            "settling.angular_velocity_threshold_rad_s", angular_velocity_threshold_rad_s
+        )
+        stable_duration_sec = config.get(
+            "settling.stable_duration_sec", stable_duration_sec
+        )
+        timeout_sec = config.get(
+            "settling.timeout_sec", timeout_sec
+        )
         if arm_state_source is None:
             raise RuntimeError(
                 "HandSettlingDetector requires an arm state source"
@@ -102,45 +101,12 @@ class HandSettlingDetector:
         monotonic_clock=time.monotonic,
     ):
         if node is None:
-            raise RuntimeError(
-                "HandSettlingDetector requires a ROS node"
-            )
-
-        values = {}
-        for name, default in (
-            (
-                LINEAR_VELOCITY_THRESHOLD_PARAMETER,
-                DEFAULT_LINEAR_VELOCITY_THRESHOLD_MPS,
-            ),
-            (
-                ANGULAR_VELOCITY_THRESHOLD_PARAMETER,
-                DEFAULT_ANGULAR_VELOCITY_THRESHOLD_RAD_S,
-            ),
-            (
-                STABLE_DURATION_PARAMETER,
-                DEFAULT_STABLE_DURATION_SEC,
-            ),
-            (
-                SETTLING_TIMEOUT_PARAMETER,
-                DEFAULT_SETTLING_TIMEOUT_SEC,
-            ),
-        ):
-            if not node.has_parameter(name):
-                node.declare_parameter(name, default)
-            values[name] = float(node.get_parameter(name).value)
-
+            raise RuntimeError("HandSettlingDetector requires a ROS node")
         return cls(
             arm_state_source=arm_state_source,
             tf_listener=tf_listener,
-            linear_velocity_threshold_mps=values[
-                LINEAR_VELOCITY_THRESHOLD_PARAMETER
-            ],
-            angular_velocity_threshold_rad_s=values[
-                ANGULAR_VELOCITY_THRESHOLD_PARAMETER
-            ],
-            stable_duration_sec=values[STABLE_DURATION_PARAMETER],
-            timeout_sec=values[SETTLING_TIMEOUT_PARAMETER],
             monotonic_clock=monotonic_clock,
+            config=ArmMotionParameters(node),
         )
 
     @property
@@ -423,15 +389,7 @@ class HandSettlingDetector:
 
 
 __all__ = [
-    "ANGULAR_VELOCITY_THRESHOLD_PARAMETER",
-    "DEFAULT_ANGULAR_VELOCITY_THRESHOLD_RAD_S",
-    "DEFAULT_LINEAR_VELOCITY_THRESHOLD_MPS",
-    "DEFAULT_SETTLING_TIMEOUT_SEC",
-    "DEFAULT_STABLE_DURATION_SEC",
     "HandSettlingDetector",
     "HandSettlingOutcome",
     "HandSettlingUpdate",
-    "LINEAR_VELOCITY_THRESHOLD_PARAMETER",
-    "SETTLING_TIMEOUT_PARAMETER",
-    "STABLE_DURATION_PARAMETER",
 ]

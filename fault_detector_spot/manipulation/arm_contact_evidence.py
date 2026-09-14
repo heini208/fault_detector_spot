@@ -5,11 +5,9 @@ from enum import Enum
 import math
 from typing import Optional, Tuple
 
-
-SHADOW_OFF_AXIS_SPEED_PARAMETER = (
-    "arm.contact.shadow.off_axis_speed_threshold_mps"
+from fault_detector_spot.manipulation.arm_motion_parameters import (
+    ArmMotionParameters,
 )
-DEFAULT_SHADOW_OFF_AXIS_SPEED_THRESHOLD_MPS = 0.040
 
 
 class ShadowContactClassification(Enum):
@@ -41,10 +39,13 @@ class ArmContactEvidenceAnalyzer:
 
     def __init__(
         self,
-        off_axis_speed_threshold_mps: float = (
-            DEFAULT_SHADOW_OFF_AXIS_SPEED_THRESHOLD_MPS
-        ),
+        off_axis_speed_threshold_mps=None,
+        config=None,
     ):
+        config = config if config is not None else ArmMotionParameters()
+        off_axis_speed_threshold_mps = config.get(
+            "contact.shadow.off_axis_speed_threshold_mps", off_axis_speed_threshold_mps
+        )
         self.off_axis_speed_threshold_mps = self._positive(
             off_axis_speed_threshold_mps,
             "Contact off-axis hand speed threshold",
@@ -54,20 +55,9 @@ class ArmContactEvidenceAnalyzer:
     @classmethod
     def from_node(cls, node):
         if node is None:
-            raise RuntimeError(
-                "ArmContactEvidenceAnalyzer requires a ROS node"
-            )
-        if not node.has_parameter(SHADOW_OFF_AXIS_SPEED_PARAMETER):
-            node.declare_parameter(
-                SHADOW_OFF_AXIS_SPEED_PARAMETER,
-                DEFAULT_SHADOW_OFF_AXIS_SPEED_THRESHOLD_MPS,
-            )
+            raise RuntimeError("ArmContactEvidenceAnalyzer requires a ROS node")
         return cls(
-            off_axis_speed_threshold_mps=float(
-                node.get_parameter(
-                    SHADOW_OFF_AXIS_SPEED_PARAMETER
-                ).value
-            ),
+            config=ArmMotionParameters(node),
         )
 
     def begin_movement(self) -> None:
@@ -190,7 +180,5 @@ class ArmContactEvidenceAnalyzer:
 __all__ = [
     "ArmContactEvidence",
     "ArmContactEvidenceAnalyzer",
-    "DEFAULT_SHADOW_OFF_AXIS_SPEED_THRESHOLD_MPS",
-    "SHADOW_OFF_AXIS_SPEED_PARAMETER",
     "ShadowContactClassification",
 ]

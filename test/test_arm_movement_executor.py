@@ -10,6 +10,7 @@ from geometry_msgs.msg import PoseStamped, TransformStamped
 import fault_detector_spot.manipulation.arm_movement_executor as executor_module
 from fault_detector_spot.manipulation.arm_motion_speed import (
     ArmMotionSpeed,
+    ArmMotionSpeedPolicy,
 )
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
@@ -229,6 +230,12 @@ def capture_builder(monkeypatch):
 
 def executor_with_client(transformer, **kwargs):
     client = kwargs.pop("action_client", FakeActionClient())
+    kwargs.setdefault("speed_policy", ArmMotionSpeedPolicy(
+        default_speed=ArmMotionSpeed(0.10, 0.50),
+        minimum_duration_sec=0.50,
+    ))
+    kwargs.setdefault("ready_forward_distance_m", 0.0)
+    kwargs.setdefault("ready_lift_distance_m", 0.10)
     if "arm_state_source" not in kwargs:
         kwargs["arm_state_source"] = FakeArmStateSource(
             ArmStowState.DEPLOYED

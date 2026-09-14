@@ -21,24 +21,9 @@ from fault_detector_spot.manipulation.arm_motion_speed import (
 )
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
-    CONTACT_RETREAT_DISTANCE_PARAMETER,
-    CONTACT_RETREAT_SPEED_PARAMETER,
-    DEFAULT_CONTACT_RETREAT_DISTANCE_M,
-    DEFAULT_CONTACT_RETREAT_SPEED_MPS,
-    DEFAULT_FORCE_STALE_TIMEOUT_SEC,
-    DEFAULT_READY_DEPLOYED_TIMEOUT_SEC,
-    DEFAULT_READY_FORWARD_DISTANCE_M,
-    DEFAULT_READY_LIFT_DISTANCE_M,
-    DEFAULT_READY_STATE_TIMEOUT_SEC,
-    DEFAULT_READY_TF_TIMEOUT_SEC,
-    DEFAULT_STOW_STATE_TIMEOUT_SEC,
-    FORCE_STALE_TIMEOUT_PARAMETER,
-    READY_DEPLOYED_TIMEOUT_PARAMETER,
-    READY_LIFT_DISTANCE_PARAMETER,
-    READY_FORWARD_DISTANCE_PARAMETER,
-    READY_STATE_TIMEOUT_PARAMETER,
-    READY_TF_TIMEOUT_PARAMETER,
-    STOW_STATE_TIMEOUT_PARAMETER,
+)
+from fault_detector_spot.manipulation.arm_motion_parameters import (
+    ArmMotionParameters,
 )
 from fault_detector_spot.manipulation.arm_state_source import (
     ArmStateSource,
@@ -154,6 +139,7 @@ class RobotCommandResources:
                     )
                 executor = ArmMovementExecutor(
                     self.get_tf_listener(node),
+                    config=ArmMotionParameters(node),
                     tag_state_source=tag_state_source,
                     robot_name=robot_name,
                     speed_policy=self._arm_motion_speed_policy,
@@ -173,51 +159,6 @@ class RobotCommandResources:
                     ),
                     force_contact_policy=(
                         SpeedAwareForceContactPolicy.from_node(node)
-                    ),
-                    force_stale_timeout_sec=self._positive_parameter(
-                        node,
-                        FORCE_STALE_TIMEOUT_PARAMETER,
-                        DEFAULT_FORCE_STALE_TIMEOUT_SEC,
-                    ),
-                    contact_retreat_distance_m=self._positive_parameter(
-                        node,
-                        CONTACT_RETREAT_DISTANCE_PARAMETER,
-                        DEFAULT_CONTACT_RETREAT_DISTANCE_M,
-                    ),
-                    contact_retreat_speed_mps=self._positive_parameter(
-                        node,
-                        CONTACT_RETREAT_SPEED_PARAMETER,
-                        DEFAULT_CONTACT_RETREAT_SPEED_MPS,
-                    ),
-                    ready_lift_distance_m=self._positive_parameter(
-                        node,
-                        READY_LIFT_DISTANCE_PARAMETER,
-                        DEFAULT_READY_LIFT_DISTANCE_M,
-                    ),
-                    ready_forward_distance_m=self._positive_parameter(
-                        node,
-                        READY_FORWARD_DISTANCE_PARAMETER,
-                        DEFAULT_READY_FORWARD_DISTANCE_M,
-                    ),
-                    ready_state_timeout_sec=self._positive_parameter(
-                        node,
-                        READY_STATE_TIMEOUT_PARAMETER,
-                        DEFAULT_READY_STATE_TIMEOUT_SEC,
-                    ),
-                    ready_tf_timeout_sec=self._positive_parameter(
-                        node,
-                        READY_TF_TIMEOUT_PARAMETER,
-                        DEFAULT_READY_TF_TIMEOUT_SEC,
-                    ),
-                    ready_deployed_timeout_sec=self._positive_parameter(
-                        node,
-                        READY_DEPLOYED_TIMEOUT_PARAMETER,
-                        DEFAULT_READY_DEPLOYED_TIMEOUT_SEC,
-                    ),
-                    stow_state_timeout_sec=self._positive_parameter(
-                        node,
-                        STOW_STATE_TIMEOUT_PARAMETER,
-                        DEFAULT_STOW_STATE_TIMEOUT_SEC,
                     ),
                     logger=node.get_logger(),
                 )

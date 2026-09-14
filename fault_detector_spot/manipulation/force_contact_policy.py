@@ -2,28 +2,9 @@
 
 import math
 
-
-CONTACT_MINIMUM_THRESHOLD_PARAMETER = (
-    "arm.contact.minimum_force_delta_threshold_n"
+from fault_detector_spot.manipulation.arm_motion_parameters import (
+    ArmMotionParameters,
 )
-CONTACT_REFERENCE_SPEED_PARAMETER = (
-    "arm.contact.reference_linear_speed_mps"
-)
-CONTACT_REFERENCE_THRESHOLD_PARAMETER = (
-    "arm.contact.reference_force_delta_threshold_n"
-)
-CONTACT_MAXIMUM_THRESHOLD_PARAMETER = (
-    "arm.contact.maximum_force_delta_threshold_n"
-)
-CONTACT_CONSECUTIVE_SAMPLES_PARAMETER = (
-    "arm.contact.consecutive_samples"
-)
-
-DEFAULT_CONTACT_MINIMUM_THRESHOLD_N = 3.0
-DEFAULT_CONTACT_REFERENCE_SPEED_MPS = 0.005
-DEFAULT_CONTACT_REFERENCE_THRESHOLD_N = 5.0
-DEFAULT_CONTACT_MAXIMUM_THRESHOLD_N = 10.0
-DEFAULT_CONTACT_CONSECUTIVE_SAMPLES = 2
 
 
 class SpeedAwareForceContactPolicy:
@@ -31,14 +12,29 @@ class SpeedAwareForceContactPolicy:
 
     def __init__(
         self,
-        minimum_threshold_n: float = DEFAULT_CONTACT_MINIMUM_THRESHOLD_N,
-        reference_speed_mps: float = DEFAULT_CONTACT_REFERENCE_SPEED_MPS,
-        reference_threshold_n: float = (
-            DEFAULT_CONTACT_REFERENCE_THRESHOLD_N
-        ),
-        maximum_threshold_n: float = DEFAULT_CONTACT_MAXIMUM_THRESHOLD_N,
-        consecutive_samples: int = DEFAULT_CONTACT_CONSECUTIVE_SAMPLES,
+        minimum_threshold_n=None,
+        reference_speed_mps=None,
+        reference_threshold_n=None,
+        maximum_threshold_n=None,
+        consecutive_samples=None,
+        config=None,
     ):
+        config = config if config is not None else ArmMotionParameters()
+        minimum_threshold_n = config.get(
+            "contact.minimum_force_delta_threshold_n", minimum_threshold_n
+        )
+        reference_speed_mps = config.get(
+            "contact.reference_linear_speed_mps", reference_speed_mps
+        )
+        reference_threshold_n = config.get(
+            "contact.reference_force_delta_threshold_n", reference_threshold_n
+        )
+        maximum_threshold_n = config.get(
+            "contact.maximum_force_delta_threshold_n", maximum_threshold_n
+        )
+        consecutive_samples = config.get(
+            "contact.consecutive_samples", consecutive_samples
+        )
         self.minimum_threshold_n = self._positive(
             minimum_threshold_n,
             "Minimum force threshold",
@@ -78,54 +74,9 @@ class SpeedAwareForceContactPolicy:
     @classmethod
     def from_node(cls, node):
         if node is None:
-            raise RuntimeError(
-                "SpeedAwareForceContactPolicy requires a ROS node"
-            )
-
-        parameters = (
-            (
-                CONTACT_MINIMUM_THRESHOLD_PARAMETER,
-                DEFAULT_CONTACT_MINIMUM_THRESHOLD_N,
-            ),
-            (
-                CONTACT_REFERENCE_SPEED_PARAMETER,
-                DEFAULT_CONTACT_REFERENCE_SPEED_MPS,
-            ),
-            (
-                CONTACT_REFERENCE_THRESHOLD_PARAMETER,
-                DEFAULT_CONTACT_REFERENCE_THRESHOLD_N,
-            ),
-            (
-                CONTACT_MAXIMUM_THRESHOLD_PARAMETER,
-                DEFAULT_CONTACT_MAXIMUM_THRESHOLD_N,
-            ),
-            (
-                CONTACT_CONSECUTIVE_SAMPLES_PARAMETER,
-                DEFAULT_CONTACT_CONSECUTIVE_SAMPLES,
-            ),
-        )
-        values = {}
-        for name, default in parameters:
-            if not node.has_parameter(name):
-                node.declare_parameter(name, default)
-            values[name] = node.get_parameter(name).value
-
+            raise RuntimeError("SpeedAwareForceContactPolicy requires a ROS node")
         return cls(
-            minimum_threshold_n=float(
-                values[CONTACT_MINIMUM_THRESHOLD_PARAMETER]
-            ),
-            reference_speed_mps=float(
-                values[CONTACT_REFERENCE_SPEED_PARAMETER]
-            ),
-            reference_threshold_n=float(
-                values[CONTACT_REFERENCE_THRESHOLD_PARAMETER]
-            ),
-            maximum_threshold_n=float(
-                values[CONTACT_MAXIMUM_THRESHOLD_PARAMETER]
-            ),
-            consecutive_samples=int(
-                values[CONTACT_CONSECUTIVE_SAMPLES_PARAMETER]
-            ),
+            config=ArmMotionParameters(node),
         )
 
     def threshold_for(self, linear_speed_mps: float) -> float:
@@ -157,15 +108,5 @@ class SpeedAwareForceContactPolicy:
 
 
 __all__ = [
-    "CONTACT_CONSECUTIVE_SAMPLES_PARAMETER",
-    "CONTACT_MAXIMUM_THRESHOLD_PARAMETER",
-    "CONTACT_MINIMUM_THRESHOLD_PARAMETER",
-    "CONTACT_REFERENCE_SPEED_PARAMETER",
-    "CONTACT_REFERENCE_THRESHOLD_PARAMETER",
-    "DEFAULT_CONTACT_CONSECUTIVE_SAMPLES",
-    "DEFAULT_CONTACT_MAXIMUM_THRESHOLD_N",
-    "DEFAULT_CONTACT_MINIMUM_THRESHOLD_N",
-    "DEFAULT_CONTACT_REFERENCE_SPEED_MPS",
-    "DEFAULT_CONTACT_REFERENCE_THRESHOLD_N",
     "SpeedAwareForceContactPolicy",
 ]

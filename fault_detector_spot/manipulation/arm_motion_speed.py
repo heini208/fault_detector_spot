@@ -3,22 +3,25 @@
 from dataclasses import dataclass, field
 import math
 
-
-LINEAR_SPEED_PARAMETER = "arm.motion.linear_speed_mps"
-ANGULAR_SPEED_PARAMETER = "arm.motion.angular_speed_rad_s"
-MINIMUM_DURATION_PARAMETER = "arm.motion.minimum_duration_sec"
-
-DEFAULT_LINEAR_SPEED_MPS = 0.10
-DEFAULT_ANGULAR_SPEED_RAD_S = 0.50
-DEFAULT_MINIMUM_DURATION_SEC = 0.50
+from fault_detector_spot.manipulation.arm_motion_parameters import (
+    ArmMotionParameters,
+)
 
 
 @dataclass(frozen=True)
 class ArmMotionSpeed:
     """Linear and angular speed limits for one arm movement."""
 
-    linear_speed_mps: float = DEFAULT_LINEAR_SPEED_MPS
-    angular_speed_rad_s: float = DEFAULT_ANGULAR_SPEED_RAD_S
+    linear_speed_mps: float = field(
+        default_factory=lambda: ArmMotionParameters().get(
+            "motion.linear_speed_mps"
+        )
+    )
+    angular_speed_rad_s: float = field(
+        default_factory=lambda: ArmMotionParameters().get(
+            "motion.angular_speed_rad_s"
+        )
+    )
 
     def __post_init__(self):
         _require_positive_finite(
@@ -38,7 +41,11 @@ class ArmMotionSpeedPolicy:
     default_speed: ArmMotionSpeed = field(
         default_factory=ArmMotionSpeed
     )
-    minimum_duration_sec: float = DEFAULT_MINIMUM_DURATION_SEC
+    minimum_duration_sec: float = field(
+        default_factory=lambda: ArmMotionParameters().get(
+            "motion.minimum_duration_sec"
+        )
+    )
 
     def __post_init__(self):
         if not isinstance(self.default_speed, ArmMotionSpeed):
@@ -58,31 +65,17 @@ class ArmMotionSpeedPolicy:
                 "ArmMotionSpeedPolicy requires a ROS node"
             )
 
-        values = {}
-        for name, default in (
-            (
-                LINEAR_SPEED_PARAMETER,
-                DEFAULT_LINEAR_SPEED_MPS,
-            ),
-            (
-                ANGULAR_SPEED_PARAMETER,
-                DEFAULT_ANGULAR_SPEED_RAD_S,
-            ),
-            (
-                MINIMUM_DURATION_PARAMETER,
-                DEFAULT_MINIMUM_DURATION_SEC,
-            ),
-        ):
-            if not node.has_parameter(name):
-                node.declare_parameter(name, default)
-            values[name] = float(node.get_parameter(name).value)
+        return cls.from_config(ArmMotionParameters(node))
 
+    @classmethod
+    def from_config(cls, config):
+        """Use one configuration for all speed and duration settings."""
         return cls(
             default_speed=ArmMotionSpeed(
-                linear_speed_mps=values[LINEAR_SPEED_PARAMETER],
-                angular_speed_rad_s=values[ANGULAR_SPEED_PARAMETER],
+                linear_speed_mps=config.get("motion.linear_speed_mps"),
+                angular_speed_rad_s=config.get("motion.angular_speed_rad_s"),
             ),
-            minimum_duration_sec=values[MINIMUM_DURATION_PARAMETER],
+            minimum_duration_sec=config.get("motion.minimum_duration_sec"),
         )
 
     def duration_between(
@@ -181,12 +174,6 @@ def _require_positive_finite(value, label):
 
 
 __all__ = [
-    "ANGULAR_SPEED_PARAMETER",
     "ArmMotionSpeed",
     "ArmMotionSpeedPolicy",
-    "DEFAULT_ANGULAR_SPEED_RAD_S",
-    "DEFAULT_LINEAR_SPEED_MPS",
-    "DEFAULT_MINIMUM_DURATION_SEC",
-    "LINEAR_SPEED_PARAMETER",
-    "MINIMUM_DURATION_PARAMETER",
 ]

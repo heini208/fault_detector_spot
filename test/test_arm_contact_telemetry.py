@@ -114,6 +114,7 @@ def test_observation_captures_force_motion_and_joint_evidence():
     telemetry = ArmContactTelemetry(
         FakeArmStateSource(velocity_sample()),
         FakeJointStateSource(joint_sample()),
+        raw_logging_enabled=False,
     )
 
     sequence = telemetry.begin_movement()
@@ -158,6 +159,7 @@ def test_missing_optional_motion_samples_do_not_block_force_observation():
     telemetry = ArmContactTelemetry(
         FakeArmStateSource(None),
         FakeJointStateSource(None),
+        raw_logging_enabled=False,
     )
 
     observation = telemetry.observe(
@@ -188,11 +190,12 @@ def test_missing_optional_motion_samples_do_not_block_force_observation():
     assert telemetry.observation_count == 1
 
 
-def test_raw_logging_is_disabled_by_default(tmp_path):
+def test_raw_logging_can_be_disabled(tmp_path):
     telemetry = ArmContactTelemetry(
         FakeArmStateSource(None),
         FakeJointStateSource(None),
         raw_log_root=tmp_path,
+        raw_logging_enabled=False,
     )
 
     telemetry.observe(

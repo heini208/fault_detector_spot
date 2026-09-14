@@ -1,12 +1,17 @@
+# Single source of arm-motion defaults. ROS parameter overrides take precedence.
+# Add settings here, then read them with ArmMotionParameters.get() where used.
+# Settings are loaded at process startup; editing this file is not hot reload.
 /**:
   ros__parameters:
-    #debug
+    # Contact telemetry
     arm.contact.telemetry.raw_logging_enabled: true
-    #
+
+    # Cartesian movement speed
     arm.motion.linear_speed_mps: 0.08
     arm.motion.angular_speed_rad_s: 0.50
     arm.motion.minimum_duration_sec: 0.50
 
+    # Ready pose offsets and state waits
     arm.ready_forward_distance_m: 0.05
     arm.ready_lift_distance_m: 0.15
     arm.ready_state_timeout_sec: 2.0
@@ -14,16 +19,19 @@
     arm.ready_deployed_timeout_sec: 2.0
     arm.stow_state_timeout_sec: 2.0
 
+    # Physical settling before and after motion
     arm.settling.linear_velocity_threshold_mps: 0.01
     arm.settling.angular_velocity_threshold_rad_s: 0.05
     arm.settling.stable_duration_sec: 0.40
     arm.settling.timeout_sec: 3.0
 
+    # Stationary force baseline
     arm.force_baseline.minimum_samples: 10
     arm.force_baseline.minimum_span_sec: 0.50
     arm.force_baseline.maximum_component_span_n: 3.0
     arm.force_baseline.timeout_sec: 2.0
 
+    # Contact detection and retreat
     arm.contact.minimum_force_delta_threshold_n: 3.0
     arm.contact.reference_linear_speed_mps: 0.005
     arm.contact.reference_force_delta_threshold_n: 5.0

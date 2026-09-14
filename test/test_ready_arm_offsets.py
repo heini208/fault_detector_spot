@@ -1,25 +1,51 @@
-"""Lock configurable Ready-arm position offsets."""
+"""Ready-arm offsets are supplied by YAML and applied to the target pose."""
 
-from pathlib import Path
+from types import SimpleNamespace
 
-import yaml
+import pytest
+from geometry_msgs.msg import TransformStamped
 
-ROOT = Path(__file__).parents[1]
-EXECUTOR = ROOT / "fault_detector_spot" / "manipulation" / "arm_movement_executor.py"
-CONFIG = ROOT / "config" / "arm_motion.yaml"
+from fault_detector_spot.manipulation import (
+    arm_movement_executor as executor_module,
+)
+from fault_detector_spot.manipulation.arm_motion_parameters import (
+    ArmMotionParameters,
+)
+from fault_detector_spot.manipulation.arm_state_source import (
+    ArmStowState,
+)
 
 
-def test_ready_arm_applies_forward_and_lift_offsets():
-    source = EXECUTOR.read_text(encoding="utf-8")
+def test_ready_arm_applies_yaml_forward_and_lift_offsets(monkeypatch):
+    config = ArmMotionParameters()
+    current = TransformStamped()
+    current.transform.translation.x = 0.2
+    current.transform.translation.z = 0.4
+    current.transform.rotation.w = 1.0
+    captured = []
+    monkeypatch.setattr(
+        executor_module.RobotCommandBuilder,
+        "arm_pose_command",
+        lambda *args: captured.append(args),
+    )
+    monkeypatch.setattr(executor_module, "convert", lambda *_: None)
+    executor = executor_module.ArmMovementExecutor(
+        SimpleNamespace(lookup_a_tform_b=lambda *_args, **_kwargs: current),
+        arm_state_source=SimpleNamespace(
+            stow_state=lambda: ArmStowState.STOWED,
+            is_stale=lambda: False,
+        ),
+        action_client=SimpleNamespace(
+            wait_for_server=lambda **_: True,
+            send_goal_async=lambda _: object(),
+        ),
+    )
 
-    assert 'READY_FORWARD_DISTANCE_PARAMETER = "arm.ready_forward_distance_m"' in source
-    assert "target_hand.pose.position.x += self.ready_forward_distance_m" in source
-    assert "target_hand.pose.position.z += self.ready_lift_distance_m" in source
-
-
-def test_ready_arm_default_config_moves_forward_and_up():
-    config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
-    parameters = config["/**"]["ros__parameters"]
-
-    assert parameters["arm.ready_forward_distance_m"] > 0.0
-    assert parameters["arm.ready_lift_distance_m"] > 0.0
+    update = executor.prepare()
+    assert update.outcome is executor_module.ArmMovementOutcome.RUNNING
+    assert captured[0][0] == pytest.approx(
+        0.2 + config.get("ready_forward_distance_m")
+    )
+    assert captured[0][2] == pytest.approx(
+        0.4 + config.get("ready_lift_distance_m")
+    )

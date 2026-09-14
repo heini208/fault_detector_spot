@@ -17,8 +17,11 @@ from fault_detector_spot.shared.persistence.runtime_paths import (
     fault_detector_runtime_root,
 )
 
+from fault_detector_spot.manipulation.arm_motion_parameters import (
+    ArmMotionParameters,
+)
 
-RAW_LOGGING_PARAMETER = "arm.contact.telemetry.raw_logging_enabled"
+
 CONTACT_TELEMETRY_DIRECTORY = "contact_telemetry"
 
 
@@ -29,10 +32,15 @@ class ArmContactTelemetry:
         self,
         arm_state_source,
         arm_joint_state_source,
-        raw_logging_enabled: bool = False,
+        raw_logging_enabled=None,
         raw_log_root=None,
         logger=None,
+        config=None,
     ):
+        config = config if config is not None else ArmMotionParameters()
+        raw_logging_enabled = config.get(
+            "contact.telemetry.raw_logging_enabled", raw_logging_enabled
+        )
         if arm_state_source is None:
             raise RuntimeError("ArmContactTelemetry requires arm state")
         if arm_joint_state_source is None:
@@ -66,14 +74,13 @@ class ArmContactTelemetry:
         arm_state_source,
         arm_joint_state_source,
     ):
-        if not node.has_parameter(RAW_LOGGING_PARAMETER):
-            node.declare_parameter(RAW_LOGGING_PARAMETER, False)
-        enabled = bool(node.get_parameter(RAW_LOGGING_PARAMETER).value)
+        if node is None:
+            raise RuntimeError("ArmContactTelemetry requires a ROS node")
         return cls(
             arm_state_source=arm_state_source,
             arm_joint_state_source=arm_joint_state_source,
-            raw_logging_enabled=enabled,
             logger=node.get_logger(),
+            config=ArmMotionParameters(node),
         )
 
     @property
@@ -527,5 +534,4 @@ class ArmContactTelemetry:
 __all__ = [
     "ArmContactTelemetry",
     "CONTACT_TELEMETRY_DIRECTORY",
-    "RAW_LOGGING_PARAMETER",
 ]

@@ -47,26 +47,9 @@ from fault_detector_spot.shared.execution.movement_executor import (
     MovementExecutor,
 )
 
-
-READY_FORWARD_DISTANCE_PARAMETER = "arm.ready_forward_distance_m"
-READY_LIFT_DISTANCE_PARAMETER = "arm.ready_lift_distance_m"
-READY_STATE_TIMEOUT_PARAMETER = "arm.ready_state_timeout_sec"
-READY_TF_TIMEOUT_PARAMETER = "arm.ready_tf_timeout_sec"
-READY_DEPLOYED_TIMEOUT_PARAMETER = "arm.ready_deployed_timeout_sec"
-STOW_STATE_TIMEOUT_PARAMETER = "arm.stow_state_timeout_sec"
-FORCE_STALE_TIMEOUT_PARAMETER = "arm.contact.force_stale_timeout_sec"
-CONTACT_RETREAT_DISTANCE_PARAMETER = "arm.contact.retreat_distance_m"
-CONTACT_RETREAT_SPEED_PARAMETER = "arm.contact.retreat_speed_mps"
-
-DEFAULT_READY_FORWARD_DISTANCE_M = 0.10
-DEFAULT_READY_LIFT_DISTANCE_M = 0.10
-DEFAULT_READY_STATE_TIMEOUT_SEC = 2.0
-DEFAULT_READY_TF_TIMEOUT_SEC = 2.0
-DEFAULT_READY_DEPLOYED_TIMEOUT_SEC = 2.0
-DEFAULT_STOW_STATE_TIMEOUT_SEC = 2.0
-DEFAULT_FORCE_STALE_TIMEOUT_SEC = 0.25
-DEFAULT_CONTACT_RETREAT_DISTANCE_M = 0.010
-DEFAULT_CONTACT_RETREAT_SPEED_MPS = 0.010
+from fault_detector_spot.manipulation.arm_motion_parameters import (
+    ArmMotionParameters,
+)
 
 
 class _ArmOperation:
@@ -98,26 +81,53 @@ class ArmMovementExecutor(MovementExecutor):
         force_baseline_sampler=None,
         force_contact_policy=None,
         contact_evidence_analyzer=None,
-        force_stale_timeout_sec: float = DEFAULT_FORCE_STALE_TIMEOUT_SEC,
-        contact_retreat_distance_m: float = (
-            DEFAULT_CONTACT_RETREAT_DISTANCE_M
-        ),
-        contact_retreat_speed_mps: float = DEFAULT_CONTACT_RETREAT_SPEED_MPS,
+        force_stale_timeout_sec=None,
+        contact_retreat_distance_m=None,
+        contact_retreat_speed_mps=None,
         ready_forward_distance_m=None,
-        ready_lift_distance_m: float = DEFAULT_READY_LIFT_DISTANCE_M,
-        ready_state_timeout_sec: float = DEFAULT_READY_STATE_TIMEOUT_SEC,
-        ready_tf_timeout_sec: float = DEFAULT_READY_TF_TIMEOUT_SEC,
-        ready_deployed_timeout_sec: float = (
-            DEFAULT_READY_DEPLOYED_TIMEOUT_SEC
-        ),
-        stow_state_timeout_sec: float = DEFAULT_STOW_STATE_TIMEOUT_SEC,
+        ready_lift_distance_m=None,
+        ready_state_timeout_sec=None,
+        ready_tf_timeout_sec=None,
+        ready_deployed_timeout_sec=None,
+        stow_state_timeout_sec=None,
         goal_response_timeout_sec: float = (
             DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC
         ),
         result_timeout_sec: float = DEFAULT_RESULT_TIMEOUT_SEC,
         monotonic_clock=time.monotonic,
         logger=None,
+        config=None,
     ):
+        config = config if config is not None else ArmMotionParameters(
+            getattr(arm_state_source, "node", None)
+        )
+        ready_forward_distance_m = config.get(
+            "ready_forward_distance_m", ready_forward_distance_m
+        )
+        ready_lift_distance_m = config.get(
+            "ready_lift_distance_m", ready_lift_distance_m
+        )
+        ready_state_timeout_sec = config.get(
+            "ready_state_timeout_sec", ready_state_timeout_sec
+        )
+        ready_tf_timeout_sec = config.get(
+            "ready_tf_timeout_sec", ready_tf_timeout_sec
+        )
+        ready_deployed_timeout_sec = config.get(
+            "ready_deployed_timeout_sec", ready_deployed_timeout_sec
+        )
+        stow_state_timeout_sec = config.get(
+            "stow_state_timeout_sec", stow_state_timeout_sec
+        )
+        force_stale_timeout_sec = config.get(
+            "contact.force_stale_timeout_sec", force_stale_timeout_sec
+        )
+        contact_retreat_distance_m = config.get(
+            "contact.retreat_distance_m", contact_retreat_distance_m
+        )
+        contact_retreat_speed_mps = config.get(
+            "contact.retreat_speed_mps", contact_retreat_speed_mps
+        )
         super().__init__(
             tf_listener,
             tag_state_source=tag_state_source,
@@ -131,7 +141,7 @@ class ArmMovementExecutor(MovementExecutor):
         self.speed_policy = (
             speed_policy
             if speed_policy is not None
-            else ArmMotionSpeedPolicy()
+            else ArmMotionSpeedPolicy.from_config(config)
         )
         self.arm_state_source = arm_state_source
         self._owns_arm_stop_service_client = False
@@ -149,20 +159,12 @@ class ArmMovementExecutor(MovementExecutor):
         self.force_contact_policy = force_contact_policy
         if contact_evidence_analyzer is not None:
             self.contact_evidence_analyzer = contact_evidence_analyzer
-        elif (
-            arm_state_source is not None
-            and getattr(arm_state_source, "node", None) is not None
-        ):
-            self.contact_evidence_analyzer = (
-                ArmContactEvidenceAnalyzer.from_node(
-                    arm_state_source.node
-                )
-            )
         else:
-            self.contact_evidence_analyzer = ArmContactEvidenceAnalyzer()
+            self.contact_evidence_analyzer = ArmContactEvidenceAnalyzer(
+                config=config
+            )
         self.ready_forward_distance_m = self._ready_forward_distance(
             ready_forward_distance_m,
-            arm_state_source,
         )
         self.ready_lift_distance_m = self._positive_timeout(
             ready_lift_distance_m,
@@ -940,26 +942,9 @@ class ArmMovementExecutor(MovementExecutor):
         convert(command, request.command)
         return request
 
-    def _ready_forward_distance(
-        self,
-        configured_value,
-        arm_state_source,
-    ) -> float:
-        if configured_value is not None:
-            value = float(configured_value)
-        else:
-            node = getattr(arm_state_source, "node", None)
-            if node is None:
-                return 0.0
-            if not node.has_parameter(READY_FORWARD_DISTANCE_PARAMETER):
-                node.declare_parameter(
-                    READY_FORWARD_DISTANCE_PARAMETER,
-                    DEFAULT_READY_FORWARD_DISTANCE_M,
-                )
-            value = float(
-                node.get_parameter(READY_FORWARD_DISTANCE_PARAMETER).value
-            )
-
+    @staticmethod
+    def _ready_forward_distance(value) -> float:
+        value = float(value)
         if not math.isfinite(value) or value < 0.0:
             raise ValueError(
                 "Ready arm forward distance must be non-negative and finite"
@@ -1008,22 +993,4 @@ __all__ = [
     "ArmMovementExecutor",
     "ArmMovementOutcome",
     "ArmMovementUpdate",
-    "CONTACT_RETREAT_DISTANCE_PARAMETER",
-    "CONTACT_RETREAT_SPEED_PARAMETER",
-    "DEFAULT_CONTACT_RETREAT_DISTANCE_M",
-    "DEFAULT_CONTACT_RETREAT_SPEED_MPS",
-    "DEFAULT_FORCE_STALE_TIMEOUT_SEC",
-    "DEFAULT_READY_DEPLOYED_TIMEOUT_SEC",
-    "DEFAULT_READY_FORWARD_DISTANCE_M",
-    "DEFAULT_READY_LIFT_DISTANCE_M",
-    "DEFAULT_READY_STATE_TIMEOUT_SEC",
-    "DEFAULT_READY_TF_TIMEOUT_SEC",
-    "DEFAULT_STOW_STATE_TIMEOUT_SEC",
-    "FORCE_STALE_TIMEOUT_PARAMETER",
-    "READY_DEPLOYED_TIMEOUT_PARAMETER",
-    "READY_FORWARD_DISTANCE_PARAMETER",
-    "READY_LIFT_DISTANCE_PARAMETER",
-    "READY_STATE_TIMEOUT_PARAMETER",
-    "READY_TF_TIMEOUT_PARAMETER",
-    "STOW_STATE_TIMEOUT_PARAMETER",
 ]

@@ -6,22 +6,9 @@ import math
 import statistics
 import time
 
-
-FORCE_BASELINE_MINIMUM_SAMPLES_PARAMETER = (
-    "arm.force_baseline.minimum_samples"
+from fault_detector_spot.manipulation.arm_motion_parameters import (
+    ArmMotionParameters,
 )
-FORCE_BASELINE_MINIMUM_SPAN_PARAMETER = (
-    "arm.force_baseline.minimum_span_sec"
-)
-FORCE_BASELINE_MAXIMUM_COMPONENT_SPAN_PARAMETER = (
-    "arm.force_baseline.maximum_component_span_n"
-)
-FORCE_BASELINE_TIMEOUT_PARAMETER = "arm.force_baseline.timeout_sec"
-
-DEFAULT_FORCE_BASELINE_MINIMUM_SAMPLES = 10
-DEFAULT_FORCE_BASELINE_MINIMUM_SPAN_SEC = 0.50
-DEFAULT_FORCE_BASELINE_MAXIMUM_COMPONENT_SPAN_N = 3.0
-DEFAULT_FORCE_BASELINE_TIMEOUT_SEC = 2.0
 
 
 class ForceBaselineOutcome(str, Enum):
@@ -59,14 +46,26 @@ class ForceBaselineSampler:
     def __init__(
         self,
         arm_state_source,
-        minimum_samples: int = DEFAULT_FORCE_BASELINE_MINIMUM_SAMPLES,
-        minimum_span_sec: float = DEFAULT_FORCE_BASELINE_MINIMUM_SPAN_SEC,
-        maximum_component_span_n: float = (
-            DEFAULT_FORCE_BASELINE_MAXIMUM_COMPONENT_SPAN_N
-        ),
-        timeout_sec: float = DEFAULT_FORCE_BASELINE_TIMEOUT_SEC,
+        minimum_samples=None,
+        minimum_span_sec=None,
+        maximum_component_span_n=None,
+        timeout_sec=None,
         monotonic_clock=time.monotonic,
+        config=None,
     ):
+        config = config if config is not None else ArmMotionParameters()
+        minimum_samples = config.get(
+            "force_baseline.minimum_samples", minimum_samples
+        )
+        minimum_span_sec = config.get(
+            "force_baseline.minimum_span_sec", minimum_span_sec
+        )
+        maximum_component_span_n = config.get(
+            "force_baseline.maximum_component_span_n", maximum_component_span_n
+        )
+        timeout_sec = config.get(
+            "force_baseline.timeout_sec", timeout_sec
+        )
         if arm_state_source is None:
             raise RuntimeError(
                 "ForceBaselineSampler requires an arm state source"
@@ -108,51 +107,11 @@ class ForceBaselineSampler:
         monotonic_clock=time.monotonic,
     ):
         if node is None:
-            raise RuntimeError(
-                "ForceBaselineSampler requires a ROS node"
-            )
-
-        parameters = (
-            (
-                FORCE_BASELINE_MINIMUM_SAMPLES_PARAMETER,
-                DEFAULT_FORCE_BASELINE_MINIMUM_SAMPLES,
-            ),
-            (
-                FORCE_BASELINE_MINIMUM_SPAN_PARAMETER,
-                DEFAULT_FORCE_BASELINE_MINIMUM_SPAN_SEC,
-            ),
-            (
-                FORCE_BASELINE_MAXIMUM_COMPONENT_SPAN_PARAMETER,
-                DEFAULT_FORCE_BASELINE_MAXIMUM_COMPONENT_SPAN_N,
-            ),
-            (
-                FORCE_BASELINE_TIMEOUT_PARAMETER,
-                DEFAULT_FORCE_BASELINE_TIMEOUT_SEC,
-            ),
-        )
-        values = {}
-        for name, default in parameters:
-            if not node.has_parameter(name):
-                node.declare_parameter(name, default)
-            values[name] = node.get_parameter(name).value
-
+            raise RuntimeError("ForceBaselineSampler requires a ROS node")
         return cls(
             arm_state_source=arm_state_source,
-            minimum_samples=int(
-                values[FORCE_BASELINE_MINIMUM_SAMPLES_PARAMETER]
-            ),
-            minimum_span_sec=float(
-                values[FORCE_BASELINE_MINIMUM_SPAN_PARAMETER]
-            ),
-            maximum_component_span_n=float(
-                values[
-                    FORCE_BASELINE_MAXIMUM_COMPONENT_SPAN_PARAMETER
-                ]
-            ),
-            timeout_sec=float(
-                values[FORCE_BASELINE_TIMEOUT_PARAMETER]
-            ),
             monotonic_clock=monotonic_clock,
+            config=ArmMotionParameters(node),
         )
 
     @property
@@ -285,14 +244,6 @@ class ForceBaselineSampler:
 
 
 __all__ = [
-    "DEFAULT_FORCE_BASELINE_MAXIMUM_COMPONENT_SPAN_N",
-    "DEFAULT_FORCE_BASELINE_MINIMUM_SAMPLES",
-    "DEFAULT_FORCE_BASELINE_MINIMUM_SPAN_SEC",
-    "DEFAULT_FORCE_BASELINE_TIMEOUT_SEC",
-    "FORCE_BASELINE_MAXIMUM_COMPONENT_SPAN_PARAMETER",
-    "FORCE_BASELINE_MINIMUM_SAMPLES_PARAMETER",
-    "FORCE_BASELINE_MINIMUM_SPAN_PARAMETER",
-    "FORCE_BASELINE_TIMEOUT_PARAMETER",
     "ForceBaselineOutcome",
     "ForceBaselineSampler",
     "ForceBaselineUpdate",
