@@ -55,6 +55,7 @@ class GuardedProbeExecution:
         force_stale_timeout_sec: float,
         retreat_distance_m: float,
         retreat_speed_mps: float,
+        contact_telemetry=None,
         monotonic_clock=time.monotonic,
     ):
         required = (
@@ -108,6 +109,7 @@ class GuardedProbeExecution:
             retreat_speed_mps,
             "Contact retreat speed",
         )
+        self.contact_telemetry = contact_telemetry
         self._monotonic_clock = monotonic_clock
         self.reset()
 
@@ -179,6 +181,8 @@ class GuardedProbeExecution:
         self._peak_opposing_force_delta_n = 0.0
         self._peak_total_force_delta_n = 0.0
         self._last_hand_orientation = None
+        self._primary_motion_started_at = None
+        self._telemetry_movement_sequence = None
         self.settling_detector.reset()
         self.force_baseline_sampler.reset()
 
@@ -296,6 +300,10 @@ class GuardedProbeExecution:
         self._force_contact_count = 0
         self._last_hand_orientation = deepcopy(
             plan.current_hand.pose.orientation
+        )
+        self._primary_motion_started_at = self._monotonic_clock()
+        self._telemetry_movement_sequence = (
+            self._begin_contact_telemetry()
         )
         self._phase = _Phase.MOVING
         update = self._start_goal(plan.goal)
@@ -420,6 +428,13 @@ class GuardedProbeExecution:
             self._peak_total_force_delta_n,
             force_delta.total_n,
         )
+        self._observe_contact_telemetry(
+            observed_at=now,
+            plan=plan,
+            force_sample=sample,
+            force_baseline=baseline,
+            force_delta=force_delta,
+        )
 
         threshold_n = self._force_threshold_n
         if threshold_n is None:
@@ -446,6 +461,43 @@ class GuardedProbeExecution:
             f"{self._peak_opposing_force_delta_n:.2f} N, peak total "
             f"{self._peak_total_force_delta_n:.2f} N"
         )
+
+    def _begin_contact_telemetry(self):
+        telemetry = self.contact_telemetry
+        if telemetry is None:
+            return None
+        try:
+            return telemetry.begin_movement()
+        except Exception:
+            return None
+
+    def _observe_contact_telemetry(
+        self,
+        *,
+        observed_at,
+        plan,
+        force_sample,
+        force_baseline,
+        force_delta,
+    ) -> None:
+        telemetry = self.contact_telemetry
+        sequence = self._telemetry_movement_sequence
+        started_at = self._primary_motion_started_at
+        if telemetry is None or sequence is None or started_at is None:
+            return
+        try:
+            telemetry.observe(
+                movement_sequence=sequence,
+                observed_at=observed_at,
+                elapsed_sec=observed_at - started_at,
+                phase=_Phase.MOVING.value,
+                plan=plan,
+                force_sample=force_sample,
+                force_baseline=force_baseline,
+                force_delta=force_delta,
+            )
+        except Exception:
+            return
 
     def _current_hand_orientation(self, plan):
         frame_id = str(plan.direction_frame).strip()

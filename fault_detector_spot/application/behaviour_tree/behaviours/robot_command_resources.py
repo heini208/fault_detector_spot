@@ -7,6 +7,9 @@ from synchros2.action_client import ActionClientWrapper
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 from synchros2.utilities import namespace_with
 
+from fault_detector_spot.manipulation.arm_contact_telemetry import (
+    ArmContactTelemetry,
+)
 from fault_detector_spot.manipulation.arm_force_baseline import (
     ForceBaselineSampler,
 )
@@ -66,6 +69,7 @@ class RobotCommandResources:
         self._tf_listener = None
         self._arm_state_source = None
         self._arm_joint_state_source = None
+        self._arm_contact_telemetry = None
         self._posture_state_source = None
         self._arm_motion_speed_policy = None
         self._arm_movement_executors = {}
@@ -110,6 +114,18 @@ class RobotCommandResources:
             if self._arm_joint_state_source is None:
                 self._arm_joint_state_source = ArmJointStateSource(node)
             return self._arm_joint_state_source
+
+    def get_arm_contact_telemetry(self, node):
+        """Return shared shadow telemetry for guarded arm movement."""
+        with self._lock:
+            self._bind_node(node)
+            if self._arm_contact_telemetry is None:
+                self._arm_contact_telemetry = ArmContactTelemetry.from_node(
+                    node,
+                    self.get_arm_state_source(node),
+                    self.get_arm_joint_state_source(node),
+                )
+            return self._arm_contact_telemetry
 
     def get_posture_state_source(self, node):
         """Return the authoritative base posture state source."""
@@ -198,6 +214,10 @@ class RobotCommandResources:
                     ),
                     logger=node.get_logger(),
                 )
+                if executor.guarded_probe_execution is not None:
+                    executor.guarded_probe_execution.contact_telemetry = (
+                        self.get_arm_contact_telemetry(node)
+                    )
                 self._arm_movement_executors[robot_name] = executor
             elif tag_state_source is not None:
                 if executor.tag_state_source is None:
@@ -261,6 +281,7 @@ class RobotCommandResources:
             tf_listener = self._tf_listener
             arm_state_source = self._arm_state_source
             arm_joint_state_source = self._arm_joint_state_source
+            arm_contact_telemetry = self._arm_contact_telemetry
             posture_state_source = self._posture_state_source
             arm_executors = tuple(
                 self._arm_movement_executors.values()
@@ -272,6 +293,7 @@ class RobotCommandResources:
             self._tf_listener = None
             self._arm_state_source = None
             self._arm_joint_state_source = None
+            self._arm_contact_telemetry = None
             self._posture_state_source = None
             self._arm_motion_speed_policy = None
             self._arm_movement_executors.clear()
@@ -291,6 +313,10 @@ class RobotCommandResources:
         if tf_listener is not None:
             resources.append(
                 ("TF listener", tf_listener.shutdown)
+            )
+        if arm_contact_telemetry is not None:
+            resources.append(
+                ("arm contact telemetry", arm_contact_telemetry.close)
             )
         if arm_state_source is not None:
             resources.append(

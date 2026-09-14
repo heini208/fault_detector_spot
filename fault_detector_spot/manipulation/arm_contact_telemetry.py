@@ -1,0 +1,250 @@
+"""Shadow telemetry for guarded arm contact analysis."""
+
+from dataclasses import asdict
+import json
+from pathlib import Path
+from threading import RLock
+import time
+
+from fault_detector_spot.manipulation.arm_contact_observation import (
+    ArmContactObservation,
+)
+from fault_detector_spot.manipulation.arm_joint_state_source import (
+    ARM_JOINT_NAMES,
+)
+from fault_detector_spot.shared.persistence.runtime_paths import (
+    fault_detector_runtime_root,
+)
+
+
+RAW_LOGGING_PARAMETER = "arm.contact.telemetry.raw_logging_enabled"
+CONTACT_TELEMETRY_DIRECTORY = "contact_telemetry"
+
+
+class ArmContactTelemetry:
+    """Collect synchronized contact evidence without controlling movement."""
+
+    def __init__(
+        self,
+        arm_state_source,
+        arm_joint_state_source,
+        raw_logging_enabled: bool = False,
+        raw_log_root=None,
+        logger=None,
+    ):
+        if arm_state_source is None:
+            raise RuntimeError("ArmContactTelemetry requires arm state")
+        if arm_joint_state_source is None:
+            raise RuntimeError("ArmContactTelemetry requires joint state")
+
+        self.arm_state_source = arm_state_source
+        self.arm_joint_state_source = arm_joint_state_source
+        self.raw_logging_enabled = bool(raw_logging_enabled)
+        self.raw_log_root = Path(
+            raw_log_root
+            if raw_log_root is not None
+            else fault_detector_runtime_root() / CONTACT_TELEMETRY_DIRECTORY
+        ).expanduser()
+        self.logger = logger
+        self._lock = RLock()
+        self._movement_sequence = 0
+        self._observation_count = 0
+        self._latest_observation = None
+        self._last_error = ""
+        self._raw_log_path = None
+        self._raw_log_file = None
+
+    @classmethod
+    def from_node(
+        cls,
+        node,
+        arm_state_source,
+        arm_joint_state_source,
+    ):
+        if not node.has_parameter(RAW_LOGGING_PARAMETER):
+            node.declare_parameter(RAW_LOGGING_PARAMETER, False)
+        enabled = bool(node.get_parameter(RAW_LOGGING_PARAMETER).value)
+        return cls(
+            arm_state_source=arm_state_source,
+            arm_joint_state_source=arm_joint_state_source,
+            raw_logging_enabled=enabled,
+            logger=node.get_logger(),
+        )
+
+    @property
+    def observation_count(self) -> int:
+        with self._lock:
+            return self._observation_count
+
+    @property
+    def last_error(self) -> str:
+        with self._lock:
+            return self._last_error
+
+    @property
+    def raw_log_path(self):
+        with self._lock:
+            return self._raw_log_path
+
+    def latest_observation(self):
+        with self._lock:
+            return self._latest_observation
+
+    def begin_movement(self) -> int:
+        with self._lock:
+            self._movement_sequence += 1
+            return self._movement_sequence
+
+    def observe(
+        self,
+        *,
+        movement_sequence: int,
+        observed_at: float,
+        elapsed_sec: float,
+        phase: str,
+        plan,
+        force_sample,
+        force_baseline,
+        force_delta,
+    ) -> ArmContactObservation:
+        velocity = self.arm_state_source.hand_velocity_sample()
+        joint_state = self.arm_joint_state_source.sample()
+
+        hand_velocity_received_at = None
+        hand_linear_velocity_mps = None
+        hand_angular_velocity_rad_s = None
+        if velocity is not None:
+            hand_velocity_received_at = float(velocity.received_at)
+            hand_linear_velocity_mps = (
+                float(velocity.linear_x_mps),
+                float(velocity.linear_y_mps),
+                float(velocity.linear_z_mps),
+            )
+            hand_angular_velocity_rad_s = (
+                float(velocity.angular_x_rad_s),
+                float(velocity.angular_y_rad_s),
+                float(velocity.angular_z_rad_s),
+            )
+
+        joint_state_received_at = None
+        joint_positions_rad = None
+        joint_velocities_rad_s = None
+        joint_efforts_nm = None
+        if joint_state is not None:
+            joint_state_received_at = float(joint_state.received_at)
+            ordered = tuple(
+                joint_state.joints[name]
+                for name in ARM_JOINT_NAMES
+            )
+            joint_positions_rad = tuple(
+                float(joint.position_rad)
+                for joint in ordered
+            )
+            joint_velocities_rad_s = tuple(
+                float(joint.velocity_rad_s)
+                for joint in ordered
+            )
+            joint_efforts_nm = tuple(
+                float(joint.effort_nm)
+                for joint in ordered
+            )
+
+        observation = ArmContactObservation(
+            movement_sequence=int(movement_sequence),
+            observed_at=float(observed_at),
+            elapsed_sec=max(0.0, float(elapsed_sec)),
+            phase=str(phase),
+            planned_linear_speed_mps=float(plan.linear_speed_mps),
+            direction_frame=str(plan.direction_frame),
+            movement_direction=(
+                float(plan.direction_x),
+                float(plan.direction_y),
+                float(plan.direction_z),
+            ),
+            force_received_at=float(force_sample.received_at),
+            force_hand_n=(
+                float(force_sample.x_n),
+                float(force_sample.y_n),
+                float(force_sample.z_n),
+            ),
+            baseline_force_hand_n=(
+                float(force_baseline.x_n),
+                float(force_baseline.y_n),
+                float(force_baseline.z_n),
+            ),
+            force_delta_n=(
+                float(force_delta.delta_x_n),
+                float(force_delta.delta_y_n),
+                float(force_delta.delta_z_n),
+            ),
+            opposing_force_delta_n=float(force_delta.opposing_n),
+            total_force_delta_n=float(force_delta.total_n),
+            hand_velocity_received_at=hand_velocity_received_at,
+            hand_linear_velocity_mps=hand_linear_velocity_mps,
+            hand_angular_velocity_rad_s=hand_angular_velocity_rad_s,
+            joint_state_received_at=joint_state_received_at,
+            joint_names=tuple(ARM_JOINT_NAMES),
+            joint_positions_rad=joint_positions_rad,
+            joint_velocities_rad_s=joint_velocities_rad_s,
+            joint_efforts_nm=joint_efforts_nm,
+        )
+
+        with self._lock:
+            self._latest_observation = observation
+            self._observation_count += 1
+            self._write_raw_locked(observation)
+        return observation
+
+    def _write_raw_locked(self, observation) -> None:
+        if not self.raw_logging_enabled:
+            return
+        try:
+            if self._raw_log_file is None:
+                self.raw_log_root.mkdir(parents=True, exist_ok=True)
+                self._raw_log_path = self.raw_log_root / (
+                    f"arm_contact_{time.time_ns()}.jsonl"
+                )
+                self._raw_log_file = self._raw_log_path.open(
+                    "a",
+                    encoding="utf-8",
+                )
+            payload = asdict(observation)
+            self._raw_log_file.write(
+                json.dumps(payload, separators=(",", ":")) + "\n"
+            )
+            self._raw_log_file.flush()
+        except Exception as exception:
+            self._last_error = str(exception)
+            self._disable_raw_logging_locked()
+            if self.logger is not None:
+                try:
+                    self.logger.warning(
+                        "Arm contact telemetry raw logging disabled: "
+                        f"{exception}"
+                    )
+                except Exception:
+                    pass
+
+    def _disable_raw_logging_locked(self) -> None:
+        raw_log_file = self._raw_log_file
+        self._raw_log_file = None
+        self.raw_logging_enabled = False
+        if raw_log_file is not None:
+            try:
+                raw_log_file.close()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        with self._lock:
+            raw_log_file = self._raw_log_file
+            self._raw_log_file = None
+        if raw_log_file is not None:
+            raw_log_file.close()
+
+
+__all__ = [
+    "ArmContactTelemetry",
+    "CONTACT_TELEMETRY_DIRECTORY",
+    "RAW_LOGGING_PARAMETER",
+]

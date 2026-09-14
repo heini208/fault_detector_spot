@@ -1,5 +1,8 @@
 /**:
   ros__parameters:
+    #debug
+    arm.contact.telemetry.raw_logging_enabled: true
+    #
     arm.motion.linear_speed_mps: 0.10
     arm.motion.angular_speed_rad_s: 0.50
     arm.motion.minimum_duration_sec: 0.50

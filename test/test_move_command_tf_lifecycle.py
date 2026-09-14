@@ -57,6 +57,8 @@ def test_behavior_tree_uses_one_robot_command_resource_owner():
     assert "get_arm_movement_executor(" in resources
     assert "get_base_movement_executor(" in resources
     assert "get_arm_joint_state_source(" in resources
+    assert "get_arm_contact_telemetry(" in resources
+    assert "executor.guarded_probe_execution.contact_telemetry" in resources
     assert "get_posture_state_source(" in resources
     assert "self.robot_command_resources = RobotCommandResources()" in helper
     assert "helper_initializer.close()" in runner
@@ -71,6 +73,7 @@ def test_shared_robot_command_resources_have_explicit_teardown():
     assert "arm_executors" in close
     assert "base_executors" in close
     assert "tf_listener.shutdown" in close
+    assert "arm_contact_telemetry.close" in close
     assert "arm_state_source.destroy" in close
     assert "arm_joint_state_source.destroy" in close
     assert "posture_state_source.destroy" in close
