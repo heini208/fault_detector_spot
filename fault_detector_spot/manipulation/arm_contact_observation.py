@@ -31,20 +31,32 @@ class ArmContactObservation:
     forward_progress_m: Optional[float]
     off_axis_displacement_m: Optional[float]
     translation_progress_fraction: Optional[float]
+    position_progress_rate_mps: Optional[float]
     force_received_at: float
     force_hand_n: Vector3
     baseline_force_hand_n: Vector3
     force_delta_n: Vector3
     opposing_force_delta_n: float
     total_force_delta_n: float
+    shadow_force_threshold_n: float
+    shadow_force_threshold_exceeded: bool
+    shadow_force_candidate_count: int
+    shadow_required_consecutive_samples: int
+    shadow_classification: str
+    shadow_off_axis_speed_threshold_mps: float
     hand_velocity_received_at: Optional[float]
     hand_linear_velocity_mps: Optional[Vector3]
     hand_angular_velocity_rad_s: Optional[Vector3]
+    parallel_hand_speed_mps: Optional[float]
+    off_axis_hand_speed_mps: Optional[float]
+    off_axis_speed_ratio: Optional[float]
     joint_state_received_at: Optional[float]
     joint_names: JointNames
     joint_positions_rad: Optional[JointVector]
     joint_velocities_rad_s: Optional[JointVector]
     joint_efforts_nm: Optional[JointVector]
+    max_joint_velocity_rad_s: Optional[float]
+    joint_effort_rate_max_nm_s: Optional[float]
 
 
 __all__ = [

@@ -31,3 +31,5 @@
     arm.contact.force_stale_timeout_sec: 0.25
     arm.contact.retreat_distance_m: 0.010
     arm.contact.retreat_speed_mps: 0.010
+
+    arm.contact.shadow.off_axis_speed_threshold_mps: 0.040

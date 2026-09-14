@@ -7,6 +7,9 @@ from pathlib import Path
 from threading import RLock
 import time
 
+from fault_detector_spot.manipulation.arm_contact_evidence import (
+    ArmContactEvidenceAnalyzer,
+)
 from fault_detector_spot.manipulation.arm_contact_observation import (
     ArmContactObservation,
 )
@@ -32,6 +35,7 @@ class ArmContactTelemetry:
         raw_logging_enabled: bool = False,
         raw_log_root=None,
         logger=None,
+        shadow_evidence_analyzer=None,
     ):
         if arm_state_source is None:
             raise RuntimeError("ArmContactTelemetry requires arm state")
@@ -47,6 +51,11 @@ class ArmContactTelemetry:
             else fault_detector_runtime_root() / CONTACT_TELEMETRY_DIRECTORY
         ).expanduser()
         self.logger = logger
+        self.shadow_evidence_analyzer = (
+            shadow_evidence_analyzer
+            if shadow_evidence_analyzer is not None
+            else ArmContactEvidenceAnalyzer()
+        )
         self._lock = RLock()
         self._movement_sequence = 0
         self._observation_count = 0
@@ -70,6 +79,9 @@ class ArmContactTelemetry:
             arm_joint_state_source=arm_joint_state_source,
             raw_logging_enabled=enabled,
             logger=node.get_logger(),
+            shadow_evidence_analyzer=(
+                ArmContactEvidenceAnalyzer.from_node(node)
+            ),
         )
 
     @property
@@ -94,7 +106,9 @@ class ArmContactTelemetry:
     def begin_movement(self) -> int:
         with self._lock:
             self._movement_sequence += 1
-            return self._movement_sequence
+            sequence = self._movement_sequence
+            self.shadow_evidence_analyzer.begin_movement(sequence)
+            return sequence
 
     def observe(
         self,
@@ -152,6 +166,23 @@ class ArmContactTelemetry:
             )
 
         motion = self._motion_metrics(plan, current_hand)
+        direction = (
+            float(plan.direction_x),
+            float(plan.direction_y),
+            float(plan.direction_z),
+        )
+        evidence = self.shadow_evidence_analyzer.analyze(
+            movement_sequence=movement_sequence,
+            observed_at=observed_at,
+            planned_linear_speed_mps=plan.linear_speed_mps,
+            movement_direction=direction,
+            opposing_force_delta_n=force_delta.opposing_n,
+            hand_linear_velocity_mps=hand_linear_velocity_mps,
+            joint_state_received_at=joint_state_received_at,
+            joint_velocities_rad_s=joint_velocities_rad_s,
+            joint_efforts_nm=joint_efforts_nm,
+            position_error_m=motion["position_error_m"],
+        )
 
         observation = ArmContactObservation(
             movement_sequence=int(movement_sequence),
@@ -160,11 +191,7 @@ class ArmContactTelemetry:
             phase=str(phase),
             planned_linear_speed_mps=float(plan.linear_speed_mps),
             direction_frame=str(plan.direction_frame),
-            movement_direction=(
-                float(plan.direction_x),
-                float(plan.direction_y),
-                float(plan.direction_z),
-            ),
+            movement_direction=direction,
             initial_translation_distance_m=(
                 motion["initial_translation_distance_m"]
             ),
@@ -185,6 +212,9 @@ class ArmContactTelemetry:
             translation_progress_fraction=(
                 motion["translation_progress_fraction"]
             ),
+            position_progress_rate_mps=(
+                evidence.position_progress_rate_mps
+            ),
             force_received_at=float(force_sample.received_at),
             force_hand_n=(
                 float(force_sample.x_n),
@@ -203,14 +233,37 @@ class ArmContactTelemetry:
             ),
             opposing_force_delta_n=float(force_delta.opposing_n),
             total_force_delta_n=float(force_delta.total_n),
+            shadow_force_threshold_n=evidence.force_threshold_n,
+            shadow_force_threshold_exceeded=(
+                evidence.force_threshold_exceeded
+            ),
+            shadow_force_candidate_count=(
+                evidence.force_candidate_count
+            ),
+            shadow_required_consecutive_samples=(
+                evidence.required_consecutive_samples
+            ),
+            shadow_classification=evidence.classification.value,
+            shadow_off_axis_speed_threshold_mps=(
+                evidence.off_axis_speed_threshold_mps
+            ),
             hand_velocity_received_at=hand_velocity_received_at,
             hand_linear_velocity_mps=hand_linear_velocity_mps,
             hand_angular_velocity_rad_s=hand_angular_velocity_rad_s,
+            parallel_hand_speed_mps=evidence.parallel_hand_speed_mps,
+            off_axis_hand_speed_mps=evidence.off_axis_hand_speed_mps,
+            off_axis_speed_ratio=evidence.off_axis_speed_ratio,
             joint_state_received_at=joint_state_received_at,
             joint_names=tuple(ARM_JOINT_NAMES),
             joint_positions_rad=joint_positions_rad,
             joint_velocities_rad_s=joint_velocities_rad_s,
             joint_efforts_nm=joint_efforts_nm,
+            max_joint_velocity_rad_s=(
+                evidence.max_joint_velocity_rad_s
+            ),
+            joint_effort_rate_max_nm_s=(
+                evidence.joint_effort_rate_max_nm_s
+            ),
         )
 
         with self._lock:
