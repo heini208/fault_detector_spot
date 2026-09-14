@@ -7,9 +7,6 @@ from pathlib import Path
 from threading import RLock
 import time
 
-from fault_detector_spot.manipulation.arm_contact_evidence import (
-    ArmContactEvidenceAnalyzer,
-)
 from fault_detector_spot.manipulation.arm_contact_observation import (
     ArmContactObservation,
 )
@@ -35,7 +32,6 @@ class ArmContactTelemetry:
         raw_logging_enabled: bool = False,
         raw_log_root=None,
         logger=None,
-        shadow_evidence_analyzer=None,
     ):
         if arm_state_source is None:
             raise RuntimeError("ArmContactTelemetry requires arm state")
@@ -51,11 +47,6 @@ class ArmContactTelemetry:
             else fault_detector_runtime_root() / CONTACT_TELEMETRY_DIRECTORY
         ).expanduser()
         self.logger = logger
-        self.shadow_evidence_analyzer = (
-            shadow_evidence_analyzer
-            if shadow_evidence_analyzer is not None
-            else ArmContactEvidenceAnalyzer()
-        )
         self._lock = RLock()
         self._movement_sequence = 0
         self._observation_count = 0
@@ -63,6 +54,10 @@ class ArmContactTelemetry:
         self._last_error = ""
         self._raw_log_path = None
         self._raw_log_file = None
+        self._previous_joint_received_at = None
+        self._previous_joint_efforts_nm = None
+        self._previous_observed_at = None
+        self._previous_position_error_m = None
 
     @classmethod
     def from_node(
@@ -79,9 +74,6 @@ class ArmContactTelemetry:
             arm_joint_state_source=arm_joint_state_source,
             raw_logging_enabled=enabled,
             logger=node.get_logger(),
-            shadow_evidence_analyzer=(
-                ArmContactEvidenceAnalyzer.from_node(node)
-            ),
         )
 
     @property
@@ -107,7 +99,10 @@ class ArmContactTelemetry:
         with self._lock:
             self._movement_sequence += 1
             sequence = self._movement_sequence
-            self.shadow_evidence_analyzer.begin_movement(sequence)
+            self._previous_joint_received_at = None
+            self._previous_joint_efforts_nm = None
+            self._previous_observed_at = None
+            self._previous_position_error_m = None
             return sequence
 
     def observe(
@@ -122,6 +117,10 @@ class ArmContactTelemetry:
         force_baseline,
         force_delta,
         current_hand=None,
+        contact_evidence=None,
+        authoritative_contact_count: int = 0,
+        authoritative_decision: str = "unavailable",
+        self_motion_suppressed: bool = False,
     ) -> ArmContactObservation:
         velocity = self.arm_state_source.hand_velocity_sample()
         joint_state = self.arm_joint_state_source.sample()
@@ -171,17 +170,14 @@ class ArmContactTelemetry:
             float(plan.direction_y),
             float(plan.direction_z),
         )
-        evidence = self.shadow_evidence_analyzer.analyze(
-            movement_sequence=movement_sequence,
-            observed_at=observed_at,
-            planned_linear_speed_mps=plan.linear_speed_mps,
-            movement_direction=direction,
-            opposing_force_delta_n=force_delta.opposing_n,
-            hand_linear_velocity_mps=hand_linear_velocity_mps,
-            joint_state_received_at=joint_state_received_at,
-            joint_velocities_rad_s=joint_velocities_rad_s,
-            joint_efforts_nm=joint_efforts_nm,
-            position_error_m=motion["position_error_m"],
+        max_joint_velocity = self._max_abs(joint_velocities_rad_s)
+        effort_rate = self._joint_effort_rate(
+            joint_state_received_at,
+            joint_efforts_nm,
+        )
+        progress_rate = self._position_progress_rate(
+            observed_at,
+            motion["position_error_m"],
         )
 
         observation = ArmContactObservation(
@@ -212,9 +208,7 @@ class ArmContactTelemetry:
             translation_progress_fraction=(
                 motion["translation_progress_fraction"]
             ),
-            position_progress_rate_mps=(
-                evidence.position_progress_rate_mps
-            ),
+            position_progress_rate_mps=progress_rate,
             force_received_at=float(force_sample.received_at),
             force_hand_n=(
                 float(force_sample.x_n),
@@ -233,37 +227,68 @@ class ArmContactTelemetry:
             ),
             opposing_force_delta_n=float(force_delta.opposing_n),
             total_force_delta_n=float(force_delta.total_n),
-            shadow_force_threshold_n=evidence.force_threshold_n,
+            shadow_force_threshold_n=(
+                None
+                if contact_evidence is None
+                else contact_evidence.force_threshold_n
+            ),
             shadow_force_threshold_exceeded=(
-                evidence.force_threshold_exceeded
+                None
+                if contact_evidence is None
+                else contact_evidence.force_threshold_exceeded
             ),
             shadow_force_candidate_count=(
-                evidence.force_candidate_count
+                None
+                if contact_evidence is None
+                else contact_evidence.force_candidate_count
             ),
             shadow_required_consecutive_samples=(
-                evidence.required_consecutive_samples
+                None
+                if contact_evidence is None
+                else contact_evidence.required_consecutive_samples
             ),
-            shadow_classification=evidence.classification.value,
+            shadow_classification=(
+                "unavailable"
+                if contact_evidence is None
+                else contact_evidence.classification.value
+            ),
             shadow_off_axis_speed_threshold_mps=(
-                evidence.off_axis_speed_threshold_mps
+                None
+                if contact_evidence is None
+                else contact_evidence.off_axis_speed_threshold_mps
             ),
+            authoritative_contact_count=int(
+                authoritative_contact_count
+            ),
+            authoritative_self_motion_suppressed=bool(
+                self_motion_suppressed
+            ),
+            authoritative_decision=str(authoritative_decision),
             hand_velocity_received_at=hand_velocity_received_at,
             hand_linear_velocity_mps=hand_linear_velocity_mps,
             hand_angular_velocity_rad_s=hand_angular_velocity_rad_s,
-            parallel_hand_speed_mps=evidence.parallel_hand_speed_mps,
-            off_axis_hand_speed_mps=evidence.off_axis_hand_speed_mps,
-            off_axis_speed_ratio=evidence.off_axis_speed_ratio,
+            parallel_hand_speed_mps=(
+                None
+                if contact_evidence is None
+                else contact_evidence.parallel_hand_speed_mps
+            ),
+            off_axis_hand_speed_mps=(
+                None
+                if contact_evidence is None
+                else contact_evidence.off_axis_hand_speed_mps
+            ),
+            off_axis_speed_ratio=(
+                None
+                if contact_evidence is None
+                else contact_evidence.off_axis_speed_ratio
+            ),
             joint_state_received_at=joint_state_received_at,
             joint_names=tuple(ARM_JOINT_NAMES),
             joint_positions_rad=joint_positions_rad,
             joint_velocities_rad_s=joint_velocities_rad_s,
             joint_efforts_nm=joint_efforts_nm,
-            max_joint_velocity_rad_s=(
-                evidence.max_joint_velocity_rad_s
-            ),
-            joint_effort_rate_max_nm_s=(
-                evidence.joint_effort_rate_max_nm_s
-            ),
+            max_joint_velocity_rad_s=max_joint_velocity,
+            joint_effort_rate_max_nm_s=effort_rate,
         )
 
         with self._lock:
@@ -271,6 +296,71 @@ class ArmContactTelemetry:
             self._observation_count += 1
             self._write_raw_locked(observation)
         return observation
+
+    @staticmethod
+    def _max_abs(values):
+        if values is None:
+            return None
+        normalized = tuple(float(value) for value in values)
+        if not normalized or not all(
+            math.isfinite(value) for value in normalized
+        ):
+            return None
+        return max(abs(value) for value in normalized)
+
+    def _joint_effort_rate(self, received_at, efforts):
+        rate = None
+        if received_at is not None and efforts is not None:
+            timestamp = float(received_at)
+            current = tuple(float(value) for value in efforts)
+            previous_time = self._previous_joint_received_at
+            previous = self._previous_joint_efforts_nm
+            if (
+                math.isfinite(timestamp)
+                and current
+                and all(math.isfinite(value) for value in current)
+            ):
+                if (
+                    previous_time is not None
+                    and previous is not None
+                    and len(previous) == len(current)
+                    and timestamp > previous_time + 1e-12
+                ):
+                    dt = timestamp - previous_time
+                    rate = max(
+                        abs(current_value - previous_value) / dt
+                        for current_value, previous_value in zip(
+                            current,
+                            previous,
+                        )
+                    )
+                if (
+                    previous_time is None
+                    or timestamp > previous_time + 1e-12
+                ):
+                    self._previous_joint_received_at = timestamp
+                    self._previous_joint_efforts_nm = current
+        return rate
+
+    def _position_progress_rate(self, observed_at, position_error_m):
+        rate = None
+        if position_error_m is not None:
+            timestamp = float(observed_at)
+            error = float(position_error_m)
+            previous_time = self._previous_observed_at
+            previous_error = self._previous_position_error_m
+            if math.isfinite(timestamp) and math.isfinite(error):
+                if (
+                    previous_time is not None
+                    and previous_error is not None
+                    and timestamp > previous_time + 1e-12
+                ):
+                    rate = (
+                        previous_error - error
+                    ) / (timestamp - previous_time)
+                self._previous_observed_at = timestamp
+                self._previous_position_error_m = error
+        return rate
 
     @classmethod
     def _motion_metrics(cls, plan, current_hand):

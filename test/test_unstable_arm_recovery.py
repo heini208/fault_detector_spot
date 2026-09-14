@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 
+import pytest
 from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.manipulation.arm_force_baseline import (
@@ -237,7 +238,7 @@ def test_successful_cartesian_move_is_stopped_then_settled():
         ManualClock(),
     )
 
-    assert guard.start(plan()).outcome is ArmMovementOutcome.RUNNING
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
     driver.updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
     )
@@ -271,7 +272,7 @@ def test_cartesian_stall_is_stopped_then_preserved():
         ManualClock(),
     )
 
-    guard.start(plan())
+    guard.start(plan)
     driver.updates.append(
         ArmMovementUpdate(
             ArmMovementOutcome.TRAJECTORY_STALLED,
@@ -306,7 +307,7 @@ def test_contact_uses_arm_stop_before_and_after_retreat():
         ManualClock(),
     )
 
-    assert guard.start(plan()).outcome is ArmMovementOutcome.RUNNING
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
     stopping = trigger_contact(guard, state)
 
     assert stopping.outcome is ArmMovementOutcome.RUNNING
@@ -321,7 +322,7 @@ def test_contact_uses_arm_stop_before_and_after_retreat():
     assert retreating.outcome is ArmMovementOutcome.RUNNING
     retreat_goal = driver.started_goals[-1]
     assert retreat_goal[0] == "retreat"
-    assert retreat_goal[2].pose.position.x == 0.02
+    assert retreat_goal[2].pose.position.x == pytest.approx(0.02)
 
     driver.updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "retreat complete")
@@ -356,7 +357,7 @@ def test_arm_stop_settling_timeout_releases_executor_as_unstable():
         ManualClock(),
     )
 
-    guard.start(plan())
+    guard.start(plan)
     driver.updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
     )
@@ -385,7 +386,7 @@ def test_contact_does_not_retreat_when_arm_stop_cannot_settle():
         ManualClock(),
     )
 
-    guard.start(plan())
+    guard.start(plan)
     assert trigger_contact(guard, state).outcome is ArmMovementOutcome.RUNNING
 
     stop_driver.updates.append(
@@ -414,7 +415,7 @@ def test_missing_settling_sensing_releases_executor_without_retreat():
         ManualClock(),
     )
 
-    guard.start(plan())
+    guard.start(plan)
     assert trigger_contact(guard, state).outcome is ArmMovementOutcome.RUNNING
 
     stop_driver.updates.append(
@@ -424,4 +425,57 @@ def test_missing_settling_sensing_releases_executor_without_retreat():
 
     assert finished.outcome is ArmMovementOutcome.STOP_UNCONFIRMED
     assert len(driver.started_goals) == 1
+    assert not guard.active
+
+def test_goal_rejection_before_motion_does_not_send_arm_stop():
+    state = ArmState()
+    driver = GoalDriver()
+    stop_driver = StopDriver()
+    settling = ScriptedSettling([])
+    guard = execution(
+        state,
+        driver,
+        settling,
+        stop_driver,
+        ManualClock(),
+    )
+
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+    driver.updates.append(
+        ArmMovementUpdate(
+            ArmMovementOutcome.GOAL_REJECTED,
+            "Goal rejected",
+        )
+    )
+    finished = guard.poll()
+
+    assert finished.outcome is ArmMovementOutcome.GOAL_REJECTED
+    assert stop_driver.count == 0
+    assert not guard.active
+
+
+def test_goal_response_timeout_before_motion_does_not_send_arm_stop():
+    state = ArmState()
+    driver = GoalDriver()
+    stop_driver = StopDriver()
+    settling = ScriptedSettling([])
+    guard = execution(
+        state,
+        driver,
+        settling,
+        stop_driver,
+        ManualClock(),
+    )
+
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+    driver.updates.append(
+        ArmMovementUpdate(
+            ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT,
+            "Goal response timed out",
+        )
+    )
+    finished = guard.poll()
+
+    assert finished.outcome is ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT
+    assert stop_driver.count == 0
     assert not guard.active

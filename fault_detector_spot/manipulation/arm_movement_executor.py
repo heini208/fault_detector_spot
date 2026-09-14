@@ -22,6 +22,9 @@ from synchros2.utilities import namespace_with
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
 )
+from fault_detector_spot.manipulation.arm_contact_evidence import (
+    ArmContactEvidenceAnalyzer,
+)
 from fault_detector_spot.manipulation.arm_motion_speed import (
     ArmMotionSpeedPolicy,
 )
@@ -45,6 +48,7 @@ from fault_detector_spot.shared.execution.movement_executor import (
 )
 
 
+READY_FORWARD_DISTANCE_PARAMETER = "arm.ready_forward_distance_m"
 READY_LIFT_DISTANCE_PARAMETER = "arm.ready_lift_distance_m"
 READY_STATE_TIMEOUT_PARAMETER = "arm.ready_state_timeout_sec"
 READY_TF_TIMEOUT_PARAMETER = "arm.ready_tf_timeout_sec"
@@ -54,6 +58,7 @@ FORCE_STALE_TIMEOUT_PARAMETER = "arm.contact.force_stale_timeout_sec"
 CONTACT_RETREAT_DISTANCE_PARAMETER = "arm.contact.retreat_distance_m"
 CONTACT_RETREAT_SPEED_PARAMETER = "arm.contact.retreat_speed_mps"
 
+DEFAULT_READY_FORWARD_DISTANCE_M = 0.10
 DEFAULT_READY_LIFT_DISTANCE_M = 0.10
 DEFAULT_READY_STATE_TIMEOUT_SEC = 2.0
 DEFAULT_READY_TF_TIMEOUT_SEC = 2.0
@@ -92,11 +97,13 @@ class ArmMovementExecutor(MovementExecutor):
         settling_detector=None,
         force_baseline_sampler=None,
         force_contact_policy=None,
+        contact_evidence_analyzer=None,
         force_stale_timeout_sec: float = DEFAULT_FORCE_STALE_TIMEOUT_SEC,
         contact_retreat_distance_m: float = (
             DEFAULT_CONTACT_RETREAT_DISTANCE_M
         ),
         contact_retreat_speed_mps: float = DEFAULT_CONTACT_RETREAT_SPEED_MPS,
+        ready_forward_distance_m=None,
         ready_lift_distance_m: float = DEFAULT_READY_LIFT_DISTANCE_M,
         ready_state_timeout_sec: float = DEFAULT_READY_STATE_TIMEOUT_SEC,
         ready_tf_timeout_sec: float = DEFAULT_READY_TF_TIMEOUT_SEC,
@@ -140,6 +147,23 @@ class ArmMovementExecutor(MovementExecutor):
             )
             self._owns_arm_stop_service_client = True
         self.force_contact_policy = force_contact_policy
+        if contact_evidence_analyzer is not None:
+            self.contact_evidence_analyzer = contact_evidence_analyzer
+        elif (
+            arm_state_source is not None
+            and getattr(arm_state_source, "node", None) is not None
+        ):
+            self.contact_evidence_analyzer = (
+                ArmContactEvidenceAnalyzer.from_node(
+                    arm_state_source.node
+                )
+            )
+        else:
+            self.contact_evidence_analyzer = ArmContactEvidenceAnalyzer()
+        self.ready_forward_distance_m = self._ready_forward_distance(
+            ready_forward_distance_m,
+            arm_state_source,
+        )
         self.ready_lift_distance_m = self._positive_timeout(
             ready_lift_distance_m,
             "Ready arm lift distance",
@@ -188,6 +212,9 @@ class ArmMovementExecutor(MovementExecutor):
                 settling_detector=settling_detector,
                 force_baseline_sampler=force_baseline_sampler,
                 force_contact_policy=force_contact_policy,
+                contact_evidence_analyzer=(
+                    self.contact_evidence_analyzer
+                ),
                 start_goal=self._guard_start_goal,
                 poll_goal=self._guard_poll_goal,
                 cancel_goal=self._guard_cancel_goal,
@@ -457,7 +484,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._operation = _ArmOperation.GUARDED_MOVEMENT
         builder = self._guarded_plan_builder
         if builder is None:
-            return self._finish(
+            return super()._finish(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Guarded probe movement has no pending target",
             )
@@ -479,7 +506,15 @@ class ArmMovementExecutor(MovementExecutor):
             return update
         if not self.active:
             return update
-        return self._finish(update.outcome, update.detail)
+        return super()._finish(update.outcome, update.detail)
+
+    def _finish(self, outcome, detail: str):
+        if self._operation == _ArmOperation.GUARDED_MOVEMENT:
+            # A goal ending must leave the guard active for stop confirmation.
+            # Only _finish_guarded_update ends the enclosing arm operation.
+            self._reset_goal_lifecycle()
+            return ArmMovementUpdate(outcome, str(detail).strip())
+        return super()._finish(outcome, detail)
 
     def _guard_start_goal(self, goal) -> ArmMovementUpdate:
         return self._submit_goal(lambda: goal)
@@ -734,6 +769,7 @@ class ArmMovementExecutor(MovementExecutor):
 
         self._tf_wait_started = None
         target_hand = deepcopy(current_hand)
+        target_hand.pose.position.x += self.ready_forward_distance_m
         target_hand.pose.position.z += self.ready_lift_distance_m
 
         return self._submit_probe(
@@ -904,6 +940,32 @@ class ArmMovementExecutor(MovementExecutor):
         convert(command, request.command)
         return request
 
+    def _ready_forward_distance(
+        self,
+        configured_value,
+        arm_state_source,
+    ) -> float:
+        if configured_value is not None:
+            value = float(configured_value)
+        else:
+            node = getattr(arm_state_source, "node", None)
+            if node is None:
+                return 0.0
+            if not node.has_parameter(READY_FORWARD_DISTANCE_PARAMETER):
+                node.declare_parameter(
+                    READY_FORWARD_DISTANCE_PARAMETER,
+                    DEFAULT_READY_FORWARD_DISTANCE_M,
+                )
+            value = float(
+                node.get_parameter(READY_FORWARD_DISTANCE_PARAMETER).value
+            )
+
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(
+                "Ready arm forward distance must be non-negative and finite"
+            )
+        return value
+
     def _build_stow_goal(self) -> RobotCommand.Goal:
         stow_command = RobotCommandBuilder.arm_stow_command()
         goal = RobotCommand.Goal()
@@ -952,12 +1014,14 @@ __all__ = [
     "DEFAULT_CONTACT_RETREAT_SPEED_MPS",
     "DEFAULT_FORCE_STALE_TIMEOUT_SEC",
     "DEFAULT_READY_DEPLOYED_TIMEOUT_SEC",
+    "DEFAULT_READY_FORWARD_DISTANCE_M",
     "DEFAULT_READY_LIFT_DISTANCE_M",
     "DEFAULT_READY_STATE_TIMEOUT_SEC",
     "DEFAULT_READY_TF_TIMEOUT_SEC",
     "DEFAULT_STOW_STATE_TIMEOUT_SEC",
     "FORCE_STALE_TIMEOUT_PARAMETER",
     "READY_DEPLOYED_TIMEOUT_PARAMETER",
+    "READY_FORWARD_DISTANCE_PARAMETER",
     "READY_LIFT_DISTANCE_PARAMETER",
     "READY_STATE_TIMEOUT_PARAMETER",
     "READY_TF_TIMEOUT_PARAMETER",

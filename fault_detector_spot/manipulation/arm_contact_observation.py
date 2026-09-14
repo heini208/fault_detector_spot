@@ -1,4 +1,4 @@
-"""Immutable shadow telemetry for one guarded arm force sample."""
+"""Immutable telemetry for one guarded arm force sample."""
 
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -38,12 +38,15 @@ class ArmContactObservation:
     force_delta_n: Vector3
     opposing_force_delta_n: float
     total_force_delta_n: float
-    shadow_force_threshold_n: float
-    shadow_force_threshold_exceeded: bool
-    shadow_force_candidate_count: int
-    shadow_required_consecutive_samples: int
+    shadow_force_threshold_n: Optional[float]
+    shadow_force_threshold_exceeded: Optional[bool]
+    shadow_force_candidate_count: Optional[int]
+    shadow_required_consecutive_samples: Optional[int]
     shadow_classification: str
-    shadow_off_axis_speed_threshold_mps: float
+    shadow_off_axis_speed_threshold_mps: Optional[float]
+    authoritative_contact_count: int
+    authoritative_self_motion_suppressed: bool
+    authoritative_decision: str
     hand_velocity_received_at: Optional[float]
     hand_linear_velocity_mps: Optional[Vector3]
     hand_angular_velocity_rad_s: Optional[Vector3]

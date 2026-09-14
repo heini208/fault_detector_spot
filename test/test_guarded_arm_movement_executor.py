@@ -1,6 +1,7 @@
 """Focused tests for guarded probe execution."""
 
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 from geometry_msgs.msg import PoseStamped
@@ -45,10 +46,14 @@ class FakeArmStateSource:
             y_n=2.0,
             z_n=3.0,
         )
+        self.velocity = None
         self.last_received_at = 0.0
 
     def hand_force_sample(self):
         return self.sample
+
+    def hand_velocity_sample(self):
+        return self.velocity
 
 
 class ImmediateSettling:
@@ -174,6 +179,7 @@ def execution(
     clock,
     current_pose,
     force_policy=None,
+    contact_evidence_analyzer=None,
 ):
     settling = ImmediateSettling()
     guard = GuardedProbeExecution(
@@ -185,6 +191,7 @@ def execution(
             if force_policy is not None
             else FixedForcePolicy()
         ),
+        contact_evidence_analyzer=contact_evidence_analyzer,
         start_goal=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
@@ -440,3 +447,120 @@ def test_force_in_commanded_direction_does_not_count_as_obstacle_contact():
 
     assert update.outcome is ArmMovementOutcome.RUNNING
     assert driver.cancel_count == 0
+
+
+
+def test_sustained_high_off_axis_self_motion_does_not_trigger_contact():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    state.velocity = SimpleNamespace(
+        linear_x_mps=0.05,
+        linear_y_mps=0.08,
+        linear_z_mps=0.0,
+    )
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.008))
+
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+
+    state.sample = HandForceSample(
+        received_at=0.1,
+        x_n=-5.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    state.sample = HandForceSample(
+        received_at=0.2,
+        x_n=-5.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    state.sample = HandForceSample(
+        received_at=0.3,
+        x_n=-5.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 0
+    assert driver.stop_count == 0
+    assert guard._self_motion_suppression_count == 2
+
+
+def test_missing_hand_velocity_keeps_existing_force_guard_fallback():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    state.velocity = None
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.008))
+
+    guard.start(plan)
+    state.sample = HandForceSample(
+        received_at=0.1,
+        x_n=-5.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    state.sample = HandForceSample(
+        received_at=0.2,
+        x_n=-5.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    update = guard.poll()
+
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 1
+    assert driver.stop_count == 1
+
+
+def test_evidence_analyzer_failure_keeps_existing_force_guard_fallback():
+    class BrokenAnalyzer:
+        def begin_movement(self):
+            pass
+
+        def analyze(self, **_kwargs):
+            raise RuntimeError("classifier unavailable")
+
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    state.velocity = SimpleNamespace(
+        linear_x_mps=0.05,
+        linear_y_mps=0.08,
+        linear_z_mps=0.0,
+    )
+    driver = GoalDriver()
+    guard = execution(
+        state,
+        driver,
+        clock,
+        pose(0.008),
+        contact_evidence_analyzer=BrokenAnalyzer(),
+    )
+
+    guard.start(plan)
+    state.sample = HandForceSample(
+        received_at=0.1,
+        x_n=-5.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    state.sample = HandForceSample(
+        received_at=0.2,
+        x_n=-5.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    update = guard.poll()
+
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 1
+    assert driver.stop_count == 1

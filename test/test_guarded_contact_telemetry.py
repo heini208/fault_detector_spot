@@ -219,6 +219,10 @@ def test_guard_emits_shadow_observation_for_each_fresh_force_sample():
     assert observation["phase"] == "moving"
     assert observation["force_sample"] is state.sample
     assert observation["current_hand"].pose.position.x == 0.004
+    assert observation["contact_evidence"] is not None
+    assert observation["authoritative_contact_count"] == 0
+    assert observation["authoritative_decision"] == "below_threshold"
+    assert not observation["self_motion_suppressed"]
 
 
 def test_telemetry_failure_cannot_change_guard_decision():

@@ -5,6 +5,10 @@ from enum import Enum
 import math
 import time
 
+from fault_detector_spot.manipulation.arm_contact_evidence import (
+    ArmContactEvidenceAnalyzer,
+    ShadowContactClassification,
+)
 from fault_detector_spot.manipulation.arm_force_baseline import (
     ForceBaselineOutcome,
 )
@@ -56,6 +60,7 @@ class GuardedProbeExecution:
         force_stale_timeout_sec: float,
         retreat_distance_m: float,
         retreat_speed_mps: float,
+        contact_evidence_analyzer=None,
         contact_telemetry=None,
         monotonic_clock=time.monotonic,
     ):
@@ -113,6 +118,11 @@ class GuardedProbeExecution:
         self.retreat_speed_mps = self._positive(
             retreat_speed_mps,
             "Contact retreat speed",
+        )
+        self.contact_evidence_analyzer = (
+            contact_evidence_analyzer
+            if contact_evidence_analyzer is not None
+            else ArmContactEvidenceAnalyzer()
         )
         self.contact_telemetry = contact_telemetry
         self._monotonic_clock = monotonic_clock
@@ -174,6 +184,7 @@ class GuardedProbeExecution:
         self._force_threshold_n = None
         self._force_last_received_at = None
         self._force_contact_count = 0
+        self._self_motion_suppression_count = 0
         self._contact_detail = ""
         self._abort_outcome = None
         self._abort_detail = ""
@@ -301,6 +312,11 @@ class GuardedProbeExecution:
 
         self._force_last_received_at = baseline.last_received_at
         self._force_contact_count = 0
+        self._self_motion_suppression_count = 0
+        try:
+            self.contact_evidence_analyzer.begin_movement()
+        except Exception:
+            pass
         self._last_hand_orientation = deepcopy(
             plan.current_hand.pose.orientation
         )
@@ -330,6 +346,11 @@ class GuardedProbeExecution:
         update = self._poll_goal()
         if update.outcome is ArmMovementOutcome.RUNNING:
             return update
+        if update.outcome in (
+            ArmMovementOutcome.GOAL_REJECTED,
+            ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT,
+        ):
+            return self._terminal(update.outcome, update.detail)
 
         detail = update.detail
         if update.outcome is ArmMovementOutcome.SUCCESS:
@@ -438,14 +459,6 @@ class GuardedProbeExecution:
             self._peak_total_force_delta_n,
             force_delta.total_n,
         )
-        self._observe_contact_telemetry(
-            observed_at=now,
-            plan=plan,
-            force_sample=sample,
-            force_baseline=baseline,
-            force_delta=force_delta,
-            current_hand=current_hand,
-        )
 
         threshold_n = self._force_threshold_n
         if threshold_n is None:
@@ -453,10 +466,47 @@ class GuardedProbeExecution:
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Translational force guard has no threshold",
             )
-        if force_delta.opposing_n >= threshold_n:
-            self._force_contact_count += 1
-        else:
+
+        evidence = self._contact_evidence(
+            plan=plan,
+            force_delta=force_delta,
+            force_threshold_n=threshold_n,
+        )
+        self_motion_suppressed = (
+            evidence is not None
+            and evidence.classification
+            is ShadowContactClassification.LIKELY_SELF_MOTION
+        )
+
+        if force_delta.opposing_n < threshold_n:
             self._force_contact_count = 0
+            authoritative_decision = "below_threshold"
+        elif self_motion_suppressed:
+            self._force_contact_count = 0
+            self._self_motion_suppression_count += 1
+            authoritative_decision = "self_motion_suppressed"
+        else:
+            self._force_contact_count += 1
+            if (
+                self._force_contact_count
+                >= self.force_contact_policy.consecutive_samples
+            ):
+                authoritative_decision = "contact"
+            else:
+                authoritative_decision = "force_candidate"
+
+        self._observe_contact_telemetry(
+            observed_at=now,
+            plan=plan,
+            force_sample=sample,
+            force_baseline=baseline,
+            force_delta=force_delta,
+            current_hand=current_hand,
+            contact_evidence=evidence,
+            authoritative_contact_count=self._force_contact_count,
+            authoritative_decision=authoritative_decision,
+            self_motion_suppressed=self_motion_suppressed,
+        )
 
         if (
             self._force_contact_count
@@ -472,6 +522,45 @@ class GuardedProbeExecution:
             f"{self._peak_opposing_force_delta_n:.2f} N, peak total "
             f"{self._peak_total_force_delta_n:.2f} N"
         )
+
+    def _contact_evidence(
+        self,
+        *,
+        plan,
+        force_delta,
+        force_threshold_n,
+    ):
+        try:
+            velocity_method = getattr(
+                self.arm_state_source,
+                "hand_velocity_sample",
+                None,
+            )
+            velocity = (
+                velocity_method() if callable(velocity_method) else None
+            )
+            hand_linear_velocity = None
+            if velocity is not None:
+                hand_linear_velocity = (
+                    velocity.linear_x_mps,
+                    velocity.linear_y_mps,
+                    velocity.linear_z_mps,
+                )
+            return self.contact_evidence_analyzer.analyze(
+                force_threshold_n=force_threshold_n,
+                required_consecutive_samples=(
+                    self.force_contact_policy.consecutive_samples
+                ),
+                movement_direction=(
+                    plan.direction_x,
+                    plan.direction_y,
+                    plan.direction_z,
+                ),
+                opposing_force_delta_n=force_delta.opposing_n,
+                hand_linear_velocity_mps=hand_linear_velocity,
+            )
+        except Exception:
+            return None
 
     def _begin_contact_telemetry(self):
         telemetry = self.contact_telemetry
@@ -491,6 +580,10 @@ class GuardedProbeExecution:
         force_baseline,
         force_delta,
         current_hand,
+        contact_evidence,
+        authoritative_contact_count,
+        authoritative_decision,
+        self_motion_suppressed,
     ) -> None:
         telemetry = self.contact_telemetry
         sequence = self._telemetry_movement_sequence
@@ -508,6 +601,12 @@ class GuardedProbeExecution:
                 force_baseline=force_baseline,
                 force_delta=force_delta,
                 current_hand=current_hand,
+                contact_evidence=contact_evidence,
+                authoritative_contact_count=(
+                    authoritative_contact_count
+                ),
+                authoritative_decision=authoritative_decision,
+                self_motion_suppressed=self_motion_suppressed,
             )
         except Exception:
             return

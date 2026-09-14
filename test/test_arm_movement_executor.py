@@ -99,6 +99,21 @@ class ManualClock:
         return self.now
 
 
+class FakeArmStopServiceClient:
+
+    def __init__(self):
+        self.requests = []
+        self.future = ManualFuture()
+
+    def wait_for_service(self, timeout_sec=0.0):
+        assert timeout_sec == 0.0
+        return True
+
+    def call_async(self, request):
+        self.requests.append(request)
+        return self.future
+
+
 class FakeArmStateSource:
 
     def __init__(
@@ -517,9 +532,11 @@ def test_executor_owns_goal_acceptance_and_success_result(monkeypatch):
     result_future = ManualFuture()
     handle = FakeGoalHandle(result_future=result_future)
     client = FakeActionClient(send_future=send_future)
+    stop_client = FakeArmStopServiceClient()
     executor, _ = executor_with_client(
         transformer,
         action_client=client,
+        arm_stop_service_client=stop_client,
     )
 
     assert executor.pose(target).outcome is ArmMovementOutcome.RUNNING
@@ -534,6 +551,10 @@ def test_executor_owns_goal_acceptance_and_success_result(monkeypatch):
             result=SimpleNamespace(success=True)
         )
     )
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert len(stop_client.requests) == 1
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    stop_client.future.set_result(SimpleNamespace(success=True))
     completed = executor.poll()
 
     assert completed.outcome is ArmMovementOutcome.SUCCESS
@@ -614,9 +635,11 @@ def test_result_timeout_requests_goal_cancellation(monkeypatch):
     result_future = ManualFuture()
     handle = FakeGoalHandle(result_future=result_future)
     client = FakeActionClient(send_future=send_future)
+    stop_client = FakeArmStopServiceClient()
     executor, _ = executor_with_client(
         transformer,
         action_client=client,
+        arm_stop_service_client=stop_client,
         monotonic_clock=clock,
         result_timeout_sec=3.0,
     )
@@ -626,6 +649,11 @@ def test_result_timeout_requests_goal_cancellation(monkeypatch):
     assert executor.poll().outcome is ArmMovementOutcome.RUNNING
 
     clock.now = 3.0
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert handle.cancel_count == 1
+    assert len(stop_client.requests) == 1
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    stop_client.future.set_result(SimpleNamespace(success=True))
     update = executor.poll()
 
     assert update.outcome is ArmMovementOutcome.RESULT_TIMEOUT

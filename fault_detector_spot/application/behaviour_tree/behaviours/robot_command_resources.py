@@ -27,6 +27,7 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
     DEFAULT_CONTACT_RETREAT_SPEED_MPS,
     DEFAULT_FORCE_STALE_TIMEOUT_SEC,
     DEFAULT_READY_DEPLOYED_TIMEOUT_SEC,
+    DEFAULT_READY_FORWARD_DISTANCE_M,
     DEFAULT_READY_LIFT_DISTANCE_M,
     DEFAULT_READY_STATE_TIMEOUT_SEC,
     DEFAULT_READY_TF_TIMEOUT_SEC,
@@ -34,6 +35,7 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
     FORCE_STALE_TIMEOUT_PARAMETER,
     READY_DEPLOYED_TIMEOUT_PARAMETER,
     READY_LIFT_DISTANCE_PARAMETER,
+    READY_FORWARD_DISTANCE_PARAMETER,
     READY_STATE_TIMEOUT_PARAMETER,
     READY_TF_TIMEOUT_PARAMETER,
     STOW_STATE_TIMEOUT_PARAMETER,
@@ -191,6 +193,11 @@ class RobotCommandResources:
                         node,
                         READY_LIFT_DISTANCE_PARAMETER,
                         DEFAULT_READY_LIFT_DISTANCE_M,
+                    ),
+                    ready_forward_distance_m=self._positive_parameter(
+                        node,
+                        READY_FORWARD_DISTANCE_PARAMETER,
+                        DEFAULT_READY_FORWARD_DISTANCE_M,
                     ),
                     ready_state_timeout_sec=self._positive_parameter(
                         node,
