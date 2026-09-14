@@ -482,6 +482,90 @@ class ArmMovementExecutor(MovementExecutor):
 
         return super()._handle_successful_result(result)
 
+    def _handle_failed_result(self, result):
+        outcome, detail = self._arm_failure_result(result)
+        if self._operation == _ArmOperation.GUARDED_MOVEMENT:
+            self._reset_goal_lifecycle()
+            return ArmMovementUpdate(outcome, detail)
+        return self._finish(outcome, detail)
+
+    def _arm_failure_result(self, result):
+        feedback = self._cartesian_feedback(result)
+        status = getattr(feedback, "status", None)
+        value = getattr(status, "value", None)
+
+        if self._status_matches(
+            status,
+            value,
+            "STATUS_TRAJECTORY_STALLED",
+        ):
+            return (
+                ArmMovementOutcome.TRAJECTORY_STALLED,
+                self._cartesian_failure_detail(
+                    "Cartesian arm trajectory stalled",
+                    result,
+                ),
+            )
+
+        if self._status_matches(
+            status,
+            value,
+            "STATUS_TRAJECTORY_CANCELLED",
+        ):
+            return (
+                ArmMovementOutcome.TRAJECTORY_CANCELLED,
+                self._cartesian_failure_detail(
+                    "Cartesian arm trajectory cancelled",
+                    result,
+                ),
+            )
+
+        return (
+            ArmMovementOutcome.MOTION_FAILED,
+            self._command_failure_detail(result),
+        )
+
+    @staticmethod
+    def _cartesian_failure_detail(prefix: str, result) -> str:
+        detail = str(
+            getattr(result, "message", "")
+            or getattr(result, "detail", "")
+        ).strip()
+        if not detail:
+            return prefix
+        return f"{prefix}; {detail}"
+
+    @staticmethod
+    def _status_matches(status, value, constant_name: str) -> bool:
+        if status is None or value is None:
+            return False
+        expected = getattr(status, constant_name, None)
+        return expected is not None and value == expected
+
+    @staticmethod
+    def _cartesian_feedback(result):
+        command_feedback = getattr(result, "result", None)
+        command = getattr(command_feedback, "command", None)
+        synchronized = getattr(command, "synchronized_feedback", None)
+        arm = getattr(synchronized, "arm_command_feedback", None)
+        feedback = getattr(arm, "feedback", None)
+        if feedback is None:
+            return None
+
+        cartesian_choice = getattr(
+            feedback,
+            "FEEDBACK_ARM_CARTESIAN_FEEDBACK_SET",
+            None,
+        )
+        feedback_choice = getattr(feedback, "feedback_choice", None)
+        if (
+            cartesian_choice is not None
+            and feedback_choice != cartesian_choice
+        ):
+            return None
+
+        return getattr(feedback, "arm_cartesian_feedback", None)
+
     def _reset_operation(self) -> None:
         super()._reset_operation()
         self._operation = None

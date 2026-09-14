@@ -15,6 +15,8 @@ class ArmMovementOutcome(Enum):
     GOAL_REJECTED = "goal_rejected"
     RESULT_TIMEOUT = "result_timeout"
     MOTION_FAILED = "motion_failed"
+    TRAJECTORY_STALLED = "trajectory_stalled"
+    TRAJECTORY_CANCELLED = "trajectory_cancelled"
     ARM_STATE_UNAVAILABLE = "arm_state_unavailable"
     ARM_STATE_STALE = "arm_state_stale"
     ARM_STATE_UNKNOWN = "arm_state_unknown"

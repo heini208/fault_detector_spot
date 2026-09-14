@@ -272,15 +272,18 @@ class MovementExecutor:
         if bool(getattr(result, "success", False)):
             return self._handle_successful_result(result)
 
-        return self._finish(
-            self.OUTCOME_TYPE.MOTION_FAILED,
-            self._command_failure_detail(result),
-        )
+        return self._handle_failed_result(result)
 
     def _handle_successful_result(self, _result):
         return self._finish(
             self.OUTCOME_TYPE.SUCCESS,
             "Succeeded",
+        )
+
+    def _handle_failed_result(self, result):
+        return self._finish(
+            self.OUTCOME_TYPE.MOTION_FAILED,
+            self._command_failure_detail(result),
         )
 
     def _request_cancel(self) -> None:
