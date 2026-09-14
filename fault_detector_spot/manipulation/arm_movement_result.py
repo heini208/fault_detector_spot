@@ -25,6 +25,8 @@ class ArmMovementOutcome(Enum):
     SETTLING_UNAVAILABLE = "settling_unavailable"
     STOP_UNCONFIRMED = "stop_unconfirmed"
     RETREAT_FAILED = "retreat_failed"
+    UNSTABLE_ARM = "unstable_arm"
+    RECOVERY_FAILED = "recovery_failed"
     CONTACT = "contact"
     EXECUTION_ERROR = "execution_error"
 
