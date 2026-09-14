@@ -4,6 +4,11 @@ from copy import deepcopy
 import math
 import time
 
+from bosdyn.api import (
+    arm_command_pb2,
+    robot_command_pb2,
+    synchronized_command_pb2,
+)
 from bosdyn.client.frame_helpers import (
     GRAV_ALIGNED_BODY_FRAME_NAME,
     HAND_FRAME_NAME,
@@ -12,6 +17,7 @@ from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_spot_api_msgs.conversions import convert
 from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
+from spot_msgs.srv import RobotCommand as RobotCommandService
 from synchros2.utilities import namespace_with
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
@@ -81,6 +87,7 @@ class ArmMovementExecutor(MovementExecutor):
         robot_name: str = "",
         speed_policy=None,
         action_client=None,
+        arm_stop_service_client=None,
         arm_state_source=None,
         settling_detector=None,
         force_baseline_sampler=None,
@@ -120,6 +127,18 @@ class ArmMovementExecutor(MovementExecutor):
             else ArmMotionSpeedPolicy()
         )
         self.arm_state_source = arm_state_source
+        self._owns_arm_stop_service_client = False
+        self.arm_stop_service_client = arm_stop_service_client
+        if (
+            self.arm_stop_service_client is None
+            and arm_state_source is not None
+            and getattr(arm_state_source, "node", None) is not None
+        ):
+            self.arm_stop_service_client = arm_state_source.node.create_client(
+                RobotCommandService,
+                namespace_with(robot_name, "robot_command"),
+            )
+            self._owns_arm_stop_service_client = True
         self.force_contact_policy = force_contact_policy
         self.ready_lift_distance_m = self._positive_timeout(
             ready_lift_distance_m,
@@ -154,6 +173,8 @@ class ArmMovementExecutor(MovementExecutor):
         self._verification_started = None
         self._guarded_plan_builder = None
         self._guarded_force_threshold_n = None
+        self._arm_stop_service_future = None
+        self._arm_stop_service_started = None
 
         self.guarded_probe_execution = None
         if (
@@ -170,6 +191,8 @@ class ArmMovementExecutor(MovementExecutor):
                 start_goal=self._guard_start_goal,
                 poll_goal=self._guard_poll_goal,
                 cancel_goal=self._guard_cancel_goal,
+                start_stop=self._guard_start_arm_stop,
+                poll_stop=self._guard_poll_arm_stop,
                 current_hand_pose=self.probe_motion_planner.current_hand_pose,
                 build_motion_goal=self.probe_motion_planner.build_motion_goal,
                 default_angular_speed_rad_s=(
@@ -371,6 +394,18 @@ class ArmMovementExecutor(MovementExecutor):
             self.guarded_probe_execution.cancel()
         super().cancel()
 
+    def shutdown(self) -> None:
+        super().shutdown()
+        if (
+            self._owns_arm_stop_service_client
+            and self.arm_stop_service_client is not None
+        ):
+            try:
+                self.arm_stop_service_client.destroy()
+            finally:
+                self.arm_stop_service_client = None
+                self._owns_arm_stop_service_client = False
+
     def _start_guarded_probe(
         self,
         target_builder,
@@ -462,6 +497,102 @@ class ArmMovementExecutor(MovementExecutor):
     def _guard_cancel_goal(self) -> None:
         self._request_cancel()
         self._reset_goal_lifecycle()
+
+    def _guard_start_arm_stop(self) -> ArmMovementUpdate:
+        client = self.arm_stop_service_client
+        if client is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "RobotCommand service client is unavailable",
+            )
+
+        try:
+            if not client.wait_for_service(timeout_sec=0.0):
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.ACTION_SERVER_UNAVAILABLE,
+                    "RobotCommand service is unavailable",
+                )
+            request = self._build_arm_stop_request()
+            future = client.call_async(request)
+        except Exception as exception:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"ArmStopCommand service call failed: {exception}",
+            )
+
+        if future is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "RobotCommand service returned no future for ArmStopCommand",
+            )
+
+        self._arm_stop_service_future = future
+        self._arm_stop_service_started = self._monotonic_clock()
+        return ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING,
+            "ArmStopCommand service request sent",
+        )
+
+    def _guard_poll_arm_stop(self) -> ArmMovementUpdate:
+        future = self._arm_stop_service_future
+        if future is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "ArmStopCommand has no active service request",
+            )
+
+        if not future.done():
+            if self._deadline_expired(
+                self._arm_stop_service_started,
+                self.goal_response_timeout_sec,
+            ):
+                self._reset_arm_stop_service_lifecycle(cancel=True)
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.RESULT_TIMEOUT,
+                    "ArmStopCommand service response timed out after "
+                    f"{self.goal_response_timeout_sec:.1f} s",
+                )
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                "Waiting for ArmStopCommand service response",
+            )
+
+        try:
+            response = future.result()
+        except Exception as exception:
+            self._reset_arm_stop_service_lifecycle()
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"ArmStopCommand service response failed: {exception}",
+            )
+
+        self._reset_arm_stop_service_lifecycle()
+        if response is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "ArmStopCommand service returned no response",
+            )
+
+        message = str(getattr(response, "message", "")).strip()
+        if bool(getattr(response, "success", False)):
+            return ArmMovementUpdate(
+                ArmMovementOutcome.SUCCESS,
+                message or "ArmStopCommand accepted",
+            )
+        return ArmMovementUpdate(
+            ArmMovementOutcome.MOTION_FAILED,
+            message or "ArmStopCommand was rejected",
+        )
+
+    def _reset_arm_stop_service_lifecycle(self, cancel=False) -> None:
+        future = self._arm_stop_service_future
+        self._arm_stop_service_future = None
+        self._arm_stop_service_started = None
+        if cancel and future is not None and not future.done():
+            try:
+                future.cancel()
+            except Exception:
+                pass
 
     def _handle_successful_result(self, result):
         if self._operation == _ArmOperation.GUARDED_MOVEMENT:
@@ -575,6 +706,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._verification_started = None
         self._guarded_plan_builder = None
         self._guarded_force_threshold_n = None
+        self._reset_arm_stop_service_lifecycle(cancel=True)
         if self.guarded_probe_execution is not None:
             self.guarded_probe_execution.reset()
 
@@ -756,6 +888,21 @@ class ArmMovementExecutor(MovementExecutor):
         if state is ArmStowState.UNKNOWN:
             return ArmMovementOutcome.ARM_STATE_UNKNOWN
         return ArmMovementOutcome.ARM_STATE_UNKNOWN
+
+    def _build_arm_stop_request(self) -> RobotCommandService.Request:
+        arm_stop = arm_command_pb2.ArmStopCommand.Request()
+        arm_command = arm_command_pb2.ArmCommand.Request(
+            arm_stop_command=arm_stop
+        )
+        synchronized = synchronized_command_pb2.SynchronizedCommand.Request(
+            arm_command=arm_command
+        )
+        command = robot_command_pb2.RobotCommand(
+            synchronized_command=synchronized
+        )
+        request = RobotCommandService.Request()
+        convert(command, request.command)
+        return request
 
     def _build_stow_goal(self) -> RobotCommand.Goal:
         stow_command = RobotCommandBuilder.arm_stow_command()

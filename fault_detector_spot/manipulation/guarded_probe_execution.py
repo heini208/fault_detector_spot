@@ -31,12 +31,9 @@ class _Phase(Enum):
     FORCE_BASELINE = "force_baseline"
     PLAN_WAIT = "plan_wait"
     MOVING = "moving"
-    CONTACT_STOPPING = "contact_stopping"
-    ABORT_STOPPING = "abort_stopping"
+    ARM_STOPPING = "arm_stopping"
+    ARM_STOP_SETTLING = "arm_stop_settling"
     RETREATING = "retreating"
-    POST_RETREAT_SETTLING = "post_retreat_settling"
-    UNSTABLE_RECOVERING = "unstable_recovering"
-    UNSTABLE_RECOVERY_SETTLING = "unstable_recovery_settling"
 
 
 class GuardedProbeExecution:
@@ -51,6 +48,8 @@ class GuardedProbeExecution:
         start_goal,
         poll_goal,
         cancel_goal,
+        start_stop,
+        poll_stop,
         current_hand_pose,
         build_motion_goal,
         default_angular_speed_rad_s: float,
@@ -75,6 +74,8 @@ class GuardedProbeExecution:
             (start_goal, "start goal"),
             (poll_goal, "poll goal"),
             (cancel_goal, "cancel goal"),
+            (start_stop, "start arm stop"),
+            (poll_stop, "poll arm stop"),
             (current_hand_pose, "current hand pose"),
             (build_motion_goal, "build motion goal"),
         )
@@ -93,6 +94,8 @@ class GuardedProbeExecution:
         self._start_goal = start_goal
         self._poll_goal = poll_goal
         self._cancel_goal = cancel_goal
+        self._start_stop = start_stop
+        self._poll_stop = poll_stop
         self._current_hand_pose = current_hand_pose
         self._build_motion_goal = build_motion_goal
         self.default_angular_speed_rad_s = self._positive(
@@ -144,25 +147,14 @@ class GuardedProbeExecution:
             return self._prepare_plan()
         if phase is _Phase.MOVING:
             return self._poll_primary_motion()
-        if phase in (
-            _Phase.CONTACT_STOPPING,
-            _Phase.ABORT_STOPPING,
-        ):
-            return self._handle_stop_settling(
+        if phase is _Phase.ARM_STOPPING:
+            return self._poll_arm_stop()
+        if phase is _Phase.ARM_STOP_SETTLING:
+            return self._handle_arm_stop_settling(
                 self.settling_detector.poll()
             )
         if phase is _Phase.RETREATING:
             return self._poll_retreat()
-        if phase is _Phase.POST_RETREAT_SETTLING:
-            return self._handle_post_retreat_settling(
-                self.settling_detector.poll()
-            )
-        if phase is _Phase.UNSTABLE_RECOVERING:
-            return self._poll_unstable_recovery()
-        if phase is _Phase.UNSTABLE_RECOVERY_SETTLING:
-            return self._handle_unstable_recovery_settling(
-                self.settling_detector.poll()
-            )
         return self._terminal(
             ArmMovementOutcome.EXECUTION_ERROR,
             "No guarded probe movement is active",
@@ -191,11 +183,9 @@ class GuardedProbeExecution:
         self._last_hand_orientation = None
         self._primary_motion_started_at = None
         self._telemetry_movement_sequence = None
-        self._unstable_recovery_terminal_outcome = None
-        self._unstable_recovery_terminal_detail = ""
-        self._unstable_recovery_previous_remaining_m = None
-        self._unstable_recovery_step_m = 0.0
-        self._unstable_recovery_distance_m = 0.0
+        self._stop_terminal_outcome = None
+        self._stop_terminal_detail = ""
+        self._stop_then_retreat = False
         self.settling_detector.reset()
         self.force_baseline_sampler.reset()
 
@@ -340,23 +330,28 @@ class GuardedProbeExecution:
         update = self._poll_goal()
         if update.outcome is ArmMovementOutcome.RUNNING:
             return update
+
+        detail = update.detail
         if update.outcome is ArmMovementOutcome.SUCCESS:
             if not plan.force_guard_enabled:
-                return self._terminal(
-                    update.outcome,
-                    f"{update.detail}; translational force guard skipped "
-                    "for rotation-only movement",
+                detail = (
+                    f"{detail}; translational force guard skipped "
+                    "for rotation-only movement"
                 )
-            return self._terminal(
-                update.outcome,
-                f"{update.detail}; peak opposing force delta "
-                f"{self._peak_opposing_force_delta_n:.2f} N, peak total "
-                f"force delta {self._peak_total_force_delta_n:.2f} N, "
-                f"directional threshold "
-                f"{self._force_threshold_n:.2f} N at "
-                f"{plan.linear_speed_mps:.4f} m/s",
-            )
-        return self._terminal(update.outcome, update.detail)
+            else:
+                detail = (
+                    f"{detail}; peak opposing force delta "
+                    f"{self._peak_opposing_force_delta_n:.2f} N, "
+                    f"peak total force delta "
+                    f"{self._peak_total_force_delta_n:.2f} N, "
+                    f"directional threshold "
+                    f"{self._force_threshold_n:.2f} N at "
+                    f"{plan.linear_speed_mps:.4f} m/s"
+                )
+        return self._begin_arm_stop(
+            terminal_outcome=update.outcome,
+            terminal_detail=detail,
+        )
 
     def _check_force_guard(self):
         now = self._monotonic_clock()
@@ -571,16 +566,11 @@ class GuardedProbeExecution:
     def _begin_contact(self, detail: str) -> ArmMovementUpdate:
         self._contact_detail = str(detail)
         self._cancel_goal()
-        self._phase = _Phase.CONTACT_STOPPING
-        try:
-            update = self.settling_detector.start()
-        except Exception as exception:
-            return self._terminal(
-                ArmMovementOutcome.STOP_UNCONFIRMED,
-                "Contact detected, but physical stop confirmation "
-                f"could not start: {exception}",
-            )
-        return self._handle_stop_settling(update)
+        return self._begin_arm_stop(
+            terminal_outcome=ArmMovementOutcome.CONTACT,
+            terminal_detail=self._contact_detail,
+            then_retreat=True,
+        )
 
     def _begin_abort(
         self,
@@ -590,222 +580,113 @@ class GuardedProbeExecution:
         self._abort_outcome = outcome
         self._abort_detail = str(detail)
         self._cancel_goal()
-        self._phase = _Phase.ABORT_STOPPING
-        try:
-            update = self.settling_detector.start()
-        except Exception as exception:
-            return self._terminal(
-                ArmMovementOutcome.STOP_UNCONFIRMED,
-                f"{detail}; physical stop confirmation could not start: "
-                f"{exception}",
-            )
-        return self._handle_stop_settling(update)
+        return self._begin_arm_stop(
+            terminal_outcome=outcome,
+            terminal_detail=self._abort_detail,
+        )
 
-    def _handle_stop_settling(self, update) -> ArmMovementUpdate:
-        if update.outcome is HandSettlingOutcome.RUNNING:
-            return ArmMovementUpdate(
-                ArmMovementOutcome.RUNNING,
-                "Waiting for physical arm stop after cancellation: "
-                f"{update.detail}",
-            )
-        if (
-            update.outcome is HandSettlingOutcome.TIMEOUT
-            and self._phase is _Phase.CONTACT_STOPPING
-        ):
-            return self._begin_unstable_recovery(
-                ArmMovementOutcome.CONTACT,
-                self._contact_detail,
-            )
-        if update.outcome is not HandSettlingOutcome.SETTLED:
-            reason = (
-                self._contact_detail
-                or self._abort_detail
-                or "Guarded probe movement was cancelled"
-            )
-            return self._terminal(
-                ArmMovementOutcome.STOP_UNCONFIRMED,
-                f"{reason}; physical stop could not be confirmed: "
-                f"{update.detail}",
-            )
-
-        if self._phase is _Phase.ABORT_STOPPING:
-            return self._terminal(
-                self._abort_outcome
-                or ArmMovementOutcome.EXECUTION_ERROR,
-                self._abort_detail,
-            )
-        return self._begin_retreat()
-
-    def _begin_unstable_recovery(
+    def _begin_arm_stop(
         self,
-        terminal_outcome=None,
-        terminal_detail=None,
+        *,
+        terminal_outcome: ArmMovementOutcome,
+        terminal_detail: str,
+        then_retreat: bool = False,
     ) -> ArmMovementUpdate:
-        plan = self._plan
-        if plan is None:
-            return self._terminal(
-                ArmMovementOutcome.RECOVERY_FAILED,
-                "Unstable arm recovery has no guarded probe plan",
-            )
+        self._stop_terminal_outcome = terminal_outcome
+        self._stop_terminal_detail = str(terminal_detail).strip()
+        self._stop_then_retreat = bool(then_retreat)
 
-        if terminal_outcome is not None:
-            self._unstable_recovery_terminal_outcome = terminal_outcome
-            self._unstable_recovery_terminal_detail = str(
-                terminal_detail or ""
-            )
-
-        try:
-            current_hand = self._current_hand_pose(
-                plan.direction_frame
-            )
-        except Exception as exception:
-            return self._terminal(
-                ArmMovementOutcome.RECOVERY_FAILED,
-                "Could not measure hand pose for unstable arm recovery: "
-                f"{exception}",
-            )
-
-        start = plan.current_hand.pose.position
-        current = current_hand.pose.position
-        dx = float(start.x) - float(current.x)
-        dy = float(start.y) - float(current.y)
-        dz = float(start.z) - float(current.z)
-        remaining = math.sqrt(dx * dx + dy * dy + dz * dz)
-
-        if remaining <= 1e-4:
-            return self._terminal(
-                ArmMovementOutcome.UNSTABLE_ARM,
-                self._unstable_recovery_detail(
-                    "arm remained unstable at the pre-movement pose"
-                ),
-            )
-
-        previous = self._unstable_recovery_previous_remaining_m
-        if previous is not None and remaining >= previous - 1e-4:
-            return self._terminal(
-                ArmMovementOutcome.RECOVERY_FAILED,
-                self._unstable_recovery_detail(
-                    "local recovery made no measurable progress"
-                ),
-            )
-
-        self._unstable_recovery_previous_remaining_m = remaining
-        self._unstable_recovery_step_m = min(
-            self.retreat_distance_m,
-            remaining,
-        )
-        scale = self._unstable_recovery_step_m / remaining
-        target = deepcopy(current_hand)
-        target.pose.position.x += dx * scale
-        target.pose.position.y += dy * scale
-        target.pose.position.z += dz * scale
-        speed = ArmMotionSpeed(
-            linear_speed_mps=self.retreat_speed_mps,
-            angular_speed_rad_s=self.default_angular_speed_rad_s,
-        )
-        try:
-            goal = self._build_motion_goal(
-                current_hand,
-                target,
-                speed,
-            )
-        except Exception as exception:
-            return self._terminal(
-                ArmMovementOutcome.RECOVERY_FAILED,
-                self._unstable_recovery_detail(
-                    f"could not build local recovery: {exception}"
-                ),
-            )
-
-        self._phase = _Phase.UNSTABLE_RECOVERING
-        update = self._start_goal(goal)
+        self._phase = _Phase.ARM_STOPPING
+        update = self._start_stop()
         if update.outcome is ArmMovementOutcome.RUNNING:
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING,
-                "Arm remained unstable; moving "
-                f"{self._unstable_recovery_step_m:.4f} m toward the "
-                "pre-movement pose",
+                "Arm movement ended; ArmStopCommand sent",
             )
         return self._terminal(
-            ArmMovementOutcome.RECOVERY_FAILED,
-            self._unstable_recovery_detail(
-                f"local recovery could not start: {update.detail}"
+            ArmMovementOutcome.STOP_UNCONFIRMED,
+            self._stop_detail(
+                f"ArmStopCommand could not start: {update.detail}"
             ),
         )
 
-    def _poll_unstable_recovery(self) -> ArmMovementUpdate:
-        update = self._poll_goal()
+    def _poll_arm_stop(self) -> ArmMovementUpdate:
+        update = self._poll_stop()
         if update.outcome is ArmMovementOutcome.RUNNING:
-            return update
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                "Waiting for ArmStopCommand service response",
+            )
         if update.outcome is not ArmMovementOutcome.SUCCESS:
             return self._terminal(
-                ArmMovementOutcome.RECOVERY_FAILED,
-                self._unstable_recovery_detail(
-                    f"local recovery failed: {update.detail}"
+                ArmMovementOutcome.STOP_UNCONFIRMED,
+                self._stop_detail(
+                    f"ArmStopCommand failed: {update.detail}"
                 ),
             )
 
-        self._unstable_recovery_distance_m += (
-            self._unstable_recovery_step_m
-        )
-        self._phase = _Phase.UNSTABLE_RECOVERY_SETTLING
+        self._phase = _Phase.ARM_STOP_SETTLING
         try:
             settling = self.settling_detector.start()
         except Exception as exception:
             return self._terminal(
-                ArmMovementOutcome.RECOVERY_FAILED,
-                self._unstable_recovery_detail(
-                    "local recovery completed, but settling "
+                ArmMovementOutcome.STOP_UNCONFIRMED,
+                self._stop_detail(
+                    "ArmStopCommand was accepted, but physical settling "
                     f"confirmation could not start: {exception}"
                 ),
             )
-        return self._handle_unstable_recovery_settling(settling)
+        return self._handle_arm_stop_settling(settling)
 
-    def _handle_unstable_recovery_settling(
+    def _handle_arm_stop_settling(
         self,
         update,
     ) -> ArmMovementUpdate:
         if update.outcome is HandSettlingOutcome.RUNNING:
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING,
-                "Local unstable-arm recovery completed; waiting for "
-                f"the hand to settle: {update.detail}",
-            )
-        if update.outcome is HandSettlingOutcome.SETTLED:
-            outcome = (
-                self._unstable_recovery_terminal_outcome
-                or ArmMovementOutcome.UNSTABLE_ARM
-            )
-            detail = self._unstable_recovery_terminal_detail
-            recovered = self._unstable_recovery_distance_m
-            suffix = (
-                "physical stop initially remained unstable, then "
-                f"recovered {recovered:.4f} m toward the pre-movement "
-                "pose and settled"
-            )
-            return self._terminal(
-                outcome,
-                f"{detail}; {suffix}" if detail else suffix,
+                "ArmStopCommand accepted; waiting for physical "
+                f"stability: {update.detail}",
             )
         if update.outcome is HandSettlingOutcome.TIMEOUT:
-            return self._begin_unstable_recovery()
+            return self._terminal(
+                ArmMovementOutcome.UNSTABLE_ARM,
+                self._stop_detail(
+                    "ArmStopCommand was accepted, but the hand remained "
+                    f"unstable: {update.detail}"
+                ),
+            )
+        if update.outcome is not HandSettlingOutcome.SETTLED:
+            return self._terminal(
+                ArmMovementOutcome.STOP_UNCONFIRMED,
+                self._stop_detail(
+                    "ArmStopCommand was accepted, but physical stability "
+                    f"could not be confirmed: {update.detail}"
+                ),
+            )
 
+        if self._stop_then_retreat:
+            return self._begin_retreat()
+
+        outcome = (
+            self._stop_terminal_outcome
+            or ArmMovementOutcome.EXECUTION_ERROR
+        )
+        detail = self._stop_terminal_detail
+        suffix = "ArmStopCommand accepted and physical stability confirmed"
         return self._terminal(
-            ArmMovementOutcome.STOP_UNCONFIRMED,
-            self._unstable_recovery_detail(
-                "local recovery completed, but physical stability "
-                f"could not be confirmed: {update.detail}"
-            ),
+            outcome,
+            f"{detail}; {suffix}" if detail else suffix,
         )
 
-    def _unstable_recovery_detail(self, detail: str) -> str:
-        reason = self._unstable_recovery_terminal_detail.strip()
+    def _stop_detail(self, detail: str) -> str:
+        original = self._stop_terminal_detail.strip()
         normalized = str(detail).strip()
-        if not reason:
+        if not original:
             return normalized
         if not normalized:
-            return reason
-        return f"{reason}; {normalized}"
+            return original
+        return f"{original}; {normalized}"
 
     def _begin_retreat(self) -> ArmMovementUpdate:
         plan = self._plan
@@ -883,53 +764,21 @@ class GuardedProbeExecution:
         update = self._poll_goal()
         if update.outcome is ArmMovementOutcome.RUNNING:
             return update
-        if update.outcome is not ArmMovementOutcome.SUCCESS:
-            return self._terminal(
-                ArmMovementOutcome.RETREAT_FAILED,
-                f"Contact retreat failed: {update.detail}",
-            )
 
-        self._phase = _Phase.POST_RETREAT_SETTLING
-        try:
-            settling = self.settling_detector.start()
-        except Exception as exception:
-            return self._terminal(
-                ArmMovementOutcome.RETREAT_FAILED,
-                "Contact retreat completed, but settling confirmation "
-                f"could not start: {exception}",
+        if update.outcome is ArmMovementOutcome.SUCCESS:
+            outcome = ArmMovementOutcome.CONTACT
+            detail = (
+                f"{self._contact_detail}; retreated "
+                f"{self._retreat_distance_m:.4f} m opposite the "
+                "measured travel direction"
             )
-        return self._handle_post_retreat_settling(settling)
+        else:
+            outcome = ArmMovementOutcome.RETREAT_FAILED
+            detail = f"Contact retreat failed: {update.detail}"
 
-    def _handle_post_retreat_settling(
-        self,
-        update,
-    ) -> ArmMovementUpdate:
-        if update.outcome is HandSettlingOutcome.RUNNING:
-            return ArmMovementUpdate(
-                ArmMovementOutcome.RUNNING,
-                "Contact retreat completed; waiting for arm to settle: "
-                f"{update.detail}",
-            )
-
-        retreat_detail = (
-            f"{self._contact_detail}; retreated "
-            f"{self._retreat_distance_m:.4f} m opposite the "
-            "measured travel direction"
-        )
-        if update.outcome is HandSettlingOutcome.TIMEOUT:
-            return self._begin_unstable_recovery(
-                ArmMovementOutcome.CONTACT,
-                f"{retreat_detail}; arm remained unstable after retreat",
-            )
-        if update.outcome is not HandSettlingOutcome.SETTLED:
-            return self._terminal(
-                ArmMovementOutcome.RETREAT_FAILED,
-                "Contact retreat completed, but physical stability "
-                f"could not be confirmed: {update.detail}",
-            )
-        return self._terminal(
-            ArmMovementOutcome.CONTACT,
-            retreat_detail,
+        return self._begin_arm_stop(
+            terminal_outcome=outcome,
+            terminal_detail=detail,
         )
 
     def _terminal(

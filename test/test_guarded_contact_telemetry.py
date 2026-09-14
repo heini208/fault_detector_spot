@@ -168,6 +168,14 @@ def execution(state, driver, clock, telemetry):
         start_goal=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
+        start_stop=lambda: ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING,
+            "stop sent",
+        ),
+        poll_stop=lambda: ArmMovementUpdate(
+            ArmMovementOutcome.SUCCESS,
+            "stop accepted",
+        ),
         current_hand_pose=lambda _frame: deepcopy(pose(0.004)),
         build_motion_goal=lambda current, target, speed: (
             current,

@@ -1,6 +1,7 @@
-"""Focused tests for bounded local recovery from an unstable arm stop."""
+"""Focused tests for ArmStop-based guarded movement finalization."""
 
-import pytest
+from copy import deepcopy
+
 from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.manipulation.arm_force_baseline import (
@@ -128,16 +129,26 @@ class GoalDriver:
         self.cancel_count += 1
 
 
-class PoseSource:
+class StopDriver:
 
-    def __init__(self, positions):
-        self.positions = list(positions)
-        self.last = self.positions[-1]
+    def __init__(self):
+        self.count = 0
+        self.updates = []
 
-    def __call__(self, _frame):
-        if self.positions:
-            self.last = self.positions.pop(0)
-        return pose(self.last)
+    def start(self):
+        self.count += 1
+        return ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING,
+            "stop sent",
+        )
+
+    def poll(self):
+        if not self.updates:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                "waiting for stop service",
+            )
+        return self.updates.pop(0)
 
 
 def pose(x):
@@ -148,9 +159,9 @@ def pose(x):
     return value
 
 
-def plan():
+def plan(force_guard_enabled=True):
     return ProbeMotionPlan(
-        goal=object(),
+        goal="primary",
         current_hand=pose(0.0),
         target_hand=pose(0.05),
         direction_x=1.0,
@@ -158,10 +169,18 @@ def plan():
         direction_z=0.0,
         linear_speed_mps=0.005,
         direction_frame="body",
+        force_guard_enabled=force_guard_enabled,
     )
 
 
-def execution(state, driver, settling, current_pose, clock):
+def execution(
+    state,
+    driver,
+    settling,
+    stop_driver,
+    clock,
+    current_x=0.03,
+):
     return GuardedProbeExecution(
         arm_state_source=state,
         settling_detector=settling,
@@ -170,8 +189,11 @@ def execution(state, driver, settling, current_pose, clock):
         start_goal=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
-        current_hand_pose=current_pose,
+        start_stop=stop_driver.start,
+        poll_stop=stop_driver.poll,
+        current_hand_pose=lambda _frame: deepcopy(pose(current_x)),
         build_motion_goal=lambda current, target, speed: (
+            "retreat",
             current,
             target,
             speed,
@@ -202,234 +224,204 @@ def trigger_contact(guard, state):
     return guard.poll()
 
 
-def test_settling_timeout_recovers_one_step_toward_pre_movement_pose():
-    clock = ManualClock()
+def test_successful_cartesian_move_is_stopped_then_settled():
     state = ArmState()
     driver = GoalDriver()
-    settling = ScriptedSettling([
-        HandSettlingOutcome.TIMEOUT,
-        HandSettlingOutcome.SETTLED,
-    ])
+    stop_driver = StopDriver()
+    settling = ScriptedSettling([HandSettlingOutcome.SETTLED])
     guard = execution(
         state,
         driver,
         settling,
-        PoseSource([0.03]),
-        clock,
+        stop_driver,
+        ManualClock(),
     )
 
-    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
-    update = trigger_contact(guard, state)
-
-    assert update.outcome is ArmMovementOutcome.RUNNING
-    assert driver.cancel_count == 1
-    assert len(driver.started_goals) == 2
-
-    _, target, speed = driver.started_goals[-1]
-    assert target.pose.position.x == pytest.approx(0.02)
-    assert speed.linear_speed_mps == pytest.approx(0.01)
-
+    assert guard.start(plan()).outcome is ArmMovementOutcome.RUNNING
     driver.updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
+    )
+
+    stopping = guard.poll()
+
+    assert stopping.outcome is ArmMovementOutcome.RUNNING
+    assert stop_driver.count == 1
+
+    stop_driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "stop complete")
     )
     finished = guard.poll()
 
-    assert finished.outcome is ArmMovementOutcome.CONTACT
-    assert "recovered 0.0100 m" in finished.detail
-    assert "pre-movement pose" in finished.detail
-    assert settling.start_count == 2
+    assert finished.outcome is ArmMovementOutcome.SUCCESS
+    assert "ArmStopCommand accepted" in finished.detail
+    assert settling.start_count == 1
     assert not guard.active
 
 
-def test_recovery_steps_repeat_only_while_arm_remains_unstable():
-    clock = ManualClock()
+def test_cartesian_stall_is_stopped_then_preserved():
     state = ArmState()
     driver = GoalDriver()
-    settling = ScriptedSettling([
-        HandSettlingOutcome.TIMEOUT,
-        HandSettlingOutcome.TIMEOUT,
-        HandSettlingOutcome.SETTLED,
-    ])
+    stop_driver = StopDriver()
+    settling = ScriptedSettling([HandSettlingOutcome.SETTLED])
     guard = execution(
         state,
         driver,
         settling,
-        PoseSource([0.03, 0.03, 0.03, 0.02]),
-        clock,
+        stop_driver,
+        ManualClock(),
     )
 
-    guard.start(plan)
-    assert trigger_contact(guard, state).outcome is ArmMovementOutcome.RUNNING
-
+    guard.start(plan())
     driver.updates.append(
-        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
+        ArmMovementUpdate(
+            ArmMovementOutcome.TRAJECTORY_STALLED,
+            "Cartesian arm trajectory stalled",
+        )
     )
     assert guard.poll().outcome is ArmMovementOutcome.RUNNING
 
-    assert len(driver.started_goals) == 3
-    _, second_target, _ = driver.started_goals[-1]
-    assert second_target.pose.position.x == pytest.approx(0.01)
-
-    driver.updates.append(
-        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
+    stop_driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "stop complete")
     )
     finished = guard.poll()
 
-    assert finished.outcome is ArmMovementOutcome.CONTACT
-    assert "recovered 0.0200 m" in finished.detail
-    assert settling.start_count == 3
-
-
-def test_recovery_stops_when_a_step_makes_no_measurable_progress():
-    clock = ManualClock()
-    state = ArmState()
-    driver = GoalDriver()
-    settling = ScriptedSettling([
-        HandSettlingOutcome.TIMEOUT,
-        HandSettlingOutcome.TIMEOUT,
-    ])
-    guard = execution(
-        state,
-        driver,
-        settling,
-        PoseSource([0.03, 0.03, 0.03, 0.03]),
-        clock,
-    )
-
-    guard.start(plan)
-    assert trigger_contact(guard, state).outcome is ArmMovementOutcome.RUNNING
-
-    driver.updates.append(
-        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
-    )
-    finished = guard.poll()
-
-    assert finished.outcome is ArmMovementOutcome.RECOVERY_FAILED
-    assert "no measurable progress" in finished.detail
-    assert len(driver.started_goals) == 2
+    assert finished.outcome is ArmMovementOutcome.TRAJECTORY_STALLED
+    assert "Cartesian arm trajectory stalled" in finished.detail
     assert not guard.active
 
 
-def test_missing_settling_sensing_does_not_start_recovery_motion():
-    clock = ManualClock()
+def test_contact_uses_arm_stop_before_and_after_retreat():
     state = ArmState()
     driver = GoalDriver()
-    settling = ScriptedSettling([
-        HandSettlingOutcome.SENSING_UNAVAILABLE,
-    ])
-    guard = execution(
-        state,
-        driver,
-        settling,
-        PoseSource([0.03]),
-        clock,
-    )
-
-    guard.start(plan)
-    finished = trigger_contact(guard, state)
-
-    assert finished.outcome is ArmMovementOutcome.STOP_UNCONFIRMED
-    assert len(driver.started_goals) == 1
-    assert driver.cancel_count == 1
-    assert not guard.active
-
-
-def test_force_abort_timeout_does_not_start_recovery_without_force_sensing():
-    clock = ManualClock()
-    state = ArmState()
-    driver = GoalDriver()
-    settling = ScriptedSettling([
-        HandSettlingOutcome.TIMEOUT,
-    ])
-    guard = execution(
-        state,
-        driver,
-        settling,
-        PoseSource([0.03]),
-        clock,
-    )
-
-    guard.start(plan)
-    clock.now = 0.25
-    finished = guard.poll()
-
-    assert finished.outcome is ArmMovementOutcome.STOP_UNCONFIRMED
-    assert len(driver.started_goals) == 1
-    assert driver.cancel_count == 1
-    assert not guard.active
-
-
-def test_post_retreat_settling_timeout_uses_local_recovery():
-    clock = ManualClock()
-    state = ArmState()
-    driver = GoalDriver()
+    stop_driver = StopDriver()
     settling = ScriptedSettling([
         HandSettlingOutcome.SETTLED,
-        HandSettlingOutcome.TIMEOUT,
         HandSettlingOutcome.SETTLED,
     ])
     guard = execution(
         state,
         driver,
         settling,
-        PoseSource([0.03, 0.03, 0.03, 0.02]),
-        clock,
+        stop_driver,
+        ManualClock(),
     )
 
-    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
-    assert trigger_contact(guard, state).outcome is ArmMovementOutcome.RUNNING
-    assert len(driver.started_goals) == 2
+    assert guard.start(plan()).outcome is ArmMovementOutcome.RUNNING
+    stopping = trigger_contact(guard, state)
 
-    driver.updates.append(
-        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
+    assert stopping.outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 1
+    assert stop_driver.count == 1
+
+    stop_driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "stop complete")
     )
-    recovering = guard.poll()
+    retreating = guard.poll()
 
-    assert recovering.outcome is ArmMovementOutcome.RUNNING
-    assert len(driver.started_goals) == 3
-    _, recovery_target, speed = driver.started_goals[-1]
-    assert recovery_target.pose.position.x == pytest.approx(0.01)
-    assert speed.linear_speed_mps == pytest.approx(0.01)
+    assert retreating.outcome is ArmMovementOutcome.RUNNING
+    retreat_goal = driver.started_goals[-1]
+    assert retreat_goal[0] == "retreat"
+    assert retreat_goal[2].pose.position.x == 0.02
 
     driver.updates.append(
-        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "retreat complete")
+    )
+    stopping_again = guard.poll()
+
+    assert stopping_again.outcome is ArmMovementOutcome.RUNNING
+    assert stop_driver.count == 2
+
+    stop_driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "stop complete")
     )
     finished = guard.poll()
 
     assert finished.outcome is ArmMovementOutcome.CONTACT
     assert "retreated 0.0100 m" in finished.detail
-    assert "arm remained unstable after retreat" in finished.detail
-    assert "recovered 0.0100 m" in finished.detail
-    assert settling.start_count == 3
+    assert settling.start_count == 2
+    assert stop_driver.count == 2
     assert not guard.active
 
 
-def test_post_retreat_missing_sensing_does_not_start_recovery_motion():
-    clock = ManualClock()
+def test_arm_stop_settling_timeout_releases_executor_as_unstable():
     state = ArmState()
     driver = GoalDriver()
+    stop_driver = StopDriver()
+    settling = ScriptedSettling([HandSettlingOutcome.TIMEOUT])
+    guard = execution(
+        state,
+        driver,
+        settling,
+        stop_driver,
+        ManualClock(),
+    )
+
+    guard.start(plan())
+    driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    stop_driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "stop complete")
+    )
+    finished = guard.poll()
+
+    assert finished.outcome is ArmMovementOutcome.UNSTABLE_ARM
+    assert "remained unstable" in finished.detail
+    assert not guard.active
+
+
+def test_contact_does_not_retreat_when_arm_stop_cannot_settle():
+    state = ArmState()
+    driver = GoalDriver()
+    stop_driver = StopDriver()
+    settling = ScriptedSettling([HandSettlingOutcome.TIMEOUT])
+    guard = execution(
+        state,
+        driver,
+        settling,
+        stop_driver,
+        ManualClock(),
+    )
+
+    guard.start(plan())
+    assert trigger_contact(guard, state).outcome is ArmMovementOutcome.RUNNING
+
+    stop_driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "stop complete")
+    )
+    finished = guard.poll()
+
+    assert finished.outcome is ArmMovementOutcome.UNSTABLE_ARM
+    assert len(driver.started_goals) == 1
+    assert stop_driver.count == 1
+    assert not guard.active
+
+
+def test_missing_settling_sensing_releases_executor_without_retreat():
+    state = ArmState()
+    driver = GoalDriver()
+    stop_driver = StopDriver()
     settling = ScriptedSettling([
-        HandSettlingOutcome.SETTLED,
         HandSettlingOutcome.SENSING_UNAVAILABLE,
     ])
     guard = execution(
         state,
         driver,
         settling,
-        PoseSource([0.03, 0.03, 0.03]),
-        clock,
+        stop_driver,
+        ManualClock(),
     )
 
-    guard.start(plan)
+    guard.start(plan())
     assert trigger_contact(guard, state).outcome is ArmMovementOutcome.RUNNING
-    assert len(driver.started_goals) == 2
 
-    driver.updates.append(
-        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
+    stop_driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "stop complete")
     )
     finished = guard.poll()
 
-    assert finished.outcome is ArmMovementOutcome.RETREAT_FAILED
-    assert "physical stability could not be confirmed" in finished.detail
-    assert len(driver.started_goals) == 2
+    assert finished.outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert len(driver.started_goals) == 1
     assert not guard.active

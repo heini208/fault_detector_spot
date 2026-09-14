@@ -106,7 +106,8 @@ def test_force_guard_state_machine_is_not_inside_arm_executor():
         "_check_force_guard",
         "_begin_contact",
         "_begin_retreat",
-        "_handle_stop_settling",
+        "_begin_arm_stop",
+        "_handle_arm_stop_settling",
     ):
         assert f"def {name}(" not in executor
         assert f"def {name}(" in guard
@@ -127,6 +128,7 @@ def test_executor_keeps_only_robot_command_translation():
 
     assert "RobotCommandBuilder.arm_pose_command" in executor
     assert "RobotCommandBuilder.arm_stow_command" in executor
+    assert "ArmStopCommand.Request" in executor
     assert "tf2_geometry_msgs" not in executor
     assert "MovementGeometryResolver" not in executor
 

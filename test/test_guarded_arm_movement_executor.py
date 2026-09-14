@@ -1,7 +1,6 @@
 """Focused tests for guarded probe execution."""
 
 from copy import deepcopy
-from types import SimpleNamespace
 
 import pytest
 from geometry_msgs.msg import PoseStamped
@@ -110,6 +109,8 @@ class GoalDriver:
         self.updates = []
         self.started_goals = []
         self.cancel_count = 0
+        self.stop_count = 0
+        self.stop_updates = []
 
     def start(self, goal):
         self.started_goals.append(goal)
@@ -129,6 +130,22 @@ class GoalDriver:
     def cancel(self):
         self.cancel_count += 1
 
+    def start_stop(self):
+        self.stop_count += 1
+        self.started_goals.append(("arm_stop", self.stop_count))
+        return ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING,
+            "stop sent",
+        )
+
+    def poll_stop(self):
+        if not self.stop_updates:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                "waiting for stop service",
+            )
+        return self.stop_updates.pop(0)
+
 
 def pose(x):
     result = PoseStamped()
@@ -140,7 +157,7 @@ def pose(x):
 
 def plan():
     return ProbeMotionPlan(
-        goal=object(),
+        goal="primary",
         current_hand=pose(0.0),
         target_hand=pose(0.01),
         direction_x=1.0,
@@ -171,8 +188,11 @@ def execution(
         start_goal=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
+        start_stop=driver.start_stop,
+        poll_stop=driver.poll_stop,
         current_hand_pose=lambda _frame: deepcopy(current_pose),
         build_motion_goal=lambda current, target, speed: (
+            "retreat",
             current,
             target,
             speed,
@@ -211,15 +231,27 @@ def test_contact_cancels_then_retreats_and_returns_contact():
         y_n=2.0,
         z_n=3.0,
     )
-    contact = guard.poll()
+    stopping = guard.poll()
 
-    assert contact.outcome is ArmMovementOutcome.RUNNING
+    assert stopping.outcome is ArmMovementOutcome.RUNNING
     assert driver.cancel_count == 1
-    assert guard._test_settling.start_count == 1
-    assert len(driver.started_goals) == 2
+    assert driver.started_goals[-1] == ("arm_stop", 1)
+    assert guard._test_settling.start_count == 0
 
+    driver.stop_updates.append(
+        ArmMovementUpdate(
+            ArmMovementOutcome.SUCCESS,
+            "Stopped",
+        )
+    )
+    retreating = guard.poll()
+
+    assert retreating.outcome is ArmMovementOutcome.RUNNING
+    assert guard._test_settling.start_count == 1
     retreat_goal = driver.started_goals[-1]
-    _, target, speed = retreat_goal
+    assert retreat_goal[0] == "retreat"
+    target = retreat_goal[2]
+    speed = retreat_goal[3]
     assert target.pose.position.x == pytest.approx(0.0)
     assert speed.linear_speed_mps == pytest.approx(0.01)
 
@@ -227,6 +259,17 @@ def test_contact_cancels_then_retreats_and_returns_contact():
         ArmMovementUpdate(
             ArmMovementOutcome.SUCCESS,
             "Succeeded",
+        )
+    )
+    stopping_again = guard.poll()
+
+    assert stopping_again.outcome is ArmMovementOutcome.RUNNING
+    assert driver.started_goals[-1] == ("arm_stop", 2)
+
+    driver.stop_updates.append(
+        ArmMovementUpdate(
+            ArmMovementOutcome.SUCCESS,
+            "Stopped",
         )
     )
     finished = guard.poll()
@@ -250,7 +293,7 @@ def test_normal_movement_does_not_wait_for_pre_movement_settling():
     assert len(driver.started_goals) == 1
 
 
-def test_primary_success_returns_success_without_retreat():
+def test_primary_success_runs_arm_stop_and_settling_without_retreat():
     clock = ManualClock()
     state = FakeArmStateSource()
     driver = GoalDriver()
@@ -270,14 +313,26 @@ def test_primary_success_returns_success_without_retreat():
         )
     )
 
+    stopping = guard.poll()
+
+    assert stopping.outcome is ArmMovementOutcome.RUNNING
+    assert driver.started_goals[-1] == ("arm_stop", 1)
+    assert driver.cancel_count == 0
+
+    driver.stop_updates.append(
+        ArmMovementUpdate(
+            ArmMovementOutcome.SUCCESS,
+            "Stopped",
+        )
+    )
     finished = guard.poll()
 
     assert finished.outcome is ArmMovementOutcome.SUCCESS
-    assert driver.cancel_count == 0
-    assert len(driver.started_goals) == 1
+    assert guard._test_settling.start_count == 1
+    assert not guard.active
 
 
-def test_stale_force_cancels_and_returns_force_stale_after_stop():
+def test_stale_force_cancels_then_arm_stops_before_returning_force_stale():
     clock = ManualClock()
     state = FakeArmStateSource()
     driver = GoalDriver()
@@ -285,10 +340,18 @@ def test_stale_force_cancels_and_returns_force_stale_after_stop():
 
     guard.start(plan)
     clock.now = 0.25
+    stopping = guard.poll()
+
+    assert stopping.outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 1
+    assert driver.started_goals[-1] == ("arm_stop", 1)
+
+    driver.stop_updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
+    )
     failed = guard.poll()
 
     assert failed.outcome is ArmMovementOutcome.FORCE_STALE
-    assert driver.cancel_count == 1
     assert not guard.active
 
 
@@ -336,6 +399,7 @@ def test_explicit_threshold_override_replaces_generic_policy():
 
     assert contact.outcome is ArmMovementOutcome.RUNNING
     assert driver.cancel_count == 1
+    assert driver.started_goals[-1] == ("arm_stop", 1)
 
 
 def test_large_sideways_force_does_not_trigger_directional_contact():
