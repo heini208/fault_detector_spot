@@ -357,3 +357,79 @@ def test_force_abort_timeout_does_not_start_recovery_without_force_sensing():
     assert len(driver.started_goals) == 1
     assert driver.cancel_count == 1
     assert not guard.active
+
+
+def test_post_retreat_settling_timeout_uses_local_recovery():
+    clock = ManualClock()
+    state = ArmState()
+    driver = GoalDriver()
+    settling = ScriptedSettling([
+        HandSettlingOutcome.SETTLED,
+        HandSettlingOutcome.TIMEOUT,
+        HandSettlingOutcome.SETTLED,
+    ])
+    guard = execution(
+        state,
+        driver,
+        settling,
+        PoseSource([0.03, 0.03, 0.03, 0.02]),
+        clock,
+    )
+
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+    assert trigger_contact(guard, state).outcome is ArmMovementOutcome.RUNNING
+    assert len(driver.started_goals) == 2
+
+    driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
+    )
+    recovering = guard.poll()
+
+    assert recovering.outcome is ArmMovementOutcome.RUNNING
+    assert len(driver.started_goals) == 3
+    _, recovery_target, speed = driver.started_goals[-1]
+    assert recovery_target.pose.position.x == pytest.approx(0.01)
+    assert speed.linear_speed_mps == pytest.approx(0.01)
+
+    driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
+    )
+    finished = guard.poll()
+
+    assert finished.outcome is ArmMovementOutcome.CONTACT
+    assert "retreated 0.0100 m" in finished.detail
+    assert "arm remained unstable after retreat" in finished.detail
+    assert "recovered 0.0100 m" in finished.detail
+    assert settling.start_count == 3
+    assert not guard.active
+
+
+def test_post_retreat_missing_sensing_does_not_start_recovery_motion():
+    clock = ManualClock()
+    state = ArmState()
+    driver = GoalDriver()
+    settling = ScriptedSettling([
+        HandSettlingOutcome.SETTLED,
+        HandSettlingOutcome.SENSING_UNAVAILABLE,
+    ])
+    guard = execution(
+        state,
+        driver,
+        settling,
+        PoseSource([0.03, 0.03, 0.03]),
+        clock,
+    )
+
+    guard.start(plan)
+    assert trigger_contact(guard, state).outcome is ArmMovementOutcome.RUNNING
+    assert len(driver.started_goals) == 2
+
+    driver.updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
+    )
+    finished = guard.poll()
+
+    assert finished.outcome is ArmMovementOutcome.RETREAT_FAILED
+    assert "physical stability could not be confirmed" in finished.detail
+    assert len(driver.started_goals) == 2
+    assert not guard.active

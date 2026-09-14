@@ -722,7 +722,7 @@ class GuardedProbeExecution:
         if update.outcome is ArmMovementOutcome.RUNNING:
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING,
-                "Arm did not settle after cancellation; moving "
+                "Arm remained unstable; moving "
                 f"{self._unstable_recovery_step_m:.4f} m toward the "
                 "pre-movement pose",
             )
@@ -910,17 +910,26 @@ class GuardedProbeExecution:
                 "Contact retreat completed; waiting for arm to settle: "
                 f"{update.detail}",
             )
+
+        retreat_detail = (
+            f"{self._contact_detail}; retreated "
+            f"{self._retreat_distance_m:.4f} m opposite the "
+            "measured travel direction"
+        )
+        if update.outcome is HandSettlingOutcome.TIMEOUT:
+            return self._begin_unstable_recovery(
+                ArmMovementOutcome.CONTACT,
+                f"{retreat_detail}; arm remained unstable after retreat",
+            )
         if update.outcome is not HandSettlingOutcome.SETTLED:
             return self._terminal(
                 ArmMovementOutcome.RETREAT_FAILED,
-                "Contact retreat completed, but the arm did not settle: "
-                f"{update.detail}",
+                "Contact retreat completed, but physical stability "
+                f"could not be confirmed: {update.detail}",
             )
         return self._terminal(
             ArmMovementOutcome.CONTACT,
-            f"{self._contact_detail}; retreated "
-            f"{self._retreat_distance_m:.4f} m opposite the "
-            "measured travel direction",
+            retreat_detail,
         )
 
     def _terminal(
