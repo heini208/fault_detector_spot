@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 
 
 Vector3 = Tuple[float, float, float]
+Quaternion = Tuple[float, float, float, float]
 JointVector = Tuple[float, ...]
 JointNames = Tuple[str, ...]
 
@@ -20,6 +21,16 @@ class ArmContactObservation:
     planned_linear_speed_mps: float
     direction_frame: str
     movement_direction: Vector3
+    initial_translation_distance_m: float
+    current_hand_position_m: Optional[Vector3]
+    current_hand_orientation_xyzw: Optional[Quaternion]
+    target_hand_position_m: Vector3
+    target_hand_orientation_xyzw: Quaternion
+    position_error_m: Optional[float]
+    rotation_error_rad: Optional[float]
+    forward_progress_m: Optional[float]
+    off_axis_displacement_m: Optional[float]
+    translation_progress_fraction: Optional[float]
     force_received_at: float
     force_hand_n: Vector3
     baseline_force_hand_n: Vector3
@@ -40,5 +51,6 @@ __all__ = [
     "ArmContactObservation",
     "JointNames",
     "JointVector",
+    "Quaternion",
     "Vector3",
 ]

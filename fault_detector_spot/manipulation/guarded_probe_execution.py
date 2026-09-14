@@ -404,7 +404,9 @@ class GuardedProbeExecution:
             )
 
         try:
-            hand_orientation = self._current_hand_orientation(plan)
+            hand_orientation, current_hand = (
+                self._current_hand_measurement(plan)
+            )
             force_delta = directional_force_delta(
                 baseline_force_hand=(
                     baseline.x_n,
@@ -447,6 +449,7 @@ class GuardedProbeExecution:
             force_sample=sample,
             force_baseline=baseline,
             force_delta=force_delta,
+            current_hand=current_hand,
         )
 
         threshold_n = self._force_threshold_n
@@ -492,6 +495,7 @@ class GuardedProbeExecution:
         force_sample,
         force_baseline,
         force_delta,
+        current_hand,
     ) -> None:
         telemetry = self.contact_telemetry
         sequence = self._telemetry_movement_sequence
@@ -508,11 +512,12 @@ class GuardedProbeExecution:
                 force_sample=force_sample,
                 force_baseline=force_baseline,
                 force_delta=force_delta,
+                current_hand=current_hand,
             )
         except Exception:
             return
 
-    def _current_hand_orientation(self, plan):
+    def _current_hand_measurement(self, plan):
         frame_id = str(plan.direction_frame).strip()
         if not frame_id:
             raise ValueError(
@@ -525,7 +530,7 @@ class GuardedProbeExecution:
             orientation = self._last_hand_orientation
             if orientation is None:
                 raise
-            return orientation
+            return orientation, None
 
         if current_hand.header.frame_id.strip() != frame_id:
             raise ValueError(
@@ -535,7 +540,7 @@ class GuardedProbeExecution:
         self._last_hand_orientation = deepcopy(
             current_hand.pose.orientation
         )
-        return self._last_hand_orientation
+        return self._last_hand_orientation, current_hand
 
     def _resolve_force_threshold(
         self,

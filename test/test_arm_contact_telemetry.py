@@ -1,9 +1,11 @@
 """Tests for shadow contact telemetry collection."""
 
 import json
+import math
 from types import SimpleNamespace
 
 import pytest
+from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.manipulation.arm_contact_telemetry import (
     ArmContactTelemetry,
@@ -31,6 +33,17 @@ class FakeJointStateSource:
         return self._sample
 
 
+def pose(x=0.0, y=0.0, z=0.0, yaw=0.0):
+    value = PoseStamped()
+    value.header.frame_id = "body"
+    value.pose.position.x = x
+    value.pose.position.y = y
+    value.pose.position.z = z
+    value.pose.orientation.z = math.sin(yaw * 0.5)
+    value.pose.orientation.w = math.cos(yaw * 0.5)
+    return value
+
+
 def plan():
     return SimpleNamespace(
         linear_speed_mps=0.05,
@@ -38,6 +51,8 @@ def plan():
         direction_x=1.0,
         direction_y=0.0,
         direction_z=0.0,
+        current_hand=pose(0.0),
+        target_hand=pose(0.10, yaw=0.4),
     )
 
 
@@ -111,12 +126,23 @@ def test_observation_captures_force_motion_and_joint_evidence():
         force_sample=force_sample(),
         force_baseline=force_baseline(),
         force_delta=force_delta(),
+        current_hand=pose(0.04, y=0.03, yaw=0.1),
     )
 
     assert observation.movement_sequence == 1
     assert observation.elapsed_sec == pytest.approx(0.4)
     assert observation.planned_linear_speed_mps == pytest.approx(0.05)
     assert observation.movement_direction == (1.0, 0.0, 0.0)
+    assert observation.initial_translation_distance_m == pytest.approx(0.10)
+    assert observation.current_hand_position_m == pytest.approx((0.04, 0.03, 0.0))
+    assert observation.target_hand_position_m == pytest.approx((0.10, 0.0, 0.0))
+    assert observation.position_error_m == pytest.approx((0.06 ** 2 + 0.03 ** 2) ** 0.5)
+    assert observation.rotation_error_rad == pytest.approx(0.3)
+    assert observation.forward_progress_m == pytest.approx(0.04)
+    assert observation.off_axis_displacement_m == pytest.approx(0.03)
+    assert observation.translation_progress_fraction == pytest.approx(
+        1.0 - ((0.06 ** 2 + 0.03 ** 2) ** 0.5 / 0.10)
+    )
     assert observation.opposing_force_delta_n == pytest.approx(4.0)
     assert observation.total_force_delta_n == pytest.approx(4.0)
     assert observation.hand_linear_velocity_mps == (0.01, 0.02, 0.03)
@@ -145,6 +171,14 @@ def test_missing_optional_motion_samples_do_not_block_force_observation():
         force_delta=force_delta(),
     )
 
+    assert observation.current_hand_position_m is None
+    assert observation.current_hand_orientation_xyzw is None
+    assert observation.position_error_m is None
+    assert observation.rotation_error_rad is None
+    assert observation.forward_progress_m is None
+    assert observation.off_axis_displacement_m is None
+    assert observation.translation_progress_fraction is None
+    assert observation.target_hand_position_m == pytest.approx((0.10, 0.0, 0.0))
     assert observation.hand_velocity_received_at is None
     assert observation.hand_linear_velocity_mps is None
     assert observation.joint_state_received_at is None
@@ -201,6 +235,8 @@ def test_raw_logging_writes_self_describing_jsonl(tmp_path):
     payload = json.loads(log_path.read_text(encoding="utf-8").strip())
     assert payload["joint_names"] == list(ARM_JOINT_NAMES)
     assert payload["opposing_force_delta_n"] == pytest.approx(4.0)
+    assert payload["target_hand_position_m"] == pytest.approx([0.10, 0.0, 0.0])
+    assert "translation_progress_fraction" in payload
     assert payload["joint_efforts_nm"][0] == pytest.approx(0.3)
 
 

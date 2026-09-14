@@ -2,6 +2,7 @@
 
 from dataclasses import asdict
 import json
+import math
 from pathlib import Path
 from threading import RLock
 import time
@@ -106,6 +107,7 @@ class ArmContactTelemetry:
         force_sample,
         force_baseline,
         force_delta,
+        current_hand=None,
     ) -> ArmContactObservation:
         velocity = self.arm_state_source.hand_velocity_sample()
         joint_state = self.arm_joint_state_source.sample()
@@ -149,6 +151,8 @@ class ArmContactTelemetry:
                 for joint in ordered
             )
 
+        motion = self._motion_metrics(plan, current_hand)
+
         observation = ArmContactObservation(
             movement_sequence=int(movement_sequence),
             observed_at=float(observed_at),
@@ -160,6 +164,26 @@ class ArmContactTelemetry:
                 float(plan.direction_x),
                 float(plan.direction_y),
                 float(plan.direction_z),
+            ),
+            initial_translation_distance_m=(
+                motion["initial_translation_distance_m"]
+            ),
+            current_hand_position_m=motion["current_hand_position_m"],
+            current_hand_orientation_xyzw=(
+                motion["current_hand_orientation_xyzw"]
+            ),
+            target_hand_position_m=motion["target_hand_position_m"],
+            target_hand_orientation_xyzw=(
+                motion["target_hand_orientation_xyzw"]
+            ),
+            position_error_m=motion["position_error_m"],
+            rotation_error_rad=motion["rotation_error_rad"],
+            forward_progress_m=motion["forward_progress_m"],
+            off_axis_displacement_m=(
+                motion["off_axis_displacement_m"]
+            ),
+            translation_progress_fraction=(
+                motion["translation_progress_fraction"]
             ),
             force_received_at=float(force_sample.received_at),
             force_hand_n=(
@@ -194,6 +218,120 @@ class ArmContactTelemetry:
             self._observation_count += 1
             self._write_raw_locked(observation)
         return observation
+
+    @classmethod
+    def _motion_metrics(cls, plan, current_hand):
+        start_position = cls._position(plan.current_hand)
+        target_position = cls._position(plan.target_hand)
+        target_orientation = cls._orientation(plan.target_hand)
+        initial_distance = cls._distance(
+            start_position,
+            target_position,
+        )
+        result = {
+            "initial_translation_distance_m": initial_distance,
+            "current_hand_position_m": None,
+            "current_hand_orientation_xyzw": None,
+            "target_hand_position_m": target_position,
+            "target_hand_orientation_xyzw": target_orientation,
+            "position_error_m": None,
+            "rotation_error_rad": None,
+            "forward_progress_m": None,
+            "off_axis_displacement_m": None,
+            "translation_progress_fraction": None,
+        }
+        if current_hand is None:
+            return result
+
+        current_position = cls._position(current_hand)
+        current_orientation = cls._orientation(current_hand)
+        position_error = cls._distance(
+            current_position,
+            target_position,
+        )
+        displacement = tuple(
+            current - start
+            for current, start in zip(
+                current_position,
+                start_position,
+            )
+        )
+        direction = (
+            float(plan.direction_x),
+            float(plan.direction_y),
+            float(plan.direction_z),
+        )
+        forward_progress = sum(
+            value * axis
+            for value, axis in zip(displacement, direction)
+        )
+        off_axis = tuple(
+            value - forward_progress * axis
+            for value, axis in zip(displacement, direction)
+        )
+        off_axis_displacement = math.sqrt(
+            sum(value * value for value in off_axis)
+        )
+        progress_fraction = None
+        if initial_distance > 1e-9:
+            progress_fraction = 1.0 - position_error / initial_distance
+
+        result.update({
+            "current_hand_position_m": current_position,
+            "current_hand_orientation_xyzw": current_orientation,
+            "position_error_m": position_error,
+            "rotation_error_rad": cls._rotation_distance_rad(
+                current_orientation,
+                target_orientation,
+            ),
+            "forward_progress_m": forward_progress,
+            "off_axis_displacement_m": off_axis_displacement,
+            "translation_progress_fraction": progress_fraction,
+        })
+        return result
+
+    @staticmethod
+    def _position(pose_stamped):
+        position = pose_stamped.pose.position
+        return (
+            float(position.x),
+            float(position.y),
+            float(position.z),
+        )
+
+    @staticmethod
+    def _orientation(pose_stamped):
+        orientation = pose_stamped.pose.orientation
+        return (
+            float(orientation.x),
+            float(orientation.y),
+            float(orientation.z),
+            float(orientation.w),
+        )
+
+    @staticmethod
+    def _distance(first, second) -> float:
+        return math.sqrt(
+            sum(
+                (a - b) * (a - b)
+                for a, b in zip(first, second)
+            )
+        )
+
+    @staticmethod
+    def _rotation_distance_rad(first, second) -> float:
+        first_norm = math.sqrt(sum(value * value for value in first))
+        second_norm = math.sqrt(sum(value * value for value in second))
+        if first_norm <= 1e-12 or second_norm <= 1e-12:
+            raise ValueError("Arm telemetry quaternion norm is zero")
+        dot = abs(
+            sum(
+                (a / first_norm) * (b / second_norm)
+                for a, b in zip(first, second)
+            )
+        )
+        dot = min(1.0, max(0.0, dot))
+        return 2.0 * math.acos(dot)
 
     def _write_raw_locked(self, observation) -> None:
         if not self.raw_logging_enabled:

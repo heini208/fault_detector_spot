@@ -168,7 +168,7 @@ def execution(state, driver, clock, telemetry):
         start_goal=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
-        current_hand_pose=lambda _frame: deepcopy(pose(0.0)),
+        current_hand_pose=lambda _frame: deepcopy(pose(0.004)),
         build_motion_goal=lambda current, target, speed: (
             current,
             target,
@@ -210,6 +210,7 @@ def test_guard_emits_shadow_observation_for_each_fresh_force_sample():
     assert observation["elapsed_sec"] == 0.1
     assert observation["phase"] == "moving"
     assert observation["force_sample"] is state.sample
+    assert observation["current_hand"].pose.position.x == 0.004
 
 
 def test_telemetry_failure_cannot_change_guard_decision():
