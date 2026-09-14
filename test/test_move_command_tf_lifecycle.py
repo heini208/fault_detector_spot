@@ -56,6 +56,7 @@ def test_behavior_tree_uses_one_robot_command_resource_owner():
     assert resources.count("TFListenerWrapper(") == 1
     assert "get_arm_movement_executor(" in resources
     assert "get_base_movement_executor(" in resources
+    assert "get_arm_joint_state_source(" in resources
     assert "get_posture_state_source(" in resources
     assert "self.robot_command_resources = RobotCommandResources()" in helper
     assert "helper_initializer.close()" in runner
@@ -71,6 +72,7 @@ def test_shared_robot_command_resources_have_explicit_teardown():
     assert "base_executors" in close
     assert "tf_listener.shutdown" in close
     assert "arm_state_source.destroy" in close
+    assert "arm_joint_state_source.destroy" in close
     assert "posture_state_source.destroy" in close
     assert "client.destroy" in close
 

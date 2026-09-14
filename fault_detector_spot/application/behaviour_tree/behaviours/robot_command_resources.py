@@ -10,6 +10,9 @@ from synchros2.utilities import namespace_with
 from fault_detector_spot.manipulation.arm_force_baseline import (
     ForceBaselineSampler,
 )
+from fault_detector_spot.manipulation.arm_joint_state_source import (
+    ArmJointStateSource,
+)
 from fault_detector_spot.manipulation.arm_motion_speed import (
     ArmMotionSpeedPolicy,
 )
@@ -62,6 +65,7 @@ class RobotCommandResources:
         self._clients = {}
         self._tf_listener = None
         self._arm_state_source = None
+        self._arm_joint_state_source = None
         self._posture_state_source = None
         self._arm_motion_speed_policy = None
         self._arm_movement_executors = {}
@@ -98,6 +102,14 @@ class RobotCommandResources:
             if self._arm_state_source is None:
                 self._arm_state_source = ArmStateSource(node)
             return self._arm_state_source
+
+    def get_arm_joint_state_source(self, node):
+        """Return the shared six-axis arm joint telemetry source."""
+        with self._lock:
+            self._bind_node(node)
+            if self._arm_joint_state_source is None:
+                self._arm_joint_state_source = ArmJointStateSource(node)
+            return self._arm_joint_state_source
 
     def get_posture_state_source(self, node):
         """Return the authoritative base posture state source."""
@@ -248,6 +260,7 @@ class RobotCommandResources:
             node = self._node
             tf_listener = self._tf_listener
             arm_state_source = self._arm_state_source
+            arm_joint_state_source = self._arm_joint_state_source
             posture_state_source = self._posture_state_source
             arm_executors = tuple(
                 self._arm_movement_executors.values()
@@ -258,6 +271,7 @@ class RobotCommandResources:
             clients = tuple(self._clients.values())
             self._tf_listener = None
             self._arm_state_source = None
+            self._arm_joint_state_source = None
             self._posture_state_source = None
             self._arm_motion_speed_policy = None
             self._arm_movement_executors.clear()
@@ -281,6 +295,10 @@ class RobotCommandResources:
         if arm_state_source is not None:
             resources.append(
                 ("arm state source", arm_state_source.destroy)
+            )
+        if arm_joint_state_source is not None:
+            resources.append(
+                ("arm joint state source", arm_joint_state_source.destroy)
             )
         if posture_state_source is not None:
             resources.append(
