@@ -148,7 +148,6 @@ class ProbeSetupGeometry:
                 projected,
                 capture.depth_image,
                 capture.depth_camera_info,
-                use_open3d=False,
             )
         except ValueError as exception:
             normal_error = str(exception)

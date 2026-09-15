@@ -8,7 +8,7 @@ from typing import Iterable, Optional, Tuple
 import numpy as np
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.geometry.open3d_depth import (
+from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     OrganizedDepthPointCloud,
     camera_intrinsics,
     create_organized_depth_point_cloud,

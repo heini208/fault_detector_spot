@@ -1,4 +1,4 @@
-"""Convert ROS registered-depth images into organized Open3D point clouds."""
+"""Convert ROS registered-depth images into organized point clouds."""
 
 import math
 from dataclasses import dataclass
@@ -6,12 +6,6 @@ from typing import Tuple
 
 import numpy as np
 from sensor_msgs.msg import CameraInfo, Image
-
-
-_OPEN3D_INSTALL_MESSAGE = (
-    "Open3D is required for probe depth geometry. On Ubuntu 22.04 install "
-    "it with: sudo apt install python3-open3d"
-)
 
 
 @dataclass(frozen=True)
@@ -37,66 +31,31 @@ class OrganizedDepthPointCloud:
             raise ValueError("Depth point pixel does not contain valid depth")
         point = np.asarray(self.points_camera[v, u], dtype=float)
         if point.shape != (3,) or not np.all(np.isfinite(point)):
-            raise ValueError("Open3D returned an invalid depth point")
+            raise ValueError("Depth point is invalid")
         return point
 
 
 def create_organized_depth_point_cloud(
     depth_image: Image,
     camera_info: CameraInfo,
-    *,
-    use_open3d: bool = True,
 ) -> OrganizedDepthPointCloud:
-    """Project registered depth, optionally avoiding Open3D initialization."""
-    depth_array, depth_m = _depth_arrays(depth_image)
+    """Project registered depth into camera coordinates using NumPy."""
+    depth_m = _depth_meters(depth_image)
     fx, fy, cx, cy = camera_intrinsics(
         camera_info,
         (depth_image.width, depth_image.height),
         "Depth CameraInfo",
     )
-    _validate_open3d_projection(camera_info, "Depth CameraInfo")
-    if not use_open3d:
-        # Identical pinhole projection, without loading the Open3D runtime.
-        points = np.empty((*depth_m.shape, 3), dtype=np.float64)
-        points[..., 0] = depth_m * (np.arange(depth_image.width) - cx) / fx
-        points[..., 1] = (
-            depth_m * (np.arange(depth_image.height)[:, None] - cy) / fy
-        )
-        points[..., 2] = depth_m
-        valid_mask = np.isfinite(depth_m) & (depth_m > 0.0)
-        points[~valid_mask] = np.nan
-        return OrganizedDepthPointCloud(points, depth_m, valid_mask)
-    open3d = require_open3d()
-    intrinsic = open3d.camera.PinholeCameraIntrinsic(
-        depth_image.width,
-        depth_image.height,
-        fx,
-        fy,
-        cx,
-        cy,
+    _validate_projection(camera_info, "Depth CameraInfo")
+    points = np.empty((*depth_m.shape, 3), dtype=np.float64)
+    points[..., 0] = depth_m * (np.arange(depth_image.width) - cx) / fx
+    points[..., 1] = (
+        depth_m * (np.arange(depth_image.height)[:, None] - cy) / fy
     )
-    point_cloud = open3d.geometry.PointCloud.create_from_depth_image(
-        open3d.geometry.Image(depth_array),
-        intrinsic,
-        depth_scale=(1000.0 if depth_array.dtype == np.uint16 else 1.0),
-        depth_trunc=1000.0,
-        stride=1,
-        project_valid_depth_only=False,
-    )
-    points = np.asarray(point_cloud.points, dtype=float)
-    expected_count = depth_image.width * depth_image.height
-    if points.shape != (expected_count, 3):
-        raise ValueError(
-            "Open3D did not preserve the registered-depth raster layout"
-        )
-    points = points.reshape(depth_image.height, depth_image.width, 3).copy()
+    points[..., 2] = depth_m
     valid_mask = np.isfinite(depth_m) & (depth_m > 0.0)
     points[~valid_mask] = np.nan
-    return OrganizedDepthPointCloud(
-        points_camera=points,
-        depth_m=depth_m,
-        valid_mask=valid_mask,
-    )
+    return OrganizedDepthPointCloud(points, depth_m, valid_mask)
 
 
 def camera_intrinsics(
@@ -142,7 +101,7 @@ def camera_intrinsics(
     return fx, fy, cx, cy
 
 
-def _validate_open3d_projection(
+def _validate_projection(
     camera_info: CameraInfo,
     label: str,
 ) -> None:
@@ -162,11 +121,11 @@ def _validate_open3d_projection(
     if abs(projection[3]) > 1e-12 or abs(projection[7]) > 1e-12:
         raise ValueError(
             f"{label} projection translation is incompatible with "
-            "Open3D depth unprojection"
+            "pinhole depth unprojection"
         )
 
 
-def _depth_arrays(depth_image: Image) -> Tuple[np.ndarray, np.ndarray]:
+def _depth_meters(depth_image: Image) -> np.ndarray:
     _validate_depth_image(depth_image)
     encoding = depth_image.encoding.strip().lower()
     if encoding == "16uc1":
@@ -177,7 +136,7 @@ def _depth_arrays(depth_image: Image) -> Tuple[np.ndarray, np.ndarray]:
         native = np.asarray(source, dtype=np.uint16).copy(order="C")
         depth_m = native.astype(np.float64) * 0.001
         depth_m[native == 0] = np.nan
-        return native, depth_m
+        return depth_m
 
     source = _depth_view(
         depth_image,
@@ -188,7 +147,7 @@ def _depth_arrays(depth_image: Image) -> Tuple[np.ndarray, np.ndarray]:
     native[invalid] = 0.0
     depth_m = native.astype(np.float64)
     depth_m[invalid] = np.nan
-    return native, depth_m
+    return depth_m
 
 
 def _depth_view(depth_image: Image, dtype: np.dtype) -> np.ndarray:
@@ -215,10 +174,3 @@ def _validate_depth_image(depth_image: Image) -> None:
     if len(depth_image.data) < depth_image.step * depth_image.height:
         raise ValueError("Depth image data is shorter than expected")
 
-
-def require_open3d():
-    try:
-        import open3d
-    except ImportError as exception:
-        raise RuntimeError(_OPEN3D_INSTALL_MESSAGE) from exception
-    return open3d

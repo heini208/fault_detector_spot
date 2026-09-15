@@ -57,7 +57,7 @@ def make_camera_info(width, height, focal_length):
     return camera_info
 
 
-def test_projection_and_open3d_use_same_processed_camera_model():
+def test_projection_uses_processed_camera_model():
     values = [0.0] * 12
     values[2 * 4 + 3] = 2.0
     depth_info = make_camera_info(4, 3, 100.0)

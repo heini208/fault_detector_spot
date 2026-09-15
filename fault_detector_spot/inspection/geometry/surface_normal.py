@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.geometry.open3d_depth import (
+from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     OrganizedDepthPointCloud,
     create_organized_depth_point_cloud,
 )
@@ -49,7 +49,6 @@ def estimate_surface_normal(
     ransac_iterations: int = 100,
     *,
     point_cloud: OrganizedDepthPointCloud | None = None,
-    use_open3d: bool = True,
 ) -> SurfaceNormalEstimate:
     """Fit a robust local plane, optionally reusing projected depth."""
     _validate_inputs(
@@ -68,7 +67,6 @@ def estimate_surface_normal(
         point_cloud = create_organized_depth_point_cloud(
             depth_image,
             camera_info,
-            use_open3d=use_open3d,
         )
     best_sample_count = 0
     last_error = None
@@ -94,7 +92,6 @@ def estimate_surface_normal(
                 minimum_plane_inlier_ratio,
                 ransac_iterations,
                 minimum_tangent_spread_m,
-                use_open3d=use_open3d,
             ).oriented_toward(Vector3Data(x=0.0, y=0.0, z=0.0))
             if plane.rmse_m > maximum_plane_rmse_m:
                 raise ValueError(

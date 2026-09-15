@@ -2,7 +2,6 @@
 
 import math
 import struct
-import sys
 
 import pytest
 from sensor_msgs.msg import CameraInfo, Image
@@ -14,19 +13,6 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
 from fault_detector_spot.inspection.geometry.surface_normal import (
     estimate_surface_normal,
 )
-
-
-@pytest.fixture(params=[True, False], autouse=True)
-def plane_backend(request, monkeypatch):
-    """Apply every existing acceptance/rejection case to both backends."""
-    original = estimate_surface_normal
-
-    def estimate_with_backend(*args, **kwargs):
-        return original(*args, **kwargs, use_open3d=request.param)
-
-    monkeypatch.setattr(
-        sys.modules[__name__], "estimate_surface_normal", estimate_with_backend,
-    )
 
 
 def make_camera_info(width=11, height=11, focal_length=100.0):

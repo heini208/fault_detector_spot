@@ -1,4 +1,4 @@
-"""Tests for the Open3D registered-depth geometry adapter."""
+"""Tests for the registered-depth geometry adapter."""
 
 import struct
 
@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from sensor_msgs.msg import CameraInfo, Image
 
-from fault_detector_spot.inspection.geometry.open3d_depth import (
+from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     create_organized_depth_point_cloud,
 )
 
@@ -79,7 +79,7 @@ def make_32fc1(values, width=2, height=1, bigendian=False):
     return image
 
 
-def test_open3d_cloud_preserves_depth_pixel_layout():
+def test_depth_cloud_preserves_depth_pixel_layout():
     cloud = create_organized_depth_point_cloud(
         make_16uc1([0, 0, 0, 0, 0, 2000]),
         make_camera_info(),
@@ -96,7 +96,7 @@ def test_open3d_cloud_preserves_depth_pixel_layout():
     )
 
 
-def test_open3d_cloud_handles_big_endian_padded_16uc1():
+def test_depth_cloud_handles_big_endian_padded_16uc1():
     cloud = create_organized_depth_point_cloud(
         make_16uc1(
             [0, 2500, 0, 0, 0, 0],
@@ -110,7 +110,7 @@ def test_open3d_cloud_handles_big_endian_padded_16uc1():
     assert cloud.point_camera(1, 0)[2] == pytest.approx(2.5)
 
 
-def test_open3d_cloud_handles_big_endian_32fc1_and_invalid_values():
+def test_depth_cloud_handles_big_endian_32fc1_and_invalid_values():
     camera_info = make_camera_info(width=2, height=1)
     camera_info.k = [
         100.0,
@@ -150,7 +150,7 @@ def test_open3d_cloud_handles_big_endian_32fc1_and_invalid_values():
     )
 
 
-def test_open3d_cloud_uses_processed_projection_intrinsics():
+def test_depth_cloud_uses_processed_projection_intrinsics():
     camera_info = make_camera_info(width=3, height=1)
     camera_info.k = [
         50.0,
@@ -188,7 +188,7 @@ def test_open3d_cloud_uses_processed_projection_intrinsics():
     )
 
 
-def test_open3d_cloud_falls_back_to_raw_intrinsics_when_projection_is_empty():
+def test_depth_cloud_falls_back_to_raw_intrinsics_when_projection_is_empty():
     camera_info = make_camera_info(width=3, height=1)
     camera_info.p = [0.0] * 12
     camera_info.k = [
@@ -213,7 +213,7 @@ def test_open3d_cloud_falls_back_to_raw_intrinsics_when_projection_is_empty():
     )
 
 
-def test_open3d_cloud_rejects_stereo_projection_translation():
+def test_depth_cloud_rejects_stereo_projection_translation():
     camera_info = make_camera_info()
     camera_info.p[3] = -20.0
 
@@ -224,7 +224,7 @@ def test_open3d_cloud_rejects_stereo_projection_translation():
         )
 
 
-def test_open3d_cloud_rejects_non_finite_projection_matrix():
+def test_depth_cloud_rejects_non_finite_projection_matrix():
     camera_info = make_camera_info()
     camera_info.p[11] = float("nan")
 

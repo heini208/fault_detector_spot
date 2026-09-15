@@ -16,7 +16,7 @@ from fault_detector_spot.inspection.geometry.surface_normal import (
     SurfaceNormalEstimate,
     estimate_surface_normal,
 )
-from fault_detector_spot.inspection.geometry.open3d_depth import (
+from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     create_organized_depth_point_cloud,
 )
 from fault_detector_spot.inspection.model.models import ImagePoint, PoseData
@@ -140,7 +140,7 @@ class ProbeSurfaceSource(RuntimeSource):
 
         depth_image, camera_info = self.latest_hand_depth(maximum_age_sec)
         point_cloud = create_organized_depth_point_cloud(
-            depth_image, camera_info, use_open3d=False,
+            depth_image, camera_info,
         )
         center = ImagePoint(
             u=int(depth_image.width) // 2,
@@ -183,7 +183,6 @@ class ProbeSurfaceSource(RuntimeSource):
                 neighborhood_radius_px=window_radius_px,
                 maximum_neighborhood_radius_px=window_radius_px,
                 point_cloud=point_cloud,
-                use_open3d=False,
             )
         except ValueError as exception:
             raise ValueError(

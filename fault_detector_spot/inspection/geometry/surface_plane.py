@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from fault_detector_spot.inspection.geometry.open3d_depth import require_open3d
 from fault_detector_spot.inspection.model.models import Vector3Data
 
 
@@ -88,8 +87,6 @@ def fit_surface_plane(
     minimum_inlier_ratio: float,
     ransac_iterations: int,
     minimum_tangent_spread_m: float,
-    *,
-    use_open3d: bool = True,
 ) -> SurfacePlane:
     """Fit a robust RANSAC plane, retaining shared acceptance checks."""
     points = np.asarray(points, dtype=np.float64)
@@ -126,20 +123,9 @@ def fit_surface_plane(
     ):
         raise ValueError("Surface-plane tangent spread must be positive")
 
-    if use_open3d:
-        open3d = require_open3d()
-        cloud = open3d.geometry.PointCloud(
-            open3d.utility.Vector3dVector(points)
-        )
-        plane_model, inlier_indices = cloud.segment_plane(
-            distance_threshold_m,
-            3,
-            ransac_iterations,
-        )
-    else:
-        plane_model, inlier_indices = _numpy_ransac_plane(
-            points, distance_threshold_m, ransac_iterations,
-        )
+    plane_model, inlier_indices = _ransac_plane(
+        points, distance_threshold_m, ransac_iterations,
+    )
     inlier_indices = np.asarray(inlier_indices, dtype=int)
     inlier_ratio = len(inlier_indices) / len(points)
     if (
@@ -182,10 +168,10 @@ def fit_surface_plane(
     return result
 
 
-def _numpy_ransac_plane(points, distance_threshold_m, iterations):
+def _ransac_plane(points, distance_threshold_m, iterations):
     """Select three-point consensus by count then error, and refine by SVD.
 
-    Sample without replacement within each hypothesis, as Open3D does.
+    Sample without replacement within each hypothesis.
     Run the full requested budget instead of terminating probabilistically.
     A local seed makes identical depth input reproducible without changing
     global random state. Acceptance thresholds are applied by the caller.

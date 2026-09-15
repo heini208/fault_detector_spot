@@ -1,4 +1,4 @@
-"""Tests for shared Open3D surface-plane geometry."""
+"""Tests for shared surface-plane geometry."""
 
 import numpy as np
 import pytest
