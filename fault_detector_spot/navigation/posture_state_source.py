@@ -7,6 +7,8 @@ import time
 
 from spot_msgs.msg import Feedback
 
+from fault_detector_spot.shared.runtime_source import RuntimeSource
+
 
 POSTURE_STATE_TOPIC = "status/feedback"
 DEFAULT_POSTURE_STATE_STALE_AFTER_SEC = 1.5
@@ -18,7 +20,7 @@ class PostureState(str, Enum):
     STANDING = "standing"
 
 
-class PostureStateSource:
+class PostureStateSource(RuntimeSource):
     """Cache fresh posture published by the Spot driver."""
 
     def __init__(

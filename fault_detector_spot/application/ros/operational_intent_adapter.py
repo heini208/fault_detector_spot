@@ -110,6 +110,13 @@ def _positive_distance(value: float, label: str) -> float:
     return normalized
 
 
+def _nonnegative_distance(value: float, label: str) -> float:
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0.0:
+        raise ValueError(f"{label} must be non-negative")
+    return normalized
+
+
 def _validate_tag(intent: OperationalIntent) -> None:
     _required_text(
         intent.tag.pose.header.frame_id,
@@ -175,7 +182,7 @@ def operational_intent_to_command(
         intent.intent
         == OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
     ):
-        target = _positive_distance(
+        target = _nonnegative_distance(
             intent.target_surface_distance_m,
             "Target surface distance",
         )

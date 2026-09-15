@@ -8,6 +8,8 @@ import time
 
 from bosdyn_api_msgs.msg import ManipulatorState, ManipulatorStateStowState
 
+from fault_detector_spot.shared.runtime_source import RuntimeSource
+
 
 MANIPULATOR_STATE_TOPIC = "manipulation_state"
 DEFAULT_ARM_STATE_STALE_AFTER_SEC = 1.5
@@ -66,7 +68,7 @@ class HandForceSample:
         )
 
 
-class ArmStateSource:
+class ArmStateSource(RuntimeSource):
     """Cache fresh manipulator state published by the Spot driver."""
 
     def __init__(

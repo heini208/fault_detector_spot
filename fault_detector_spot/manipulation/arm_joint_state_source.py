@@ -9,6 +9,8 @@ import time
 
 from sensor_msgs.msg import JointState
 
+from fault_detector_spot.shared.runtime_source import RuntimeSource
+
 
 ARM_JOINT_STATE_TOPIC = "joint_states"
 DEFAULT_ARM_JOINT_STATE_STALE_AFTER_SEC = 1.5
@@ -39,7 +41,7 @@ class ArmJointStateSample:
     joints: Mapping[str, ArmJointSample]
 
 
-class ArmJointStateSource:
+class ArmJointStateSource(RuntimeSource):
     """Cache fresh six-axis arm joint telemetry from the Spot driver."""
 
     def __init__(

@@ -1,7 +1,7 @@
-"""Safety invariants for the standalone close-surface approach."""
+"""Safety invariants for the executor-backed close-surface approach."""
 
 import math
-import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,23 +13,34 @@ from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_from_euler,
 )
 from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
-from fault_detector_spot.inspection.execution.move_close_to_surface_operation import (
-    MoveCloseToSurfaceOperation,
-)
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
 )
+from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
+    MoveCloseToSurfaceBehaviour,
+    MoveCloseToSurfaceConfig,
+)
 
 
-def operation(**kwargs):
-    return MoveCloseToSurfaceOperation(
-        node=object(),
-        state_source=object(),
-        robot_command_client=object(),
-        **kwargs,
+class FakeExecutor:
+    active = False
+    speed_policy = SimpleNamespace(
+        default_speed=SimpleNamespace(angular_speed_rad_s=0.5)
     )
+
+    def cancel(self):
+        pass
+
+
+def behaviour(**kwargs):
+    action = MoveCloseToSurfaceBehaviour(
+        surface_source=object(),
+        config=MoveCloseToSurfaceConfig(**kwargs),
+    )
+    action.executor = FakeExecutor()
+    return action
 
 
 def pose(orientation=None):
@@ -51,47 +62,23 @@ def plane(normal=None):
     )
 
 
-def test_default_travel_matches_40_ten_millimeter_steps():
-    action = operation()
+def test_default_travel_allows_extra_steps_for_contact_mode():
+    action = behaviour()
 
-    assert action.maximum_step_m == pytest.approx(0.010)
-    assert action.maximum_approach_steps == 40
-    assert action.maximum_travel_m == pytest.approx(0.400)
+    assert action.config.maximum_step_m == pytest.approx(0.010)
+    assert action.config.maximum_approach_steps == 60
+    assert action.config.maximum_travel_m == pytest.approx(0.400)
 
 
 def test_default_surface_sampling_uses_five_frames_over_one_second():
-    action = operation()
+    action = behaviour()
 
-    assert action.minimum_surface_samples == 5
-    assert action.minimum_surface_span_sec == pytest.approx(1.0)
-
-
-def test_default_force_stale_timeout_tolerates_normal_motion_gaps():
-    action = operation()
-
-    assert action.force_stale_timeout_sec == pytest.approx(1.5)
+    assert action.config.minimum_surface_samples == 5
+    assert action.config.minimum_surface_span_sec == pytest.approx(1.0)
 
 
-def test_force_guard_uses_configured_stale_timeout_for_sample_age():
-    class StateSource:
-        maximum_age_sec = None
-
-        def latest_end_effector_force(self, maximum_age_sec=None):
-            self.maximum_age_sec = maximum_age_sec
-            raise ValueError("No force sample")
-
-    action = operation(
-        force_stale_timeout_sec=1.25,
-    )
-    action._state_source = StateSource()
-    action._force_last_receipt = time.monotonic()
-
-    assert action._check_force_guard() is None
-    assert action._state_source.maximum_age_sec == pytest.approx(1.25)
-
-
-def test_force_guard_becomes_more_sensitive_near_target():
-    action = operation(
+def test_force_threshold_becomes_more_sensitive_near_target():
+    action = behaviour(
         force_contact_threshold_n=5.0,
         force_near_target_threshold_n=3.0,
         force_near_target_distance_m=0.020,
@@ -103,32 +90,38 @@ def test_force_guard_becomes_more_sensitive_near_target():
     assert action._force_threshold_for(0.000) == pytest.approx(3.0)
 
 
-def test_default_force_baseline_allows_normal_stationary_sensor_noise():
-    action = operation()
+def test_approach_speed_decreases_toward_expected_surface():
+    action = behaviour(
+        approach_far_speed_mps=0.005,
+        approach_near_speed_mps=0.001,
+        approach_slowdown_distance_m=0.050,
+    )
 
-    assert action.force_baseline_max_component_span_n == pytest.approx(3.0)
+    far = action._approach_speed_for(0.050).linear_speed_mps
+    middle = action._approach_speed_for(0.025).linear_speed_mps
+    near = action._approach_speed_for(0.0).linear_speed_mps
+
+    assert far == pytest.approx(0.005)
+    assert near == pytest.approx(0.001)
+    assert near < middle < far
 
 
-def test_configuration_rejects_near_target_threshold_above_normal_threshold():
-    with pytest.raises(ValueError, match="Near-target force threshold"):
-        operation(
-            force_contact_threshold_n=4.0,
-            force_near_target_threshold_n=4.1,
+def test_configuration_rejects_near_speed_above_far_speed():
+    with pytest.raises(ValueError, match="Near-surface approach speed"):
+        behaviour(
+            approach_far_speed_mps=0.003,
+            approach_near_speed_mps=0.004,
         )
 
 
 def test_configuration_rejects_step_larger_than_ten_millimeters():
     with pytest.raises(ValueError, match="0.010 m"):
-        operation(maximum_step_m=0.0101)
+        behaviour(maximum_step_m=0.0101)
 
 
-def test_configuration_rejects_travel_unreachable_with_step_count():
-    with pytest.raises(ValueError, match="step-count limit"):
-        operation(
-            maximum_step_m=0.005,
-            maximum_approach_steps=40,
-            maximum_travel_m=0.201,
-        )
+def test_configuration_rejects_contact_search_beyond_one_step():
+    with pytest.raises(ValueError, match="Contact search overtravel"):
+        behaviour(contact_search_overtravel_m=0.011)
 
 
 def test_frozen_plan_records_surface_normal_axis_error():
@@ -176,23 +169,3 @@ def test_runtime_axis_error_is_measured_against_surface_normal():
     assert evaluation.axis_error_rad == pytest.approx(
         math.radians(2.0)
     )
-
-
-def test_action_rejects_initial_surface_misalignment_before_force_baseline():
-    action = operation(
-        maximum_axis_error_rad=math.radians(5.0)
-    )
-    plan = freeze_probe_surface_approach(
-        current_probe_pose_execution=pose(),
-        surface_plane_probe=plane(
-            Vector3Data(
-                x=-math.cos(math.radians(6.0)),
-                y=math.sin(math.radians(6.0)),
-                z=0.0,
-            )
-        ),
-        target_distance_m=0.05,
-        maximum_travel_m=0.40,
-    )
-
-    assert plan.initial_axis_error_rad > action.maximum_axis_error_rad

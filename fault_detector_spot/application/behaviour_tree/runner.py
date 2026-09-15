@@ -37,8 +37,8 @@ from fault_detector_spot.inspection.behaviours.resolve_live_inspection_object im
 from fault_detector_spot.manipulation.behaviours.close_gripper_action import (
     CloseGripperAction,
 )
-from fault_detector_spot.manipulation.behaviours.manipulator_move_close_to_surface_action import (
-    ManipulatorMoveCloseToSurfaceAction,
+from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
+    MoveCloseToSurfaceBehaviour,
 )
 from fault_detector_spot.manipulation.behaviours.arm_goal_behaviour import (
     ArmGoalBehaviour,
@@ -260,21 +260,6 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     helper = get_helper_container(node)
     robot_command_resources = helper.robot_command_resources
     tag_state_source = helper.tag_state_source
-    close_surface_action_name = read_parameter(
-        node,
-        "close_surface.action_name",
-        "fault_detector/manipulation/move_close_to_surface",
-    )
-    close_surface_goal_response_timeout_sec = read_parameter(
-        node,
-        "close_surface.goal_response_timeout_sec",
-        2.0,
-    )
-    close_surface_action_timeout_sec = read_parameter(
-        node,
-        "close_surface.action_timeout_sec",
-        600.0,
-    )
     specs = [
         (
             CommandID.STOW_ARM,
@@ -331,13 +316,9 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         ),
         (
             CommandID.MOVE_CLOSE_TO_SURFACE,
-            lambda n: ManipulatorMoveCloseToSurfaceAction(
-                name="MoveCloseToSurfaceAction",
-                action_name=close_surface_action_name,
-                goal_response_timeout_sec=(
-                    close_surface_goal_response_timeout_sec
-                ),
-                result_timeout_sec=close_surface_action_timeout_sec,
+            lambda n: MoveCloseToSurfaceBehaviour(
+                name="MoveCloseToSurfaceBehaviour",
+                robot_command_resources=robot_command_resources,
             ),
         ),
         (
@@ -545,7 +526,6 @@ def match_command_checker(
     )
 
 
-
 def build_navigate_to_goal_pose_tree(
     node: rclpy.node.Node,
 ) -> py_trees.behaviour.Behaviour:
@@ -605,7 +585,6 @@ def main(args=None):
     executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(tree.node)
     try:
-        # Start action discovery before advertising command consumption.
         get_helper_container(node).robot_command_resources.get_action_client(node)
         for behaviour in root.iterate():
             if isinstance(behaviour, CommandSubscriber):

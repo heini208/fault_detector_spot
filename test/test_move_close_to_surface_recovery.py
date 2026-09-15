@@ -1,17 +1,12 @@
 """Safety regression tests for close-surface recovery."""
 
 import math
+from types import SimpleNamespace
 
 import pytest
+from geometry_msgs.msg import PoseStamped
+from py_trees.common import Status
 
-import fault_detector_spot.inspection.execution.move_close_to_surface_operation as move_close_module
-from fault_detector_spot.inspection.execution.move_close_to_surface_operation import (
-    MoveCloseToSurfaceOperation,
-    MoveCloseToSurfaceStatus,
-)
-from fault_detector_spot.inspection.execution.probe_surface_approach import (
-    ProbeSurfaceApproachEvaluation,
-)
 from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_from_euler,
     rotation_distance_rad,
@@ -21,15 +16,15 @@ from fault_detector_spot.inspection.model.models import (
     QuaternionData,
     Vector3Data,
 )
-
-
-def operation(**kwargs):
-    return MoveCloseToSurfaceOperation(
-        node=object(),
-        state_source=object(),
-        robot_command_client=object(),
-        **kwargs,
-    )
+from fault_detector_spot.manipulation.arm_movement_result import (
+    ArmMovementOutcome,
+    ArmMovementUpdate,
+)
+from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
+    MoveCloseToSurfaceBehaviour,
+    MoveCloseToSurfaceConfig,
+)
+from fault_detector_spot.shared.geometry.transforms import pose_data_to_pose
 
 
 def pose(x=0.0, y=0.0, z=0.0, orientation=None):
@@ -39,24 +34,45 @@ def pose(x=0.0, y=0.0, z=0.0, orientation=None):
     )
 
 
-class RecoveryStateSource:
-    def __init__(self, current_pose):
-        self.current_pose = current_pose
+def stamped(data):
+    value = PoseStamped()
+    value.header.frame_id = "body"
+    value.pose = pose_data_to_pose(data)
+    return value
 
-    def current_hand_pose_execution(self):
-        return self.current_pose
+
+class FakePlanner:
+    def __init__(self, hand_pose=None):
+        self.hand_pose = hand_pose or pose()
+
+    def current_hand_pose(self, _frame):
+        return stamped(self.hand_pose)
 
 
-class ApproachStateSource:
-    def __init__(self, probe_pose, hand_pose):
-        self.probe_pose = probe_pose
-        self.hand_pose = hand_pose
+class FakeExecutor:
+    def __init__(self, hand_pose=None):
+        self.active = False
+        self.speed_policy = SimpleNamespace(
+            default_speed=SimpleNamespace(angular_speed_rad_s=0.5)
+        )
+        self.probe_motion_planner = FakePlanner(hand_pose)
+        self.guarded_calls = []
+        self.probe_calls = []
+        self.cancel_count = 0
 
-    def current_probe_pose_execution(self, _sensor_id):
-        return self.probe_pose
+    def guarded_probe(self, *args, **kwargs):
+        self.guarded_calls.append((args, kwargs))
+        self.active = True
+        return ArmMovementUpdate(ArmMovementOutcome.RUNNING, "running")
 
-    def current_hand_pose_execution(self):
-        return self.hand_pose
+    def probe(self, *args, **kwargs):
+        self.probe_calls.append((args, kwargs))
+        self.active = True
+        return ArmMovementUpdate(ArmMovementOutcome.RUNNING, "recovering")
+
+    def cancel(self):
+        self.cancel_count += 1
+        self.active = False
 
 
 class FrozenPlan:
@@ -64,53 +80,85 @@ class FrozenPlan:
         return Vector3Data(x=1.0, y=0.0, z=0.0)
 
 
+def behaviour(executor=None, **changes):
+    action = MoveCloseToSurfaceBehaviour(
+        surface_source=object(),
+        config=MoveCloseToSurfaceConfig(**changes),
+    )
+    action.executor = executor or FakeExecutor()
+    action._command = SimpleNamespace(target_surface_distance_m=0.03)
+    action._phase = "approach"
+    action._started = True
+    return action
+
+
+def test_contact_mode_returns_success_after_shared_snap_retreat():
+    action = behaviour()
+    action._command = SimpleNamespace(target_surface_distance_m=0.0)
+
+    result = action._handle_approach_update(
+        ArmMovementUpdate(
+            ArmMovementOutcome.CONTACT,
+            "contact; retreated 0.0100 m",
+        )
+    )
+
+    assert result is Status.SUCCESS
+    assert "snap retreat" in action.feedback_message
+
+
+def test_nonzero_contact_starts_recovery_to_original_start():
+    executor = FakeExecutor(hand_pose=pose(x=0.06))
+    action = behaviour(executor=executor)
+    action._recovery_hand_pose = pose(x=0.0)
+    action._approach_steps = 1
+
+    result = action._handle_approach_update(
+        ArmMovementUpdate(
+            ArmMovementOutcome.CONTACT,
+            "contact; retreated 0.0100 m",
+        )
+    )
+
+    assert result is Status.RUNNING
+    assert len(executor.probe_calls) == 1
+    target = executor.probe_calls[0][0][0]
+    assert target.pose.position.x == pytest.approx(0.02)
+    assert "original pre-approach" in action.feedback_message
+
+
 def test_diagonal_recovery_step_is_bounded_by_euclidean_distance():
-    action = operation(recovery_step_m=0.040)
-    action._state_source = RecoveryStateSource(pose())
+    executor = FakeExecutor(hand_pose=pose())
+    action = behaviour(executor=executor, recovery_step_m=0.040)
     action._recovery_hand_pose = pose(x=0.040, y=0.040)
     action._phase = "recovery_prepare"
-    action._recovery_steps = 0
-
-    sent = []
-    action._send_pose_goal = lambda target, duration: sent.append(target)
 
     result = action._update_recovery_prepare()
 
-    assert result is MoveCloseToSurfaceStatus.RUNNING
-    assert len(sent) == 1
-    target = sent[0]
+    assert result is Status.RUNNING
+    target = executor.probe_calls[0][0][0]
     distance = math.sqrt(
-        target.position.x ** 2
-        + target.position.y ** 2
-        + target.position.z ** 2
+        target.pose.position.x ** 2
+        + target.pose.position.y ** 2
+        + target.pose.position.z ** 2
     )
     assert distance == pytest.approx(0.040)
-    assert target.position.x == pytest.approx(
+    assert target.pose.position.x == pytest.approx(
         0.040 / math.sqrt(2.0)
     )
-    assert target.position.y == pytest.approx(
+    assert target.pose.position.y == pytest.approx(
         0.040 / math.sqrt(2.0)
     )
 
 
 def test_recovery_configuration_rejects_more_than_40_mm():
     with pytest.raises(ValueError, match="0.040 m"):
-        operation(recovery_step_m=0.0401)
+        behaviour(recovery_step_m=0.0401)
 
 
 def test_rotation_distance_is_sign_invariant():
-    first = QuaternionData(
-        x=0.0,
-        y=0.0,
-        z=0.0,
-        w=1.0,
-    )
-    second = QuaternionData(
-        x=-0.0,
-        y=-0.0,
-        z=-0.0,
-        w=-1.0,
-    )
+    first = QuaternionData(x=0.0, y=0.0, z=0.0, w=1.0)
+    second = QuaternionData(x=-0.0, y=-0.0, z=-0.0, w=-1.0)
 
     assert rotation_distance_rad(first, second) == pytest.approx(0.0)
 
@@ -125,7 +173,7 @@ def test_rotation_distance_matches_known_angle():
 
 
 def test_trajectory_guard_measures_lateral_drift_per_step():
-    action = operation(maximum_lateral_drift_m=0.010)
+    action = behaviour(maximum_lateral_drift_m=0.010)
     action._plan = FrozenPlan()
     action._previous_probe_pose = pose(x=0.050, y=0.0100)
     action._requested_step_m = 0.010
@@ -139,7 +187,7 @@ def test_trajectory_guard_measures_lateral_drift_per_step():
 
 
 def test_trajectory_guard_rejects_actual_per_step_lateral_drift():
-    action = operation(maximum_lateral_drift_m=0.010)
+    action = behaviour(maximum_lateral_drift_m=0.010)
     action._plan = FrozenPlan()
     action._previous_probe_pose = pose()
     action._requested_step_m = 0.010
@@ -148,49 +196,3 @@ def test_trajectory_guard_rejects_actual_per_step_lateral_drift():
         action._validate_step_motion(
             pose(x=0.010, y=0.0102)
         )
-
-
-def test_approach_step_commands_original_aligned_orientation(monkeypatch):
-    aligned_orientation = quaternion_from_euler("z", math.radians(2.0))
-    drifted_orientation = quaternion_from_euler("z", math.radians(4.0))
-    action = operation()
-    action._sensor_id = "sensor"
-    action._plan = FrozenPlan()
-    action._recovery_hand_pose = pose(orientation=aligned_orientation)
-    action._state_source = ApproachStateSource(
-        probe_pose=pose(orientation=drifted_orientation),
-        hand_pose=pose(x=0.100, orientation=drifted_orientation),
-    )
-    action._approach_steps = 0
-
-    evaluation = ProbeSurfaceApproachEvaluation(
-        estimated_distance_m=0.100,
-        remaining_inward_travel_m=0.010,
-        traveled_inward_m=0.0,
-        lateral_offset_m=0.0,
-        axis_error_rad=0.0,
-        requested_step_m=0.010,
-        reached=False,
-    )
-    monkeypatch.setattr(
-        move_close_module,
-        "evaluate_probe_surface_approach",
-        lambda *args, **kwargs: evaluation,
-    )
-
-    sent = []
-    action._send_pose_goal = lambda target, duration: sent.append(target)
-
-    result = action._prepare_next_approach_step()
-
-    assert result is MoveCloseToSurfaceStatus.RUNNING
-    assert len(sent) == 1
-    assert sent[0].position.x == pytest.approx(0.110)
-    assert rotation_distance_rad(
-        sent[0].orientation,
-        aligned_orientation,
-    ) == pytest.approx(0.0)
-    assert rotation_distance_rad(
-        sent[0].orientation,
-        drifted_orientation,
-    ) > 0.0

@@ -8,12 +8,13 @@ import time
 from fault_detector_msgs.msg import TagElementArray
 
 from fault_detector_spot.shared.ros.qos_profiles import TAG_STATE_QOS
+from fault_detector_spot.shared.runtime_source import RuntimeSource
 
 
 DEFAULT_TAG_STATE_STALE_AFTER_SEC = 1.5
 
 
-class TagStateSource:
+class TagStateSource(RuntimeSource):
     """Cache authoritative base, visible, and reachable tag snapshots."""
 
     def __init__(

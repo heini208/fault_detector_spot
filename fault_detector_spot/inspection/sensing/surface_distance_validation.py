@@ -13,12 +13,22 @@ def require_positive_finite_distance(value: float, label: str) -> float:
     return float(value)
 
 
+def require_nonnegative_finite_distance(
+    value: float,
+    label: str,
+) -> float:
+    """Return one validated finite distance that may represent contact."""
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(f"{label} must be non-negative and finite")
+    return float(value)
+
+
 def validate_surface_distance_pair(
     target_surface_distance_m: float,
     aligned_preapproach_distance_m: float,
 ) -> float:
-    """Validate absolute probe and aligned distances and return separation."""
-    target = require_positive_finite_distance(
+    """Validate target/aligned distances and return their separation."""
+    target = require_nonnegative_finite_distance(
         target_surface_distance_m,
         "Target surface distance",
     )

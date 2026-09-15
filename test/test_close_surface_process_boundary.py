@@ -1,4 +1,4 @@
-"""Lock close-surface runtime ownership outside the behavior tree."""
+"""Lock close-surface execution into the shared arm movement boundary."""
 
 from pathlib import Path
 
@@ -10,56 +10,51 @@ def read(relative_path):
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_launch_starts_dedicated_close_surface_process():
+def test_launch_has_no_dedicated_close_surface_process():
     launch = read("launch/fault_detector_launch.py")
     setup = read("setup.py")
 
-    assert 'executable="move_close_to_surface_node"' in launch
-    assert "manipulation.move_close_to_surface_node:main" in setup
+    assert 'executable="move_close_to_surface_node"' not in launch
+    assert "manipulation.move_close_to_surface_node:main" not in setup
 
 
-def test_bt_close_surface_behavior_is_transport_only():
-    client = read(
+def test_close_surface_is_one_bt_behaviour_over_shared_executor():
+    behaviour = read(
         "fault_detector_spot/manipulation/behaviours/"
-        "manipulator_move_close_to_surface_action.py"
+        "move_close_to_surface_behaviour.py"
     )
 
-    assert "WorkflowActionBehaviour" in client
-    assert "MoveCloseToSurface.Goal" in client
-    assert "ProbeSurfaceRuntimeStateSource" not in client
-    assert "Image" not in client
-    assert "Vector3Stamped" not in client
-    assert "tf2_ros" not in client
-    assert "RobotCommand" not in client
+    assert "class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour)" in behaviour
+    assert "guarded_probe(" in behaviour
+    assert ".probe(" in behaviour
+    assert "ArmMovementOutcome.CONTACT" in behaviour
+    assert "MoveCloseToSurfaceOperation" not in behaviour
+    assert "WorkflowActionBehaviour" not in behaviour
+    assert "RobotCommandBuilder" not in behaviour
+    assert "send_goal_async" not in behaviour
+    assert "cancel_goal_async" not in behaviour
+    assert "end_effector_force" not in behaviour
 
 
-def test_server_owns_one_long_lived_runtime_source_and_robot_client():
-    server = read(
-        "fault_detector_spot/manipulation/move_close_to_surface_node.py"
+def test_probe_surface_source_only_owns_surface_sensing_and_attachment():
+    source = read(
+        "fault_detector_spot/inspection/sensing/probe_surface_source.py"
     )
 
-    assert server.count("ProbeSurfaceRuntimeStateSource(") == 1
-    assert server.count("ActionClientWrapper(") == 1
-    assert "MoveCloseToSurfaceOperation(" in server
-    assert "MultiThreadedExecutor(num_threads=4)" in server
+    assert "class ProbeSurfaceSource(RuntimeSource)" in source
+    assert "surface_distance_samples" in source
+    assert "active_attachment" in source
+    assert "END_EFFECTOR_FORCE_TOPIC" not in source
+    assert "Vector3Stamped" not in source
+    assert "current_hand_pose_execution" not in source
+    assert "current_probe_pose_execution" not in source
 
 
-def test_runtime_source_unregisters_tf_listener_on_shutdown():
-    runtime = read(
-        "fault_detector_spot/inspection/execution/"
-        "probe_surface_runtime_state.py"
+def test_close_surface_uses_executor_planner_for_live_arm_geometry():
+    behaviour = read(
+        "fault_detector_spot/manipulation/behaviours/"
+        "move_close_to_surface_behaviour.py"
     )
 
-    assert "self._tf_listener.unregister()" in runtime
-    assert "self._tf_listener = None" in runtime
-
-
-def test_operation_has_no_behavior_tree_or_blackboard_dependency():
-    operation = read(
-        "fault_detector_spot/inspection/execution/"
-        "move_close_to_surface_operation.py"
-    )
-
-    assert "py_trees" not in operation
-    assert "blackboard" not in operation
-    assert "MoveCloseToSurfaceStatus" in operation
+    assert "probe_motion_planner.current_pose(" in behaviour
+    assert "probe_motion_planner.current_hand_pose(" in behaviour

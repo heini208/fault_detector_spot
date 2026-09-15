@@ -1,15 +1,11 @@
-"""Regression tests for the standalone close-to-surface command boundary."""
+"""Regression tests for the executor-backed close-surface command."""
 
 import inspect
 
 import pytest
-
 from fault_detector_msgs.msg import OperationalIntent
 
 from fault_detector_spot.application.behaviour_tree import runner
-from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import (
-    WorkflowActionBehaviour,
-)
 from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
     CommandSubscriber,
 )
@@ -24,14 +20,11 @@ from fault_detector_spot.application.ros.semantic_command_adapter import (
     semantic_command_from_message,
     semantic_command_to_message,
 )
-from fault_detector_spot.inspection.execution.move_close_to_surface_operation import (
-    MoveCloseToSurfaceOperation,
+from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
+    ArmMovementBehaviour,
 )
-from fault_detector_spot.manipulation.behaviours.manipulator_move_close_to_surface_action import (
-    ManipulatorMoveCloseToSurfaceAction,
-)
-from fault_detector_spot.manipulation.move_close_to_surface_node import (
-    MoveCloseToSurfaceNode,
+from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
+    MoveCloseToSurfaceBehaviour,
 )
 from fault_detector_spot.manipulation.commands.move_close_to_surface_command import (
     MoveCloseToSurfaceCommand,
@@ -58,11 +51,19 @@ def test_operational_intent_requires_surface_and_aligned_distances():
     assert command.motion_sensor_id == ""
 
 
-def test_operational_intent_rejects_invalid_surface_distance():
-    intent = close_surface_intent(target=0.0)
+def test_operational_intent_accepts_zero_as_contact_mode():
+    command = operational_intent_to_command(
+        close_surface_intent(target=0.0, aligned=0.20)
+    )
 
-    with pytest.raises(ValueError, match="Target surface distance"):
-        operational_intent_to_command(intent)
+    assert command.target_surface_distance_m == pytest.approx(0.0)
+
+
+def test_operational_intent_rejects_negative_surface_distance():
+    with pytest.raises(ValueError, match="non-negative"):
+        operational_intent_to_command(
+            close_surface_intent(target=-0.001)
+        )
 
 
 def test_operational_intent_rejects_aligned_distance_at_target():
@@ -86,14 +87,15 @@ def test_surface_distances_survive_command_payload_round_trip():
     assert restored.aligned_preapproach_distance_m == pytest.approx(0.23)
 
 
-def test_bt_command_rejects_non_positive_distance():
-    with pytest.raises(ValueError, match="Target surface distance"):
-        MoveCloseToSurfaceCommand(
-            CommandID.MOVE_CLOSE_TO_SURFACE,
-            stamp=object(),
-            target_surface_distance_m=0.0,
-            aligned_preapproach_distance_m=0.20,
-        )
+def test_bt_command_accepts_zero_distance_as_contact_mode():
+    command = MoveCloseToSurfaceCommand(
+        CommandID.MOVE_CLOSE_TO_SURFACE,
+        stamp=object(),
+        target_surface_distance_m=0.0,
+        aligned_preapproach_distance_m=0.20,
+    )
+
+    assert command.target_surface_distance_m == 0.0
 
 
 def test_command_subscriber_builds_close_surface_command():
@@ -105,51 +107,26 @@ def test_command_subscriber_builds_close_surface_command():
     assert "aligned_preapproach_distance_m" in source
 
 
-def test_behaviour_tree_registers_close_surface_action():
+def test_behaviour_tree_registers_close_surface_behaviour():
     source = inspect.getsource(runner.build_command_tree)
 
     assert "CommandID.MOVE_CLOSE_TO_SURFACE" in source
-    assert "ManipulatorMoveCloseToSurfaceAction" in source
+    assert "MoveCloseToSurfaceBehaviour" in source
+    assert "robot_command_resources=robot_command_resources" in source
+    assert "close_surface.action_name" not in source
 
 
-def test_close_surface_bt_behavior_is_only_an_action_client():
-    source = inspect.getsource(ManipulatorMoveCloseToSurfaceAction)
+def test_close_surface_is_direct_arm_workflow_without_operation_class():
+    source = inspect.getsource(MoveCloseToSurfaceBehaviour)
 
-    assert issubclass(
-        ManipulatorMoveCloseToSurfaceAction,
-        WorkflowActionBehaviour,
-    )
-    assert "MoveCloseToSurface.Goal" in source
-    assert "ProbeSurfaceRuntimeStateSource" not in source
-    assert "surface_distance_samples" not in source
-    assert "end_effector_force" not in source
-
-
-def test_close_surface_server_owns_runtime_operation():
-    source = inspect.getsource(MoveCloseToSurfaceNode)
-
-    assert "ProbeSurfaceRuntimeStateSource" in source
-    assert "MoveCloseToSurfaceOperation" in source
-    assert "ActionServer" in source
-
-
-def test_close_surface_operation_uses_live_geometry_without_setup_context():
-    source = inspect.getsource(MoveCloseToSurfaceOperation)
-
-    for forbidden in (
-        "context_id",
-        "ProbeSetup",
-        "object_id",
-        "routine_id",
-        "reference_view",
-    ):
-        assert forbidden not in source
-    assert "target_surface_distance_m" in source
-    assert "active_attachment" in source
-    assert "surface_distance_samples" in source
-    assert "surface_plane_probe" in source
-    assert "freeze_probe_surface_approach" in source
-    assert "end_effector_force" in source
+    assert issubclass(MoveCloseToSurfaceBehaviour, ArmMovementBehaviour)
+    assert "ProbeSurfaceSource" in source
+    assert "guarded_probe(" in source
+    assert ".probe(" in source
+    assert "ArmMovementOutcome.CONTACT" in source
+    assert "MoveCloseToSurfaceOperation" not in source
+    assert "MoveCloseToSurface.Goal" not in source
+    assert "WorkflowActionBehaviour" not in source
 
 
 def test_finalization_keeps_aligned_pose_as_execution_authority():

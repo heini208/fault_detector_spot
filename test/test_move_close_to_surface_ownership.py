@@ -1,4 +1,4 @@
-"""Ownership guards for standalone move-close-to-surface execution."""
+"""Ownership guards for direct move-close-to-surface execution."""
 
 import ast
 from pathlib import Path
@@ -93,9 +93,9 @@ def test_obsolete_setup_verification_modules_are_absent():
     assert all(not path.exists() for path in obsolete)
 
 
-def test_close_surface_runtime_remains_independent_of_probe_setup():
+def test_close_surface_source_remains_independent_of_probe_setup():
     runtime = source(
-        "inspection/execution/probe_surface_runtime_state.py"
+        "inspection/sensing/probe_surface_source.py"
     )
 
     assert "surface_distance_samples" in runtime

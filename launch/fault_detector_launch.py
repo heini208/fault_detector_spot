@@ -207,16 +207,6 @@ def generate_launch_description():
         ),
         Node(
             package="fault_detector_spot",
-            executable="move_close_to_surface_node",
-            name="move_close_to_surface",
-            output="screen",
-            parameters=[
-                close_surface_config,
-                {"use_sim_time": use_sim_time},
-            ],
-        ),
-        Node(
-            package="fault_detector_spot",
             executable="record_manager",
             name="record_manager",
             output="screen",

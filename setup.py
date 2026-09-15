@@ -40,8 +40,6 @@ setup(
             'fault_detector_spot.sensing.micro_ros_agent_status_node:main',
             'sensor_head_connection = '
             'fault_detector_spot.sensing.sensor_head_connection_node:main',
-            'move_close_to_surface_node = '
-            'fault_detector_spot.manipulation.move_close_to_surface_node:main',
             'lidar_self_filter = fault_detector_spot.mapping.ros.lidar_self_filter:main',
         ],
     },

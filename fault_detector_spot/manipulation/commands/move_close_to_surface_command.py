@@ -1,4 +1,4 @@
-"""Behavior-tree command for one force-guarded close surface approach."""
+"""Behavior-tree command for a guarded close-surface workflow."""
 
 import math
 
@@ -8,7 +8,7 @@ from fault_detector_spot.application.behaviour_tree.commands.execution_command i
 
 
 class MoveCloseToSurfaceCommand(ExecutionCommand):
-    """Carry the requested probe-tip stand-off and aligned start distance."""
+    """Carry stand-off target; zero means move until guarded contact."""
 
     def __init__(
         self,
@@ -21,10 +21,14 @@ class MoveCloseToSurfaceCommand(ExecutionCommand):
         super().__init__(command_id, stamp, request_id=request_id)
         target = float(target_surface_distance_m)
         aligned = float(aligned_preapproach_distance_m)
-        if not math.isfinite(target) or target <= 0.0:
-            raise ValueError("Target surface distance must be positive")
+        if not math.isfinite(target) or target < 0.0:
+            raise ValueError(
+                "Target surface distance must be non-negative"
+            )
         if not math.isfinite(aligned) or aligned <= 0.0:
-            raise ValueError("Aligned pre-approach distance must be positive")
+            raise ValueError(
+                "Aligned pre-approach distance must be positive"
+            )
         if aligned <= target:
             raise ValueError(
                 "Aligned pre-approach distance must exceed target surface "

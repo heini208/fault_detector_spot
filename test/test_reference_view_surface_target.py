@@ -156,10 +156,27 @@ def test_target_and_aligned_positions_use_their_own_distances():
     )
 
 
+def test_zero_target_distance_places_contact_target_on_surface():
+    result = resolve_reference_surface_target(
+        approach((1.0, 2.0, 3.0), (1.0, 0.0, 0.0)),
+        PoseData.identity(),
+        target_surface_distance_m=0.0,
+        aligned_preapproach_distance_m=0.15,
+    )
+
+    assert result.target_surface_distance_m == pytest.approx(0.0)
+    assert result.target_pose_object.position.x == pytest.approx(1.0)
+    assert result.target_pose_object.position.y == pytest.approx(2.0)
+    assert result.target_pose_object.position.z == pytest.approx(3.0)
+    assert result.aligned_preapproach_pose_object.position.x == pytest.approx(
+        1.15
+    )
+
+
 @pytest.mark.parametrize(
     "target_distance,preapproach_distance,message",
     [
-        (0.0, 0.15, "Target surface distance"),
+        (-0.001, 0.15, "Target surface distance"),
         (0.03, 0.0, "Aligned pre-approach distance"),
         (0.03, 0.03, "at least 0.05 m"),
         (0.03, 0.079, "at least 0.05 m"),
