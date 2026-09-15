@@ -47,6 +47,9 @@ _INTENT_COMMAND_IDS = {
     OperationalIntent.INTENT_ORIENT_TO_SURFACE: (
         CommandID.ORIENT_TO_SURFACE
     ),
+    OperationalIntent.INTENT_ORIENT_TO_TAG: (
+        CommandID.ORIENT_TO_TAG
+    ),
     OperationalIntent.INTENT_MOVE_BASE_TO_TAG: (
         CommandID.MOVE_BASE_TO_TAG
     ),
@@ -72,6 +75,7 @@ _TAG_INTENTS = frozenset({
     OperationalIntent.INTENT_MOVE_ARM_TO_TAG,
     OperationalIntent.INTENT_MOVE_ARM_TO_TAG_AND_WAIT,
     OperationalIntent.INTENT_MOVE_BASE_TO_TAG,
+    OperationalIntent.INTENT_ORIENT_TO_TAG,
 })
 
 _OFFSET_INTENTS = frozenset({

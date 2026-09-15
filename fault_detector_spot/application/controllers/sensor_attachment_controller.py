@@ -27,6 +27,7 @@ _AUTOMATIC_SENSOR_COMMANDS = frozenset({
     CommandID.MOVE_ARM_TO_TAG,
     CommandID.MOVE_ARM_TO_TAG_AND_WAIT,
     CommandID.ORIENT_TO_SURFACE,
+    CommandID.ORIENT_TO_TAG,
 })
 
 

@@ -260,7 +260,13 @@ class ManipulationControls(UIControlHelper):
         return self.ui.execute_operation(intent)
 
     def handle_orient_to_tag(self):
-        return self.show_setup_unavailable("Orient to Tag")
+        intent = OperationalIntent()
+        intent.intent = OperationalIntent.INTENT_ORIENT_TO_TAG
+        try:
+            intent = self.add_tag_element_to_intent(intent)
+        except TagNotFound:
+            return None
+        return self.ui.execute_operation(intent)
 
     def handle_move_close_to_surface(self):
         return self.show_setup_unavailable("Move Close to Surface")

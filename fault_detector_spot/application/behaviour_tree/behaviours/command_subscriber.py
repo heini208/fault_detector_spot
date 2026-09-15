@@ -39,6 +39,9 @@ from fault_detector_spot.manipulation.commands.move_close_to_surface_command imp
 from fault_detector_spot.manipulation.commands.orient_to_surface_command import (
     OrientToSurfaceCommand,
 )
+from fault_detector_spot.manipulation.commands.orient_to_tag_command import (
+    OrientToTagCommand,
+)
 from fault_detector_spot.navigation.commands.base_move_relative_command import (
     BaseMoveRelativeCommand,
 )
@@ -92,6 +95,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.MOVE_TO_WAYPOINT: self._waypoint_command,
             CommandID.MOVE_CLOSE_TO_SURFACE: self._move_close_to_surface,
             CommandID.ORIENT_TO_SURFACE: self._orient_to_surface,
+            CommandID.ORIENT_TO_TAG: self._orient_to_tag,
         }
         self.pending_msgs = []
         self.last_received_time = None
@@ -308,6 +312,22 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         return OrientToSurfaceCommand(
             command_id=CommandID.ORIENT_TO_SURFACE,
             stamp=self._create_command_stamp(),
+            motion_sensor_id=command.motion_sensor_id,
+        )
+
+    def _orient_to_tag(
+        self,
+        command: SemanticCommand,
+    ) -> OrientToTagCommand:
+        tag = self._required_tag(command)
+        if not command.motion_sensor_id:
+            raise ValueError(
+                "Orient-to-tag command is missing active sensor geometry"
+            )
+        return OrientToTagCommand(
+            command_id=CommandID.ORIENT_TO_TAG,
+            stamp=self._create_command_stamp(),
+            tag_id=tag.id,
             motion_sensor_id=command.motion_sensor_id,
         )
 

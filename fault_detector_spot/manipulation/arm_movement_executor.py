@@ -19,7 +19,10 @@ from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
 from spot_msgs.srv import RobotCommand as RobotCommandService
 from synchros2.utilities import namespace_with
-from fault_detector_spot.inspection.geometry.rotation import rotate_vector
+from fault_detector_spot.inspection.geometry.rotation import (
+    multiply_quaternions,
+    rotate_vector,
+)
 from fault_detector_spot.inspection.model.models import Vector3Data
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
@@ -27,6 +30,7 @@ from fault_detector_spot.inspection.model.sensor_models import (
 )
 from fault_detector_spot.inspection.setup.alignment_orientation import (
     surface_aligned_probe_orientation,
+    tag_aligned_probe_orientation,
 )
 from fault_detector_spot.manipulation.arm_contact_evidence import (
     ArmContactEvidenceAnalyzer,
@@ -353,6 +357,34 @@ class ArmMovementExecutor(MovementExecutor):
             force_threshold_n=force_threshold_n,
         )
 
+    def orient_to_tag(
+        self,
+        tag_id: int,
+        motion_sensor_id: str,
+        speed=None,
+        force_threshold_n=None,
+    ) -> ArmMovementUpdate:
+        """Orient the active probe to a currently reachable tag."""
+        sensor_id = str(motion_sensor_id).strip()
+        if not sensor_id:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Tag orientation requires active sensor geometry",
+            )
+        if self.tag_state_source is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Tag state source is not configured",
+            )
+        return self.guarded_probe(
+            lambda: self._resolve_tag_orientation_target(
+                int(tag_id),
+                sensor_id,
+            ),
+            speed=speed,
+            force_threshold_n=force_threshold_n,
+        )
+
     def guarded_probe(
         self,
         probe_target,
@@ -498,6 +530,43 @@ class ArmMovementExecutor(MovementExecutor):
             finally:
                 self.arm_stop_service_client = None
                 self._owns_arm_stop_service_client = False
+
+    def _resolve_tag_orientation_target(
+        self,
+        tag_id: int,
+        sensor_id: str,
+    ):
+        tag = self.tag_state_source.reachable_tag(tag_id)
+        if tag is None:
+            raise RuntimeError(
+                f"Tag {tag_id} is not currently reachable"
+            )
+
+        tag_pose = self.probe_motion_planner.normalize_target(
+            tag.pose,
+            GRAV_ALIGNED_BODY_FRAME_NAME,
+        )
+        tag_orientation = pose_to_pose_data(tag_pose.pose).orientation
+        hand_to_probe_orientation = pose_to_pose_data(
+            self.probe_motion_planner.hand_to_probe_pose(sensor_id)
+        ).orientation
+        target_orientation = multiply_quaternions(
+            tag_orientation,
+            tag_aligned_probe_orientation(
+                hand_to_probe_orientation
+            ),
+        )
+
+        current_probe = self.probe_motion_planner.current_pose(
+            GRAV_ALIGNED_BODY_FRAME_NAME,
+            sensor_probe_frame(sensor_id),
+        )
+        target_probe = deepcopy(current_probe)
+        target_probe.pose.orientation.x = target_orientation.x
+        target_probe.pose.orientation.y = target_orientation.y
+        target_probe.pose.orientation.z = target_orientation.z
+        target_probe.pose.orientation.w = target_orientation.w
+        return target_probe, sensor_id
 
     def _resolve_surface_orientation_target(
         self,
