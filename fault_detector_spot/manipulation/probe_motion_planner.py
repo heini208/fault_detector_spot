@@ -284,6 +284,17 @@ class ProbeMotionPlanner:
             current_probe.pose,
             target_probe.pose,
         )
+        probe_start = current_probe.pose.position
+        probe_target_position = target_probe.pose.position
+        probe_dx = float(probe_target_position.x) - float(probe_start.x)
+        probe_dy = float(probe_target_position.y) - float(probe_start.y)
+        probe_dz = float(probe_target_position.z) - float(probe_start.z)
+        probe_distance = math.sqrt(
+            probe_dx * probe_dx
+            + probe_dy * probe_dy
+            + probe_dz * probe_dz
+        )
+
         start = current_hand.pose.position
         target = target_hand.pose.position
         dx = float(target.x) - float(start.x)
@@ -292,7 +303,7 @@ class ProbeMotionPlanner:
         hand_distance = math.sqrt(dx * dx + dy * dy + dz * dz)
 
         motion_required = (
-            hand_distance > 1e-6
+            probe_distance > 1e-6
             or probe_rotation > 1e-6
         )
         goal = self._build_pose_goal(target_hand, duration_sec)
@@ -310,7 +321,7 @@ class ProbeMotionPlanner:
                 force_guard_enabled=False,
             )
 
-        if hand_distance <= 1e-6:
+        if probe_distance <= 1e-6 or hand_distance <= 1e-6:
             return ProbeMotionPlan(
                 goal=goal,
                 current_hand=deepcopy(current_hand),
@@ -321,7 +332,7 @@ class ProbeMotionPlanner:
                 linear_speed_mps=0.0,
                 direction_frame=target_frame,
                 motion_required=True,
-                force_guard_enabled=False,
+                force_guard_enabled=True,
             )
 
         return ProbeMotionPlan(

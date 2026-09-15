@@ -82,9 +82,9 @@ class SpeedAwareForceContactPolicy:
     def threshold_for(self, linear_speed_mps: float) -> float:
         """Return the bounded threshold for one planned translational speed."""
         speed = float(linear_speed_mps)
-        if not math.isfinite(speed) or speed <= 0.0:
+        if not math.isfinite(speed) or speed < 0.0:
             raise ValueError(
-                "Guarded arm speed must be positive and finite"
+                "Guarded arm speed must be non-negative and finite"
             )
 
         speed_allowance_n = (

@@ -62,9 +62,9 @@ from fault_detector_spot.manipulation.arm_motion_parameters import (
 
 class _ArmOperation:
     MOVEMENT = "movement"
-    GUARDED_WAIT_READY = "guarded_wait_ready"
+    READY_WAIT = "ready_wait"
+    READY_PREPARE = "ready_prepare"
     GUARDED_MOVEMENT = "guarded_movement"
-    GUARDED_PREPARE = "guarded_prepare"
     PREPARE = "prepare"
     STOW = "stow"
 
@@ -207,6 +207,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._state_wait_started = None
         self._tf_wait_started = None
         self._verification_started = None
+        self._ready_probe_start = None
         self._guarded_plan_builder = None
         self._guarded_force_threshold_n = None
         self._arm_stop_service_future = None
@@ -362,7 +363,20 @@ class ArmMovementExecutor(MovementExecutor):
         speed=None,
         force_threshold_n=None,
     ) -> ArmMovementUpdate:
-        """Start the single guarded entry point for probe motion."""
+        """Execute one ready probe movement with force monitoring."""
+        if self.active:
+            return self._busy_update()
+        if self.guarded_probe_execution is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Guarded probe movement is not configured",
+            )
+        if self.force_contact_policy is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Guarded probe movement requires a force contact policy",
+            )
+
         if callable(probe_target):
             if str(motion_sensor_id).strip():
                 raise ValueError(
@@ -374,11 +388,30 @@ class ArmMovementExecutor(MovementExecutor):
             target = deepcopy(probe_target)
             sensor_id = str(motion_sensor_id).strip()
             target_builder = lambda: (target, sensor_id)
-        return self._start_guarded_probe(
-            target_builder,
-            speed,
-            force_threshold_n,
+
+        self._guarded_force_threshold_n = force_threshold_n
+        self._guarded_plan_builder = lambda: (
+            self.probe_motion_planner.build_plan(
+                target_builder,
+                speed,
+            )
         )
+        return self.ready_probe(self._begin_guarded_probe)
+
+    def ready_probe(
+        self,
+        start_probe,
+    ) -> ArmMovementUpdate:
+        """Ensure the arm is deployed, then start one probe operation."""
+        if not callable(start_probe):
+            raise TypeError("Ready probe requires a callable probe starter")
+        if self.active:
+            return self._busy_update()
+
+        self._active = True
+        self._operation = _ArmOperation.READY_WAIT
+        self._ready_probe_start = start_probe
+        return self._advance_ready_probe()
 
     def probe(
         self,
@@ -428,8 +461,8 @@ class ArmMovementExecutor(MovementExecutor):
         if self._verification_started is not None:
             return self._poll_state_confirmation()
 
-        if self._operation == _ArmOperation.GUARDED_WAIT_READY:
-            return self._advance_guarded_readiness()
+        if self._operation == _ArmOperation.READY_WAIT:
+            return self._advance_ready_probe()
 
         if self._operation == _ArmOperation.GUARDED_MOVEMENT:
             return self._poll_guarded_probe()
@@ -437,7 +470,7 @@ class ArmMovementExecutor(MovementExecutor):
         if self._send_goal_future is None:
             if self._operation in (
                 _ArmOperation.PREPARE,
-                _ArmOperation.GUARDED_PREPARE,
+                _ArmOperation.READY_PREPARE,
             ):
                 return self._advance_prepare_start()
             if self._operation == _ArmOperation.STOW:
@@ -504,52 +537,37 @@ class ArmMovementExecutor(MovementExecutor):
         target_probe.pose.orientation.w = target_orientation.w
         return target_probe, sensor_id
 
-    def _start_guarded_probe(
-        self,
-        target_builder,
-        speed=None,
-        force_threshold_n=None,
-    ) -> ArmMovementUpdate:
-        if self.active:
-            return self._busy_update()
-        if self.guarded_probe_execution is None:
-            return ArmMovementUpdate(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "Guarded probe movement is not configured",
-            )
-        if self.force_contact_policy is None:
-            return ArmMovementUpdate(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "Guarded probe movement requires a force contact policy",
-            )
-
-        self._active = True
-        self._operation = _ArmOperation.GUARDED_WAIT_READY
-        self._operation_speed = speed
-        self._guarded_force_threshold_n = force_threshold_n
-        self._guarded_plan_builder = lambda: (
-            self.probe_motion_planner.build_plan(
-                target_builder,
-                speed,
-            )
-        )
-        return self._advance_guarded_readiness()
-
-    def _advance_guarded_readiness(self) -> ArmMovementUpdate:
+    def _advance_ready_probe(self) -> ArmMovementUpdate:
         state = self._fresh_arm_state()
         if state is None or state is ArmStowState.UNKNOWN:
             return self._wait_for_arm_state(
                 self.ready_state_timeout_sec,
-                "Waiting for manipulator stow state before guarded movement",
+                "Waiting for manipulator stow state before probe movement",
             )
 
         self._state_wait_started = None
         if state is ArmStowState.STOWED:
-            self._operation = _ArmOperation.GUARDED_PREPARE
+            self._operation = _ArmOperation.READY_PREPARE
             self._operation_speed = None
             return self._advance_prepare_start()
 
-        return self._begin_guarded_probe()
+        return self._begin_ready_probe()
+
+    def _begin_ready_probe(self) -> ArmMovementUpdate:
+        start_probe = self._ready_probe_start
+        if start_probe is None:
+            return super()._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Ready probe movement has no pending probe operation",
+            )
+        self._ready_probe_start = None
+        try:
+            return start_probe()
+        except Exception as exception:
+            return super()._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"Ready probe operation could not start: {exception}",
+            )
 
     def _begin_guarded_probe(self) -> ArmMovementUpdate:
         self._operation = _ArmOperation.GUARDED_MOVEMENT
@@ -710,7 +728,7 @@ class ArmMovementExecutor(MovementExecutor):
 
         if self._operation in (
             _ArmOperation.PREPARE,
-            _ArmOperation.GUARDED_PREPARE,
+            _ArmOperation.READY_PREPARE,
             _ArmOperation.STOW,
         ):
             self._reset_goal_lifecycle()
@@ -810,6 +828,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._state_wait_started = None
         self._tf_wait_started = None
         self._verification_started = None
+        self._ready_probe_start = None
         self._guarded_plan_builder = None
         self._guarded_force_threshold_n = None
         self._reset_arm_stop_service_lifecycle(cancel=True)
@@ -826,8 +845,8 @@ class ArmMovementExecutor(MovementExecutor):
 
         self._state_wait_started = None
         if state is ArmStowState.DEPLOYED:
-            if self._operation == _ArmOperation.GUARDED_PREPARE:
-                return self._begin_guarded_probe()
+            if self._operation == _ArmOperation.READY_PREPARE:
+                return self._begin_ready_probe()
             return self._finish(
                 ArmMovementOutcome.SUCCESS,
                 "Arm is already deployed",
@@ -869,7 +888,7 @@ class ArmMovementExecutor(MovementExecutor):
     def _poll_state_confirmation(self) -> ArmMovementUpdate:
         if self._operation in (
             _ArmOperation.PREPARE,
-            _ArmOperation.GUARDED_PREPARE,
+            _ArmOperation.READY_PREPARE,
         ):
             expected = ArmStowState.DEPLOYED
             timeout_sec = self.ready_deployed_timeout_sec
@@ -894,9 +913,9 @@ class ArmMovementExecutor(MovementExecutor):
 
         state = self._fresh_arm_state()
         if state is expected:
-            if self._operation == _ArmOperation.GUARDED_PREPARE:
+            if self._operation == _ArmOperation.READY_PREPARE:
                 self._verification_started = None
-                return self._begin_guarded_probe()
+                return self._begin_ready_probe()
             return self._finish(
                 ArmMovementOutcome.SUCCESS,
                 success_detail,

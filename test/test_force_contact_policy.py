@@ -32,15 +32,20 @@ def test_threshold_is_capped_for_normal_arm_speed():
     assert policy().threshold_for(0.10) == pytest.approx(10.0)
 
 
-def test_any_positive_speed_has_a_threshold():
+def test_zero_speed_uses_general_minimum_threshold():
+    assert policy().threshold_for(0.0) == pytest.approx(3.0)
+
+
+def test_any_non_negative_speed_has_a_threshold():
     contact = policy()
 
+    assert contact.threshold_for(0.0) > 0.0
     assert contact.threshold_for(0.001) > 0.0
     assert contact.threshold_for(0.037) > 0.0
     assert contact.threshold_for(0.10) > 0.0
 
 
-@pytest.mark.parametrize("speed", [0.0, -0.1, float("inf")])
+@pytest.mark.parametrize("speed", [-0.1, float("inf")])
 def test_invalid_speeds_are_rejected(speed):
     with pytest.raises(ValueError):
         policy().threshold_for(speed)

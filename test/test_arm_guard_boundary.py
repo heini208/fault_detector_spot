@@ -55,13 +55,20 @@ def test_application_arm_entries_route_through_guarded_probe():
         "probe_pose",
         "tag_probe",
         "probe_relative",
-        "guarded_probe",
     ):
         method = _method_source(source, method_name)
-        assert (
-            "_start_guarded_probe(" in method
-            or "self.guarded_probe(" in method
-        )
+        assert "self.guarded_probe(" in method
+
+
+def test_guarded_probe_reuses_ready_probe_readiness():
+    source = _source(EXECUTOR)
+    guarded = _method_source(source, "guarded_probe")
+    ready = _method_source(source, "ready_probe")
+
+    assert "self.ready_probe(self._begin_guarded_probe)" in guarded
+    assert "_advance_ready_probe()" in ready
+    assert "_start_guarded_probe(" not in source
+    assert "_advance_guarded_readiness(" not in source
 
 
 def test_low_level_probe_is_explicitly_unguarded():
@@ -69,7 +76,8 @@ def test_low_level_probe_is_explicitly_unguarded():
     method = _method_source(source, "probe")
 
     assert "_submit_probe(" in method
-    assert "_start_guarded_probe(" not in method
+    assert "guarded_probe_execution" not in method
+    assert "ready_probe(" not in method
 
 
 def test_ready_arm_uses_low_level_probe_submission_not_force_guard():
@@ -77,7 +85,6 @@ def test_ready_arm_uses_low_level_probe_submission_not_force_guard():
     method = _method_source(source, "_advance_prepare_start")
 
     assert "_submit_probe(" in method
-    assert "_start_guarded_probe(" not in method
     assert "guarded_probe_execution" not in method
 
 

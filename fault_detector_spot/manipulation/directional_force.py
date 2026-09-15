@@ -22,8 +22,8 @@ def directional_force_delta(
     current_hand_orientation,
     movement_direction,
 ) -> DirectionalForceDelta:
-    """Project force change onto the direction opposing planned travel."""
-    direction = _normalized_vector(
+    """Return directional contact force, or total delta without travel."""
+    direction = _optional_normalized_vector(
         movement_direction,
         "Movement direction",
     )
@@ -44,14 +44,17 @@ def directional_force_delta(
         )
     )
     total = math.sqrt(sum(value * value for value in delta))
-    opposing = max(
-        0.0,
-        -sum(
-            force_component * direction_component
-            for force_component, direction_component
-            in zip(delta, direction)
-        ),
-    )
+    if direction is None:
+        opposing = total
+    else:
+        opposing = max(
+            0.0,
+            -sum(
+                force_component * direction_component
+                for force_component, direction_component
+                in zip(delta, direction)
+            ),
+        )
     return DirectionalForceDelta(
         opposing_n=float(opposing),
         total_n=float(total),
@@ -100,11 +103,11 @@ def _normalized_quaternion(quaternion):
     return tuple(value / norm for value in values)
 
 
-def _normalized_vector(vector, label):
+def _optional_normalized_vector(vector, label):
     values = _finite_vector(vector, label)
     norm = math.sqrt(sum(value * value for value in values))
     if norm <= 1e-12:
-        raise ValueError(f"{label} must be non-zero")
+        return None
     return tuple(value / norm for value in values)
 
 

@@ -73,3 +73,16 @@ def test_hand_rotation_does_not_create_false_force_delta():
 
     assert result.opposing_n == pytest.approx(0.0, abs=1e-9)
     assert result.total_n == pytest.approx(0.0, abs=1e-9)
+
+
+def test_zero_travel_direction_uses_total_baseline_force_delta():
+    result = directional_force_delta(
+        baseline_force_hand=(1.0, 2.0, 3.0),
+        current_force_hand=(4.0, 6.0, 3.0),
+        baseline_hand_orientation=quaternion(),
+        current_hand_orientation=quaternion(),
+        movement_direction=(0.0, 0.0, 0.0),
+    )
+
+    assert result.total_n == pytest.approx(5.0)
+    assert result.opposing_n == pytest.approx(5.0)
