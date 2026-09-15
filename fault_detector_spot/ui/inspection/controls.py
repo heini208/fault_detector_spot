@@ -1085,6 +1085,7 @@ class InspectionControls(UIControlHelper):
             self.move_aligned_pose_button,
             self.use_current_alignment_button,
             self.orient_to_surface_button,
+            self.orient_to_tag_button,
             self.test_surface_distance_button,
             self.approve_and_retract_button,
             self.retract_without_saving_button,

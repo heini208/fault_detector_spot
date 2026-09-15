@@ -130,6 +130,7 @@ class ProbeRefinementDialog(QDialog):
             self.controls.move_aligned_pose_button,
             self.controls.use_current_alignment_button,
             self.controls.orient_to_surface_button,
+            self.controls.orient_to_tag_button,
             self.back_button,
             self.next_button,
         ):

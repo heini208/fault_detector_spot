@@ -1,4 +1,4 @@
-"""Resolve explicit probe alignment orientations for setup workflows."""
+"""Resolve probe orientations for tag and surface alignment."""
 
 from copy import deepcopy
 import math
@@ -22,10 +22,8 @@ _TAG_FACING_PITCH_COS = math.cos(math.pi / 4.0)
 
 
 def tag_aligned_probe_orientation(
-    hand_to_probe_orientation: QuaternionData,
 ) -> QuaternionData:
     """Return the probe orientation produced by relative-to-tag mode."""
-    hand_to_probe_orientation.validate()
     return QuaternionData(
         x=0.0,
         y=_TAG_FACING_PITCH_SIN,

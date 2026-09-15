@@ -176,7 +176,10 @@ class ProbeRefinementController:
         if (
             motion.kind is ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH
             and refinement.motion_states[RefinementStage.ALIGNMENT]
-            is not RefinementMotionState.ORIENTED
+            not in {
+                RefinementMotionState.ORIENTED,
+                RefinementMotionState.REACHED,
+            }
         ):
             raise RuntimeError(
                 "Orient to the tag or surface before moving to the aligned "

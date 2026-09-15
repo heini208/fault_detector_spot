@@ -28,7 +28,7 @@ from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     sensor_probe_frame,
 )
-from fault_detector_spot.inspection.setup.alignment_orientation import (
+from fault_detector_spot.inspection.geometry.alignment_orientation import (
     surface_aligned_probe_orientation,
     tag_aligned_probe_orientation,
 )
@@ -547,14 +547,9 @@ class ArmMovementExecutor(MovementExecutor):
             GRAV_ALIGNED_BODY_FRAME_NAME,
         )
         tag_orientation = pose_to_pose_data(tag_pose.pose).orientation
-        hand_to_probe_orientation = pose_to_pose_data(
-            self.probe_motion_planner.hand_to_probe_pose(sensor_id)
-        ).orientation
         target_orientation = multiply_quaternions(
             tag_orientation,
-            tag_aligned_probe_orientation(
-                hand_to_probe_orientation
-            ),
+            tag_aligned_probe_orientation(),
         )
 
         current_probe = self.probe_motion_planner.current_pose(

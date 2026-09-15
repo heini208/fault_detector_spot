@@ -23,7 +23,7 @@ from fault_detector_spot.inspection.repository import (
 from fault_detector_spot.inspection.sensing.surface_distance_validation import (
     validate_surface_distance_pair,
 )
-from fault_detector_spot.inspection.setup.alignment_orientation import (
+from fault_detector_spot.inspection.geometry.alignment_orientation import (
     surface_aligned_probe_orientation,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (

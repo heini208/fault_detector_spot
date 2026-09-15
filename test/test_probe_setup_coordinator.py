@@ -481,6 +481,38 @@ def test_alignment_requires_orientation_before_candidate_move(tmp_path):
         )
 
 
+def test_reached_alignment_can_be_reused_for_finalization_retraction(tmp_path):
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
+        state.context,
+        "slot1_hand",
+        ImagePoint(u=20, v=30),
+        "surface_fit",
+        0.10,
+        0.20,
+    )
+    probe.motion_state_source.pose = pose(0.8)
+    state = probe.begin_refinement(state.context)
+    refinement = probe._drafts[state.context.context_id].refinement
+    refinement.motion_states[RefinementStage.SAFE_APPROACH] = (
+        RefinementMotionState.REACHED
+    )
+    refinement.motion_states[RefinementStage.ALIGNMENT] = (
+        RefinementMotionState.REACHED
+    )
+
+    operation = probe.prepare_motion(
+        state.context,
+        ProbeMotionRequest(kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH),
+    )
+
+    assert operation.request.command.command_id is CommandID.MOVE_ARM_TO_TAG
+
+
 def test_tag_orientation_uses_existing_command_and_enables_candidate(tmp_path):
     probe, command_controller = coordinator(tmp_path)
     state = create_selected_routine(

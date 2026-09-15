@@ -8,7 +8,7 @@ from fault_detector_spot.inspection.model.models import (
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.inspection.setup.alignment_orientation import (
+from fault_detector_spot.inspection.geometry.alignment_orientation import (
     surface_aligned_probe_orientation,
     tag_aligned_probe_orientation,
 )
@@ -28,9 +28,7 @@ def roll_quaternion(degrees):
 
 
 def test_tag_alignment_matches_relative_to_tag_probe_axis():
-    hand_to_probe = roll_quaternion(90.0)
-
-    probe = tag_aligned_probe_orientation(hand_to_probe)
+    probe = tag_aligned_probe_orientation()
     axis = rotate_vector(
         probe,
         Vector3Data(x=1.0, y=0.0, z=0.0),
