@@ -7,6 +7,8 @@ from rclpy.clock import ClockType
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 
+import pytest
+
 from fault_detector_spot.inspection.setup import (
     probe_setup_motion_state_source as source_module,
 )
@@ -164,3 +166,29 @@ def test_surface_samples_use_receipt_time_not_ros_header_age(monkeypatch):
     samples = source.surface_distance_samples("hall_probe")
 
     assert samples == (0.05, 0.05, 0.05)
+
+
+class _ParameterNode:
+    def __init__(self, value):
+        self.value = value
+
+    def get_parameter(self, _name):
+        return type("Parameter", (), {"value": self.value})()
+
+
+def _window_source(value):
+    source = source_module.ProbeSetupMotionStateSource.__new__(
+        source_module.ProbeSetupMotionStateSource
+    )
+    source.node = _ParameterNode(value)
+    return source
+
+
+def test_hand_surface_window_radius_remains_runtime_configurable():
+    assert _window_source(24)._hand_surface_window_radius_px() == 24
+
+
+@pytest.mark.parametrize("value", [3, 65, 4.0, True])
+def test_hand_surface_window_radius_rejects_invalid_values(value):
+    with pytest.raises(ValueError, match="window radius"):
+        _window_source(value)._hand_surface_window_radius_px()
