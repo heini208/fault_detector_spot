@@ -52,6 +52,8 @@ class ProbeMotionPlan:
     direction_y: float
     direction_z: float
     linear_speed_mps: float
+    angular_speed_rad_s: float = 0.0
+    translational_motion: bool = True
     direction_frame: str = ""
     motion_required: bool = True
     force_guard_enabled: bool = True
@@ -302,11 +304,16 @@ class ProbeMotionPlanner:
         dz = float(target.z) - float(start.z)
         hand_distance = math.sqrt(dx * dx + dy * dy + dz * dz)
 
-        motion_required = (
-            probe_distance > 1e-6
-            or probe_rotation > 1e-6
-        )
+        translational_motion = probe_distance > 1e-6
+        rotational_motion = probe_rotation > 1e-6
+        motion_required = translational_motion or rotational_motion
         goal = self._build_pose_goal(target_hand, duration_sec)
+        angular_speed_rad_s = (
+            probe_rotation / duration_sec
+            if rotational_motion
+            else 0.0
+        )
+
         if not motion_required:
             return ProbeMotionPlan(
                 goal=goal,
@@ -316,12 +323,14 @@ class ProbeMotionPlanner:
                 direction_y=0.0,
                 direction_z=0.0,
                 linear_speed_mps=0.0,
+                angular_speed_rad_s=0.0,
+                translational_motion=False,
                 direction_frame=target_frame,
                 motion_required=True,
                 force_guard_enabled=False,
             )
 
-        if probe_distance <= 1e-6 or hand_distance <= 1e-6:
+        if not translational_motion or hand_distance <= 1e-6:
             return ProbeMotionPlan(
                 goal=goal,
                 current_hand=deepcopy(current_hand),
@@ -330,6 +339,8 @@ class ProbeMotionPlanner:
                 direction_y=0.0,
                 direction_z=0.0,
                 linear_speed_mps=0.0,
+                angular_speed_rad_s=angular_speed_rad_s,
+                translational_motion=translational_motion,
                 direction_frame=target_frame,
                 motion_required=True,
                 force_guard_enabled=True,
@@ -343,6 +354,8 @@ class ProbeMotionPlanner:
             direction_y=dy / hand_distance,
             direction_z=dz / hand_distance,
             linear_speed_mps=hand_distance / duration_sec,
+            angular_speed_rad_s=angular_speed_rad_s,
+            translational_motion=True,
             direction_frame=target_frame,
             motion_required=True,
             force_guard_enabled=True,

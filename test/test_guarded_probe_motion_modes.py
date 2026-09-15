@@ -6,6 +6,7 @@ import pytest
 from geometry_msgs.msg import PoseStamped, TransformStamped
 
 from fault_detector_spot.manipulation.arm_motion_speed import (
+    ArmMotionSpeed,
     ArmMotionSpeedPolicy,
 )
 from fault_detector_spot.manipulation.probe_motion_planner import (
@@ -91,10 +92,28 @@ def test_rotation_only_plan_uses_total_force_guard():
     assert plan.force_guard_enabled
     assert plan.goal is not None
     assert plan.linear_speed_mps == 0.0
+    assert plan.angular_speed_rad_s > 0.0
+    assert not plan.translational_motion
     assert plan.direction_x == 0.0
     assert plan.direction_y == 0.0
     assert plan.direction_z == 0.0
     assert len(value._test_goals) == 1
+
+
+def test_rotation_only_plan_respects_selected_angular_speed():
+    value = planner()
+
+    plan = value.build_plan(
+        lambda: value.resolved_target(target(yaw=0.5), "hand"),
+        speed=ArmMotionSpeed(
+            linear_speed_mps=0.08,
+            angular_speed_rad_s=0.25,
+        ),
+    )
+
+    assert plan.linear_speed_mps == 0.0
+    assert plan.angular_speed_rad_s == pytest.approx(0.25)
+    assert not plan.translational_motion
 
 
 def test_diagonal_translation_has_normalized_3d_direction():
@@ -109,6 +128,9 @@ def test_diagonal_translation_has_normalized_3d_direction():
 
     assert plan.motion_required
     assert plan.force_guard_enabled
+    assert plan.translational_motion
+    assert plan.linear_speed_mps > 0.0
+    assert plan.angular_speed_rad_s == 0.0
     norm = math.sqrt(
         plan.direction_x * plan.direction_x
         + plan.direction_y * plan.direction_y
@@ -177,6 +199,8 @@ def test_attached_probe_rotation_uses_total_force_guard_not_hand_arc_direction()
 
     assert plan.force_guard_enabled
     assert plan.linear_speed_mps == 0.0
+    assert plan.angular_speed_rad_s > 0.0
+    assert not plan.translational_motion
     assert plan.direction_x == 0.0
     assert plan.direction_y == 0.0
     assert plan.direction_z == 0.0

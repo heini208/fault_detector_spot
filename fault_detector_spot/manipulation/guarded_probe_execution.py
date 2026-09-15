@@ -276,6 +276,7 @@ class GuardedProbeExecution:
         try:
             self._force_threshold_n = self._resolve_force_threshold(
                 plan.linear_speed_mps,
+                plan.angular_speed_rad_s,
                 self._force_threshold_override_n,
             )
         except Exception as exception:
@@ -355,20 +356,30 @@ class GuardedProbeExecution:
         detail = update.detail
         if update.outcome is ArmMovementOutcome.SUCCESS:
             if not plan.force_guard_enabled:
-                detail = (
-                    f"{detail}; translational force guard skipped "
-                    "for rotation-only movement"
-                )
-            else:
+                return self._terminal(update.outcome, detail)
+            if plan.translational_motion:
                 detail = (
                     f"{detail}; peak opposing force delta "
                     f"{self._peak_opposing_force_delta_n:.2f} N, "
                     f"peak total force delta "
                     f"{self._peak_total_force_delta_n:.2f} N, "
-                    f"directional threshold "
+                    f"motion threshold "
                     f"{self._force_threshold_n:.2f} N at "
-                    f"{plan.linear_speed_mps:.4f} m/s"
+                    f"{plan.linear_speed_mps:.4f} m/s linear, "
+                    f"{plan.angular_speed_rad_s:.4f} rad/s angular"
                 )
+                return self._begin_arm_stop(
+                    terminal_outcome=update.outcome,
+                    terminal_detail=detail,
+                )
+            detail = (
+                f"{detail}; peak total force delta "
+                f"{self._peak_total_force_delta_n:.2f} N, "
+                f"orientation threshold "
+                f"{self._force_threshold_n:.2f} N at "
+                f"{plan.angular_speed_rad_s:.4f} rad/s angular"
+            )
+            return self._terminal(update.outcome, detail)
         return self._begin_arm_stop(
             terminal_outcome=update.outcome,
             terminal_detail=detail,
@@ -464,19 +475,22 @@ class GuardedProbeExecution:
         if threshold_n is None:
             return self._begin_abort(
                 ArmMovementOutcome.EXECUTION_ERROR,
-                "Translational force guard has no threshold",
+                "Force guard has no threshold",
             )
 
-        evidence = self._contact_evidence(
-            plan=plan,
-            force_delta=force_delta,
-            force_threshold_n=threshold_n,
-        )
-        self_motion_suppressed = (
-            evidence is not None
-            and evidence.classification
-            is ShadowContactClassification.LIKELY_SELF_MOTION
-        )
+        evidence = None
+        self_motion_suppressed = False
+        if plan.translational_motion:
+            evidence = self._contact_evidence(
+                plan=plan,
+                force_delta=force_delta,
+                force_threshold_n=threshold_n,
+            )
+            self_motion_suppressed = (
+                evidence is not None
+                and evidence.classification
+                is ShadowContactClassification.LIKELY_SELF_MOTION
+            )
 
         if force_delta.opposing_n < threshold_n:
             self._force_contact_count = 0
@@ -514,14 +528,25 @@ class GuardedProbeExecution:
         ):
             return None
 
-        return self._begin_contact(
-            "Contact detected from opposing end-effector force delta "
-            f"{force_delta.opposing_n:.2f} N exceeding directional "
-            f"threshold {threshold_n:.2f} N at "
-            f"{plan.linear_speed_mps:.4f} m/s; peak opposing "
-            f"{self._peak_opposing_force_delta_n:.2f} N, peak total "
-            f"{self._peak_total_force_delta_n:.2f} N"
-        )
+        if plan.translational_motion:
+            detail = (
+                "Contact detected from opposing end-effector force delta "
+                f"{force_delta.opposing_n:.2f} N exceeding motion "
+                f"threshold {threshold_n:.2f} N at "
+                f"{plan.linear_speed_mps:.4f} m/s linear, "
+                f"{plan.angular_speed_rad_s:.4f} rad/s angular; "
+                f"peak opposing {self._peak_opposing_force_delta_n:.2f} N, "
+                f"peak total {self._peak_total_force_delta_n:.2f} N"
+            )
+        else:
+            detail = (
+                "Contact detected from total end-effector force delta "
+                f"{force_delta.total_n:.2f} N exceeding orientation "
+                f"threshold {threshold_n:.2f} N at "
+                f"{plan.angular_speed_rad_s:.4f} rad/s angular; "
+                f"peak total {self._peak_total_force_delta_n:.2f} N"
+            )
+        return self._begin_contact(detail)
 
     def _contact_evidence(
         self,
@@ -530,6 +555,8 @@ class GuardedProbeExecution:
         force_delta,
         force_threshold_n,
     ):
+        if not plan.translational_motion:
+            return None
         try:
             velocity_method = getattr(
                 self.arm_state_source,
@@ -639,12 +666,23 @@ class GuardedProbeExecution:
     def _resolve_force_threshold(
         self,
         linear_speed_mps: float,
+        angular_speed_rad_s: float,
         override_n,
     ) -> float:
         if override_n is None:
-            return self.force_contact_policy.threshold_for(
-                linear_speed_mps
-            )
+            threshold_for = self.force_contact_policy.threshold_for
+            try:
+                return threshold_for(
+                    linear_speed_mps,
+                    angular_speed_rad_s,
+                )
+            except TypeError as exception:
+                if angular_speed_rad_s > 1e-12:
+                    raise TypeError(
+                        "Force contact policy must accept linear and "
+                        "angular speed for rotational guarded motion"
+                    ) from exception
+                return threshold_for(linear_speed_mps)
 
         threshold = float(override_n)
         if not math.isfinite(threshold) or threshold <= 0.0:
@@ -665,10 +703,13 @@ class GuardedProbeExecution:
     def _begin_contact(self, detail: str) -> ArmMovementUpdate:
         self._contact_detail = str(detail)
         self._cancel_goal()
+        plan = self._plan
         return self._begin_arm_stop(
             terminal_outcome=ArmMovementOutcome.CONTACT,
             terminal_detail=self._contact_detail,
-            then_retreat=True,
+            then_retreat=bool(
+                plan is not None and plan.translational_motion
+            ),
         )
 
     def _begin_abort(
@@ -902,4 +943,4 @@ class GuardedProbeExecution:
         return normalized
 
 
-__all__ = ["GuardedProbeExecution"]
+__all__ = ["GuaredProbeExecution"]

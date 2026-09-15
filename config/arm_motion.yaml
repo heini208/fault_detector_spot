@@ -34,6 +34,7 @@
     # Contact detection and retreat
     arm.contact.minimum_force_delta_threshold_n: 3.0
     arm.contact.reference_linear_speed_mps: 0.005
+    arm.contact.reference_angular_speed_rad_s: 0.50
     arm.contact.reference_force_delta_threshold_n: 5.0
     arm.contact.maximum_force_delta_threshold_n: 10.0
     arm.contact.consecutive_samples: 2

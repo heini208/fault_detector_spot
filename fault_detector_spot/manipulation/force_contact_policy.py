@@ -1,4 +1,4 @@
-"""Continuous speed-aware force threshold for guarded arm motion."""
+"""Continuous motion-aware force threshold for guarded arm motion."""
 
 import math
 
@@ -8,12 +8,13 @@ from fault_detector_spot.manipulation.arm_motion_parameters import (
 
 
 class SpeedAwareForceContactPolicy:
-    """Scale force tolerance continuously with planned arm speed."""
+    """Scale force tolerance continuously with planned Cartesian motion."""
 
     def __init__(
         self,
         minimum_threshold_n=None,
-        reference_speed_mps=None,
+        reference_linear_speed_mps=None,
+        reference_angular_speed_rad_s=None,
         reference_threshold_n=None,
         maximum_threshold_n=None,
         consecutive_samples=None,
@@ -23,8 +24,13 @@ class SpeedAwareForceContactPolicy:
         minimum_threshold_n = config.get(
             "contact.minimum_force_delta_threshold_n", minimum_threshold_n
         )
-        reference_speed_mps = config.get(
-            "contact.reference_linear_speed_mps", reference_speed_mps
+        reference_linear_speed_mps = config.get(
+            "contact.reference_linear_speed_mps",
+            reference_linear_speed_mps,
+        )
+        reference_angular_speed_rad_s = config.get(
+            "contact.reference_angular_speed_rad_s",
+            reference_angular_speed_rad_s,
         )
         reference_threshold_n = config.get(
             "contact.reference_force_delta_threshold_n", reference_threshold_n
@@ -39,9 +45,13 @@ class SpeedAwareForceContactPolicy:
             minimum_threshold_n,
             "Minimum force threshold",
         )
-        self.reference_speed_mps = self._positive(
-            reference_speed_mps,
-            "Reference arm speed",
+        self.reference_linear_speed_mps = self._positive(
+            reference_linear_speed_mps,
+            "Reference linear arm speed",
+        )
+        self.reference_angular_speed_rad_s = self._positive(
+            reference_angular_speed_rad_s,
+            "Reference angular arm speed",
         )
         self.reference_threshold_n = self._positive(
             reference_threshold_n,
@@ -79,19 +89,29 @@ class SpeedAwareForceContactPolicy:
             config=ArmMotionParameters(node),
         )
 
-    def threshold_for(self, linear_speed_mps: float) -> float:
-        """Return the bounded threshold for one planned translational speed."""
-        speed = float(linear_speed_mps)
-        if not math.isfinite(speed) or speed < 0.0:
-            raise ValueError(
-                "Guarded arm speed must be non-negative and finite"
-            )
-
-        speed_allowance_n = (
+    def threshold_for(
+        self,
+        linear_speed_mps: float,
+        angular_speed_rad_s: float = 0.0,
+    ) -> float:
+        """Return the bounded threshold for planned linear and angular motion."""
+        linear_speed = self._non_negative(
+            linear_speed_mps,
+            "Guarded arm linear speed",
+        )
+        angular_speed = self._non_negative(
+            angular_speed_rad_s,
+            "Guarded arm angular speed",
+        )
+        motion_scale = max(
+            linear_speed / self.reference_linear_speed_mps,
+            angular_speed / self.reference_angular_speed_rad_s,
+        )
+        motion_allowance_n = (
             self.reference_threshold_n
             - self.minimum_threshold_n
-        ) * (speed / self.reference_speed_mps)
-        threshold = self.minimum_threshold_n + speed_allowance_n
+        ) * motion_scale
+        threshold = self.minimum_threshold_n + motion_allowance_n
         return min(
             self.maximum_threshold_n,
             max(self.minimum_threshold_n, threshold),
@@ -103,6 +123,15 @@ class SpeedAwareForceContactPolicy:
         if not math.isfinite(normalized) or normalized <= 0.0:
             raise ValueError(
                 f"{label} must be positive and finite"
+            )
+        return normalized
+
+    @staticmethod
+    def _non_negative(value, label: str) -> float:
+        normalized = float(value)
+        if not math.isfinite(normalized) or normalized < 0.0:
+            raise ValueError(
+                f"{label} must be non-negative and finite"
             )
         return normalized
 
