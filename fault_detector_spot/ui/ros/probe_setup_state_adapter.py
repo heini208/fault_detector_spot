@@ -20,8 +20,8 @@ from fault_detector_spot.inspection.setup.reference_view_approach_direction impo
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ProjectedReferencePoint,
 )
-from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
-    ReferenceSurfaceNormal,
+from fault_detector_spot.inspection.geometry.surface_normal import (
+    SurfaceNormalEstimate,
 )
 from fault_detector_spot.inspection.setup.reference_view_surface_target import (
     ReferenceSurfaceTarget,
@@ -136,7 +136,7 @@ class ProbeSetupView:
 
     message: ProbeSetupState
     projected_point: Optional[ProjectedReferencePoint]
-    surface_normal: Optional[ReferenceSurfaceNormal]
+    surface_normal: Optional[SurfaceNormalEstimate]
     approach_direction: Optional[ReferenceApproachDirection]
     surface_target: Optional[ReferenceSurfaceTarget]
     calculated_setup: Optional[ReferenceProbeSetup]
@@ -192,7 +192,7 @@ def _projected_point(state):
 def _surface_normal(state, projected):
     if projected is None or not state.has_surface_normal:
         return None
-    return ReferenceSurfaceNormal(
+    return SurfaceNormalEstimate(
         projected_point=projected,
         normal_camera=_vector(state.surface_normal_camera),
         sample_count=int(state.surface_normal_sample_count),

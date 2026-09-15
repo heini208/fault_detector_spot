@@ -17,8 +17,8 @@ from fault_detector_spot.inspection.setup import (
 from fault_detector_spot.inspection.setup import (
     reference_view_depth_projection as depth_projection,
 )
-from fault_detector_spot.inspection.setup import (
-    reference_view_surface_normal as surface_normal_geometry,
+from fault_detector_spot.inspection.geometry import (
+    surface_normal as surface_normal_geometry,
 )
 from fault_detector_spot.inspection.setup import (
     reference_view_surface_target as surface_target_geometry,
@@ -31,7 +31,7 @@ class ProbeGeometryResult:
 
     capture: reference_repository.CapturedReferenceView
     projected_point: depth_projection.ProjectedReferencePoint
-    surface_normal: Optional[surface_normal_geometry.ReferenceSurfaceNormal]
+    surface_normal: Optional[surface_normal_geometry.SurfaceNormalEstimate]
     surface_normal_error: str
     approach_direction: approach_geometry.ReferenceApproachDirection
     surface_target: surface_target_geometry.ReferenceSurfaceTarget
@@ -104,7 +104,7 @@ class ProbeSetupGeometry:
         normal_error = ""
         try:
             normal = (
-                surface_normal_geometry.estimate_reference_surface_normal(
+                surface_normal_geometry.estimate_surface_normal(
                     projected,
                     capture.depth_image,
                     capture.depth_camera_info,

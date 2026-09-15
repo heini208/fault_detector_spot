@@ -10,8 +10,8 @@ from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     project_reference_pixel,
 )
-from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
-    estimate_reference_surface_normal,
+from fault_detector_spot.inspection.geometry.surface_normal import (
+    estimate_surface_normal,
 )
 
 
@@ -70,7 +70,7 @@ def plane_depth_values(
 def estimate(depth_image, camera_info, pixel=None, **kwargs):
     pixel = pixel or ImagePoint(u=5, v=5)
     projected = project_reference_pixel(pixel, depth_image, camera_info)
-    return estimate_reference_surface_normal(
+    return estimate_surface_normal(
         projected,
         depth_image,
         camera_info,
@@ -190,7 +190,7 @@ def test_invalid_configuration_is_rejected():
     )
 
     with pytest.raises(ValueError, match="positive integer"):
-        estimate_reference_surface_normal(
+        estimate_surface_normal(
             projected,
             depth,
             camera_info,
@@ -198,7 +198,7 @@ def test_invalid_configuration_is_rejected():
         )
 
     with pytest.raises(ValueError, match="within"):
-        estimate_reference_surface_normal(
+        estimate_surface_normal(
             projected,
             depth,
             camera_info,

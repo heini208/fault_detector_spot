@@ -21,8 +21,8 @@ from fault_detector_spot.inspection.setup.reference_view_approach_direction impo
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ProjectedReferencePoint,
 )
-from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
-    ReferenceSurfaceNormal,
+from fault_detector_spot.inspection.geometry.surface_normal import (
+    SurfaceNormalEstimate,
 )
 
 
@@ -48,7 +48,7 @@ def make_pose(orientation=None):
 
 def make_surface_normal(projected_point, x, y, z):
     """Create a valid local surface-normal estimate."""
-    return ReferenceSurfaceNormal(
+    return SurfaceNormalEstimate(
         projected_point=projected_point,
         normal_camera=Vector3Data(x=x, y=y, z=z),
         sample_count=40,

@@ -43,8 +43,8 @@ from fault_detector_spot.inspection.setup.alignment_orientation import (
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     project_reference_pixel,
 )
-from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
-    estimate_reference_surface_normal,
+from fault_detector_spot.inspection.geometry.surface_normal import (
+    estimate_surface_normal,
 )
 from fault_detector_spot.inspection.setup.stable_tag_pose import (
     TagPoseSample,
@@ -280,7 +280,7 @@ class ProbeSetupMotionStateSource:
                 "may be inside its usable near field. Increase the aligned "
                 "pre-approach distance or the center-window radius."
             ) from exception
-        normal = estimate_reference_surface_normal(
+        normal = estimate_surface_normal(
             projected,
             depth_image,
             camera_info,

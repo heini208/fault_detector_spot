@@ -17,6 +17,9 @@ from fault_detector_spot.application.commanding.semantic_command import (
 from fault_detector_spot.application.ros.operational_intent_adapter import (
     operational_intent_to_command,
 )
+from fault_detector_spot.inspection.sensing.probe_surface_source import (
+    ProbeSurfaceSource,
+)
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
 )
@@ -87,6 +90,15 @@ def test_behaviour_only_dispatches_to_executor():
     assert behaviour._start_operation() is marker
 
 
+def test_surface_source_owns_live_depth_to_normal_resolution():
+    source = inspect.getsource(ProbeSurfaceSource.surface_normal)
+
+    assert "self.latest_hand_depth(" in source
+    assert "project_reference_pixel(" in source
+    assert "MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M" in source
+    assert "estimate_surface_normal(" in source
+
+
 def test_executor_owns_surface_orientation_calculation_and_guarded_move():
     start = inspect.getsource(ArmMovementExecutor.orient_to_surface)
     resolve = inspect.getsource(
@@ -95,8 +107,9 @@ def test_executor_owns_surface_orientation_calculation_and_guarded_move():
 
     assert "self.guarded_probe(" in start
     assert "_resolve_surface_orientation_target" in start
-    assert "latest_hand_depth()" in resolve
-    assert "estimate_reference_surface_normal(" in resolve
+    assert "self.surface_source.surface_normal()" in resolve
+    assert "latest_hand_depth()" not in resolve
+    assert "estimate_surface_normal(" not in resolve
     assert "surface_aligned_probe_orientation(" in resolve
     assert "sensor_probe_frame(sensor_id)" in resolve
 

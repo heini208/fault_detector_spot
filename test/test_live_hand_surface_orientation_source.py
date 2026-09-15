@@ -14,5 +14,5 @@ def test_live_surface_orientation_uses_current_hand_depth_center():
 
     assert "int(depth_image.width) // 2" in source
     assert "int(depth_image.height) // 2" in source
-    assert "estimate_reference_surface_normal" in source
+    assert "estimate_surface_normal" in source
     assert "surface_aligned_probe_orientation" in source

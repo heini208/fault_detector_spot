@@ -11,7 +11,9 @@ from fault_detector_spot.inspection.geometry.rotation import (
 )
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from .reference_view_depth_projection import ProjectedReferencePoint
-from .reference_view_surface_normal import ReferenceSurfaceNormal
+from fault_detector_spot.inspection.geometry.surface_normal import (
+    SurfaceNormalEstimate,
+)
 
 
 APPROACH_MODE_AUTOMATIC = "automatic"
@@ -35,12 +37,12 @@ class ReferenceApproachDirection:
     projected_point: ProjectedReferencePoint
     direction_camera: Vector3Data
     source: str
-    surface_normal: Optional[ReferenceSurfaceNormal] = None
+    surface_normal: Optional[SurfaceNormalEstimate] = None
 
 
 def resolve_reference_approach_direction(
     projected_point: ProjectedReferencePoint,
-    surface_normal: Optional[ReferenceSurfaceNormal],
+    surface_normal: Optional[SurfaceNormalEstimate],
     controlled_frame_pose_object: PoseData,
     mode: str = APPROACH_MODE_AUTOMATIC,
     surface_normal_unavailable_reason: str = "",
@@ -99,7 +101,7 @@ def _object_positive_x_in_camera(
 
 def _aligned_surface_direction(
     projected_point: ProjectedReferencePoint,
-    surface_normal: ReferenceSurfaceNormal,
+    surface_normal: SurfaceNormalEstimate,
 ) -> np.ndarray:
     normal_point = surface_normal.projected_point
     if normal_point.frame_id != projected_point.frame_id:

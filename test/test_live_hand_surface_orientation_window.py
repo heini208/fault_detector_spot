@@ -7,7 +7,7 @@ import pytest
 from fault_detector_spot.inspection.setup import (
     probe_setup_motion_state_source as source_module,
 )
-from fault_detector_spot.inspection.setup import reference_view_surface_normal
+from fault_detector_spot.inspection.geometry import surface_normal
 
 
 class _Parameter:
@@ -53,7 +53,7 @@ def test_live_surface_fit_uses_configured_window_for_seed_and_plane():
 
 def test_surface_samples_remain_centered_on_requested_image_location():
     source = inspect.getsource(
-        reference_view_surface_normal._collect_surface_samples
+        surface_normal._collect_surface_samples
     )
 
     assert "center = projected_point.mapped_pixel" in source

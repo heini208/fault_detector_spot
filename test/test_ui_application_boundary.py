@@ -72,7 +72,7 @@ def test_inspection_ui_only_renders_probe_setup_state_and_intent():
         "self.object_repository",
         "self.reference_view_repository",
         "project_reference_pixel",
-        "estimate_reference_surface_normal",
+        "estimate_surface_normal",
         "resolve_reference_approach_direction",
         "resolve_reference_surface_target",
         "initialize_reference_probe_setup",

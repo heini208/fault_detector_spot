@@ -12,13 +12,20 @@ from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
-from fault_detector_spot.inspection.model.models import PoseData
+from fault_detector_spot.inspection.geometry.surface_normal import (
+    SurfaceNormalEstimate,
+    estimate_surface_normal,
+)
+from fault_detector_spot.inspection.model.models import ImagePoint, PoseData
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     sensor_probe_frame,
 )
 from fault_detector_spot.inspection.sensing.live_surface_distance import (
     measure_probe_surface_distance,
+)
+from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
+    project_reference_pixel,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 from fault_detector_spot.shared.ros.tf_transforms import lookup_pose_data
@@ -114,6 +121,66 @@ class ProbeSurfaceSource(RuntimeSource):
                 f"age={age:.3f}s, max_age={maximum_age_sec:.3f}s"
             )
         return deepcopy(depth_image), camera_info
+
+    def surface_normal(
+        self,
+        maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
+        window_radius_px: int = SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
+    ) -> SurfaceNormalEstimate:
+        """Return a live local surface-normal estimate at image center."""
+        if (
+            isinstance(window_radius_px, bool)
+            or not isinstance(window_radius_px, int)
+            or window_radius_px <= 0
+        ):
+            raise ValueError("Surface orientation window radius must be positive")
+
+        depth_image, camera_info = self.latest_hand_depth(maximum_age_sec)
+        center = ImagePoint(
+            u=int(depth_image.width) // 2,
+            v=int(depth_image.height) // 2,
+        )
+        try:
+            projected = project_reference_pixel(
+                center,
+                depth_image,
+                camera_info,
+                search_radius_px=window_radius_px,
+                rgb_size=(
+                    int(depth_image.width),
+                    int(depth_image.height),
+                ),
+            )
+        except ValueError as exception:
+            if "No valid depth within" not in str(exception):
+                raise
+            raise ValueError(
+                "No valid registered hand depth was found in the center "
+                f"{window_radius_px} px window. The surface may be too "
+                "close or too far from the gripper depth camera."
+            ) from exception
+
+        camera_distance_m = float(projected.depth_m)
+        if camera_distance_m < MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M:
+            raise ValueError(
+                "Surface is too close for reliable orientation: "
+                f"camera distance {camera_distance_m:.3f} m, minimum "
+                f"{MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M:.3f} m"
+            )
+
+        try:
+            return estimate_surface_normal(
+                projected,
+                depth_image,
+                camera_info,
+                neighborhood_radius_px=window_radius_px,
+                maximum_neighborhood_radius_px=window_radius_px,
+            )
+        except ValueError as exception:
+            raise ValueError(
+                "Unable to fit a reliable front surface plane: "
+                f"{exception}"
+            ) from exception
 
     def surface_distance_samples(
         self,

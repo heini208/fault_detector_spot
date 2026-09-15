@@ -12,8 +12,8 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
     rgb_depth_overlap_region,
     rgb_depth_selectable_region,
 )
-from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
-    estimate_reference_surface_normal,
+from fault_detector_spot.inspection.geometry.surface_normal import (
+    estimate_surface_normal,
 )
 
 
@@ -152,7 +152,7 @@ def test_normal_fit_uses_registered_depth_neighborhood():
         rgb_camera_info=make_camera_info(22, 22, focal_length=200.0),
     )
 
-    result = estimate_reference_surface_normal(
+    result = estimate_surface_normal(
         projected,
         depth,
         depth_info,

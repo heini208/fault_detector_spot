@@ -20,23 +20,13 @@ from spot_msgs.action import RobotCommand
 from spot_msgs.srv import RobotCommand as RobotCommandService
 from synchros2.utilities import namespace_with
 from fault_detector_spot.inspection.geometry.rotation import rotate_vector
-from fault_detector_spot.inspection.model.models import ImagePoint, Vector3Data
+from fault_detector_spot.inspection.model.models import Vector3Data
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     sensor_probe_frame,
 )
-from fault_detector_spot.inspection.sensing.probe_surface_source import (
-    MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M,
-    SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
-)
 from fault_detector_spot.inspection.setup.alignment_orientation import (
     surface_aligned_probe_orientation,
-)
-from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
-    project_reference_pixel,
-)
-from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
-    estimate_reference_surface_normal,
 )
 from fault_detector_spot.manipulation.arm_contact_evidence import (
     ArmContactEvidenceAnalyzer,
@@ -483,50 +473,8 @@ class ArmMovementExecutor(MovementExecutor):
         self,
         sensor_id: str,
     ):
-        depth_image, camera_info = self.surface_source.latest_hand_depth()
-        center = ImagePoint(
-            u=int(depth_image.width) // 2,
-            v=int(depth_image.height) // 2,
-        )
-        try:
-            projected = project_reference_pixel(
-                center,
-                depth_image,
-                camera_info,
-                search_radius_px=SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
-                rgb_size=(
-                    int(depth_image.width),
-                    int(depth_image.height),
-                ),
-            )
-        except ValueError as exception:
-            if "No valid depth within" not in str(exception):
-                raise
-            raise ValueError(
-                "Cannot orient to surface because the center hand-depth "
-                "window has no valid measurement. The surface may be too "
-                "close or too far from the gripper depth camera."
-            ) from exception
-
-        camera_distance_m = float(projected.depth_m)
-        if (
-            camera_distance_m
-            < MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M
-        ):
-            raise ValueError(
-                "Surface is too close for reliable orientation: "
-                f"camera distance {camera_distance_m:.3f} m, minimum "
-                f"{MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M:.3f} m"
-            )
-        normal = estimate_reference_surface_normal(
-            projected,
-            depth_image,
-            camera_info,
-            neighborhood_radius_px=SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
-            maximum_neighborhood_radius_px=(
-                SURFACE_ORIENTATION_WINDOW_RADIUS_PX
-            ),
-        )
+        surface_normal = self.surface_source.surface_normal()
+        projected = surface_normal.projected_point
         camera_to_execution = self.tf_listener.lookup_a_tform_b(
             GRAV_ALIGNED_BODY_FRAME_NAME,
             projected.frame_id,
@@ -534,7 +482,7 @@ class ArmMovementExecutor(MovementExecutor):
         )
         surface_normal_execution = rotate_vector(
             transform_to_pose_data(camera_to_execution).orientation,
-            normal.normal_camera,
+            surface_normal.normal_camera,
         )
         hand_to_probe_orientation = pose_to_pose_data(
             self.probe_motion_planner.hand_to_probe_pose(sensor_id)

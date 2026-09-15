@@ -1,7 +1,10 @@
-"""Estimate a local surface normal from registered reference depth."""
+"""Estimate a local surface normal from registered depth."""
+
+from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 from sensor_msgs.msg import CameraInfo, Image
@@ -14,11 +17,15 @@ from fault_detector_spot.inspection.geometry.surface_plane import (
     fit_surface_plane,
 )
 from fault_detector_spot.inspection.model.models import Vector3Data
-from .reference_view_depth_projection import ProjectedReferencePoint
+
+if TYPE_CHECKING:
+    from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
+        ProjectedReferencePoint,
+    )
 
 
 @dataclass(frozen=True)
-class ReferenceSurfaceNormal:
+class SurfaceNormalEstimate:
     """Local plane normal associated with one projected surface point."""
 
     projected_point: ProjectedReferencePoint
@@ -28,7 +35,7 @@ class ReferenceSurfaceNormal:
     neighborhood_radius_px: int = 0
 
 
-def estimate_reference_surface_normal(
+def estimate_surface_normal(
     projected_point: ProjectedReferencePoint,
     depth_image: Image,
     camera_info: CameraInfo,
@@ -40,7 +47,7 @@ def estimate_reference_surface_normal(
     minimum_tangent_spread_m: float = 0.0005,
     minimum_plane_inlier_ratio: float = 0.60,
     ransac_iterations: int = 100,
-) -> ReferenceSurfaceNormal:
+) -> SurfaceNormalEstimate:
     """Fit a robust local plane with shared Open3D geometry."""
     _validate_inputs(
         projected_point,
@@ -90,7 +97,7 @@ def estimate_reference_surface_normal(
                     f"{maximum_plane_rmse_m:.4f} m using "
                     f"{plane.inlier_count} RANSAC inliers"
                 )
-            return ReferenceSurfaceNormal(
+            return SurfaceNormalEstimate(
                 projected_point=projected_point,
                 normal_camera=plane.normal,
                 sample_count=plane.inlier_count,
@@ -221,3 +228,5 @@ def _require_positive_integer(value, label) -> None:
 def _require_positive_finite(value, label) -> None:
     if not math.isfinite(value) or value <= 0.0:
         raise ValueError(f"{label} must be positive and finite")
+
+__all__ = ["SurfaceNormalEstimate", "estimate_surface_normal"]
