@@ -60,6 +60,7 @@ class ManipulationControls(UIControlHelper):
                 "Arm offset", offsets,
                 self._make_reset_fields_and_move_relative_row(),
             ),
+            control_group("Surface actions", self._make_surface_action_row()),
             control_group("Robot actions", self._make_control_row()),
         ]
 
@@ -196,6 +197,72 @@ class ManipulationControls(UIControlHelper):
 
         return row
 
+    def _make_surface_action_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+
+        self.orient_to_surface_button = QPushButton("Orient to Surface")
+        self.orient_to_surface_button.setToolTip(
+            "Orient the active probe to the front-facing live surface."
+        )
+        self.orient_to_surface_button.clicked.connect(
+            self.handle_orient_to_surface
+        )
+        row.addWidget(self.orient_to_surface_button)
+
+        self.orient_to_tag_button = QPushButton("Orient to Tag")
+        self.orient_to_tag_button.setToolTip(
+            "Orient the active probe to the tag selected above without "
+            "changing its position."
+        )
+        self.orient_to_tag_button.clicked.connect(self.handle_orient_to_tag)
+        row.addWidget(self.orient_to_tag_button)
+
+        row.addWidget(QLabel("Distance (m):"))
+        self.surface_distance_input = QDoubleSpinBox()
+        self.surface_distance_input.setDecimals(3)
+        self.surface_distance_input.setRange(0.0, 1.0)
+        self.surface_distance_input.setSingleStep(0.005)
+        self.surface_distance_input.setValue(0.03)
+        self.surface_distance_input.setToolTip(
+            "Desired probe-tip distance from the surface. 0.000 m means "
+            "move until contact is detected."
+        )
+        row.addWidget(self.surface_distance_input)
+
+        row.addWidget(QLabel("Tolerance (m):"))
+        self.surface_tolerance_input = QDoubleSpinBox()
+        self.surface_tolerance_input.setDecimals(3)
+        self.surface_tolerance_input.setRange(0.001, 0.100)
+        self.surface_tolerance_input.setSingleStep(0.001)
+        self.surface_tolerance_input.setValue(0.005)
+        self.surface_tolerance_input.setToolTip(
+            "Allowed surface-distance error for Move Close to Surface."
+        )
+        row.addWidget(self.surface_tolerance_input)
+
+        self.move_close_to_surface_button = QPushButton(
+            "Move Close to Surface"
+        )
+        self.move_close_to_surface_button.setToolTip(
+            "Move along the active probe axis toward the live surface."
+        )
+        self.move_close_to_surface_button.clicked.connect(
+            self.handle_move_close_to_surface
+        )
+        row.addWidget(self.move_close_to_surface_button)
+
+        row.addStretch()
+        return row
+
+    def handle_orient_to_surface(self):
+        return self.show_setup_unavailable("Orient to Surface")
+
+    def handle_orient_to_tag(self):
+        return self.show_setup_unavailable("Orient to Tag")
+
+    def handle_move_close_to_surface(self):
+        return self.show_setup_unavailable("Move Close to Surface")
+
     def _reset_all_zero(self):
         """Set all offset and orientation fields to 0."""
         for axis in ("X", "Y", "Z", "Roll", "Pitch", "Yaw"):
@@ -236,7 +303,6 @@ class ManipulationControls(UIControlHelper):
             self.offset_fields[axis] = fld
 
     def _add_orientation_offset_controls(self, row: QHBoxLayout):
-        # Each tuple: (axis, dec_label, inc_label, dec_delta, inc_delta)
         controls = [
             ("Roll", "⟲ CCW", "⟳ CW", -5.0, +5.0),
             ("Pitch", "Down", "Up", +5.0, -5.0),
@@ -270,7 +336,6 @@ class ManipulationControls(UIControlHelper):
     def _change_angle(self, axis: str, delta: float):
         field = self.offset_fields[axis]
         val = float(field.text()) + delta
-        # Wrap around -180..180
         if val > 180.0:
             val -= 360.0
         elif val < -180.0:
@@ -345,7 +410,7 @@ class ManipulationControls(UIControlHelper):
                     "You are using MAP_FRAME but Navigation Mode is OFF.\n"
                     "Please enable Navigation Mode to proceed."
                 )
-                return None  # abort publishing command
+                return None
 
         intent.offset.header = intent.tag.pose.header
         intent.offset.header.frame_id = frame_choice
