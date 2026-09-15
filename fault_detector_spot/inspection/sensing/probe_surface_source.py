@@ -16,6 +16,9 @@ from fault_detector_spot.inspection.geometry.surface_normal import (
     SurfaceNormalEstimate,
     estimate_surface_normal,
 )
+from fault_detector_spot.inspection.geometry.open3d_depth import (
+    create_organized_depth_point_cloud,
+)
 from fault_detector_spot.inspection.model.models import ImagePoint, PoseData
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
@@ -136,6 +139,9 @@ class ProbeSurfaceSource(RuntimeSource):
             raise ValueError("Surface orientation window radius must be positive")
 
         depth_image, camera_info = self.latest_hand_depth(maximum_age_sec)
+        point_cloud = create_organized_depth_point_cloud(
+            depth_image, camera_info, use_open3d=False,
+        )
         center = ImagePoint(
             u=int(depth_image.width) // 2,
             v=int(depth_image.height) // 2,
@@ -146,6 +152,7 @@ class ProbeSurfaceSource(RuntimeSource):
                 depth_image,
                 camera_info,
                 search_radius_px=window_radius_px,
+                point_cloud=point_cloud,
                 rgb_size=(
                     int(depth_image.width),
                     int(depth_image.height),
@@ -175,6 +182,8 @@ class ProbeSurfaceSource(RuntimeSource):
                 camera_info,
                 neighborhood_radius_px=window_radius_px,
                 maximum_neighborhood_radius_px=window_radius_px,
+                point_cloud=point_cloud,
+                use_open3d=False,
             )
         except ValueError as exception:
             raise ValueError(

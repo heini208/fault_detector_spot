@@ -44,8 +44,10 @@ class OrganizedDepthPointCloud:
 def create_organized_depth_point_cloud(
     depth_image: Image,
     camera_info: CameraInfo,
+    *,
+    use_open3d: bool = True,
 ) -> OrganizedDepthPointCloud:
-    """Create an organized camera-frame point cloud from registered depth."""
+    """Project registered depth, optionally avoiding Open3D initialization."""
     depth_array, depth_m = _depth_arrays(depth_image)
     fx, fy, cx, cy = camera_intrinsics(
         camera_info,
@@ -53,6 +55,17 @@ def create_organized_depth_point_cloud(
         "Depth CameraInfo",
     )
     _validate_open3d_projection(camera_info, "Depth CameraInfo")
+    if not use_open3d:
+        # Identical pinhole projection, without loading the Open3D runtime.
+        points = np.empty((*depth_m.shape, 3), dtype=np.float64)
+        points[..., 0] = depth_m * (np.arange(depth_image.width) - cx) / fx
+        points[..., 1] = (
+            depth_m * (np.arange(depth_image.height)[:, None] - cy) / fy
+        )
+        points[..., 2] = depth_m
+        valid_mask = np.isfinite(depth_m) & (depth_m > 0.0)
+        points[~valid_mask] = np.nan
+        return OrganizedDepthPointCloud(points, depth_m, valid_mask)
     open3d = require_open3d()
     intrinsic = open3d.camera.PinholeCameraIntrinsic(
         depth_image.width,

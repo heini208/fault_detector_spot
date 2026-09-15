@@ -73,8 +73,10 @@ def project_reference_pixel(
     search_radius_px: int = 2,
     rgb_size: Optional[Tuple[int, int]] = None,
     rgb_camera_info: Optional[CameraInfo] = None,
+    *,
+    point_cloud: Optional[OrganizedDepthPointCloud] = None,
 ) -> ProjectedReferencePoint:
-    """Map an RGB ray into registered depth and project it with Open3D."""
+    """Map an RGB ray into depth, optionally reusing its point cloud."""
     if pixel is None:
         raise ValueError("No reference pixel is selected")
     pixel.validate()
@@ -92,10 +94,11 @@ def project_reference_pixel(
         ),
     )
     frame_id = _resolve_frame_id(depth_image, depth_camera_info)
-    point_cloud = create_organized_depth_point_cloud(
-        depth_image,
-        depth_camera_info,
-    )
+    if point_cloud is None:
+        point_cloud = create_organized_depth_point_cloud(
+            depth_image,
+            depth_camera_info,
+        )
     sampled_pixel, depth_m = _nearest_valid_depth(
         mapped_pixel,
         point_cloud,

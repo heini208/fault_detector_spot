@@ -88,8 +88,10 @@ def fit_surface_plane(
     minimum_inlier_ratio: float,
     ransac_iterations: int,
     minimum_tangent_spread_m: float,
+    *,
+    use_open3d: bool = True,
 ) -> SurfacePlane:
-    """Fit one robust Open3D RANSAC plane to 3D samples."""
+    """Fit a robust RANSAC plane, retaining shared acceptance checks."""
     points = np.asarray(points, dtype=np.float64)
     if points.ndim != 2 or points.shape[1:] != (3,):
         raise ValueError("Surface-plane samples must have shape Nx3")
@@ -124,15 +126,20 @@ def fit_surface_plane(
     ):
         raise ValueError("Surface-plane tangent spread must be positive")
 
-    open3d = require_open3d()
-    cloud = open3d.geometry.PointCloud(
-        open3d.utility.Vector3dVector(points)
-    )
-    plane_model, inlier_indices = cloud.segment_plane(
-        distance_threshold_m,
-        3,
-        ransac_iterations,
-    )
+    if use_open3d:
+        open3d = require_open3d()
+        cloud = open3d.geometry.PointCloud(
+            open3d.utility.Vector3dVector(points)
+        )
+        plane_model, inlier_indices = cloud.segment_plane(
+            distance_threshold_m,
+            3,
+            ransac_iterations,
+        )
+    else:
+        plane_model, inlier_indices = _numpy_ransac_plane(
+            points, distance_threshold_m, ransac_iterations,
+        )
     inlier_indices = np.asarray(inlier_indices, dtype=int)
     inlier_ratio = len(inlier_indices) / len(points)
     if (
@@ -173,6 +180,43 @@ def fit_surface_plane(
     )
     result.validate()
     return result
+
+
+def _numpy_ransac_plane(points, distance_threshold_m, iterations):
+    """Select three-point consensus by count then error, and refine by SVD.
+
+    Sample without replacement within each hypothesis, as Open3D does.
+    Run the full requested budget instead of terminating probabilistically.
+    A local seed makes identical depth input reproducible without changing
+    global random state. Acceptance thresholds are applied by the caller.
+    """
+    rng = np.random.default_rng(0)
+    best_indices = np.empty(0, dtype=int)
+    best_error = math.inf
+    for _ in range(iterations):
+        triple = points[rng.choice(len(points), size=3, replace=False)]
+        normal = np.cross(triple[1] - triple[0], triple[2] - triple[0])
+        norm = float(np.linalg.norm(normal))
+        if norm <= np.finfo(np.float64).tiny:
+            continue
+        normal /= norm
+        distances = (points - triple[0]) @ normal
+        indices = np.flatnonzero(np.abs(distances) < distance_threshold_m)
+        error = float(np.sum(distances[indices] ** 2))
+        if len(indices) > len(best_indices) or (
+            len(indices) == len(best_indices) and error < best_error
+        ):
+            best_indices = indices
+            best_error = error
+    if len(best_indices) < 3:
+        raise ValueError(
+            "Depth neighborhood does not span a two-dimensional surface"
+        )
+    inliers = points[best_indices]
+    centroid = inliers.mean(axis=0)
+    _, _, axes = np.linalg.svd(inliers - centroid, full_matrices=False)
+    normal = axes[-1]
+    return np.append(normal, -np.dot(normal, centroid)), best_indices
 
 
 def _validate_tangent_spread(points, minimum_tangent_spread_m) -> None:
