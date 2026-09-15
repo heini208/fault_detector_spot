@@ -24,16 +24,21 @@ def test_application_injects_one_attachment_authority_at_construction():
 def test_probe_geometry_and_live_orientation_use_confirmed_attachment():
     geometry = source("inspection/setup/probe_geometry_editor.py")
     api = source("application/api/probe_setup_api.py")
-    coordinator = source(
-        "application/coordinators/probe_setup_coordinator.py"
+    refinement = source(
+        "application/coordinators/probe_refinement_controller.py"
     )
+    executor = source("manipulation/arm_movement_executor.py")
 
     assert "attachment = self._active_attachment()" in geometry
     assert "attachment.hand_to_probe()" in geometry
     assert "routine.sensor_id" not in geometry
-    assert "calculate_surface_orientation(" in api
-    assert "motion_attachment()" in coordinator
-    assert "attachment.hand_to_probe().orientation" in coordinator
+    assert "calculate_surface_orientation(" not in api
+    assert "motion_command_factory.orient_to_surface(" in refinement
+    assert "motion_command_factory.orient_to_tag(" in refinement
+    assert "attachment.motion_sensor_id" in refinement
+    assert "def motion_attachment(" in refinement
+    assert "hand_to_probe_pose(sensor_id)" in executor
+    assert "surface_aligned_probe_orientation(" in executor
     assert "routine.sensor_id" not in api
 
 

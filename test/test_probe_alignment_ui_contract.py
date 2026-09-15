@@ -1,30 +1,22 @@
-"""Regression guards for the alignment-stage orientation workflow."""
+"""Regression guards for the alignment-orientation command schema."""
 
-import inspect
-
-from fault_detector_spot.ui.inspection.controls import InspectionControls
+from fault_detector_msgs.msg import ProbeSetupMotionIntent
 
 
-def test_alignment_controls_offer_tag_and_surface_modes():
-    source = inspect.getsource(InspectionControls._create_reference_widgets)
-
-    assert "ALIGNMENT_ORIENTATION_TAG" in source
-    assert "ALIGNMENT_ORIENTATION_CALCULATED_SURFACE" in source
-    assert "Calculate Hand-Facing Surface" in source
-    assert "Orient to Calculated Surface" in source
+def test_surface_orientation_has_one_explicit_motion_operation():
+    assert ProbeSetupMotionIntent.OPERATION_ORIENT_TO_SURFACE == 5
+    assert ProbeSetupMotionIntent.OPERATION_ORIENT_TO_TAG == 6
 
 
-def test_surface_orientation_is_requested_from_backend():
-    source = inspect.getsource(
-        InspectionControls.handle_calculate_hand_surface_orientation
-    )
+def test_alignment_orientation_has_explicit_workflow_state():
+    from fault_detector_msgs.msg import ProbeSetupState
 
-    assert "calculate_surface_orientation" in source
+    assert ProbeSetupState.MOTION_ORIENTED == 4
 
 
-def test_alignment_motion_carries_mode_and_orientation_only_flag():
-    source = inspect.getsource(InspectionControls._send_alignment_motion)
-
-    assert "alignment_orientation_mode" in source
-    assert "orientation_only" in source
-    assert "calculated_surface_orientation_object" in source
+def test_legacy_calculated_orientation_payload_is_removed():
+    fields = ProbeSetupMotionIntent.get_fields_and_field_types()
+    assert "alignment_orientation_mode" not in fields
+    assert "orientation_only" not in fields
+    assert "has_calculated_surface_orientation" not in fields
+    assert "calculated_surface_orientation_object" not in fields

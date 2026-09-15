@@ -25,7 +25,6 @@ from fault_detector_spot.application.coordinators.probe_setup_coordinator import
     ProbeSetupMotionStatus,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
-    ProbeAlignmentOrientationMode,
     ProbeMotionFrame,
     ProbeMotionKind,
     ProbeMotionRequest,
@@ -207,6 +206,9 @@ class ProbeSetupMotionApi:
             ProbeSetupMotionIntent.OPERATION_ORIENT_TO_SURFACE: (
                 ProbeMotionKind.ORIENT_TO_SURFACE
             ),
+            ProbeSetupMotionIntent.OPERATION_ORIENT_TO_TAG: (
+                ProbeMotionKind.ORIENT_TO_TAG
+            ),
         }
         frames = {
             ProbeSetupMotionIntent.FRAME_SENSOR: ProbeMotionFrame.SENSOR,
@@ -215,15 +217,9 @@ class ProbeSetupMotionApi:
             ProbeSetupMotionIntent.FRAME_BODY: ProbeMotionFrame.BODY,
             ProbeSetupMotionIntent.FRAME_MAP: ProbeMotionFrame.MAP,
         }
-        modes = {
-            ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_TAG: (
-                ProbeAlignmentOrientationMode.TAG
-            ),
-        }
         try:
             kind = kinds[int(intent.operation)]
             frame = frames[int(intent.frame)]
-            mode = modes[int(intent.alignment_orientation_mode)]
         except KeyError as exception:
             raise ValueError(
                 "Unsupported probe setup motion intent"
@@ -242,7 +238,6 @@ class ProbeSetupMotionApi:
             orientation_tolerance_rad=float(
                 intent.orientation_tolerance_rad
             ),
-            alignment_orientation_mode=mode,
         )
         request.validate()
         return request
@@ -264,6 +259,9 @@ class ProbeSetupMotionApi:
             ),
             ProbeMotionKind.ORIENT_TO_SURFACE: (
                 ProbeSetupMotionIntent.OPERATION_ORIENT_TO_SURFACE
+            ),
+            ProbeMotionKind.ORIENT_TO_TAG: (
+                ProbeSetupMotionIntent.OPERATION_ORIENT_TO_TAG
             ),
         }[kind]
 

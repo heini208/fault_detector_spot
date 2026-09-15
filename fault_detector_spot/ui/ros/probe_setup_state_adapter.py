@@ -369,6 +369,9 @@ def _motion_state(value):
     states = {
         ProbeSetupState.MOTION_NOT_TESTED: RefinementMotionState.NOT_TESTED,
         ProbeSetupState.MOTION_MOVING: RefinementMotionState.MOVING,
+        ProbeSetupState.MOTION_ORIENTED: (
+            RefinementMotionState.ORIENTED
+        ),
         ProbeSetupState.MOTION_REACHED: RefinementMotionState.REACHED,
         ProbeSetupState.MOTION_FAILED: RefinementMotionState.FAILED,
     }

@@ -448,13 +448,10 @@ class InspectionControls(UIControlHelper):
         self.use_current_alignment_button = QPushButton(
             "Approve Current Pose"
         )
-        self.alignment_orientation_mode_dropdown = QComboBox()
-        self.alignment_orientation_mode_dropdown.addItem(
-            "Align with tag",
-            ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_TAG,
-        )
         self.orient_to_surface_button = QPushButton("Orient to Surface")
         self.orient_to_surface_button.setEnabled(False)
+        self.orient_to_tag_button = QPushButton("Orient to Tag")
+        self.orient_to_tag_button.setEnabled(False)
         self.move_probe_pose_button = QPushButton(
             "Direct Probe Movement Disabled"
         )
@@ -629,11 +626,11 @@ class InspectionControls(UIControlHelper):
         self.move_aligned_pose_button.clicked.connect(
             self.handle_move_to_aligned_pose
         )
-        self.alignment_orientation_mode_dropdown.currentIndexChanged.connect(
-            self._handle_alignment_orientation_mode_changed
-        )
         self.orient_to_surface_button.clicked.connect(
             self.handle_orient_to_surface
+        )
+        self.orient_to_tag_button.clicked.connect(
+            self.handle_orient_to_tag
         )
         self.use_current_alignment_button.clicked.connect(
             self.handle_use_current_alignment
@@ -976,11 +973,8 @@ class InspectionControls(UIControlHelper):
         if stage == "alignment":
             orientation_group = QGroupBox("Alignment orientation")
             orientation_layout = QFormLayout(orientation_group)
-            orientation_layout.addRow(
-                "Mode:",
-                self.alignment_orientation_mode_dropdown,
-            )
             orientation_actions = QHBoxLayout()
+            orientation_actions.addWidget(self.orient_to_tag_button)
             orientation_actions.addWidget(
                 self.orient_to_surface_button
             )
@@ -1841,6 +1835,10 @@ class InspectionControls(UIControlHelper):
             presentation.motion_states[RefinementStage.ALIGNMENT]
             == RefinementMotionState.REACHED
         )
+        oriented = (
+            presentation.motion_states[RefinementStage.ALIGNMENT]
+            == RefinementMotionState.ORIENTED
+        )
         alignment_adjustable = presentation.motion_states[
             RefinementStage.ALIGNMENT
         ] in (
@@ -1860,10 +1858,11 @@ class InspectionControls(UIControlHelper):
             and not pending
             and not recovery_only
         )
-        self.move_aligned_pose_button.setEnabled(alignment_enabled)
-        self.orient_to_surface_button.setEnabled(
-            alignment_enabled and alignment_reached
+        self.move_aligned_pose_button.setEnabled(
+            alignment_enabled and oriented
         )
+        self.orient_to_surface_button.setEnabled(alignment_enabled)
+        self.orient_to_tag_button.setEnabled(alignment_enabled)
         self.use_current_alignment_button.setEnabled(
             alignment_enabled and alignment_adjustable
         )
@@ -1910,10 +1909,6 @@ class InspectionControls(UIControlHelper):
         self.refine_translation_step_field.setEnabled(not pending)
         self.refine_rotation_step_field.setEnabled(not pending)
         self.refine_frame_dropdown.setEnabled(not pending)
-        self.alignment_orientation_mode_dropdown.setEnabled(
-            alignment_page and not pending and not recovery_only
-        )
-
         self.refinement_dialog.back_button.setEnabled(
             current != RefinementStage.SAFE_APPROACH
             and not pending
@@ -2018,28 +2013,32 @@ class InspectionControls(UIControlHelper):
         return self._send_alignment_motion()
 
     def handle_orient_to_surface(self):
+        return self._send_alignment_orientation(
+            ProbeSetupMotionIntent.OPERATION_ORIENT_TO_SURFACE,
+            "surface orientation",
+        )
+
+    def handle_orient_to_tag(self):
+        return self._send_alignment_orientation(
+            ProbeSetupMotionIntent.OPERATION_ORIENT_TO_TAG,
+            "tag orientation",
+        )
+
+    def _send_alignment_orientation(self, operation, label):
         presentation = self._require_refinement_presentation()
-        if (
-            presentation.active_stage is not RefinementStage.ALIGNMENT
-            or presentation.motion_states[RefinementStage.ALIGNMENT]
-            is not RefinementMotionState.REACHED
-        ):
+        if presentation.active_stage is not RefinementStage.ALIGNMENT:
             self._show_setup_error(
-                "Orient to Surface",
+                "Orient Probe",
                 ValueError(
-                    "Reach the aligned pre-approach before orienting "
-                    "to the surface"
+                    "Open the alignment stage before orienting the probe"
                 ),
             )
             return False
         intent = ProbeSetupMotionIntent()
-        intent.operation = ProbeSetupMotionIntent.OPERATION_ORIENT_TO_SURFACE
+        intent.operation = operation
         intent.frame = ProbeSetupMotionIntent.FRAME_SENSOR
         self._write_motion_tolerances(intent)
-        return self._submit_probe_motion(intent, "surface orientation")
-
-    def _handle_alignment_orientation_mode_changed(self, _index=None):
-        self._refresh_refinement_dialog()
+        return self._submit_probe_motion(intent, label)
 
     def handle_move_to_probe_pose(self):
         self._show_setup_error(
@@ -2166,9 +2165,6 @@ class InspectionControls(UIControlHelper):
             ProbeSetupMotionIntent.OPERATION_MOVE_ALIGNED_PREAPPROACH
         )
         intent.frame = ProbeSetupMotionIntent.FRAME_SENSOR
-        intent.alignment_orientation_mode = int(
-            self.alignment_orientation_mode_dropdown.currentData()
-        )
         self._write_motion_tolerances(intent)
         return self._submit_probe_motion(
             intent,

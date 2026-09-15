@@ -23,6 +23,9 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
     RefinementStage,
 )
+from fault_detector_spot.inspection.setup.probe_setup_motion import (
+    ProbeMotionKind,
+)
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     initialize_reference_probe_setup,
 )
@@ -70,25 +73,29 @@ class AlignmentController(ProbeRefinementController):
         return self._achieved_pose
 
 
-def test_successful_orientation_only_alignment_remains_reached():
+def test_successful_surface_orientation_updates_candidate_orientation():
     setup = calculated_setup()
     refinement = ProbeRefinementSession.create(setup, setup)
     refinement.seed_safe_approach_from_current_pose(pose(x=0.30))
     request_id = new_request_id()
-    achieved = pose(x=0.30)
+    original = refinement.candidate_pose(RefinementStage.ALIGNMENT)
+    achieved = PoseData(
+        position=Vector3Data(x=0.30, y=0.0, z=0.0),
+        orientation=QuaternionData(x=0.0, y=0.0, z=1.0, w=0.0),
+    )
     refinement.begin_motion(
         PendingRefinementMotion(
             request_id=request_id,
             stage=RefinementStage.ALIGNMENT,
             purpose="alignment orientation",
             target_pose_object=achieved,
-            updates_candidate=False,
-            verify_achieved_pose=True,
+            updates_candidate=True,
+            verify_achieved_pose=False,
         )
     )
     draft = SimpleNamespace(refinement=refinement)
     motion = SimpleNamespace(
-        orientation_only=True,
+        kind=ProbeMotionKind.ORIENT_TO_SURFACE,
         position_tolerance_m=0.01,
         orientation_tolerance_rad=0.10,
     )
@@ -105,5 +112,8 @@ def test_successful_orientation_only_alignment_remains_reached():
     controller.handle_terminal_status(status, draft)
 
     assert refinement.motion_states[RefinementStage.ALIGNMENT] is (
-        RefinementMotionState.REACHED
+        RefinementMotionState.ORIENTED
     )
+    candidate = refinement.candidate_pose(RefinementStage.ALIGNMENT)
+    assert candidate.position == original.position
+    assert candidate.orientation == achieved.orientation

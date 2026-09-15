@@ -33,6 +33,7 @@ class RefinementMotionState(str, Enum):
 
     NOT_TESTED = "Not Tested"
     MOVING = "Moving"
+    ORIENTED = "Oriented"
     REACHED = "Reached"
     FAILED = "Failed"
 
@@ -309,6 +310,26 @@ class ProbeRefinementSession:
         if motion.updates_candidate:
             self.set_candidate(motion.stage, achieved_pose_object)
         self.motion_states[motion.stage] = RefinementMotionState.REACHED
+        self.pending_motion = None
+
+    def complete_alignment_orientation(
+        self,
+        request_id: str,
+        achieved_pose_object: PoseData,
+    ) -> None:
+        """Apply the achieved orientation without moving the candidate point."""
+        motion = self._matching_motion(request_id)
+        if motion.stage is not RefinementStage.ALIGNMENT:
+            raise RuntimeError(
+                "Alignment orientation must target the alignment stage"
+            )
+        achieved_pose_object.validate()
+        candidate = self.candidate_pose(RefinementStage.ALIGNMENT)
+        candidate.orientation = deepcopy(achieved_pose_object.orientation)
+        self.set_candidate(RefinementStage.ALIGNMENT, candidate)
+        self.motion_states[RefinementStage.ALIGNMENT] = (
+            RefinementMotionState.ORIENTED
+        )
         self.pending_motion = None
 
     def complete_motion_without_pose_capture(self, request_id: str) -> None:

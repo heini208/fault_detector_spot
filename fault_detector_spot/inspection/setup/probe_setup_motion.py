@@ -42,6 +42,7 @@ class ProbeMotionKind(str, Enum):
     ADJUST_SAFE_APPROACH = "adjust_safe_approach"
     ADJUST_ALIGNED_PREAPPROACH = "adjust_aligned_preapproach"
     ORIENT_TO_SURFACE = "orient_to_surface"
+    ORIENT_TO_TAG = "orient_to_tag"
 
 
 class ProbeMotionFrame(str, Enum):
@@ -52,12 +53,6 @@ class ProbeMotionFrame(str, Enum):
     TAG = "tag"
     BODY = "body"
     MAP = "map"
-
-
-class ProbeAlignmentOrientationMode(str, Enum):
-    """Explicit orientation source for one aligned absolute move."""
-
-    TAG = "tag"
 
 
 @dataclass(frozen=True)
@@ -71,20 +66,12 @@ class ProbeMotionRequest:
     yaw_rad: float = 0.0
     position_tolerance_m: float = 0.01
     orientation_tolerance_rad: float = math.radians(5.0)
-    alignment_orientation_mode: ProbeAlignmentOrientationMode = (
-        ProbeAlignmentOrientationMode.TAG
-    )
 
     def validate(self) -> None:
         if not isinstance(self.kind, ProbeMotionKind):
             raise TypeError("Probe motion kind is invalid")
         if not isinstance(self.frame, ProbeMotionFrame):
             raise TypeError("Probe motion frame is invalid")
-        if not isinstance(
-            self.alignment_orientation_mode,
-            ProbeAlignmentOrientationMode,
-        ):
-            raise TypeError("Alignment orientation mode is invalid")
         self.translation.validate()
         for value, label in (
             (self.pitch_rad, "Pitch adjustment"),
@@ -142,22 +129,7 @@ class ProbeSetupMotionCommandFactory:
             target_probe_pose_object,
         )
 
-        tag_pose = StampedPose(
-            frame_id=reference_tag.pose.header.frame_id,
-            stamp_sec=int(reference_tag.pose.header.stamp.sec),
-            stamp_nanosec=int(reference_tag.pose.header.stamp.nanosec),
-            position=CommandVector3(
-                x=reference_tag.pose.pose.position.x,
-                y=reference_tag.pose.pose.position.y,
-                z=reference_tag.pose.pose.position.z,
-            ),
-            orientation=CommandQuaternion(
-                x=reference_tag.pose.pose.orientation.x,
-                y=reference_tag.pose.pose.orientation.y,
-                z=reference_tag.pose.pose.orientation.z,
-                w=reference_tag.pose.pose.orientation.w,
-            ),
-        )
+        semantic_tag = self._semantic_tag(reference_tag)
 
         offset = StampedPose(
             frame_id=frame_id,
@@ -178,10 +150,7 @@ class ProbeSetupMotionCommandFactory:
 
         return SemanticCommand(
             command_id=CommandID.MOVE_ARM_TO_TAG,
-            tag=SemanticTag(
-                id=int(reference_tag.id),
-                pose=tag_pose,
-            ),
+            tag=semantic_tag,
             offset=offset,
             orientation_mode=OrientationModes.CUSTOM_ORIENTATION.value,
             motion_sensor_id=sensor_id,
@@ -193,6 +162,17 @@ class ProbeSetupMotionCommandFactory:
     ) -> SemanticCommand:
         return SemanticCommand(
             command_id=CommandID.ORIENT_TO_SURFACE,
+            motion_sensor_id=self._required_sensor_id(motion_sensor_id),
+        )
+
+    def orient_to_tag(
+        self,
+        reference_tag: TagElement,
+        motion_sensor_id: str,
+    ) -> SemanticCommand:
+        return SemanticCommand(
+            command_id=CommandID.ORIENT_TO_TAG,
+            tag=self._semantic_tag(reference_tag),
             motion_sensor_id=self._required_sensor_id(motion_sensor_id),
         )
 
@@ -255,6 +235,31 @@ class ProbeSetupMotionCommandFactory:
         return normalized
 
     @staticmethod
+    def _semantic_tag(reference_tag: TagElement) -> SemanticTag:
+        frame_id = reference_tag.pose.header.frame_id.strip()
+        if not frame_id:
+            raise ValueError("Reference tag pose frame is empty")
+        return SemanticTag(
+            id=int(reference_tag.id),
+            pose=StampedPose(
+                frame_id=frame_id,
+                stamp_sec=int(reference_tag.pose.header.stamp.sec),
+                stamp_nanosec=int(reference_tag.pose.header.stamp.nanosec),
+                position=CommandVector3(
+                    x=reference_tag.pose.pose.position.x,
+                    y=reference_tag.pose.pose.position.y,
+                    z=reference_tag.pose.pose.position.z,
+                ),
+                orientation=CommandQuaternion(
+                    x=reference_tag.pose.pose.orientation.x,
+                    y=reference_tag.pose.pose.orientation.y,
+                    z=reference_tag.pose.pose.orientation.z,
+                    w=reference_tag.pose.pose.orientation.w,
+                ),
+            ),
+        )
+
+    @staticmethod
     def _relative_rotation(pitch_rad, yaw_rad):
         half_pitch = pitch_rad * 0.5
         half_yaw = yaw_rad * 0.5
@@ -267,7 +272,6 @@ class ProbeSetupMotionCommandFactory:
 
 
 __all__ = [
-    "ProbeAlignmentOrientationMode",
     "ProbeMotionFrame",
     "ProbeMotionKind",
     "ProbeMotionRequest",

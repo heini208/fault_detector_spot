@@ -499,7 +499,6 @@ class ProbeSetupClient(QObject):
         self.node.destroy_client(self._execute_client)
         self.node.destroy_client(self._close_client)
         self.node.destroy_client(self._preview_client)
-        self.node.destroy_client(self._surface_orientation_client)
         self._motion_client.destroy()
         self._finalization_client.destroy()
         self._capture_client.destroy()

@@ -19,12 +19,14 @@ def source(relative):
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_probe_setup_motion_contains_only_safe_and_aligned_primitives():
+def test_probe_setup_motion_excludes_close_surface_execution():
     assert {kind.value for kind in ProbeMotionKind} == {
         "move_safe_approach",
         "move_aligned_preapproach",
         "adjust_safe_approach",
         "adjust_aligned_preapproach",
+        "orient_to_surface",
+        "orient_to_tag",
     }
 
 

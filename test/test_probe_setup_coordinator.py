@@ -135,6 +135,12 @@ class FakeMotionCommandFactory:
             motion_sensor_id=motion_sensor_id,
         )
 
+    def orient_to_tag(self, _reference_tag, motion_sensor_id):
+        return SemanticCommand(
+            command_id=CommandID.ORIENT_TO_TAG,
+            motion_sensor_id=motion_sensor_id,
+        )
+
     def relative(
         self,
         _frame,
@@ -285,8 +291,16 @@ def approve_all(probe, command_controller, state):
     state = probe.begin_refinement(state.context)
     state = probe.approve_safe_pose(state.context)
 
-    operation = probe.prepare_motion(
+    orientation = probe.prepare_motion(
         state.context,
+        ProbeMotionRequest(kind=ProbeMotionKind.ORIENT_TO_SURFACE),
+    )
+    probe.submit_motion(orientation)
+    command_controller.succeed(orientation.request)
+    context = probe.context(state.context.context_id, "probe-ui")
+
+    operation = probe.prepare_motion(
+        context,
         ProbeMotionRequest(
             kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
             position_tolerance_m=0.01,
@@ -439,9 +453,7 @@ def test_probe_motion_uses_active_sensor_attachment(tmp_path):
     assert operation.request.command.motion_sensor_id == "hand"
 
 
-def test_alignment_defaults_to_tag_aligned_probe_without_changing_position(
-    tmp_path,
-):
+def test_alignment_requires_orientation_before_candidate_move(tmp_path):
     probe, _ = coordinator(tmp_path)
     state = create_selected_routine(
         probe,
@@ -457,26 +469,53 @@ def test_alignment_defaults_to_tag_aligned_probe_without_changing_position(
     )
     probe.motion_state_source.pose = pose(0.8)
     state = probe.begin_refinement(state.context)
-    draft = probe._drafts[state.context.context_id]
-    original = draft.refinement.candidate_pose(
-        RefinementStage.ALIGNMENT
-    )
+    with pytest.raises(
+        RuntimeError,
+        match="Orient to the tag or surface",
+    ):
+        probe.prepare_motion(
+            state.context,
+            ProbeMotionRequest(
+                kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+            ),
+        )
 
-    probe.prepare_motion(
+
+def test_tag_orientation_uses_existing_command_and_enables_candidate(tmp_path):
+    probe, command_controller = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
         state.context,
-        ProbeMotionRequest(
-            kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
-            position_tolerance_m=0.01,
-            orientation_tolerance_rad=0.10,
-        ),
+        "slot1_hand",
+        ImagePoint(u=20, v=30),
+        "surface_fit",
+        0.10,
+        0.20,
+    )
+    probe.motion_state_source.pose = pose(0.8)
+    state = probe.begin_refinement(state.context)
+    draft = probe._drafts[state.context.context_id]
+    draft.refinement.motion_states[RefinementStage.SAFE_APPROACH] = (
+        RefinementMotionState.REACHED
     )
 
-    target = draft.refinement.pending_motion.target_pose_object
-    assert target.position == original.position
-    assert target.orientation == pitch_quaternion(90.0)
+    operation = probe.prepare_motion(
+        state.context,
+        ProbeMotionRequest(kind=ProbeMotionKind.ORIENT_TO_TAG),
+    )
+
+    assert operation.request.command.command_id is CommandID.ORIENT_TO_TAG
+    probe.submit_motion(operation)
+    command_controller.succeed(operation.request)
+    assert draft.refinement.motion_states[RefinementStage.ALIGNMENT] is (
+        RefinementMotionState.ORIENTED
+    )
 
 
-def test_surface_orientation_uses_existing_command_after_alignment_reached(
+def test_surface_orientation_enables_candidate_move_and_supplies_orientation(
     tmp_path,
 ):
     probe, command_controller = coordinator(tmp_path)
@@ -495,21 +534,11 @@ def test_surface_orientation_uses_existing_command_after_alignment_reached(
     probe.motion_state_source.pose = pose(0.8)
     state = probe.begin_refinement(state.context)
 
-    with pytest.raises(
-        RuntimeError,
-        match="Reach the aligned pre-approach",
-    ):
-        probe.prepare_motion(
-            state.context,
-            ProbeMotionRequest(
-                kind=ProbeMotionKind.ORIENT_TO_SURFACE,
-            ),
-        )
-
     draft = probe._drafts[state.context.context_id]
-    draft.refinement.motion_states[RefinementStage.ALIGNMENT] = (
+    draft.refinement.motion_states[RefinementStage.SAFE_APPROACH] = (
         RefinementMotionState.REACHED
     )
+    original = draft.refinement.candidate_pose(RefinementStage.ALIGNMENT)
     current = pose(0.61, 0.2, 0.3)
     probe.motion_state_source.pose = current
 
@@ -536,10 +565,30 @@ def test_surface_orientation_uses_existing_command_after_alignment_reached(
     probe.motion_state_source.pose = achieved
     command_controller.succeed(operation.request)
 
-    assert (
-        draft.refinement.candidate_pose(RefinementStage.ALIGNMENT)
-        == achieved
+    oriented_candidate = draft.refinement.candidate_pose(
+        RefinementStage.ALIGNMENT
     )
+    assert oriented_candidate.position == original.position
+    assert oriented_candidate.orientation == achieved.orientation
+    assert draft.refinement.motion_states[RefinementStage.ALIGNMENT] is (
+        RefinementMotionState.ORIENTED
+    )
+
+    context = probe.context(state.context.context_id, "probe-ui")
+    candidate_operation = probe.prepare_motion(
+        context,
+        ProbeMotionRequest(
+            kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+            position_tolerance_m=0.01,
+            orientation_tolerance_rad=0.10,
+        ),
+    )
+    target = draft.refinement.pending_motion.target_pose_object
+    assert (
+        candidate_operation.request.command.command_id
+        is CommandID.MOVE_ARM_TO_TAG
+    )
+    assert target == oriented_candidate
 
 
 def test_probe_motion_cancellation_keeps_context_state_correlated(tmp_path):

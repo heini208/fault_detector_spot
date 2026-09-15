@@ -93,6 +93,9 @@ class ProbeSetupStateAdapter:
                 ProbeSetupState.MOTION_NOT_TESTED
             ),
             RefinementMotionState.MOVING: ProbeSetupState.MOTION_MOVING,
+            RefinementMotionState.ORIENTED: (
+                ProbeSetupState.MOTION_ORIENTED
+            ),
             RefinementMotionState.REACHED: ProbeSetupState.MOTION_REACHED,
             RefinementMotionState.FAILED: ProbeSetupState.MOTION_FAILED,
         }

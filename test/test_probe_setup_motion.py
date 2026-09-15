@@ -71,6 +71,18 @@ def test_surface_orientation_reuses_existing_semantic_command():
     assert command.motion_sensor_id == "hall_probe"
 
 
+def test_tag_orientation_reuses_existing_semantic_command():
+    command = ProbeSetupMotionCommandFactory().orient_to_tag(
+        tag(),
+        "hall_probe",
+    )
+
+    assert isinstance(command, SemanticCommand)
+    assert command.command_id is CommandID.ORIENT_TO_TAG
+    assert command.tag.id == 7
+    assert command.motion_sensor_id == "hall_probe"
+
+
 def test_relative_motion_is_one_semantic_relative_arm_primitive():
     command = ProbeSetupMotionCommandFactory().relative(
         "probe_hall_probe",

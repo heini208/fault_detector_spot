@@ -27,9 +27,6 @@ from fault_detector_spot.inspection.model.sensor_models import (
 from fault_detector_spot.inspection.sensing.end_effector_force import (
     EndEffectorForceSample,
 )
-from fault_detector_spot.inspection.sensing.live_surface_distance import (
-    measure_probe_surface_distance,
-)
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     compose_poses,
     relative_pose,
@@ -50,11 +47,7 @@ BASE_TAG_HISTORY_MAX_SAMPLES = 64
 BASE_TAG_MINIMUM_SPAN_SEC = 0.10
 HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
 MAX_HAND_DEPTH_AGE_SEC = 0.5
-MINIMUM_SURFACE_DISTANCE_SAMPLES = 3
-HAND_SURFACE_WINDOW_PARAMETER = "inspection.hand_surface_window_radius_px"
-DEFAULT_HAND_SURFACE_WINDOW_RADIUS_PX = 16
-MINIMUM_HAND_SURFACE_WINDOW_RADIUS_PX = 4
-MAXIMUM_HAND_SURFACE_WINDOW_RADIUS_PX = 64
+HAND_DEPTH_SEARCH_RADIUS_PX = 16
 MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M = 0.290
 END_EFFECTOR_FORCE_TOPIC = "/status/end_effector_force"
 END_EFFECTOR_FORCE_HISTORY_MAX_SAMPLES = 128
@@ -74,10 +67,6 @@ class ProbeSetupMotionStateSource:
         self._hand_depth_camera_info = None
         self._end_effector_force_history = deque(
             maxlen=END_EFFECTOR_FORCE_HISTORY_MAX_SAMPLES
-        )
-        node.declare_parameter(
-            HAND_SURFACE_WINDOW_PARAMETER,
-            DEFAULT_HAND_SURFACE_WINDOW_RADIUS_PX,
         )
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(
@@ -207,22 +196,6 @@ class ProbeSetupMotionStateSource:
         body_to_object = pose_to_pose_data(tag.pose.pose)
         return relative_pose(body_to_object, body_to_probe)
 
-    def _hand_surface_window_radius_px(self) -> int:
-        value = self.node.get_parameter(HAND_SURFACE_WINDOW_PARAMETER).value
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError("Hand surface window radius must be an integer")
-        if not (
-            MINIMUM_HAND_SURFACE_WINDOW_RADIUS_PX
-            <= value
-            <= MAXIMUM_HAND_SURFACE_WINDOW_RADIUS_PX
-        ):
-            raise ValueError(
-                "Hand surface window radius must be between "
-                f"{MINIMUM_HAND_SURFACE_WINDOW_RADIUS_PX} and "
-                f"{MAXIMUM_HAND_SURFACE_WINDOW_RADIUS_PX} pixels"
-            )
-        return value
-
     def minimum_aligned_probe_distance_m(
         self,
         sensor_id: str,
@@ -309,7 +282,7 @@ class ProbeSetupMotionStateSource:
             center,
             depth_image,
             camera_info,
-            search_radius_px=self._hand_surface_window_radius_px(),
+            search_radius_px=HAND_DEPTH_SEARCH_RADIUS_PX,
             rgb_size=(int(depth_image.width), int(depth_image.height)),
         )
         return float(projected.depth_m)
@@ -336,88 +309,6 @@ class ProbeSetupMotionStateSource:
                 f"required at least {minimum_camera_clearance_m:.3f} m"
             )
         return clearance_m
-
-    def surface_distance_samples(
-        self,
-        sensor_id: str,
-        receipt_not_before: float = 0.0,
-        maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
-        minimum_samples: int = MINIMUM_SURFACE_DISTANCE_SAMPLES,
-    ):
-        """Return currently fresh valid probe-axis distance measurements."""
-        if not isinstance(sensor_id, str) or not sensor_id.strip():
-            raise ValueError("Sensor ID must not be empty")
-        if not math.isfinite(float(receipt_not_before)):
-            raise ValueError("Surface sample receipt threshold must be finite")
-        if (
-            not math.isfinite(float(maximum_age_sec))
-            or maximum_age_sec <= 0.0
-        ):
-            raise ValueError("Maximum hand-depth age must be positive")
-        if (
-            isinstance(minimum_samples, bool)
-            or not isinstance(minimum_samples, int)
-            or minimum_samples < 1
-        ):
-            raise ValueError("Minimum surface sample count must be positive")
-        with self._lock:
-            camera_info = deepcopy(self._hand_depth_camera_info)
-            history = tuple(self._hand_depth_history)
-        if camera_info is None:
-            raise ValueError(
-                "No registered hand-depth camera info is available"
-            )
-
-        samples = []
-        errors = []
-        fresh_history = self._recent_hand_depth_samples(
-            history,
-            maximum_age_sec,
-            receipt_not_before=receipt_not_before,
-        )
-        for _receipt_time, depth_image in fresh_history:
-            try:
-                stamp = Time.from_msg(depth_image.header.stamp)
-                if stamp.nanoseconds <= 0:
-                    raise ValueError("Registered hand-depth timestamp is empty")
-                depth_frame = (
-                    depth_image.header.frame_id.strip()
-                    or camera_info.header.frame_id.strip()
-                )
-                if not depth_frame:
-                    raise ValueError("Registered hand-depth frame is empty")
-                probe_to_camera = self._lookup_pose(
-                    sensor_probe_frame(sensor_id.strip()),
-                    depth_frame,
-                    lookup_time=stamp,
-                )
-                samples.append(
-                    measure_probe_surface_distance(
-                        depth_image,
-                        camera_info,
-                        probe_to_camera,
-                    )
-                )
-            except Exception as exception:
-                errors.append(str(exception))
-        if len(samples) < minimum_samples:
-            detail = errors[-1] if errors else "no fresh depth frames"
-            if (
-                "no valid pixels" in detail.lower()
-                or "insufficient support" in detail.lower()
-            ):
-                detail = (
-                    f"{detail}. Registered depth is present, but no valid "
-                    "surface measurement was found on probe local +X. "
-                    "The gripper ToF may be inside its usable near field "
-                    "at this probe distance"
-                )
-            raise ValueError(
-                "Need at least "
-                f"{minimum_samples} fresh registered hand-depth sample"
-                f"{'s' if minimum_samples != 1 else ''}: {detail}"
-            )
-        return tuple(samples)
 
     def end_effector_force_samples(
         self,

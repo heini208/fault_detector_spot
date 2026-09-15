@@ -17,8 +17,6 @@ from fault_detector_spot.inspection.model.models import (
 )
 
 
-ALIGNMENT_ORIENTATION_TAG = "tag"
-ALIGNMENT_ORIENTATION_CALCULATED_SURFACE = "calculated_surface"
 _TAG_FACING_PITCH_SIN = math.sin(math.pi / 4.0)
 _TAG_FACING_PITCH_COS = math.cos(math.pi / 4.0)
 
@@ -118,8 +116,6 @@ def _normalized(values) -> np.ndarray:
 
 
 __all__ = [
-    "ALIGNMENT_ORIENTATION_CALCULATED_SURFACE",
-    "ALIGNMENT_ORIENTATION_TAG",
     "surface_aligned_probe_orientation",
     "tag_aligned_probe_orientation",
 ]
