@@ -20,9 +20,6 @@ from fault_detector_spot.manipulation.arm_movement_result import (
 from fault_detector_spot.manipulation.directional_force import (
     directional_force_delta,
 )
-from fault_detector_spot.manipulation.hand_settling_detector import (
-    HandSettlingOutcome,
-)
 from fault_detector_spot.manipulation.probe_motion_planner import (
     ProbeMotionPlan,
 )
@@ -36,7 +33,6 @@ class _Phase(Enum):
     PLAN_WAIT = "plan_wait"
     MOVING = "moving"
     ARM_STOPPING = "arm_stopping"
-    ARM_STOP_SETTLING = "arm_stop_settling"
     RETREATING = "retreating"
 
 
@@ -46,7 +42,6 @@ class GuardedProbeExecution:
     def __init__(
         self,
         arm_state_source,
-        settling_detector,
         force_baseline_sampler,
         force_contact_policy,
         start_goal,
@@ -66,7 +61,6 @@ class GuardedProbeExecution:
     ):
         required = (
             (arm_state_source, "arm state source"),
-            (settling_detector, "settling detector"),
             (force_baseline_sampler, "force baseline sampler"),
             (force_contact_policy, "force contact policy"),
         )
@@ -93,7 +87,6 @@ class GuardedProbeExecution:
             raise TypeError("Monotonic clock must be callable")
 
         self.arm_state_source = arm_state_source
-        self.settling_detector = settling_detector
         self.force_baseline_sampler = force_baseline_sampler
         self.force_contact_policy = force_contact_policy
         self._start_goal = start_goal
@@ -159,10 +152,6 @@ class GuardedProbeExecution:
             return self._poll_primary_motion()
         if phase is _Phase.ARM_STOPPING:
             return self._poll_arm_stop()
-        if phase is _Phase.ARM_STOP_SETTLING:
-            return self._handle_arm_stop_settling(
-                self.settling_detector.poll()
-            )
         if phase is _Phase.RETREATING:
             return self._poll_retreat()
         return self._terminal(
@@ -197,7 +186,6 @@ class GuardedProbeExecution:
         self._stop_terminal_outcome = None
         self._stop_terminal_detail = ""
         self._stop_then_retreat = False
-        self.settling_detector.reset()
         self.force_baseline_sampler.reset()
 
     def _begin_force_baseline(self) -> ArmMovementUpdate:
@@ -355,9 +343,7 @@ class GuardedProbeExecution:
 
         detail = update.detail
         if update.outcome is ArmMovementOutcome.SUCCESS:
-            if not plan.force_guard_enabled:
-                return self._terminal(update.outcome, detail)
-            if plan.translational_motion:
+            if plan.force_guard_enabled and plan.translational_motion:
                 detail = (
                     f"{detail}; peak opposing force delta "
                     f"{self._peak_opposing_force_delta_n:.2f} N, "
@@ -368,18 +354,14 @@ class GuardedProbeExecution:
                     f"{plan.linear_speed_mps:.4f} m/s linear, "
                     f"{plan.angular_speed_rad_s:.4f} rad/s angular"
                 )
-                return self._begin_arm_stop(
-                    terminal_outcome=update.outcome,
-                    terminal_detail=detail,
+            elif plan.force_guard_enabled:
+                detail = (
+                    f"{detail}; peak total force delta "
+                    f"{self._peak_total_force_delta_n:.2f} N, "
+                    f"orientation threshold "
+                    f"{self._force_threshold_n:.2f} N at "
+                    f"{plan.angular_speed_rad_s:.4f} rad/s angular"
                 )
-            detail = (
-                f"{detail}; peak total force delta "
-                f"{self._peak_total_force_delta_n:.2f} N, "
-                f"orientation threshold "
-                f"{self._force_threshold_n:.2f} N at "
-                f"{plan.angular_speed_rad_s:.4f} rad/s angular"
-            )
-            return self._terminal(update.outcome, detail)
         return self._begin_arm_stop(
             terminal_outcome=update.outcome,
             terminal_detail=detail,
@@ -765,46 +747,6 @@ class GuardedProbeExecution:
                 ),
             )
 
-        self._phase = _Phase.ARM_STOP_SETTLING
-        try:
-            settling = self.settling_detector.start()
-        except Exception as exception:
-            return self._terminal(
-                ArmMovementOutcome.STOP_UNCONFIRMED,
-                self._stop_detail(
-                    "ArmStopCommand was accepted, but physical settling "
-                    f"confirmation could not start: {exception}"
-                ),
-            )
-        return self._handle_arm_stop_settling(settling)
-
-    def _handle_arm_stop_settling(
-        self,
-        update,
-    ) -> ArmMovementUpdate:
-        if update.outcome is HandSettlingOutcome.RUNNING:
-            return ArmMovementUpdate(
-                ArmMovementOutcome.RUNNING,
-                "ArmStopCommand accepted; waiting for physical "
-                f"stability: {update.detail}",
-            )
-        if update.outcome is HandSettlingOutcome.TIMEOUT:
-            return self._terminal(
-                ArmMovementOutcome.UNSTABLE_ARM,
-                self._stop_detail(
-                    "ArmStopCommand was accepted, but the hand remained "
-                    f"unstable: {update.detail}"
-                ),
-            )
-        if update.outcome is not HandSettlingOutcome.SETTLED:
-            return self._terminal(
-                ArmMovementOutcome.STOP_UNCONFIRMED,
-                self._stop_detail(
-                    "ArmStopCommand was accepted, but physical stability "
-                    f"could not be confirmed: {update.detail}"
-                ),
-            )
-
         if self._stop_then_retreat:
             return self._begin_retreat()
 
@@ -813,7 +755,7 @@ class GuardedProbeExecution:
             or ArmMovementOutcome.EXECUTION_ERROR
         )
         detail = self._stop_terminal_detail
-        suffix = "ArmStopCommand accepted and physical stability confirmed"
+        suffix = "ArmStopCommand accepted"
         return self._terminal(
             outcome,
             f"{detail}; {suffix}" if detail else suffix,

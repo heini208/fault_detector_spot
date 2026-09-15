@@ -86,7 +86,6 @@ class ArmMovementExecutor(MovementExecutor):
         arm_stop_service_client=None,
         arm_state_source=None,
         surface_source=None,
-        settling_detector=None,
         force_baseline_sampler=None,
         force_contact_policy=None,
         contact_evidence_analyzer=None,
@@ -216,13 +215,11 @@ class ArmMovementExecutor(MovementExecutor):
         self.guarded_probe_execution = None
         if (
             arm_state_source is not None
-            and settling_detector is not None
             and force_baseline_sampler is not None
             and force_contact_policy is not None
         ):
             self.guarded_probe_execution = GuardedProbeExecution(
                 arm_state_source=arm_state_source,
-                settling_detector=settling_detector,
                 force_baseline_sampler=force_baseline_sampler,
                 force_contact_policy=force_contact_policy,
                 contact_evidence_analyzer=(

@@ -34,9 +34,6 @@ from fault_detector_spot.manipulation.arm_state_source import (
 from fault_detector_spot.manipulation.force_contact_policy import (
     SpeedAwareForceContactPolicy,
 )
-from fault_detector_spot.manipulation.hand_settling_detector import (
-    HandSettlingDetector,
-)
 from fault_detector_spot.navigation.base_movement_executor import (
     BASE_READY_STANDING_TIMEOUT_PARAMETER,
     BASE_READY_STATE_TIMEOUT_PARAMETER,
@@ -60,8 +57,8 @@ class RobotCommandResources:
         self._arm_state_source = None
         self._arm_joint_state_source = None
         self._arm_contact_telemetry = None
-        self._posture_state_source = None
         self._probe_surface_source = None
+        self._posture_state_source = None
         self._arm_motion_speed_policy = None
         self._arm_movement_executors = {}
         self._base_movement_executors = {}
@@ -118,6 +115,14 @@ class RobotCommandResources:
                 )
             return self._arm_contact_telemetry
 
+    def get_probe_surface_source(self, node):
+        """Return shared live hand-depth and attachment state."""
+        with self._lock:
+            self._bind_node(node)
+            if self._probe_surface_source is None:
+                self._probe_surface_source = ProbeSurfaceSource(node)
+            return self._probe_surface_source
+
     def get_posture_state_source(self, node):
         """Return the authoritative base posture state source."""
         with self._lock:
@@ -125,14 +130,6 @@ class RobotCommandResources:
             if self._posture_state_source is None:
                 self._posture_state_source = PostureStateSource(node)
             return self._posture_state_source
-
-    def get_probe_surface_source(self, node):
-        """Return the shared registered hand-depth surface source."""
-        with self._lock:
-            self._bind_node(node)
-            if self._probe_surface_source is None:
-                self._probe_surface_source = ProbeSurfaceSource(node)
-            return self._probe_surface_source
 
     def get_arm_movement_executor(
         self,
@@ -153,6 +150,7 @@ class RobotCommandResources:
                     self.get_tf_listener(node),
                     config=ArmMotionParameters(node),
                     tag_state_source=tag_state_source,
+                    surface_source=self.get_probe_surface_source(node),
                     robot_name=robot_name,
                     speed_policy=self._arm_motion_speed_policy,
                     action_client=self.get_action_client(
@@ -160,12 +158,6 @@ class RobotCommandResources:
                         robot_name,
                     ),
                     arm_state_source=self.get_arm_state_source(node),
-                    surface_source=self.get_probe_surface_source(node),
-                    settling_detector=HandSettlingDetector.from_node(
-                        node,
-                        self.get_arm_state_source(node),
-                        self.get_tf_listener(node),
-                    ),
                     force_baseline_sampler=ForceBaselineSampler.from_node(
                         node,
                         self.get_arm_state_source(node),
@@ -243,8 +235,8 @@ class RobotCommandResources:
             arm_state_source = self._arm_state_source
             arm_joint_state_source = self._arm_joint_state_source
             arm_contact_telemetry = self._arm_contact_telemetry
-            posture_state_source = self._posture_state_source
             probe_surface_source = self._probe_surface_source
+            posture_state_source = self._posture_state_source
             arm_executors = tuple(
                 self._arm_movement_executors.values()
             )
@@ -256,8 +248,8 @@ class RobotCommandResources:
             self._arm_state_source = None
             self._arm_joint_state_source = None
             self._arm_contact_telemetry = None
-            self._posture_state_source = None
             self._probe_surface_source = None
+            self._posture_state_source = None
             self._arm_motion_speed_policy = None
             self._arm_movement_executors.clear()
             self._base_movement_executors.clear()
@@ -273,6 +265,10 @@ class RobotCommandResources:
             ("base movement executor", executor.shutdown)
             for executor in base_executors
         )
+        if probe_surface_source is not None:
+            resources.append(
+                ("probe surface source", probe_surface_source.destroy)
+            )
         if tf_listener is not None:
             resources.append(
                 ("TF listener", tf_listener.shutdown)
@@ -292,10 +288,6 @@ class RobotCommandResources:
         if posture_state_source is not None:
             resources.append(
                 ("posture state source", posture_state_source.destroy)
-            )
-        if probe_surface_source is not None:
-            resources.append(
-                ("probe surface source", probe_surface_source.destroy)
             )
         resources.extend(
             ("RobotCommand action client", client.destroy)

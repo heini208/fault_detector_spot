@@ -18,10 +18,6 @@ from fault_detector_spot.manipulation.arm_state_source import HandForceSample
 from fault_detector_spot.manipulation.guarded_probe_execution import (
     GuardedProbeExecution,
 )
-from fault_detector_spot.manipulation.hand_settling_detector import (
-    HandSettlingOutcome,
-    HandSettlingUpdate,
-)
 from fault_detector_spot.manipulation.probe_motion_planner import (
     ProbeMotionPlan,
 )
@@ -68,24 +64,6 @@ class ImmediateBaseline:
     def reset(self):
         pass
 
-
-class ImmediateSettling:
-
-    def __init__(self):
-        self.start_count = 0
-
-    def start(self):
-        self.start_count += 1
-        return HandSettlingUpdate(
-            HandSettlingOutcome.SETTLED,
-            "settled",
-        )
-
-    def poll(self):
-        raise AssertionError("Immediate settling should not need polling")
-
-    def reset(self):
-        pass
 
 
 class RecordingForcePolicy:
@@ -160,10 +138,8 @@ def rotation_plan():
 
 
 def execution(state, driver, policy):
-    settling = ImmediateSettling()
     guard = GuardedProbeExecution(
         arm_state_source=state,
-        settling_detector=settling,
         force_baseline_sampler=ImmediateBaseline(),
         force_contact_policy=policy,
         start_goal=driver.start,
@@ -184,7 +160,6 @@ def execution(state, driver, policy):
         retreat_speed_mps=0.01,
         monotonic_clock=lambda: 0.0,
     )
-    guard._test_settling = settling
     return guard
 
 
@@ -225,7 +200,7 @@ def test_rotation_self_load_below_angular_threshold_does_not_trigger_contact():
     assert driver.stop_count == 0
 
 
-def test_successful_rotation_does_not_arm_stop_or_wait_for_settling():
+def test_successful_rotation_finishes_after_arm_stop_confirmation():
     state = FakeArmStateSource()
     driver = GoalDriver()
     guard = execution(state, driver, RecordingForcePolicy())
@@ -241,12 +216,20 @@ def test_successful_rotation_does_not_arm_stop_or_wait_for_settling():
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
     )
 
+    stopping = guard.poll()
+
+    assert stopping.outcome is ArmMovementOutcome.RUNNING
+    assert driver.stop_count == 1
+    assert driver.started_goals[-1] == ("arm_stop", 1)
+
+    driver.stop_updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
+    )
     finished = guard.poll()
 
     assert finished.outcome is ArmMovementOutcome.SUCCESS
     assert "orientation threshold 5.00 N" in finished.detail
-    assert driver.stop_count == 0
-    assert guard._test_settling.start_count == 0
+    assert "ArmStopCommand accepted" in finished.detail
     assert not guard.active
 
 
@@ -285,7 +268,6 @@ def test_rotation_contact_uses_total_delta_and_does_not_retreat():
     assert finished.outcome is ArmMovementOutcome.CONTACT
     assert "total end-effector force delta" in finished.detail
     assert "orientation threshold 5.00 N" in finished.detail
-    assert guard._test_settling.start_count == 1
     assert all(
         not isinstance(goal, tuple) or goal[0] != "retreat"
         for goal in driver.started_goals
