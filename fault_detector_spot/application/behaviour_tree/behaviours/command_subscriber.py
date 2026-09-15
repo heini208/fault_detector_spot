@@ -296,9 +296,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             command_id=CommandID.MOVE_CLOSE_TO_SURFACE,
             stamp=self._create_command_stamp(),
             target_surface_distance_m=command.target_surface_distance_m,
-            aligned_preapproach_distance_m=(
-                command.aligned_preapproach_distance_m
-            ),
+            surface_tolerance_m=command.surface_tolerance_m,
         )
 
     def _orient_to_surface(

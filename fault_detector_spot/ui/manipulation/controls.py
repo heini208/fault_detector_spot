@@ -269,7 +269,15 @@ class ManipulationControls(UIControlHelper):
         return self.ui.execute_operation(intent)
 
     def handle_move_close_to_surface(self):
-        return self.show_setup_unavailable("Move Close to Surface")
+        intent = OperationalIntent()
+        intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+        intent.target_surface_distance_m = float(
+            self.surface_distance_input.value()
+        )
+        intent.surface_tolerance_m = float(
+            self.surface_tolerance_input.value()
+        )
+        return self.ui.execute_operation(intent)
 
     def _reset_all_zero(self):
         """Set all offset and orientation fields to 0."""

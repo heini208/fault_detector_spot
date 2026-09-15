@@ -261,7 +261,7 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
                 tuple(self._surface_samples.values()),
                 planning_target,
                 self.config.maximum_step_m,
-                tolerance_m=self.config.tolerance_m,
+                tolerance_m=self._surface_tolerance(),
                 minimum_samples=self.config.minimum_surface_samples,
                 minimum_span_sec=self.config.minimum_surface_span_sec,
                 stability_tolerance_m=(
@@ -328,7 +328,7 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
             self._plan,
             current_probe_pose_execution=current_probe,
             maximum_step_m=self.config.maximum_step_m,
-            tolerance_m=self.config.tolerance_m,
+            tolerance_m=self._surface_tolerance(),
         )
         self._validate_axis_guard(evaluation)
 
@@ -417,7 +417,7 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
             self._plan,
             current_probe_pose_execution=current_probe,
             maximum_step_m=self.config.maximum_step_m,
-            tolerance_m=self.config.tolerance_m,
+            tolerance_m=self._surface_tolerance(),
         )
         self._validate_axis_guard(evaluation)
         achieved, lateral = self._validate_step_motion(current_probe)
@@ -583,6 +583,14 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
         if target > 0.0:
             return target
         return CONTACT_MODE_PLANNING_DISTANCE_M
+
+    def _surface_tolerance(self) -> float:
+        requested = float(
+            getattr(self._command, "surface_tolerance_m", 0.0)
+        )
+        if requested > 0.0:
+            return requested
+        return float(self.config.tolerance_m)
 
     def _require_attachment_unchanged(self) -> None:
         sensor_id, revision = self.surface_source.active_attachment()

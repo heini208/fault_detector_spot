@@ -25,26 +25,27 @@ from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
 )
 from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
     MoveCloseToSurfaceBehaviour,
+    MoveCloseToSurfaceConfig,
 )
 from fault_detector_spot.manipulation.commands.move_close_to_surface_command import (
     MoveCloseToSurfaceCommand,
 )
 
 
-def close_surface_intent(target=0.05, aligned=0.20):
+def close_surface_intent(target=0.05, tolerance=0.005):
     intent = OperationalIntent()
     intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
     intent.target_surface_distance_m = target
-    intent.aligned_preapproach_distance_m = aligned
+    intent.surface_tolerance_m = tolerance
     return intent
 
 
-def test_operational_intent_requires_surface_and_aligned_distances():
+def test_operational_intent_carries_surface_distance_and_tolerance():
     command = operational_intent_to_command(close_surface_intent())
 
     assert command.command_id is CommandID.MOVE_CLOSE_TO_SURFACE
     assert command.target_surface_distance_m == pytest.approx(0.05)
-    assert command.aligned_preapproach_distance_m == pytest.approx(0.20)
+    assert command.surface_tolerance_m == pytest.approx(0.005)
     assert command.inspection.object_id == ""
     assert command.inspection.routine_id == ""
     assert command.inspection.probe_point_id == ""
@@ -53,10 +54,18 @@ def test_operational_intent_requires_surface_and_aligned_distances():
 
 def test_operational_intent_accepts_zero_as_contact_mode():
     command = operational_intent_to_command(
-        close_surface_intent(target=0.0, aligned=0.20)
+        close_surface_intent(target=0.0)
     )
 
     assert command.target_surface_distance_m == pytest.approx(0.0)
+
+
+def test_operational_intent_accepts_zero_tolerance_for_config_fallback():
+    command = operational_intent_to_command(
+        close_surface_intent(tolerance=0.0)
+    )
+
+    assert command.surface_tolerance_m == pytest.approx(0.0)
 
 
 def test_operational_intent_rejects_negative_surface_distance():
@@ -66,16 +75,16 @@ def test_operational_intent_rejects_negative_surface_distance():
         )
 
 
-def test_operational_intent_rejects_aligned_distance_at_target():
-    intent = close_surface_intent(target=0.05, aligned=0.05)
+def test_operational_intent_rejects_negative_surface_tolerance():
+    with pytest.raises(ValueError, match="non-negative"):
+        operational_intent_to_command(
+            close_surface_intent(tolerance=-0.001)
+        )
 
-    with pytest.raises(ValueError, match="must exceed target"):
-        operational_intent_to_command(intent)
 
-
-def test_surface_distances_survive_command_payload_round_trip():
+def test_surface_distance_and_tolerance_survive_payload_round_trip():
     command = operational_intent_to_command(
-        close_surface_intent(target=0.037, aligned=0.23)
+        close_surface_intent(target=0.037, tolerance=0.006)
     )
 
     restored = semantic_command_from_message(
@@ -84,27 +93,58 @@ def test_surface_distances_survive_command_payload_round_trip():
 
     assert restored.command_id is CommandID.MOVE_CLOSE_TO_SURFACE
     assert restored.target_surface_distance_m == pytest.approx(0.037)
-    assert restored.aligned_preapproach_distance_m == pytest.approx(0.23)
+    assert restored.surface_tolerance_m == pytest.approx(0.006)
 
 
-def test_bt_command_accepts_zero_distance_as_contact_mode():
+def test_bt_command_accepts_distance_and_tolerance():
     command = MoveCloseToSurfaceCommand(
         CommandID.MOVE_CLOSE_TO_SURFACE,
         stamp=object(),
-        target_surface_distance_m=0.0,
-        aligned_preapproach_distance_m=0.20,
+        target_surface_distance_m=0.03,
+        surface_tolerance_m=0.004,
     )
 
-    assert command.target_surface_distance_m == 0.0
+    assert command.target_surface_distance_m == pytest.approx(0.03)
+    assert command.surface_tolerance_m == pytest.approx(0.004)
+
+
+def test_behaviour_uses_command_tolerance_when_supplied():
+    behaviour = MoveCloseToSurfaceBehaviour(
+        surface_source=object(),
+        config=MoveCloseToSurfaceConfig(tolerance_m=0.005),
+    )
+    behaviour._command = MoveCloseToSurfaceCommand(
+        CommandID.MOVE_CLOSE_TO_SURFACE,
+        stamp=object(),
+        target_surface_distance_m=0.03,
+        surface_tolerance_m=0.002,
+    )
+
+    assert behaviour._surface_tolerance() == pytest.approx(0.002)
+
+
+def test_behaviour_falls_back_to_configured_tolerance():
+    behaviour = MoveCloseToSurfaceBehaviour(
+        surface_source=object(),
+        config=MoveCloseToSurfaceConfig(tolerance_m=0.005),
+    )
+    behaviour._command = MoveCloseToSurfaceCommand(
+        CommandID.MOVE_CLOSE_TO_SURFACE,
+        stamp=object(),
+        target_surface_distance_m=0.03,
+        surface_tolerance_m=0.0,
+    )
+
+    assert behaviour._surface_tolerance() == pytest.approx(0.005)
 
 
 def test_command_subscriber_builds_close_surface_command():
-    source = inspect.getsource(CommandSubscriber)
+    source = inspect.getsource(CommandSubscriber._move_close_to_surface)
 
-    assert "CommandID.MOVE_CLOSE_TO_SURFACE" in source
     assert "MoveCloseToSurfaceCommand" in source
     assert "target_surface_distance_m" in source
-    assert "aligned_preapproach_distance_m" in source
+    assert "surface_tolerance_m" in source
+    assert "aligned_preapproach_distance_m" not in source
 
 
 def test_behaviour_tree_registers_close_surface_behaviour():

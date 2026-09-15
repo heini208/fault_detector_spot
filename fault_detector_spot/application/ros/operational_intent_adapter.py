@@ -110,12 +110,6 @@ def _duration(value: float, allow_zero: bool = False) -> float:
     return normalized
 
 
-def _positive_distance(value: float, label: str) -> float:
-    normalized = float(value)
-    if not math.isfinite(normalized) or normalized <= 0.0:
-        raise ValueError(f"{label} must be positive")
-    return normalized
-
 
 def _nonnegative_distance(value: float, label: str) -> float:
     normalized = float(value)
@@ -189,19 +183,14 @@ def operational_intent_to_command(
         intent.intent
         == OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
     ):
-        target = _nonnegative_distance(
+        _nonnegative_distance(
             intent.target_surface_distance_m,
             "Target surface distance",
         )
-        aligned = _positive_distance(
-            intent.aligned_preapproach_distance_m,
-            "Aligned pre-approach distance",
+        _nonnegative_distance(
+            intent.surface_tolerance_m,
+            "Surface tolerance",
         )
-        if aligned <= target:
-            raise ValueError(
-                "Aligned pre-approach distance must exceed target surface "
-                "distance"
-            )
     if (
         intent.intent
         == OperationalIntent.INTENT_MOVE_TO_WAYPOINT
@@ -243,6 +232,7 @@ def operational_intent_to_command(
         target_surface_distance_m=float(
             intent.target_surface_distance_m
         ),
+        surface_tolerance_m=float(intent.surface_tolerance_m),
         aligned_preapproach_distance_m=float(
             intent.aligned_preapproach_distance_m
         ),

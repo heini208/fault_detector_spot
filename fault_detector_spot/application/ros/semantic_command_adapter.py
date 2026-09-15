@@ -77,6 +77,7 @@ def semantic_command_from_message(
         orientation_mode=message.orientation_mode,
         wait_time=message.wait_time,
         target_surface_distance_m=message.target_surface_distance_m,
+        surface_tolerance_m=message.surface_tolerance_m,
         aligned_preapproach_distance_m=(
             message.aligned_preapproach_distance_m
         ),
@@ -111,6 +112,7 @@ def semantic_command_to_message(
     message.target_surface_distance_m = float(
         command.target_surface_distance_m
     )
+    message.surface_tolerance_m = float(command.surface_tolerance_m)
     message.aligned_preapproach_distance_m = float(
         command.aligned_preapproach_distance_m
     )
