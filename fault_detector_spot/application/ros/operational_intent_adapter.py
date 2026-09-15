@@ -44,6 +44,9 @@ _INTENT_COMMAND_IDS = {
     OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE: (
         CommandID.MOVE_CLOSE_TO_SURFACE
     ),
+    OperationalIntent.INTENT_ORIENT_TO_SURFACE: (
+        CommandID.ORIENT_TO_SURFACE
+    ),
     OperationalIntent.INTENT_MOVE_BASE_TO_TAG: (
         CommandID.MOVE_BASE_TO_TAG
     ),

@@ -179,6 +179,7 @@ def test_public_arm_api_exposes_speed_not_duration():
         "def probe_pose(",
         "def tag_probe(",
         "def probe_relative(",
+        "def orient_to_surface(",
     ):
         assert signature in executor
 

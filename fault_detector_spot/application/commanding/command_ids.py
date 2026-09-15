@@ -8,6 +8,7 @@ class CommandID(str, Enum):
     MOVE_ARM_TO_TAG_AND_WAIT = "move_tag_and_wait"
     MOVE_ARM_RELATIVE = "move_arm_relative"
     MOVE_CLOSE_TO_SURFACE = "move_close_to_surface"
+    ORIENT_TO_SURFACE = "orient_to_surface"
     STAND_UP = "stand_up"
     SIT_DOWN = "sit_down"
     WAIT_TIME = "wait_time"

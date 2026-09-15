@@ -255,7 +255,9 @@ class ManipulationControls(UIControlHelper):
         return row
 
     def handle_orient_to_surface(self):
-        return self.show_setup_unavailable("Orient to Surface")
+        intent = OperationalIntent()
+        intent.intent = OperationalIntent.INTENT_ORIENT_TO_SURFACE
+        return self.ui.execute_operation(intent)
 
     def handle_orient_to_tag(self):
         return self.show_setup_unavailable("Orient to Tag")

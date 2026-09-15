@@ -40,6 +40,9 @@ from fault_detector_spot.manipulation.behaviours.close_gripper_action import (
 from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
     MoveCloseToSurfaceBehaviour,
 )
+from fault_detector_spot.manipulation.behaviours.orient_to_surface_behaviour import (
+    OrientToSurfaceBehaviour,
+)
 from fault_detector_spot.manipulation.behaviours.arm_goal_behaviour import (
     ArmGoalBehaviour,
 )
@@ -318,6 +321,13 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             CommandID.MOVE_CLOSE_TO_SURFACE,
             lambda n: MoveCloseToSurfaceBehaviour(
                 name="MoveCloseToSurfaceBehaviour",
+                robot_command_resources=robot_command_resources,
+            ),
+        ),
+        (
+            CommandID.ORIENT_TO_SURFACE,
+            lambda n: OrientToSurfaceBehaviour(
+                name="OrientToSurfaceBehaviour",
                 robot_command_resources=robot_command_resources,
             ),
         ),

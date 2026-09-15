@@ -43,6 +43,9 @@ def test_close_surface_resolves_active_attachment_without_setup_context():
         "manipulation/behaviours/move_close_to_surface_behaviour.py"
     )
     application = source("application/api/application_api_node.py")
+    resources = source(
+        "application/behaviour_tree/behaviours/robot_command_resources.py"
+    )
 
     assert "def active_attachment(" in runtime
     assert "active_sensor_id" in runtime
@@ -50,7 +53,9 @@ def test_close_surface_resolves_active_attachment_without_setup_context():
     assert "probe_setup_coordinator" not in runtime
     assert "setup_context" not in runtime
     assert "active_attachment()" in behaviour
-    assert "ProbeSurfaceSource" in behaviour
+    assert "get_probe_surface_source(" in behaviour
+    assert "ProbeSurfaceSource" in resources
+    assert "def get_probe_surface_source(" in resources
     assert "ArmMovementBehaviour" in behaviour
     assert "WorkflowActionBehaviour" not in behaviour
     assert "ExecuteOperation" in application

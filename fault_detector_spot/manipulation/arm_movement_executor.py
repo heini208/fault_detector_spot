@@ -19,8 +19,24 @@ from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
 from spot_msgs.srv import RobotCommand as RobotCommandService
 from synchros2.utilities import namespace_with
+from fault_detector_spot.inspection.geometry.rotation import rotate_vector
+from fault_detector_spot.inspection.model.models import ImagePoint, Vector3Data
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
+    sensor_probe_frame,
+)
+from fault_detector_spot.inspection.sensing.probe_surface_source import (
+    MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M,
+    SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
+)
+from fault_detector_spot.inspection.setup.alignment_orientation import (
+    surface_aligned_probe_orientation,
+)
+from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
+    project_reference_pixel,
+)
+from fault_detector_spot.inspection.setup.reference_view_surface_normal import (
+    estimate_reference_surface_normal,
 )
 from fault_detector_spot.manipulation.arm_contact_evidence import (
     ArmContactEvidenceAnalyzer,
@@ -41,6 +57,8 @@ from fault_detector_spot.manipulation.guarded_probe_execution import (
 from fault_detector_spot.manipulation.probe_motion_planner import (
     ProbeMotionPlanner,
 )
+from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
+from fault_detector_spot.shared.ros.tf_transforms import transform_to_pose_data
 from fault_detector_spot.shared.execution.movement_executor import (
     DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC,
     DEFAULT_RESULT_TIMEOUT_SEC,
@@ -77,6 +95,7 @@ class ArmMovementExecutor(MovementExecutor):
         action_client=None,
         arm_stop_service_client=None,
         arm_state_source=None,
+        surface_source=None,
         settling_detector=None,
         force_baseline_sampler=None,
         force_contact_policy=None,
@@ -144,6 +163,7 @@ class ArmMovementExecutor(MovementExecutor):
             else ArmMotionSpeedPolicy.from_config(config)
         )
         self.arm_state_source = arm_state_source
+        self.surface_source = surface_source
         self._owns_arm_stop_service_client = False
         self.arm_stop_service_client = arm_stop_service_client
         if (
@@ -321,6 +341,30 @@ class ArmMovementExecutor(MovementExecutor):
             force_threshold_n=force_threshold_n,
         )
 
+    def orient_to_surface(
+        self,
+        motion_sensor_id: str,
+        speed=None,
+        force_threshold_n=None,
+    ) -> ArmMovementUpdate:
+        """Orient the active probe to the front-facing live surface."""
+        sensor_id = str(motion_sensor_id).strip()
+        if not sensor_id:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Surface orientation requires active sensor geometry",
+            )
+        if self.surface_source is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Surface orientation source is not configured",
+            )
+        return self.guarded_probe(
+            lambda: self._resolve_surface_orientation_target(sensor_id),
+            speed=speed,
+            force_threshold_n=force_threshold_n,
+        )
+
     def guarded_probe(
         self,
         probe_target,
@@ -434,6 +478,83 @@ class ArmMovementExecutor(MovementExecutor):
             finally:
                 self.arm_stop_service_client = None
                 self._owns_arm_stop_service_client = False
+
+    def _resolve_surface_orientation_target(
+        self,
+        sensor_id: str,
+    ):
+        depth_image, camera_info = self.surface_source.latest_hand_depth()
+        center = ImagePoint(
+            u=int(depth_image.width) // 2,
+            v=int(depth_image.height) // 2,
+        )
+        try:
+            projected = project_reference_pixel(
+                center,
+                depth_image,
+                camera_info,
+                search_radius_px=SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
+                rgb_size=(
+                    int(depth_image.width),
+                    int(depth_image.height),
+                ),
+            )
+        except ValueError as exception:
+            if "No valid depth within" not in str(exception):
+                raise
+            raise ValueError(
+                "Cannot orient to surface because the center hand-depth "
+                "window has no valid measurement. The surface may be too "
+                "close or too far from the gripper depth camera."
+            ) from exception
+
+        camera_distance_m = float(projected.depth_m)
+        if (
+            camera_distance_m
+            < MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M
+        ):
+            raise ValueError(
+                "Surface is too close for reliable orientation: "
+                f"camera distance {camera_distance_m:.3f} m, minimum "
+                f"{MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M:.3f} m"
+            )
+        normal = estimate_reference_surface_normal(
+            projected,
+            depth_image,
+            camera_info,
+            neighborhood_radius_px=SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
+            maximum_neighborhood_radius_px=(
+                SURFACE_ORIENTATION_WINDOW_RADIUS_PX
+            ),
+        )
+        camera_to_execution = self.tf_listener.lookup_a_tform_b(
+            GRAV_ALIGNED_BODY_FRAME_NAME,
+            projected.frame_id,
+            timeout_sec=0.0,
+        )
+        surface_normal_execution = rotate_vector(
+            transform_to_pose_data(camera_to_execution).orientation,
+            normal.normal_camera,
+        )
+        hand_to_probe_orientation = pose_to_pose_data(
+            self.probe_motion_planner.hand_to_probe_pose(sensor_id)
+        ).orientation
+        target_orientation = surface_aligned_probe_orientation(
+            surface_normal_execution,
+            hand_to_probe_orientation,
+            Vector3Data(x=0.0, y=0.0, z=1.0),
+        )
+
+        current_probe = self.probe_motion_planner.current_pose(
+            GRAV_ALIGNED_BODY_FRAME_NAME,
+            sensor_probe_frame(sensor_id),
+        )
+        target_probe = deepcopy(current_probe)
+        target_probe.pose.orientation.x = target_orientation.x
+        target_probe.pose.orientation.y = target_orientation.y
+        target_probe.pose.orientation.z = target_orientation.z
+        target_probe.pose.orientation.w = target_orientation.w
+        return target_probe, sensor_id
 
     def _start_guarded_probe(
         self,

@@ -1,4 +1,4 @@
-"""Live surface sensing used by close-surface execution."""
+"""Live hand-depth surface sensing used by arm execution."""
 
 from collections import deque
 from copy import deepcopy
@@ -27,6 +27,8 @@ from fault_detector_spot.shared.runtime_source import RuntimeSource
 
 HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
 MAX_HAND_DEPTH_AGE_SEC = 0.5
+SURFACE_ORIENTATION_WINDOW_RADIUS_PX = 16
+MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M = 0.290
 SENSOR_ATTACHMENT_TOPIC = "fault_detector/application/sensor_attachment_state"
 
 
@@ -82,6 +84,36 @@ class ProbeSurfaceSource(RuntimeSource):
             raise ValueError("Sensor attachment state is invalid")
         sensor_id = state.active_sensor_id.strip() or BARE_HAND_MOTION_ID
         return sensor_id, int(state.attachment_revision)
+
+    def latest_hand_depth(
+        self,
+        maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
+    ):
+        """Return the newest fresh registered hand depth and camera info."""
+        maximum_age_sec = float(maximum_age_sec)
+        if not math.isfinite(maximum_age_sec) or maximum_age_sec <= 0.0:
+            raise ValueError("Maximum hand-depth age must be positive")
+
+        with self._lock:
+            camera_info = deepcopy(self._hand_depth_camera_info)
+            history = tuple(self._hand_depth_history)
+        if camera_info is None:
+            raise ValueError(
+                "No registered hand-depth camera info is available"
+            )
+        if not history:
+            raise ValueError(
+                "No registered hand-depth image is available"
+            )
+
+        receipt_time, depth_image = history[-1]
+        age = time.monotonic() - receipt_time
+        if age < -1e-9 or age > maximum_age_sec:
+            raise ValueError(
+                "Registered hand-depth image is stale: "
+                f"age={age:.3f}s, max_age={maximum_age_sec:.3f}s"
+            )
+        return deepcopy(depth_image), camera_info
 
     def surface_distance_samples(
         self,
@@ -226,4 +258,8 @@ class ProbeSurfaceSource(RuntimeSource):
             self._attachment_state = None
 
 
-__all__ = ["ProbeSurfaceSource"]
+__all__ = [
+    "MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M",
+    "ProbeSurfaceSource",
+    "SURFACE_ORIENTATION_WINDOW_RADIUS_PX",
+]

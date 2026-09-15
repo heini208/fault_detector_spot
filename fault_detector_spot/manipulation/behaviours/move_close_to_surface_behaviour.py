@@ -13,9 +13,6 @@ from fault_detector_spot.inspection.execution.probe_surface_approach import (
     evaluate_probe_surface_approach,
     freeze_probe_surface_approach,
 )
-from fault_detector_spot.inspection.sensing.probe_surface_source import (
-    ProbeSurfaceSource,
-)
 from fault_detector_spot.inspection.geometry.rotation import rotation_distance_rad
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.model.sensor_models import (
@@ -109,7 +106,7 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
         )
         self._configured_robot_name = robot_name
         self.surface_source = surface_source
-        self._owns_surface_source = surface_source is None
+        self._owns_surface_source = False
         self.config = config
         if not callable(monotonic_clock):
             raise TypeError("Monotonic clock must be callable")
@@ -129,7 +126,11 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
             ).strip()
         self._ensure_executor()
         if self.surface_source is None:
-            self.surface_source = ProbeSurfaceSource(self.node)
+            self.surface_source = (
+                self.robot_command_resources.get_probe_surface_source(
+                    self.node
+                )
+            )
         if self.config is None:
             self.config = MoveCloseToSurfaceConfig.from_node(self.node)
         self._validate_configuration()
