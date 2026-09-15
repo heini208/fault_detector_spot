@@ -456,28 +456,6 @@ class ProbeSetupCoordinator:
             return self.snapshot(context)
         return self._advance(draft)
 
-    def calculate_surface_orientation(
-        self,
-        context: SetupContextSnapshot,
-    ):
-        """Calculate live probe orientation through the public facade."""
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            self.refinement_controller.require_refinement(draft)
-            attachment = self.refinement_controller.motion_attachment()
-            if self.motion_state_source is None:
-                raise RuntimeError(
-                    "Probe setup motion state is unavailable"
-                )
-            definition = self.object_repository.load(
-                draft.selected_object_id
-            )
-            return self.motion_state_source.live_hand_surface_orientation(
-                definition.reference_tag.tag_id,
-                attachment.hand_to_probe().orientation,
-            )
-
     def require_physical_lane_idle(
         self,
         detail: str,

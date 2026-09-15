@@ -173,9 +173,25 @@ class ProbeRefinementController:
                 attachment,
             )
         refinement = self.require_refinement(draft)
+        if (
+            motion.kind is ProbeMotionKind.ORIENT_TO_SURFACE
+            and refinement.motion_states[RefinementStage.ALIGNMENT]
+            is not RefinementMotionState.REACHED
+        ):
+            raise RuntimeError(
+                "Reach the aligned pre-approach before orienting to the surface"
+            )
         refinement.active_stage = stage
         self._invalidate_downstream_motion_state(refinement, stage)
-        if motion.relative:
+        if motion.kind is ProbeMotionKind.ORIENT_TO_SURFACE:
+            target = self.current_probe_pose(draft, attachment)
+            command = self.motion_command_factory.orient_to_surface(
+                attachment.motion_sensor_id
+            )
+            purpose = "surface orientation"
+            updates_candidate = True
+            verify_achieved_pose = False
+        elif motion.relative:
             command = self._relative_motion_command(
                 draft,
                 motion,
@@ -183,6 +199,8 @@ class ProbeRefinementController:
             )
             target = refinement.candidate_pose(stage)
             purpose = f"{stage.value} adjustment"
+            updates_candidate = True
+            verify_achieved_pose = False
         else:
             target = refinement.candidate_pose(stage)
             if stage is RefinementStage.ALIGNMENT:
@@ -194,27 +212,14 @@ class ProbeRefinementController:
                 )
                 refinement.set_candidate(stage, candidate)
                 target = candidate
-                if motion.orientation_only:
-                    target = deepcopy(candidate)
-                    target.position = deepcopy(
-                        self.current_probe_pose(
-                            draft,
-                            attachment,
-                        ).position
-                    )
             command = self._absolute_motion_command(
                 draft,
                 target,
                 attachment,
             )
-            purpose = (
-                "alignment orientation"
-                if (
-                    stage is RefinementStage.ALIGNMENT
-                    and motion.orientation_only
-                )
-                else stage.value
-            )
+            purpose = stage.value
+            updates_candidate = False
+            verify_achieved_pose = True
         operation = self.setup_coordinator.prepare_command(
             context,
             command,
@@ -224,8 +229,8 @@ class ProbeRefinementController:
             stage=stage,
             purpose=purpose,
             target_pose_object=deepcopy(target),
-            updates_candidate=motion.relative,
-            verify_achieved_pose=not motion.relative,
+            updates_candidate=updates_candidate,
+            verify_achieved_pose=verify_achieved_pose,
         )
         refinement.begin_motion(pending_motion)
         self._operations.register(
@@ -291,7 +296,7 @@ class ProbeRefinementController:
                 )
                 if (
                     stage is RefinementStage.ALIGNMENT
-                    and not motion.orientation_only
+                    and motion.kind is not ProbeMotionKind.ORIENT_TO_SURFACE
                 ):
                     self._require_live_alignment_camera_clearance()
                 refinement.complete_motion(
@@ -393,6 +398,7 @@ class ProbeRefinementController:
         if kind in {
             ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
             ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH,
+            ProbeMotionKind.ORIENT_TO_SURFACE,
         }:
             return RefinementStage.ALIGNMENT
         raise ValueError(
@@ -598,23 +604,15 @@ class ProbeRefinementController:
         motion,
         attachment,
     ):
-        result = deepcopy(candidate)
         if (
             motion.alignment_orientation_mode
-            is ProbeAlignmentOrientationMode.TAG
+            is not ProbeAlignmentOrientationMode.TAG
         ):
-            result.orientation = tag_aligned_probe_orientation(
-                attachment.hand_to_probe().orientation
-            )
-        elif (
-            motion.alignment_orientation_mode
-            is ProbeAlignmentOrientationMode.CALCULATED_SURFACE
-        ):
-            result.orientation = deepcopy(
-                motion.calculated_surface_orientation_object
-            )
-        else:
             raise ValueError("Unsupported alignment orientation mode")
+        result = deepcopy(candidate)
+        result.orientation = tag_aligned_probe_orientation(
+            attachment.hand_to_probe().orientation
+        )
         result.validate()
         return result
 

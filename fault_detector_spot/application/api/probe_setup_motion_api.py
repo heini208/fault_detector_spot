@@ -19,10 +19,7 @@ from fault_detector_spot.application.commanding.client_identity import (
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
 )
-from fault_detector_spot.inspection.model.models import (
-    QuaternionData,
-    Vector3Data,
-)
+from fault_detector_spot.inspection.model.models import Vector3Data
 from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
     ProbeSetupMotionStatus,
@@ -207,6 +204,9 @@ class ProbeSetupMotionApi:
             ProbeSetupMotionIntent.OPERATION_ADJUST_ALIGNED_PREAPPROACH: (
                 ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH
             ),
+            ProbeSetupMotionIntent.OPERATION_ORIENT_TO_SURFACE: (
+                ProbeMotionKind.ORIENT_TO_SURFACE
+            ),
         }
         frames = {
             ProbeSetupMotionIntent.FRAME_SENSOR: ProbeMotionFrame.SENSOR,
@@ -219,9 +219,6 @@ class ProbeSetupMotionApi:
             ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_TAG: (
                 ProbeAlignmentOrientationMode.TAG
             ),
-            ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_CALCULATED_SURFACE: (
-                ProbeAlignmentOrientationMode.CALCULATED_SURFACE
-            ),
         }
         try:
             kind = kinds[int(intent.operation)]
@@ -231,15 +228,6 @@ class ProbeSetupMotionApi:
             raise ValueError(
                 "Unsupported probe setup motion intent"
             ) from exception
-        calculated_orientation = None
-        if bool(intent.has_calculated_surface_orientation):
-            value = intent.calculated_surface_orientation_object
-            calculated_orientation = QuaternionData(
-                x=float(value.x),
-                y=float(value.y),
-                z=float(value.z),
-                w=float(value.w),
-            )
         request = ProbeMotionRequest(
             kind=kind,
             frame=frame,
@@ -255,10 +243,6 @@ class ProbeSetupMotionApi:
                 intent.orientation_tolerance_rad
             ),
             alignment_orientation_mode=mode,
-            orientation_only=bool(intent.orientation_only),
-            calculated_surface_orientation_object=(
-                calculated_orientation
-            ),
         )
         request.validate()
         return request
@@ -277,6 +261,9 @@ class ProbeSetupMotionApi:
             ),
             ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH: (
                 ProbeSetupMotionIntent.OPERATION_ADJUST_ALIGNED_PREAPPROACH
+            ),
+            ProbeMotionKind.ORIENT_TO_SURFACE: (
+                ProbeSetupMotionIntent.OPERATION_ORIENT_TO_SURFACE
             ),
         }[kind]
 

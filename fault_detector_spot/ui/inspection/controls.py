@@ -96,8 +96,6 @@ class InspectionControls(UIControlHelper):
         self._surface_normal_error = ""
         self._selected_approach_direction = None
         self._selected_surface_target = None
-        self._calculated_surface_probe_orientation = None
-        self._calculated_surface_hand_orientation = None
         self._calculated_probe_setup = None
         self._probe_setup = None
         self._refinement_presentation = None
@@ -113,16 +111,7 @@ class InspectionControls(UIControlHelper):
             layout.addLayout(row)
 
     def init_ros_communication(self):
-        if self.node is None:
-            return
-        client = getattr(self.ui, "probe_setup_client", None)
-        if client is not None:
-            client.surface_orientation_received.connect(
-                self.apply_live_surface_orientation
-            )
-            client.surface_orientation_rejected.connect(
-                self.apply_live_surface_orientation_error
-            )
+        pass
 
     def make_rows(self):
         self._make_management_dialog()
@@ -464,24 +453,8 @@ class InspectionControls(UIControlHelper):
             "Align with tag",
             ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_TAG,
         )
-        self.alignment_orientation_mode_dropdown.addItem(
-            "Align with calculated surface",
-            ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_CALCULATED_SURFACE,
-        )
-        self.calculated_surface_orientation_value_label = QLabel(
-            "Not calculated"
-        )
-        self.calculated_surface_orientation_value_label.setWordWrap(True)
-        self.calculated_surface_orientation_value_label.setTextInteractionFlags(
-            Qt.TextSelectableByMouse
-        )
-        self.calculate_hand_surface_orientation_button = QPushButton(
-            "Calculate Hand-Facing Surface"
-        )
-        self.orient_to_calculated_surface_button = QPushButton(
-            "Orient to Calculated Surface"
-        )
-        self.orient_to_calculated_surface_button.setEnabled(False)
+        self.orient_to_surface_button = QPushButton("Orient to Surface")
+        self.orient_to_surface_button.setEnabled(False)
         self.move_probe_pose_button = QPushButton(
             "Direct Probe Movement Disabled"
         )
@@ -659,11 +632,8 @@ class InspectionControls(UIControlHelper):
         self.alignment_orientation_mode_dropdown.currentIndexChanged.connect(
             self._handle_alignment_orientation_mode_changed
         )
-        self.calculate_hand_surface_orientation_button.clicked.connect(
-            self.handle_calculate_hand_surface_orientation
-        )
-        self.orient_to_calculated_surface_button.clicked.connect(
-            self.handle_orient_to_calculated_surface
+        self.orient_to_surface_button.clicked.connect(
+            self.handle_orient_to_surface
         )
         self.use_current_alignment_button.clicked.connect(
             self.handle_use_current_alignment
@@ -1010,16 +980,9 @@ class InspectionControls(UIControlHelper):
                 "Mode:",
                 self.alignment_orientation_mode_dropdown,
             )
-            orientation_layout.addRow(
-                "Calculated hand orientation:",
-                self.calculated_surface_orientation_value_label,
-            )
             orientation_actions = QHBoxLayout()
             orientation_actions.addWidget(
-                self.calculate_hand_surface_orientation_button
-            )
-            orientation_actions.addWidget(
-                self.orient_to_calculated_surface_button
+                self.orient_to_surface_button
             )
             orientation_actions.addStretch()
             orientation_layout.addRow(orientation_actions)
@@ -1127,8 +1090,7 @@ class InspectionControls(UIControlHelper):
             self.use_current_approach_button,
             self.move_aligned_pose_button,
             self.use_current_alignment_button,
-            self.calculate_hand_surface_orientation_button,
-            self.orient_to_calculated_surface_button,
+            self.orient_to_surface_button,
             self.test_surface_distance_button,
             self.approve_and_retract_button,
             self.retract_without_saving_button,
@@ -1589,9 +1551,6 @@ class InspectionControls(UIControlHelper):
 
     def _clear_selected_surface_target(self):
         self._selected_surface_target = None
-        self._clear_live_surface_orientation()
-        self._calculated_surface_probe_orientation = None
-        self._calculated_surface_hand_orientation = None
         self._calculated_probe_setup = None
         self._probe_setup = None
         self.reference_target_x_value_label.setText("—")
@@ -1902,17 +1861,8 @@ class InspectionControls(UIControlHelper):
             and not recovery_only
         )
         self.move_aligned_pose_button.setEnabled(alignment_enabled)
-        self.calculate_hand_surface_orientation_button.setEnabled(
-            alignment_enabled
-        )
-        surface_selected = (
-            self.alignment_orientation_mode_dropdown.currentData()
-            == ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_CALCULATED_SURFACE
-        )
-        self.orient_to_calculated_surface_button.setEnabled(
-            alignment_enabled
-            and surface_selected
-            and self._calculated_surface_probe_orientation is not None
+        self.orient_to_surface_button.setEnabled(
+            alignment_enabled and alignment_reached
         )
         self.use_current_alignment_button.setEnabled(
             alignment_enabled and alignment_adjustable
@@ -2065,93 +2015,28 @@ class InspectionControls(UIControlHelper):
 
     def handle_move_to_aligned_pose(self):
         self._require_refinement_presentation()
-        return self._send_alignment_motion(orientation_only=False)
+        return self._send_alignment_motion()
 
-    def handle_orient_to_calculated_surface(self):
-        self._require_refinement_presentation()
-        if self._calculated_surface_probe_orientation is None:
+    def handle_orient_to_surface(self):
+        presentation = self._require_refinement_presentation()
+        if (
+            presentation.active_stage is not RefinementStage.ALIGNMENT
+            or presentation.motion_states[RefinementStage.ALIGNMENT]
+            is not RefinementMotionState.REACHED
+        ):
             self._show_setup_error(
-                "Orient to Calculated Surface",
+                "Orient to Surface",
                 ValueError(
-                    "Calculate the live hand-facing surface first"
+                    "Reach the aligned pre-approach before orienting "
+                    "to the surface"
                 ),
             )
             return False
-        index = self.alignment_orientation_mode_dropdown.findData(
-            ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_CALCULATED_SURFACE
-        )
-        self.alignment_orientation_mode_dropdown.setCurrentIndex(index)
-        return self._send_alignment_motion(orientation_only=True)
-
-    def handle_calculate_hand_surface_orientation(self):
-        client = getattr(self.ui, "probe_setup_client", None)
-        if client is None:
-            return self.show_setup_unavailable(
-                "Live hand surface orientation"
-            )
-        future = client.calculate_surface_orientation()
-        if future is None:
-            return False
-        self.calculated_surface_orientation_value_label.setText(
-            "Calculating from live hand depth..."
-        )
-        return True
-
-    def apply_live_surface_orientation(self, response):
-        probe = response.probe_orientation_object
-        hand = response.hand_orientation_object
-        self._calculated_surface_probe_orientation = QuaternionData(
-            x=float(probe.x),
-            y=float(probe.y),
-            z=float(probe.z),
-            w=float(probe.w),
-        )
-        self._calculated_surface_probe_orientation.validate()
-        self._calculated_surface_hand_orientation = QuaternionData(
-            x=float(hand.x),
-            y=float(hand.y),
-            z=float(hand.z),
-            w=float(hand.w),
-        )
-        self._calculated_surface_hand_orientation.validate()
-        roll, pitch, yaw = quaternion_to_rpy(
-            self._calculated_surface_hand_orientation
-        )
-        self.calculated_surface_orientation_value_label.setText(
-            "rpy=("
-            f"{math.degrees(roll):.1f}, "
-            f"{math.degrees(pitch):.1f}, "
-            f"{self._normalize_degrees(math.degrees(yaw)):.1f}) deg"
-        )
-        normal = response.surface_normal_object
-        self.calculated_surface_orientation_value_label.setToolTip(
-            "Object-frame surface normal: "
-            f"({normal.x:.4f}, {normal.y:.4f}, {normal.z:.4f}); "
-            f"samples={int(response.sample_count)}; "
-            f"RMSE={float(response.plane_rmse_m):.4f} m"
-        )
-        self._refresh_refinement_dialog()
-        return True
-
-    def apply_live_surface_orientation_error(self, detail):
-        self._clear_live_surface_orientation()
-        self.calculated_surface_orientation_value_label.setText(
-            f"Unavailable: {detail}"
-        )
-        self._refresh_refinement_dialog()
-        return False
-
-    def _clear_live_surface_orientation(self):
-        self._calculated_surface_probe_orientation = None
-        self._calculated_surface_hand_orientation = None
-        if hasattr(
-            self,
-            "calculated_surface_orientation_value_label",
-        ):
-            self.calculated_surface_orientation_value_label.setText(
-                "Not calculated"
-            )
-            self.calculated_surface_orientation_value_label.setToolTip("")
+        intent = ProbeSetupMotionIntent()
+        intent.operation = ProbeSetupMotionIntent.OPERATION_ORIENT_TO_SURFACE
+        intent.frame = ProbeSetupMotionIntent.FRAME_SENSOR
+        self._write_motion_tolerances(intent)
+        return self._submit_probe_motion(intent, "surface orientation")
 
     def _handle_alignment_orientation_mode_changed(self, _index=None):
         self._refresh_refinement_dialog()
@@ -2275,7 +2160,7 @@ class InspectionControls(UIControlHelper):
         )
         return False
 
-    def _send_alignment_motion(self, orientation_only):
+    def _send_alignment_motion(self):
         intent = ProbeSetupMotionIntent()
         intent.operation = (
             ProbeSetupMotionIntent.OPERATION_MOVE_ALIGNED_PREAPPROACH
@@ -2284,32 +2169,11 @@ class InspectionControls(UIControlHelper):
         intent.alignment_orientation_mode = int(
             self.alignment_orientation_mode_dropdown.currentData()
         )
-        intent.orientation_only = bool(orientation_only)
-        if (
-            intent.alignment_orientation_mode
-            == ProbeSetupMotionIntent.ALIGNMENT_ORIENTATION_CALCULATED_SURFACE
-        ):
-            orientation = self._calculated_surface_probe_orientation
-            if orientation is None:
-                self._show_setup_error(
-                    "Move to Aligned Pose",
-                    ValueError(
-                        "Calculate the live hand-facing surface first"
-                    ),
-                )
-                return False
-            intent.has_calculated_surface_orientation = True
-            intent.calculated_surface_orientation_object.x = orientation.x
-            intent.calculated_surface_orientation_object.y = orientation.y
-            intent.calculated_surface_orientation_object.z = orientation.z
-            intent.calculated_surface_orientation_object.w = orientation.w
         self._write_motion_tolerances(intent)
-        label = (
-            "calculated surface orientation"
-            if orientation_only
-            else "aligned pre-approach candidate"
+        return self._submit_probe_motion(
+            intent,
+            "aligned pre-approach candidate",
         )
-        return self._submit_probe_motion(intent, label)
 
     def _send_refinement_motion(
         self,
@@ -2716,8 +2580,7 @@ class InspectionControls(UIControlHelper):
         )
         self._retraction_failed = False
         if previous is None:
-            self._clear_live_surface_orientation()
-            self.resume_refinement_dialog()
+                self.resume_refinement_dialog()
         elif self.refinement_dialog.isVisible():
             self.inspection_workspace_splitter.setEnabled(False)
         self._refresh_refinement_dialog()
@@ -2864,7 +2727,6 @@ class InspectionControls(UIControlHelper):
         )
         intent.object_id = object_id
         intent.routine_id = routine_id
-        self._clear_live_surface_orientation()
         return self._submit_probe_setup(intent) is not None
 
     def _refresh_routine_parent_objects(

@@ -39,7 +39,6 @@ from fault_detector_spot.application.coordinators.probe_setup_coordinator import
     ProbeSetupCoordinator,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
-    ProbeAlignmentOrientationMode,
     ProbeMotionKind,
     ProbeMotionRequest,
 )
@@ -49,7 +48,6 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     initialize_reference_probe_setup,
-    multiply_quaternions,
     rotate_vector,
 )
 from fault_detector_spot.inspection.setup import (
@@ -128,6 +126,12 @@ class FakeMotionCommandFactory:
     def absolute(self, _target, _tag, motion_sensor_id):
         return SemanticCommand(
             command_id=CommandID.MOVE_ARM_TO_TAG,
+            motion_sensor_id=motion_sensor_id,
+        )
+
+    def orient_to_surface(self, motion_sensor_id):
+        return SemanticCommand(
+            command_id=CommandID.ORIENT_TO_SURFACE,
             motion_sensor_id=motion_sensor_id,
         )
 
@@ -472,8 +476,10 @@ def test_alignment_defaults_to_tag_aligned_probe_without_changing_position(
     assert target.orientation == pitch_quaternion(90.0)
 
 
-def test_calculated_surface_alignment_changes_orientation_only(tmp_path):
-    probe, _ = coordinator(tmp_path)
+def test_surface_orientation_uses_existing_command_after_alignment_reached(
+    tmp_path,
+):
+    probe, command_controller = coordinator(tmp_path)
     state = create_selected_routine(
         probe,
         probe.open_context("probe-ui").context,
@@ -488,66 +494,52 @@ def test_calculated_surface_alignment_changes_orientation_only(tmp_path):
     )
     probe.motion_state_source.pose = pose(0.8)
     state = probe.begin_refinement(state.context)
-    draft = probe._drafts[state.context.context_id]
-    original = draft.refinement.candidate_pose(
-        RefinementStage.ALIGNMENT
-    )
-    orientation = multiply_quaternions(
-        yaw_quaternion(25.0),
-        pitch_quaternion(-20.0),
-    )
 
-    probe.prepare_motion(
+    with pytest.raises(
+        RuntimeError,
+        match="Reach the aligned pre-approach",
+    ):
+        probe.prepare_motion(
+            state.context,
+            ProbeMotionRequest(
+                kind=ProbeMotionKind.ORIENT_TO_SURFACE,
+            ),
+        )
+
+    draft = probe._drafts[state.context.context_id]
+    draft.refinement.motion_states[RefinementStage.ALIGNMENT] = (
+        RefinementMotionState.REACHED
+    )
+    current = pose(0.61, 0.2, 0.3)
+    probe.motion_state_source.pose = current
+
+    operation = probe.prepare_motion(
         state.context,
         ProbeMotionRequest(
-            kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
-            alignment_orientation_mode=(
-                ProbeAlignmentOrientationMode.CALCULATED_SURFACE
-            ),
-            calculated_surface_orientation_object=orientation,
+            kind=ProbeMotionKind.ORIENT_TO_SURFACE,
         ),
     )
 
-    target = draft.refinement.pending_motion.target_pose_object
-    assert target.position == original.position
-    assert target.orientation == orientation
+    pending = draft.refinement.pending_motion
+    assert operation.request.command.command_id is CommandID.ORIENT_TO_SURFACE
+    assert operation.request.command.motion_sensor_id == "hall_probe"
+    assert pending.purpose == "surface orientation"
+    assert pending.target_pose_object == current
+    assert pending.updates_candidate is True
+    assert pending.verify_achieved_pose is False
 
-
-def test_orientation_only_alignment_uses_current_position(tmp_path):
-    probe, _ = coordinator(tmp_path)
-    state = create_selected_routine(
-        probe,
-        probe.open_context("probe-ui").context,
+    probe.submit_motion(operation)
+    achieved = PoseData(
+        position=Vector3Data(x=0.61, y=0.2, z=0.3),
+        orientation=yaw_quaternion(15.0),
     )
-    state = probe.select_reference_pixel(
-        state.context,
-        "slot1_hand",
-        ImagePoint(u=20, v=30),
-        "surface_fit",
-        0.10,
-        0.20,
-    )
-    probe.motion_state_source.pose = pose(0.8)
-    state = probe.begin_refinement(state.context)
-    probe.motion_state_source.pose = pose(0.61, 0.2, 0.3)
-    orientation = yaw_quaternion(15.0)
+    probe.motion_state_source.pose = achieved
+    command_controller.succeed(operation.request)
 
-    probe.prepare_motion(
-        state.context,
-        ProbeMotionRequest(
-            kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
-            alignment_orientation_mode=(
-                ProbeAlignmentOrientationMode.CALCULATED_SURFACE
-            ),
-            calculated_surface_orientation_object=orientation,
-            orientation_only=True,
-        ),
+    assert (
+        draft.refinement.candidate_pose(RefinementStage.ALIGNMENT)
+        == achieved
     )
-
-    draft = probe._drafts[state.context.context_id]
-    target = draft.refinement.pending_motion.target_pose_object
-    assert target.position == pose(0.61, 0.2, 0.3).position
-    assert target.orientation == orientation
 
 
 def test_probe_motion_cancellation_keeps_context_state_correlated(tmp_path):

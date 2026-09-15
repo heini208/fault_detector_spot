@@ -2,7 +2,6 @@
 
 from collections import deque
 from copy import deepcopy
-from dataclasses import dataclass
 import math
 from threading import RLock
 import time
@@ -33,18 +32,10 @@ from fault_detector_spot.inspection.sensing.live_surface_distance import (
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     compose_poses,
-    multiply_quaternions,
     relative_pose,
-    rotate_vector,
-)
-from fault_detector_spot.inspection.setup.alignment_orientation import (
-    surface_aligned_probe_orientation,
 )
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     project_reference_pixel,
-)
-from fault_detector_spot.inspection.geometry.surface_normal import (
-    estimate_surface_normal,
 )
 from fault_detector_spot.inspection.setup.stable_tag_pose import (
     TagPoseSample,
@@ -68,17 +59,6 @@ MINIMUM_HAND_CAMERA_SURFACE_CLEARANCE_M = 0.290
 END_EFFECTOR_FORCE_TOPIC = "/status/end_effector_force"
 END_EFFECTOR_FORCE_HISTORY_MAX_SAMPLES = 128
 MAX_END_EFFECTOR_FORCE_AGE_SEC = 0.25
-
-
-@dataclass(frozen=True)
-class LiveHandSurfaceOrientation:
-    """One current hand-camera surface orientation calculation."""
-
-    probe_orientation_object: QuaternionData
-    hand_orientation_object: QuaternionData
-    surface_normal_object: Vector3Data
-    sample_count: int
-    plane_rmse_m: float
 
 
 class ProbeSetupMotionStateSource:
@@ -227,101 +207,6 @@ class ProbeSetupMotionStateSource:
         body_to_object = pose_to_pose_data(tag.pose.pose)
         return relative_pose(body_to_object, body_to_probe)
 
-    def live_hand_surface_orientation(
-        self,
-        reference_tag_id: int,
-        hand_to_probe_orientation: QuaternionData,
-    ) -> LiveHandSurfaceOrientation:
-        """Calculate a surface-facing probe orientation at hand-image center."""
-        hand_to_probe_orientation.validate()
-        with self._lock:
-            camera_info = deepcopy(self._hand_depth_camera_info)
-            history = tuple(self._hand_depth_history)
-        if camera_info is None:
-            raise ValueError(
-                "No registered hand-depth camera info is available"
-            )
-        depth_image = None
-        stamp = None
-        fresh_history = self._recent_hand_depth_samples(
-            history,
-            MAX_HAND_DEPTH_AGE_SEC,
-        )
-        for _receipt_time, candidate in reversed(fresh_history):
-            candidate_stamp = Time.from_msg(candidate.header.stamp)
-            if candidate_stamp.nanoseconds <= 0:
-                continue
-            depth_image = deepcopy(candidate)
-            stamp = candidate_stamp
-            break
-        if depth_image is None or stamp is None:
-            raise ValueError(
-                "No fresh registered hand-depth image is available"
-            )
-        window_radius_px = self._hand_surface_window_radius_px()
-        center = ImagePoint(
-            u=int(depth_image.width) // 2,
-            v=int(depth_image.height) // 2,
-        )
-        try:
-            projected = project_reference_pixel(
-                center,
-                depth_image,
-                camera_info,
-                search_radius_px=window_radius_px,
-                rgb_size=(int(depth_image.width), int(depth_image.height)),
-            )
-        except ValueError as exception:
-            if "No valid depth within" not in str(exception):
-                raise
-            raise ValueError(
-                "No valid registered hand depth in the "
-                f"{window_radius_px} px center window. The gripper ToF "
-                "may be inside its usable near field. Increase the aligned "
-                "pre-approach distance or the center-window radius."
-            ) from exception
-        normal = estimate_surface_normal(
-            projected,
-            depth_image,
-            camera_info,
-            neighborhood_radius_px=window_radius_px,
-            maximum_neighborhood_radius_px=window_radius_px,
-        )
-        tag = self.reference_tag(reference_tag_id)
-        body_frame = tag.pose.header.frame_id.strip()
-        body_to_object = pose_to_pose_data(tag.pose.pose)
-        body_to_camera = self._lookup_pose(
-            body_frame,
-            projected.frame_id,
-            lookup_time=stamp,
-        )
-        object_to_camera = relative_pose(body_to_object, body_to_camera)
-        surface_normal_object = rotate_vector(
-            object_to_camera.orientation,
-            normal.normal_camera,
-        )
-        gravity_to_object = self.gravity_aligned_object_pose(reference_tag_id)
-        gravity_up_object = rotate_vector(
-            self._inverse_orientation(gravity_to_object.orientation),
-            Vector3Data(x=0.0, y=0.0, z=1.0),
-        )
-        probe_orientation = surface_aligned_probe_orientation(
-            surface_normal_object,
-            hand_to_probe_orientation,
-            gravity_up_object,
-        )
-        hand_orientation = multiply_quaternions(
-            probe_orientation,
-            self._inverse_orientation(hand_to_probe_orientation),
-        )
-        return LiveHandSurfaceOrientation(
-            probe_orientation_object=probe_orientation,
-            hand_orientation_object=hand_orientation,
-            surface_normal_object=surface_normal_object,
-            sample_count=normal.sample_count,
-            plane_rmse_m=normal.plane_rmse_m,
-        )
-
     def _hand_surface_window_radius_px(self) -> int:
         value = self.node.get_parameter(HAND_SURFACE_WINDOW_PARAMETER).value
         if isinstance(value, bool) or not isinstance(value, int):
@@ -337,16 +222,6 @@ class ProbeSetupMotionStateSource:
                 f"{MAXIMUM_HAND_SURFACE_WINDOW_RADIUS_PX} pixels"
             )
         return value
-
-    @staticmethod
-    def _inverse_orientation(orientation: QuaternionData) -> QuaternionData:
-        orientation.validate()
-        return QuaternionData(
-            x=-orientation.x,
-            y=-orientation.y,
-            z=-orientation.z,
-            w=orientation.w,
-        )
 
     def minimum_aligned_probe_distance_m(
         self,
@@ -703,6 +578,5 @@ class ProbeSetupMotionStateSource:
 
 
 __all__ = [
-    "LiveHandSurfaceOrientation",
     "ProbeSetupMotionStateSource",
 ]
