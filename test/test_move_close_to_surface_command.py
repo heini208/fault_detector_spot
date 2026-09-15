@@ -120,7 +120,7 @@ def test_close_surface_is_direct_arm_workflow_without_operation_class():
     source = inspect.getsource(MoveCloseToSurfaceBehaviour)
 
     assert issubclass(MoveCloseToSurfaceBehaviour, ArmMovementBehaviour)
-    assert "ProbeSurfaceSource" in source
+    assert "get_probe_surface_source(" in source
     assert "guarded_probe(" in source
     assert ".probe(" in source
     assert "ArmMovementOutcome.CONTACT" in source

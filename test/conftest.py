@@ -11,25 +11,6 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
 )
 from fault_detector_spot.manipulation.arm_state_source import HandForceSample
-from fault_detector_spot.manipulation.hand_settling_detector import (
-    HandSettlingOutcome,
-    HandSettlingUpdate,
-)
-
-
-class _ImmediateSettlingDetector:
-
-    def start(self):
-        return HandSettlingUpdate(
-            HandSettlingOutcome.SETTLED,
-            "settled",
-        )
-
-    def poll(self):
-        raise AssertionError("Immediate settling should not need polling")
-
-    def reset(self):
-        pass
 
 
 class _ImmediateForceBaselineSampler:
@@ -73,10 +54,6 @@ def _guarded_arm_executor_defaults(request, monkeypatch):
     original_init = ArmMovementExecutor.__init__
 
     def guarded_init(self, *args, **kwargs):
-        kwargs.setdefault(
-            "settling_detector",
-            _ImmediateSettlingDetector(),
-        )
         kwargs.setdefault(
             "force_baseline_sampler",
             _ImmediateForceBaselineSampler(),

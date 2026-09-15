@@ -114,7 +114,7 @@ def test_force_guard_state_machine_is_not_inside_arm_executor():
         "_begin_contact",
         "_begin_retreat",
         "_begin_arm_stop",
-        "_handle_arm_stop_settling",
+        "_poll_arm_stop",
     ):
         assert f"def {name}(" not in executor
         assert f"def {name}(" in guard

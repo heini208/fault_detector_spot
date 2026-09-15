@@ -20,9 +20,6 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
 from fault_detector_spot.manipulation.arm_force_baseline import (
     ForceBaselineSampler,
 )
-from fault_detector_spot.manipulation.hand_settling_detector import (
-    HandSettlingDetector,
-)
 from fault_detector_spot.manipulation.force_contact_policy import (
     SpeedAwareForceContactPolicy,
 )
@@ -144,7 +141,6 @@ def test_standalone_consumers_use_changed_yaml(monkeypatch, tmp_path):
         "arm.motion.angular_speed_rad_s": 0.61,
         "arm.motion.minimum_duration_sec": 0.71,
         "arm.force_baseline.minimum_samples": 13,
-        "arm.settling.stable_duration_sec": 0.63,
         "arm.contact.consecutive_samples": 4,
         "arm.contact.shadow.off_axis_speed_threshold_mps": 0.07,
         "arm.contact.telemetry.raw_logging_enabled": False,
@@ -160,7 +156,6 @@ def test_standalone_consumers_use_changed_yaml(monkeypatch, tmp_path):
     assert ArmMotionSpeed().angular_speed_rad_s == 0.61
     assert ArmMotionSpeedPolicy().minimum_duration_sec == 0.71
     assert ForceBaselineSampler(object()).minimum_samples == 13
-    assert HandSettlingDetector(object(), object()).stable_duration_sec == 0.63
     assert SpeedAwareForceContactPolicy().consecutive_samples == 4
     assert ArmContactEvidenceAnalyzer().off_axis_speed_threshold_mps == 0.07
     telemetry = ArmContactTelemetry(object(), object(), raw_log_root=tmp_path)
@@ -170,7 +165,6 @@ def test_standalone_consumers_use_changed_yaml(monkeypatch, tmp_path):
 def test_ros_overrides_reach_consumers():
     node = FakeNode({
         "arm.motion.linear_speed_mps": 0.19,
-        "arm.settling.stable_duration_sec": 0.67,
         "arm.force_baseline.minimum_samples": 17,
         "arm.contact.consecutive_samples": 6,
         "arm.contact.shadow.off_axis_speed_threshold_mps": 0.09,
@@ -182,8 +176,6 @@ def test_ros_overrides_reach_consumers():
     )
     assert executor.ready_forward_distance_m == 0.0
     assert executor.speed_policy.default_speed.linear_speed_mps == 0.19
-    settling = HandSettlingDetector.from_node(node, object(), object())
-    assert settling.stable_duration_sec == 0.67
     assert ForceBaselineSampler.from_node(node, object()).minimum_samples == 17
     contact = SpeedAwareForceContactPolicy.from_node(node)
     assert contact.consecutive_samples == 6

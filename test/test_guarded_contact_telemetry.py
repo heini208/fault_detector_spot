@@ -17,10 +17,6 @@ from fault_detector_spot.manipulation.arm_state_source import HandForceSample
 from fault_detector_spot.manipulation.guarded_probe_execution import (
     GuardedProbeExecution,
 )
-from fault_detector_spot.manipulation.hand_settling_detector import (
-    HandSettlingOutcome,
-    HandSettlingUpdate,
-)
 from fault_detector_spot.manipulation.probe_motion_planner import (
     ProbeMotionPlan,
 )
@@ -69,21 +65,6 @@ class Baseline:
 
     def poll(self):
         raise AssertionError("baseline should already be ready")
-
-    def reset(self):
-        pass
-
-
-class Settling:
-
-    def start(self):
-        return HandSettlingUpdate(
-            HandSettlingOutcome.SETTLED,
-            "settled",
-        )
-
-    def poll(self):
-        raise AssertionError("settling should already be complete")
 
     def reset(self):
         pass
@@ -162,7 +143,6 @@ def plan():
 def execution(state, driver, clock, telemetry):
     return GuardedProbeExecution(
         arm_state_source=state,
-        settling_detector=Settling(),
         force_baseline_sampler=Baseline(),
         force_contact_policy=Policy(),
         start_goal=driver.start,
