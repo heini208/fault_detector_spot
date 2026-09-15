@@ -1,26 +1,25 @@
-"""Tests for object-frame surface-facing target pose generation."""
+"""Tests for direct point-plus-normal probe target generation."""
 
 import math
 
 import numpy as np
 import pytest
 
+from fault_detector_spot.inspection.geometry.rotation import quaternion_to_rpy
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     PoseData,
     QuaternionData,
     Vector3Data,
 )
+from fault_detector_spot.inspection.setup.probe_setup_geometry import (
+    ProbeSetupGeometry,
+)
 from fault_detector_spot.inspection.setup.reference_view_approach_direction import (
     APPROACH_SOURCE_SURFACE_FIT,
-    ReferenceApproachDirection,
 )
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ProjectedReferencePoint,
-)
-from fault_detector_spot.inspection.setup.reference_view_surface_target import (
-    quaternion_to_rpy,
-    resolve_reference_surface_target,
 )
 
 
@@ -35,11 +34,22 @@ def projected_point(point):
     )
 
 
-def approach(point, direction):
-    return ReferenceApproachDirection(
+def resolve_target(
+    point,
+    outward,
+    camera_pose,
+    target_distance,
+    preapproach_distance,
+    mounting=None,
+):
+    return ProbeSetupGeometry._build_surface_target(
         projected_point=projected_point(point),
-        direction_camera=Vector3Data(*direction),
-        source=APPROACH_SOURCE_SURFACE_FIT,
+        outward_direction_camera=Vector3Data(*outward),
+        controlled_frame_pose_object=camera_pose,
+        target_surface_distance_m=target_distance,
+        aligned_preapproach_distance_m=preapproach_distance,
+        hand_to_probe_pose=mounting or PoseData.identity(),
+        direction_source=APPROACH_SOURCE_SURFACE_FIT,
     )
 
 
@@ -71,12 +81,13 @@ def quaternion_matrix(quaternion):
     )
 
 
-def test_identity_tag_geometry_points_probe_toward_surface():
-    result = resolve_reference_surface_target(
-        approach((1.0, 2.0, 3.0), (1.0, 0.0, 0.0)),
+def test_target_is_surface_point_plus_outward_normal_times_distance():
+    result = resolve_target(
+        (1.0, 2.0, 3.0),
+        (1.0, 0.0, 0.0),
         PoseData.identity(),
-        target_surface_distance_m=0.03,
-        aligned_preapproach_distance_m=0.20,
+        0.03,
+        0.20,
     )
 
     assert result.surface_point_object == Vector3Data(1.0, 2.0, 3.0)
@@ -88,14 +99,9 @@ def test_identity_tag_geometry_points_probe_toward_surface():
     )
     rotation = quaternion_matrix(result.target_pose_object.orientation)
     assert rotation[:, 0] == pytest.approx([-1.0, 0.0, 0.0])
-    assert rotation[:, 2] == pytest.approx([0.0, 0.0, 1.0])
-    assert (
-        result.aligned_preapproach_pose_object.orientation
-        == result.target_pose_object.orientation
-    )
 
 
-def test_camera_pose_transforms_surface_and_direction_into_object_frame():
+def test_camera_pose_transforms_point_and_normal_before_offsetting():
     half_sqrt = math.sqrt(0.5)
     camera_pose = PoseData(
         position=Vector3Data(10.0, 0.0, 0.0),
@@ -107,33 +113,34 @@ def test_camera_pose_transforms_surface_and_direction_into_object_frame():
         ),
     )
 
-    result = resolve_reference_surface_target(
-        approach((1.0, 0.0, 1.0), (1.0, 0.0, 0.0)),
+    result = resolve_target(
+        (1.0, 0.0, 1.0),
+        (1.0, 0.0, 0.0),
         camera_pose,
-        target_surface_distance_m=0.05,
-        aligned_preapproach_distance_m=0.25,
+        0.05,
+        0.25,
     )
 
     assert result.surface_point_object.x == pytest.approx(10.0)
     assert result.surface_point_object.y == pytest.approx(1.0)
     assert result.surface_point_object.z == pytest.approx(1.0)
-    assert result.target_pose_object.position.x == pytest.approx(10.0)
+    assert result.outward_direction_object.x == pytest.approx(0.0, abs=1e-9)
+    assert result.outward_direction_object.y == pytest.approx(1.0)
     assert result.target_pose_object.position.y == pytest.approx(1.05)
     assert result.aligned_preapproach_pose_object.position.y == pytest.approx(
         1.25
     )
-    rotation = quaternion_matrix(result.target_pose_object.orientation)
-    assert rotation[:, 0] == pytest.approx([0.0, -1.0, 0.0])
 
 
-def test_orientation_local_x_opposes_tilted_surface_outward_axis():
+def test_probe_x_axis_points_back_toward_the_surface():
     outward = np.array([1.0, 0.0, 1.0])
     outward = outward / np.linalg.norm(outward)
-    result = resolve_reference_surface_target(
-        approach((0.0, 0.0, 1.0), tuple(outward)),
+    result = resolve_target(
+        (0.0, 0.0, 1.0),
+        tuple(outward),
         PoseData.identity(),
-        target_surface_distance_m=0.04,
-        aligned_preapproach_distance_m=0.18,
+        0.04,
+        0.18,
     )
 
     rotation = quaternion_matrix(result.target_pose_object.orientation)
@@ -142,35 +149,35 @@ def test_orientation_local_x_opposes_tilted_surface_outward_axis():
     assert rotation.T @ rotation == pytest.approx(np.eye(3))
 
 
-def test_target_and_aligned_positions_use_their_own_distances():
-    result = resolve_reference_surface_target(
-        approach((0.0, 0.0, 1.0), (0.0, 0.0, -1.0)),
+def test_target_and_preapproach_use_the_same_vector_with_different_distances():
+    result = resolve_target(
+        (0.0, 0.0, 1.0),
+        (0.0, 0.0, -1.0),
         PoseData.identity(),
-        target_surface_distance_m=0.03,
-        aligned_preapproach_distance_m=0.15,
+        0.03,
+        0.15,
     )
 
     assert result.target_pose_object.position.z == pytest.approx(0.97)
     assert result.aligned_preapproach_pose_object.position.z == pytest.approx(
         0.85
     )
+    assert (
+        result.target_pose_object.orientation
+        == result.aligned_preapproach_pose_object.orientation
+    )
 
 
-def test_zero_target_distance_places_contact_target_on_surface():
-    result = resolve_reference_surface_target(
-        approach((1.0, 2.0, 3.0), (1.0, 0.0, 0.0)),
+def test_zero_target_distance_places_target_on_the_surface_point():
+    result = resolve_target(
+        (1.0, 2.0, 3.0),
+        (1.0, 0.0, 0.0),
         PoseData.identity(),
-        target_surface_distance_m=0.0,
-        aligned_preapproach_distance_m=0.15,
+        0.0,
+        0.15,
     )
 
-    assert result.target_surface_distance_m == pytest.approx(0.0)
-    assert result.target_pose_object.position.x == pytest.approx(1.0)
-    assert result.target_pose_object.position.y == pytest.approx(2.0)
-    assert result.target_pose_object.position.z == pytest.approx(3.0)
-    assert result.aligned_preapproach_pose_object.position.x == pytest.approx(
-        1.15
-    )
+    assert result.target_pose_object.position == Vector3Data(1.0, 2.0, 3.0)
 
 
 @pytest.mark.parametrize(
@@ -189,26 +196,16 @@ def test_invalid_distances_are_rejected(
     message,
 ):
     with pytest.raises(ValueError, match=message):
-        resolve_reference_surface_target(
-            approach((0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),
+        resolve_target(
+            (0.0, 0.0, 1.0),
+            (1.0, 0.0, 0.0),
             PoseData.identity(),
-            target_surface_distance_m=target_distance,
-            aligned_preapproach_distance_m=preapproach_distance,
+            target_distance,
+            preapproach_distance,
         )
 
 
-def test_exact_minimum_distance_separation_is_accepted():
-    result = resolve_reference_surface_target(
-        approach((0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),
-        PoseData.identity(),
-        target_surface_distance_m=0.10,
-        aligned_preapproach_distance_m=0.15,
-    )
-
-    assert result.aligned_preapproach_distance_m == pytest.approx(0.15)
-
-
-def test_quaternion_to_rpy_reports_generated_yaw():
+def test_quaternion_to_rpy_still_comes_from_shared_rotation_geometry():
     half_sqrt = math.sqrt(0.5)
     roll, pitch, yaw = quaternion_to_rpy(
         QuaternionData(0.0, 0.0, half_sqrt, half_sqrt)

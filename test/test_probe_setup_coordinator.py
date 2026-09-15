@@ -216,7 +216,6 @@ class FakeGeometry:
             pixel=pixel,
             probe_setup=initialize_reference_probe_setup(
                 target,
-                hand_to_probe_pose,
             ),
         )
 

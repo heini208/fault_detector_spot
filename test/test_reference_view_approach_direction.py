@@ -1,14 +1,20 @@
-"""Tests for resolving outward reference-view approach directions."""
+"""Tests for selecting the outward vector used by probe setup geometry."""
 
 import math
 
 import pytest
 
+from fault_detector_spot.inspection.geometry.surface_normal import (
+    SurfaceNormalEstimate,
+)
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     PoseData,
     QuaternionData,
     Vector3Data,
+)
+from fault_detector_spot.inspection.setup.probe_setup_geometry import (
+    ProbeSetupGeometry,
 )
 from fault_detector_spot.inspection.setup.reference_view_approach_direction import (
     APPROACH_MODE_AUTOMATIC,
@@ -16,18 +22,13 @@ from fault_detector_spot.inspection.setup.reference_view_approach_direction impo
     APPROACH_MODE_TAG_X,
     APPROACH_SOURCE_SURFACE_FIT,
     APPROACH_SOURCE_TAG_X_SELECTED,
-    resolve_reference_approach_direction,
 )
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ProjectedReferencePoint,
 )
-from fault_detector_spot.inspection.geometry.surface_normal import (
-    SurfaceNormalEstimate,
-)
 
 
 def make_projected_point():
-    """Create one selected point in the reference camera frame."""
     pixel = ImagePoint(u=12, v=8)
     return ProjectedReferencePoint(
         requested_pixel=pixel,
@@ -39,7 +40,6 @@ def make_projected_point():
 
 
 def make_pose(orientation=None):
-    """Create the saved camera pose in the object/tag frame."""
     return PoseData(
         position=Vector3Data.zero(),
         orientation=orientation or QuaternionData.identity(),
@@ -47,7 +47,6 @@ def make_pose(orientation=None):
 
 
 def make_surface_normal(projected_point, x, y, z):
-    """Create a valid local surface-normal estimate."""
     return SurfaceNormalEstimate(
         projected_point=projected_point,
         normal_camera=Vector3Data(x=x, y=y, z=z),
@@ -56,41 +55,61 @@ def make_surface_normal(projected_point, x, y, z):
     )
 
 
-def test_surface_fit_is_aligned_toward_the_reference_camera():
-    """A fitted normal points toward the camera viewing the surface."""
-    point = make_projected_point()
-    normal = make_surface_normal(point, 0.0, 0.0, 1.0)
+def resolve(point, normal, pose, mode, reason=""):
+    return ProbeSetupGeometry._resolve_outward_camera_direction(
+        projected_point=point,
+        surface_normal=normal,
+        controlled_frame_pose_object=pose,
+        mode=mode,
+        surface_normal_unavailable_reason=reason,
+    )
 
-    result = resolve_reference_approach_direction(
+
+def test_surface_fit_uses_the_existing_camera_facing_surface_normal():
+    point = make_projected_point()
+    normal = make_surface_normal(point, 0.0, 0.0, -1.0)
+
+    direction, source = resolve(
         point,
         normal,
         make_pose(),
-        mode=APPROACH_MODE_AUTOMATIC,
+        APPROACH_MODE_AUTOMATIC,
     )
 
-    assert result.source == APPROACH_SOURCE_SURFACE_FIT
-    assert result.direction_camera.x == pytest.approx(0.0)
-    assert result.direction_camera.y == pytest.approx(0.0)
-    assert result.direction_camera.z == pytest.approx(-1.0)
-    assert result.surface_normal is normal
+    assert source == APPROACH_SOURCE_SURFACE_FIT
+    assert direction.x == pytest.approx(0.0)
+    assert direction.y == pytest.approx(0.0)
+    assert direction.z == pytest.approx(-1.0)
+
+
+def test_surface_fit_does_not_reorient_the_surface_normal_again():
+    point = make_projected_point()
+    normal = make_surface_normal(point, 0.25, 0.0, -0.75)
+
+    direction, _source = resolve(
+        point,
+        normal,
+        make_pose(),
+        APPROACH_MODE_SURFACE_FIT,
+    )
+
+    length = math.sqrt(0.25 ** 2 + 0.75 ** 2)
+    assert direction.x == pytest.approx(0.25 / length)
+    assert direction.z == pytest.approx(-0.75 / length)
 
 
 def test_automatic_mode_rejects_missing_surface_fit():
-    """Automatic mode never assumes a tag mounting direction."""
-    point = make_projected_point()
-
     with pytest.raises(ValueError, match="surface is uneven"):
-        resolve_reference_approach_direction(
-            point,
+        resolve(
+            make_projected_point(),
             None,
             make_pose(),
-            mode=APPROACH_MODE_AUTOMATIC,
-            surface_normal_unavailable_reason="surface is uneven",
+            APPROACH_MODE_AUTOMATIC,
+            "surface is uneven",
         )
 
 
 def test_tag_x_is_transformed_into_the_camera_frame():
-    """Object-frame +X is rotated through the saved reference pose."""
     point = make_projected_point()
     half_sqrt = math.sqrt(0.5)
     pose = make_pose(
@@ -102,33 +121,20 @@ def test_tag_x_is_transformed_into_the_camera_frame():
         )
     )
 
-    result = resolve_reference_approach_direction(
+    direction, source = resolve(
         point,
         None,
         pose,
-        mode=APPROACH_MODE_TAG_X,
+        APPROACH_MODE_TAG_X,
     )
 
-    assert result.source == APPROACH_SOURCE_TAG_X_SELECTED
-    assert result.direction_camera.x == pytest.approx(0.0, abs=1e-9)
-    assert result.direction_camera.y == pytest.approx(0.0, abs=1e-9)
-    assert result.direction_camera.z == pytest.approx(-1.0)
-
-
-def test_surface_fit_only_rejects_missing_normal():
-    """Surface-only mode never silently falls back to tag orientation."""
-    with pytest.raises(ValueError, match="Surface-fit approach"):
-        resolve_reference_approach_direction(
-            make_projected_point(),
-            None,
-            make_pose(),
-            mode=APPROACH_MODE_SURFACE_FIT,
-            surface_normal_unavailable_reason="too few samples",
-        )
+    assert source == APPROACH_SOURCE_TAG_X_SELECTED
+    assert direction.x == pytest.approx(0.0, abs=1e-9)
+    assert direction.y == pytest.approx(0.0, abs=1e-9)
+    assert direction.z == pytest.approx(-1.0)
 
 
 def test_surface_normal_must_belong_to_the_selected_point():
-    """A stale normal cannot be attached to a different selected pixel."""
     point = make_projected_point()
     other = ProjectedReferencePoint(
         requested_pixel=ImagePoint(u=13, v=8),
@@ -140,19 +146,19 @@ def test_surface_normal_must_belong_to_the_selected_point():
     normal = make_surface_normal(other, 1.0, 0.0, 0.0)
 
     with pytest.raises(ValueError, match="different reference pixel"):
-        resolve_reference_approach_direction(
+        resolve(
             point,
             normal,
             make_pose(),
+            APPROACH_MODE_AUTOMATIC,
         )
 
 
 def test_invalid_mode_is_rejected():
-    """Unknown direction-source modes fail explicitly."""
     with pytest.raises(ValueError, match="Unsupported"):
-        resolve_reference_approach_direction(
+        resolve(
             make_projected_point(),
             None,
             make_pose(),
-            mode="unknown",
+            "unknown",
         )

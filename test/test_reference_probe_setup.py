@@ -4,6 +4,7 @@ import math
 
 import pytest
 
+from fault_detector_spot.inspection.geometry.rotation import quaternion_from_euler
 from fault_detector_spot.inspection.model.models import (
     PoseData,
     QuaternionData,
@@ -34,12 +35,13 @@ def pose(x=0.0, y=0.0, z=0.0, orientation=None):
     )
 
 
-def target():
+def target(orientation=None):
+    resolved = orientation or QuaternionData.identity()
     return ReferenceSurfaceTarget(
         surface_point_object=Vector3Data.zero(),
         outward_direction_object=Vector3Data(x=1.0, y=0.0, z=0.0),
-        target_pose_object=pose(x=0.03),
-        aligned_preapproach_pose_object=pose(x=0.15),
+        target_pose_object=pose(x=0.03, orientation=resolved),
+        aligned_preapproach_pose_object=pose(x=0.15, orientation=resolved),
         target_surface_distance_m=0.03,
         aligned_preapproach_distance_m=0.15,
         direction_source="surface_fit",
@@ -56,42 +58,19 @@ def yaw_quaternion(degrees):
     )
 
 
-def roll_quaternion(degrees):
-    radians = math.radians(degrees) * 0.5
-    return QuaternionData(
-        x=math.sin(radians),
-        y=0.0,
-        z=0.0,
-        w=math.cos(radians),
+def test_initial_setup_uses_already_resolved_surface_target_poses():
+    orientation = quaternion_from_euler(
+        "xyz",
+        [math.radians(5.0), math.radians(15.0), math.radians(25.0)],
     )
-
-
-def test_initial_setup_uses_calculated_poses():
-    setup = initialize_reference_probe_setup(target())
+    setup = initialize_reference_probe_setup(target(orientation))
 
     assert setup.safe_approach_pose_object.position.x == 0.15
     assert setup.aligned_preapproach_pose_object.position.x == 0.15
     assert setup.probe_pose_object.position.x == 0.03
+    assert setup.aligned_preapproach_pose_object.orientation == orientation
+    assert setup.probe_pose_object.orientation == orientation
     assert not setup.safe_approach_approved
-
-
-def test_initial_setup_compensates_sensor_roll_with_level_hand_pose():
-    mounting = pose(orientation=roll_quaternion(90.0))
-
-    setup = initialize_reference_probe_setup(target(), mounting)
-    hand_pose = probe_pose_to_hand_pose(
-        setup.probe_pose_object,
-        mounting,
-    )
-    inward = rotate_vector(
-        setup.probe_pose_object.orientation,
-        Vector3Data(x=1.0, y=0.0, z=0.0),
-    )
-
-    assert hand_pose.orientation == QuaternionData.identity()
-    assert inward.x == pytest.approx(1.0)
-    assert inward.y == pytest.approx(0.0)
-    assert inward.z == pytest.approx(0.0)
 
 
 def test_approach_capture_changes_only_the_independent_safe_pose():
@@ -164,7 +143,6 @@ def test_aligned_pose_is_derived_opposite_probe_local_positive_x():
 
 
 def test_later_approvals_preserve_the_approved_safe_pose():
-    """Later stages cannot rewrite a previously approved safe pose."""
     setup = initialize_reference_probe_setup(target())
     safe_pose = pose(
         x=0.4,
@@ -186,7 +164,6 @@ def test_later_approvals_preserve_the_approved_safe_pose():
 
 
 def test_reapproving_approach_preserves_independent_later_approvals():
-    """Changing the independent safe pose cannot rewrite geometry."""
     setup = initialize_reference_probe_setup(target())
     setup = approve_surface_alignment_pose(setup, pose(x=0.20))
     setup = approve_probe_pose(setup, pose(x=0.04))
