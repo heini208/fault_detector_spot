@@ -172,7 +172,7 @@ def test_rotation_distance_matches_known_angle():
     )
 
 
-def test_trajectory_guard_measures_lateral_drift_per_step():
+def test_endpoint_validation_measures_settled_lateral_error():
     action = behaviour(maximum_lateral_drift_m=0.010)
     action._plan = FrozenPlan()
     action._previous_probe_pose = pose(x=0.050, y=0.0100)
@@ -186,13 +186,13 @@ def test_trajectory_guard_measures_lateral_drift_per_step():
     assert lateral == pytest.approx(0.0002)
 
 
-def test_trajectory_guard_rejects_actual_per_step_lateral_drift():
+def test_endpoint_validation_rejects_excessive_settled_lateral_error():
     action = behaviour(maximum_lateral_drift_m=0.010)
     action._plan = FrozenPlan()
     action._previous_probe_pose = pose()
     action._requested_step_m = 0.010
 
-    with pytest.raises(RuntimeError, match="per-step lateral drift"):
+    with pytest.raises(RuntimeError, match="settled endpoint lateral error"):
         action._validate_step_motion(
             pose(x=0.010, y=0.0102)
         )
