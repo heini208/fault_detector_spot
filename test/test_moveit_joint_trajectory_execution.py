@@ -135,3 +135,24 @@ def test_moveit_joint_goal_rejects_partial_velocity_data(monkeypatch):
 
     with pytest.raises(ValueError, match="velocities for every point"):
         ArmMovementExecutor._build_moveit_joint_goal(planned)
+
+
+def test_zero_time_start_gets_lead_time_without_changing_segment_duration(monkeypatch):
+    planned = trajectory()
+    planned.points[0].time_from_start.nanosec = 0
+    captured = capture_joint_move(monkeypatch)
+
+    ArmMovementExecutor._build_moveit_joint_goal(planned)
+
+    assert captured["times"] == pytest.approx([0.25, 1.5])
+    assert captured["times"][1] - captured["times"][0] == pytest.approx(1.25)
+    assert planned.points[0].time_from_start.nanosec == 0
+
+
+@pytest.mark.parametrize("seconds", [-1, float("nan"), float("inf")])
+def test_joint_goal_rejects_invalid_times(monkeypatch, seconds):
+    planned = trajectory()
+    planned.points[0].time_from_start.sec = seconds
+    capture_joint_move(monkeypatch)
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        ArmMovementExecutor._build_moveit_joint_goal(planned)

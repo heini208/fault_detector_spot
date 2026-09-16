@@ -226,8 +226,7 @@ class MoveItArmPlanner:
         if error_code != MoveItErrorCodes.SUCCESS:
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.FAILURE,
-                f"MoveIt could not compute an arm plan "
-                f"(error code {error_code})",
+                self._planning_failure_detail(error_code),
             )
 
         trajectory = deepcopy(result.trajectory.joint_trajectory)
@@ -276,6 +275,23 @@ class MoveItArmPlanner:
             self._pose_goal_constraints(target_hand)
         ]
         return request
+
+    @staticmethod
+    def _planning_failure_detail(error_code: int) -> str:
+        name = next((
+            key for key in dir(MoveItErrorCodes)
+            if key.isupper() and getattr(MoveItErrorCodes, key) == error_code
+        ), "UNKNOWN")
+        detail = (
+            "MoveIt could not compute an arm plan "
+            f"({name}, error code {error_code})"
+        )
+        if error_code == MoveItErrorCodes.GOAL_STATE_INVALID:
+            detail += (
+                ": no valid goal state found for the requested hand pose; "
+                "check move_group logs for IK, collision, or joint-limit failures"
+            )
+        return detail
 
     def _pose_goal_constraints(
         self,

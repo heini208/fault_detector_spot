@@ -994,6 +994,17 @@ class ArmMovementExecutor(MovementExecutor):
         return self._finish(outcome, detail)
 
     def _arm_failure_result(self, result):
+        command = getattr(getattr(result, "result", None), "command", None)
+        if (
+            getattr(command, "command_choice", None) == 0
+            and not getattr(result, "message", "")
+            and not getattr(result, "detail", "")
+        ):
+            return (
+                ArmMovementOutcome.MOTION_FAILED,
+                "Spot RobotCommand failed without feedback or an error "
+                "message; check spot_driver logs for the underlying failure",
+            )
         feedback = self._cartesian_feedback(result)
         status = getattr(feedback, "status", None)
         value = getattr(status, "value", None)
@@ -1339,6 +1350,16 @@ class ArmMovementExecutor(MovementExecutor):
                     float(point.velocities[joint_index])
                     for joint_index in joint_indices
                 ])
+
+        # Spot rejects multipoint trajectories whose first point has already
+        # elapsed at receipt. MoveIt normally includes the start state at t=0.
+        # Shift the whole trajectory so segment durations remain unchanged.
+        if any(not math.isfinite(value) or value < 0.0 for value in times):
+            raise ValueError("MoveIt trajectory times must be finite and nonnegative")
+        if any(right <= left for left, right in zip(times, times[1:])):
+            raise ValueError("MoveIt trajectory times must be strictly increasing")
+        start_delay = max(0.0, 0.25 - times[0])
+        times = [value + start_delay for value in times]
 
         command = RobotCommandBuilder.arm_joint_move_helper(
             joint_positions,

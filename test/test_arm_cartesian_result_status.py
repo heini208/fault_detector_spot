@@ -110,3 +110,25 @@ def test_guarded_failure_releases_only_goal_lifecycle():
     assert executor._result_future is None
     assert executor._goal_sent_monotonic is None
     assert executor._result_started_monotonic is None
+
+
+def test_empty_driver_result_reports_missing_feedback_without_ros_dump():
+    from spot_msgs.action import RobotCommand
+
+    outcome, detail = executor_shell()._arm_failure_result(RobotCommand.Result())
+
+    assert outcome is ArmMovementOutcome.MOTION_FAILED
+    assert "without feedback or an error message" in detail
+    assert "spot_driver logs" in detail
+    assert "bosdyn_api_msgs" not in detail
+
+
+def test_empty_feedback_preserves_driver_error_message():
+    from spot_msgs.action import RobotCommand
+
+    result = RobotCommand.Result()
+    result.message = "Command rejected by driver"
+    outcome, detail = executor_shell()._arm_failure_result(result)
+
+    assert outcome is ArmMovementOutcome.MOTION_FAILED
+    assert detail == result.message
