@@ -25,6 +25,9 @@ from fault_detector_spot.manipulation.arm_motion_speed import (
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
 )
+from fault_detector_spot.manipulation.moveit_arm_planner import (
+    MoveItArmPlanner,
+)
 from fault_detector_spot.manipulation.arm_motion_parameters import (
     ArmMotionParameters,
 )
@@ -60,6 +63,7 @@ class RobotCommandResources:
         self._probe_surface_source = None
         self._posture_state_source = None
         self._arm_motion_speed_policy = None
+        self._moveit_arm_planner = None
         self._arm_movement_executors = {}
         self._base_movement_executors = {}
 
@@ -131,6 +135,14 @@ class RobotCommandResources:
                 self._posture_state_source = PostureStateSource(node)
             return self._posture_state_source
 
+    def get_moveit_arm_planner(self, node):
+        """Return the shared MoveIt planning client for the Spot arm."""
+        with self._lock:
+            self._bind_node(node)
+            if self._moveit_arm_planner is None:
+                self._moveit_arm_planner = MoveItArmPlanner(node)
+            return self._moveit_arm_planner
+
     def get_arm_movement_executor(
         self,
         node,
@@ -157,6 +169,7 @@ class RobotCommandResources:
                         node,
                         robot_name,
                     ),
+                    moveit_arm_planner=self.get_moveit_arm_planner(node),
                     arm_state_source=self.get_arm_state_source(node),
                     force_baseline_sampler=ForceBaselineSampler.from_node(
                         node,
@@ -237,6 +250,7 @@ class RobotCommandResources:
             arm_contact_telemetry = self._arm_contact_telemetry
             probe_surface_source = self._probe_surface_source
             posture_state_source = self._posture_state_source
+            moveit_arm_planner = self._moveit_arm_planner
             arm_executors = tuple(
                 self._arm_movement_executors.values()
             )
@@ -251,6 +265,7 @@ class RobotCommandResources:
             self._probe_surface_source = None
             self._posture_state_source = None
             self._arm_motion_speed_policy = None
+            self._moveit_arm_planner = None
             self._arm_movement_executors.clear()
             self._base_movement_executors.clear()
             self._clients.clear()
@@ -265,6 +280,10 @@ class RobotCommandResources:
             ("base movement executor", executor.shutdown)
             for executor in base_executors
         )
+        if moveit_arm_planner is not None:
+            resources.append(
+                ("MoveIt arm planner", moveit_arm_planner.destroy)
+            )
         if probe_surface_source is not None:
             resources.append(
                 ("probe surface source", probe_surface_source.destroy)

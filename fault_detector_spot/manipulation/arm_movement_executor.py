@@ -48,9 +48,15 @@ from fault_detector_spot.manipulation.arm_state_source import (
 from fault_detector_spot.manipulation.guarded_probe_execution import (
     GuardedProbeExecution,
 )
+from fault_detector_spot.manipulation.moveit_arm_planner import (
+    MoveItPlanOutcome,
+)
 from fault_detector_spot.manipulation.probe_motion_planner import (
     CartesianMotionPlan,
     ProbeMotionPlanner,
+)
+from fault_detector_spot.shared.geometry.movement_geometry import (
+    MovementGeometryUnavailable,
 )
 from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
 from fault_detector_spot.shared.ros.tf_transforms import transform_to_pose_data
@@ -88,6 +94,7 @@ class ArmMovementExecutor(MovementExecutor):
         robot_name: str = "",
         speed_policy=None,
         action_client=None,
+        moveit_arm_planner=None,
         arm_stop_service_client=None,
         arm_state_source=None,
         surface_source=None,
@@ -158,6 +165,7 @@ class ArmMovementExecutor(MovementExecutor):
         )
         self.arm_state_source = arm_state_source
         self.surface_source = surface_source
+        self.moveit_arm_planner = moveit_arm_planner
         self._owns_arm_stop_service_client = False
         self.arm_stop_service_client = arm_stop_service_client
         if (
@@ -214,6 +222,8 @@ class ArmMovementExecutor(MovementExecutor):
         self._ready_probe_start = None
         self._guarded_plan_builder = None
         self._guarded_force_threshold_n = None
+        self._pending_moveit_plan_builder = None
+        self._moveit_cartesian_plan = None
         self._arm_stop_service_future = None
         self._arm_stop_service_started = None
 
@@ -477,24 +487,130 @@ class ArmMovementExecutor(MovementExecutor):
 
         target = deepcopy(probe_target)
 
-        def build_goal():
+        def build_plan():
             if isinstance(target, CartesianMotionPlan):
                 if str(motion_sensor_id).strip() or speed is not None:
                     raise ValueError(
                         "Resolved arm plans already contain target geometry "
                         "and timing"
                     )
-                plan = target
-            else:
-                plan = self.probe_motion_planner.build_probe_plan(
-                    target,
-                    motion_sensor_id,
-                    speed,
-                )
+                return target
+            return self.probe_motion_planner.build_probe_plan(
+                target,
+                motion_sensor_id,
+                speed,
+            )
+
+        if self._moveit_planning_required():
+            self._pending_moveit_plan_builder = build_plan
+            return self._advance_moveit_planning_start()
+
+        def build_goal():
+            plan = build_plan()
             return self._build_pose_goal(plan.target_hand, plan.duration_sec)
 
         self._pending_goal_builder = build_goal
         return self._submit_goal(build_goal)
+
+    def _moveit_planning_required(self) -> bool:
+        return (
+            self.moveit_arm_planner is not None
+            and self._operation not in (
+                _ArmOperation.PREPARE,
+                _ArmOperation.READY_PREPARE,
+            )
+        )
+
+    def _advance_moveit_planning_start(self) -> ArmMovementUpdate:
+        planner = self.moveit_arm_planner
+        builder = self._pending_moveit_plan_builder
+        if planner is None or builder is None:
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "MoveIt planning has no planner or pending arm plan",
+            )
+
+        try:
+            plan = builder()
+            target_hand = self.probe_motion_planner.normalize_target(
+                plan.target_hand,
+                planner.planning_frame,
+            )
+        except MovementGeometryUnavailable as exception:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                str(exception),
+            )
+        except Exception as exception:
+            self._pending_moveit_plan_builder = None
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"MoveIt target preparation failed: {exception}",
+            )
+
+        update = planner.start(target_hand)
+        if update.outcome is MoveItPlanOutcome.RUNNING:
+            self._pending_moveit_plan_builder = None
+            self._moveit_cartesian_plan = plan
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                update.detail,
+            )
+
+        self._pending_moveit_plan_builder = None
+        return self._finish(
+            self._moveit_failure_outcome(update.outcome),
+            update.detail,
+        )
+
+    def _poll_moveit_planning(self) -> ArmMovementUpdate:
+        planner = self.moveit_arm_planner
+        plan = self._moveit_cartesian_plan
+        if planner is None or plan is None:
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "MoveIt planning lost its planner or Cartesian arm plan",
+            )
+
+        update = planner.poll()
+        if update.outcome is MoveItPlanOutcome.RUNNING:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                update.detail,
+            )
+
+        self._moveit_cartesian_plan = None
+        if update.outcome is not MoveItPlanOutcome.SUCCESS:
+            return self._finish(
+                self._moveit_failure_outcome(update.outcome),
+                update.detail,
+            )
+
+        def build_goal():
+            return self._build_pose_goal(
+                plan.target_hand,
+                plan.duration_sec,
+            )
+
+        self._pending_goal_builder = build_goal
+        return self._submit_goal(build_goal)
+
+    @staticmethod
+    def _moveit_failure_outcome(outcome):
+        if outcome is MoveItPlanOutcome.SERVICE_UNAVAILABLE:
+            return ArmMovementOutcome.ACTION_SERVER_UNAVAILABLE
+        if outcome is MoveItPlanOutcome.TIMEOUT:
+            return ArmMovementOutcome.RESULT_TIMEOUT
+        if outcome is MoveItPlanOutcome.FAILURE:
+            return ArmMovementOutcome.MOTION_FAILED
+        return ArmMovementOutcome.EXECUTION_ERROR
+
+    def _reset_moveit_planning(self, cancel=False) -> None:
+        planner = self.moveit_arm_planner
+        self._pending_moveit_plan_builder = None
+        self._moveit_cartesian_plan = None
+        if cancel and planner is not None:
+            planner.cancel()
 
     def _continue_probe(
         self,
@@ -537,6 +653,12 @@ class ArmMovementExecutor(MovementExecutor):
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "No arm movement is active",
             )
+
+        if self._pending_moveit_plan_builder is not None:
+            return self._advance_moveit_planning_start()
+
+        if self._moveit_cartesian_plan is not None:
+            return self._poll_moveit_planning()
 
         if self._verification_started is not None:
             return self._poll_state_confirmation()
@@ -715,6 +837,7 @@ class ArmMovementExecutor(MovementExecutor):
         if self._operation == _ArmOperation.GUARDED_MOVEMENT:
             # A goal ending must leave the guard active for stop confirmation.
             # Only _finish_guarded_update ends the enclosing arm operation.
+            self._reset_moveit_planning(cancel=True)
             self._pending_goal_builder = None
             self._reset_goal_lifecycle()
             return ArmMovementUpdate(outcome, str(detail).strip())
@@ -733,6 +856,7 @@ class ArmMovementExecutor(MovementExecutor):
         return self._poll_result()
 
     def _guard_cancel_goal(self) -> None:
+        self._reset_moveit_planning(cancel=True)
         self._pending_goal_builder = None
         self._request_cancel()
         self._reset_goal_lifecycle()
@@ -937,6 +1061,7 @@ class ArmMovementExecutor(MovementExecutor):
         return getattr(feedback, "arm_cartesian_feedback", None)
 
     def _reset_operation(self) -> None:
+        self._reset_moveit_planning(cancel=True)
         super()._reset_operation()
         self._operation = None
         self._operation_speed = None
