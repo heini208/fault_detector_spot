@@ -354,20 +354,19 @@ def test_force_in_commanded_direction_is_not_obstacle_contact():
     assert driver.cancel_count == 0
 
 
-def test_sustained_high_off_axis_self_motion_is_suppressed():
+def test_sustained_high_off_axis_self_motion_uses_execution_frame_pose():
     clock = ManualClock()
     state = FakeArmStateSource()
-    state.velocity = SimpleNamespace(
-        linear_x_mps=0.05,
-        linear_y_mps=0.08,
-        linear_z_mps=0.0,
-    )
     driver = GoalDriver()
-    guard = execution(state, driver, clock, pose(0.008))
+    current_pose = pose(0.0)
+    guard = execution(state, driver, clock, current_pose)
 
     assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
 
-    for received_at in (0.1, 0.2, 0.3):
+    for index, received_at in enumerate((0.1, 0.2, 0.3), start=1):
+        clock.now = received_at
+        current_pose.pose.position.x = 0.005 * index
+        current_pose.pose.position.y = 0.008 * index
         state.sample = HandForceSample(
             received_at,
             -5.0,
@@ -379,3 +378,30 @@ def test_sustained_high_off_axis_self_motion_is_suppressed():
     assert driver.cancel_count == 0
     assert driver.stop_count == 0
     assert guard._self_motion_suppression_count == 2
+
+
+def test_vision_frame_velocity_does_not_suppress_contact():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    state.velocity = SimpleNamespace(
+        linear_x_mps=0.05,
+        linear_y_mps=0.08,
+        linear_z_mps=0.0,
+    )
+    driver = GoalDriver()
+    current_pose = pose(0.008)
+    guard = execution(state, driver, clock, current_pose)
+
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+
+    clock.now = 0.1
+    state.sample = HandForceSample(0.1, -5.0, 2.0, 3.0)
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    clock.now = 0.2
+    state.sample = HandForceSample(0.2, -5.0, 2.0, 3.0)
+    update = guard.poll()
+
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 1
+    assert driver.started_goals[-1] == ("arm_stop", 1)
