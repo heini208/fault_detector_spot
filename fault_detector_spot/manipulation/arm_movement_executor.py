@@ -654,6 +654,10 @@ class ArmMovementExecutor(MovementExecutor):
                 "No arm movement is active",
             )
 
+        # The guard must consume planning results and retain force monitoring.
+        if self._operation == _ArmOperation.GUARDED_MOVEMENT:
+            return self._poll_guarded_probe()
+
         if self._pending_moveit_plan_builder is not None:
             return self._advance_moveit_planning_start()
 
@@ -665,9 +669,6 @@ class ArmMovementExecutor(MovementExecutor):
 
         if self._operation == _ArmOperation.READY_WAIT:
             return self._advance_ready_probe()
-
-        if self._operation == _ArmOperation.GUARDED_MOVEMENT:
-            return self._poll_guarded_probe()
 
         if self._send_goal_future is None:
             if self._pending_goal_builder is not None:
@@ -844,6 +845,10 @@ class ArmMovementExecutor(MovementExecutor):
         return super()._finish(outcome, detail)
 
     def _guard_poll_goal(self) -> ArmMovementUpdate:
+        if self._pending_moveit_plan_builder is not None:
+            return self._advance_moveit_planning_start()
+        if self._moveit_cartesian_plan is not None:
+            return self._poll_moveit_planning()
         if self._pending_goal_builder is not None:
             return super().poll()
         if self._send_goal_future is None:

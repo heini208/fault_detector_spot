@@ -271,6 +271,7 @@ class MoveItArmPlanner:
         motion.allowed_planning_time = self.allowed_planning_time_sec
         motion.max_velocity_scaling_factor = self.velocity_scaling
         motion.max_acceleration_scaling_factor = self.acceleration_scaling
+        motion.start_state.is_diff = True
         motion.goal_constraints = [
             self._pose_goal_constraints(target_hand)
         ]

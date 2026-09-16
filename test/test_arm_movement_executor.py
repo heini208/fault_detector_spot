@@ -668,7 +668,8 @@ def test_result_timeout_requests_goal_cancellation(monkeypatch):
     assert not executor.active
 
 
-def test_explicit_cancel_requests_goal_cancellation(monkeypatch):
+@pytest.mark.parametrize("poll_acceptance", [False, True])
+def test_explicit_cancel_requests_goal_cancellation(monkeypatch, poll_acceptance):
     target = PoseStamped()
     target.header.frame_id = "body"
     target.pose.orientation.w = 1.0
@@ -688,7 +689,8 @@ def test_explicit_cancel_requests_goal_cancellation(monkeypatch):
 
     executor.pose(target)
     send_future.set_result(handle)
-    executor.poll()
+    if poll_acceptance:
+        executor.poll()
 
     executor.cancel()
 
@@ -1105,3 +1107,40 @@ def test_public_probe_rejects_new_requests_during_preparation(monkeypatch):
     assert executor._operation == executor_module._ArmOperation.PREPARE
     executor.cancel()
     assert not executor.active
+
+
+@pytest.mark.parametrize("outcome_name", ["FAILURE", "TIMEOUT", "ERROR"])
+def test_guarded_moveit_failure_stops_and_releases_executor(outcome_name):
+    from fault_detector_spot.manipulation.moveit_arm_planner import (
+        MoveItPlanOutcome, MoveItPlanUpdate,
+    )
+    from fault_detector_spot.manipulation.guarded_probe_execution import _Phase
+
+    executor, client = executor_with_client(FakeTransformer({}))
+    executor.arm_stop_service_client = FakeArmStopServiceClient()
+    executor.moveit_arm_planner = SimpleNamespace(
+        poll=lambda: MoveItPlanUpdate(
+            getattr(MoveItPlanOutcome, outcome_name), "planning failed"
+        ),
+        cancel=lambda: None,
+    )
+    executor._active = True
+    executor._operation = executor_module._ArmOperation.GUARDED_MOVEMENT
+    executor._moveit_cartesian_plan = object()
+    guard = executor.guarded_probe_execution
+    guard._phase = _Phase.MOVING
+    guard._plan = SimpleNamespace(force_guard_enabled=False)
+
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert executor.active
+    assert len(executor.arm_stop_service_client.requests) == 1
+    executor.arm_stop_service_client.future.set_result(
+        SimpleNamespace(success=True, message="stopped")
+    )
+    result = executor.poll()
+    assert result.outcome is not ArmMovementOutcome.RUNNING
+    assert "planning failed" in result.detail
+    assert not executor.active
+    assert not guard.active
+    assert client.sent_goals == []
+    assert executor.stow().outcome is ArmMovementOutcome.RUNNING

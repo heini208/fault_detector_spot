@@ -299,7 +299,7 @@ class MovementExecutor:
             return
 
         future = self._send_goal_future
-        if future is None or future.done():
+        if future is None:
             return
 
         def cancel_when_accepted(done_future):
@@ -316,7 +316,10 @@ class MovementExecutor:
                     f"failed: {exception}"
                 )
 
-        future.add_done_callback(cancel_when_accepted)
+        if future.done():
+            cancel_when_accepted(future)
+        else:
+            future.add_done_callback(cancel_when_accepted)
 
     def _finish(self, outcome, detail: str):
         update = self._new_update(

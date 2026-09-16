@@ -156,3 +156,18 @@ def test_common_movement_behaviour_preserves_correlated_failure_detail():
     assert action.blackboard.command_failure_detail == (
         "Fresh manipulator stow state was unavailable for 2.0 s"
     )
+
+
+def test_emergency_stow_cancels_active_executor_before_starting():
+    calls = []
+    action = StowArmBehaviour(preempt=True)
+    action.executor = SimpleNamespace(
+        cancel=lambda: calls.append("cancel"),
+        stow=lambda: calls.append("stow") or ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING, "stowing"
+        ),
+    )
+    action.blackboard = blackboard("cancel-all")
+    action.initialise()
+    assert action.update() is Status.RUNNING
+    assert calls == ["cancel", "stow"]

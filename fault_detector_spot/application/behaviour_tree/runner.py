@@ -419,6 +419,7 @@ def build_cancelable_command_tree(
     stow_cancel = StowArmBehaviour(
         name="StowArmCancelBehaviour",
         robot_command_resources=robot_command_resources,
+        preempt=True,
     )
     close_gripper = CloseGripperAction(
         name="CloseGripperAction",
