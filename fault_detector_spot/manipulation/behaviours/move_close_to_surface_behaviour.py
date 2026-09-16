@@ -637,7 +637,7 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
         lateral = self._norm(lateral_vector)
         if lateral > self.config.maximum_lateral_drift_m:
             raise RuntimeError(
-                "per-step lateral drift exceeded the safety limit: "
+                "settled endpoint lateral error exceeded the safety limit: "
                 f"{lateral:.4f} m > "
                 f"{self.config.maximum_lateral_drift_m:.4f} m"
             )
