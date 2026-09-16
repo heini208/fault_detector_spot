@@ -2,9 +2,10 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
 from fault_detector_spot.shared.persistence.runtime_paths import (
@@ -16,6 +17,7 @@ from fault_detector_spot.shared.persistence.runtime_paths import (
 
 def generate_launch_description():
     pkg = get_package_share_directory("fault_detector_spot")
+    moveit_pkg = get_package_share_directory("spot_moveit_config")
 
     tag_config = os.path.join(
         pkg,
@@ -102,6 +104,15 @@ def generate_launch_description():
             "micro_ros_agent_verbosity",
             default_value="4",
             description="micro-ROS Agent log verbosity (0-6)",
+        ),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(
+                    moveit_pkg,
+                    "launch",
+                    "move_group.launch.py",
+                )
+            )
         ),
         Node(
             package="micro_ros_agent",
