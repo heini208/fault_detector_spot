@@ -251,7 +251,7 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
                     self.config.sample_timeout_sec,
                     self.config.minimum_surface_span_sec,
                 ),
-                minimum_samples=1,
+                minimum_samples=self.config.minimum_surface_samples,
             )
             for sample in fresh:
                 self._surface_samples[sample.stamp_seconds] = sample
@@ -309,15 +309,21 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
         except Exception as exception:
             last_error = exception
 
+        detail = str(last_error)
+        if self._surface_samples:
+            detail += (
+                f"; {len(self._surface_samples)} distinct valid frame(s) "
+                "accumulated"
+            )
+
         if now - self._phase_started >= self.config.sample_timeout_sec:
             return self._fail_workflow(
                 "Unable to establish stable surface distance: "
-                f"{last_error}; collected "
-                f"{len(self._surface_samples)} valid frame(s)"
+                f"{detail}"
             )
         self.feedback_message = (
             "Collecting initial surface distance: "
-            f"{len(self._surface_samples)} valid frame(s); {last_error}"
+            f"{detail}"
         )
         return Status.RUNNING
 

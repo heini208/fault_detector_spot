@@ -259,26 +259,23 @@ class ProbeSurfaceSource(RuntimeSource):
                 errors.append(str(exception))
 
         if len(samples) < minimum_samples:
+            newest_age = now - history[-1][0] if history else None
+            newest_detail = (
+                f"{newest_age:.3f}s"
+                if newest_age is not None
+                else "none"
+            )
+            detail = (
+                f"buffered={len(history)}, "
+                f"post_start={post_start_count}, "
+                f"within_age={eligible_count}, "
+                f"valid={len(samples)}, "
+                f"rejected={len(errors)}, "
+                f"newest_age={newest_detail}, "
+                f"max_age={maximum_age_sec:.3f}s"
+            )
             if errors:
-                detail = (
-                    f"{eligible_count} eligible frame(s), "
-                    f"{len(errors)} rejected; last error: {errors[-1]}"
-                )
-            else:
-                newest_age = now - history[-1][0] if history else None
-                newest_detail = (
-                    f"{newest_age:.3f}s"
-                    if newest_age is not None
-                    else "none"
-                )
-                detail = (
-                    "no eligible depth frames "
-                    f"(buffered={len(history)}, "
-                    f"post_start={post_start_count}, "
-                    f"within_age={eligible_count}, "
-                    f"newest_age={newest_detail}, "
-                    f"max_age={maximum_age_sec:.3f}s)"
-                )
+                detail += f"; last rejection: {errors[-1]}"
             raise ValueError(
                 "Need at least "
                 f"{minimum_samples} fresh registered hand-depth sample"
