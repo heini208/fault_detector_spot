@@ -181,8 +181,6 @@ class GuardedProbeExecution:
         self._peak_opposing_force_delta_n = 0.0
         self._peak_total_force_delta_n = 0.0
         self._last_hand_orientation = None
-        self._last_motion_pose = None
-        self._last_motion_observed_at = None
         self._primary_motion_started_at = None
         self._telemetry_movement_sequence = None
         self._stop_terminal_outcome = None
@@ -312,8 +310,6 @@ class GuardedProbeExecution:
             plan.current_hand.pose.orientation
         )
         self._primary_motion_started_at = self._monotonic_clock()
-        self._last_motion_pose = deepcopy(plan.current_hand)
-        self._last_motion_observed_at = self._primary_motion_started_at
         self._telemetry_movement_sequence = (
             self._begin_contact_telemetry()
         )
@@ -441,10 +437,6 @@ class GuardedProbeExecution:
                     plan.direction_z,
                 ),
             )
-            measured_hand_velocity = self._same_frame_hand_velocity(
-                current_hand,
-                now,
-            )
         except Exception as exception:
             return self._begin_abort(
                 ArmMovementOutcome.EXECUTION_ERROR,
@@ -475,7 +467,6 @@ class GuardedProbeExecution:
                 plan=plan,
                 force_delta=force_delta,
                 force_threshold_n=threshold_n,
-                hand_linear_velocity_mps=measured_hand_velocity,
             )
             self_motion_suppressed = (
                 evidence is not None
@@ -539,56 +530,31 @@ class GuardedProbeExecution:
             )
         return self._begin_contact(detail)
 
-    def _same_frame_hand_velocity(
-        self,
-        current_hand,
-        observed_at: float,
-    ):
-        if current_hand is None:
-            return None
-
-        timestamp = float(observed_at)
-        if not math.isfinite(timestamp):
-            return None
-
-        previous_pose = self._last_motion_pose
-        previous_time = self._last_motion_observed_at
-        self._last_motion_pose = deepcopy(current_hand)
-        self._last_motion_observed_at = timestamp
-
-        if previous_pose is None or previous_time is None:
-            return None
-        if timestamp <= previous_time + 1e-12:
-            return None
-        if (
-            previous_pose.header.frame_id.strip()
-            != current_hand.header.frame_id.strip()
-        ):
-            return None
-
-        dt = timestamp - previous_time
-        previous = previous_pose.pose.position
-        current = current_hand.pose.position
-        velocity = (
-            (float(current.x) - float(previous.x)) / dt,
-            (float(current.y) - float(previous.y)) / dt,
-            (float(current.z) - float(previous.z)) / dt,
-        )
-        if not all(math.isfinite(value) for value in velocity):
-            return None
-        return velocity
-
     def _contact_evidence(
         self,
         *,
         plan,
         force_delta,
         force_threshold_n,
-        hand_linear_velocity_mps,
     ):
         if not plan.translational_motion:
             return None
         try:
+            velocity_method = getattr(
+                self.arm_state_source,
+                "hand_velocity_sample",
+                None,
+            )
+            velocity = (
+                velocity_method() if callable(velocity_method) else None
+            )
+            hand_linear_velocity = None
+            if velocity is not None:
+                hand_linear_velocity = (
+                    velocity.linear_x_mps,
+                    velocity.linear_y_mps,
+                    velocity.linear_z_mps,
+                )
             return self.contact_evidence_analyzer.analyze(
                 force_threshold_n=force_threshold_n,
                 required_consecutive_samples=(
@@ -600,7 +566,7 @@ class GuardedProbeExecution:
                     plan.direction_z,
                 ),
                 opposing_force_delta_n=force_delta.opposing_n,
-                hand_linear_velocity_mps=hand_linear_velocity_mps,
+                hand_linear_velocity_mps=hand_linear_velocity,
             )
         except Exception:
             return None
