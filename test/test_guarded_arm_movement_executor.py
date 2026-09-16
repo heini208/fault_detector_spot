@@ -183,7 +183,9 @@ def execution(
         cancel_goal=driver.cancel,
         start_stop=driver.start_stop,
         poll_stop=driver.poll_stop,
-        current_hand_pose=lambda _frame: deepcopy(current_pose),
+        current_hand_pose=lambda _frame: deepcopy(
+            current_pose() if callable(current_pose) else current_pose
+        ),
         build_motion_plan=lambda current, target, speed: (
             "retreat",
             current,
@@ -357,17 +359,26 @@ def test_force_in_commanded_direction_is_not_obstacle_contact():
 def test_sustained_high_off_axis_self_motion_is_suppressed():
     clock = ManualClock()
     state = FakeArmStateSource()
-    state.velocity = SimpleNamespace(
-        linear_x_mps=0.05,
-        linear_y_mps=0.08,
-        linear_z_mps=0.0,
-    )
     driver = GoalDriver()
-    guard = execution(state, driver, clock, pose(0.008))
+    current = {"pose": pose(0.0)}
+    guard = execution(
+        state,
+        driver,
+        clock,
+        lambda: current["pose"],
+    )
 
     assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
 
-    for received_at in (0.1, 0.2, 0.3):
+    samples = (
+        (0.1, 0.01, 0.005),
+        (0.2, 0.02, 0.010),
+        (0.3, 0.03, 0.015),
+    )
+    for received_at, x, y in samples:
+        clock.now = received_at
+        current["pose"] = pose(x)
+        current["pose"].pose.position.y = y
         state.sample = HandForceSample(
             received_at,
             -5.0,

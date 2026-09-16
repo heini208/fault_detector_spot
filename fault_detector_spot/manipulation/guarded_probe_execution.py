@@ -181,6 +181,8 @@ class GuardedProbeExecution:
         self._peak_opposing_force_delta_n = 0.0
         self._peak_total_force_delta_n = 0.0
         self._last_hand_orientation = None
+        self._last_hand_position = None
+        self._last_hand_position_at = None
         self._primary_motion_started_at = None
         self._telemetry_movement_sequence = None
         self._stop_terminal_outcome = None
@@ -309,7 +311,14 @@ class GuardedProbeExecution:
         self._last_hand_orientation = deepcopy(
             plan.current_hand.pose.orientation
         )
+        start_position = plan.current_hand.pose.position
+        self._last_hand_position = (
+            float(start_position.x),
+            float(start_position.y),
+            float(start_position.z),
+        )
         self._primary_motion_started_at = self._monotonic_clock()
+        self._last_hand_position_at = self._primary_motion_started_at
         self._telemetry_movement_sequence = (
             self._begin_contact_telemetry()
         )
@@ -416,6 +425,13 @@ class GuardedProbeExecution:
             hand_orientation, current_hand = (
                 self._current_hand_measurement(plan)
             )
+            movement_direction, measured_hand_velocity = (
+                self._measured_hand_motion(
+                    plan,
+                    current_hand,
+                    now,
+                )
+            )
             force_delta = directional_force_delta(
                 baseline_force_hand=(
                     baseline.x_n,
@@ -431,11 +447,7 @@ class GuardedProbeExecution:
                     plan.current_hand.pose.orientation
                 ),
                 current_hand_orientation=hand_orientation,
-                movement_direction=(
-                    plan.direction_x,
-                    plan.direction_y,
-                    plan.direction_z,
-                ),
+                movement_direction=movement_direction,
             )
         except Exception as exception:
             return self._begin_abort(
@@ -467,6 +479,7 @@ class GuardedProbeExecution:
                 plan=plan,
                 force_delta=force_delta,
                 force_threshold_n=threshold_n,
+                hand_linear_velocity_mps=measured_hand_velocity,
             )
             self_motion_suppressed = (
                 evidence is not None
@@ -536,25 +549,11 @@ class GuardedProbeExecution:
         plan,
         force_delta,
         force_threshold_n,
+        hand_linear_velocity_mps,
     ):
         if not plan.translational_motion:
             return None
         try:
-            velocity_method = getattr(
-                self.arm_state_source,
-                "hand_velocity_sample",
-                None,
-            )
-            velocity = (
-                velocity_method() if callable(velocity_method) else None
-            )
-            hand_linear_velocity = None
-            if velocity is not None:
-                hand_linear_velocity = (
-                    velocity.linear_x_mps,
-                    velocity.linear_y_mps,
-                    velocity.linear_z_mps,
-                )
             return self.contact_evidence_analyzer.analyze(
                 force_threshold_n=force_threshold_n,
                 required_consecutive_samples=(
@@ -566,10 +565,66 @@ class GuardedProbeExecution:
                     plan.direction_z,
                 ),
                 opposing_force_delta_n=force_delta.opposing_n,
-                hand_linear_velocity_mps=hand_linear_velocity,
+                hand_linear_velocity_mps=hand_linear_velocity_mps,
             )
         except Exception:
             return None
+
+    def _measured_hand_motion(
+        self,
+        plan,
+        current_hand,
+        observed_at: float,
+    ):
+        fallback_direction = (
+            plan.direction_x,
+            plan.direction_y,
+            plan.direction_z,
+        )
+        if current_hand is None:
+            return fallback_direction, None
+
+        position = current_hand.pose.position
+        current_position = (
+            float(position.x),
+            float(position.y),
+            float(position.z),
+        )
+        previous_position = self._last_hand_position
+        previous_at = self._last_hand_position_at
+        self._last_hand_position = current_position
+        self._last_hand_position_at = float(observed_at)
+
+        if previous_position is None:
+            return fallback_direction, None
+
+        delta = tuple(
+            current - previous
+            for current, previous in zip(
+                current_position,
+                previous_position,
+            )
+        )
+        distance = math.sqrt(sum(value * value for value in delta))
+        if distance <= 1e-6:
+            return fallback_direction, None
+
+        movement_direction = tuple(
+            value / distance
+            for value in delta
+        )
+        if previous_at is None:
+            return movement_direction, None
+
+        elapsed = float(observed_at) - float(previous_at)
+        if elapsed <= 1e-6:
+            return movement_direction, None
+
+        measured_velocity = tuple(
+            value / elapsed
+            for value in delta
+        )
+        return movement_direction, measured_velocity
 
     def _begin_contact_telemetry(self):
         telemetry = self.contact_telemetry

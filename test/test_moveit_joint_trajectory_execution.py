@@ -11,6 +11,8 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementUpdate,
 )
 from fault_detector_spot.manipulation.moveit_arm_planner import (
+    DEFAULT_ACCELERATION_SCALING,
+    DEFAULT_VELOCITY_SCALING,
     MoveItPlanOutcome,
     MoveItPlanUpdate,
 )
@@ -88,7 +90,10 @@ def test_moveit_success_executes_returned_joint_trajectory(monkeypatch):
             trajectory=planned,
         )
     )
-    executor._moveit_cartesian_plan = object()
+    executor._moveit_cartesian_plan = SimpleNamespace(duration_sec=1.0)
+    executor._base_result_timeout_sec = 30.0
+    executor.result_timeout_sec = 30.0
+    executor.moveit_result_timeout_margin_sec = 15.0
     submitted = {}
 
     def submit(goal_builder):
@@ -121,7 +126,12 @@ def test_moveit_success_executes_returned_joint_trajectory(monkeypatch):
 def test_moveit_joint_goal_allows_position_only_trajectory(monkeypatch):
     captured = capture_joint_move(monkeypatch)
 
-    ArmMovementExecutor._build_moveit_joint_goal(
+    executor = object.__new__(ArmMovementExecutor)
+    executor._base_result_timeout_sec = 30.0
+    executor.result_timeout_sec = 30.0
+    executor.moveit_result_timeout_margin_sec = 15.0
+
+    executor._build_moveit_joint_goal(
         trajectory(with_velocities=False)
     )
 
@@ -134,7 +144,11 @@ def test_moveit_joint_goal_rejects_partial_velocity_data(monkeypatch):
     capture_joint_move(monkeypatch)
 
     with pytest.raises(ValueError, match="velocities for every point"):
-        ArmMovementExecutor._build_moveit_joint_goal(planned)
+        executor = object.__new__(ArmMovementExecutor)
+        executor._base_result_timeout_sec = 30.0
+        executor.result_timeout_sec = 30.0
+        executor.moveit_result_timeout_margin_sec = 15.0
+        executor._build_moveit_joint_goal(planned)
 
 
 def test_zero_time_start_gets_lead_time_without_changing_segment_duration(monkeypatch):
@@ -142,7 +156,12 @@ def test_zero_time_start_gets_lead_time_without_changing_segment_duration(monkey
     planned.points[0].time_from_start.nanosec = 0
     captured = capture_joint_move(monkeypatch)
 
-    ArmMovementExecutor._build_moveit_joint_goal(planned)
+    executor = object.__new__(ArmMovementExecutor)
+    executor._base_result_timeout_sec = 30.0
+    executor.result_timeout_sec = 30.0
+    executor.moveit_result_timeout_margin_sec = 15.0
+
+    executor._build_moveit_joint_goal(planned)
 
     assert captured["times"] == pytest.approx([0.25, 1.5])
     assert captured["times"][1] - captured["times"][0] == pytest.approx(1.25)
@@ -154,5 +173,73 @@ def test_joint_goal_rejects_invalid_times(monkeypatch, seconds):
     planned = trajectory()
     planned.points[0].time_from_start.sec = seconds
     capture_joint_move(monkeypatch)
+    executor = object.__new__(ArmMovementExecutor)
+    executor._base_result_timeout_sec = 30.0
+    executor.result_timeout_sec = 30.0
+    executor.moveit_result_timeout_margin_sec = 15.0
     with pytest.raises(ValueError, match="finite and nonnegative"):
-        ArmMovementExecutor._build_moveit_joint_goal(planned)
+        executor._build_moveit_joint_goal(planned)
+
+
+def test_moveit_plans_at_full_model_limits_before_execution_retiming():
+    assert DEFAULT_VELOCITY_SCALING == pytest.approx(1.0)
+    assert DEFAULT_ACCELERATION_SCALING == pytest.approx(1.0)
+
+
+def test_requested_duration_stretches_moveit_times_and_velocities(monkeypatch):
+    planned = trajectory()
+    planned.points[0].time_from_start.sec = 0
+    planned.points[0].time_from_start.nanosec = 0
+    planned.points[1].time_from_start.sec = 1
+    planned.points[1].time_from_start.nanosec = 0
+    captured = capture_joint_move(monkeypatch)
+    executor = object.__new__(ArmMovementExecutor)
+    executor._base_result_timeout_sec = 30.0
+    executor.result_timeout_sec = 30.0
+    executor.moveit_result_timeout_margin_sec = 15.0
+
+    executor._build_moveit_joint_goal(
+        planned,
+        minimum_duration_sec=2.0,
+    )
+
+    assert captured["times"] == pytest.approx([0.25, 2.25])
+    assert captured["joint_velocities"] == [
+        pytest.approx([0.05, 0.10, 0.15, 0.20, 0.25, 0.30]),
+        pytest.approx([0.55, 0.60, 0.65, 0.70, 0.75, 0.80]),
+    ]
+
+
+def test_requested_duration_never_shortens_moveit_plan(monkeypatch):
+    captured = capture_joint_move(monkeypatch)
+    executor = object.__new__(ArmMovementExecutor)
+    executor._base_result_timeout_sec = 30.0
+    executor.result_timeout_sec = 30.0
+    executor.moveit_result_timeout_margin_sec = 15.0
+
+    executor._build_moveit_joint_goal(
+        trajectory(),
+        minimum_duration_sec=0.5,
+    )
+
+    assert captured["times"] == pytest.approx([0.5, 1.25])
+
+
+def test_long_moveit_trajectory_extends_result_timeout(monkeypatch):
+    planned = trajectory()
+    planned.points[0].time_from_start.sec = 0
+    planned.points[0].time_from_start.nanosec = 0
+    planned.points[1].time_from_start.sec = 1
+    planned.points[1].time_from_start.nanosec = 0
+    capture_joint_move(monkeypatch)
+    executor = object.__new__(ArmMovementExecutor)
+    executor._base_result_timeout_sec = 30.0
+    executor.result_timeout_sec = 30.0
+    executor.moveit_result_timeout_margin_sec = 15.0
+
+    executor._build_moveit_joint_goal(
+        planned,
+        minimum_duration_sec=45.0,
+    )
+
+    assert executor.result_timeout_sec == pytest.approx(60.25)

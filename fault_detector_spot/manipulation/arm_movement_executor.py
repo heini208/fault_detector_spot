@@ -105,6 +105,7 @@ class ArmMovementExecutor(MovementExecutor):
         force_stale_timeout_sec=None,
         contact_retreat_distance_m=None,
         contact_retreat_speed_mps=None,
+        moveit_result_timeout_margin_sec=None,
         ready_forward_distance_m=None,
         ready_lift_distance_m=None,
         ready_state_timeout_sec=None,
@@ -149,6 +150,10 @@ class ArmMovementExecutor(MovementExecutor):
         contact_retreat_speed_mps = config.get(
             "contact.retreat_speed_mps", contact_retreat_speed_mps
         )
+        moveit_result_timeout_margin_sec = config.get(
+            "motion.moveit_result_timeout_margin_sec",
+            moveit_result_timeout_margin_sec,
+        )
         super().__init__(
             tf_listener,
             tag_state_source=tag_state_source,
@@ -158,6 +163,11 @@ class ArmMovementExecutor(MovementExecutor):
             result_timeout_sec=result_timeout_sec,
             monotonic_clock=monotonic_clock,
             logger=logger,
+        )
+        self._base_result_timeout_sec = self.result_timeout_sec
+        self.moveit_result_timeout_margin_sec = self._positive_timeout(
+            moveit_result_timeout_margin_sec,
+            "MoveIt result timeout margin",
         )
         self.speed_policy = (
             speed_policy
@@ -595,7 +605,10 @@ class ArmMovementExecutor(MovementExecutor):
             )
 
         def build_goal():
-            return self._build_moveit_joint_goal(trajectory)
+            return self._build_moveit_joint_goal(
+                trajectory,
+                minimum_duration_sec=plan.duration_sec,
+            )
 
         self._pending_goal_builder = build_goal
         return self._submit_goal(build_goal)
@@ -1084,6 +1097,8 @@ class ArmMovementExecutor(MovementExecutor):
     def _reset_operation(self) -> None:
         self._reset_moveit_planning(cancel=True)
         super()._reset_operation()
+        if hasattr(self, "_base_result_timeout_sec"):
+            self.result_timeout_sec = self._base_result_timeout_sec
         self._operation = None
         self._operation_speed = None
         self._state_wait_started = None
@@ -1292,8 +1307,11 @@ class ArmMovementExecutor(MovementExecutor):
         convert(stow_command, goal.command)
         return goal
 
-    @staticmethod
-    def _build_moveit_joint_goal(trajectory) -> RobotCommand.Goal:
+    def _build_moveit_joint_goal(
+        self,
+        trajectory,
+        minimum_duration_sec=None,
+    ) -> RobotCommand.Goal:
         names = tuple(trajectory.joint_names)
         if len(names) != len(ARM_JOINT_NAMES) or set(names) != set(
             ARM_JOINT_NAMES
@@ -1351,15 +1369,57 @@ class ArmMovementExecutor(MovementExecutor):
                     for joint_index in joint_indices
                 ])
 
-        # Spot rejects multipoint trajectories whose first point has already
-        # elapsed at receipt. MoveIt normally includes the start state at t=0.
-        # Shift the whole trajectory so segment durations remain unchanged.
         if any(not math.isfinite(value) or value < 0.0 for value in times):
-            raise ValueError("MoveIt trajectory times must be finite and nonnegative")
+            raise ValueError(
+                "MoveIt trajectory times must be finite and nonnegative"
+            )
         if any(right <= left for left, right in zip(times, times[1:])):
-            raise ValueError("MoveIt trajectory times must be strictly increasing")
+            raise ValueError(
+                "MoveIt trajectory times must be strictly increasing"
+            )
+
+        moveit_duration_sec = times[-1]
+        requested_duration_sec = 0.0
+        if minimum_duration_sec is not None:
+            requested_duration_sec = float(minimum_duration_sec)
+            if (
+                not math.isfinite(requested_duration_sec)
+                or requested_duration_sec <= 0.0
+            ):
+                raise ValueError(
+                    "Requested arm movement duration must be positive and finite"
+                )
+
+        target_duration_sec = max(
+            moveit_duration_sec,
+            requested_duration_sec,
+        )
+        time_scale = 1.0
+        if (
+            moveit_duration_sec > 1e-9
+            and target_duration_sec > moveit_duration_sec
+        ):
+            time_scale = target_duration_sec / moveit_duration_sec
+            times = [
+                value * time_scale
+                for value in times
+            ]
+            if use_velocities:
+                joint_velocities = [
+                    [
+                        value / time_scale
+                        for value in velocities
+                    ]
+                    for velocities in joint_velocities
+                ]
+
         start_delay = max(0.0, 0.25 - times[0])
         times = [value + start_delay for value in times]
+        execution_duration_sec = times[-1]
+        self.result_timeout_sec = max(
+            self._base_result_timeout_sec,
+            execution_duration_sec + self.moveit_result_timeout_margin_sec,
+        )
 
         command = RobotCommandBuilder.arm_joint_move_helper(
             joint_positions,
