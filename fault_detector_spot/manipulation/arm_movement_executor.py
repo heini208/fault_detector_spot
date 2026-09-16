@@ -49,6 +49,7 @@ from fault_detector_spot.manipulation.guarded_probe_execution import (
     GuardedProbeExecution,
 )
 from fault_detector_spot.manipulation.moveit_arm_planner import (
+    ARM_JOINT_NAMES,
     MoveItPlanOutcome,
 )
 from fault_detector_spot.manipulation.probe_motion_planner import (
@@ -586,11 +587,15 @@ class ArmMovementExecutor(MovementExecutor):
                 update.detail,
             )
 
-        def build_goal():
-            return self._build_pose_goal(
-                plan.target_hand,
-                plan.duration_sec,
+        trajectory = update.trajectory
+        if trajectory is None:
+            return self._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "MoveIt reported success without an arm trajectory",
             )
+
+        def build_goal():
+            return self._build_moveit_joint_goal(trajectory)
 
         self._pending_goal_builder = build_goal
         return self._submit_goal(build_goal)
@@ -1274,6 +1279,78 @@ class ArmMovementExecutor(MovementExecutor):
         stow_command = RobotCommandBuilder.arm_stow_command()
         goal = RobotCommand.Goal()
         convert(stow_command, goal.command)
+        return goal
+
+    @staticmethod
+    def _build_moveit_joint_goal(trajectory) -> RobotCommand.Goal:
+        names = tuple(trajectory.joint_names)
+        if len(names) != len(ARM_JOINT_NAMES) or set(names) != set(
+            ARM_JOINT_NAMES
+        ):
+            raise ValueError(
+                "MoveIt trajectory must contain exactly the six Spot arm joints"
+            )
+
+        points = tuple(trajectory.points)
+        if not points:
+            raise ValueError("MoveIt trajectory contains no points")
+
+        joint_indices = [
+            names.index(name)
+            for name in ARM_JOINT_NAMES
+        ]
+        joint_positions = []
+        times = []
+        joint_velocities = []
+        use_velocities = None
+
+        for index, point in enumerate(points):
+            if len(point.positions) != len(names):
+                raise ValueError(
+                    f"MoveIt trajectory point {index} has "
+                    f"{len(point.positions)} positions for {len(names)} joints"
+                )
+
+            joint_positions.append([
+                float(point.positions[joint_index])
+                for joint_index in joint_indices
+            ])
+            times.append(
+                float(point.time_from_start.sec)
+                + float(point.time_from_start.nanosec) * 1e-9
+            )
+
+            velocity_count = len(point.velocities)
+            point_has_velocities = velocity_count > 0
+            if point_has_velocities and velocity_count != len(names):
+                raise ValueError(
+                    f"MoveIt trajectory point {index} has "
+                    f"{velocity_count} velocities for {len(names)} joints"
+                )
+            if use_velocities is None:
+                use_velocities = point_has_velocities
+            elif use_velocities != point_has_velocities:
+                raise ValueError(
+                    "MoveIt trajectory must provide velocities for every "
+                    "point or for none"
+                )
+            if point_has_velocities:
+                joint_velocities.append([
+                    float(point.velocities[joint_index])
+                    for joint_index in joint_indices
+                ])
+
+        command = RobotCommandBuilder.arm_joint_move_helper(
+            joint_positions,
+            times,
+            joint_velocities=(
+                joint_velocities
+                if use_velocities
+                else None
+            ),
+        )
+        goal = RobotCommand.Goal()
+        convert(command, goal.command)
         return goal
 
     def _build_pose_goal(
