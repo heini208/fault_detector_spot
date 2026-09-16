@@ -231,23 +231,16 @@ def test_contact_cancels_stops_retreats_and_returns_contact():
     driver.updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
     )
-    stopping_again = guard.poll()
-
-    assert stopping_again.outcome is ArmMovementOutcome.RUNNING
-    assert driver.started_goals[-1] == ("arm_stop", 2)
-
-    driver.stop_updates.append(
-        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
-    )
     finished = guard.poll()
 
     assert finished.outcome is ArmMovementOutcome.CONTACT
     assert "retreated 0.0080 m" in finished.detail
-    assert "ArmStopCommand accepted" in finished.detail
+    assert "ArmStopCommand accepted" not in finished.detail
+    assert driver.stop_count == 1
     assert not guard.active
 
 
-def test_primary_success_finishes_after_arm_stop_confirmation():
+def test_primary_success_finishes_without_arm_stop():
     clock = ManualClock()
     state = FakeArmStateSource()
     driver = GoalDriver()
@@ -259,19 +252,12 @@ def test_primary_success_finishes_after_arm_stop_confirmation():
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
     )
 
-    stopping = guard.poll()
-
-    assert stopping.outcome is ArmMovementOutcome.RUNNING
-    assert driver.started_goals[-1] == ("arm_stop", 1)
-    assert driver.cancel_count == 0
-
-    driver.stop_updates.append(
-        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
-    )
     finished = guard.poll()
 
     assert finished.outcome is ArmMovementOutcome.SUCCESS
-    assert "ArmStopCommand accepted" in finished.detail
+    assert "Succeeded" in finished.detail
+    assert driver.cancel_count == 0
+    assert driver.stop_count == 0
     assert not guard.active
 
 
