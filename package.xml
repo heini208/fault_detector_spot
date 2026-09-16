@@ -27,6 +27,8 @@
   <exec_depend>spot_wrapper</exec_depend>
   <exec_depend>spot_common</exec_depend>
   <exec_depend>fault_detector_msgs</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>spot_moveit_config</exec_depend>
   <exec_depend>micro_ros_agent</exec_depend>
   <exec_depend>py_trees</exec_depend>
   <exec_depend>py_trees_ros</exec_depend>
