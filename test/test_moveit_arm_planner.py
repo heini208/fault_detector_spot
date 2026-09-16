@@ -6,9 +6,14 @@ import pytest
 from moveit_msgs.msg import MoveItErrorCodes
 
 from fault_detector_spot.manipulation.moveit_arm_planner import (
+    DEFAULT_POSITION_TOLERANCE_M,
     MoveItArmPlanner,
     MoveItPlanOutcome,
 )
+
+
+def test_default_position_tolerance_is_two_millimeters():
+    assert DEFAULT_POSITION_TOLERANCE_M == pytest.approx(0.002)
 
 
 @pytest.mark.parametrize("code, name", [
