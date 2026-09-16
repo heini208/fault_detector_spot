@@ -266,7 +266,7 @@ class MoveItArmPlanner:
         motion = request.motion_plan_request
         motion.group_name = self.group_name
         motion.planner_id = self.planner_id
-        motion.num_planning_attempts = 1
+        motion.num_planning_attempts = 4
         motion.allowed_planning_time = self.allowed_planning_time_sec
         motion.max_velocity_scaling_factor = self.velocity_scaling
         motion.max_acceleration_scaling_factor = self.acceleration_scaling
