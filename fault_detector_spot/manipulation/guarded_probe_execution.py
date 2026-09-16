@@ -371,6 +371,12 @@ class GuardedProbeExecution:
                     f"{self._force_threshold_n:.2f} N at "
                     f"{plan.angular_speed_rad_s:.4f} rad/s angular"
                 )
+        if update.outcome is ArmMovementOutcome.SUCCESS:
+            return self._terminal(
+                ArmMovementOutcome.SUCCESS,
+                detail,
+            )
+
         return self._begin_arm_stop(
             terminal_outcome=update.outcome,
             terminal_detail=detail,
@@ -903,19 +909,18 @@ class GuardedProbeExecution:
             return update
 
         if update.outcome is ArmMovementOutcome.SUCCESS:
-            outcome = ArmMovementOutcome.CONTACT
-            detail = (
-                f"{self._contact_detail}; retreated "
-                f"{self._retreat_distance_m:.4f} m opposite the "
-                "measured travel direction"
+            return self._terminal(
+                ArmMovementOutcome.CONTACT,
+                (
+                    f"{self._contact_detail}; retreated "
+                    f"{self._retreat_distance_m:.4f} m opposite the "
+                    "measured travel direction"
+                ),
             )
-        else:
-            outcome = ArmMovementOutcome.RETREAT_FAILED
-            detail = f"Contact retreat failed: {update.detail}"
 
         return self._begin_arm_stop(
-            terminal_outcome=outcome,
-            terminal_detail=detail,
+            terminal_outcome=ArmMovementOutcome.RETREAT_FAILED,
+            terminal_detail=f"Contact retreat failed: {update.detail}",
         )
 
     def _terminal(
