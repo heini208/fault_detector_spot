@@ -1009,8 +1009,99 @@ def test_planning_defers_spot_command_construction_until_execution(monkeypatch):
     assert captured == {}
     assert not hasattr(plan, "goal")
     assert plan.duration_sec == pytest.approx(2.0)
-    update = executor._guard_start_motion(plan)
+    update = executor.probe(plan)
 
     assert update.outcome is ArmMovementOutcome.RUNNING
     assert captured["args"][0] == pytest.approx(0.2)
     assert captured["args"][-1] == pytest.approx(plan.duration_sec)
+
+
+def record_probe_calls(monkeypatch, executor):
+    calls = []
+    original = executor.probe
+
+    def probe(*args, **kwargs):
+        calls.append((deepcopy(args), executor._operation))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(executor, "probe", probe)
+    return calls
+
+
+def test_contact_retreat_uses_probe_and_preserves_guard_lifecycle(monkeypatch):
+    from fault_detector_spot.manipulation.arm_state_source import HandForceSample
+
+    frame = executor_module.GRAV_ALIGNED_BODY_FRAME_NAME
+    tf = FakeTransformer({(frame, "hand"): transform(frame, "hand")})
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
+    executor, client = executor_with_client(
+        tf,
+        arm_stop_service_client=stop_client,
+        monotonic_clock=clock,
+    )
+    capture_builder(monkeypatch)
+    calls = record_probe_calls(monkeypatch, executor)
+    target = PoseStamped()
+    target.header.frame_id = frame
+    target.pose.position.x = 0.1
+    target.pose.orientation.w = 1.0
+
+    assert executor.guarded_probe(
+        target, "hand", force_threshold_n=1.0
+    ).outcome is ArmMovementOutcome.RUNNING
+    assert len(calls) == 1
+    assert calls[0][1] == executor_module._ArmOperation.GUARDED_MOVEMENT
+    assert executor.probe(target, "hand").outcome is ArmMovementOutcome.BUSY
+    calls.pop()  # The rejected public request does not submit a command.
+    assert len(client.sent_goals) == 1
+
+    executor.arm_state_source.hand_force_sample = lambda: HandForceSample(
+        clock.now, -10.0, 0.0, 0.0
+    )
+    clock.now = 0.1
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    clock.now = 0.2
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert len(stop_client.requests) == 1
+    tf.transforms[(frame, "hand")] = transform(frame, "hand", x=0.008)
+    stop_client.future.set_result(SimpleNamespace(success=True, message="stopped"))
+    client.send_future = ManualFuture()
+
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert len(calls) == 2
+    assert calls[1][1] == executor_module._ArmOperation.GUARDED_MOVEMENT
+    retreat = calls[1][0][0]
+    assert retreat.target_hand.pose.position.x == pytest.approx(0.0)
+    assert len(client.sent_goals) == 2
+    assert executor.active
+
+    retreat_result = ManualFuture()
+    client.send_future.set_result(FakeGoalHandle(result_future=retreat_result))
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    retreat_result.set_result(SimpleNamespace(result=SimpleNamespace(success=True)))
+    stop_client.future = ManualFuture()
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert len(stop_client.requests) == 2
+    stop_client.future.set_result(SimpleNamespace(success=True, message="stopped"))
+    assert executor.poll().outcome is ArmMovementOutcome.CONTACT
+    assert not executor.active
+
+
+def test_public_probe_rejects_new_requests_during_preparation(monkeypatch):
+    frame = executor_module.GRAV_ALIGNED_BODY_FRAME_NAME
+    executor, client = executor_with_client(
+        FakeTransformer({(frame, "hand"): transform(frame, "hand")}),
+        arm_state_source=FakeArmStateSource(ArmStowState.STOWED),
+    )
+    capture_builder(monkeypatch)
+    calls = record_probe_calls(monkeypatch, executor)
+
+    assert executor.prepare().outcome is ArmMovementOutcome.RUNNING
+    assert len(calls) == 1
+    assert calls[0][1] == executor_module._ArmOperation.PREPARE
+    assert executor.probe(PoseStamped(), "hand").outcome is ArmMovementOutcome.BUSY
+    assert len(client.sent_goals) == 1
+    assert executor._operation == executor_module._ArmOperation.PREPARE
+    executor.cancel()
+    assert not executor.active

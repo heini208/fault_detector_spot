@@ -96,6 +96,25 @@ Refer to the [System Design](System_Design.md) Document’s **Available Commands
 
 Any UI or agent can publish here. The Behaviour Tree’s `CommandSubscriber` receives these messages, converts them into internal command objects, and appends them to the command buffer on the blackboard.
 
+### Arm execution boundary
+
+`ArmMovementExecutor.probe()` is the single execution path for normal arm
+motion. Relative, absolute, tag, probe-relative, and orientation requests use
+`guarded_probe()` for readiness and force monitoring; the guard delegates its
+primary movement and contact retreat to `probe()`. Preparation lifts and
+close-surface recovery also use `probe()` without starting another force guard.
+
+`ProbeMotionPlanner` returns target geometry, timing, and guard metadata. It
+never constructs or sends Spot commands. `probe()` accepts either a target and
+sensor ID or a resolved `CartesianMotionPlan`, then translates the motion to a
+Spot command. Internal continuations preserve the enclosing readiness or guard
+operation; new public requests remain rejected while an operation is active.
+
+Future MoveIt trajectory planning and Spot joint-trajectory conversion belong
+at this one execution boundary. The current backend still uses Spot Cartesian
+pose commands. Arm stop, gripper commands, and native `stow()` are deliberate
+exceptions to the normal planned-motion path.
+
 ### 2.2 Internal Close-Surface Action
 
 The Behaviour Tree delegates `MOVE_CLOSE_TO_SURFACE` to a dedicated process:

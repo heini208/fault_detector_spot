@@ -55,6 +55,8 @@ def test_application_arm_entries_route_through_guarded_probe():
         "probe_pose",
         "tag_probe",
         "probe_relative",
+        "orient_to_surface",
+        "orient_to_tag",
     ):
         method = _method_source(source, method_name)
         assert "self.guarded_probe(" in method
@@ -75,7 +77,7 @@ def test_low_level_probe_is_explicitly_unguarded():
     source = _source(EXECUTOR)
     method = _method_source(source, "probe")
 
-    assert "_submit_probe(" in method
+    assert "_submit_goal(" in method
     assert "guarded_probe_execution" not in method
     assert "ready_probe(" not in method
 
@@ -84,7 +86,7 @@ def test_ready_arm_uses_low_level_probe_submission_not_force_guard():
     source = _source(EXECUTOR)
     method = _method_source(source, "_advance_prepare_start")
 
-    assert "_submit_probe(" in method
+    assert "_continue_probe(" in method
     assert "guarded_probe_execution" not in method
 
 
@@ -163,3 +165,23 @@ def test_guard_does_not_define_a_separate_movement_speed():
     for source in (executor, planner, resources):
         assert "guarded_linear_speed" not in source
         assert "GUARDED_LINEAR_SPEED" not in source
+
+
+def test_only_probe_and_native_stow_submit_arm_motion():
+    tree = ast.parse(_source(EXECUTOR))
+    executor = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+                    and node.name == "ArmMovementExecutor")
+    callers = {}
+    for method in executor.body:
+        if not isinstance(method, ast.FunctionDef):
+            continue
+        for call in ast.walk(method):
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute):
+                callers.setdefault(call.func.attr, set()).add(method.name)
+
+    assert callers["_submit_goal"] == {"probe", "_advance_stow_start"}
+    assert callers["_build_pose_goal"] == {"probe"}
+    assert callers["probe"] == {"_continue_probe"}
+    assert "start_motion=self._continue_probe" in _source(EXECUTOR)
+    assert "self._start_motion(plan)" in _source(GUARD)
+    assert "self._start_motion(retreat_plan)" in _source(GUARD)

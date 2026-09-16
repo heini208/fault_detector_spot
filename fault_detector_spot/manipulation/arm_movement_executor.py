@@ -206,6 +206,7 @@ class ArmMovementExecutor(MovementExecutor):
         )
 
         self._operation = None
+        self._probe_continuation = object()
         self._operation_speed = None
         self._state_wait_started = None
         self._tf_wait_started = None
@@ -229,7 +230,7 @@ class ArmMovementExecutor(MovementExecutor):
                 contact_evidence_analyzer=(
                     self.contact_evidence_analyzer
                 ),
-                start_motion=self._guard_start_motion,
+                start_motion=self._continue_probe,
                 poll_goal=self._guard_poll_goal,
                 cancel_goal=self._guard_cancel_goal,
                 start_stop=self._guard_start_arm_stop,
@@ -444,19 +445,69 @@ class ArmMovementExecutor(MovementExecutor):
 
     def probe(
         self,
-        probe_target: PoseStamped,
-        motion_sensor_id: str,
+        probe_target: PoseStamped | CartesianMotionPlan,
+        motion_sensor_id: str = "",
+        speed=None,
+        *,
+        _continuation=None,
+    ) -> ArmMovementUpdate:
+        """Execute every normal arm motion through this unguarded boundary.
+
+        Accept either a probe target or an already resolved hand motion plan.
+        Internal continuations retain the enclosing readiness/guard lifecycle;
+        public calls still require an idle executor. Trajectory planning and
+        Spot command translation belong at this boundary.
+        """
+        continuing = _continuation is self._probe_continuation
+        if self.active:
+            if not continuing or any((
+                self._send_goal_future is not None,
+                self._pending_goal_builder is not None,
+                self._verification_started is not None,
+            )):
+                return self._busy_update()
+        elif continuing:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Probe continuation has no active arm operation",
+            )
+        else:
+            self._active = True
+            self._operation = _ArmOperation.MOVEMENT
+
+        target = deepcopy(probe_target)
+
+        def build_goal():
+            if isinstance(target, CartesianMotionPlan):
+                if str(motion_sensor_id).strip() or speed is not None:
+                    raise ValueError(
+                        "Resolved arm plans already contain target geometry "
+                        "and timing"
+                    )
+                plan = target
+            else:
+                plan = self.probe_motion_planner.build_probe_plan(
+                    target,
+                    motion_sensor_id,
+                    speed,
+                )
+            return self._build_pose_goal(plan.target_hand, plan.duration_sec)
+
+        self._pending_goal_builder = build_goal
+        return self._submit_goal(build_goal)
+
+    def _continue_probe(
+        self,
+        probe_target: PoseStamped | CartesianMotionPlan,
+        motion_sensor_id: str = "",
         speed=None,
     ) -> ArmMovementUpdate:
-        """Start one low-level unguarded probe movement."""
-        if self.active:
-            return self._busy_update()
-        self._active = True
-        self._operation = _ArmOperation.MOVEMENT
-        return self._submit_probe(
+        """Start a physical step without replacing its enclosing operation."""
+        return self.probe(
             probe_target,
             motion_sensor_id,
             speed,
+            _continuation=self._probe_continuation,
         )
 
     def prepare(
@@ -497,6 +548,8 @@ class ArmMovementExecutor(MovementExecutor):
             return self._poll_guarded_probe()
 
         if self._send_goal_future is None:
+            if self._pending_goal_builder is not None:
+                return super().poll()
             if self._operation in (
                 _ArmOperation.PREPARE,
                 _ArmOperation.READY_PREPARE,
@@ -662,17 +715,14 @@ class ArmMovementExecutor(MovementExecutor):
         if self._operation == _ArmOperation.GUARDED_MOVEMENT:
             # A goal ending must leave the guard active for stop confirmation.
             # Only _finish_guarded_update ends the enclosing arm operation.
+            self._pending_goal_builder = None
             self._reset_goal_lifecycle()
             return ArmMovementUpdate(outcome, str(detail).strip())
         return super()._finish(outcome, detail)
 
-    def _guard_start_motion(self, plan: CartesianMotionPlan) -> ArmMovementUpdate:
-        return self._submit_goal(lambda: self._build_plan_goal(plan))
-
-    def _build_plan_goal(self, plan: CartesianMotionPlan) -> RobotCommand.Goal:
-        return self._build_pose_goal(plan.target_hand, plan.duration_sec)
-
     def _guard_poll_goal(self) -> ArmMovementUpdate:
+        if self._pending_goal_builder is not None:
+            return super().poll()
         if self._send_goal_future is None:
             return ArmMovementUpdate(
                 ArmMovementOutcome.EXECUTION_ERROR,
@@ -683,6 +733,7 @@ class ArmMovementExecutor(MovementExecutor):
         return self._poll_result()
 
     def _guard_cancel_goal(self) -> None:
+        self._pending_goal_builder = None
         self._request_cancel()
         self._reset_goal_lifecycle()
 
@@ -926,7 +977,7 @@ class ArmMovementExecutor(MovementExecutor):
         target_hand.pose.position.x += self.ready_forward_distance_m
         target_hand.pose.position.z += self.ready_lift_distance_m
 
-        return self._submit_probe(
+        return self._continue_probe(
             target_hand,
             BARE_HAND_MOTION_ID,
             self._operation_speed,
@@ -1001,22 +1052,6 @@ class ArmMovementExecutor(MovementExecutor):
         ):
             outcome = ArmMovementOutcome.MOTION_FAILED
         return self._finish(outcome, failure_detail)
-
-    def _submit_probe(
-        self,
-        probe_target: PoseStamped,
-        motion_sensor_id: str,
-        speed=None,
-    ) -> ArmMovementUpdate:
-        return self._submit_goal(
-            lambda: self._build_plan_goal(
-                self.probe_motion_planner.build_probe_plan(
-                    probe_target,
-                    motion_sensor_id,
-                    speed,
-                )
-            )
-        )
 
     def _wait_for_arm_state(
         self,
