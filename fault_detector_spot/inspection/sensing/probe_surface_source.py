@@ -7,6 +7,7 @@ import math
 import time
 
 from fault_detector_msgs.msg import SensorAttachmentState
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
@@ -50,6 +51,7 @@ class ProbeSurfaceSource(RuntimeSource):
             raise RuntimeError("ProbeSurfaceSource requires a ROS node")
         self.node = node
         self._lock = RLock()
+        self._callback_group = MutuallyExclusiveCallbackGroup()
         self._hand_depth_history = deque(
             maxlen=HAND_DEPTH_HISTORY_MAX_SAMPLES
         )
@@ -65,18 +67,21 @@ class ProbeSurfaceSource(RuntimeSource):
             "/depth_registered/hand/image",
             self._receive_hand_depth,
             qos_profile_sensor_data,
+            callback_group=self._callback_group,
         )
         self._hand_depth_camera_info_subscription = node.create_subscription(
             CameraInfo,
             "/depth_registered/hand/camera_info",
             self._receive_hand_depth_camera_info,
             qos_profile_sensor_data,
+            callback_group=self._callback_group,
         )
         self._attachment_subscription = node.create_subscription(
             SensorAttachmentState,
             SENSOR_ATTACHMENT_TOPIC,
             self._receive_attachment_state,
             APPLICATION_STATE_QOS,
+            callback_group=self._callback_group,
         )
 
     def active_attachment(self):
