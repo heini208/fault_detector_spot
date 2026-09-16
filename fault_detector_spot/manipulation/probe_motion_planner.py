@@ -1,4 +1,4 @@
-"""Resolve probe targets and build low-level Cartesian motion plans."""
+"""Resolve probe targets into Cartesian movement geometry and timing."""
 
 from copy import deepcopy
 from dataclasses import dataclass
@@ -42,12 +42,18 @@ class ResolvedProbeTarget:
 
 
 @dataclass(frozen=True)
-class ProbeMotionPlan:
+class CartesianMotionPlan:
+    """Requested hand pose and travel time, independent of Spot commands."""
+
+    target_hand: PoseStamped
+    duration_sec: float
+
+
+@dataclass(frozen=True)
+class ProbeMotionPlan(CartesianMotionPlan):
     """Resolved geometry for one probe motion."""
 
-    goal: object | None
     current_hand: PoseStamped
-    target_hand: PoseStamped
     direction_x: float
     direction_y: float
     direction_z: float
@@ -60,13 +66,12 @@ class ProbeMotionPlan:
 
 
 class ProbeMotionPlanner:
-    """Resolve probe targets and convert them to one RobotCommand goal."""
+    """Resolve probe movements into geometry, timing, and guard metadata."""
 
     def __init__(
         self,
         tf_listener,
         speed_policy: ArmMotionSpeedPolicy,
-        build_pose_goal,
     ):
         if tf_listener is None:
             raise RuntimeError("ProbeMotionPlanner requires a TF listener")
@@ -74,15 +79,10 @@ class ProbeMotionPlanner:
             raise TypeError(
                 "ProbeMotionPlanner requires an ArmMotionSpeedPolicy"
             )
-        if not callable(build_pose_goal):
-            raise TypeError(
-                "ProbeMotionPlanner build_pose_goal must be callable"
-            )
 
         self.tf_listener = tf_listener
         self.speed_policy = speed_policy
         self.geometry_resolver = MovementGeometryResolver(tf_listener)
-        self._build_pose_goal = build_pose_goal
 
     def resolve_absolute(
         self,
@@ -307,7 +307,6 @@ class ProbeMotionPlanner:
         translational_motion = probe_distance > 1e-6
         rotational_motion = probe_rotation > 1e-6
         motion_required = translational_motion or rotational_motion
-        goal = self._build_pose_goal(target_hand, duration_sec)
         angular_speed_rad_s = (
             probe_rotation / duration_sec
             if rotational_motion
@@ -316,7 +315,7 @@ class ProbeMotionPlanner:
 
         if not motion_required:
             return ProbeMotionPlan(
-                goal=goal,
+                duration_sec=duration_sec,
                 current_hand=deepcopy(current_hand),
                 target_hand=deepcopy(target_hand),
                 direction_x=0.0,
@@ -332,7 +331,7 @@ class ProbeMotionPlanner:
 
         if not translational_motion or hand_distance <= 1e-6:
             return ProbeMotionPlan(
-                goal=goal,
+                duration_sec=duration_sec,
                 current_hand=deepcopy(current_hand),
                 target_hand=deepcopy(target_hand),
                 direction_x=0.0,
@@ -347,7 +346,7 @@ class ProbeMotionPlanner:
             )
 
         return ProbeMotionPlan(
-            goal=goal,
+            duration_sec=duration_sec,
             current_hand=deepcopy(current_hand),
             target_hand=deepcopy(target_hand),
             direction_x=dx / hand_distance,
@@ -361,12 +360,12 @@ class ProbeMotionPlanner:
             force_guard_enabled=True,
         )
 
-    def build_probe_goal(
+    def build_probe_plan(
         self,
         probe_target: PoseStamped,
         motion_sensor_id: str,
         speed=None,
-    ):
+    ) -> CartesianMotionPlan:
         if not isinstance(probe_target, PoseStamped):
             raise TypeError("Probe target must be a PoseStamped")
 
@@ -394,25 +393,25 @@ class ProbeMotionPlanner:
                 target_probe,
                 sensor_id,
             )
-        return self._build_pose_goal(
-            hand_target,
-            duration_sec,
+        return CartesianMotionPlan(
+            target_hand=hand_target,
+            duration_sec=duration_sec,
         )
 
-    def build_motion_goal(
+    def build_motion_plan(
         self,
         current_hand: PoseStamped,
         target_hand: PoseStamped,
         speed=None,
-    ):
+    ) -> CartesianMotionPlan:
         duration_sec = self.speed_policy.duration_between(
             current_hand.pose,
             target_hand.pose,
             speed=speed,
         )
-        return self._build_pose_goal(
-            target_hand,
-            duration_sec,
+        return CartesianMotionPlan(
+            target_hand=deepcopy(target_hand),
+            duration_sec=duration_sec,
         )
 
     def current_hand_pose(
@@ -560,6 +559,7 @@ class ProbeMotionPlanner:
 
 
 __all__ = [
+    "CartesianMotionPlan",
     "ProbeMotionPlan",
     "ProbeMotionPlanner",
     "ResolvedProbeTarget",

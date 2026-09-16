@@ -148,7 +148,7 @@ def pose(x):
 
 def plan():
     return ProbeMotionPlan(
-        goal="primary",
+        duration_sec=2.0,
         current_hand=pose(0.0),
         target_hand=pose(0.01),
         direction_x=1.0,
@@ -178,13 +178,13 @@ def execution(
             else FixedForcePolicy()
         ),
         contact_evidence_analyzer=contact_evidence_analyzer,
-        start_goal=driver.start,
+        start_motion=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
         start_stop=driver.start_stop,
         poll_stop=driver.poll_stop,
         current_hand_pose=lambda _frame: deepcopy(current_pose),
-        build_motion_goal=lambda current, target, speed: (
+        build_motion_plan=lambda current, target, speed: (
             "retreat",
             current,
             target,

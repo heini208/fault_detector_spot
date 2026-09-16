@@ -129,7 +129,7 @@ def pose(x):
 
 def plan():
     return ProbeMotionPlan(
-        goal=object(),
+        duration_sec=2.0,
         current_hand=pose(0.0),
         target_hand=pose(0.01),
         direction_x=1.0,
@@ -145,7 +145,7 @@ def execution(state, driver, clock, telemetry):
         arm_state_source=state,
         force_baseline_sampler=Baseline(),
         force_contact_policy=Policy(),
-        start_goal=driver.start,
+        start_motion=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
         start_stop=lambda: ArmMovementUpdate(
@@ -157,7 +157,7 @@ def execution(state, driver, clock, telemetry):
             "stop accepted",
         ),
         current_hand_pose=lambda _frame: deepcopy(pose(0.004)),
-        build_motion_goal=lambda current, target, speed: (
+        build_motion_plan=lambda current, target, speed: (
             current,
             target,
             speed,

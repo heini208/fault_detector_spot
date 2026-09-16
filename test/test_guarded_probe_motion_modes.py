@@ -47,17 +47,12 @@ def target(x=0.0, y=0.0, z=0.0, yaw=0.0):
 
 
 def planner():
-    goals = []
     value = ProbeMotionPlanner(
         tf_listener=FakeTF({
             ("body", "hand"): transform("body", "hand"),
         }),
         speed_policy=ArmMotionSpeedPolicy(),
-        build_pose_goal=lambda pose, duration: goals.append(
-            (pose, duration)
-        ) or object(),
     )
-    value._test_goals = goals
     return value
 
 
@@ -70,8 +65,8 @@ def test_stationary_absolute_plan_keeps_low_level_goal_semantics():
 
     assert plan.motion_required
     assert not plan.force_guard_enabled
-    assert plan.goal is not None
-    assert len(value._test_goals) == 1
+    assert plan.duration_sec > 0.0
+    assert not hasattr(plan, "goal")
 
 
 def test_zero_relative_offset_is_detected_before_planning():
@@ -90,14 +85,14 @@ def test_rotation_only_plan_uses_total_force_guard():
 
     assert plan.motion_required
     assert plan.force_guard_enabled
-    assert plan.goal is not None
+    assert plan.duration_sec > 0.0
+    assert not hasattr(plan, "goal")
     assert plan.linear_speed_mps == 0.0
     assert plan.angular_speed_rad_s > 0.0
     assert not plan.translational_motion
     assert plan.direction_x == 0.0
     assert plan.direction_y == 0.0
     assert plan.direction_z == 0.0
-    assert len(value._test_goals) == 1
 
 
 def test_rotation_only_plan_respects_selected_angular_speed():
@@ -156,13 +151,9 @@ def test_sensor_probe_plan_reuses_attachment_geometry_without_extra_hand_tf():
         ("body", probe_frame): transform("body", probe_frame, x=0.5),
         ("hand", probe_frame): transform("hand", probe_frame, x=0.2),
     })
-    goals = []
     value = ProbeMotionPlanner(
         tf_listener=tf,
         speed_policy=ArmMotionSpeedPolicy(),
-        build_pose_goal=lambda pose, duration: goals.append(
-            (pose, duration)
-        ) or object(),
     )
     probe_target = target(x=0.7)
 
@@ -172,7 +163,8 @@ def test_sensor_probe_plan_reuses_attachment_geometry_without_extra_hand_tf():
 
     assert plan.motion_required
     assert plan.force_guard_enabled
-    assert len(goals) == 1
+    assert plan.current_hand.pose.position.x == pytest.approx(0.3)
+    assert plan.target_hand.pose.position.x == pytest.approx(0.5)
 
 
 def test_attached_probe_rotation_uses_total_force_guard_not_hand_arc_direction():
@@ -181,13 +173,9 @@ def test_attached_probe_rotation_uses_total_force_guard_not_hand_arc_direction()
         ("body", probe_frame): transform("body", probe_frame, x=0.5),
         ("hand", probe_frame): transform("hand", probe_frame, x=0.2),
     })
-    goals = []
     value = ProbeMotionPlanner(
         tf_listener=tf,
         speed_policy=ArmMotionSpeedPolicy(),
-        build_pose_goal=lambda pose, duration: goals.append(
-            (pose, duration)
-        ) or object(),
     )
 
     plan = value.build_plan(

@@ -97,7 +97,7 @@ def test_executor_delegates_probe_geometry_to_planner():
         "resolve_tag",
         "resolve_probe_relative",
         "build_plan",
-        "build_probe_goal",
+        "build_probe_plan",
         "probe_target_to_hand_target",
         "normalize_target",
     ):

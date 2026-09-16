@@ -24,7 +24,6 @@ def _planner():
     return ProbeMotionPlanner(
         _TF(),
         speed_policy=policy,
-        build_pose_goal=lambda target, duration: object(),
     )
 
 

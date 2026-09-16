@@ -988,3 +988,29 @@ def test_stow_uses_native_command_and_verifies_stowed(monkeypatch):
     assert completed.outcome is ArmMovementOutcome.SUCCESS
     assert completed.detail == "Arm stowed"
     assert not executor.active
+
+
+def test_planning_defers_spot_command_construction_until_execution(monkeypatch):
+    frame = executor_module.GRAV_ALIGNED_BODY_FRAME_NAME
+    executor, client = executor_with_client(FakeTransformer({
+        (frame, "hand"): transform(frame, "hand"),
+    }))
+    captured = capture_builder(monkeypatch)
+    target = PoseStamped()
+    target.header.frame_id = frame
+    target.pose.position.x = 0.2
+    target.pose.orientation.w = 1.0
+    planner = executor.probe_motion_planner
+
+    plan = planner.build_plan(
+        lambda: planner.resolved_target(target, "hand")
+    )
+
+    assert captured == {}
+    assert not hasattr(plan, "goal")
+    assert plan.duration_sec == pytest.approx(2.0)
+    update = executor._guard_start_motion(plan)
+
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert captured["args"][0] == pytest.approx(0.2)
+    assert captured["args"][-1] == pytest.approx(plan.duration_sec)

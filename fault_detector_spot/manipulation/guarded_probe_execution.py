@@ -44,13 +44,13 @@ class GuardedProbeExecution:
         arm_state_source,
         force_baseline_sampler,
         force_contact_policy,
-        start_goal,
+        start_motion,
         poll_goal,
         cancel_goal,
         start_stop,
         poll_stop,
         current_hand_pose,
-        build_motion_goal,
+        build_motion_plan,
         default_angular_speed_rad_s: float,
         force_stale_timeout_sec: float,
         retreat_distance_m: float,
@@ -70,13 +70,13 @@ class GuardedProbeExecution:
                     f"GuardedProbeExecution requires {label}"
                 )
         callbacks = (
-            (start_goal, "start goal"),
+            (start_motion, "start motion"),
             (poll_goal, "poll goal"),
             (cancel_goal, "cancel goal"),
             (start_stop, "start arm stop"),
             (poll_stop, "poll arm stop"),
             (current_hand_pose, "current hand pose"),
-            (build_motion_goal, "build motion goal"),
+            (build_motion_plan, "build motion plan"),
         )
         for callback, label in callbacks:
             if not callable(callback):
@@ -89,13 +89,13 @@ class GuardedProbeExecution:
         self.arm_state_source = arm_state_source
         self.force_baseline_sampler = force_baseline_sampler
         self.force_contact_policy = force_contact_policy
-        self._start_goal = start_goal
+        self._start_motion = start_motion
         self._poll_goal = poll_goal
         self._cancel_goal = cancel_goal
         self._start_stop = start_stop
         self._poll_stop = poll_stop
         self._current_hand_pose = current_hand_pose
-        self._build_motion_goal = build_motion_goal
+        self._build_motion_plan = build_motion_plan
         self.default_angular_speed_rad_s = self._positive(
             default_angular_speed_rad_s,
             "Default angular speed",
@@ -278,14 +278,14 @@ class GuardedProbeExecution:
         self,
     ) -> ArmMovementUpdate:
         plan = self._plan
-        if plan is None or plan.goal is None:
+        if plan is None:
             return self._terminal(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Unguarded rotation movement lost its plan",
             )
 
         self._phase = _Phase.MOVING
-        update = self._start_goal(plan.goal)
+        update = self._start_motion(plan)
         if update.outcome is ArmMovementOutcome.RUNNING:
             return update
         return self._terminal(update.outcome, update.detail)
@@ -314,7 +314,7 @@ class GuardedProbeExecution:
             self._begin_contact_telemetry()
         )
         self._phase = _Phase.MOVING
-        update = self._start_goal(plan.goal)
+        update = self._start_motion(plan)
         if update.outcome is ArmMovementOutcome.RUNNING:
             return update
         return self._terminal(update.outcome, update.detail)
@@ -822,7 +822,7 @@ class GuardedProbeExecution:
             angular_speed_rad_s=self.default_angular_speed_rad_s,
         )
         try:
-            goal = self._build_motion_goal(
+            retreat_plan = self._build_motion_plan(
                 current_hand,
                 target,
                 speed,
@@ -834,7 +834,7 @@ class GuardedProbeExecution:
             )
 
         self._phase = _Phase.RETREATING
-        update = self._start_goal(goal)
+        update = self._start_motion(retreat_plan)
         if update.outcome is ArmMovementOutcome.RUNNING:
             return update
         return self._terminal(

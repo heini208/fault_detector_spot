@@ -49,6 +49,7 @@ from fault_detector_spot.manipulation.guarded_probe_execution import (
     GuardedProbeExecution,
 )
 from fault_detector_spot.manipulation.probe_motion_planner import (
+    CartesianMotionPlan,
     ProbeMotionPlanner,
 )
 from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
@@ -202,7 +203,6 @@ class ArmMovementExecutor(MovementExecutor):
         self.probe_motion_planner = ProbeMotionPlanner(
             tf_listener=tf_listener,
             speed_policy=self.speed_policy,
-            build_pose_goal=self._build_pose_goal,
         )
 
         self._operation = None
@@ -229,13 +229,13 @@ class ArmMovementExecutor(MovementExecutor):
                 contact_evidence_analyzer=(
                     self.contact_evidence_analyzer
                 ),
-                start_goal=self._guard_start_goal,
+                start_motion=self._guard_start_motion,
                 poll_goal=self._guard_poll_goal,
                 cancel_goal=self._guard_cancel_goal,
                 start_stop=self._guard_start_arm_stop,
                 poll_stop=self._guard_poll_arm_stop,
                 current_hand_pose=self.probe_motion_planner.current_hand_pose,
-                build_motion_goal=self.probe_motion_planner.build_motion_goal,
+                build_motion_plan=self.probe_motion_planner.build_motion_plan,
                 default_angular_speed_rad_s=(
                     self.speed_policy.default_speed.angular_speed_rad_s
                 ),
@@ -666,8 +666,11 @@ class ArmMovementExecutor(MovementExecutor):
             return ArmMovementUpdate(outcome, str(detail).strip())
         return super()._finish(outcome, detail)
 
-    def _guard_start_goal(self, goal) -> ArmMovementUpdate:
-        return self._submit_goal(lambda: goal)
+    def _guard_start_motion(self, plan: CartesianMotionPlan) -> ArmMovementUpdate:
+        return self._submit_goal(lambda: self._build_plan_goal(plan))
+
+    def _build_plan_goal(self, plan: CartesianMotionPlan) -> RobotCommand.Goal:
+        return self._build_pose_goal(plan.target_hand, plan.duration_sec)
 
     def _guard_poll_goal(self) -> ArmMovementUpdate:
         if self._send_goal_future is None:
@@ -1006,10 +1009,12 @@ class ArmMovementExecutor(MovementExecutor):
         speed=None,
     ) -> ArmMovementUpdate:
         return self._submit_goal(
-            lambda: self.probe_motion_planner.build_probe_goal(
-                probe_target,
-                motion_sensor_id,
-                speed,
+            lambda: self._build_plan_goal(
+                self.probe_motion_planner.build_probe_plan(
+                    probe_target,
+                    motion_sensor_id,
+                    speed,
+                )
             )
         )
 

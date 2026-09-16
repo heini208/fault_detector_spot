@@ -124,7 +124,7 @@ def pose(yaw=0.0):
 
 def rotation_plan():
     return ProbeMotionPlan(
-        goal="primary",
+        duration_sec=2.0,
         current_hand=pose(),
         target_hand=pose(yaw=0.25),
         direction_x=0.0,
@@ -142,13 +142,13 @@ def execution(state, driver, policy):
         arm_state_source=state,
         force_baseline_sampler=ImmediateBaseline(),
         force_contact_policy=policy,
-        start_goal=driver.start,
+        start_motion=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
         start_stop=driver.start_stop,
         poll_stop=driver.poll_stop,
         current_hand_pose=lambda _frame: deepcopy(pose()),
-        build_motion_goal=lambda current, target, speed: (
+        build_motion_plan=lambda current, target, speed: (
             "retreat",
             current,
             target,
