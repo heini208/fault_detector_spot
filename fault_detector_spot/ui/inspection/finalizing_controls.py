@@ -23,6 +23,8 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
     ImageRegion,
 )
 
+from fault_detector_spot.ui.sensor.models import SensorAttachmentViewStatus
+
 from .controls import InspectionControls
 
 
@@ -30,6 +32,8 @@ class FinalizingInspectionControls(InspectionControls):
     """Route physical setup workflows through server-owned APIs."""
 
     def __init__(self, ui):
+        self._reference_start_pending = False
+        self._reference_start_error = ""
         self._surface_test_active = False
         self._surface_move_succeeded = False
         self._surface_move_target_m = None
@@ -97,6 +101,20 @@ class FinalizingInspectionControls(InspectionControls):
                 "Select a saved object and routine first.",
             )
             return False
+        attachment = getattr(self.ui, "_sensor_attachment_state", None)
+        if (
+            attachment is None
+            or attachment.status is not SensorAttachmentViewStatus.ACTIVE
+        ):
+            self.show_warning(
+                "Add Probe Point",
+                "Confirm the sensor attachment in the sensor controls before "
+                "adding a probe point. If using the bare hand, select and "
+                "confirm No sensor.",
+            )
+            return False
+        self._reference_start_pending = False
+        self._reference_start_error = ""
         self._begin_refinement_after_reference_commit = False
         self.inspection_workspace_splitter.setEnabled(False)
         self.refinement_dialog.open_reference_selection(
@@ -126,22 +144,42 @@ class FinalizingInspectionControls(InspectionControls):
         return self.handle_capture_reference_view()
 
     def handle_reference_point_approved(self):
-        """Commit the selected reference point and start refinement."""
-        point = self.reference_view_widget.selected_image_point
-        view_id = self._reference_slot_view_ids[0]
-        if point is None or not view_id:
+        """Start refinement from an already validated saved reference point."""
+        if self._reference_start_pending:
+            return False
+        state = self._probe_setup_state
+        if state is None:
             self.refinement_dialog.set_reference_status(
-                "Select a point in the displayed reference image first."
+                "Reference-point state is unavailable."
             )
             return False
-
-        self._begin_refinement_after_reference_commit = True
-        if self._reference_state_matches_draft():
-            return self._start_refinement_after_reference()
-        self.refinement_dialog.set_reference_status(
-            "Confirming the selected reference point..."
-        )
-        return True
+        if not self._reference_state_matches_draft():
+            self.refinement_dialog.set_reference_status(
+                "Wait for the selected point to be checked against the saved "
+                "depth image."
+            )
+            return False
+        if not state.has_surface_point:
+            detail = (
+                state.validation_error.strip()
+                or state.detail.strip()
+                or "No valid registered depth is available at this point."
+            )
+            self.refinement_dialog.set_reference_status(
+                f"Invalid point: {detail}"
+            )
+            return False
+        if not state.has_probe_setup:
+            detail = (
+                state.validation_error.strip()
+                or state.detail.strip()
+                or "Probe geometry could not be calculated for this point."
+            )
+            self.refinement_dialog.set_reference_status(
+                f"Point cannot be used: {detail}"
+            )
+            return False
+        return self._start_refinement_after_reference()
 
     def _reference_state_matches_draft(self):
         state = self._probe_setup_state
@@ -157,21 +195,47 @@ class FinalizingInspectionControls(InspectionControls):
         )
 
     def _start_refinement_after_reference(self):
+        if self._reference_start_pending:
+            return False
+        self.refinement_dialog.show_stage(RefinementStage.SAFE_APPROACH)
         intent = ProbeSetupIntent()
         intent.operation = ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT
+        self._reference_start_error = ""
+        self._reference_start_pending = True
+        self.refinement_dialog.refresh_reference_selection()
+        self.refinement_dialog.refresh_refinement_start()
         request_id = self._submit_probe_setup(intent)
         if request_id is None:
-            self.refinement_dialog.set_reference_status(
-                "Could not start probe refinement."
+            self.handle_reference_start_rejected(
+                "Could not submit probe refinement. Check that the setup "
+                "service is available and no other request is pending."
             )
             return False
         self._begin_refinement_after_reference_commit = False
-        self.refinement_dialog.set_reference_status(
-            "Starting probe refinement..."
-        )
         return True
 
+    def handle_reference_start_rejected(self, detail):
+        if not self._reference_start_pending:
+            return
+        self._reference_start_pending = False
+        self._reference_start_error = detail
+        self.refinement_dialog.refresh_reference_selection()
+        self.refinement_dialog.refresh_refinement_start()
+
     def apply_setup_state(self, state):
+        if (
+            self._reference_start_pending
+            and state.operation == ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT
+            and state.state in (
+                ProbeSetupState.STATE_SUCCEEDED,
+                ProbeSetupState.STATE_FAILED,
+            )
+        ):
+            self._reference_start_pending = False
+            self._reference_start_error = (
+                state.detail or "Probe refinement could not start."
+                if state.state == ProbeSetupState.STATE_FAILED else ""
+            )
         result = super().apply_setup_state(state)
 
         if self._probe_point_overview_label is not None:
@@ -199,6 +263,8 @@ class FinalizingInspectionControls(InspectionControls):
             self.refinement_dialog.update_reference_availability(
                 bool(state.reference_view_ids)
             )
+            self.refinement_dialog.refresh_reference_selection()
+            self.refinement_dialog.refresh_refinement_start()
 
         if self._reference_capture_in_progress:
             if (
@@ -212,12 +278,6 @@ class FinalizingInspectionControls(InspectionControls):
                 self.refinement_dialog.set_reference_status(
                     state.detail or "Reference capture failed."
                 )
-
-        if (
-            self._begin_refinement_after_reference_commit
-            and self._reference_state_matches_draft()
-        ):
-            self._start_refinement_after_reference()
 
         return result
 

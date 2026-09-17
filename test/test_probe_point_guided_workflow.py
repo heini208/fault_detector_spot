@@ -1,6 +1,8 @@
 """Tests for the guided add-probe-point UI workflow."""
 
 import os
+from types import SimpleNamespace
+from fault_detector_spot.ui.sensor.models import SensorAttachmentViewStatus
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -25,6 +27,9 @@ class FakeProbeSetupClient:
 
 class FakeUI:
     def __init__(self):
+        self._sensor_attachment_state = SimpleNamespace(
+            status=SensorAttachmentViewStatus.ACTIVE,
+        )
         self.node = None
         self.status_label = QLabel()
         self.probe_setup_client = FakeProbeSetupClient()
@@ -141,6 +146,8 @@ def test_reference_approval_starts_existing_refinement_operation(application):
     ui = FakeUI()
     controls = FinalizingInspectionControls(ui)
     state = make_state(with_references=True)
+    state.has_surface_point = True
+    state.has_probe_setup = True
     state.has_reference_pixel = True
     state.selected_reference_view_id = "slot6_hand"
     state.reference_pixel_u = 40

@@ -273,6 +273,24 @@ class ProbeRefinementDialog(QDialog):
         self.reference_view_layout.addLayout(self.reference_selection_row)
         layout.addWidget(self.reference_view_group, 1)
 
+        validation_group = QGroupBox("Selected point validation")
+        validation_layout = QFormLayout(validation_group)
+        self.reference_depth_status_label = QLabel("No point selected")
+        self.reference_depth_status_label.setWordWrap(True)
+        self.reference_depth_value_label = QLabel("—")
+        self.reference_depth_value_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse
+        )
+        validation_layout.addRow(
+            "Status:",
+            self.reference_depth_status_label,
+        )
+        validation_layout.addRow(
+            "Saved depth:",
+            self.reference_depth_value_label,
+        )
+        layout.addWidget(validation_group)
+
         self.reference_status_label = QLabel("")
         self.reference_status_label.setWordWrap(True)
         layout.addWidget(self.reference_status_label)
@@ -280,7 +298,7 @@ class ProbeRefinementDialog(QDialog):
         actions = QHBoxLayout()
         actions.addStretch()
         self.approve_reference_button = QPushButton(
-            "Approve Point and Start Refinement"
+            "Approve Point and Continue"
         )
         self.approve_reference_button.clicked.connect(
             self.controls.handle_reference_point_approved
@@ -290,7 +308,7 @@ class ProbeRefinementDialog(QDialog):
         return page
 
     def _make_safe_approach_page(self):
-        return self._make_scroll_page(
+        page = self._make_scroll_page(
             RefinementStage.SAFE_APPROACH,
             "Safe Approach Pose",
             "Capture or reach an obstacle-safe sensor-tip pose. This pose "
@@ -300,6 +318,36 @@ class ProbeRefinementDialog(QDialog):
             self.controls.use_current_approach_button,
             self.controls._make_refinement_controls("approach"),
         )
+
+        self.refinement_start_status_label = QLabel("")
+        self.refinement_start_status_label.setWordWrap(True)
+        self.retry_refinement_start_button = QPushButton("Retry Starting Refinement")
+        self.retry_refinement_start_button.clicked.connect(
+            self.controls._start_refinement_after_reference
+        )
+        self.retry_refinement_start_button.hide()
+        page.widget().layout().insertWidget(2, self.refinement_start_status_label)
+        page.widget().layout().insertWidget(3, self.retry_refinement_start_button)
+        return page
+
+    def refresh_refinement_start(self):
+        pending = self.controls._reference_start_pending
+        error = self.controls._reference_start_error
+        self.refinement_start_status_label.setText(
+            "Point approved. Checking live robot readiness..." if pending else
+            ("Point approved. Physical refinement is unavailable: " + error
+             if error else "")
+        )
+        self.retry_refinement_start_button.setVisible(bool(error))
+        self.retry_refinement_start_button.setEnabled(not pending)
+        if pending or error:
+            self.controls.move_calculated_approach_button.setEnabled(False)
+            self.controls.use_current_approach_button.setEnabled(False)
+            for button in self.controls.refinement_buttons["approach"].values():
+                button.setEnabled(False)
+            self.back_button.setEnabled(False)
+            self.next_button.setEnabled(False)
+
 
     def _make_alignment_page(self):
         distance_row = QHBoxLayout()
@@ -641,23 +689,105 @@ class ProbeRefinementDialog(QDialog):
         self.reference_status_label.setText(text)
 
     def reference_selection_changed(self):
+        self.controls._reference_start_error = ""
         self.approve_reference_button.setEnabled(False)
+        self.reference_depth_status_label.setText(
+            "Checking saved registered-depth data..."
+        )
+        self.reference_depth_value_label.setText("—")
         self.set_reference_status(
-            "Select a point in the displayed reference image."
+            "The selected pixel is being evaluated from the saved reference "
+            "RGB/depth dataset."
         )
 
     def refresh_reference_selection(self):
         if not self._workflow_controls_attached:
             return
+
+        if self.controls._reference_start_pending:
+            self.approve_reference_button.setEnabled(False)
+            self.set_reference_status(
+                "Starting probe refinement; checking the current pose "
+                "and transforms..."
+            )
+            return
+
         point = self.controls.reference_view_widget.selected_image_point
         view_id = self.controls._reference_slot_view_ids[0]
-        ready = point is not None and bool(view_id)
-        self.approve_reference_button.setEnabled(ready)
-        if ready:
+        state = self.controls._probe_setup_state
+
+        if point is None or not view_id:
+            self.approve_reference_button.setEnabled(False)
+            self.reference_depth_status_label.setText("No point selected")
+            self.reference_depth_value_label.setText("—")
             self.set_reference_status(
-                f"Selected u={point.u}, v={point.v}. "
-                "Approve to begin refinement."
+                "Select a point in the displayed reference image."
             )
+            return
+
+        authoritative_match = (
+            state is not None
+            and bool(state.has_reference_pixel)
+            and state.selected_reference_view_id == view_id
+            and int(state.reference_pixel_u) == int(point.u)
+            and int(state.reference_pixel_v) == int(point.v)
+        )
+
+        if not authoritative_match:
+            self.approve_reference_button.setEnabled(False)
+            self.reference_depth_status_label.setText(
+                "Checking saved registered-depth data..."
+            )
+            self.reference_depth_value_label.setText("—")
+            self.set_reference_status(
+                f"Selected u={point.u}, v={point.v}. Waiting for the saved "
+                "reference dataset to validate this pixel."
+            )
+            return
+
+        if not state.has_surface_point:
+            detail = (
+                state.validation_error.strip()
+                or state.detail.strip()
+                or "No usable registered depth was found for this pixel."
+            )
+            self.approve_reference_button.setEnabled(False)
+            self.reference_depth_status_label.setText(
+                f"Invalid: {detail}"
+            )
+            self.reference_depth_value_label.setText("Unavailable")
+            self.set_reference_status(
+                "Choose another pixel or another camera view."
+            )
+            return
+
+        self.reference_depth_value_label.setText(
+            f"{float(state.depth_m):.3f} m"
+        )
+
+        if not state.has_probe_setup:
+            detail = (
+                state.validation_error.strip()
+                or state.detail.strip()
+                or "Probe geometry could not be calculated."
+            )
+            self.approve_reference_button.setEnabled(False)
+            self.reference_depth_status_label.setText(
+                f"Depth valid, geometry invalid: {detail}"
+            )
+            self.set_reference_status(
+                "Choose another pixel or adjust the reference geometry."
+            )
+            return
+
+        self.approve_reference_button.setEnabled(True)
+        self.reference_depth_status_label.setText(
+            "Valid saved depth and probe geometry"
+        )
+        self.set_reference_status(
+            f"Selected u={point.u}, v={point.v}. "
+            "The point is valid and ready for refinement."
+        )
 
     def show_stage(self, stage):
         index = self.STAGES.index(stage)
