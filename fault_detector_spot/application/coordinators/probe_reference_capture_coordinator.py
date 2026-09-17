@@ -172,16 +172,10 @@ class ProbeReferenceCaptureCoordinator:
                     )
                     self.probe_setup_coordinator.require_current(context)
                     self._require_command_lane_idle()
-                    reference_tag = self._stable_reference_tag(tag_id)
                     reference_tags = self._historical_reference_tags(
                         tag_id,
                         capture_receipt_start,
                         capture_receipt_end,
-                    )
-                    self._require_tf_ready(
-                        synchronizers,
-                        selected,
-                        reference_tag,
                     )
                     requests = tuple(
                         CameraCaptureRequest(
@@ -222,9 +216,7 @@ class ProbeReferenceCaptureCoordinator:
                             self.maximum_timestamp_skew_sec
                         ),
                         fixed_frame=self.fixed_frame,
-                        transform_timeout_sec=(
-                            self.transform_timeout_sec
-                        ),
+                        transform_timeout_sec=self.capture_timeout_sec,
                     )
                     current = self.probe_setup_coordinator.context(
                         context.context_id,
@@ -412,9 +404,15 @@ class ProbeReferenceCaptureCoordinator:
 
     def _require_tf_ready(self, synchronizers, selected, reference_tag):
         timeout = Duration(seconds=self.transform_timeout_sec)
-        self.tf_buffer.transform(
-            reference_tag.pose,
+        tag_frame_id = reference_tag.pose.header.frame_id.strip()
+        if not tag_frame_id:
+            raise ReferenceViewCaptureNotReady(
+                "Reference tag frame ID is not available"
+            )
+        self.tf_buffer.lookup_transform(
             self.fixed_frame,
+            tag_frame_id,
+            Time(),
             timeout=timeout,
         )
         for _, camera_id in selected:

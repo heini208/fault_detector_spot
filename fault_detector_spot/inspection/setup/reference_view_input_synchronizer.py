@@ -69,7 +69,6 @@ class ReferenceViewInputSynchronizer:
         self._depth_camera_info: Optional[CameraInfo] = None
         self._input_sequence = 0
         self._idle_history_size = 2
-        self._collection_history_size = queue_size
         self._rgb_history: Deque[ImageSample] = deque(
             maxlen=self._idle_history_size
         )
@@ -120,7 +119,7 @@ class ReferenceViewInputSynchronizer:
             )
 
     def begin_collection(self, minimum_input_sequence: int) -> None:
-        """Start one bounded camera-specific capture window."""
+        """Start one time-bounded camera-specific capture window."""
         self._validate_sequence(minimum_input_sequence)
         now_nanoseconds = time.monotonic_ns()
         with self._lock:
@@ -135,18 +134,14 @@ class ReferenceViewInputSynchronizer:
                     + self._collection_duration_nanoseconds
                 ),
                 rgb_images=deque(
-                    (
-                        sample for sample in self._rgb_history
-                        if sample[0] >= minimum_input_sequence
-                    ),
-                    maxlen=self._collection_history_size,
+                    sample
+                    for sample in self._rgb_history
+                    if sample[0] >= minimum_input_sequence
                 ),
                 depth_images=deque(
-                    (
-                        sample for sample in self._depth_history
-                        if sample[0] >= minimum_input_sequence
-                    ),
-                    maxlen=self._collection_history_size,
+                    sample
+                    for sample in self._depth_history
+                    if sample[0] >= minimum_input_sequence
                 ),
                 rgb_camera_info=deepcopy(self._rgb_camera_info),
                 depth_camera_info=deepcopy(self._depth_camera_info),

@@ -1,4 +1,4 @@
-"""Tests for bounded raw camera collection."""
+"""Tests for time-bounded raw camera collection."""
 
 from collections import deque
 from threading import Lock
@@ -37,7 +37,6 @@ def make_synchronizer():
     synchronizer._rgb_camera_info = make_camera_info()
     synchronizer._depth_camera_info = make_camera_info()
     synchronizer._input_sequence = 0
-    synchronizer._collection_history_size = 60
     synchronizer._rgb_history = deque(maxlen=2)
     synchronizer._depth_history = deque(maxlen=2)
     synchronizer._maximum_timestamp_skew_nanoseconds = 50_000_000
@@ -79,6 +78,27 @@ def test_collection_waits_one_second_then_selects_best_pair(
 
     assert snapshot[0].header.stamp.nanosec == 500_000_000
     assert snapshot[1].header.stamp.nanosec == 505_000_000
+
+
+def test_active_collection_retains_every_frame_in_window(monkeypatch):
+    clock = [1_000_000_000]
+    monkeypatch.setattr(
+        synchronizer_module.time,
+        "monotonic_ns",
+        lambda: clock[0],
+    )
+    synchronizer = make_synchronizer()
+    synchronizer.begin_collection(1)
+
+    for index in range(80):
+        stamp = 100_000_000 + index * 1_000_000
+        synchronizer._rgb_callback(make_image(stamp))
+        synchronizer._depth_callback(make_image(stamp + 100_000))
+
+    assert synchronizer._collection.rgb_images.maxlen is None
+    assert synchronizer._collection.depth_images.maxlen is None
+    assert len(synchronizer._collection.rgb_images) == 80
+    assert len(synchronizer._collection.depth_images) == 80
 
 
 def test_collection_excludes_inputs_before_minimum_sequence(
