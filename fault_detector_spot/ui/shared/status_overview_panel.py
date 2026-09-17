@@ -1,6 +1,6 @@
 """Compact overview panel for global UI state."""
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QVBoxLayout,
     QWidget,
 )
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
@@ -15,7 +16,24 @@ from std_msgs.msg import Float32
 
 
 class StatusOverviewPanel(QFrame):
-    """Arrange global status, buffer, tags, sensor, and emergency stop."""
+    """Separate robot-wide status from the compact sensor-system strip."""
+
+    RECORDING_ACTIVE_STYLE = (
+        "QPushButton {"
+        " background-color: #C62828;"
+        " color: white;"
+        " border: 1px solid #B71C1C;"
+        " border-radius: 4px;"
+        " padding: 4px 10px;"
+        " font-weight: bold;"
+        "}"
+        "QPushButton:hover {"
+        " background-color: #B71C1C;"
+        "}"
+        "QPushButton:pressed {"
+        " background-color: #8E0000;"
+        "}"
+    )
 
     def __init__(
         self,
@@ -42,18 +60,35 @@ class StatusOverviewPanel(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.battery_label = QLabel("Battery: Unknown")
         self.battery_subscription = None
+        self._recording_button = sensor_recording_button
+        self._recording_button_base_style = sensor_recording_button.styleSheet()
+        self._recording_button_active = None
 
-        layout = QGridLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
-        layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(8)
+        layout.setSpacing(8)
+
+        robot_status = QWidget()
+        robot_layout = QGridLayout(robot_status)
+        robot_layout.setContentsMargins(0, 0, 0, 0)
+        robot_layout.setHorizontalSpacing(12)
+        robot_layout.setVerticalSpacing(8)
 
         for label in (
             status_label,
             command_status_label,
-            navigation_mode_label,
+            self.battery_label,
         ):
             self._configure_status_label(label)
+
+        navigation_mode_label.setAlignment(
+            Qt.AlignVCenter | Qt.AlignLeft
+        )
+        navigation_mode_label.setSizePolicy(
+            QSizePolicy.Maximum,
+            QSizePolicy.Preferred,
+        )
+        navigation_mode_label.setStyleSheet("")
 
         for label in (
             buffer_label,
@@ -66,75 +101,114 @@ class StatusOverviewPanel(QFrame):
 
         buffer_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         visible_label.setMinimumWidth(190)
-        sensor_status_label.setSizePolicy(
-            QSizePolicy.Maximum,
-            QSizePolicy.Preferred,
-        )
         self.battery_label.setSizePolicy(
             QSizePolicy.Maximum,
             QSizePolicy.Preferred,
         )
 
-        sensor_widget = QWidget()
-        sensor_layout = QGridLayout(sensor_widget)
-        sensor_layout.setContentsMargins(0, 0, 0, 0)
-        sensor_layout.setHorizontalSpacing(6)
-        sensor_layout.setVerticalSpacing(6)
-        sensor_layout.addWidget(QLabel("Sensor:"), 0, 0)
-        sensor_layout.addWidget(sensor_indicator_label, 0, 1)
-        sensor_layout.addWidget(sensor_status_label, 0, 2)
-        sensor_layout.addWidget(sensor_confirm_button, 0, 3)
-        sensor_layout.addWidget(QLabel("Recording:"), 0, 4)
-        sensor_layout.addWidget(sensor_recording_indicator_label, 0, 5)
-        sensor_layout.addWidget(sensor_recording_button, 0, 6)
-        sensor_layout.addWidget(open_measurements_button, 0, 7)
-        sensor_layout.addWidget(QLabel("Head:"), 1, 0)
-        sensor_layout.addWidget(sensor_connection_indicator_label, 1, 1)
-        sensor_layout.addWidget(sensor_connection_status_label, 1, 2, 1, 2)
-        sensor_layout.setColumnMinimumWidth(4, 85)
+        robot_layout.addWidget(status_label, 0, 0)
+        robot_layout.addWidget(command_status_label, 0, 1)
+        robot_layout.addWidget(self.battery_label, 0, 2)
+        robot_layout.addWidget(estop_button, 0, 4, 2, 1)
 
-        agent_widget = QWidget()
-        agent_layout = QHBoxLayout(agent_widget)
-        agent_layout.setContentsMargins(0, 0, 0, 0)
-        agent_layout.setSpacing(4)
-        agent_layout.addWidget(QLabel("micro-ROS Agent:"))
-        agent_layout.addWidget(agent_indicator_label)
-        agent_layout.addWidget(agent_endpoint_button)
-        agent_layout.addWidget(agent_copy_button)
+        robot_layout.addWidget(buffer_label, 1, 0)
+        robot_layout.addWidget(visible_label, 1, 1)
+        robot_layout.addWidget(navigation_mode_label, 1, 2)
 
-        hardware_widget = QWidget()
-        hardware_layout = QHBoxLayout(hardware_widget)
-        hardware_layout.setContentsMargins(0, 0, 0, 0)
-        hardware_layout.setSpacing(4)
-        hardware_layout.addWidget(agent_widget, alignment=Qt.AlignTop)
-        hardware_layout.addSpacing(14)
-        hardware_layout.addWidget(sensor_widget)
-        hardware_layout.addStretch()
-
-        layout.addWidget(status_label, 0, 0)
-        layout.addWidget(command_status_label, 0, 1)
-        layout.addWidget(navigation_mode_label, 0, 2)
-        layout.addWidget(estop_button, 0, 3, 2, 1)
-
-        layout.addWidget(buffer_label, 1, 0)
-        layout.addWidget(visible_label, 1, 1)
-        layout.addWidget(self.battery_label, 1, 2)
-        layout.addWidget(hardware_widget, 2, 0, 1, 3)
-
-        layout.setColumnStretch(0, 2)
-        layout.setColumnStretch(1, 2)
-        layout.setColumnStretch(2, 2)
+        robot_layout.setColumnStretch(0, 2)
+        robot_layout.setColumnStretch(1, 2)
+        robot_layout.setColumnStretch(2, 2)
+        robot_layout.setColumnStretch(3, 1)
 
         estop_button.setMinimumHeight(54)
         status_label.setWordWrap(True)
         buffer_label.setWordWrap(True)
         visible_label.setWordWrap(True)
 
-        self.sensor_widget = sensor_widget
-        self.agent_widget = agent_widget
-        self.hardware_widget = hardware_widget
-        self.grid_layout = layout
+        sensor_strip = QFrame()
+        sensor_strip.setObjectName("sensorStatusStrip")
+        sensor_strip.setFrameShape(QFrame.StyledPanel)
+        sensor_strip.setStyleSheet(
+            "QFrame#sensorStatusStrip {"
+            " background: palette(alternate-base);"
+            " border: 1px solid palette(mid);"
+            " border-radius: 4px;"
+            "}"
+        )
+        sensor_layout = QHBoxLayout(sensor_strip)
+        sensor_layout.setContentsMargins(8, 5, 8, 5)
+        sensor_layout.setSpacing(5)
+
+        sensor_title = QLabel("Sensor system")
+        sensor_title_font = sensor_title.font()
+        sensor_title_font.setBold(True)
+        sensor_title.setFont(sensor_title_font)
+        sensor_layout.addWidget(sensor_title)
+        sensor_layout.addWidget(self._separator())
+
+        sensor_layout.addWidget(QLabel("micro-ROS:"))
+        sensor_layout.addWidget(agent_indicator_label)
+        sensor_layout.addWidget(agent_endpoint_button)
+        sensor_layout.addWidget(agent_copy_button)
+        sensor_layout.addWidget(self._separator())
+
+        sensor_layout.addWidget(QLabel("Attachment:"))
+        sensor_layout.addWidget(sensor_indicator_label)
+        sensor_layout.addWidget(sensor_status_label)
+        sensor_layout.addWidget(sensor_confirm_button)
+        sensor_layout.addWidget(self._separator())
+
+        sensor_layout.addWidget(QLabel("Head:"))
+        sensor_layout.addWidget(sensor_connection_indicator_label)
+        sensor_layout.addWidget(sensor_connection_status_label)
+        sensor_layout.addWidget(self._separator())
+
+        sensor_layout.addWidget(QLabel("Recording:"))
+        sensor_layout.addWidget(sensor_recording_button)
+        sensor_layout.addWidget(open_measurements_button)
+        sensor_layout.addStretch()
+
+        sensor_recording_indicator_label.hide()
+        sensor_status_label.setSizePolicy(
+            QSizePolicy.Maximum,
+            QSizePolicy.Preferred,
+        )
+
+        layout.addWidget(robot_status)
+        layout.addWidget(sensor_strip)
+
+        self.sensor_widget = sensor_strip
+        self.agent_widget = sensor_strip
+        self.hardware_widget = sensor_strip
+        self.sensor_strip = sensor_strip
+        self.grid_layout = robot_layout
+
+        self._recording_style_timer = QTimer(self)
+        self._recording_style_timer.timeout.connect(
+            self._refresh_recording_button_style
+        )
+        self._recording_style_timer.start(100)
+        self._refresh_recording_button_style()
         self._init_battery_subscription(parent)
+
+    def _refresh_recording_button_style(self) -> None:
+        active = self._recording_button.text().strip().lower() == "stop"
+        if active == self._recording_button_active:
+            return
+        self._recording_button_active = active
+        self._recording_button.setStyleSheet(
+            self.RECORDING_ACTIVE_STYLE
+            if active
+            else self._recording_button_base_style
+        )
+
+    @staticmethod
+    def _separator() -> QFrame:
+        separator = QFrame()
+        separator.setFrameShape(QFrame.VLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setFixedHeight(22)
+        return separator
 
     def _init_battery_subscription(self, parent) -> None:
         node = getattr(parent, "node", None)
