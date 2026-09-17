@@ -268,8 +268,12 @@ class ManipulationControls(UIControlHelper):
         )
         row.addWidget(self.move_to_tag_surface_button)
 
-        self.move_to_tag_surface_info = QLabel("ⓘ")
-        self.move_to_tag_surface_info.setToolTip(self.TAG_SURFACE_TEST_INFO)
+        self.move_to_tag_surface_info = QPushButton("ⓘ")
+        self.move_to_tag_surface_info.setFlat(True)
+        self.move_to_tag_surface_info.setFixedWidth(24)
+        self.move_to_tag_surface_info.clicked.connect(
+            self.handle_move_to_tag_surface_info
+        )
         row.addWidget(self.move_to_tag_surface_info)
 
         row.addStretch()
@@ -299,6 +303,12 @@ class ManipulationControls(UIControlHelper):
             self.surface_tolerance_input.value()
         )
         return self.ui.execute_operation(intent)
+
+    def handle_move_to_tag_surface_info(self):
+        return self.show_info(
+            "Move to Tag Surface",
+            self.TAG_SURFACE_TEST_INFO,
+        )
 
     def handle_move_to_tag_surface(self):
         intent_id = getattr(
