@@ -558,11 +558,10 @@ def test_executor_owns_goal_acceptance_and_success_result(monkeypatch):
             result=SimpleNamespace(success=True)
         )
     )
-    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
-    assert len(stop_client.requests) == 1
-    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
-    stop_client.future.set_result(SimpleNamespace(success=True))
     completed = executor.poll()
+
+    assert stop_client.requests == []
+    assert handle.cancel_count == 0
 
     assert completed.outcome is ArmMovementOutcome.SUCCESS
     assert not executor.active
@@ -1082,11 +1081,8 @@ def test_contact_retreat_uses_probe_and_preserves_guard_lifecycle(monkeypatch):
     client.send_future.set_result(FakeGoalHandle(result_future=retreat_result))
     assert executor.poll().outcome is ArmMovementOutcome.RUNNING
     retreat_result.set_result(SimpleNamespace(result=SimpleNamespace(success=True)))
-    stop_client.future = ManualFuture()
-    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
-    assert len(stop_client.requests) == 2
-    stop_client.future.set_result(SimpleNamespace(success=True, message="stopped"))
     assert executor.poll().outcome is ArmMovementOutcome.CONTACT
+    assert len(stop_client.requests) == 1
     assert not executor.active
 
 

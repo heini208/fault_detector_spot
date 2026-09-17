@@ -200,7 +200,7 @@ def test_rotation_self_load_below_angular_threshold_does_not_trigger_contact():
     assert driver.stop_count == 0
 
 
-def test_successful_rotation_finishes_after_arm_stop_confirmation():
+def test_successful_rotation_finishes_without_arm_stop():
     state = FakeArmStateSource()
     driver = GoalDriver()
     guard = execution(state, driver, RecordingForcePolicy())
@@ -216,20 +216,12 @@ def test_successful_rotation_finishes_after_arm_stop_confirmation():
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
     )
 
-    stopping = guard.poll()
-
-    assert stopping.outcome is ArmMovementOutcome.RUNNING
-    assert driver.stop_count == 1
-    assert driver.started_goals[-1] == ("arm_stop", 1)
-
-    driver.stop_updates.append(
-        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
-    )
     finished = guard.poll()
 
     assert finished.outcome is ArmMovementOutcome.SUCCESS
     assert "orientation threshold 5.00 N" in finished.detail
-    assert "ArmStopCommand accepted" in finished.detail
+    assert driver.stop_count == 0
+    assert driver.cancel_count == 0
     assert not guard.active
 
 

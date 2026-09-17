@@ -93,6 +93,15 @@ def test_ready_arm_uses_low_level_probe_submission_not_force_guard():
 def test_executor_delegates_probe_geometry_to_planner():
     executor = _source(EXECUTOR)
     planner = _source(PLANNER)
+    executor_class = next(
+        node for node in ast.parse(executor).body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "ArmMovementExecutor"
+    )
+    executor_methods = {
+        node.name for node in executor_class.body
+        if isinstance(node, ast.FunctionDef)
+    }
 
     for name in (
         "resolve_relative",
@@ -103,7 +112,7 @@ def test_executor_delegates_probe_geometry_to_planner():
         "probe_target_to_hand_target",
         "normalize_target",
     ):
-        assert f"def {name}(" not in executor
+        assert name not in executor_methods
         assert f"def {name}(" in planner
 
 
@@ -167,7 +176,7 @@ def test_guard_does_not_define_a_separate_movement_speed():
         assert "GUARDED_LINEAR_SPEED" not in source
 
 
-def test_only_probe_and_native_stow_submit_arm_motion():
+def test_only_probe_moveit_completion_and_native_stow_submit_arm_motion():
     tree = ast.parse(_source(EXECUTOR))
     executor = next(node for node in tree.body if isinstance(node, ast.ClassDef)
                     and node.name == "ArmMovementExecutor")
@@ -179,7 +188,9 @@ def test_only_probe_and_native_stow_submit_arm_motion():
             if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute):
                 callers.setdefault(call.func.attr, set()).add(method.name)
 
-    assert callers["_submit_goal"] == {"probe", "_advance_stow_start"}
+    assert callers["_submit_goal"] == {
+        "probe", "_poll_moveit_planning", "_advance_stow_start",
+    }
     assert callers["_build_pose_goal"] == {"probe"}
     assert callers["probe"] == {"_continue_probe"}
     assert "start_motion=self._continue_probe" in _source(EXECUTOR)

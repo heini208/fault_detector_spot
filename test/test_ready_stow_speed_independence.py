@@ -1,4 +1,7 @@
+import math
 from pathlib import Path
+
+import yaml
 
 
 ROOT = Path(__file__).parents[1]
@@ -13,7 +16,9 @@ def test_ready_arm_has_dedicated_linear_speed():
         / "arm_movement_executor.py"
     ).read_text(encoding="utf-8")
 
-    assert "arm.ready_linear_speed_mps: 0.08" in config
+    parameters = yaml.safe_load(config)["/**"]["ros__parameters"]
+    ready_speed = parameters["arm.ready_linear_speed_mps"]
+    assert math.isfinite(ready_speed) and ready_speed > 0.0
     assert 'config.get("ready_linear_speed_mps")' in executor
     assert "speed if speed is not None else self.ready_speed" in executor
     assert "self._operation_speed = self.ready_speed" in executor

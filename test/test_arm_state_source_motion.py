@@ -32,6 +32,8 @@ class FakeNode:
         _topic,
         callback,
         _depth,
+        *,
+        callback_group=None,
     ):
         self.callback = callback
         return object()

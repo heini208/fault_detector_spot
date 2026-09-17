@@ -26,7 +26,9 @@ class _Node:
         self.callback = None
         self.destroyed = None
 
-    def create_subscription(self, _type, _topic, callback, _qos):
+    def create_subscription(
+        self, _type, _topic, callback, _qos, *, callback_group=None
+    ):
         self.callback = callback
         return object()
 
