@@ -35,8 +35,8 @@ def test_tag_surface_test_control_is_next_to_move_close_to_surface():
     tag_surface_index = row.index("Move to Tag Surface")
 
     assert close_index < tag_surface_index
-    assert 'QLabel("ⓘ")' in row
-    assert "TAG_SURFACE_TEST_INFO" in row
+    assert 'QPushButton("ⓘ")' in row
+    assert "handle_move_to_tag_surface_info" in row
     assert "handle_move_to_tag_surface" in row
 
 
@@ -67,3 +67,5 @@ def test_tag_surface_info_explains_temporary_input_semantics():
     assert "Y/Z are always" in source
     assert "interpreted in the tag frame" in source
     assert "reference-frame point instead" in source
+    assert "def handle_move_to_tag_surface_info(self):" in source
+    assert 'self.show_info(\n            "Move to Tag Surface",' in source
