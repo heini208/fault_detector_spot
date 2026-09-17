@@ -1,8 +1,9 @@
 """Add server-owned probe finalization to inspection controls."""
 
 import math
+from uuid import uuid4
 
-from PyQt5.QtWidgets import QFrame, QLabel, QVBoxLayout
+from PyQt5.QtWidgets import QDoubleSpinBox, QFrame, QLabel, QListWidget, QPushButton, QVBoxLayout
 
 from fault_detector_msgs.msg import (
     ApplicationCommandState,
@@ -42,6 +43,8 @@ class FinalizingInspectionControls(InspectionControls):
         self._reference_view_id_by_camera = {}
         self._begin_refinement_after_reference_commit = False
         self._reference_capture_in_progress = False
+        self._saved_probe_scope = None
+        self._saved_probe_operation_context = ""
         self._probe_point_entry_panel = None
         self._probe_point_overview_label = None
         super().__init__(ui)
@@ -77,6 +80,39 @@ class FinalizingInspectionControls(InspectionControls):
         self._probe_point_overview_label.setWordWrap(True)
         layout.addWidget(self._probe_point_overview_label)
 
+        self.saved_probe_points_list = QListWidget()
+        self.saved_probe_points_list.currentRowChanged.connect(
+            self._saved_probe_selection_changed
+        )
+        layout.addWidget(self.saved_probe_points_list)
+        layout.addWidget(QLabel("Target distance from wall [m]:"))
+        self.saved_probe_distance = QDoubleSpinBox()
+        self.saved_probe_distance.setDecimals(3)
+        self.saved_probe_distance.setRange(0.0, 10.0)
+        self.saved_probe_distance.setSingleStep(0.005)
+        self.saved_probe_distance.setEnabled(False)
+        self.saved_probe_distance.setToolTip(
+            "Defaults to the selected point’s saved value. Changes apply only to this movement."
+        )
+        layout.addWidget(self.saved_probe_distance)
+        self.saved_probe_action_buttons = {}
+        for label, operation in (
+            ("Move to Saved Safe Approach", OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH),
+            ("Move to Saved Aligned Pre-approach", OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH),
+            ("Move Close to Wall", OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE),
+        ):
+            button = QPushButton(label)
+            button.setEnabled(False)
+            button.clicked.connect(
+                lambda _checked=False, operation=operation: self.handle_saved_probe_motion(operation)
+            )
+            self.saved_probe_action_buttons[operation] = button
+            layout.addWidget(button)
+        self.saved_probe_motion_status = QLabel("Select a saved probe point.")
+        self.saved_probe_motion_status.setWordWrap(True)
+        layout.addWidget(self.saved_probe_motion_status)
+
+
         self.start_probe_refinement_button.setText(
             "Add New Probe Point"
         )
@@ -89,6 +125,114 @@ class FinalizingInspectionControls(InspectionControls):
             [0] * (splitter.count() - 1) + [500]
         )
         self._probe_point_entry_panel = panel
+
+    def _saved_probe_selection_changed(self, _row=None):
+        state = self._probe_setup_state
+        row = self.saved_probe_points_list.currentRow()
+        if state is not None and 0 <= row < len(state.probe_point_target_surface_distances_m):
+            self.saved_probe_distance.setValue(state.probe_point_target_surface_distances_m[row])
+        else:
+            self.saved_probe_distance.setValue(0.0)
+        self._refresh_saved_probe_actions()
+
+    def _refresh_saved_probe_actions(self, _row=None):
+        state = self._probe_setup_state
+        enabled = bool(
+            state is not None
+            and state.selected_object_id and state.selected_routine_id
+            and self.saved_probe_points_list.currentItem() is not None
+            and not state.refinement_active and not state.motion_pending
+            and not self._reference_start_pending
+            and not self._saved_probe_operation_context
+        )
+        row = self.saved_probe_points_list.currentRow()
+        self.saved_probe_distance.setEnabled(
+            enabled and 0 <= row < len(state.probe_point_target_surface_distances_m)
+        )
+        for button in self.saved_probe_action_buttons.values():
+            button.setEnabled(enabled)
+        self.saved_probe_points_list.setEnabled(
+            not bool(self._saved_probe_operation_context)
+        )
+
+    def _update_saved_probe_points(self, state):
+        scope = (state.selected_object_id, state.selected_routine_id)
+        ids = list(state.probe_point_ids) if all(scope) else []
+        current = self.saved_probe_points_list.currentItem()
+        selected = current.text() if current and scope == self._saved_probe_scope else None
+        previous = [self.saved_probe_points_list.item(i).text()
+                    for i in range(self.saved_probe_points_list.count())]
+        if scope != self._saved_probe_scope or ids != previous:
+            self.saved_probe_points_list.blockSignals(True)
+            self.saved_probe_points_list.clear()
+            self.saved_probe_points_list.addItems(ids)
+            if selected in ids:
+                self.saved_probe_points_list.setCurrentRow(ids.index(selected))
+            self.saved_probe_points_list.blockSignals(False)
+            self._saved_probe_scope = scope
+            if selected not in ids:
+                self._saved_probe_selection_changed()
+            if not self._saved_probe_operation_context:
+                self.saved_probe_motion_status.setText("Select a saved probe point.")
+        self._refresh_saved_probe_actions()
+
+    def handle_saved_probe_motion(self, operation):
+        self._refresh_saved_probe_actions()
+        button = self.saved_probe_action_buttons.get(operation)
+        if button is None or not button.isEnabled():
+            return False
+        state = self._probe_setup_state
+        point_id = self.saved_probe_points_list.currentItem().text()
+        if (self._saved_probe_scope != (state.selected_object_id, state.selected_routine_id)
+                or point_id not in state.probe_point_ids):
+            return False
+        intent = OperationalIntent()
+        intent.intent = operation
+        intent.object_id = state.selected_object_id
+        intent.routine_id = state.selected_routine_id
+        intent.probe_point_id = point_id
+        if (operation == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
+                and self.saved_probe_distance.isEnabled()):
+            intent.override_target_surface_distance = True
+            intent.target_surface_distance_m = self.saved_probe_distance.value()
+        self._saved_probe_operation_context = "saved-probe-" + uuid4().hex
+        self.saved_probe_motion_status.setText(f"{point_id}: submitting movement...")
+        self._refresh_saved_probe_actions()
+        request_id = self.ui.execute_operation(
+            intent, context_id=self._saved_probe_operation_context,
+        )
+        if request_id is None:
+            self.handle_saved_probe_rejected("Movement could not be submitted.")
+            return False
+        return True
+
+    def handle_saved_probe_rejected(self, detail):
+        if not self._saved_probe_operation_context:
+            return
+        self._saved_probe_operation_context = ""
+        self.saved_probe_motion_status.setText(detail)
+        self._refresh_saved_probe_actions()
+
+    def _handle_saved_probe_status(self, status):
+        if (not self._saved_probe_operation_context
+                or status.context_id != self._saved_probe_operation_context):
+            return
+        self.saved_probe_motion_status.setText(status.detail or "Movement in progress")
+        if status.state in {
+            ApplicationCommandState.STATE_SUCCEEDED,
+            ApplicationCommandState.STATE_FAILED,
+            ApplicationCommandState.STATE_CANCELLED,
+        }:
+            self._saved_probe_operation_context = ""
+            labels = {
+                ApplicationCommandState.STATE_SUCCEEDED: "Movement completed",
+                ApplicationCommandState.STATE_FAILED: "Movement failed",
+                ApplicationCommandState.STATE_CANCELLED: "Movement cancelled",
+            }
+            self.saved_probe_motion_status.setText(
+                labels[status.state] + (": " + status.detail if status.detail else "")
+            )
+        self._refresh_saved_probe_actions()
 
     def handle_start_probe_refinement(self):
         """Open reference selection before beginning physical refinement."""
@@ -237,6 +381,8 @@ class FinalizingInspectionControls(InspectionControls):
                 if state.state == ProbeSetupState.STATE_FAILED else ""
             )
         result = super().apply_setup_state(state)
+
+        self._update_saved_probe_points(state)
 
         if self._probe_point_overview_label is not None:
             if not state.selected_routine_id:
@@ -628,7 +774,8 @@ class FinalizingInspectionControls(InspectionControls):
         return True
 
     def handle_application_state(self, status):
-        """Track only this UI's standalone close-surface test command."""
+        """Track saved-point movements and standalone close-surface tests."""
+        self._handle_saved_probe_status(status)
         if (
             not self._surface_test_active
             or status.intent

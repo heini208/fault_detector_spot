@@ -57,6 +57,9 @@ class ProbeSetupStateAdapter:
         message.reference_view_ids = list(snapshot.reference_view_ids)
         message.reference_camera_ids = list(snapshot.reference_camera_ids)
         message.probe_point_ids = list(snapshot.probe_point_ids)
+        message.probe_point_target_surface_distances_m = list(
+            snapshot.probe_point_target_surface_distances_m
+        )
         self._write_geometry(message, snapshot)
         self._write_refinement(message, snapshot)
         return message

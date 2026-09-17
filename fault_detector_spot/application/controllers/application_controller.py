@@ -22,6 +22,7 @@ from fault_detector_spot.application.controllers.command_controller import (
 )
 from fault_detector_spot.application.ros.operational_intent_adapter import (
     operational_intent_to_command,
+    SAVED_PROBE_INTENTS,
 )
 from fault_detector_spot.application.coordinators.setup_coordinator import (
     SetupCoordinator,
@@ -76,6 +77,10 @@ class ApplicationController:
         """Validate public intent and create its semantic request."""
         self.validate_operation(intent, client_id)
         command = operational_intent_to_command(intent)
+        if intent.intent in SAVED_PROBE_INTENTS:
+            if self.probe_setup_coordinator is None:
+                raise RuntimeError("Saved probe-point controls are unavailable")
+            command = self.probe_setup_coordinator.saved_probe_command(intent)
         request = CommandRequest.create(
             command=command,
             client_id=required_client_id(client_id),

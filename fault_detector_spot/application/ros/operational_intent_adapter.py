@@ -21,7 +21,16 @@ from fault_detector_spot.inspection.measurement import (
 )
 
 
+SAVED_PROBE_INTENTS = frozenset({
+    OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH,
+    OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH,
+    OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE,
+})
+
 _INTENT_COMMAND_IDS = {
+    OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH: CommandID.MOVE_ARM_TO_TAG,
+    OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH: CommandID.MOVE_ARM_TO_TAG,
+    OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE: CommandID.MOVE_CLOSE_TO_SURFACE,
     OperationalIntent.INTENT_STAND_UP: CommandID.STAND_UP,
     OperationalIntent.INTENT_SIT_DOWN: CommandID.SIT_DOWN,
     OperationalIntent.INTENT_READY_ARM: CommandID.READY_ARM,
@@ -163,6 +172,9 @@ def operational_intent_to_command(
             f"{intent.intent!r}"
         ) from exception
 
+    if (intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
+            and intent.override_target_surface_distance):
+        _nonnegative_distance(intent.target_surface_distance_m, "Target surface distance")
     if intent.intent in _TAG_INTENTS:
         _validate_tag(intent)
     if intent.intent in _OFFSET_INTENTS:
@@ -200,7 +212,8 @@ def operational_intent_to_command(
             intent.waypoint_name,
             "Waypoint name",
         )
-    if intent.intent == OperationalIntent.INTENT_EXECUTE_PROBE_POINT:
+    if (intent.intent == OperationalIntent.INTENT_EXECUTE_PROBE_POINT
+            or intent.intent in SAVED_PROBE_INTENTS):
         _required_text(intent.object_id, "Object ID")
         _required_text(intent.routine_id, "Routine ID")
         _required_text(

@@ -114,6 +114,22 @@ class ProbeSetupCoordinator:
         self._drafts = {}
         self._context_locks = {}
 
+    def saved_probe_command(self, intent):
+        """Resolve a saved point on the server without changing setup drafts."""
+        from fault_detector_spot.inspection.execution.saved_probe_motion import (
+            saved_probe_command,
+        )
+        self.setup_coordinator.require_command_lane_idle(
+            "Robot command lane must be idle for saved probe-point motion"
+        )
+        return saved_probe_command(
+            intent,
+            self.object_repository,
+            self.motion_state_source,
+            self.refinement_controller.sensor_attachment_controller,
+            self.refinement_controller.motion_command_factory,
+        )
+
     def open_context(self, client_id: str) -> ProbeSetupSnapshot:
         """Open one independent server-owned probe setup draft."""
         context = self.setup_coordinator.open_context(
@@ -199,6 +215,14 @@ class ProbeSetupCoordinator:
                 object_ids,
             )
         )
+        distances = ()
+        if probe_ids:
+            definition = self.object_repository.load(draft.selected_object_id)
+            routine = definition.get_routine(draft.selected_routine_id)
+            distances = tuple(
+                routine.get_probe_point(point_id).target_surface_distance_m
+                for point_id in probe_ids
+            )
         return ProbeSetupSnapshot.from_draft(
             draft=draft,
             object_ids=object_ids,
@@ -208,6 +232,7 @@ class ProbeSetupCoordinator:
             selected_reference_tag_id=reference_tag_id,
             selected_reference_tag_family=reference_tag_family,
             probe_point_ids=probe_ids,
+            probe_point_target_surface_distances_m=distances,
         )
 
     @_serialized_transaction

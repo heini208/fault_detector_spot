@@ -75,6 +75,7 @@ class ProbeSetupSnapshot:
     refinement: Optional[ProbeRefinementSession]
     dirty: bool
     validation_error: str
+    probe_point_target_surface_distances_m: Tuple[float, ...] = ()
 
     @classmethod
     def from_draft(
@@ -87,6 +88,7 @@ class ProbeSetupSnapshot:
         selected_reference_tag_id,
         selected_reference_tag_family,
         probe_point_ids,
+        probe_point_target_surface_distances_m=(),
     ) -> "ProbeSetupSnapshot":
         return cls(
             context=draft.context,
@@ -102,6 +104,7 @@ class ProbeSetupSnapshot:
             reference_view_ids=tuple(reference_view_ids),
             reference_camera_ids=tuple(reference_camera_ids),
             probe_point_ids=tuple(probe_point_ids),
+            probe_point_target_surface_distances_m=tuple(probe_point_target_surface_distances_m),
             reference_pixel=deepcopy(draft.reference_pixel),
             geometry=deepcopy(draft.geometry),
             setup=deepcopy(draft.setup),

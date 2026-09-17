@@ -760,6 +760,9 @@ def test_save_is_one_atomic_repository_transaction(tmp_path):
     assert point.reference_pixel == ImagePoint(u=20, v=30)
     assert point.reference_view_id == "slot1_hand"
     assert saved.probe_point_ids == ("bearing_front",)
+    assert saved.probe_point_target_surface_distances_m == (
+        point.target_surface_distance_m,
+    )
     assert not saved.dirty
 
 
