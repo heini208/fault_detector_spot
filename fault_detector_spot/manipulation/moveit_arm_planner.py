@@ -13,7 +13,7 @@ from moveit_msgs.msg import (
     OrientationConstraint,
     PositionConstraint,
 )
-from moveit_msgs.srv import GetMotionPlan
+from moveit_msgs.srv import GetCartesianPath, GetMotionPlan
 from shape_msgs.msg import SolidPrimitive
 
 
@@ -26,6 +26,7 @@ ARM_JOINT_NAMES = (
     "arm_wr1",
 )
 DEFAULT_SERVICE_NAME = "/plan_kinematic_path"
+DEFAULT_CARTESIAN_SERVICE_NAME = "/compute_cartesian_path"
 DEFAULT_PLANNING_FRAME = "body"
 DEFAULT_GROUP_NAME = "arm"
 DEFAULT_END_EFFECTOR_LINK = "hand"
@@ -36,6 +37,9 @@ DEFAULT_POSITION_TOLERANCE_M = 0.002
 DEFAULT_ORIENTATION_TOLERANCE_RAD = 0.01
 DEFAULT_VELOCITY_SCALING = 1.0
 DEFAULT_ACCELERATION_SCALING = 1.0
+DEFAULT_CARTESIAN_MAX_STEP_M = 0.002
+DEFAULT_CARTESIAN_JUMP_THRESHOLD = 2.0
+DEFAULT_CARTESIAN_MIN_FRACTION = 0.999
 MIN_ARM_SH1_RAD = -2.96706
 
 
@@ -56,12 +60,13 @@ class MoveItPlanUpdate:
 
 
 class MoveItArmPlanner:
-    """Plan hand-pose goals through move_group without executing them."""
+    """Plan normal and straight Cartesian hand paths without executing them."""
 
     def __init__(
         self,
         node,
         service_name: str = DEFAULT_SERVICE_NAME,
+        cartesian_service_name: str = DEFAULT_CARTESIAN_SERVICE_NAME,
         planning_frame: str = DEFAULT_PLANNING_FRAME,
         group_name: str = DEFAULT_GROUP_NAME,
         end_effector_link: str = DEFAULT_END_EFFECTOR_LINK,
@@ -76,6 +81,9 @@ class MoveItArmPlanner:
         ),
         velocity_scaling: float = DEFAULT_VELOCITY_SCALING,
         acceleration_scaling: float = DEFAULT_ACCELERATION_SCALING,
+        cartesian_max_step_m: float = DEFAULT_CARTESIAN_MAX_STEP_M,
+        cartesian_jump_threshold: float = DEFAULT_CARTESIAN_JUMP_THRESHOLD,
+        cartesian_min_fraction: float = DEFAULT_CARTESIAN_MIN_FRACTION,
         monotonic_clock=time.monotonic,
     ):
         if node is None:
@@ -85,6 +93,7 @@ class MoveItArmPlanner:
 
         self.node = node
         self.service_name = str(service_name).strip()
+        self.cartesian_service_name = str(cartesian_service_name).strip()
         self.planning_frame = str(planning_frame).strip()
         self.group_name = str(group_name).strip()
         self.end_effector_link = str(end_effector_link).strip()
@@ -113,8 +122,24 @@ class MoveItArmPlanner:
             acceleration_scaling,
             "Acceleration scaling",
         )
+        self.cartesian_max_step_m = self._positive(
+            cartesian_max_step_m,
+            "Cartesian maximum step",
+        )
+        self.cartesian_jump_threshold = self._nonnegative(
+            cartesian_jump_threshold,
+            "Cartesian jump threshold",
+        )
+        self.cartesian_min_fraction = self._fraction(
+            cartesian_min_fraction,
+            "Cartesian minimum fraction",
+        )
         if not self.service_name:
             raise ValueError("MoveIt planning service name must not be empty")
+        if not self.cartesian_service_name:
+            raise ValueError(
+                "MoveIt Cartesian planning service name must not be empty"
+            )
         if not self.planning_frame:
             raise ValueError("MoveIt planning frame must not be empty")
         if not self.group_name:
@@ -128,30 +153,22 @@ class MoveItArmPlanner:
             GetMotionPlan,
             self.service_name,
         )
+        self._cartesian_client = node.create_client(
+            GetCartesianPath,
+            self.cartesian_service_name,
+        )
         self._future = None
         self._started_at = None
+        self._planning_mode = None
 
     @property
     def active(self) -> bool:
         return self._future is not None
 
     def start(self, target_hand: PoseStamped) -> MoveItPlanUpdate:
-        if self.active:
-            return MoveItPlanUpdate(
-                MoveItPlanOutcome.ERROR,
-                "Another MoveIt arm plan is already active",
-            )
-        if not isinstance(target_hand, PoseStamped):
-            return MoveItPlanUpdate(
-                MoveItPlanOutcome.ERROR,
-                "MoveIt arm target must be a PoseStamped",
-            )
-        if target_hand.header.frame_id.strip() != self.planning_frame:
-            return MoveItPlanUpdate(
-                MoveItPlanOutcome.ERROR,
-                "MoveIt arm target must be expressed in planning frame "
-                f"'{self.planning_frame}'",
-            )
+        error = self._target_error(target_hand)
+        if error is not None:
+            return error
 
         try:
             if not self._client.wait_for_service(timeout_sec=0.0):
@@ -168,17 +185,38 @@ class MoveItArmPlanner:
                 f"MoveIt planning request failed: {exception}",
             )
 
-        if future is None:
+        return self._begin_future(
+            future,
+            "motion",
+            "MoveIt arm planning started",
+            "MoveIt planning service returned no future",
+        )
+
+    def start_cartesian(self, target_hand: PoseStamped) -> MoveItPlanUpdate:
+        error = self._target_error(target_hand)
+        if error is not None:
+            return error
+
+        try:
+            if not self._cartesian_client.wait_for_service(timeout_sec=0.0):
+                return MoveItPlanUpdate(
+                    MoveItPlanOutcome.SERVICE_UNAVAILABLE,
+                    "MoveIt Cartesian planning service "
+                    f"'{self.cartesian_service_name}' is unavailable",
+                )
+            request = self._build_cartesian_request(target_hand)
+            future = self._cartesian_client.call_async(request)
+        except Exception as exception:
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
-                "MoveIt planning service returned no future",
+                f"MoveIt Cartesian planning request failed: {exception}",
             )
 
-        self._future = future
-        self._started_at = self._monotonic_clock()
-        return MoveItPlanUpdate(
-            MoveItPlanOutcome.RUNNING,
-            "MoveIt arm planning started",
+        return self._begin_future(
+            future,
+            "cartesian",
+            "MoveIt Cartesian path planning started",
+            "MoveIt Cartesian planning service returned no future",
         )
 
     def poll(self) -> MoveItPlanUpdate:
@@ -194,33 +232,107 @@ class MoveItArmPlanner:
                 self._monotonic_clock() - self._started_at
                 >= self.response_timeout_sec
             ):
+                mode = self._planning_mode
                 self.cancel()
+                label = "Cartesian path planning" if mode == "cartesian" else "arm planning"
                 return MoveItPlanUpdate(
                     MoveItPlanOutcome.TIMEOUT,
-                    "MoveIt arm planning timed out after "
+                    f"MoveIt {label} timed out after "
                     f"{self.response_timeout_sec:.1f} s",
                 )
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.RUNNING,
-                "Waiting for MoveIt arm plan",
+                (
+                    "Waiting for MoveIt Cartesian path"
+                    if self._planning_mode == "cartesian"
+                    else "Waiting for MoveIt arm plan"
+                ),
             )
 
+        mode = self._planning_mode
         try:
             response = future.result()
         except Exception as exception:
             self._reset()
+            label = "Cartesian planning" if mode == "cartesian" else "planning"
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
-                f"MoveIt planning response failed: {exception}",
+                f"MoveIt {label} response failed: {exception}",
             )
 
         self._reset()
         if response is None:
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
-                "MoveIt planning service returned no response",
+                (
+                    "MoveIt Cartesian planning service returned no response"
+                    if mode == "cartesian"
+                    else "MoveIt planning service returned no response"
+                ),
             )
 
+        if mode == "cartesian":
+            return self._cartesian_result(response)
+        return self._motion_plan_result(response)
+
+    def cancel(self) -> None:
+        future = self._future
+        self._reset()
+        if future is not None and not future.done():
+            try:
+                future.cancel()
+            except Exception:
+                pass
+
+    def destroy(self) -> None:
+        self.cancel()
+        clients = (self._client, self._cartesian_client)
+        self._client = None
+        self._cartesian_client = None
+        for client in clients:
+            if client is not None:
+                self.node.destroy_client(client)
+
+    def _target_error(self, target_hand: PoseStamped):
+        if self.active:
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.ERROR,
+                "Another MoveIt arm plan is already active",
+            )
+        if not isinstance(target_hand, PoseStamped):
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.ERROR,
+                "MoveIt arm target must be a PoseStamped",
+            )
+        if target_hand.header.frame_id.strip() != self.planning_frame:
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.ERROR,
+                "MoveIt arm target must be expressed in planning frame "
+                f"'{self.planning_frame}'",
+            )
+        return None
+
+    def _begin_future(
+        self,
+        future,
+        planning_mode: str,
+        started_detail: str,
+        missing_future_detail: str,
+    ) -> MoveItPlanUpdate:
+        if future is None:
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.ERROR,
+                missing_future_detail,
+            )
+        self._future = future
+        self._started_at = self._monotonic_clock()
+        self._planning_mode = planning_mode
+        return MoveItPlanUpdate(
+            MoveItPlanOutcome.RUNNING,
+            started_detail,
+        )
+
+    def _motion_plan_result(self, response) -> MoveItPlanUpdate:
         result = response.motion_plan_response
         error_code = int(result.error_code.val)
         if error_code != MoveItErrorCodes.SUCCESS:
@@ -245,21 +357,49 @@ class MoveItArmPlanner:
             trajectory=trajectory,
         )
 
-    def cancel(self) -> None:
-        future = self._future
-        self._reset()
-        if future is not None and not future.done():
-            try:
-                future.cancel()
-            except Exception:
-                pass
+    def _cartesian_result(self, response) -> MoveItPlanUpdate:
+        error_code = int(response.error_code.val)
+        if error_code != MoveItErrorCodes.SUCCESS:
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.FAILURE,
+                "MoveIt Cartesian path failed: "
+                f"{self._planning_failure_detail(error_code)}",
+            )
 
-    def destroy(self) -> None:
-        self.cancel()
-        client = self._client
-        self._client = None
-        if client is not None:
-            self.node.destroy_client(client)
+        fraction = float(response.fraction)
+        if not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.ERROR,
+                f"MoveIt Cartesian path returned invalid fraction {fraction}",
+            )
+        if fraction + 1e-12 < self.cartesian_min_fraction:
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.FAILURE,
+                "MoveIt Cartesian path is incomplete: "
+                f"fraction {fraction:.6f} < "
+                f"{self.cartesian_min_fraction:.6f}",
+            )
+
+        trajectory = deepcopy(response.solution.joint_trajectory)
+        try:
+            trajectory_detail = self._validate_and_describe(trajectory)
+        except Exception as exception:
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.ERROR,
+                "MoveIt returned an invalid Cartesian arm trajectory: "
+                f"{exception}",
+            )
+
+        detail = (
+            f"MoveIt Cartesian path ready: fraction {fraction:.6f}; "
+            f"{trajectory_detail}"
+        )
+        self._logger.info(detail)
+        return MoveItPlanUpdate(
+            MoveItPlanOutcome.SUCCESS,
+            detail,
+            trajectory=trajectory,
+        )
 
     def _build_request(self, target_hand: PoseStamped):
         request = GetMotionPlan.Request()
@@ -274,6 +414,22 @@ class MoveItArmPlanner:
         motion.goal_constraints = [
             self._pose_goal_constraints(target_hand)
         ]
+        return request
+
+    def _build_cartesian_request(self, target_hand: PoseStamped):
+        request = GetCartesianPath.Request()
+        request.header.frame_id = self.planning_frame
+        request.start_state.is_diff = True
+        request.group_name = self.group_name
+        request.link_name = self.end_effector_link
+        request.waypoints = [deepcopy(target_hand.pose)]
+        request.max_step = self.cartesian_max_step_m
+        request.jump_threshold = self.cartesian_jump_threshold
+        request.prismatic_jump_threshold = 0.0
+        request.revolute_jump_threshold = 0.0
+        request.avoid_collisions = True
+        request.max_velocity_scaling_factor = self.velocity_scaling
+        request.max_acceleration_scaling_factor = self.acceleration_scaling
         return request
 
     @staticmethod
@@ -407,12 +563,27 @@ class MoveItArmPlanner:
     def _reset(self) -> None:
         self._future = None
         self._started_at = None
+        self._planning_mode = None
 
     @staticmethod
     def _positive(value, label: str) -> float:
         normalized = float(value)
         if not math.isfinite(normalized) or normalized <= 0.0:
             raise ValueError(f"{label} must be positive and finite")
+        return normalized
+
+    @staticmethod
+    def _nonnegative(value, label: str) -> float:
+        normalized = float(value)
+        if not math.isfinite(normalized) or normalized < 0.0:
+            raise ValueError(f"{label} must be non-negative and finite")
+        return normalized
+
+    @staticmethod
+    def _fraction(value, label: str) -> float:
+        normalized = float(value)
+        if not math.isfinite(normalized) or not 0.0 < normalized <= 1.0:
+            raise ValueError(f"{label} must be in (0, 1]")
         return normalized
 
     @staticmethod
@@ -429,6 +600,10 @@ class MoveItArmPlanner:
 
 __all__ = [
     "ARM_JOINT_NAMES",
+    "DEFAULT_CARTESIAN_JUMP_THRESHOLD",
+    "DEFAULT_CARTESIAN_MAX_STEP_M",
+    "DEFAULT_CARTESIAN_MIN_FRACTION",
+    "DEFAULT_CARTESIAN_SERVICE_NAME",
     "MoveItArmPlanner",
     "MoveItPlanOutcome",
     "MoveItPlanUpdate",
