@@ -30,6 +30,14 @@ class ManipulationControls(UIControlHelper):
         "Yaw": 0.0,
     }
 
+    TAG_SURFACE_TEST_INFO = (
+        "Temporary test input for Move to Tag Surface. Uses the selected tag "
+        "and Arm offset Y/Z. Arm offset X (backward/forward), the frame "
+        "dropdown, and rotation offsets are ignored. Y/Z are always "
+        "interpreted in the tag frame. The final workflow will use the "
+        "reference-frame point instead."
+    )
+
     def __init__(self, parent_ui: "Fault_Detector_UI"):
         self.offset_fields = {}
         self.orientation_combo = None
@@ -251,6 +259,19 @@ class ManipulationControls(UIControlHelper):
         )
         row.addWidget(self.move_close_to_surface_button)
 
+        self.move_to_tag_surface_button = QPushButton("Move to Tag Surface")
+        self.move_to_tag_surface_button.setToolTip(
+            self.TAG_SURFACE_TEST_INFO
+        )
+        self.move_to_tag_surface_button.clicked.connect(
+            self.handle_move_to_tag_surface
+        )
+        row.addWidget(self.move_to_tag_surface_button)
+
+        self.move_to_tag_surface_info = QLabel("ⓘ")
+        self.move_to_tag_surface_info.setToolTip(self.TAG_SURFACE_TEST_INFO)
+        row.addWidget(self.move_to_tag_surface_info)
+
         row.addStretch()
         return row
 
@@ -271,6 +292,41 @@ class ManipulationControls(UIControlHelper):
     def handle_move_close_to_surface(self):
         intent = OperationalIntent()
         intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+        intent.target_surface_distance_m = float(
+            self.surface_distance_input.value()
+        )
+        intent.surface_tolerance_m = float(
+            self.surface_tolerance_input.value()
+        )
+        return self.ui.execute_operation(intent)
+
+    def handle_move_to_tag_surface(self):
+        intent_id = getattr(
+            OperationalIntent,
+            "INTENT_MOVE_TO_TAG_SURFACE",
+            None,
+        )
+        if intent_id is None:
+            self.show_info(
+                "Move to Tag Surface",
+                "The command is not available yet. The temporary UI input "
+                "is ready for the upcoming command implementation.",
+            )
+            return None
+
+        intent = OperationalIntent()
+        intent.intent = intent_id
+        try:
+            intent = self.add_tag_element_to_intent(intent)
+        except TagNotFound:
+            return None
+
+        intent.offset.header = intent.tag.pose.header
+        intent.offset.header.frame_id = "tag"
+        intent.offset.pose.position.x = 0.0
+        intent.offset.pose.position.y = self._get_offset("Y")
+        intent.offset.pose.position.z = self._get_offset("Z")
+        intent.offset.pose.orientation.w = 1.0
         intent.target_surface_distance_m = float(
             self.surface_distance_input.value()
         )
