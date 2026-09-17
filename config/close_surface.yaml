@@ -18,8 +18,8 @@
     close_surface.force_near_target_threshold_n: 3.0
     close_surface.force_near_target_distance_m: 0.020
 
-    close_surface.approach_far_speed_mps: 0.005
-    close_surface.approach_near_speed_mps: 0.001
+    close_surface.approach_far_speed_mps: 0.01
+    close_surface.approach_near_speed_mps: 0.002
     close_surface.approach_slowdown_distance_m: 0.050
     close_surface.contact_search_overtravel_m: 0.005
 
