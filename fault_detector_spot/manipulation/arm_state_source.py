@@ -7,6 +7,7 @@ import math
 import time
 
 from bosdyn_api_msgs.msg import ManipulatorState, ManipulatorStateStowState
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
 from fault_detector_spot.shared.runtime_source import RuntimeSource
 
@@ -89,6 +90,7 @@ class ArmStateSource(RuntimeSource):
         self.stale_after_sec = stale_after_sec
         self._monotonic_clock = monotonic_clock
         self._lock = RLock()
+        self._callback_group = MutuallyExclusiveCallbackGroup()
         self._stow_state = ArmStowState.UNKNOWN
         self._hand_velocity_sample = None
         self._hand_force_sample = None
@@ -98,6 +100,7 @@ class ArmStateSource(RuntimeSource):
             MANIPULATOR_STATE_TOPIC,
             self._receive_state,
             10,
+            callback_group=self._callback_group,
         )
 
     @property

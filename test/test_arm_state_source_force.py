@@ -27,8 +27,11 @@ class FakeNode:
         _topic,
         callback,
         _depth,
+        *,
+        callback_group=None,
     ):
         self.callback = callback
+        self.callback_group = callback_group
         self.subscription = object()
         return self.subscription
 
@@ -62,6 +65,15 @@ def manipulator_state(
             z=force[2],
         ),
     )
+
+
+def test_source_uses_dedicated_callback_group():
+    node = FakeNode()
+
+    source = ArmStateSource(node)
+
+    assert node.callback_group is source._callback_group
+    assert node.callback_group is not None
 
 
 def test_source_exposes_fresh_hand_frame_force():
