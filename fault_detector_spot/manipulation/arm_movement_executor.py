@@ -36,6 +36,7 @@ from fault_detector_spot.manipulation.arm_contact_evidence import (
     ArmContactEvidenceAnalyzer,
 )
 from fault_detector_spot.manipulation.arm_motion_speed import (
+    ArmMotionSpeed,
     ArmMotionSpeedPolicy,
 )
 from fault_detector_spot.manipulation.arm_movement_result import (
@@ -173,6 +174,12 @@ class ArmMovementExecutor(MovementExecutor):
             speed_policy
             if speed_policy is not None
             else ArmMotionSpeedPolicy.from_config(config)
+        )
+        self.ready_speed = ArmMotionSpeed(
+            linear_speed_mps=config.get("ready_linear_speed_mps"),
+            angular_speed_rad_s=(
+                self.speed_policy.default_speed.angular_speed_rad_s
+            ),
         )
         self.arm_state_source = arm_state_source
         self.surface_source = surface_source
@@ -675,7 +682,9 @@ class ArmMovementExecutor(MovementExecutor):
             return self._busy_update()
         self._active = True
         self._operation = _ArmOperation.PREPARE
-        self._operation_speed = speed
+        self._operation_speed = (
+            speed if speed is not None else self.ready_speed
+        )
         return self._advance_prepare_start()
 
     def stow(self) -> ArmMovementUpdate:
@@ -825,7 +834,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._state_wait_started = None
         if state is ArmStowState.STOWED:
             self._operation = _ArmOperation.READY_PREPARE
-            self._operation_speed = None
+            self._operation_speed = self.ready_speed
             return self._advance_prepare_start()
 
         return self._begin_ready_probe()
