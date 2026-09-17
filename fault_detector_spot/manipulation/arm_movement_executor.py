@@ -233,7 +233,10 @@ class ArmMovementExecutor(MovementExecutor):
         self._ready_probe_start = None
         self._guarded_plan_builder = None
         self._guarded_force_threshold_n = None
+        self._guarded_cartesian_path = False
+        self._next_probe_cartesian_path = False
         self._pending_moveit_plan_builder = None
+        self._pending_moveit_cartesian_path = False
         self._moveit_cartesian_plan = None
         self._arm_stop_service_future = None
         self._arm_stop_service_started = None
@@ -413,6 +416,7 @@ class ArmMovementExecutor(MovementExecutor):
         motion_sensor_id: str = "",
         speed=None,
         force_threshold_n=None,
+        cartesian_path: bool = False,
     ) -> ArmMovementUpdate:
         """Execute one ready probe movement with force monitoring."""
         if self.active:
@@ -426,6 +430,11 @@ class ArmMovementExecutor(MovementExecutor):
             return ArmMovementUpdate(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Guarded probe movement requires a force contact policy",
+            )
+        if cartesian_path and self.moveit_arm_planner is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Cartesian guarded probe movement requires MoveIt planning",
             )
 
         if callable(probe_target):
@@ -441,6 +450,7 @@ class ArmMovementExecutor(MovementExecutor):
             target_builder = lambda: (target, sensor_id)
 
         self._guarded_force_threshold_n = force_threshold_n
+        self._guarded_cartesian_path = bool(cartesian_path)
         self._guarded_plan_builder = lambda: (
             self.probe_motion_planner.build_plan(
                 target_builder,
@@ -471,6 +481,7 @@ class ArmMovementExecutor(MovementExecutor):
         speed=None,
         *,
         _continuation=None,
+        _cartesian_path: bool = False,
     ) -> ArmMovementUpdate:
         """Execute every normal arm motion through this unguarded boundary.
 
@@ -514,6 +525,7 @@ class ArmMovementExecutor(MovementExecutor):
 
         if self._moveit_planning_required():
             self._pending_moveit_plan_builder = build_plan
+            self._pending_moveit_cartesian_path = bool(_cartesian_path)
             return self._advance_moveit_planning_start()
 
         def build_goal():
@@ -554,14 +566,19 @@ class ArmMovementExecutor(MovementExecutor):
             )
         except Exception as exception:
             self._pending_moveit_plan_builder = None
+            self._pending_moveit_cartesian_path = False
             return self._finish(
                 ArmMovementOutcome.EXECUTION_ERROR,
                 f"MoveIt target preparation failed: {exception}",
             )
 
-        update = planner.start(target_hand)
+        if self._pending_moveit_cartesian_path:
+            update = planner.start_cartesian(target_hand)
+        else:
+            update = planner.start(target_hand)
         if update.outcome is MoveItPlanOutcome.RUNNING:
             self._pending_moveit_plan_builder = None
+            self._pending_moveit_cartesian_path = False
             self._moveit_cartesian_plan = plan
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING,
@@ -569,6 +586,7 @@ class ArmMovementExecutor(MovementExecutor):
             )
 
         self._pending_moveit_plan_builder = None
+        self._pending_moveit_cartesian_path = False
         return self._finish(
             self._moveit_failure_outcome(update.outcome),
             update.detail,
@@ -626,6 +644,7 @@ class ArmMovementExecutor(MovementExecutor):
     def _reset_moveit_planning(self, cancel=False) -> None:
         planner = self.moveit_arm_planner
         self._pending_moveit_plan_builder = None
+        self._pending_moveit_cartesian_path = False
         self._moveit_cartesian_plan = None
         if cancel and planner is not None:
             planner.cancel()
@@ -637,11 +656,14 @@ class ArmMovementExecutor(MovementExecutor):
         speed=None,
     ) -> ArmMovementUpdate:
         """Start a physical step without replacing its enclosing operation."""
+        cartesian_path = self._next_probe_cartesian_path
+        self._next_probe_cartesian_path = False
         return self.probe(
             probe_target,
             motion_sensor_id,
             speed,
             _continuation=self._probe_continuation,
+            _cartesian_path=cartesian_path,
         )
 
     def prepare(
@@ -832,6 +854,7 @@ class ArmMovementExecutor(MovementExecutor):
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Guarded probe movement has no pending target",
             )
+        self._next_probe_cartesian_path = self._guarded_cartesian_path
         update = self.guarded_probe_execution.start(
             builder,
             force_threshold_n=self._guarded_force_threshold_n,
@@ -1107,6 +1130,9 @@ class ArmMovementExecutor(MovementExecutor):
         self._ready_probe_start = None
         self._guarded_plan_builder = None
         self._guarded_force_threshold_n = None
+        self._guarded_cartesian_path = False
+        self._next_probe_cartesian_path = False
+        self._pending_moveit_cartesian_path = False
         self._reset_arm_stop_service_lifecycle(cancel=True)
         if self.guarded_probe_execution is not None:
             self.guarded_probe_execution.reset()

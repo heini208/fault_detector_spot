@@ -1,4 +1,4 @@
-"""Behavior-tree workflow for repeated guarded surface approach movements."""
+"""Behavior-tree workflow for a guarded Cartesian surface approach."""
 
 from copy import deepcopy
 from dataclasses import dataclass, fields
@@ -39,6 +39,8 @@ from fault_detector_spot.shared.geometry.transforms import (
 
 
 CONTACT_MODE_PLANNING_DISTANCE_M = 0.001
+MAX_CARTESIAN_STANDOFF_MOVES = 2
+MAX_CARTESIAN_CONTACT_MOVES = 1
 
 
 @dataclass(frozen=True)
@@ -88,7 +90,7 @@ class MoveCloseToSurfaceConfig:
 
 
 class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
-    """Chain guarded arm movements until stand-off or contact is reached."""
+    """Move straight from a safe pre-approach to stand-off or contact."""
 
     def __init__(
         self,
@@ -302,7 +304,7 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
             )
             mode = "contact" if self.contact_mode else "stand-off"
             self.feedback_message = (
-                f"Frozen {mode} approach from live surface estimate at "
+                f"Frozen {mode} Cartesian approach from live surface estimate at "
                 f"{aggregate.distance_m:.4f} m"
             )
             return self._prepare_next_approach_step()
@@ -343,16 +345,26 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
                 "Reached requested surface stand-off from frozen estimate: "
                 f"{evaluation.estimated_distance_m:.4f} m"
             )
-        if self._approach_steps >= self.config.maximum_approach_steps:
-            return self._begin_recovery(
-                "Surface approach exceeded the maximum step count"
-            )
+
+        movement_limit = self._cartesian_movement_limit()
+        if self._approach_steps >= movement_limit:
+            if self.contact_mode:
+                detail = (
+                    "Cartesian contact search completed without detecting "
+                    "surface contact"
+                )
+            else:
+                detail = (
+                    "Cartesian surface approach did not reach the requested "
+                    "stand-off after one endpoint correction"
+                )
+            return self._begin_recovery(detail)
 
         requested_step_m = self._requested_step(evaluation)
         if requested_step_m <= 0.0:
             return self._begin_recovery(
-                "Contact-seeking approach reached its travel limit without "
-                "detecting contact"
+                "Cartesian surface approach reached its travel limit without "
+                "reaching the requested target"
             )
 
         self._previous_probe_pose = deepcopy(current_probe)
@@ -380,13 +392,14 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
             self._sensor_id,
             speed=speed,
             force_threshold_n=threshold_n,
+            cartesian_path=True,
         )
+        stage = "approach" if self._approach_steps == 1 else "correction"
         self.feedback_message = (
-            "Approaching surface by "
+            f"Starting straight Cartesian surface {stage} by "
             f"{requested_step_m:.4f} m at {speed.linear_speed_mps:.4f} m/s "
             f"with {threshold_n:.2f} N guard "
-            f"(step {self._approach_steps}/"
-            f"{self.config.maximum_approach_steps})"
+            f"(move {self._approach_steps}/{movement_limit})"
         )
         return self._handle_approach_update(update)
 
@@ -406,7 +419,9 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
         if update.outcome is ArmMovementOutcome.SUCCESS:
             self._settle_deadline = self._clock() + self.config.settle_sec
             self._phase = "settling"
-            self.feedback_message = "Surface step completed; waiting to settle"
+            self.feedback_message = (
+                "Cartesian surface movement completed; waiting to settle"
+            )
             return Status.RUNNING
         return self._begin_recovery(
             "Surface approach movement failed: "
@@ -428,10 +443,16 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
         self._validate_axis_guard(evaluation)
         achieved, lateral = self._validate_step_motion(current_probe)
         self.feedback_message = (
-            f"Step settled: inward {achieved:.4f} m, lateral "
+            f"Cartesian move settled: inward {achieved:.4f} m, lateral "
             f"{lateral:.4f} m; estimated surface distance "
             f"{evaluation.estimated_distance_m:.4f} m"
         )
+
+        if self.contact_mode:
+            return self._begin_recovery(
+                "Cartesian contact search reached its planned endpoint without "
+                "detecting surface contact"
+            )
         return self._prepare_next_approach_step()
 
     def _begin_recovery(self, detail: str) -> Status:
@@ -525,26 +546,27 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
         )
 
     def _requested_step(self, evaluation) -> float:
-        if not self.contact_mode:
-            return float(evaluation.requested_step_m)
-
         traveled = max(0.0, float(evaluation.traveled_inward_m))
         remaining_guard = self.config.maximum_travel_m - traveled
         if remaining_guard <= 1e-9:
             return 0.0
 
         remaining = max(0.0, float(evaluation.remaining_inward_travel_m))
-        if evaluation.reached or remaining <= self.config.maximum_step_m:
-            desired = max(
-                self.config.contact_search_overtravel_m,
-                remaining + self.config.contact_search_overtravel_m,
-            )
-            return min(
-                self.config.maximum_step_m,
-                remaining_guard,
-                desired,
-            )
-        return min(float(evaluation.requested_step_m), remaining_guard)
+        if not self.contact_mode:
+            return min(remaining, remaining_guard)
+
+        if self._approach_steps > 0:
+            return 0.0
+        desired = remaining + self.config.contact_search_overtravel_m
+        return min(desired, remaining_guard)
+
+    def _cartesian_movement_limit(self) -> int:
+        workflow_limit = (
+            MAX_CARTESIAN_CONTACT_MOVES
+            if self.contact_mode
+            else MAX_CARTESIAN_STANDOFF_MOVES
+        )
+        return min(self.config.maximum_approach_steps, workflow_limit)
 
     def _approach_speed_for(self, estimated_surface_distance_m: float):
         distance = max(0.0, float(estimated_surface_distance_m))

@@ -428,8 +428,8 @@ class MoveItArmPlanner:
         request.prismatic_jump_threshold = 0.0
         request.revolute_jump_threshold = 0.0
         request.avoid_collisions = True
-        request.max_velocity_scaling_factor = self.velocity_scaling
-        request.max_acceleration_scaling_factor = self.acceleration_scaling
+        # Humble's Cartesian service has no velocity/acceleration scaling fields.
+        # The executor stretches trajectory timing to the requested duration.
         return request
 
     @staticmethod

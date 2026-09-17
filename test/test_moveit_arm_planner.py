@@ -74,8 +74,6 @@ def test_cartesian_request_is_straight_collision_checked_hand_path():
     assert request.max_step == pytest.approx(0.002)
     assert request.jump_threshold == pytest.approx(2.0)
     assert request.avoid_collisions
-    assert request.max_velocity_scaling_factor == pytest.approx(1.0)
-    assert request.max_acceleration_scaling_factor == pytest.approx(1.0)
 
 
 def test_complete_cartesian_response_returns_joint_trajectory():
