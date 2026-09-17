@@ -32,10 +32,16 @@ class ManipulationControls(UIControlHelper):
 
     TAG_SURFACE_TEST_INFO = (
         "Temporary test input for Move to Tag Surface. Uses the selected tag "
-        "and Arm offset Y/Z. Arm offset X (backward/forward), the frame "
-        "dropdown, and rotation offsets are ignored. Y/Z are always "
-        "interpreted in the tag frame. The final workflow will use the "
-        "reference-frame point instead."
+        "and Arm offset X/Y/Z, always interpreted in the tag frame. The frame "
+        "dropdown and rotation offsets are ignored. Choose the tag offset so "
+        "the resulting test point lies behind the physical surface at the "
+        "location you want to approach. The tag-relative point is only an "
+        "approximate target: the workflow first approaches the live surface "
+        "safely, then aligns and measures the actual surface again. Distance "
+        "(m) sets the final probe-tip stand-off from that measured surface, "
+        "and Tolerance (m) sets the allowed final distance error. Therefore "
+        "the X backward/forward offset does not define the final stand-off. "
+        "The final workflow will use the reference-frame point instead."
     )
 
     def __init__(self, parent_ui: "Fault_Detector_UI"):
@@ -333,7 +339,7 @@ class ManipulationControls(UIControlHelper):
 
         intent.offset.header = intent.tag.pose.header
         intent.offset.header.frame_id = "tag"
-        intent.offset.pose.position.x = 0.0
+        intent.offset.pose.position.x = self._get_offset("X")
         intent.offset.pose.position.y = self._get_offset("Y")
         intent.offset.pose.position.z = self._get_offset("Z")
         intent.offset.pose.orientation.w = 1.0
