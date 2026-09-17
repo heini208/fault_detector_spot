@@ -2,10 +2,13 @@
 
 import math
 
+from PyQt5.QtWidgets import QFrame, QLabel, QVBoxLayout
+
 from fault_detector_msgs.msg import (
     ApplicationCommandState,
     OperationalIntent,
     ProbeSetupIntent,
+    ProbeSetupState,
 )
 
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
@@ -27,26 +30,196 @@ class FinalizingInspectionControls(InspectionControls):
     """Route physical setup workflows through server-owned APIs."""
 
     def __init__(self, ui):
-        super().__init__(ui)
         self._surface_test_active = False
         self._surface_move_succeeded = False
         self._surface_move_target_m = None
         self._refinement_emergency_stop_requested = False
         self._reference_preview_cache = {}
         self._reference_view_id_by_camera = {}
-        self._configure_single_reference_view_ui()
+        self._begin_refinement_after_reference_commit = False
+        self._reference_capture_in_progress = False
+        self._probe_point_entry_panel = None
+        self._probe_point_overview_label = None
+        super().__init__(ui)
+        self.refinement_dialog.attach_workflow_controls()
+        self._configure_probe_point_entry_ui()
 
-    def _configure_single_reference_view_ui(self):
-        """Keep one visible reference viewer while preserving legacy wiring."""
-        self.reference_view_widget = self.reference_view_widgets[0]
-        for slot_index in range(1, len(self.reference_view_widgets)):
-            widget = self.reference_view_widgets[slot_index]
-            dropdown = self.reference_camera_dropdowns[slot_index]
-            widget.hide()
-            dropdown.hide()
-            parent = widget.parentWidget()
-            if parent is not None:
-                parent.hide()
+    def _configure_probe_point_entry_ui(self):
+        """Replace the old setup workspace with one probe-point entry action."""
+        splitter = self.inspection_workspace_splitter
+        original_widgets = [
+            splitter.widget(index)
+            for index in range(splitter.count())
+        ]
+        for widget in original_widgets:
+            if widget is not None:
+                widget.hide()
+
+        panel = QFrame()
+        panel.setFrameShape(QFrame.StyledPanel)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        title = QLabel("Probe Points")
+        title_font = title.font()
+        title_font.setBold(True)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        self._probe_point_overview_label = QLabel(
+            "Select an inspection routine to add a probe point."
+        )
+        self._probe_point_overview_label.setWordWrap(True)
+        layout.addWidget(self._probe_point_overview_label)
+
+        self.start_probe_refinement_button.setText(
+            "Add New Probe Point"
+        )
+        layout.addWidget(self.start_probe_refinement_button)
+        layout.addStretch()
+
+        splitter.addWidget(panel)
+        splitter.setStretchFactor(splitter.count() - 1, 1)
+        splitter.setSizes(
+            [0] * (splitter.count() - 1) + [500]
+        )
+        self._probe_point_entry_panel = panel
+
+    def handle_start_probe_refinement(self):
+        """Open reference selection before beginning physical refinement."""
+        if self._refinement_presentation is not None:
+            return self.resume_refinement_dialog()
+        state = self._probe_setup_state
+        if state is None or not state.selected_routine_id:
+            self.show_warning(
+                "Add Probe Point",
+                "Select a saved object and routine first.",
+            )
+            return False
+        self._begin_refinement_after_reference_commit = False
+        self.inspection_workspace_splitter.setEnabled(False)
+        self.refinement_dialog.open_reference_selection(
+            has_existing=bool(state.reference_view_ids)
+        )
+        if state.reference_view_ids:
+            self._request_reference_previews(state)
+        return True
+
+    def handle_use_existing_reference_views(self):
+        state = self._probe_setup_state
+        if state is None or not state.reference_view_ids:
+            self.refinement_dialog.set_reference_status(
+                "No saved reference views are available."
+            )
+            return False
+        self._request_reference_previews(state)
+        self.refinement_dialog.enable_reference_selection()
+        return True
+
+    def handle_capture_new_reference_views(self):
+        self.replace_reference_view_checkbox.setChecked(False)
+        return self.handle_capture_reference_view()
+
+    def handle_retake_reference_views(self):
+        self.replace_reference_view_checkbox.setChecked(True)
+        return self.handle_capture_reference_view()
+
+    def handle_reference_point_approved(self):
+        """Commit the selected reference point and start refinement."""
+        point = self.reference_view_widget.selected_image_point
+        view_id = self._reference_slot_view_ids[0]
+        if point is None or not view_id:
+            self.refinement_dialog.set_reference_status(
+                "Select a point in the displayed reference image first."
+            )
+            return False
+
+        self._begin_refinement_after_reference_commit = True
+        if self._reference_state_matches_draft():
+            return self._start_refinement_after_reference()
+        self.refinement_dialog.set_reference_status(
+            "Confirming the selected reference point..."
+        )
+        return True
+
+    def _reference_state_matches_draft(self):
+        state = self._probe_setup_state
+        point = self.reference_view_widget.selected_image_point
+        if state is None or point is None:
+            return False
+        return (
+            bool(state.has_reference_pixel)
+            and state.selected_reference_view_id
+            == self._reference_slot_view_ids[0]
+            and int(state.reference_pixel_u) == int(point.u)
+            and int(state.reference_pixel_v) == int(point.v)
+        )
+
+    def _start_refinement_after_reference(self):
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT
+        request_id = self._submit_probe_setup(intent)
+        if request_id is None:
+            self.refinement_dialog.set_reference_status(
+                "Could not start probe refinement."
+            )
+            return False
+        self._begin_refinement_after_reference_commit = False
+        self.refinement_dialog.set_reference_status(
+            "Starting probe refinement..."
+        )
+        return True
+
+    def apply_setup_state(self, state):
+        result = super().apply_setup_state(state)
+
+        if self._probe_point_overview_label is not None:
+            if not state.selected_routine_id:
+                overview = "Select an inspection routine to add a probe point."
+            elif state.probe_point_ids:
+                overview = (
+                    "Existing probe points: "
+                    + ", ".join(state.probe_point_ids)
+                )
+            else:
+                overview = "No probe points are saved for this routine."
+            self._probe_point_overview_label.setText(overview)
+
+        if self._refinement_presentation is None:
+            self.start_probe_refinement_button.setText(
+                "Add New Probe Point"
+            )
+            self.start_probe_refinement_button.setEnabled(
+                bool(state.selected_routine_id)
+                and not bool(state.motion_pending)
+            )
+
+        if hasattr(self, "refinement_dialog"):
+            self.refinement_dialog.update_reference_availability(
+                bool(state.reference_view_ids)
+            )
+
+        if self._reference_capture_in_progress:
+            if (
+                state.state == ProbeSetupState.STATE_SUCCEEDED
+                and state.reference_view_ids
+            ):
+                self._reference_capture_in_progress = False
+                self.refinement_dialog.reference_views_ready()
+            elif state.state == ProbeSetupState.STATE_FAILED:
+                self._reference_capture_in_progress = False
+                self.refinement_dialog.set_reference_status(
+                    state.detail or "Reference capture failed."
+                )
+
+        if (
+            self._begin_refinement_after_reference_commit
+            and self._reference_state_matches_draft()
+        ):
+            self._start_refinement_after_reference()
+
+        return result
 
     def _clear_reference_preview_cache(self):
         self._reference_preview_cache = {}
@@ -81,6 +254,8 @@ class FinalizingInspectionControls(InspectionControls):
             )
             return False
         self._clear_reference_preview_cache()
+        self._begin_refinement_after_reference_commit = False
+        self._reference_capture_in_progress = True
         legacy_camera_ids = tuple(
             camera.camera_id for camera in REFERENCE_CAMERAS[:3]
         )
@@ -91,6 +266,7 @@ class FinalizingInspectionControls(InspectionControls):
             ),
         )
         if request_id is None:
+            self._reference_capture_in_progress = False
             return False
         self.reference_view_status_label.setText(
             "Reference capture running"
@@ -98,6 +274,7 @@ class FinalizingInspectionControls(InspectionControls):
         self.reference_view_widget.clear_preview(
             "Capturing reference views"
         )
+        self.refinement_dialog.set_reference_capture_running()
         return True
 
     def _reference_view_id_for_camera(self, camera_id):
@@ -135,6 +312,12 @@ class FinalizingInspectionControls(InspectionControls):
     def _handle_reference_camera_selection_changed(self, slot_index):
         if slot_index != 0 or not self.reference_camera_dropdowns:
             return
+
+        state = self._probe_setup_state
+        had_reference_pixel = bool(
+            state is not None and state.has_reference_pixel
+        )
+
         camera_id = self._selected_reference_camera_id()
         self._reference_slot_view_ids[0] = ""
         widget = self.reference_view_widget
@@ -142,14 +325,22 @@ class FinalizingInspectionControls(InspectionControls):
         widget.clear_selection()
         widget.blockSignals(False)
 
-        if self._active_reference_slot == 0:
-            self._active_reference_slot = None
-            self._reference_rgb_size = None
-            self._reference_depth_image = None
-            self._reference_rgb_camera_info = None
-            self._reference_camera_info = None
-            self._reference_view = None
-            self._handle_reference_image_point_cleared()
+        self._active_reference_slot = None
+        self._reference_rgb_size = None
+        self._reference_depth_image = None
+        self._reference_rgb_camera_info = None
+        self._reference_camera_info = None
+        self._reference_view = None
+        self._handle_reference_image_point_cleared()
+
+        if had_reference_pixel:
+            intent = ProbeSetupIntent()
+            intent.operation = (
+                ProbeSetupIntent.OPERATION_CLEAR_REFERENCE_PIXEL
+            )
+            self._submit_probe_setup(intent)
+
+        self.refinement_dialog.reference_selection_changed()
 
         if not camera_id:
             widget.clear_preview("No camera selected")
@@ -203,8 +394,9 @@ class FinalizingInspectionControls(InspectionControls):
             )
             self._set_reference_camera_defaults()
             self.reference_view_widget.clear_preview(
-                "Capture a reference view"
+                "Capture reference views to continue"
             )
+            self.refinement_dialog.update_reference_availability(False)
             return
         client = getattr(self.ui, "probe_setup_client", None)
         if client is None:
@@ -222,6 +414,8 @@ class FinalizingInspectionControls(InspectionControls):
                 continue
             self._reference_view_id_by_camera[camera_id] = view_id
             client.request_preview(view_id)
+
+        self.refinement_dialog.update_reference_availability(True)
         self._handle_reference_camera_selection_changed(0)
 
     def apply_reference_preview(self, response):
@@ -241,22 +435,50 @@ class FinalizingInspectionControls(InspectionControls):
         ] = response.reference_view_id
 
         current_camera_id = self._selected_reference_camera_id()
-        if current_camera_id != response.camera_id:
-            return True
-
-        self._render_reference_preview(response)
+        if current_camera_id == response.camera_id:
+            self._render_reference_preview(response)
+            self.refinement_dialog.refresh_reference_selection()
         return True
+
+    def handle_open_probe_summary(self):
+        presentation = self._refinement_presentation
+        if presentation is None:
+            return False
+        if presentation.active_stage is not RefinementStage.PROBE:
+            return False
+        if not self._surface_result_current():
+            self.surface_distance_test_status_label.setText(
+                "Reach the requested surface distance before continuing."
+            )
+            return False
+        self.refinement_dialog.show_summary()
+        return True
+
+    def handle_refinement_back(self):
+        if self.refinement_dialog.is_summary_page():
+            self.refinement_dialog.show_stage(RefinementStage.PROBE)
+            return True
+        return super().handle_refinement_back()
 
     def handle_refinement_emergency_stop(self):
         self._refinement_emergency_stop_requested = True
         return super().handle_refinement_emergency_stop()
 
     def request_close_refinement_workflow(self):
+        if self._refinement_presentation is None:
+            self._begin_refinement_after_reference_commit = False
+            if hasattr(self, "inspection_workspace_splitter"):
+                self.inspection_workspace_splitter.setEnabled(True)
+            self.start_probe_refinement_button.setText(
+                "Add New Probe Point"
+            )
+            return True
+
         if self._refinement_emergency_stop_requested:
             if hasattr(self, "inspection_workspace_splitter"):
                 self.inspection_workspace_splitter.setEnabled(True)
             self.start_probe_refinement_button.setText(
-                "Resume Probe Point Position Refinement Workflow"
+                "Resume Probe Point Setup"
             )
             self.refinement_summary_status_label.setText(
                 "Refinement paused after emergency stop."
@@ -264,8 +486,6 @@ class FinalizingInspectionControls(InspectionControls):
             return True
 
         presentation = self._refinement_presentation
-        if presentation is None:
-            return True
         if presentation.pending_motion is not None:
             self.refinement_recovery_status_label.setText(
                 "Wait for the active movement and settle check."
@@ -288,7 +508,7 @@ class FinalizingInspectionControls(InspectionControls):
         if hasattr(self, "inspection_workspace_splitter"):
             self.inspection_workspace_splitter.setEnabled(True)
         self.start_probe_refinement_button.setText(
-            "Resume Probe Point Position Refinement Workflow"
+            "Add New Probe Point"
         )
         self.refinement_summary_status_label.setText(
             "Ending refinement workflow."
@@ -299,11 +519,18 @@ class FinalizingInspectionControls(InspectionControls):
         resumed = super().resume_refinement_dialog()
         if resumed:
             self._refinement_emergency_stop_requested = False
+            self.start_probe_refinement_button.setText(
+                "Resume Probe Point Setup"
+            )
         return resumed
 
     def _finish_refinement_workflow_close(self):
         self._refinement_emergency_stop_requested = False
+        self._begin_refinement_after_reference_commit = False
         result = super()._finish_refinement_workflow_close()
+        self.start_probe_refinement_button.setText(
+            "Add New Probe Point"
+        )
         if (
             hasattr(self, "refinement_dialog")
             and self.refinement_dialog.isVisible()
@@ -380,6 +607,7 @@ class FinalizingInspectionControls(InspectionControls):
                 or "surface recovery" in detail.lower()
             )
         self._update_save_probe_point_state()
+        self._refresh_refinement_dialog()
         return None
 
     def _surface_result_current(self):
@@ -462,7 +690,16 @@ class FinalizingInspectionControls(InspectionControls):
                 or (probe_page and alignment_reached)
             )
         )
+        self.refinement_dialog.continue_to_summary_button.setEnabled(
+            probe_page
+            and alignment_reached
+            and self._surface_result_current()
+            and not pending
+            and not retraction_required
+        )
         self._update_save_probe_point_state()
+        if self.refinement_dialog.is_summary_page():
+            self.refinement_dialog.refresh_summary()
 
     def handle_approve_and_retract(self):
         """Request server-owned save followed by mandatory retraction."""
