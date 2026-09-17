@@ -12,7 +12,8 @@
     arm.motion.minimum_duration_sec: 0.50
     arm.motion.moveit_result_timeout_margin_sec: 15.0
 
-    # Ready pose offsets and state waits
+    # Ready pose speed, offsets, and state waits
+    arm.ready_linear_speed_mps: 0.08
     arm.ready_forward_distance_m: 0.05
     arm.ready_lift_distance_m: 0.15
     arm.ready_state_timeout_sec: 2.0
