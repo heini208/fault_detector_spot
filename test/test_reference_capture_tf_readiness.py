@@ -8,6 +8,9 @@ from fault_detector_msgs.msg import TagElement
 from fault_detector_spot.application.coordinators.probe_reference_capture_coordinator import (
     ProbeReferenceCaptureCoordinator,
 )
+from fault_detector_spot.inspection.setup.reference_view_validation import (
+    ReferenceViewCaptureNotReady,
+)
 
 
 class FakeSynchronizer:
@@ -89,7 +92,7 @@ def test_readiness_rejects_missing_tag_frame():
     coordinator = make_coordinator()
 
     with pytest.raises(
-        Exception,
+        ReferenceViewCaptureNotReady,
         match="Reference tag frame ID is not available",
     ):
         coordinator._require_tf_ready(
@@ -103,7 +106,7 @@ def test_readiness_rejects_missing_camera_frame():
     coordinator = make_coordinator()
 
     with pytest.raises(
-        Exception,
+        ReferenceViewCaptureNotReady,
         match="RGB frame ID is not available",
     ):
         coordinator._require_tf_ready(

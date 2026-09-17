@@ -284,14 +284,14 @@ class MultiReferenceViewRepository:
                 "Maximum timestamp skew must be finite and non-negative"
             )
         normalized = tuple(sorted(captures, key=lambda item: item.slot_index))
-        if not 1 <= len(normalized) <= 3:
+        if not 1 <= len(normalized) <= 6:
             raise ValueError(
-                "Reference capture must contain one to three views"
+                "Reference capture must contain one to six views"
             )
         slots = [capture.slot_index for capture in normalized]
         cameras = [capture.camera_id for capture in normalized]
-        if any(slot < 0 or slot > 2 for slot in slots):
-            raise ValueError("Reference camera slot must be between 0 and 2")
+        if any(slot < 0 or slot > 5 for slot in slots):
+            raise ValueError("Reference camera slot must be between 0 and 5")
         if len(set(slots)) != len(slots):
             raise ValueError("Reference camera slots must be unique")
         if len(set(cameras)) != len(cameras):

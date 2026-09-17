@@ -91,7 +91,7 @@ def get_reference_camera(camera_id: str) -> ReferenceCameraConfig:
 def validate_reference_camera_slots(
     camera_ids,
 ) -> Tuple[Tuple[int, str], ...]:
-    """Validate three command slots and return selected slot-camera pairs."""
+    """Validate three legacy command slots and return selected pairs."""
     if len(camera_ids) != 3:
         raise ValueError("Exactly three reference camera slots are required")
 
@@ -112,3 +112,11 @@ def validate_reference_camera_slots(
     if not selected:
         raise ValueError("Select at least one reference camera")
     return tuple(selected)
+
+
+def all_reference_camera_slots() -> Tuple[Tuple[int, str], ...]:
+    """Return every reference camera in canonical persisted slot order."""
+    return tuple(
+        (slot_index, camera.camera_id)
+        for slot_index, camera in enumerate(REFERENCE_CAMERAS)
+    )

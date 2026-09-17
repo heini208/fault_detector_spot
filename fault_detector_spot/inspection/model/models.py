@@ -254,10 +254,10 @@ class ReferenceView:
                 isinstance(self.slot_index, bool)
                 or not isinstance(self.slot_index, int)
                 or self.slot_index < 0
-                or self.slot_index > 2
+                or self.slot_index > 5
             ):
                 raise ValueError(
-                    "Reference view slot must be between 0 and 2"
+                    "Reference view slot must be between 0 and 5"
                 )
         if (
             self.reference_dataset_path is not None
@@ -429,7 +429,7 @@ class ProbePoint:
 
 @dataclass
 class InspectionRoutine:
-    """Ordered probe procedure with up to three reference views."""
+    """Ordered probe procedure with up to six reference views."""
 
     routine_id: str
     display_name: str
@@ -476,9 +476,9 @@ class InspectionRoutine:
             self.display_name,
             "Routine display name",
         )
-        if not 0 <= len(self.reference_views) <= 3:
+        if not 0 <= len(self.reference_views) <= 6:
             raise ValueError(
-                "Routine must contain at most three reference views"
+                "Routine must contain at most six reference views"
             )
         view_ids: Set[str] = set()
         camera_ids: Set[str] = set()

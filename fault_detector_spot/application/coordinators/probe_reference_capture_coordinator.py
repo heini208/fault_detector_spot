@@ -17,7 +17,7 @@ from fault_detector_spot.inspection.setup.multi_reference_view_capture import (
 )
 from fault_detector_spot.inspection.setup.reference_camera_registry import (
     REFERENCE_CAMERA_BY_ID,
-    validate_reference_camera_slots,
+    all_reference_camera_slots,
 )
 from fault_detector_spot.inspection.setup.reference_view_input_synchronizer import (
     ReferenceViewInputSynchronizer,
@@ -42,7 +42,7 @@ class ReferenceCapturePhase(str, Enum):
 
 @dataclass(frozen=True)
 class ProbeReferenceCaptureSpec:
-    """Describe selected capture slots and replacement policy."""
+    """Describe replacement policy for a complete reference capture."""
 
     reference_camera_ids: tuple
     replace_existing: bool
@@ -102,7 +102,7 @@ class ProbeReferenceCaptureCoordinator:
         cancel_requested,
         state_changed=None,
     ):
-        """Run one complete reference capture transaction."""
+        """Run one complete six-camera reference capture transaction."""
         if not isinstance(spec, ProbeReferenceCaptureSpec):
             raise TypeError("Expected a ProbeReferenceCaptureSpec")
         if not callable(cancel_requested):
@@ -117,9 +117,7 @@ class ProbeReferenceCaptureCoordinator:
 
         synchronizers = {}
         try:
-            selected = validate_reference_camera_slots(
-                spec.reference_camera_ids
-            )
+            selected = all_reference_camera_slots()
             snapshot = self.probe_setup_coordinator.snapshot(context)
             object_id = snapshot.selected_object_id
             routine_id = snapshot.selected_routine_id

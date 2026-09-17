@@ -12,6 +12,13 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
     RefinementStage,
 )
+from fault_detector_spot.inspection.setup.reference_camera_registry import (
+    REFERENCE_CAMERAS,
+    REFERENCE_CAMERA_BY_ID,
+)
+from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
+    ImageRegion,
+)
 
 from .controls import InspectionControls
 
@@ -27,7 +34,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._refinement_emergency_stop_requested = False
 
     def handle_capture_reference_view(self):
-        """Submit camera selections to the server-owned capture action."""
+        """Request the server-owned complete six-camera capture."""
         state = self._probe_setup_state
         if state is None or not state.selected_routine_id:
             self.show_warning(
@@ -35,23 +42,11 @@ class FinalizingInspectionControls(InspectionControls):
                 "Select a saved object and routine first.",
             )
             return False
-        camera_ids = tuple(self._selected_reference_camera_ids())
-        try:
-            selected = tuple(value for value in camera_ids if value)
-            if not selected:
-                raise ValueError("Select at least one reference camera")
-            if len(selected) != len(set(selected)):
-                raise ValueError(
-                    "Each reference camera can only be selected once"
-                )
-        except ValueError as exception:
-            self.show_warning(
-                "Capture Reference View",
-                str(exception),
-            )
-            return False
+        legacy_camera_ids = tuple(
+            camera.camera_id for camera in REFERENCE_CAMERAS[:3]
+        )
         request_id = self.ui.execute_probe_reference_capture(
-            camera_ids,
+            legacy_camera_ids,
             replace_existing=(
                 self.replace_reference_view_checkbox.isChecked()
             ),
@@ -61,6 +56,148 @@ class FinalizingInspectionControls(InspectionControls):
         self.reference_view_status_label.setText(
             "Reference capture running"
         )
+        return True
+
+    def _reference_view_id_for_camera(self, camera_id):
+        state = self._probe_setup_state
+        if state is None:
+            return ""
+        for stored_camera_id, view_id in zip(
+            state.reference_camera_ids,
+            state.reference_view_ids,
+        ):
+            if stored_camera_id == camera_id:
+                return view_id
+        return ""
+
+    def _handle_reference_camera_selection_changed(self, slot_index):
+        if slot_index >= len(self.reference_camera_dropdowns):
+            return
+        camera_id = str(
+            self.reference_camera_dropdowns[slot_index].currentData() or ""
+        )
+        self._reference_slot_view_ids[slot_index] = ""
+        widget = self.reference_view_widgets[slot_index]
+        widget.blockSignals(True)
+        widget.clear_selection()
+        widget.blockSignals(False)
+
+        if self._active_reference_slot == slot_index:
+            self._active_reference_slot = None
+            self._reference_rgb_size = None
+            self._reference_depth_image = None
+            self._reference_rgb_camera_info = None
+            self._reference_camera_info = None
+            self._reference_view = None
+            self._handle_reference_image_point_cleared()
+
+        if not camera_id:
+            widget.clear_preview("No camera selected")
+            return
+
+        camera = REFERENCE_CAMERA_BY_ID[camera_id]
+        view_id = self._reference_view_id_for_camera(camera_id)
+        if not view_id:
+            widget.clear_preview(
+                f"{camera.display_name} not captured"
+            )
+            return
+
+        client = getattr(self.ui, "probe_setup_client", None)
+        if client is None:
+            widget.clear_preview("Remote preview unavailable")
+            return
+
+        widget.clear_preview(f"Loading {camera.display_name}")
+        self.reference_view_status_label.setText(
+            "Reference view: loading preview"
+        )
+        client.request_preview(view_id)
+
+    def _request_reference_previews(self, state):
+        self._clear_reference_previews(
+            "Loading reference preview"
+        )
+        self._reference_slot_view_ids = ["", "", ""]
+        if not state.selected_routine_id:
+            self.reference_view_status_label.setText(
+                "Reference view: no routine selected"
+            )
+            self._set_reference_camera_defaults()
+            return
+        if not state.reference_view_ids:
+            self.reference_view_status_label.setText(
+                "Reference view: not captured"
+            )
+            self._set_reference_camera_defaults()
+            return
+        client = getattr(self.ui, "probe_setup_client", None)
+        if client is None:
+            self.reference_view_status_label.setText(
+                "Reference view: remote preview unavailable"
+            )
+            return
+
+        requested = set()
+        for slot_index, dropdown in enumerate(
+            self.reference_camera_dropdowns
+        ):
+            camera_id = str(dropdown.currentData() or "")
+            if not camera_id:
+                continue
+            view_id = self._reference_view_id_for_camera(camera_id)
+            if not view_id:
+                camera = REFERENCE_CAMERA_BY_ID[camera_id]
+                self.reference_view_widgets[slot_index].clear_preview(
+                    f"{camera.display_name} not captured"
+                )
+                continue
+            if view_id in requested:
+                continue
+            requested.add(view_id)
+            client.request_preview(view_id)
+
+    def apply_reference_preview(self, response):
+        state = self._probe_setup_state
+        if (
+            state is None
+            or response.reference_view_id
+            not in state.reference_view_ids
+        ):
+            return False
+
+        matching_slots = [
+            slot_index
+            for slot_index, dropdown in enumerate(
+                self.reference_camera_dropdowns
+            )
+            if dropdown.currentData() == response.camera_id
+        ]
+        if not matching_slots:
+            return False
+
+        region = ImageRegion(
+            x=int(response.selectable_x),
+            y=int(response.selectable_y),
+            width=int(response.selectable_width),
+            height=int(response.selectable_height),
+        )
+        for slot_index in matching_slots:
+            widget = self.reference_view_widgets[slot_index]
+            widget.blockSignals(True)
+            widget.set_ros_image(
+                response.image,
+                valid_region=region,
+            )
+            widget.blockSignals(False)
+            self._reference_slot_view_ids[slot_index] = (
+                response.reference_view_id
+            )
+
+        self.reference_view_status_label.setText(
+            "Reference view: remote preview ready"
+        )
+        self._restore_authoritative_selection()
         return True
 
     def handle_refinement_emergency_stop(self):
