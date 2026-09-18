@@ -1801,6 +1801,17 @@ class InspectionControls(UIControlHelper):
                     else "Modified"
                 )
             labels["status"].setText(status)
+            if (
+                stage is RefinementStage.SAFE_APPROACH
+                and presentation.motion_states[stage]
+                is RefinementMotionState.NOT_TESTED
+                and approved is None
+            ):
+                labels["candidate"].setText(
+                    "Ready arm pose will be captured on first move"
+                )
+                labels["difference"].setText("Pending Ready Arm")
+                labels["status"].setText("Ready Arm candidate")
 
         self.approach_step_status_label.setText(
             presentation.motion_states[
@@ -1849,7 +1860,16 @@ class InspectionControls(UIControlHelper):
 
         safe_enabled = safe_page and not pending and not recovery_only
         self.move_calculated_approach_button.setEnabled(safe_enabled)
-        self.use_current_approach_button.setEnabled(safe_enabled)
+        self.use_current_approach_button.setEnabled(
+            safe_enabled and safe_reached
+        )
+        self.move_calculated_approach_button.setText(
+            "Ready Arm as Candidate"
+            if presentation.motion_states[
+                RefinementStage.SAFE_APPROACH
+            ] is RefinementMotionState.NOT_TESTED
+            else "Move to Candidate"
+        )
         for button in self.refinement_buttons["approach"].values():
             button.setEnabled(safe_enabled and safe_adjustable)
 

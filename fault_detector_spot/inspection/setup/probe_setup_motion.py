@@ -110,11 +110,18 @@ class ProbeMotionRequest:
 class ProbeSetupMotionCommandFactory:
     """Translate one probe setup movement into one semantic command."""
 
+    @staticmethod
+    def ready_safe_approach() -> SemanticCommand:
+        return SemanticCommand(
+            command_id=CommandID.READY_SAFE_APPROACH,
+        )
+
     def absolute(
         self,
         target_probe_pose_object: PoseData,
         reference_tag: TagElement,
         motion_sensor_id: str,
+        safe_approach: bool = False,
     ) -> SemanticCommand:
         target_probe_pose_object.validate()
         sensor_id = self._required_sensor_id(motion_sensor_id)
@@ -149,7 +156,11 @@ class ProbeSetupMotionCommandFactory:
         )
 
         return SemanticCommand(
-            command_id=CommandID.MOVE_ARM_TO_TAG,
+            command_id=(
+                CommandID.MOVE_SAFE_APPROACH
+                if safe_approach
+                else CommandID.MOVE_ARM_TO_TAG
+            ),
             tag=semantic_tag,
             offset=offset,
             orientation_mode=OrientationModes.CUSTOM_ORIENTATION.value,
@@ -183,6 +194,7 @@ class ProbeSetupMotionCommandFactory:
         pitch_rad: float,
         yaw_rad: float,
         motion_sensor_id: str,
+        safe_approach: bool = False,
     ) -> SemanticCommand:
         if not isinstance(frame_id, str) or not frame_id.strip():
             raise ValueError("Refinement frame must not be empty")
@@ -192,7 +204,11 @@ class ProbeSetupMotionCommandFactory:
         rotation = self._relative_rotation(pitch_rad, yaw_rad)
 
         return SemanticCommand(
-            command_id=CommandID.MOVE_ARM_RELATIVE,
+            command_id=(
+                CommandID.ADJUST_SAFE_APPROACH
+                if safe_approach
+                else CommandID.MOVE_ARM_RELATIVE
+            ),
             offset=StampedPose(
                 frame_id=frame_id.strip(),
                 position=CommandVector3(

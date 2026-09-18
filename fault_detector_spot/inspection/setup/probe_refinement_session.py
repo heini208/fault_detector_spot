@@ -50,6 +50,8 @@ class PendingRefinementMotion:
     command_id: str = "move_to_tag"
     verify_achieved_pose: bool = True
     preserve_reached_state: bool = False
+    seeds_safe_approach_from_ready: bool = False
+    previous_motion_state: Optional[RefinementMotionState] = None
 
 
 @dataclass
@@ -77,6 +79,7 @@ class ProbeRefinementSession:
     saved: bool = False
     alignment_orientation_established: bool = False
     alignment_candidate_reached: bool = False
+    safe_approach_ready_seeded: bool = False
 
     @classmethod
     def create(
@@ -133,6 +136,9 @@ class ProbeRefinementSession:
             active_stage=active_stage,
             alignment_orientation_established=bool(
                 approved.surface_alignment_approved
+            ),
+            safe_approach_ready_seeded=bool(
+                approved.safe_approach_approved
             ),
         )
 
@@ -209,6 +215,7 @@ class ProbeRefinementSession:
             RefinementStage.SAFE_APPROACH,
             achieved_pose_object,
         )
+        self.safe_approach_ready_seeded = True
         self.motion_states[RefinementStage.SAFE_APPROACH] = (
             RefinementMotionState.REACHED
         )
@@ -265,6 +272,9 @@ class ProbeRefinementSession:
         updated.alignment_orientation_established = (
             self.alignment_orientation_established
         )
+        updated.safe_approach_ready_seeded = (
+            self.safe_approach_ready_seeded
+        )
         return updated
 
     def approve(
@@ -278,6 +288,8 @@ class ProbeRefinementSession:
             self.candidate_poses[stage]
         )
         self.draft_approved[stage] = True
+        if stage is RefinementStage.SAFE_APPROACH:
+            self.safe_approach_ready_seeded = True
 
     def stage_is_approved(self, stage: RefinementStage) -> bool:
         """Return whether the current candidate was explicitly approved."""
@@ -321,6 +333,8 @@ class ProbeRefinementSession:
         achieved_pose_object.validate()
         if motion.updates_candidate:
             self.set_candidate(motion.stage, achieved_pose_object)
+        if motion.seeds_safe_approach_from_ready:
+            self.safe_approach_ready_seeded = True
         if motion.stage is RefinementStage.ALIGNMENT:
             self.alignment_candidate_reached = True
         self.motion_states[motion.stage] = RefinementMotionState.REACHED
@@ -342,14 +356,25 @@ class ProbeRefinementSession:
         candidate.orientation = deepcopy(achieved_pose_object.orientation)
         self.set_candidate(RefinementStage.ALIGNMENT, candidate)
         self.alignment_orientation_established = True
-        self.motion_states[RefinementStage.ALIGNMENT] = (
-            RefinementMotionState.REACHED
-            if (
-                self.alignment_candidate_reached
-                or motion.preserve_reached_state
+        previous_state = motion.previous_motion_state
+        if previous_state in (
+            RefinementMotionState.REACHED,
+            RefinementMotionState.FAILED,
+        ):
+            self.motion_states[RefinementStage.ALIGNMENT] = (
+                previous_state
             )
-            else RefinementMotionState.ORIENTED
-        )
+        elif (
+            getattr(self, "alignment_candidate_reached", False)
+            or motion.preserve_reached_state
+        ):
+            self.motion_states[RefinementStage.ALIGNMENT] = (
+                RefinementMotionState.REACHED
+            )
+        else:
+            self.motion_states[RefinementStage.ALIGNMENT] = (
+                RefinementMotionState.ORIENTED
+            )
         self.pending_motion = None
 
     def complete_motion_without_pose_capture(self, request_id: str) -> None:

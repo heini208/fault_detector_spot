@@ -282,6 +282,14 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             ),
         ),
         (
+            CommandID.READY_SAFE_APPROACH,
+            lambda n: ReadyArmBehaviour(
+                name="ReadySafeApproachBehaviour",
+                robot_command_resources=robot_command_resources,
+                safe_approach=True,
+            ),
+        ),
+        (
             CommandID.TOGGLE_GRIPPER,
             lambda n: ToggleGripperAction(
                 name="ToggleGripperAction",
@@ -294,6 +302,24 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
                 name="ArmToTagBehaviour",
                 tag_state_source=tag_state_source,
                 robot_command_resources=robot_command_resources,
+            ),
+        ),
+        (
+            CommandID.MOVE_SAFE_APPROACH,
+            lambda n: ArmGoalBehaviour(
+                name="MoveSafeApproachBehaviour",
+                tag_state_source=tag_state_source,
+                robot_command_resources=robot_command_resources,
+                safe_approach=True,
+            ),
+        ),
+        (
+            CommandID.ADJUST_SAFE_APPROACH,
+            lambda n: ArmGoalBehaviour(
+                name="AdjustSafeApproachBehaviour",
+                tag_state_source=tag_state_source,
+                robot_command_resources=robot_command_resources,
+                safe_approach=True,
             ),
         ),
         (

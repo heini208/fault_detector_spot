@@ -173,14 +173,36 @@ class ProbeRefinementController:
                 attachment,
             )
         refinement = self.require_refinement(draft)
-        preserve_reached_state = bool(
-            motion.kind in _ORIENTATION_MOTION_KINDS
-            and refinement.motion_states[RefinementStage.ALIGNMENT]
+        previous_alignment_motion_state = None
+        if motion.kind in _ORIENTATION_MOTION_KINDS:
+            current_alignment_motion_state = refinement.motion_states[
+                RefinementStage.ALIGNMENT
+            ]
+            if current_alignment_motion_state in (
+                RefinementMotionState.REACHED,
+                RefinementMotionState.FAILED,
+            ):
+                previous_alignment_motion_state = (
+                    current_alignment_motion_state
+                )
+        preserve_reached_state = (
+            previous_alignment_motion_state
             is RefinementMotionState.REACHED
         )
         refinement.active_stage = stage
         self._invalidate_downstream_motion_state(refinement, stage)
-        if motion.kind is ProbeMotionKind.ORIENT_TO_SURFACE:
+        seeds_safe_approach_from_ready = False
+        if (
+            motion.kind is ProbeMotionKind.MOVE_SAFE_APPROACH
+            and not refinement.safe_approach_ready_seeded
+        ):
+            target = self.current_probe_pose(draft, attachment)
+            command = self.motion_command_factory.ready_safe_approach()
+            purpose = "ready arm safe approach"
+            updates_candidate = True
+            verify_achieved_pose = False
+            seeds_safe_approach_from_ready = True
+        elif motion.kind is ProbeMotionKind.ORIENT_TO_SURFACE:
             target = self.current_probe_pose(draft, attachment)
             command = self.motion_command_factory.orient_to_surface(
                 attachment.motion_sensor_id
@@ -230,6 +252,7 @@ class ProbeRefinementController:
                 draft,
                 target,
                 attachment,
+                motion.kind,
             )
             purpose = stage.value
             verify_achieved_pose = True
@@ -245,6 +268,10 @@ class ProbeRefinementController:
             updates_candidate=updates_candidate,
             verify_achieved_pose=verify_achieved_pose,
             preserve_reached_state=preserve_reached_state,
+            seeds_safe_approach_from_ready=(
+                seeds_safe_approach_from_ready
+            ),
+            previous_motion_state=previous_alignment_motion_state,
         )
         refinement.begin_motion(pending_motion)
         self._operations.register(
@@ -619,6 +646,7 @@ class ProbeRefinementController:
         draft,
         target,
         attachment,
+        motion_kind,
     ):
         definition = self.object_repository.load(
             draft.selected_object_id
@@ -630,6 +658,9 @@ class ProbeRefinementController:
             target,
             tag,
             attachment.motion_sensor_id,
+            safe_approach=(
+                motion_kind is ProbeMotionKind.MOVE_SAFE_APPROACH
+            ),
         )
 
     def _relative_motion_command(
@@ -652,6 +683,9 @@ class ProbeRefinementController:
             motion.pitch_rad,
             motion.yaw_rad,
             attachment.motion_sensor_id,
+            safe_approach=(
+                motion.kind is ProbeMotionKind.ADJUST_SAFE_APPROACH
+            ),
         )
 
     def motion_attachment(self):

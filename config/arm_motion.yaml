@@ -12,6 +12,10 @@
     arm.motion.minimum_duration_sec: 0.50
     arm.motion.moveit_result_timeout_margin_sec: 15.0
 
+    # Probe setup safe-approach speed
+    arm.safe_approach_linear_speed_mps: 0.20
+    arm.safe_approach_angular_speed_rad_s: 1.00
+
     # Ready pose speed, offsets, and state waits
     arm.ready_linear_speed_mps: 0.1
     arm.ready_forward_distance_m: 0.05

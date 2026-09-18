@@ -181,6 +181,14 @@ class ArmMovementExecutor(MovementExecutor):
                 self.speed_policy.default_speed.angular_speed_rad_s
             ),
         )
+        self.safe_approach_speed = ArmMotionSpeed(
+            linear_speed_mps=config.get(
+                "safe_approach_linear_speed_mps"
+            ),
+            angular_speed_rad_s=config.get(
+                "safe_approach_angular_speed_rad_s"
+            ),
+        )
         self.arm_state_source = arm_state_source
         self.surface_source = surface_source
         self.moveit_arm_planner = moveit_arm_planner
