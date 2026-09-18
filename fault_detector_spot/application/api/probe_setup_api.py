@@ -70,6 +70,9 @@ class ProbeSetupApi:
             ProbeSetupIntent.OPERATION_DELETE_OBJECT: self._delete_object,
             ProbeSetupIntent.OPERATION_CREATE_ROUTINE: self._create_routine,
             ProbeSetupIntent.OPERATION_DELETE_ROUTINE: self._delete_routine,
+            ProbeSetupIntent.OPERATION_DELETE_PROBE_POINT: (
+                self._delete_probe_point
+            ),
             ProbeSetupIntent.OPERATION_SELECT_REFERENCE_PIXEL: (
                 self._select_reference_pixel
             ),
@@ -177,6 +180,14 @@ class ProbeSetupApi:
             context,
             intent.object_id,
             intent.routine_id,
+        )
+
+    def _delete_probe_point(self, context, intent):
+        return self.coordinator.delete_probe_point(
+            context,
+            intent.object_id,
+            intent.routine_id,
+            intent.probe_point_id,
         )
 
     def _select_reference_pixel(self, context, intent):

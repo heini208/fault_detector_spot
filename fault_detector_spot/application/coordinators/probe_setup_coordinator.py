@@ -372,6 +372,23 @@ class ProbeSetupCoordinator:
         return self._advance(draft)
 
     @_serialized_transaction
+    def delete_probe_point(
+        self,
+        context: SetupContextSnapshot,
+        object_id: str,
+        routine_id: str,
+        probe_point_id: str,
+    ) -> ProbeSetupSnapshot:
+        # Delete one saved probe point from the selected routine.
+        draft = self._draft(context)
+        self.definition_service.delete_probe_point(
+            object_id,
+            routine_id,
+            probe_point_id,
+        )
+        return self._advance(draft)
+
+    @_serialized_transaction
     def select_reference_pixel(
         self,
         context: SetupContextSnapshot,

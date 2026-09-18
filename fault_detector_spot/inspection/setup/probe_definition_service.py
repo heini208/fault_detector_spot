@@ -102,6 +102,22 @@ class ProbeDefinitionService:
         )
         return object_name, routine_name
 
+    def delete_probe_point(
+        self,
+        object_id: str,
+        routine_id: str,
+        probe_point_id: str,
+    ) -> tuple[str, str, str]:
+        object_name = self._name(object_id, "object ID")
+        routine_name = self._name(routine_id, "routine ID")
+        point_name = self._name(probe_point_id, "probe point ID")
+        self.object_repository.delete_probe_point(
+            object_name,
+            routine_name,
+            point_name,
+        )
+        return object_name, routine_name, point_name
+
     def selected_definition_lists(
         self,
         selected_object_id: str,

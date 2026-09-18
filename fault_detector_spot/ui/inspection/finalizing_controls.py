@@ -3,7 +3,15 @@
 import math
 from uuid import uuid4
 
-from PyQt5.QtWidgets import QDoubleSpinBox, QFrame, QLabel, QListWidget, QPushButton, QVBoxLayout
+from PyQt5.QtGui import QPalette
+from PyQt5.QtWidgets import (
+    QDoubleSpinBox,
+    QFrame,
+    QLabel,
+    QListWidget,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from fault_detector_msgs.msg import (
     ApplicationCommandState,
@@ -45,6 +53,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._reference_capture_in_progress = False
         self._saved_probe_scope = None
         self._saved_probe_operation_context = ""
+        self._delete_probe_point_pending = ""
         self._probe_finalization_point_id = ""
         self._probe_finalization_scope = None
         self._saved_probe_selection_after_finalization = None
@@ -84,11 +93,50 @@ class FinalizingInspectionControls(InspectionControls):
         self._probe_point_overview_label.setWordWrap(True)
         layout.addWidget(self._probe_point_overview_label)
 
+        self.saved_probe_selection_label = QLabel(
+            "Selected probe point: none"
+        )
+        selection_font = self.saved_probe_selection_label.font()
+        selection_font.setBold(True)
+        self.saved_probe_selection_label.setFont(selection_font)
+        layout.addWidget(self.saved_probe_selection_label)
+
         self.saved_probe_points_list = QListWidget()
+        palette = self.saved_probe_points_list.palette()
+        highlight = palette.color(QPalette.Highlight).name()
+        highlighted_text = palette.color(
+            QPalette.HighlightedText
+        ).name()
+        self.saved_probe_points_list.setStyleSheet(
+            "QListWidget::item {"
+            " padding: 8px;"
+            " border: 1px solid transparent;"
+            "}"
+            "QListWidget::item:selected {"
+            f" background: {highlight};"
+            f" color: {highlighted_text};"
+            f" border: 2px solid {highlighted_text};"
+            " font-weight: bold;"
+            "}"
+        )
         self.saved_probe_points_list.currentRowChanged.connect(
             self._saved_probe_selection_changed
         )
         layout.addWidget(self.saved_probe_points_list)
+
+        self.delete_saved_probe_point_button = QPushButton(
+            "Delete Selected Probe Point"
+        )
+        self.delete_saved_probe_point_button.setEnabled(False)
+        self.delete_saved_probe_point_button.setToolTip(
+            "Delete the selected probe point including its stored safe "
+            "approach, aligned pre-approach, and probe target data."
+        )
+        self.delete_saved_probe_point_button.clicked.connect(
+            self.handle_delete_saved_probe_point
+        )
+        layout.addWidget(self.delete_saved_probe_point_button)
+
         layout.addWidget(QLabel("Target distance from wall [m]:"))
         self.saved_probe_distance = QDoubleSpinBox()
         self.saved_probe_distance.setDecimals(3)
@@ -132,6 +180,14 @@ class FinalizingInspectionControls(InspectionControls):
 
     def _saved_probe_selection_changed(self, _row=None):
         state = self._probe_setup_state
+        current = self.saved_probe_points_list.currentItem()
+        self.saved_probe_selection_label.setText(
+            (
+                f"Selected probe point: {current.text()}"
+                if current is not None
+                else "Selected probe point: none"
+            )
+        )
         row = self.saved_probe_points_list.currentRow()
         if state is not None and 0 <= row < len(state.probe_point_target_surface_distances_m):
             self.saved_probe_distance.setValue(state.probe_point_target_surface_distances_m[row])
@@ -148,6 +204,7 @@ class FinalizingInspectionControls(InspectionControls):
             and not state.refinement_active and not state.motion_pending
             and not self._reference_start_pending
             and not self._saved_probe_operation_context
+            and not self._delete_probe_point_pending
         )
         row = self.saved_probe_points_list.currentRow()
         self.saved_probe_distance.setEnabled(
@@ -155,8 +212,12 @@ class FinalizingInspectionControls(InspectionControls):
         )
         for button in self.saved_probe_action_buttons.values():
             button.setEnabled(enabled)
+        self.delete_saved_probe_point_button.setEnabled(enabled)
         self.saved_probe_points_list.setEnabled(
-            not bool(self._saved_probe_operation_context)
+            not bool(
+                self._saved_probe_operation_context
+                or self._delete_probe_point_pending
+            )
         )
 
     def _update_saved_probe_points(self, state):
@@ -213,6 +274,61 @@ class FinalizingInspectionControls(InspectionControls):
                     "Select a saved probe point."
                 )
         self._refresh_saved_probe_actions()
+
+    def handle_delete_saved_probe_point(self):
+        self._refresh_saved_probe_actions()
+        if not self.delete_saved_probe_point_button.isEnabled():
+            return False
+
+        state = self._probe_setup_state
+        current = self.saved_probe_points_list.currentItem()
+        if state is None or current is None:
+            return False
+
+        point_id = current.text()
+        scope = (
+            state.selected_object_id,
+            state.selected_routine_id,
+        )
+        if (
+            self._saved_probe_scope != scope
+            or point_id not in state.probe_point_ids
+        ):
+            return False
+
+        if not self.ask_question(
+            "Delete Probe Point",
+            (
+                f"Delete probe point '{point_id}' from "
+                f"'{scope[0]}/{scope[1]}'?\n\n"
+                "Its saved approach and aligned positions are deleted "
+                "with the probe point."
+            ),
+        ):
+            return False
+
+        intent = ProbeSetupIntent()
+        intent.operation = (
+            ProbeSetupIntent.OPERATION_DELETE_PROBE_POINT
+        )
+        intent.object_id = scope[0]
+        intent.routine_id = scope[1]
+        intent.probe_point_id = point_id
+
+        self._delete_probe_point_pending = point_id
+        self.saved_probe_motion_status.setText(
+            f"{point_id}: deleting..."
+        )
+        self._refresh_saved_probe_actions()
+        request_id = self._submit_probe_setup(intent)
+        if request_id is None:
+            self._delete_probe_point_pending = ""
+            self.saved_probe_motion_status.setText(
+                f"{point_id}: delete request could not be submitted."
+            )
+            self._refresh_saved_probe_actions()
+            return False
+        return True
 
     def handle_saved_probe_motion(self, operation):
         self._refresh_saved_probe_actions()
@@ -420,7 +536,33 @@ class FinalizingInspectionControls(InspectionControls):
             )
         result = super().apply_setup_state(state)
 
+        deletion_point_id = self._delete_probe_point_pending
         self._update_saved_probe_points(state)
+
+        if (
+            deletion_point_id
+            and state.operation
+            == ProbeSetupIntent.OPERATION_DELETE_PROBE_POINT
+            and state.state in (
+                ProbeSetupState.STATE_SUCCEEDED,
+                ProbeSetupState.STATE_FAILED,
+            )
+        ):
+            self._delete_probe_point_pending = ""
+            if state.state == ProbeSetupState.STATE_SUCCEEDED:
+                self.saved_probe_motion_status.setText(
+                    f"{deletion_point_id}: deleted."
+                )
+            else:
+                detail = (
+                    state.detail.strip()
+                    or state.validation_error.strip()
+                    or "Delete failed."
+                )
+                self.saved_probe_motion_status.setText(
+                    f"{deletion_point_id}: delete failed: {detail}"
+                )
+            self._refresh_saved_probe_actions()
 
         if self._probe_point_overview_label is not None:
             if not state.selected_routine_id:
