@@ -215,13 +215,23 @@ class ProbeRefinementController:
             verify_achieved_pose = False
         else:
             target = refinement.candidate_pose(stage)
+            updates_candidate = False
+            if (
+                motion.kind is ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH
+                and not refinement.alignment_orientation_established
+            ):
+                current = self.current_probe_pose(
+                    draft,
+                    attachment,
+                )
+                target.orientation = deepcopy(current.orientation)
+                updates_candidate = True
             command = self._absolute_motion_command(
                 draft,
                 target,
                 attachment,
             )
             purpose = stage.value
-            updates_candidate = False
             verify_achieved_pose = True
         operation = self.setup_coordinator.prepare_command(
             context,
@@ -506,6 +516,7 @@ class ProbeRefinementController:
             updated_refinement.motion_states[
                 RefinementStage.ALIGNMENT
             ] = RefinementMotionState.NOT_TESTED
+            updated_refinement.alignment_candidate_reached = False
             updated_refinement.motion_states[
                 RefinementStage.PROBE
             ] = RefinementMotionState.NOT_TESTED

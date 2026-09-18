@@ -381,6 +381,18 @@ class ProbeRefinementDialog(QDialog):
         )
         clearance_hint.setWordWrap(True)
         clearance_layout.addWidget(clearance_hint)
+
+        self.alignment_depth_readiness_label = QLabel(
+            "Depth readiness for Move Close to Wall: NOT VERIFIED"
+        )
+        readiness_font = self.alignment_depth_readiness_label.font()
+        readiness_font.setBold(True)
+        self.alignment_depth_readiness_label.setFont(readiness_font)
+        self.alignment_depth_readiness_label.setWordWrap(True)
+        clearance_layout.addWidget(
+            self.alignment_depth_readiness_label
+        )
+
         self.back_away_surface_button = QPushButton(
             "Back Away from Surface"
         )
@@ -413,6 +425,16 @@ class ProbeRefinementDialog(QDialog):
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.probe_depth_readiness_label = QLabel(
+            "Depth readiness for Move Close to Wall: NOT VERIFIED"
+        )
+        readiness_font = self.probe_depth_readiness_label.font()
+        readiness_font.setBold(True)
+        self.probe_depth_readiness_label.setFont(readiness_font)
+        self.probe_depth_readiness_label.setWordWrap(True)
+        content_layout.addWidget(self.probe_depth_readiness_label)
+
         content_layout.addWidget(
             self.controls._make_surface_distance_controls(
                 self.target_distance_field

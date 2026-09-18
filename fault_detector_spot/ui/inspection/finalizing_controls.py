@@ -951,7 +951,9 @@ class FinalizingInspectionControls(InspectionControls):
         return True
 
     def request_close_refinement_workflow(self):
-        if self._refinement_presentation is None:
+        """Pause the UI without discarding server-owned refinement state."""
+        presentation = self._refinement_presentation
+        if presentation is None:
             self._begin_refinement_after_reference_commit = False
             if hasattr(self, "inspection_workspace_splitter"):
                 self.inspection_workspace_splitter.setEnabled(True)
@@ -960,7 +962,13 @@ class FinalizingInspectionControls(InspectionControls):
             )
             return True
 
-        presentation = self._refinement_presentation
+        if presentation.pending_motion is not None:
+            self.refinement_recovery_status_label.setText(
+                "Wait for the active movement and settle check before "
+                "closing the setup window."
+            )
+            return False
+
         if (
             self._probe_finalization_point_id
             and not presentation.recovery_required
@@ -971,44 +979,33 @@ class FinalizingInspectionControls(InspectionControls):
             )
             return False
 
-        if self._refinement_emergency_stop_requested:
-            if hasattr(self, "inspection_workspace_splitter"):
-                self.inspection_workspace_splitter.setEnabled(True)
-            self.start_probe_refinement_button.setText(
-                "Resume Probe Point Setup"
-            )
-            self.refinement_summary_status_label.setText(
-                "Refinement paused after emergency stop."
-            )
-            return True
+        if hasattr(self, "inspection_workspace_splitter"):
+            self.inspection_workspace_splitter.setEnabled(True)
 
-        if presentation.pending_motion is not None:
-            self.refinement_recovery_status_label.setText(
-                "Wait for the active movement and settle check."
-            )
-            return False
+        self.start_probe_refinement_button.setText(
+            "Resume Probe Point Setup"
+        )
+
         if (
             presentation.recovery_required
             or self._distance_failure_requires_retraction
         ):
-            self.refinement_recovery_status_label.setText(
-                "Retract Without Saving is required before closing this "
-                "workflow."
+            self.refinement_summary_status_label.setText(
+                "Probe-point setup paused in recovery. Resume it to "
+                "continue recovery, or use Abort Probe Point Setup to "
+                "discard it."
             )
-            return False
+        elif self._refinement_emergency_stop_requested:
+            self.refinement_summary_status_label.setText(
+                "Probe-point setup paused after emergency stop. Resume it "
+                "to continue, or abort it from the main panel."
+            )
+        else:
+            self.refinement_summary_status_label.setText(
+                "Probe-point setup paused. Resume to continue from the "
+                "current stage."
+            )
 
-        intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_END_REFINEMENT
-        if self._submit_probe_setup(intent) is None:
-            return False
-        if hasattr(self, "inspection_workspace_splitter"):
-            self.inspection_workspace_splitter.setEnabled(True)
-        self.start_probe_refinement_button.setText(
-            "Add New Probe Point"
-        )
-        self.refinement_summary_status_label.setText(
-            "Ending refinement workflow."
-        )
         return True
 
     def resume_refinement_dialog(self):
@@ -1216,16 +1213,23 @@ class FinalizingInspectionControls(InspectionControls):
             return
 
         motion_state = presentation.motion_states[RefinementStage.ALIGNMENT]
-        label = self.alignment_step_status_label
-        label.setToolTip("")
+        movement_label = self.alignment_step_status_label
+        movement_label.setToolTip("")
+        aligned_distance = presentation.aligned_preapproach_distance_m
+        distance_text = (
+            f"Configured aligned probe-to-surface distance: "
+            f"{aligned_distance:.3f} m."
+        )
 
         if presentation.stage_is_approved(RefinementStage.ALIGNMENT):
-            label.setText("Reached, registered depth verified")
-            label.setToolTip(
-                "The aligned pre-approach was approved only after live "
-                "registered hand depth confirmed usable camera clearance "
-                "for the probe step."
+            movement_label.setText("Reached, registered depth verified")
+            detail = (
+                "Depth readiness for Move Close to Wall: READY. "
+                f"{distance_text} Live registered hand depth at the "
+                "reached aligned pose verified usable camera clearance."
             )
+            self._set_depth_readiness_status(detail)
+            movement_label.setToolTip(detail)
             return
 
         if (
@@ -1238,21 +1242,44 @@ class FinalizingInspectionControls(InspectionControls):
                 or state.validation_error.strip()
                 or "Live registered hand depth could not verify camera clearance."
             )
-            label.setText(
+            movement_label.setText(
                 f"{motion_state.value}, registered depth NOT verified"
             )
-            label.setToolTip(detail)
+            readiness = (
+                "Depth readiness for Move Close to Wall: NOT READY. "
+                f"{distance_text} {detail}"
+            )
+            self._set_depth_readiness_status(readiness)
+            movement_label.setToolTip(detail)
             return
 
         if motion_state is RefinementMotionState.REACHED:
-            label.setText("Reached, depth check pending approval")
-            label.setToolTip(
-                "Approve Current Pose to verify live registered hand depth "
-                "before continuing to the probe step."
+            movement_label.setText("Reached, depth check pending approval")
+            detail = (
+                "Depth readiness for Move Close to Wall: CHECK REQUIRED. "
+                f"{distance_text} Press Approve Current Pose to verify "
+                "live registered hand depth at the reached pose."
             )
+            self._set_depth_readiness_status(detail)
+            movement_label.setToolTip(detail)
             return
 
-        label.setText(motion_state.value)
+        movement_label.setText(motion_state.value)
+        self._set_depth_readiness_status(
+            "Depth readiness for Move Close to Wall: NOT VERIFIED. "
+            f"{distance_text} Reach the aligned candidate and approve the "
+            "current pose to verify live registered hand depth."
+        )
+
+    def _set_depth_readiness_status(self, text):
+        for name in (
+            "alignment_depth_readiness_label",
+            "probe_depth_readiness_label",
+        ):
+            label = getattr(self.refinement_dialog, name, None)
+            if label is not None:
+                label.setText(text)
+                label.setToolTip(text)
 
     def _refresh_refinement_dialog(self):
         super()._refresh_refinement_dialog()

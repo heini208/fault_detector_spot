@@ -75,6 +75,8 @@ class ProbeRefinementSession:
     recovery_required: bool = False
     recovery_message: str = ""
     saved: bool = False
+    alignment_orientation_established: bool = False
+    alignment_candidate_reached: bool = False
 
     @classmethod
     def create(
@@ -129,6 +131,9 @@ class ProbeRefinementSession:
                 for stage in RefinementStage
             },
             active_stage=active_stage,
+            alignment_orientation_established=bool(
+                approved.surface_alignment_approved
+            ),
         )
 
     @staticmethod
@@ -254,6 +259,12 @@ class ProbeRefinementSession:
             approved_setup.surface_alignment_approved
         )
         updated.active_stage = self.active_stage
+        updated.alignment_candidate_reached = (
+            self.alignment_candidate_reached
+        )
+        updated.alignment_orientation_established = (
+            self.alignment_orientation_established
+        )
         return updated
 
     def approve(
@@ -310,6 +321,8 @@ class ProbeRefinementSession:
         achieved_pose_object.validate()
         if motion.updates_candidate:
             self.set_candidate(motion.stage, achieved_pose_object)
+        if motion.stage is RefinementStage.ALIGNMENT:
+            self.alignment_candidate_reached = True
         self.motion_states[motion.stage] = RefinementMotionState.REACHED
         self.pending_motion = None
 
@@ -328,9 +341,13 @@ class ProbeRefinementSession:
         candidate = self.candidate_pose(RefinementStage.ALIGNMENT)
         candidate.orientation = deepcopy(achieved_pose_object.orientation)
         self.set_candidate(RefinementStage.ALIGNMENT, candidate)
+        self.alignment_orientation_established = True
         self.motion_states[RefinementStage.ALIGNMENT] = (
             RefinementMotionState.REACHED
-            if motion.preserve_reached_state
+            if (
+                self.alignment_candidate_reached
+                or motion.preserve_reached_state
+            )
             else RefinementMotionState.ORIENTED
         )
         self.pending_motion = None
@@ -371,6 +388,7 @@ class ProbeRefinementSession:
         """Return the session to the aligned pre-approach state."""
         self.recovery_required = False
         self.recovery_message = ""
+        self.alignment_candidate_reached = True
         self.motion_states[RefinementStage.ALIGNMENT] = (
             RefinementMotionState.REACHED
         )
@@ -391,6 +409,7 @@ class ProbeRefinementSession:
             )
             self.draft_approved[stage] = approved is not None
         self.pending_motion = None
+        self.alignment_candidate_reached = False
         for stage in RefinementStage:
             self.motion_states[stage] = RefinementMotionState.NOT_TESTED
 
