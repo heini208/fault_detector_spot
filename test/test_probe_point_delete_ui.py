@@ -5,7 +5,7 @@ from fault_detector_spot.application.coordinators.probe_setup_coordinator import
     ProbeSetupCoordinator,
 )
 from fault_detector_spot.inspection.repository.object_repository import (
-    InspectionObjectRepository,
+    ObjectRepository,
 )
 from fault_detector_spot.ui.inspection.finalizing_controls import (
     FinalizingInspectionControls,
@@ -13,7 +13,7 @@ from fault_detector_spot.ui.inspection.finalizing_controls import (
 
 
 def test_saved_probe_delete_path_exists_end_to_end():
-    assert hasattr(InspectionObjectRepository, "delete_probe_point")
+    assert hasattr(ObjectRepository, "delete_probe_point")
     assert hasattr(ProbeSetupCoordinator, "delete_probe_point")
     assert hasattr(ProbeSetupApi, "_delete_probe_point")
     assert hasattr(
