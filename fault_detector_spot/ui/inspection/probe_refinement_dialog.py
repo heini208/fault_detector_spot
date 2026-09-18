@@ -128,6 +128,16 @@ class ProbeRefinementDialog(QDialog):
         )
         footer.addWidget(self.next_button)
 
+        self.abort_button = QPushButton("Abort Setup")
+        self.abort_button.setToolTip(
+            "Discard this unsaved probe-point setup. Any active setup "
+            "movement is cancelled."
+        )
+        self.abort_button.clicked.connect(
+            self.controls.handle_abort_probe_refinement
+        )
+        footer.addWidget(self.abort_button)
+
         self.close_button = QPushButton("Close")
         self.close_button.clicked.connect(self.close)
         footer.addWidget(self.close_button)

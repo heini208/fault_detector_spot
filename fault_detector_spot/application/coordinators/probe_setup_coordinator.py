@@ -1,5 +1,6 @@
 """Coordinate probe authoring and single-step setup movement."""
 
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import wraps
 from threading import RLock
@@ -492,10 +493,35 @@ class ProbeSetupCoordinator:
         self,
         context: SetupContextSnapshot,
     ) -> ProbeSetupSnapshot:
-        """Discard unapproved candidates and close refinement state."""
+        """Abort the current unsaved probe-point creation."""
         draft = self._selected_draft(context)
-        if not self.refinement_controller.end(draft):
+        if draft.refinement is None:
             return self.snapshot(context)
+        if self.finalization_controller.active_request_id(context):
+            raise RuntimeError(
+                "Probe point finalization is already in progress"
+            )
+
+        for request_id in self.refinement_controller.request_ids_for(
+            context
+        ):
+            try:
+                self.setup_coordinator.cancel_operation(
+                    context,
+                    request_id,
+                )
+            except LookupError:
+                pass
+
+        self.refinement_controller.discard_context(context)
+        self.refinement_controller.abort(draft)
+        draft.setup = (
+            deepcopy(draft.geometry.probe_setup)
+            if draft.geometry is not None
+            else None
+        )
+        draft.dirty = False
+        draft.validation_error = ""
         return self._advance(draft)
 
     def require_physical_lane_idle(

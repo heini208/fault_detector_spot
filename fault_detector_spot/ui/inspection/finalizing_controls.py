@@ -51,6 +51,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._reference_view_id_by_camera = {}
         self._begin_refinement_after_reference_commit = False
         self._reference_capture_in_progress = False
+        self._abort_refinement_after_start = False
         self._saved_probe_scope = None
         self._saved_probe_operation_context = ""
         self._delete_probe_point_pending = ""
@@ -169,6 +170,19 @@ class FinalizingInspectionControls(InspectionControls):
             "Add New Probe Point"
         )
         layout.addWidget(self.start_probe_refinement_button)
+
+        self.abort_probe_refinement_button = QPushButton(
+            "Abort Probe Point Setup"
+        )
+        self.abort_probe_refinement_button.setToolTip(
+            "Discard the current unsaved probe-point setup without "
+            "resuming it."
+        )
+        self.abort_probe_refinement_button.clicked.connect(
+            self.handle_abort_probe_refinement
+        )
+        self.abort_probe_refinement_button.hide()
+        layout.addWidget(self.abort_probe_refinement_button)
         layout.addStretch()
 
         splitter.addWidget(panel)
@@ -536,6 +550,34 @@ class FinalizingInspectionControls(InspectionControls):
             )
         result = super().apply_setup_state(state)
 
+        if self._abort_refinement_after_start:
+            if (
+                state.operation
+                == ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT
+                and state.state == ProbeSetupState.STATE_FAILED
+            ):
+                self._abort_refinement_after_start = False
+            elif state.refinement_active:
+                intent = ProbeSetupIntent()
+                intent.operation = (
+                    ProbeSetupIntent.OPERATION_END_REFINEMENT
+                )
+                if self._submit_probe_setup(intent) is not None:
+                    self._abort_refinement_after_start = False
+
+        refinement_active = self._refinement_presentation is not None
+        self.abort_probe_refinement_button.setVisible(
+            refinement_active
+        )
+        self.abort_probe_refinement_button.setEnabled(
+            refinement_active
+            and not bool(self._probe_finalization_point_id)
+        )
+        if hasattr(self.refinement_dialog, "abort_button"):
+            self.refinement_dialog.abort_button.setEnabled(
+                not bool(self._probe_finalization_point_id)
+            )
+
         deletion_point_id = self._delete_probe_point_pending
         self._update_saved_probe_points(state)
 
@@ -849,6 +891,64 @@ class FinalizingInspectionControls(InspectionControls):
     def handle_refinement_emergency_stop(self):
         self._refinement_emergency_stop_requested = True
         return super().handle_refinement_emergency_stop()
+
+    def handle_abort_probe_refinement(self):
+        """Abort the current unsaved probe-point setup."""
+        if self._probe_finalization_point_id:
+            self.refinement_recovery_status_label.setText(
+                "Probe-point saving is already in progress and cannot be "
+                "aborted here."
+            )
+            return False
+
+        if self._reference_start_pending:
+            self._abort_refinement_after_start = True
+            self.refinement_recovery_status_label.setText(
+                "Abort requested. Waiting for refinement startup to finish."
+            )
+            if self.refinement_dialog.isVisible():
+                self.refinement_dialog.close_after_completion()
+            if hasattr(self, "inspection_workspace_splitter"):
+                self.inspection_workspace_splitter.setEnabled(True)
+            return True
+
+        if self._refinement_presentation is None:
+            self._begin_refinement_after_reference_commit = False
+            self._abort_refinement_after_start = False
+            if hasattr(self, "inspection_workspace_splitter"):
+                self.inspection_workspace_splitter.setEnabled(True)
+            self.start_probe_refinement_button.setText(
+                "Add New Probe Point"
+            )
+            self.abort_probe_refinement_button.hide()
+            if self.refinement_dialog.isVisible():
+                self.refinement_dialog.close_after_completion()
+            return True
+
+        if not self.ask_question(
+            "Abort Probe Point Setup",
+            (
+                "Discard the current unsaved probe-point setup? "
+                "Any active setup movement will be cancelled."
+            ),
+        ):
+            return False
+
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_END_REFINEMENT
+        request_id = self._submit_probe_setup(intent)
+        if request_id is None:
+            self.refinement_recovery_status_label.setText(
+                "Probe-point setup could not be aborted."
+            )
+            return False
+
+        self.abort_probe_refinement_button.setEnabled(False)
+        self.refinement_dialog.abort_button.setEnabled(False)
+        self.refinement_recovery_status_label.setText(
+            "Aborting probe-point setup."
+        )
+        return True
 
     def request_close_refinement_workflow(self):
         if self._refinement_presentation is None:
