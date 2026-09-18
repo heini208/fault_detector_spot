@@ -173,18 +173,11 @@ class ProbeRefinementController:
                 attachment,
             )
         refinement = self.require_refinement(draft)
-        if (
-            motion.kind is ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH
+        preserve_reached_state = bool(
+            motion.kind in _ORIENTATION_MOTION_KINDS
             and refinement.motion_states[RefinementStage.ALIGNMENT]
-            not in {
-                RefinementMotionState.ORIENTED,
-                RefinementMotionState.REACHED,
-            }
-        ):
-            raise RuntimeError(
-                "Orient to the tag or surface before moving to the aligned "
-                "pre-approach"
-            )
+            is RefinementMotionState.REACHED
+        )
         refinement.active_stage = stage
         self._invalidate_downstream_motion_state(refinement, stage)
         if motion.kind is ProbeMotionKind.ORIENT_TO_SURFACE:
@@ -241,6 +234,7 @@ class ProbeRefinementController:
             target_pose_object=deepcopy(target),
             updates_candidate=updates_candidate,
             verify_achieved_pose=verify_achieved_pose,
+            preserve_reached_state=preserve_reached_state,
         )
         refinement.begin_motion(pending_motion)
         self._operations.register(

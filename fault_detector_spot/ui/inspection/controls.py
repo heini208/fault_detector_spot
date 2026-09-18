@@ -1860,7 +1860,7 @@ class InspectionControls(UIControlHelper):
             and not recovery_only
         )
         self.move_aligned_pose_button.setEnabled(
-            alignment_enabled and oriented
+            alignment_enabled
         )
         self.orient_to_surface_button.setEnabled(alignment_enabled)
         self.orient_to_tag_button.setEnabled(alignment_enabled)

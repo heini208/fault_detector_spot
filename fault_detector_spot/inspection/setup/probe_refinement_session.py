@@ -49,6 +49,7 @@ class PendingRefinementMotion:
     updates_candidate: bool = True
     command_id: str = "move_to_tag"
     verify_achieved_pose: bool = True
+    preserve_reached_state: bool = False
 
 
 @dataclass
@@ -328,7 +329,9 @@ class ProbeRefinementSession:
         candidate.orientation = deepcopy(achieved_pose_object.orientation)
         self.set_candidate(RefinementStage.ALIGNMENT, candidate)
         self.motion_states[RefinementStage.ALIGNMENT] = (
-            RefinementMotionState.ORIENTED
+            RefinementMotionState.REACHED
+            if motion.preserve_reached_state
+            else RefinementMotionState.ORIENTED
         )
         self.pending_motion = None
 

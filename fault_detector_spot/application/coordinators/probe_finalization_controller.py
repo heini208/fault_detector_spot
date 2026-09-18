@@ -126,6 +126,24 @@ class ProbeFinalizationController:
         with self.state_lock:
             self._active.pop(context.context_id, None)
 
+    def complete_saved_after_retraction_failure(
+        self,
+        context,
+        draft,
+        request_id: str,
+    ) -> None:
+        self.require(context, request_id)
+        refinement = self.refinement_controller.require_refinement(
+            draft
+        )
+        if not refinement.saved:
+            raise RuntimeError(
+                "Cannot finish failed retraction before probe point save"
+            )
+        self.refinement_controller.abort(draft)
+        with self.state_lock:
+            self._active.pop(context.context_id, None)
+
     def fail(
         self,
         context,

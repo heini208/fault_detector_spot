@@ -604,6 +604,21 @@ class ProbeSetupCoordinator:
             )
             return self._advance(draft)
 
+    def complete_saved_finalization_after_retraction_failure(
+        self,
+        context: SetupContextSnapshot,
+        request_id: str,
+    ) -> ProbeSetupSnapshot:
+        with self._context_lock(context):
+            self.setup_coordinator.require_current(context)
+            draft = self._selected_draft(context)
+            self.finalization_controller.complete_saved_after_retraction_failure(
+                context,
+                draft,
+                request_id,
+            )
+            return self._advance(draft)
+
     def fail_finalization(
         self,
         context: SetupContextSnapshot,

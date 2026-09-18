@@ -453,7 +453,7 @@ def test_probe_motion_uses_active_sensor_attachment(tmp_path):
     assert operation.request.command.motion_sensor_id == "hand"
 
 
-def test_alignment_requires_orientation_before_candidate_move(tmp_path):
+def test_alignment_candidate_move_is_allowed_before_orientation(tmp_path):
     probe, _ = coordinator(tmp_path)
     state = create_selected_routine(
         probe,
@@ -469,16 +469,18 @@ def test_alignment_requires_orientation_before_candidate_move(tmp_path):
     )
     probe.motion_state_source.pose = pose(0.8)
     state = probe.begin_refinement(state.context)
-    with pytest.raises(
-        RuntimeError,
-        match="Orient to the tag or surface",
-    ):
-        probe.prepare_motion(
-            state.context,
-            ProbeMotionRequest(
-                kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
-            ),
-        )
+
+    operation = probe.prepare_motion(
+        state.context,
+        ProbeMotionRequest(
+            kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+        ),
+    )
+
+    assert (
+        operation.request.command.command_id
+        is CommandID.MOVE_ARM_TO_TAG
+    )
 
 
 def test_reached_alignment_can_be_reused_for_finalization_retraction(tmp_path):

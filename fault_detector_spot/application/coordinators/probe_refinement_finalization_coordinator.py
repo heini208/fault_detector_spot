@@ -135,15 +135,34 @@ class ProbeRefinementFinalizationCoordinator:
 
         phase = FinalizationPhase.RETRACTING_TO_ALIGNED
         self._emit(state_changed, phase, saved, snapshot)
-        status = self._execute_retraction(
-            context_id,
-            client_id,
-            request_id,
-            ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
-            cancel_requested,
-        )
+        try:
+            status = self._execute_retraction(
+                context_id,
+                client_id,
+                request_id,
+                ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+                cancel_requested,
+                spec.position_tolerance_m,
+                spec.orientation_tolerance_rad,
+            )
+        except Exception:
+            if saved:
+                return self._complete_saved_after_retraction_failure(
+                    context_id,
+                    client_id,
+                    request_id,
+                    state_changed,
+                )
+            raise
         if status.state is not CommandControllerState.SUCCEEDED:
             detail = status.detail or "Aligned retraction failed"
+            if saved:
+                return self._complete_saved_after_retraction_failure(
+                    context_id,
+                    client_id,
+                    request_id,
+                    state_changed,
+                )
             snapshot = self._fail(
                 context_id,
                 client_id,
@@ -162,15 +181,34 @@ class ProbeRefinementFinalizationCoordinator:
         context = self.coordinator.context(context_id, client_id)
         snapshot = self.coordinator.snapshot(context)
         self._emit(state_changed, phase, saved, snapshot)
-        status = self._execute_retraction(
-            context_id,
-            client_id,
-            request_id,
-            ProbeMotionKind.MOVE_SAFE_APPROACH,
-            cancel_requested,
-        )
+        try:
+            status = self._execute_retraction(
+                context_id,
+                client_id,
+                request_id,
+                ProbeMotionKind.MOVE_SAFE_APPROACH,
+                cancel_requested,
+                spec.position_tolerance_m,
+                spec.orientation_tolerance_rad,
+            )
+        except Exception:
+            if saved:
+                return self._complete_saved_after_retraction_failure(
+                    context_id,
+                    client_id,
+                    request_id,
+                    state_changed,
+                )
+            raise
         if status.state is not CommandControllerState.SUCCEEDED:
             detail = status.detail or "Safe retraction failed"
+            if saved:
+                return self._complete_saved_after_retraction_failure(
+                    context_id,
+                    client_id,
+                    request_id,
+                    state_changed,
+                )
             snapshot = self._fail(
                 context_id,
                 client_id,
@@ -198,6 +236,29 @@ class ProbeRefinementFinalizationCoordinator:
         )
         return snapshot, saved, FinalizationPhase.COMPLETE
 
+    def _complete_saved_after_retraction_failure(
+        self,
+        context_id,
+        client_id,
+        request_id,
+        state_changed,
+    ):
+        context = self.coordinator.context(context_id, client_id)
+        snapshot = (
+            self.coordinator
+            .complete_saved_finalization_after_retraction_failure(
+                context,
+                request_id,
+            )
+        )
+        self._emit(
+            state_changed,
+            FinalizationPhase.COMPLETE,
+            True,
+            snapshot,
+        )
+        return snapshot, True, FinalizationPhase.COMPLETE
+
     def _execute_retraction(
         self,
         context_id,
@@ -205,11 +266,17 @@ class ProbeRefinementFinalizationCoordinator:
         finalization_request_id,
         kind,
         cancel_requested,
+        position_tolerance_m,
+        orientation_tolerance_rad,
     ):
         context = self.coordinator.context(context_id, client_id)
         operation = self.coordinator.prepare_motion(
             context,
-            ProbeMotionRequest(kind=kind),
+            ProbeMotionRequest(
+                kind=kind,
+                position_tolerance_m=position_tolerance_m,
+                orientation_tolerance_rad=orientation_tolerance_rad,
+            ),
             finalization_request_id=finalization_request_id,
         )
         waiter = _MotionWaiter()
