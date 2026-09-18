@@ -9,8 +9,8 @@ import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QGroupBox, QLabel
 
-from fault_detector_spot.ui.inspection.controls import (
-    InspectionControls,
+from fault_detector_spot.ui.inspection.finalizing_controls import (
+    FinalizingInspectionControls,
 )
 
 
@@ -33,16 +33,23 @@ def application():
     return QApplication.instance() or QApplication([])
 
 
-def test_workspace_uses_three_camera_slots_and_workflow_tabs(
+def test_workspace_uses_entry_panel_and_single_dialog_preview(
     application,
     tmp_path,
 ):
-    controls = InspectionControls(FakeUI(tmp_path))
+    controls = FinalizingInspectionControls(FakeUI(tmp_path))
 
     assert controls.inspection_workspace_splitter.orientation() == (
         Qt.Vertical
     )
-    assert controls.inspection_workspace_splitter.count() == 2
+    assert controls.inspection_workspace_splitter.count() == 3
+    assert controls.inspection_workspace_splitter.widget(0).isHidden()
+    assert controls.inspection_workspace_splitter.widget(1).isHidden()
+    assert controls.inspection_workspace_splitter.widget(2) is (
+        controls._probe_point_entry_panel
+    )
+    assert controls.reference_view_widget.window() is controls.refinement_dialog
+    assert all(widget.isHidden() for widget in controls.reference_view_widgets[1:])
     assert len(controls.reference_view_widgets) == 3
     assert len(controls.reference_camera_dropdowns) == 3
     assert controls.reference_view_widget is (
@@ -79,7 +86,7 @@ def test_management_controls_live_in_non_modal_dialog(
     application,
     tmp_path,
 ):
-    controls = InspectionControls(FakeUI(tmp_path))
+    controls = FinalizingInspectionControls(FakeUI(tmp_path))
 
     assert not controls.management_dialog.isModal()
     assert controls.object_id_field.window() is controls.management_dialog
@@ -96,7 +103,7 @@ def test_transient_approval_statuses_update_all_tabs(
     application,
     tmp_path,
 ):
-    controls = InspectionControls(FakeUI(tmp_path))
+    controls = FinalizingInspectionControls(FakeUI(tmp_path))
     controls._probe_setup = SimpleNamespace(
         safe_approach_approved=True,
         surface_alignment_approved=True,
@@ -116,7 +123,7 @@ def test_transient_approval_statuses_update_all_tabs(
 
 
 def test_refine_tab_uses_stage_safe_controls(application, tmp_path):
-    controls = InspectionControls(FakeUI(tmp_path))
+    controls = FinalizingInspectionControls(FakeUI(tmp_path))
 
     group_titles = {
         group.title()
@@ -124,7 +131,7 @@ def test_refine_tab_uses_stage_safe_controls(application, tmp_path):
     }
     assert "Workflow Summary" in group_titles
     assert not controls.refinement_dialog.isModal()
-    assert controls.refinement_dialog.stage_stack.count() == 3
+    assert controls.refinement_dialog.stage_stack.count() == 5
     assert controls.move_aligned_pose_button.text() == "Move to Candidate"
     assert controls.use_current_alignment_button.text() == (
         "Approve Current Pose"

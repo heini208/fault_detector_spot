@@ -15,7 +15,7 @@ def test_runner_uses_one_arm_goal_behaviour_for_relative_and_tag():
         "fault_detector_spot/application/behaviour_tree/runner.py"
     )
 
-    assert runner.count("ArmGoalBehaviour(") == 2
+    assert runner.count("ArmGoalBehaviour(") == 4
     assert "ArmMovementAction" not in runner
     assert "ReadyArmActionSimple" not in runner
     assert "StowArmActionSimple" not in runner
@@ -78,7 +78,7 @@ def test_ready_and_stow_are_small_executor_dispatchers():
         "stow_arm_behaviour.py"
     )
 
-    assert "return self.executor.prepare()" in ready
+    assert "return self.executor.prepare(speed=speed)" in ready
     assert "return self.executor.stow()" in stow
     assert "RobotCommandBuilder" not in ready
     assert "RobotCommandBuilder" not in stow
@@ -97,8 +97,8 @@ def test_arm_goal_behaviour_only_dispatches_to_executor():
     assert "_prepare_operation" not in goal
     assert "_prepare_move_command" not in goal
     assert "GRAV_ALIGNED_BODY_FRAME_NAME" not in goal
-    assert "executor.relative(command)" in goal
-    assert "executor.tag_probe(command)" in goal
+    assert "executor.relative(command, speed=speed)" in goal
+    assert "executor.tag_probe(command, speed=speed)" in goal
 
 
 def test_arm_executor_inherits_shared_robot_command_lifecycle():
@@ -184,8 +184,8 @@ def test_public_arm_api_exposes_speed_not_duration():
         assert signature in executor
 
     assert "duration_sec" not in goal
-    assert "executor.relative(command)" in goal
-    assert "executor.tag_probe(command)" in goal
+    assert "executor.relative(command, speed=speed)" in goal
+    assert "executor.tag_probe(command, speed=speed)" in goal
 
 
 def test_arm_and_base_executors_share_only_the_lifecycle_parent():

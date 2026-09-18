@@ -52,7 +52,11 @@ def _serialized_transaction(method):
     @wraps(method)
     def wrapped(self, context, *args, **kwargs):
         with self._context_lock(context):
-            if method.__name__ not in {"snapshot", "close_context"}:
+            # Abort must reach its cancellation path during motion or recovery.
+            # It checks for active finalization before discarding the draft.
+            if method.__name__ not in {
+                "snapshot", "close_context", "end_refinement",
+            }:
                 self._require_idle(context)
             return method(self, context, *args, **kwargs)
 

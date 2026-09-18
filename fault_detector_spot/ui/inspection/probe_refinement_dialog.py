@@ -153,6 +153,11 @@ class ProbeRefinementDialog(QDialog):
         if self._workflow_controls_attached:
             return
 
+        for widget in self.controls.reference_view_widgets[1:]:
+            widget.hide()
+        for dropdown in self.controls.reference_camera_dropdowns[1:]:
+            dropdown.hide()
+
         camera_dropdown = self.controls.reference_camera_dropdowns[0]
         self.reference_camera_row.addWidget(camera_dropdown, 1)
         self.reference_view_layout.addWidget(

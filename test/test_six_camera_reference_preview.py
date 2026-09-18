@@ -1,4 +1,4 @@
-"""Tests for six-camera capture with three preview selectors."""
+"""Tests for routing saved camera slots to the single preview selector."""
 
 import os
 from types import SimpleNamespace
@@ -122,14 +122,14 @@ def test_dropdown_fetches_saved_camera_from_any_capture_slot(application):
     controls.apply_setup_state(make_state())
     ui.probe_setup_client.preview_requests.clear()
 
-    dropdown = controls.reference_camera_dropdowns[1]
+    dropdown = controls.reference_camera_dropdowns[0]
     dropdown.setCurrentIndex(dropdown.findData("right"))
 
     assert ui.probe_setup_client.preview_requests == ["slot4_right"]
 
     response = make_preview("slot4_right", "right", 3)
     assert controls.apply_reference_preview(response) is True
-    assert controls._reference_slot_view_ids[1] == "slot4_right"
+    assert controls._reference_slot_view_ids[0] == "slot4_right"
 
 
 def test_preview_is_routed_by_camera_not_persisted_slot(application):
@@ -138,9 +138,10 @@ def test_preview_is_routed_by_camera_not_persisted_slot(application):
     controls.apply_setup_state(make_state())
     ui.probe_setup_client.preview_requests.clear()
 
-    dropdown = controls.reference_camera_dropdowns[2]
+    dropdown = controls.reference_camera_dropdowns[0]
+    dropdown.setCurrentIndex(dropdown.findData("back"))
     dropdown.setCurrentIndex(dropdown.findData("hand"))
 
     response = make_preview("slot6_hand", "hand", 5)
     assert controls.apply_reference_preview(response) is True
-    assert controls._reference_slot_view_ids[2] == "slot6_hand"
+    assert controls._reference_slot_view_ids[0] == "slot6_hand"

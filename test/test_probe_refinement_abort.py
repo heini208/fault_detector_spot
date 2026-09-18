@@ -2,6 +2,8 @@
 
 import inspect
 
+import pytest
+
 from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
     ProbeMotionKind,
@@ -70,6 +72,22 @@ def test_abort_cancels_active_setup_motion(tmp_path):
     assert not probe.refinement_controller.request_ids_for(
         aborted.context
     )
+
+
+def test_abort_rejects_active_finalization(tmp_path, monkeypatch):
+    probe, _, state = _begin_refinement(tmp_path)
+    monkeypatch.setattr(
+        probe.finalization_controller,
+        "active_request_id",
+        lambda _context: "finalization-request",
+    )
+
+    with pytest.raises(RuntimeError, match="finalization is already in progress"):
+        probe.end_refinement(state.context)
+
+    assert probe.snapshot(state.context).refinement is not None
+    attachment = probe.refinement_controller.sensor_attachment_controller
+    assert attachment.active_reservations == 1
 
 
 def test_abort_control_is_available_in_dialog_and_main_panel():

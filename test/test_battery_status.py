@@ -120,7 +120,7 @@ def test_status_panel_subscribes_and_places_battery_in_global_row(application):
 
     layout = panel.grid_layout
     assert layout.getItemPosition(layout.indexOf(panel.battery_label)) == (
-        1,
+        0,
         2,
         1,
         1,

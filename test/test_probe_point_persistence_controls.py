@@ -6,8 +6,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from fault_detector_spot.ui.inspection.controls import (
-    InspectionControls,
+from fault_detector_spot.ui.inspection.finalizing_controls import (
+    FinalizingInspectionControls,
 )
 
 
@@ -27,7 +27,7 @@ class FakeUI:
 
 def test_hidden_direct_save_path_is_removed(tmp_path):
     application = QApplication.instance() or QApplication([])
-    controls = InspectionControls(FakeUI(tmp_path))
+    controls = FinalizingInspectionControls(FakeUI(tmp_path))
 
     assert application is not None
     assert not hasattr(controls, "save_probe_point_button")

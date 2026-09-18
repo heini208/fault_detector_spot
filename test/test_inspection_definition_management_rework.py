@@ -7,7 +7,9 @@ import pytest
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from fault_detector_spot.ui.inspection.controls import InspectionControls
+from fault_detector_spot.ui.inspection.finalizing_controls import (
+    FinalizingInspectionControls,
+)
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -44,7 +46,7 @@ def application():
 
 @pytest.fixture
 def controls(application):
-    result = InspectionControls(FakeUI())
+    result = FinalizingInspectionControls(FakeUI())
     result.ui.requests.clear()
     result.show_warning = lambda title, message: None
     result.ask_question = lambda title, message: True

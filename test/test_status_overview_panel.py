@@ -62,12 +62,12 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
     assert layout.getItemPosition(layout.indexOf(status)) == (0, 0, 1, 1)
     assert layout.getItemPosition(layout.indexOf(command)) == (0, 1, 1, 1)
     assert layout.getItemPosition(layout.indexOf(navigation)) == (
-        0,
+        1,
         2,
         1,
         1,
     )
-    assert layout.getItemPosition(layout.indexOf(estop)) == (0, 3, 2, 1)
+    assert layout.getItemPosition(layout.indexOf(estop)) == (0, 4, 2, 1)
 
     assert layout.getItemPosition(layout.indexOf(buffer_label)) == (
         1,
@@ -81,31 +81,17 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
         1,
         1,
     )
-    assert layout.getItemPosition(layout.indexOf(panel.hardware_widget)) == (
-        2,
-        0,
-        1,
-        3,
-    )
-    hardware_layout = panel.hardware_widget.layout()
-    assert hardware_layout.indexOf(panel.agent_widget) >= 0
-    assert hardware_layout.indexOf(panel.sensor_widget) >= 0
-    assert hardware_layout.indexOf(panel.agent_widget) < (
-        hardware_layout.indexOf(panel.sensor_widget)
-    )
-    assert panel.sensor_widget.layout().indexOf(sensor_indicator) >= 0
-    assert panel.sensor_widget.layout().indexOf(sensor) >= 0
-    assert panel.sensor_widget.layout().indexOf(confirm) >= 0
-    assert panel.sensor_widget.layout().indexOf(recording_indicator) >= 0
-    assert panel.sensor_widget.layout().indexOf(recording_button) >= 0
-    assert panel.sensor_widget.layout().indexOf(open_measurements) >= 0
-    assert panel.sensor_widget.layout().indexOf(
-        sensor_connection_indicator
-    ) >= 0
-    assert panel.sensor_widget.layout().indexOf(sensor_connection) >= 0
-    assert panel.agent_widget.layout().indexOf(agent_indicator) >= 0
-    assert panel.agent_widget.layout().indexOf(agent_endpoint) >= 0
-    assert panel.agent_widget.layout().indexOf(agent_copy) >= 0
+    assert panel.layout().indexOf(panel.sensor_strip) == 1
+    sensor_layout = panel.sensor_strip.layout()
+    for widget in (
+        agent_indicator, agent_endpoint, agent_copy,
+        sensor_indicator, sensor, confirm,
+        sensor_connection_indicator, sensor_connection,
+        recording_button, open_measurements,
+    ):
+        assert sensor_layout.indexOf(widget) >= 0
+    assert sensor_layout.indexOf(agent_indicator) < sensor_layout.indexOf(sensor)
+    assert recording_indicator.isHidden()
 
     assert buffer_label.sizePolicy().horizontalPolicy() == (
         QSizePolicy.Expanding
@@ -114,6 +100,6 @@ def test_primary_statuses_use_first_row_and_context_uses_second_row(
     assert sensor.sizePolicy().horizontalPolicy() == QSizePolicy.Maximum
     sensor_layout = panel.sensor_widget.layout()
     assert sensor_layout.indexOf(sensor) + 1 == sensor_layout.indexOf(confirm)
-    assert hardware_layout.itemAt(
-        hardware_layout.count() - 1
+    assert sensor_layout.itemAt(
+        sensor_layout.count() - 1
     ).spacerItem() is not None

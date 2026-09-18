@@ -8,7 +8,9 @@ from fault_detector_msgs.msg import ProbeSetupState
 from PyQt5.QtWidgets import QApplication, QLabel
 from sensor_msgs.msg import Image
 
-from fault_detector_spot.ui.inspection.controls import InspectionControls
+from fault_detector_spot.ui.inspection.finalizing_controls import (
+    FinalizingInspectionControls,
+)
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -86,16 +88,18 @@ def preview(view_id="slot1_hand"):
 
 def test_state_requests_preview_from_application_service(application):
     ui = FakeUI()
-    controls = InspectionControls(ui)
+    controls = FinalizingInspectionControls(ui)
     ui.probe_setup_client.preview_requests.clear()
+    ui.requests.clear()
 
     controls.apply_setup_state(setup_state())
 
     assert ui.probe_setup_client.preview_requests == ["slot1_hand"]
+    assert ui.requests == []
 
 
 def test_preview_preserves_authoritative_source_pixel(application):
-    controls = InspectionControls(FakeUI())
+    controls = FinalizingInspectionControls(FakeUI())
     controls.apply_setup_state(setup_state())
 
     assert controls.apply_reference_preview(preview()) is True
@@ -107,7 +111,7 @@ def test_preview_preserves_authoritative_source_pixel(application):
 
 
 def test_stale_preview_is_ignored(application):
-    controls = InspectionControls(FakeUI())
+    controls = FinalizingInspectionControls(FakeUI())
     controls.apply_setup_state(setup_state())
 
     assert controls.apply_reference_preview(preview("old_view")) is False

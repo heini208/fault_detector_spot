@@ -30,7 +30,7 @@ class FakeExecutor:
         self.cancel_calls = 0
         self.tf_listener = object()
 
-    def prepare(self):
+    def prepare(self, speed=None):
         self.prepare_calls += 1
         return self.start_update
 

@@ -123,9 +123,13 @@ class FakeMotionStateSource:
 
 
 class FakeMotionCommandFactory:
-    def absolute(self, _target, _tag, motion_sensor_id):
+    def absolute(self, _target, _tag, motion_sensor_id, safe_approach=False):
         return SemanticCommand(
-            command_id=CommandID.MOVE_ARM_TO_TAG,
+            command_id=(
+                CommandID.MOVE_SAFE_APPROACH
+                if safe_approach
+                else CommandID.MOVE_ARM_TO_TAG
+            ),
             motion_sensor_id=motion_sensor_id,
         )
 
@@ -401,7 +405,7 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
     assert operation.request.context_id == state.context.context_id
     assert (
         operation.request.command.command_id
-        is CommandID.MOVE_ARM_TO_TAG
+        is CommandID.MOVE_SAFE_APPROACH
     )
     assert operation.request.command.motion_sensor_id == "hall_probe"
     with pytest.raises(RuntimeError, match="active motion"):

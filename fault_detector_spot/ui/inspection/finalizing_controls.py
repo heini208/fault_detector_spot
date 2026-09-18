@@ -844,7 +844,6 @@ class FinalizingInspectionControls(InspectionControls):
             client.request_preview(view_id)
 
         self.refinement_dialog.update_reference_availability(True)
-        self._handle_reference_camera_selection_changed(0)
 
     def apply_reference_preview(self, response):
         state = self._probe_setup_state

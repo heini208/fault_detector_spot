@@ -10,8 +10,8 @@ from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QImage, QMouseEvent
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from fault_detector_spot.ui.inspection.controls import (
-    InspectionControls,
+from fault_detector_spot.ui.inspection.finalizing_controls import (
+    FinalizingInspectionControls,
 )
 
 
@@ -43,7 +43,7 @@ def test_controls_report_and_clear_selected_pixel(
     tmp_path,
 ):
     """The setup UI mirrors the widget's transient selected coordinate."""
-    controls = InspectionControls(FakeUI(tmp_path))
+    controls = FinalizingInspectionControls(FakeUI(tmp_path))
     widget = controls.reference_view_widget
     widget.resize(400, 240)
     widget.set_qimage(QImage(400, 200, QImage.Format_RGB888))
