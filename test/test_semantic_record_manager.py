@@ -141,6 +141,9 @@ def test_recording_round_trip_preserves_full_semantic_command():
         offset=pose,
         orientation_mode="relative_to_tag",
         wait_time=1.25,
+        target_surface_distance_m=0.12,
+        surface_tolerance_m=0.008,
+        aligned_preapproach_distance_m=0.23,
         map_name="factory",
         waypoint_name="motor_a",
         inspection=InspectionSelection(
@@ -159,8 +162,49 @@ def test_recording_round_trip_preserves_full_semantic_command():
     assert restored == command
 
 
+def test_close_surface_recording_preserves_motion_parameters():
+    command = SemanticCommand(
+        command_id=CommandID.MOVE_CLOSE_TO_SURFACE,
+        target_surface_distance_m=0.1,
+        surface_tolerance_m=0.005,
+        aligned_preapproach_distance_m=0.23,
+    )
+
+    restored = deserialize_recorded_command(
+        serialize_recorded_command(command)
+    )
+
+    assert restored == command
+
+
+def test_runtime_sensor_binding_is_not_persisted():
+    command = SemanticCommand(
+        command_id=CommandID.ORIENT_TO_SURFACE,
+        motion_sensor_id="bmm150_01",
+    )
+
+    data = serialize_recorded_command(command)
+    restored = deserialize_recorded_command(data)
+
+    assert "motion_sensor_id" not in data
+    assert restored.motion_sensor_id == ""
+
+
+def test_missing_persistent_command_field_is_rejected():
+    data = serialize_recorded_command(
+        SemanticCommand(command_id=CommandID.MOVE_CLOSE_TO_SURFACE)
+    )
+    del data["target_surface_distance_m"]
+
+    with pytest.raises(
+        ValueError,
+        match="missing field.*target_surface_distance_m",
+    ):
+        deserialize_recorded_command(data)
+
+
 def test_legacy_complex_command_recording_is_rejected():
-    with pytest.raises(ValueError, match="missing field: tag"):
+    with pytest.raises(ValueError, match="missing field"):
         deserialize_recorded_command(
             {
                 "command": {

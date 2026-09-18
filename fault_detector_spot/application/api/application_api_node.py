@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import os
 from threading import RLock
 from typing import Dict, Optional
+from uuid import uuid4
 
 import rclpy
 from fault_detector_msgs.action import ExecuteOperation
@@ -353,11 +354,14 @@ class ApplicationApiNode(Node):
 
     async def _execute_operation(self, goal_handle):
         goal = goal_handle.request
-        operation = self.application_controller.prepare_operation(
-            intent=goal.intent,
-            client_id=goal.client_id,
-            context_id=goal.context_id.strip(),
-        )
+        try:
+            operation = self.application_controller.prepare_operation(
+                intent=goal.intent,
+                client_id=goal.client_id,
+                context_id=goal.context_id.strip(),
+            )
+        except Exception as exception:
+            return self._abort_preparation(goal_handle, str(exception))
         execution = _OperationExecution(
             goal_handle=goal_handle,
             operation=operation,
@@ -391,6 +395,23 @@ class ApplicationApiNode(Node):
             goal_handle.abort()
         with self._lock:
             self._executions.pop(operation.request_id, None)
+        return result
+
+    def _abort_preparation(self, goal_handle, detail):
+        """Report preparation failure before a command request exists."""
+        goal = goal_handle.request
+        state = ApplicationCommandState()
+        state.header.stamp = self.get_clock().now().to_msg()
+        state.request_id = uuid4().hex
+        state.client_id = goal.client_id.strip()
+        state.context_id = goal.context_id.strip()
+        state.intent = int(goal.intent.intent)
+        state.state = ApplicationCommandState.STATE_FAILED
+        state.detail = detail
+        self._state_publisher.publish(state)
+        result = ExecuteOperation.Result()
+        result.state = state
+        goal_handle.abort()
         return result
 
     def _request_execution_cancellation(self, execution):
