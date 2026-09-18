@@ -193,3 +193,57 @@ def test_application_controller_resolves_saved_motion_before_submission():
     coordinator.saved_probe_command.assert_called_once_with(intent)
     assert operation.request.command is resolved
     assert operation.intent == 26
+
+
+def test_newly_saved_point_is_not_reported_as_duplicate_during_finalization(
+    controls,
+):
+    state = make_state(with_references=False)
+    state.probe_point_ids = ["one", "two", "three"]
+    state.refinement_active = True
+    controls._probe_setup_state = state
+    controls._probe_finalization_point_id = "three"
+    controls._probe_finalization_scope = ("motor", "scan")
+    controls.probe_point_id_field.setText("three")
+    controls.probe_point_display_name_field.setText("Three")
+
+    controls._update_save_probe_point_state()
+
+    assert controls.save_probe_point_status_label.text() == (
+        "Probe point saved. Mandatory retraction in progress."
+    )
+    assert not controls.approve_and_retract_button.isEnabled()
+
+
+def test_completed_finalization_selects_new_point_and_enables_motion(controls):
+    state = make_state(with_references=False)
+    state.probe_point_ids = ["one", "two", "three"]
+    state.probe_point_target_surface_distances_m = [0.03, 0.04, 0.05]
+    controls._probe_setup_state = state
+    controls._update_saved_probe_points(state)
+    controls._probe_finalization_point_id = "three"
+    controls._probe_finalization_scope = ("motor", "scan")
+
+    controls._finish_refinement_workflow_close()
+    controls._update_saved_probe_points(state)
+
+    assert controls.saved_probe_points_list.currentItem().text() == "three"
+    assert controls.saved_probe_distance.value() == 0.05
+    assert all(
+        button.isEnabled()
+        for button in controls.saved_probe_action_buttons.values()
+    )
+    assert controls.saved_probe_motion_status.text() == "three: ready."
+
+
+def test_close_is_blocked_while_save_finalization_is_running(controls):
+    controls._probe_finalization_point_id = "three"
+    controls._refinement_presentation = SimpleNamespace(
+        recovery_required=False,
+        pending_motion=None,
+    )
+
+    assert controls.request_close_refinement_workflow() is False
+    assert "mandatory retraction" in (
+        controls.refinement_recovery_status_label.text()
+    )

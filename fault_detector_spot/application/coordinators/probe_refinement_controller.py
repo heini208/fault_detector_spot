@@ -304,11 +304,6 @@ class ProbeRefinementController:
                     motion,
                     achieved,
                 )
-                if (
-                    stage is RefinementStage.ALIGNMENT
-                    and motion.kind not in _ORIENTATION_MOTION_KINDS
-                ):
-                    self._require_live_alignment_camera_clearance()
                 if motion.kind in _ORIENTATION_MOTION_KINDS:
                     refinement.complete_alignment_orientation(
                         status.operation.request_id,

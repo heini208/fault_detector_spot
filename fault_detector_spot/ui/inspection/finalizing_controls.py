@@ -45,9 +45,13 @@ class FinalizingInspectionControls(InspectionControls):
         self._reference_capture_in_progress = False
         self._saved_probe_scope = None
         self._saved_probe_operation_context = ""
+        self._probe_finalization_point_id = ""
+        self._probe_finalization_scope = None
+        self._saved_probe_selection_after_finalization = None
         self._probe_point_entry_panel = None
         self._probe_point_overview_label = None
         super().__init__(ui)
+        self.alignment_step_status_label.setWordWrap(True)
         self.refinement_dialog.attach_workflow_controls()
         self._configure_probe_point_entry_ui()
 
@@ -159,21 +163,55 @@ class FinalizingInspectionControls(InspectionControls):
         scope = (state.selected_object_id, state.selected_routine_id)
         ids = list(state.probe_point_ids) if all(scope) else []
         current = self.saved_probe_points_list.currentItem()
-        selected = current.text() if current and scope == self._saved_probe_scope else None
-        previous = [self.saved_probe_points_list.item(i).text()
-                    for i in range(self.saved_probe_points_list.count())]
-        if scope != self._saved_probe_scope or ids != previous:
+        selected = (
+            current.text()
+            if current and scope == self._saved_probe_scope
+            else None
+        )
+        completed = self._saved_probe_selection_after_finalization
+        select_completed = bool(
+            completed is not None
+            and completed[:2] == scope
+            and completed[2] in ids
+        )
+        if select_completed:
+            selected = completed[2]
+        previous = [
+            self.saved_probe_points_list.item(i).text()
+            for i in range(self.saved_probe_points_list.count())
+        ]
+        changed = scope != self._saved_probe_scope or ids != previous
+        if changed:
             self.saved_probe_points_list.blockSignals(True)
             self.saved_probe_points_list.clear()
             self.saved_probe_points_list.addItems(ids)
             if selected in ids:
-                self.saved_probe_points_list.setCurrentRow(ids.index(selected))
+                self.saved_probe_points_list.setCurrentRow(
+                    ids.index(selected)
+                )
             self.saved_probe_points_list.blockSignals(False)
             self._saved_probe_scope = scope
+
+        if select_completed:
+            if not changed:
+                self.saved_probe_points_list.blockSignals(True)
+                self.saved_probe_points_list.setCurrentRow(
+                    ids.index(selected)
+                )
+                self.saved_probe_points_list.blockSignals(False)
+            self._saved_probe_selection_after_finalization = None
+            self._saved_probe_selection_changed()
+            if not self._saved_probe_operation_context:
+                self.saved_probe_motion_status.setText(
+                    f"{selected}: ready."
+                )
+        elif changed:
             if selected not in ids:
                 self._saved_probe_selection_changed()
             if not self._saved_probe_operation_context:
-                self.saved_probe_motion_status.setText("Select a saved probe point.")
+                self.saved_probe_motion_status.setText(
+                    "Select a saved probe point."
+                )
         self._refresh_saved_probe_actions()
 
     def handle_saved_probe_motion(self, operation):
@@ -680,6 +718,17 @@ class FinalizingInspectionControls(InspectionControls):
             )
             return True
 
+        presentation = self._refinement_presentation
+        if (
+            self._probe_finalization_point_id
+            and not presentation.recovery_required
+        ):
+            self.refinement_recovery_status_label.setText(
+                "Wait for probe-point saving and mandatory retraction to "
+                "finish."
+            )
+            return False
+
         if self._refinement_emergency_stop_requested:
             if hasattr(self, "inspection_workspace_splitter"):
                 self.inspection_workspace_splitter.setEnabled(True)
@@ -691,7 +740,6 @@ class FinalizingInspectionControls(InspectionControls):
             )
             return True
 
-        presentation = self._refinement_presentation
         if presentation.pending_motion is not None:
             self.refinement_recovery_status_label.setText(
                 "Wait for the active movement and settle check."
@@ -731,6 +779,26 @@ class FinalizingInspectionControls(InspectionControls):
         return resumed
 
     def _finish_refinement_workflow_close(self):
+        point_id = self._probe_finalization_point_id
+        scope = self._probe_finalization_scope
+        state = self._probe_setup_state
+        if (
+            point_id
+            and scope is not None
+            and state is not None
+            and scope == (
+                state.selected_object_id,
+                state.selected_routine_id,
+            )
+            and point_id in state.probe_point_ids
+        ):
+            self._saved_probe_selection_after_finalization = (
+                scope[0],
+                scope[1],
+                point_id,
+            )
+        self._probe_finalization_point_id = ""
+        self._probe_finalization_scope = None
         self._refinement_emergency_stop_requested = False
         self._begin_refinement_after_reference_commit = False
         result = super()._finish_refinement_workflow_close()
@@ -844,13 +912,42 @@ class FinalizingInspectionControls(InspectionControls):
                 self.probe_measurement_duration_field,
             )
         )
+        finalizing_current = bool(
+            point_id
+            and point_id == self._probe_finalization_point_id
+        )
+        saved_during_finalization = bool(
+            finalizing_current
+            and state is not None
+            and point_id in state.probe_point_ids
+        )
         duplicate = (
             state is not None
             and point_id in state.probe_point_ids
             and point_id != self._editing_probe_point_id
         )
         ready = False
-        if state is None or not state.selected_routine_id:
+        if finalizing_current:
+            if state is not None and state.refinement_recovery_required:
+                detail = (
+                    state.refinement_recovery_message.strip()
+                    or state.detail.strip()
+                )
+                status = (
+                    "Probe point saved, but mandatory retraction requires "
+                    "recovery."
+                    if saved_during_finalization
+                    else "Probe-point finalization requires recovery."
+                )
+                if detail:
+                    status = f"{status} {detail}"
+            elif saved_during_finalization:
+                status = (
+                    "Probe point saved. Mandatory retraction in progress."
+                )
+            else:
+                status = "Saving probe point and retracting."
+        elif state is None or not state.selected_routine_id:
             status = "Select a saved object and routine."
         elif not state.has_reference_pixel:
             status = "Select a point in a captured reference view."
@@ -870,8 +967,54 @@ class FinalizingInspectionControls(InspectionControls):
         self.approve_and_retract_button.setEnabled(ready)
         self.save_probe_point_status_label.setText(status)
 
+    def _refresh_alignment_depth_status(self):
+        presentation = self._refinement_presentation
+        state = self._probe_setup_state
+        if presentation is None or state is None:
+            return
+
+        motion_state = presentation.motion_states[RefinementStage.ALIGNMENT]
+        label = self.alignment_step_status_label
+        label.setToolTip("")
+
+        if presentation.stage_is_approved(RefinementStage.ALIGNMENT):
+            label.setText("Reached, registered depth verified")
+            label.setToolTip(
+                "The aligned pre-approach was approved only after live "
+                "registered hand depth confirmed usable camera clearance "
+                "for the probe step."
+            )
+            return
+
+        if (
+            state.operation
+            == ProbeSetupIntent.OPERATION_APPROVE_ALIGNED_POSE
+            and state.state == ProbeSetupState.STATE_FAILED
+        ):
+            detail = (
+                state.detail.strip()
+                or state.validation_error.strip()
+                or "Live registered hand depth could not verify camera clearance."
+            )
+            label.setText(
+                f"{motion_state.value}, registered depth NOT verified"
+            )
+            label.setToolTip(detail)
+            return
+
+        if motion_state is RefinementMotionState.REACHED:
+            label.setText("Reached, depth check pending approval")
+            label.setToolTip(
+                "Approve Current Pose to verify live registered hand depth "
+                "before continuing to the probe step."
+            )
+            return
+
+        label.setText(motion_state.value)
+
     def _refresh_refinement_dialog(self):
         super()._refresh_refinement_dialog()
+        self._refresh_alignment_depth_status()
         presentation = self._refinement_presentation
         if presentation is None:
             self._surface_test_active = False
@@ -905,6 +1048,11 @@ class FinalizingInspectionControls(InspectionControls):
             and not retraction_required
         )
         self._update_save_probe_point_state()
+        if (
+            self._probe_finalization_point_id
+            and not presentation.recovery_required
+        ):
+            self.refinement_dialog.close_button.setEnabled(False)
         if self.refinement_dialog.is_summary_page():
             self.refinement_dialog.refresh_summary()
 
@@ -946,11 +1094,17 @@ class FinalizingInspectionControls(InspectionControls):
         )
         if request_id is None:
             return False
+        state = self._probe_setup_state
+        self._probe_finalization_point_id = point_id
+        self._probe_finalization_scope = (
+            (state.selected_object_id, state.selected_routine_id)
+            if state is not None
+            else None
+        )
+        self._saved_probe_selection_after_finalization = None
         self.approve_and_retract_button.setEnabled(False)
         self.retract_without_saving_button.setEnabled(False)
-        self.save_probe_point_status_label.setText(
-            "Saving probe point and retracting"
-        )
+        self._refresh_refinement_dialog()
         return True
 
     def handle_retract_without_saving(self):
