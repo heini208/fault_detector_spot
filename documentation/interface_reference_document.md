@@ -189,7 +189,7 @@ The provided Qt-based UI uses these same fields (see [manipulation_controls.py](
 
 The Behaviour Tree publishes multiple topics that UIs and monitors can subscribe to.
 
-### 3.1 Base, Visible, and Reachable Tags
+### 3.1 Base, Visible, and Usable Tags
 
 - **Base-camera tags**
     - Topic: `fault_detector/state/base_tags`
@@ -201,14 +201,15 @@ The Behaviour Tree publishes multiple topics that UIs and monitors can subscribe
     - Type: `fault_detector_msgs/TagElementArray`
     - Direction: Tag observation node → BT / UI / external
 
-- **Reachable tags**
-    - Topic: `fault_detector/state/reachable_tags`
+- **Usable tags**
+    - Topic: `fault_detector/state/usable_tags`
     - Type: `fault_detector_msgs/TagElementArray`
-    - Direction: BT → UI / external
+    - Direction: Tag observation node → BT / UI / external
 
 The dedicated tag observation node owns raw `/tf` and `/detections`
-processing. The behaviour tree subscribes to the resulting base and visible
-snapshots, then derives and publishes manipulator reachability.
+processing and publishes base, visible, and usable snapshots. Usable tags are
+fresh observations within `tag_sensing.maximum_range_m` (default 1.5 m) of the
+body origin. This is a sensing range; MoveIt checks resolved motion goals.
 
 Each `TagElement` contains:
 
@@ -221,8 +222,8 @@ Example usage in the UI:
 def _process_visible_tags(self, msg: TagElementArray):
     self.visible_tags = {tag.id: tag for tag in msg.elements}
 
-def _process_reachable_tags(self, msg: TagElementArray):
-    self.reachable_tags = {tag.id: tag for tag in msg.elements}
+def _process_usable_tags(self, msg: TagElementArray):
+    self.usable_tags = {tag.id: tag for tag in msg.elements}
 ```
 
 ### 3.2 Command Buffer and Execution Status
@@ -375,7 +376,7 @@ To implement your own UI or agent:
     - Set `command.command_id` to the desired `CommandID`.
     - Add `tag`, `offset`, `map_name`, `waypoint_name`, `wait_time` as needed.
 3. **Subscribe** to:
-    - `fault_detector/state/visible_tags` and `fault_detector/state/reachable_tags` (for tag-aware behaviours).
+    - `fault_detector/state/visible_tags` and `fault_detector/state/usable_tags` (for tag-aware behaviours).
     - `fault_detector/command_buffer` and `fault_detector/command_tree_status` (for execution state).
     - `/active_map`, `/map_list`, `/waypoint_list`, `/landmark_list` (for navigation GUIs).
     - `fault_detector/recordings_list` (if supporting recording playback).

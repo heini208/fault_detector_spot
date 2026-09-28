@@ -120,7 +120,7 @@ def executor_with_geometry():
     executor = object.__new__(ArmMovementExecutor)
     tag = SimpleNamespace(pose=pose(angles=(15, 25, 35)))
     executor.tag_state_source = SimpleNamespace(
-        reachable_tag=Mock(return_value=tag),
+        usable_tag=Mock(return_value=tag),
     )
     current = pose(angles=(-10, 5, 20))
     mounting = pose((0.12, -0.04, 0.08), (10, 20, 30)).pose
@@ -145,7 +145,7 @@ def test_executor_preserves_probe_origin_and_compensates_mount():
     assert sensor_id == "hall_probe"
     assert target.pose.position == original.pose.position
     assert current == original
-    executor.tag_state_source.reachable_tag.assert_called_once_with(7)
+    executor.tag_state_source.usable_tag.assert_called_once_with(7)
     executor.probe_motion_planner.normalize_target.assert_called_once_with(
         tag.pose, GRAV_ALIGNED_BODY_FRAME_NAME,
     )
@@ -196,10 +196,10 @@ def test_missing_or_stale_tag_rejects_target(stale):
         tag.id = 7
         message = TagElementArray()
         message.elements = [tag]
-        source._receive_reachable_tags(message)
+        source._receive_usable_tags(message)
         source._monotonic_clock = lambda: 12.0
     executor.tag_state_source = source
-    with pytest.raises(RuntimeError, match="not currently reachable"):
+    with pytest.raises(RuntimeError, match="not currently usable"):
         executor._resolve_tag_orientation_target(7, "hall_probe")
     executor.probe_motion_planner.current_pose.assert_not_called()
 

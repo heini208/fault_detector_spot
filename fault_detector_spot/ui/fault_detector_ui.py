@@ -138,7 +138,7 @@ class Fault_Detector_UI(QWidget):
         self._buffer_text = "Buffer: []"
 
         self.visible_tags = {}
-        self.reachable_tags = {}
+        self.usable_tags = {}
         self.available_frames = []
         self.application_client = None
         self.navigation_setup_client = None
@@ -839,10 +839,10 @@ class Fault_Detector_UI(QWidget):
             10,
         )
 
-        self.reachable_tags_sub = self.node.create_subscription(
+        self.usable_tags_sub = self.node.create_subscription(
             TagElementArray,
-            "fault_detector/state/reachable_tags",
-            self._process_reachable_tags,
+            "fault_detector/state/usable_tags",
+            self._process_usable_tags,
             10,
         )
 
@@ -888,7 +888,7 @@ class Fault_Detector_UI(QWidget):
                 self.sensor_controls.apply_sensor_head_connection(None)
         parts = []
         for tag_id in sorted(self.visible_tags.keys()):
-            color = "green" if tag_id in self.reachable_tags else "red"
+            color = "green" if tag_id in self.usable_tags else "red"
             parts.append(
                 f'<span style="color:{color}">{tag_id}</span>'
             )
@@ -901,8 +901,8 @@ class Fault_Detector_UI(QWidget):
         self.manipulation_controls.update_tags_dropdown()
         self.base_movement_controls.update_tags_dropdown()
 
-    def _process_reachable_tags(self, msg: TagElementArray):
-        self.reachable_tags = {tag.id: tag for tag in msg.elements}
+    def _process_usable_tags(self, msg: TagElementArray):
+        self.usable_tags = {tag.id: tag for tag in msg.elements}
 
     def _refresh_buffer_label(self):
         if not hasattr(self, "buffer_label"):

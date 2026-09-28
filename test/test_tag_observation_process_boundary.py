@@ -1,4 +1,4 @@
-"""Lock AprilTag observation and reachability ownership outside the BT."""
+"""Lock AprilTag observation and usability ownership outside the BT."""
 
 from pathlib import Path
 
@@ -37,12 +37,12 @@ def test_tag_process_owns_one_tf_listener_and_all_tag_publishers():
     assert node.count("tf2_ros.TransformListener(") == 1
     assert '"fault_detector/state/base_tags"' in node
     assert '"fault_detector/state/visible_tags"' in node
-    assert '"fault_detector/state/reachable_tags"' in node
-    assert "TagReachabilityFilter" in node
+    assert '"fault_detector/state/usable_tags"' in node
+    assert "TagUsabilityFilter" in node
     assert "merge_tag_observations" in node
 
 
-def test_bt_subscriber_has_no_tf_detection_or_reachability_logic():
+def test_bt_subscriber_has_no_tf_detection_or_usability_logic():
     subscriber = read(
         "fault_detector_spot/sensing/behaviours/"
         "tag_state_subscriber.py"
@@ -50,8 +50,8 @@ def test_bt_subscriber_has_no_tf_detection_or_reachability_logic():
 
     assert "tf2_ros" not in subscriber
     assert "AprilTagDetection" not in subscriber
-    assert "TagReachabilityFilter" not in subscriber
+    assert "TagUsabilityFilter" not in subscriber
     assert "base_tag_observations" in subscriber
     assert "visible_tags" in subscriber
-    assert "reachable_tags" in subscriber
+    assert "usable_tags" in subscriber
     assert "time.monotonic()" in subscriber

@@ -26,13 +26,13 @@ class TagStateSubscriber(py_trees.behaviour.Behaviour):
         self._lock = RLock()
         self._base_tags = {}
         self._visible_tags = {}
-        self._reachable_tags = {}
+        self._usable_tags = {}
         self._base_receipt_time = None
         self._visible_receipt_time = None
-        self._reachable_receipt_time = None
+        self._usable_receipt_time = None
         self._base_subscription = None
         self._visible_subscription = None
-        self._reachable_subscription = None
+        self._usable_subscription = None
         self.blackboard = self.attach_blackboard_client()
 
     def setup(self, **kwargs):
@@ -48,12 +48,12 @@ class TagStateSubscriber(py_trees.behaviour.Behaviour):
             access=py_trees.common.Access.WRITE,
         )
         self.blackboard.register_key(
-            "reachable_tags",
+            "usable_tags",
             access=py_trees.common.Access.WRITE,
         )
         self.blackboard.base_tag_observations = {}
         self.blackboard.visible_tags = {}
-        self.blackboard.reachable_tags = {}
+        self.blackboard.usable_tags = {}
         self._base_subscription = self.node.create_subscription(
             TagElementArray,
             "fault_detector/state/base_tags",
@@ -66,10 +66,10 @@ class TagStateSubscriber(py_trees.behaviour.Behaviour):
             self._receive_visible_tags,
             TAG_STATE_QOS,
         )
-        self._reachable_subscription = self.node.create_subscription(
+        self._usable_subscription = self.node.create_subscription(
             TagElementArray,
-            "fault_detector/state/reachable_tags",
-            self._receive_reachable_tags,
+            "fault_detector/state/usable_tags",
+            self._receive_usable_tags,
             TAG_STATE_QOS,
         )
         return True
@@ -87,18 +87,18 @@ class TagStateSubscriber(py_trees.behaviour.Behaviour):
                 self._visible_receipt_time,
                 now,
             )
-            reachable_tags = self._fresh_snapshot(
-                self._reachable_tags,
-                self._reachable_receipt_time,
+            usable_tags = self._fresh_snapshot(
+                self._usable_tags,
+                self._usable_receipt_time,
                 now,
             )
         self.blackboard.base_tag_observations = base_tags
         self.blackboard.visible_tags = visible_tags
-        self.blackboard.reachable_tags = reachable_tags
+        self.blackboard.usable_tags = usable_tags
         self.feedback_message = (
             f"Base tags: {sorted(base_tags)}; "
             f"visible tags: {sorted(visible_tags)}; "
-            f"reachable tags: {sorted(reachable_tags)}"
+            f"usable tags: {sorted(usable_tags)}"
         )
         return py_trees.common.Status.SUCCESS
 
@@ -108,7 +108,7 @@ class TagStateSubscriber(py_trees.behaviour.Behaviour):
         subscriptions = (
             "_base_subscription",
             "_visible_subscription",
-            "_reachable_subscription",
+            "_usable_subscription",
         )
         for attribute in subscriptions:
             subscription = getattr(self, attribute)
@@ -126,10 +126,10 @@ class TagStateSubscriber(py_trees.behaviour.Behaviour):
             self._visible_tags = self._message_snapshot(message)
             self._visible_receipt_time = time.monotonic()
 
-    def _receive_reachable_tags(self, message: TagElementArray) -> None:
+    def _receive_usable_tags(self, message: TagElementArray) -> None:
         with self._lock:
-            self._reachable_tags = self._message_snapshot(message)
-            self._reachable_receipt_time = time.monotonic()
+            self._usable_tags = self._message_snapshot(message)
+            self._usable_receipt_time = time.monotonic()
 
     def _fresh_snapshot(self, values, receipt_time, now):
         if (

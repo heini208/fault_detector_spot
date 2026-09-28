@@ -30,17 +30,17 @@ def message_with_tag(tag_id):
     return message
 
 
-def test_reachable_snapshot_is_copied_and_expires():
+def test_usable_snapshot_is_copied_and_expires():
     now = [100.0]
     source = TagStateSource(
         FakeNode(),
         stale_after_sec=1.5,
         monotonic_clock=lambda: now[0],
     )
-    source._receive_reachable_tags(message_with_tag(7))
+    source._receive_usable_tags(message_with_tag(7))
 
-    tag = source.reachable_tag(7)
-    snapshot = source.reachable_snapshot()
+    tag = source.usable_tag(7)
+    snapshot = source.usable_snapshot()
 
     assert tag.id == 7
     assert set(snapshot) == {7}
@@ -48,8 +48,8 @@ def test_reachable_snapshot_is_copied_and_expires():
 
     now[0] = 101.6
 
-    assert source.reachable_snapshot() == {}
-    assert source.reachable_tag(7) is None
+    assert source.usable_snapshot() == {}
+    assert source.usable_tag(7) is None
 
 
 def test_source_subscribes_once_to_each_authoritative_topic():
@@ -64,7 +64,7 @@ def test_source_subscribes_once_to_each_authoritative_topic():
     assert topics == [
         "fault_detector/state/base_tags",
         "fault_detector/state/visible_tags",
-        "fault_detector/state/reachable_tags",
+        "fault_detector/state/usable_tags",
     ]
 
     source.destroy()

@@ -259,8 +259,8 @@ It operates in parallel to command execution and sensing, ensuring the operator 
 - **Visible Tags**  
   Published continuously by the tag observation node independently of the tree.
 
-- **Reachable Tags**  
-  Publishes the subset of visible tags that can be reached by the manipulator.
+- **Usable Tags**
+  Publishes fresh visible tags within the configured body-origin sensing range.
 
 - **Command Buffer State**  
   Publishes the list of queued commands awaiting execution.
@@ -530,7 +530,7 @@ Key idea:
 |-------------------------|---------------------------------------|---------------------------------------|-----------------|
 | Base-camera AprilTags   | `fault_detector/state/base_tags`      | `fault_detector_msgs/TagElementArray` | Tag node → BT / tools |
 | Visible AprilTags       | `fault_detector/state/visible_tags`   | `fault_detector_msgs/TagElementArray` | Tag node → BT / UI / tools |
-| Reachable AprilTags     | `fault_detector/state/reachable_tags` | `fault_detector_msgs/TagElementArray` | BT → UI / tools |
+| Usable AprilTags     | `fault_detector/state/usable_tags` | `fault_detector_msgs/TagElementArray` | Tag observation node → BT / UI / tools |
 | Command buffer contents | `fault_detector/command_buffer`       | `std_msgs/String`                     | BT → UI / tools |
 | Command tree status     | `fault_detector/command_tree_status`  | `std_msgs/String`                     | BT → UI / tools |
 
@@ -920,9 +920,8 @@ The ScanForTags Sequence combines multiple components:
 
 - **TagStateSubscriber** copies fresh `base_tags` and `visible_tags` topic
   snapshots onto the blackboard. It does not subscribe to raw TF or detections.
-- [**CheckTagReachability**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcheck_tag_reachability.py) determines whether a detected tag is
-  reachable.
-- **PublishReachableTags** publishes the tree-derived reachable subset.
+- **TagUsabilityFilter** runs in the tag observation node and publishes
+  `usable_tags` within `tag_sensing.maximum_range_m` of the body origin.
 - [**VisibleTagToMap**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fvisible_tag_to_map.py) transforms the detected tag poses into the global
   SLAM map frame if mapping is used.
 
@@ -942,7 +941,7 @@ The Sensing Subtree is designed to:
 
 - **Separate perception from decision-making:**  
   The tag observation process owns raw sensor and TF state. The Behaviour Tree
-  consumes typed ROS snapshots and owns only decisions such as reachability.
+  consumes typed ROS snapshots; MoveIt validates the resolved arm goal poses.
 
 - **Support parallel, non-blocking sensing:**  
   Tag observation continues independently of tree traversal. Command reception,
@@ -953,8 +952,8 @@ The Sensing Subtree is designed to:
   while presenting them as common `TagElementArray` state topics.
 
 - **Provide reusable, high-level tag information:**  
-  The reachability check and map-frame transform are handled once in the Sensing Subtree. Downstream behaviours (navigation, manipulation, relocalization, UI
-  feedback) can work directly with `visible_tags`, [`reachable_tags`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcheck_tag_reachability.py), and [`visible_tags_map_frame`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fvisible_tag_to_map.py) without duplicating TF or reachability logic.
+  The tag observation node publishes `visible_tags` and `usable_tags`; the
+  Sensing Subtree derives `visible_tags_map_frame` without duplicating range filtering.
 
 ## 7.2 Tag Handling
 
@@ -1028,14 +1027,14 @@ It enables precise alignment, manipulation, and navigation even when tags are on
 After AprilTags are detected by the Sensing Subtree, a post-processing step evaluates each tag for its usability in downstream tasks. This processing serves two
 main purposes:
 
-1. **Reachability Check:**  
-   Each detected tag is checked to determine whether it falls within the circular reach of the robot’s manipulator. This ensures that:
-
-- Manipulation behaviours do not attempt to reach tags that are physically out of range.
-- The user interface can provide feedback on which tags are currently reachable versus just visible.
-
-Tags that pass this check are stored in a [**`reachable_tags`**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fcheck_tag_reachability.py) list on the blackboard, in addition to the [**`visible_tags`**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fsensing%2Fdetect_visible_tags.py) list maintained by the Sensing
-Subtree.
+1. **Observation Usability Check:**
+   The tag observation node filters fresh visible observations by their 3D
+   distance from the configured base-frame origin (`body` by default).
+   `tag_sensing.maximum_range_m` defaults to 1.5 m and can be increased later.
+   This is a rough sensing range, not a manipulator reach or accuracy guarantee.
+   The node publishes `usable_tags`, consumed by the UI, BT and tag-relative
+   motion. MoveIt validates the actual goal after tag-relative offsets and probe
+   geometry are applied. Freshness checks remain independent of range.
 
 2. **Map Frame Transformation:**  
    To simplify further processing, a transformer node converts detected tag poses into the global map frame. This allows any behaviour or node requiring map
@@ -1103,8 +1102,8 @@ Tag state publication is split according to ownership:
 
 - `tag_observation_node` publishes `fault_detector/state/base_tags` and
   `fault_detector/state/visible_tags` at its own fixed rate.
-- `PublishReachableTags` publishes `fault_detector/state/reachable_tags` after
-  the Behaviour Tree applies the manipulator reachability rule.
+- `tag_observation_node` also publishes `fault_detector/state/usable_tags`
+  after applying the configured body-origin sensing range.
 
 Key aspects:
 
@@ -1149,7 +1148,7 @@ Overall, the Feedback Subtree provides:
 
 - Initial map information for UI bootstrapping,
 - Continuous visibility into command scheduling and execution,
-- A standardized representation of visible and reachable tags, and
+- A standardized representation of visible and usable tags, and
 - Automatic landmark-based relocalization support.
 
 All of these are made available via ROS2 topics, so external clients can monitor and visualize system behaviour without direct access to internal BT structures
@@ -1825,8 +1824,8 @@ controls are permanently accessible.
 
 * **Status Display:** A block of labels at the top-left provides real-time feedback on the system's state, including ROS2 connection status, the contents of
   the command buffer, the status of the last executed command, and whether the navigation system is active.
-* **Visible Tags:** This label provides a list of all currently detected AprilTags. To give immediate feedback on manipulator reachability, tags that are within
-  the arm's range are colored green, while those that are visible but out of reach are colored red.
+* **Visible Tags:** This label provides a list of all currently detected AprilTags. Tags with fresh observations within
+  the configured sensing range are colored green; other visible tags are colored red.
 
 ![A close-up of the UI status panel showing a 'stow_arm' command was sent, a buffer with queued commands, the current running status as 'move_to_tag', and visible tags 1 and 3.](images%2FSystem_Design%2FUI%2Fui_with_feedback.png)
 

@@ -9,7 +9,7 @@ from fault_detector_spot.manipulation.commands.orient_to_tag_command import (
 
 
 class OrientToTagBehaviour(ArmMovementBehaviour):
-    """Orient the active probe to the selected reachable tag."""
+    """Orient the active probe to the selected usable tag."""
 
     def _start_operation(self):
         command = self._last_command()

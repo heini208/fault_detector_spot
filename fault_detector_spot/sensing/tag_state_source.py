@@ -15,7 +15,7 @@ DEFAULT_TAG_STATE_STALE_AFTER_SEC = 1.5
 
 
 class TagStateSource(RuntimeSource):
-    """Cache authoritative base, visible, and reachable tag snapshots."""
+    """Cache authoritative base, visible, and usable tag snapshots."""
 
     def __init__(
         self,
@@ -38,10 +38,10 @@ class TagStateSource(RuntimeSource):
 
         self._base_tags = {}
         self._visible_tags = {}
-        self._reachable_tags = {}
+        self._usable_tags = {}
         self._base_received_at = None
         self._visible_received_at = None
-        self._reachable_received_at = None
+        self._usable_received_at = None
 
         self._subscriptions = [
             node.create_subscription(
@@ -58,8 +58,8 @@ class TagStateSource(RuntimeSource):
             ),
             node.create_subscription(
                 TagElementArray,
-                "fault_detector/state/reachable_tags",
-                self._receive_reachable_tags,
+                "fault_detector/state/usable_tags",
+                self._receive_usable_tags,
                 TAG_STATE_QOS,
             ),
         ]
@@ -78,15 +78,15 @@ class TagStateSource(RuntimeSource):
             now,
         )
 
-    def reachable_snapshot(self, now: float = None):
+    def usable_snapshot(self, now: float = None):
         return self._snapshot(
-            "_reachable_tags",
-            "_reachable_received_at",
+            "_usable_tags",
+            "_usable_received_at",
             now,
         )
 
-    def reachable_tag(self, tag_id: int, now: float = None):
-        return self.reachable_snapshot(now).get(int(tag_id))
+    def usable_tag(self, tag_id: int, now: float = None):
+        return self.usable_snapshot(now).get(int(tag_id))
 
     def destroy(self) -> None:
         subscriptions = tuple(self._subscriptions)
@@ -116,10 +116,10 @@ class TagStateSource(RuntimeSource):
     def _receive_visible_tags(self, message: TagElementArray) -> None:
         self._store("_visible_tags", "_visible_received_at", message)
 
-    def _receive_reachable_tags(self, message: TagElementArray) -> None:
+    def _receive_usable_tags(self, message: TagElementArray) -> None:
         self._store(
-            "_reachable_tags",
-            "_reachable_received_at",
+            "_usable_tags",
+            "_usable_received_at",
             message,
         )
 

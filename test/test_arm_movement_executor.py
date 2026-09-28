@@ -176,7 +176,7 @@ class FakeTagStateSource:
         self.tags = tags
         self.requests = []
 
-    def reachable_tag(self, tag_id):
+    def usable_tag(self, tag_id):
         self.requests.append(tag_id)
         tag = self.tags.get(tag_id)
         return None if tag is None else deepcopy(tag)
@@ -497,7 +497,7 @@ def test_bare_hand_probe_pose_uses_hand_speed_path(monkeypatch):
     assert captured["args"][8] == pytest.approx(2.0)
 
 
-def test_tag_probe_rejects_unreachable_tag_as_typed_failure():
+def test_tag_probe_rejects_unusable_tag_as_typed_failure():
     executor, client = executor_with_client(
         FakeTransformer(),
         tag_state_source=FakeTagStateSource({}),
@@ -511,7 +511,7 @@ def test_tag_probe_rejects_unreachable_tag_as_typed_failure():
     )
 
     assert update.outcome is ArmMovementOutcome.EXECUTION_ERROR
-    assert "not currently reachable" in update.detail
+    assert "not currently usable" in update.detail
     assert client.sent_goals == []
 
 

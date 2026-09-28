@@ -404,7 +404,7 @@ class ArmMovementExecutor(MovementExecutor):
         speed=None,
         force_threshold_n=None,
     ) -> ArmMovementUpdate:
-        """Orient the active probe to a currently reachable tag."""
+        """Orient the active probe to a currently usable tag."""
         sensor_id = str(motion_sensor_id).strip()
         if not sensor_id:
             return ArmMovementUpdate(
@@ -769,10 +769,10 @@ class ArmMovementExecutor(MovementExecutor):
         tag_id: int,
         sensor_id: str,
     ):
-        tag = self.tag_state_source.reachable_tag(tag_id)
+        tag = self.tag_state_source.usable_tag(tag_id)
         if tag is None:
             raise RuntimeError(
-                f"Tag {tag_id} is not currently reachable"
+                f"Tag {tag_id} is not currently usable"
             )
 
         tag_pose = self.probe_motion_planner.normalize_target(

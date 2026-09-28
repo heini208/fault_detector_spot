@@ -116,7 +116,7 @@ The user interface allows:
 * Mapping actions — create, save, load maps.
 * Safety functions — emergency stop, E-stop status display.
 * Recording/Playback — start, stop, play, delete; select from available list.
-* Status views — visible and reachable markers, active command, queue contents, playback state, and error messages.
+* Status views — visible and usable markers, active command, queue contents, playback state, and error messages.
 
 **Operation Principles**
 

@@ -1,14 +1,11 @@
 """Publish AprilTag observations independently of behavior-tree execution."""
 
-import math
-
 import rclpy
 import tf2_ros
 from apriltag_msgs.msg import AprilTagDetectionArray
 from fault_detector_msgs.msg import TagElementArray
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from rclpy.time import Time
 from tf2_msgs.msg import TFMessage
 
 from fault_detector_spot.sensing.observations.tag_observation_tracker import (
@@ -16,14 +13,14 @@ from fault_detector_spot.sensing.observations.tag_observation_tracker import (
     HandTagObservationTracker,
     merge_tag_observations,
 )
-from fault_detector_spot.sensing.observations.tag_reachability import (
-    TagReachabilityFilter,
+from fault_detector_spot.sensing.observations.tag_usability import (
+    TagUsabilityFilter,
 )
 from fault_detector_spot.shared.ros.qos_profiles import TAG_STATE_QOS
 
 
 class TagObservationNode(Node):
-    """Own tag observation, freshness, reachability, and publication."""
+    """Own tag observation, freshness, usability, and publication."""
 
     def __init__(self):
         super().__init__("tag_observation")
@@ -61,55 +58,19 @@ class TagObservationNode(Node):
         publish_period_sec = float(
             self._parameter("tag_sensing.publish_period_sec", 0.05)
         )
-        arm_base_frame = str(
-            self._parameter(
-                "tag_sensing.arm_base_frame",
-                "arm_link_sh0",
-            )
-        ).strip()
-        arm_reach_m = float(
-            self._parameter("tag_sensing.arm_reach_m", 1.1)
-        )
-        arm_reach_tolerance_m = float(
-            self._parameter(
-                "tag_sensing.arm_reach_tolerance_m",
-                0.0,
-            )
+        maximum_range_m = float(
+            self._parameter("tag_sensing.maximum_range_m", 1.5)
         )
 
         if publish_period_sec <= 0.0:
             raise ValueError(
                 "tag_sensing.publish_period_sec must be positive"
             )
-        if (
-            not math.isfinite(arm_reach_tolerance_m)
-            or arm_reach_tolerance_m < 0.0
-        ):
-            raise ValueError(
-                "tag_sensing.arm_reach_tolerance_m must be finite "
-                "and non-negative"
-            )
-        if (
-            not math.isfinite(arm_reach_m)
-            or arm_reach_m <= arm_reach_tolerance_m
-        ):
-            raise ValueError(
-                "tag_sensing.arm_reach_m must be finite and exceed "
-                "its tolerance"
-            )
         if not str(base_frame).strip():
             raise ValueError("tag_sensing.base_frame must not be empty")
-        if not arm_base_frame:
-            raise ValueError(
-                "tag_sensing.arm_base_frame must not be empty"
-            )
 
         self._base_frame = str(base_frame).strip()
-        self._arm_base_frame = arm_base_frame
-        self._arm_base_position = None
-        self._reachability_filter = TagReachabilityFilter(
-            arm_reach_m - arm_reach_tolerance_m
-        )
+        self._usability_filter = TagUsabilityFilter(maximum_range_m)
 
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(
@@ -155,9 +116,9 @@ class TagObservationNode(Node):
             "fault_detector/state/visible_tags",
             TAG_STATE_QOS,
         )
-        self._reachable_publisher = self.create_publisher(
+        self._usable_publisher = self.create_publisher(
             TagElementArray,
-            "fault_detector/state/reachable_tags",
+            "fault_detector/state/usable_tags",
             TAG_STATE_QOS,
         )
         self._last_signature = None
@@ -179,7 +140,7 @@ class TagObservationNode(Node):
             base_observations,
             hand_observations,
         )
-        reachable_observations = self._reachable_observations(
+        usable_observations = self._usable_observations(
             visible_observations
         )
 
@@ -187,62 +148,28 @@ class TagObservationNode(Node):
         base_message.elements = list(base_observations.values())
         visible_message = TagElementArray()
         visible_message.elements = list(visible_observations.values())
-        reachable_message = TagElementArray()
-        reachable_message.elements = list(reachable_observations.values())
+        usable_message = TagElementArray()
+        usable_message.elements = list(usable_observations.values())
 
         self._base_publisher.publish(base_message)
         self._visible_publisher.publish(visible_message)
-        self._reachable_publisher.publish(reachable_message)
+        self._usable_publisher.publish(usable_message)
 
         signature = (
             tuple(sorted(base_observations)),
             tuple(sorted(hand_observations)),
-            tuple(sorted(reachable_observations)),
+            tuple(sorted(usable_observations)),
         )
         if signature != self._last_signature:
             self.get_logger().info(
                 f"Base tags: {list(signature[0])}; "
                 f"hand fallback tags: {list(signature[1])}; "
-                f"reachable tags: {list(signature[2])}"
+                f"usable tags: {list(signature[2])}"
             )
             self._last_signature = signature
 
-    def _reachable_observations(self, visible_observations):
-        return self._reachability_filter.filter(
-            visible_observations,
-            self._get_arm_base_position(),
-        )
-
-    def _get_arm_base_position(self):
-        if self._arm_base_position is not None:
-            return self._arm_base_position
-
-        try:
-            if not self._tf_buffer.can_transform(
-                self._base_frame,
-                self._arm_base_frame,
-                Time(),
-            ):
-                return None
-            transform = self._tf_buffer.lookup_transform(
-                self._base_frame,
-                self._arm_base_frame,
-                Time(),
-            )
-        except Exception:
-            return None
-
-        translation = transform.transform.translation
-        self._arm_base_position = (
-            float(translation.x),
-            float(translation.y),
-            float(translation.z),
-        )
-        self.get_logger().info(
-            "Resolved arm base offset "
-            f"{self._arm_base_position} in {self._base_frame}"
-        )
-        return self._arm_base_position
+    def _usable_observations(self, visible_observations):
+        return self._usability_filter.filter(visible_observations)
 
     def destroy_node(self):
         if self._tf_listener is not None:

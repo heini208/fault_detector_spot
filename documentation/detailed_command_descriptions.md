@@ -91,7 +91,7 @@
 - **Parameters:**
   - `tag_id` (int): The ID of the AprilTag to reach.
   - `offset` (Pose, optional): An offset relative to the tag frame (e.g., `{x: -0.2}` to stop 20cm in front of it). **CRITICAL:** Without a defined offset, the robot will attempt to move the gripper's TCP (Tool Center Point) exactly to the tag's origin, causing the gripper to collide with the tag/surface.
-- **Preconditions:** The specific `tag_id` must be currently visible and reachable (`reachable_tags`, green in the test-UI).
+- **Preconditions:** The specific `tag_id` must be currently visible and usable (`usable_tags`, green in the test-UI).
 - **Effects:** The arm moves so the hand aligns with the target tag's pose (plus offset).
 - **Feedback:** "Found goal tag {id}", "Waiting for TF".
 - **Errors:** Returns `FAILURE` if the tag is not visible or TF lookup times out.
@@ -103,7 +103,7 @@
   - `tag_id` (int): The ID of the AprilTag to reach.
   - `duration` (float): Time to wait after reaching the tag.
   - `offset` (Pose, optional): An offset relative to the tag frame (e.g., `{x: -0.2}` to stop 20cm in front of it). **CRITICAL:** Without a defined offset, the robot will attempt to move the gripper's TCP (Tool Center Point) exactly to the tag's origin, causing the gripper to collide with the tag/surface.
-- **Preconditions:** The specific `tag_id` must be currently visible and reachable (`reachable_tags`, green in the test-UI).
+- **Preconditions:** The specific `tag_id` must be currently visible and usable (`usable_tags`, green in the test-UI).
 - **Effects:** Moves arm to tag, then pauses execution.
 - **Feedback:** Same as `MOVE_ARM_TO_TAG` plus wait status.
 - **Errors:** Returns `FAILURE` if move fails.

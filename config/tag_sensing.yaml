@@ -13,9 +13,8 @@
     tag_sensing.hand_max_hamming: 0
     tag_sensing.hand_min_decision_margin: 0.0
 
-    tag_sensing.arm_base_frame: arm_link_sh0
-    tag_sensing.arm_reach_m: 1.1
-    tag_sensing.arm_reach_tolerance_m: 0.0
+    # Rough sensing range from the body-frame origin, not manipulator reach.
+    tag_sensing.maximum_range_m: 1.5
 
     tag_sensing.publish_period_sec: 0.05
     tag_sensing.state_timeout_sec: 1.5
