@@ -101,6 +101,11 @@ class CommandController:
             raise TypeError("Listener error handler must be callable")
 
         self._lock = RLock()
+        # Never acquire the command/setup lock while holding this transport lock.
+        self._emergency_lock = RLock()
+        self._pending_emergencies = deque()
+        self._emergency_feedback = {}
+        self._emergency_request_ids = set()
         self._queue: Deque[CommandRequest[SemanticCommand]] = deque()
         self._active: Optional[CommandRequest[SemanticCommand]] = None
         self._listeners: List[StatusListener] = []
@@ -201,24 +206,27 @@ class CommandController:
 
     def submit(self, request: CommandRequest[SemanticCommand]) -> str:
         normalized = self._normalize_request(request)
+        if self._is_emergency(normalized):
+            return self._submit_emergency(normalized)
         with self._lock:
             normalized = self._prepare_request_locked(normalized)
-            if normalized.request_id in self._known_request_ids:
-                raise DuplicateCommandRequest(
-                    f"Duplicate request ID: {normalized.request_id}"
-                )
-            self._known_request_ids.add(normalized.request_id)
+            with self._emergency_lock:
+                if (
+                    normalized.request_id in self._known_request_ids
+                    or normalized.request_id in self._emergency_request_ids
+                ):
+                    raise DuplicateCommandRequest(
+                        f"Duplicate request ID: {normalized.request_id}"
+                    )
+                self._known_request_ids.add(normalized.request_id)
             self._emit_accepted_locked(normalized)
-            if self._is_emergency(normalized):
-                self._dispatch_emergency_locked(normalized)
-            else:
-                self._queue.append(normalized)
-                self._emit_locked(
-                    normalized,
-                    CommandControllerState.QUEUED,
-                    self._queued_detail_locked(normalized),
-                )
-                self._dispatch_next_locked()
+            self._queue.append(normalized)
+            self._emit_locked(
+                normalized,
+                CommandControllerState.QUEUED,
+                self._queued_detail_locked(normalized),
+            )
+            self._dispatch_next_locked()
         return normalized.request_id
 
     def cancel(self, request_id: str) -> str:
@@ -268,6 +276,11 @@ class CommandController:
             CommandControllerState.CANCELLED,
         }:
             return False
+        with self._emergency_lock:
+            feedback = self._emergency_feedback.get(status.request_id)
+            if feedback is not None:
+                feedback.append(status)
+                return True
         with self._lock:
             if (
                 self._active is None
@@ -308,6 +321,7 @@ class CommandController:
     def poll(self) -> None:
         """Advance timeout handling and dispatch queued work when possible."""
         with self._lock:
+            self._reconcile_emergencies_locked()
             self._retry_dispatch_locked()
             self._dispatch_next_locked()
 
@@ -392,34 +406,73 @@ class CommandController:
         self._active_dispatched_monotonic = None
         self._dispatch_locked(self._active)
 
-    def _dispatch_emergency_locked(
-        self,
-        request: CommandRequest[SemanticCommand],
-    ) -> None:
-        interrupted = []
-        if self._active is not None:
-            interrupted.append(self._active)
-        interrupted.extend(self._queue)
-        self._active = None
-        self._active_acknowledged = False
-        self._active_dispatched_monotonic = None
-        self._queue.clear()
-        for pending in interrupted:
-            self._emit_locked(
-                pending,
-                CommandControllerState.CANCELLED,
-                "Interrupted by emergency stop",
-            )
-        if self._dispatch_consumer_ready_locked():
-            self._active = request
-            self._dispatch_locked(request)
-        else:
-            self._queue.appendleft(request)
-            self._emit_locked(
-                request,
-                CommandControllerState.QUEUED,
-                "Waiting for behavior-tree command consumer",
-            )
+    def _submit_emergency(self, request) -> str:
+        """Publish before touching setup state; poll performs bookkeeping."""
+        with self._emergency_lock:
+            if (
+                request.request_id in self._known_request_ids
+                or request.request_id in self._emergency_request_ids
+            ):
+                raise DuplicateCommandRequest(
+                    f"Duplicate request ID: {request.request_id}"
+                )
+            self._emergency_request_ids.add(request.request_id)
+            self._emergency_feedback[request.request_id] = []
+            sent_at = None
+            error = ""
+            try:
+                callback = self._dispatch_request
+                ready = self._dispatch_ready
+                if callback is not None and (ready is None or ready()):
+                    sent_at = self._monotonic_clock()
+                    callback(request)
+            except Exception as exception:
+                error = f"Command dispatch failed: {exception}"
+            self._pending_emergencies.append((request, sent_at, error))
+        return request.request_id
+
+    def _reconcile_emergencies_locked(self) -> None:
+        while True:
+            with self._emergency_lock:
+                if not self._pending_emergencies:
+                    return
+                request, sent_at, error = self._pending_emergencies.popleft()
+                interrupted = list(self._queue)
+                if self._active is not None:
+                    interrupted.insert(0, self._active)
+                self._queue.clear()
+                self._active = (
+                    request if sent_at is not None and not error else None
+                )
+                self._active_acknowledged = False
+                self._active_dispatched_monotonic = (
+                    sent_at if self._active else None
+                )
+                feedback = self._emergency_feedback.pop(request.request_id)
+                if sent_at is None and not error:
+                    self._queue.appendleft(request)
+            # Notification work is deferred from the immediate stop path.
+            self._emit_accepted_locked(request)
+            for pending in interrupted:
+                self._emit_locked(
+                    pending,
+                    CommandControllerState.CANCELLED,
+                    "Interrupted by emergency stop",
+                )
+            if error:
+                self._emit_locked(request, CommandControllerState.FAILED, error)
+            elif sent_at is None:
+                self._emit_locked(
+                    request, CommandControllerState.QUEUED,
+                    "Waiting for behavior-tree command consumer",
+                )
+            else:
+                self._emit_locked(
+                    request, CommandControllerState.DISPATCHED,
+                    "Dispatched cancel_all to behavior tree; waiting for BT receipt",
+                )
+                for status in feedback:
+                    self.handle_execution_status(status)
 
     def _dispatch_locked(
         self,
@@ -430,7 +483,12 @@ class CommandController:
             raise RuntimeError("Command dispatch transport is not configured")
         self._active_dispatched_monotonic = self._monotonic_clock()
         try:
-            callback(request)
+            with self._emergency_lock:
+                # A stop published during command preparation cancels that work
+                # before it can reach the transport, even before poll reconciles.
+                if self._pending_emergencies:
+                    return
+                callback(request)
         except Exception as exception:
             if self._active is request:
                 self._active = None

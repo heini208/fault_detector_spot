@@ -109,6 +109,7 @@ def test_emergency_stop_clears_queue_and_bypasses_active_request():
     controller.submit(second)
 
     emergency_request_id = controller.cancel_all()
+    controller.poll()
 
     assert [request.request_id for request in dispatched] == [
         first.request_id,

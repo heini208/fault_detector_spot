@@ -217,3 +217,21 @@ def test_transport_readiness_controls_pure_controller_dispatch():
     assert len(dispatch.messages) == 1
     transport.close()
     assert node_override.timers[0].cancelled
+
+
+def test_emergency_bypasses_local_command_handler():
+    node = FakeNode()
+    controller = CommandController()
+    transport = RosCommandTransport(node, controller)
+    local_calls = []
+    transport.set_local_dispatch(lambda request: local_calls.append(request) or True)
+
+    request_id = controller.cancel_all()
+
+    messages = node.publishers[
+        "fault_detector/_internal/commands/request"
+    ].messages
+    assert [message.request_id for message in messages] == [request_id]
+    assert local_calls == []
+    controller.poll()
+    assert controller.active_request_id == request_id

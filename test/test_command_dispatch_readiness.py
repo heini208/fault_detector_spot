@@ -55,6 +55,7 @@ def test_emergency_is_not_lost_when_dispatch_transport_is_unready():
     controller.submit(request(CommandID.SWAP_MAP))
 
     emergency_id = controller.cancel_all("operator-ui")
+    controller.poll()
 
     assert dispatched == []
     assert controller.active_request_id == ""

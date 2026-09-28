@@ -16,6 +16,7 @@ from fault_detector_spot.application.ros.command_request_adapter import (
     command_request_to_message,
 )
 from fault_detector_spot.shared.ros.qos_profiles import COMMAND_REQUEST_QOS
+from fault_detector_spot.application.commanding.command_ids import CommandID
 
 
 class RosCommandTransport:
@@ -121,6 +122,9 @@ class RosCommandTransport:
             cancel()
 
     def _dispatch(self, request) -> None:
+        if request.command.command_id is CommandID.EMERGENCY_CANCEL:
+            self._publish_dispatch(request)
+            return
         if (
             self._local_dispatch is not None
             and self._local_dispatch(request)
