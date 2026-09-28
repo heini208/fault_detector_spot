@@ -81,21 +81,6 @@ def test_requires_complete_waypoint_identity():
         operational_intent_to_command(intent)
 
 
-def test_translates_probe_execution_selection():
-    intent = OperationalIntent()
-    intent.intent = OperationalIntent.INTENT_EXECUTE_PROBE_POINT
-    intent.object_id = "motor_a"
-    intent.routine_id = "magnetic_scan"
-    intent.probe_point_id = "bearing_1"
-
-    command = operational_intent_to_command(intent)
-
-    assert command.command_id is CommandID.EXECUTE_PROBE_POINT
-    assert command.inspection.object_id == "motor_a"
-    assert command.inspection.routine_id == "magnetic_scan"
-    assert command.inspection.probe_point_id == "bearing_1"
-
-
 def test_translates_sensor_recording_intents():
     start = OperationalIntent()
     start.intent = OperationalIntent.INTENT_START_SENSOR_RECORDING

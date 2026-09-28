@@ -69,9 +69,6 @@ _INTENT_COMMAND_IDS = {
         CommandID.MOVE_TO_WAYPOINT
     ),
     OperationalIntent.INTENT_WAIT: CommandID.WAIT_TIME,
-    OperationalIntent.INTENT_EXECUTE_PROBE_POINT: (
-        CommandID.EXECUTE_PROBE_POINT
-    ),
     OperationalIntent.INTENT_START_SENSOR_RECORDING: (
         CommandID.START_SENSOR_RECORDING
     ),
@@ -212,8 +209,7 @@ def operational_intent_to_command(
             intent.waypoint_name,
             "Waypoint name",
         )
-    if (intent.intent == OperationalIntent.INTENT_EXECUTE_PROBE_POINT
-            or intent.intent in SAVED_PROBE_INTENTS):
+    if intent.intent in SAVED_PROBE_INTENTS:
         _required_text(intent.object_id, "Object ID")
         _required_text(intent.routine_id, "Routine ID")
         _required_text(

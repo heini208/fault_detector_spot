@@ -3,11 +3,7 @@
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
-from builtin_interfaces.msg import Time
 
-from fault_detector_spot.inspection.commands import (
-    ExecuteProbePointCommand,
-)
 from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
@@ -88,22 +84,12 @@ def repository_and_sensor(tmp_path, sensor_id="bmm150_01"):
     return objects, attachment
 
 
-def command():
-    return ExecuteProbePointCommand(
-        Time(),
+def load_session(tmp_path, sensor_id="bmm150_01"):
+    objects, attachment = repository_and_sensor(tmp_path, sensor_id)
+    session = ProbeExecutionSession.load(
         "motor_a",
         "scan",
         "point_1",
-    )
-
-
-def load_session(tmp_path, sensor_id="bmm150_01"):
-    objects, attachment = repository_and_sensor(tmp_path, sensor_id)
-    selection = command()
-    session = ProbeExecutionSession.load(
-        selection.object_id,
-        selection.routine_id,
-        selection.probe_point_id,
         objects,
         attachment,
     )

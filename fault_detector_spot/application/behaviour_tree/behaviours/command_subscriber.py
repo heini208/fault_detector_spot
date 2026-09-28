@@ -241,11 +241,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         command: SemanticCommand,
     ) -> List[ExecutionCommand]:
         command_id = command.command_id
-        if command_id == CommandID.EXECUTE_PROBE_POINT:
-            raise ValueError(
-                "execute_probe_point is unavailable until its action "
-                "server is installed"
-            )
         builder = self._combination_command_builders.get(command_id)
         if builder is not None:
             commands = builder(command)

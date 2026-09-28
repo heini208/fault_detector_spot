@@ -55,7 +55,7 @@ def test_wire_payload_does_not_duplicate_request_identity():
 def test_wire_payload_flattens_inspection_selection():
     request = CommandRequest.create(
         command=SemanticCommand(
-            command_id=CommandID.EXECUTE_PROBE_POINT,
+            command_id=CommandID.START_SENSOR_RECORDING,
             inspection=InspectionSelection(
                 object_id="pump",
                 routine_id="bearing",
