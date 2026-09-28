@@ -23,9 +23,7 @@
     close_surface.approach_slowdown_distance_m: 0.050
     close_surface.contact_search_overtravel_m: 0.005
 
-    close_surface.recovery_step_m: 0.040
     close_surface.recovery_speed_mps: 0.020
-    close_surface.maximum_recovery_steps: 20
 
     close_surface.maximum_lateral_drift_m: 0.010
     close_surface.maximum_axis_error_rad: 0.08726646259971647

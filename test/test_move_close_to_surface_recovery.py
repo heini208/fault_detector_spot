@@ -123,37 +123,44 @@ def test_nonzero_contact_starts_recovery_to_original_start():
     assert result is Status.RUNNING
     assert len(executor.probe_calls) == 1
     target = executor.probe_calls[0][0][0]
-    assert target.pose.position.x == pytest.approx(0.02)
+    assert target.pose.position.x == pytest.approx(0.0)
     assert "original pre-approach" in action.feedback_message
 
 
-def test_diagonal_recovery_step_is_bounded_by_euclidean_distance():
+def test_diagonal_recovery_targets_full_original_pose():
     executor = FakeExecutor(hand_pose=pose())
-    action = behaviour(executor=executor, recovery_step_m=0.040)
-    action._recovery_hand_pose = pose(x=0.040, y=0.040)
-    action._phase = "recovery_prepare"
+    action = behaviour(executor=executor)
+    original = pose(x=0.12, y=0.08, orientation=quaternion_from_euler("z", 0.03))
+    action._recovery_hand_pose = original
 
     result = action._update_recovery_prepare()
 
     assert result is Status.RUNNING
+    assert len(executor.probe_calls) == 1
     target = executor.probe_calls[0][0][0]
-    distance = math.sqrt(
-        target.pose.position.x ** 2
-        + target.pose.position.y ** 2
-        + target.pose.position.z ** 2
-    )
-    assert distance == pytest.approx(0.040)
-    assert target.pose.position.x == pytest.approx(
-        0.040 / math.sqrt(2.0)
-    )
-    assert target.pose.position.y == pytest.approx(
-        0.040 / math.sqrt(2.0)
-    )
+    assert target.pose == pose_data_to_pose(original)
+    assert executor.probe_calls[0][1]["speed"].linear_speed_mps == 0.020
 
 
-def test_recovery_configuration_rejects_more_than_40_mm():
-    with pytest.raises(ValueError, match="0.040 m"):
-        behaviour(recovery_step_m=0.0401)
+@pytest.mark.parametrize("remaining", [0.0, 0.02])
+def test_completed_recovery_never_starts_another_move(remaining):
+    executor = FakeExecutor(hand_pose=pose(x=0.12))
+    action = behaviour(executor=executor)
+    action._recovery_hand_pose = pose()
+    action._recovery_detail = "Unexpected contact"
+    action._update_recovery_prepare()
+    executor.probe_motion_planner.hand_pose = pose(x=remaining)
+    action._handle_recovery_update(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "completed")
+    )
+
+    result = action._update_recovery_prepare()
+
+    assert result is Status.FAILURE
+    assert len(executor.probe_calls) == 1
+    assert "Unexpected contact" in action.feedback_message
+    if remaining:
+        assert "did not reach" in action.feedback_message
 
 
 def test_rotation_distance_is_sign_invariant():

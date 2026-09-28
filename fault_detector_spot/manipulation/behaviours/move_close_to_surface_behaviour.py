@@ -61,9 +61,7 @@ class MoveCloseToSurfaceConfig:
     approach_near_speed_mps: float = 0.001
     approach_slowdown_distance_m: float = 0.050
     contact_search_overtravel_m: float = 0.005
-    recovery_step_m: float = 0.040
     recovery_speed_mps: float = 0.020
-    maximum_recovery_steps: int = 20
     maximum_lateral_drift_m: float = 0.010
     maximum_axis_error_rad: float = math.radians(5.0)
     minimum_step_progress_ratio: float = 0.25
@@ -75,7 +73,6 @@ class MoveCloseToSurfaceConfig:
         integer_fields = {
             "maximum_approach_steps",
             "minimum_surface_samples",
-            "maximum_recovery_steps",
         }
         for field in fields(cls):
             name = f"close_surface.{field.name}"
@@ -490,32 +487,22 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
                 )
             return self._fail_workflow(self._recovery_detail)
 
-        if self._recovery_steps >= self.config.maximum_recovery_steps:
+        if self._recovery_started:
             return self._fail_workflow(
-                "Surface recovery could not reach the original aligned "
-                "pre-approach pose within the recovery step limit. "
+                "Surface recovery did not reach the original pre-approach "
+                f"pose ({distance:.4f} m remaining). "
                 f"Original failure: {self._recovery_detail}"
             )
 
-        scale = min(1.0, self.config.recovery_step_m / distance)
-        target = PoseData(
-            position=Vector3Data(
-                x=current.position.x + remaining.x * scale,
-                y=current.position.y + remaining.y * scale,
-                z=current.position.z + remaining.z * scale,
-            ),
-            orientation=deepcopy(self._recovery_hand_pose.orientation),
-        )
-        self._recovery_steps += 1
+        self._recovery_started = True
         self._phase = "recovering"
         update = self.executor.probe(
-            self._pose_stamped(target),
+            self._pose_stamped(deepcopy(self._recovery_hand_pose)),
             BARE_HAND_MOTION_ID,
             speed=self._speed(self.config.recovery_speed_mps),
         )
         self.feedback_message = (
-            "Recovering to original pre-approach pose, step "
-            f"{self._recovery_steps}/{self.config.maximum_recovery_steps}"
+            "Recovering to original pre-approach pose in one movement"
         )
         return self._handle_recovery_update(update)
 
@@ -699,7 +686,7 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
         self._approach_steps = 0
         self._settle_deadline = 0.0
         self._recovery_detail = ""
-        self._recovery_steps = 0
+        self._recovery_started = False
 
     def _validate_configuration(self) -> None:
         c = self.config
@@ -718,7 +705,6 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
             c.approach_near_speed_mps,
             c.approach_slowdown_distance_m,
             c.contact_search_overtravel_m,
-            c.recovery_step_m,
             c.recovery_speed_mps,
             c.maximum_lateral_drift_m,
             c.maximum_axis_error_rad,
@@ -750,10 +736,6 @@ class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour):
             )
         if c.minimum_surface_samples < 3:
             raise ValueError("Surface sampling requires at least three samples")
-        if c.maximum_recovery_steps < 1:
-            raise ValueError("Maximum recovery steps must be positive")
-        if c.recovery_step_m > 0.040 + 1e-12:
-            raise ValueError("Surface recovery step must not exceed 0.040 m")
         if not 0.0 < c.minimum_step_progress_ratio <= 1.0:
             raise ValueError(
                 "Minimum surface-step progress ratio must be in (0, 1]"
