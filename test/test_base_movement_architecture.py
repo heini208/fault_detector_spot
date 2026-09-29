@@ -134,6 +134,10 @@ def test_base_motion_planner_owns_target_resolution():
     assert "visible_snapshot()" not in goal
     assert "self.motion_planner.resolve_relative(command)" in executor
     assert "self.motion_planner.resolve_tag(" in executor
+    assert "_movement_plan_builder" in executor
+    assert "_movement_goal_builder" not in executor
+    assert "def _build_relative_goal(" not in executor
+    assert "def _build_tag_goal(" not in executor
 
 
 def test_legacy_base_movement_behaviours_are_removed():

@@ -2,6 +2,11 @@
 
 from types import SimpleNamespace
 
+from geometry_msgs.msg import PoseStamped
+
+from fault_detector_spot.navigation.base_motion_planner import (
+    BaseMovementPlan,
+)
 from fault_detector_spot.navigation.base_movement_executor import (
     BaseMovementExecutor,
     BaseMovementOutcome,
@@ -99,6 +104,17 @@ class ManualClock:
         return self.now
 
 
+def movement_plan(executor):
+    target = PoseStamped()
+    target.header.frame_id = "odom"
+    target.pose.orientation.w = 1.0
+    return BaseMovementPlan(
+        target=target,
+        linear_speed_mps=0.1,
+        profile=executor.walking_profiles.for_move(),
+    )
+
+
 def test_stand_uses_executor_lifecycle_until_success():
     send_future = ManualFuture()
     result_future = ManualFuture()
@@ -168,18 +184,21 @@ def test_standing_relative_starts_without_stand():
     )
     command = object()
     built = []
-    executor._build_relative_goal = (
-        lambda value: built.append(value) or object()
+    plan = movement_plan(executor)
+    executor.motion_planner.resolve_relative = (
+        lambda value: built.append(value) or plan
     )
+    executor._build_absolute_base_goal = lambda value: object()
 
     update = executor.relative(command)
 
     assert update.outcome is BaseMovementOutcome.RUNNING
     assert built == [command]
+    assert executor._movement_plan is plan
     assert client.send_calls == 1
 
 
-def test_sitting_relative_stands_before_resolving_requested_goal():
+def test_sitting_relative_stands_before_resolving_requested_plan():
     stand_send_future = ManualFuture()
     stand_result_future = ManualFuture()
     client = FakeActionClient(stand_send_future)
@@ -191,10 +210,12 @@ def test_sitting_relative_stands_before_resolving_requested_goal():
     )
     command = object()
     built = []
+    plan = movement_plan(executor)
     executor._build_stand_goal = lambda: object()
-    executor._build_relative_goal = (
-        lambda value: built.append(value) or object()
+    executor.motion_planner.resolve_relative = (
+        lambda value: built.append(value) or plan
     )
+    executor._build_absolute_base_goal = lambda value: object()
 
     started = executor.relative(command)
 
@@ -224,6 +245,7 @@ def test_sitting_relative_stands_before_resolving_requested_goal():
 
     assert resumed.outcome is BaseMovementOutcome.RUNNING
     assert built == [command]
+    assert executor._movement_plan is plan
     assert client.send_calls == 2
 
 
@@ -244,8 +266,8 @@ def test_relative_reports_missing_posture_after_bounded_wait():
         ready_state_timeout_sec=2.0,
     )
     built = []
-    executor._build_relative_goal = (
-        lambda value: built.append(value) or object()
+    executor.motion_planner.resolve_relative = (
+        lambda value: built.append(value) or movement_plan(executor)
     )
 
     first = executor.relative(object())
@@ -281,7 +303,9 @@ def test_stand_confirmation_requires_reported_standing():
         ready_standing_timeout_sec=2.0,
     )
     executor._build_stand_goal = lambda: object()
-    executor._build_relative_goal = lambda command: object()
+    executor.motion_planner.resolve_relative = (
+        lambda command: movement_plan(executor)
+    )
 
     executor.relative(object())
     stand_send_future.set_result(

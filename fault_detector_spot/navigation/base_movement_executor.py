@@ -141,20 +141,23 @@ class BaseMovementExecutor(MovementExecutor):
         self._correction_attempts = 0
         self._previous_correction_error = None
         self._operation = None
-        self._movement_goal_builder = None
+        self._movement_plan_builder = None
         self._state_wait_started = None
         self._verification_started = None
 
     def relative(self, command) -> BaseMovementUpdate:
         """Start a relative SE2 base movement."""
         return self._start_verified_base_movement(
-            lambda: self._build_relative_goal(command)
+            lambda: self.motion_planner.resolve_relative(command)
         )
 
     def tag(self, command) -> BaseMovementUpdate:
         """Start an SE2 base movement relative to a live visible tag."""
         return self._start_verified_base_movement(
-            lambda: self._build_tag_goal(command)
+            lambda: self.motion_planner.resolve_tag(
+                command,
+                self.tag_state_source,
+            )
         )
 
     def stand(self) -> BaseMovementUpdate:
@@ -198,13 +201,15 @@ class BaseMovementExecutor(MovementExecutor):
 
         return self._poll_result()
 
-    def _start_verified_base_movement(self, goal_builder) -> BaseMovementUpdate:
-        """Shared relative/tag movement lifecycle with bounded endpoint correction."""
+    def _start_verified_base_movement(self, plan_builder) -> BaseMovementUpdate:
+        """Start one movement whose plan is resolved after readiness."""
         if self.active:
             return self._busy_update()
+        if not callable(plan_builder):
+            raise TypeError("Base movement requires a plan builder")
         self._active = True
         self._operation = _BaseOperation.MOVEMENT
-        self._movement_goal_builder = goal_builder
+        self._movement_plan_builder = plan_builder
         return self._advance_movement_start()
 
     def _advance_movement_start(self) -> BaseMovementUpdate:
@@ -220,16 +225,25 @@ class BaseMovementExecutor(MovementExecutor):
         return self._submit_movement_goal()
 
     def _submit_movement_goal(self) -> BaseMovementUpdate:
-        goal_builder = self._movement_goal_builder
-        if goal_builder is None:
+        plan_builder = self._movement_plan_builder
+        if plan_builder is None:
             return self._finish(
                 BaseMovementOutcome.EXECUTION_ERROR,
-                "Base movement has no pending goal builder",
+                "Base movement has no pending plan builder",
             )
 
+        def build_goal():
+            plan = plan_builder()
+            if not isinstance(plan, BaseMovementPlan):
+                raise TypeError(
+                    "Base movement plan builder must return BaseMovementPlan"
+                )
+            self._movement_plan = plan
+            return self._build_absolute_base_goal(plan)
+
         self._operation = _BaseOperation.MOVEMENT
-        self._pending_goal_builder = goal_builder
-        return self._submit_goal(goal_builder)
+        self._pending_goal_builder = build_goal
+        return self._submit_goal(build_goal)
 
     def _handle_successful_result(self, result):
         if self._operation is _BaseOperation.MOVEMENT_STAND:
@@ -392,22 +406,9 @@ class BaseMovementExecutor(MovementExecutor):
         self._correction_attempts = 0
         self._previous_correction_error = None
         self._operation = None
-        self._movement_goal_builder = None
+        self._movement_plan_builder = None
         self._state_wait_started = None
         self._verification_started = None
-
-    def _build_relative_goal(self, command) -> RobotCommand.Goal:
-        plan = self.motion_planner.resolve_relative(command)
-        self._movement_plan = plan
-        return self._build_absolute_base_goal(plan)
-
-    def _build_tag_goal(self, command) -> RobotCommand.Goal:
-        plan = self.motion_planner.resolve_tag(
-            command,
-            self.tag_state_source,
-        )
-        self._movement_plan = plan
-        return self._build_absolute_base_goal(plan)
 
     def _build_stand_goal(self) -> RobotCommand.Goal:
         command = RobotCommandBuilder.synchro_stand_command()

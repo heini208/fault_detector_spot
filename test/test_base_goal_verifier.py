@@ -93,14 +93,10 @@ def test_executor_verifies_actual_goal_and_cancellation_during_settling():
     target.header.frame_id = "odom"
     target.pose.orientation.w = 1.0
     target.pose.position.x = 1.0
+    profile = executor.walking_profiles.for_move()
+    plan = BaseMovementPlan(target, 0.1, profile)
+    executor.motion_planner.resolve_relative = lambda _: plan
 
-    def build_relative(_):
-        profile = executor.walking_profiles.for_move()
-        plan = BaseMovementPlan(target, 0.1, profile)
-        executor._movement_plan = plan
-        return executor._build_absolute_base_goal(plan)
-
-    executor._build_relative_goal = build_relative
     executor.relative(object())
     handle = FakeGoalHandle(result)
     send.set_result(handle)
@@ -113,6 +109,7 @@ def test_executor_verifies_actual_goal_and_cancellation_during_settling():
     assert executor.poll().outcome is BaseMovementOutcome.SUCCESS
     assert not executor.active
 
+    executor.motion_planner.resolve_relative = lambda _: plan
     executor.relative(object())
     executor.poll()
     assert executor.poll().outcome is BaseMovementOutcome.RUNNING
