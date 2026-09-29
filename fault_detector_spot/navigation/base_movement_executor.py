@@ -1,5 +1,6 @@
 """Centralized RobotCommand execution for Spot base movement."""
 
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 import time
@@ -25,6 +26,10 @@ from fault_detector_spot.navigation.posture_state_source import (
     PostureState,
 )
 from fault_detector_spot.navigation.walking_profile import WalkingProfiles
+from fault_detector_spot.sensing.observations.tag_observation_stability import (
+    StableTagObservationTracker,
+    TagObservationStabilityConfig,
+)
 from fault_detector_spot.shared.execution.movement_executor import (
     DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC,
     DEFAULT_RESULT_TIMEOUT_SEC,
@@ -71,6 +76,11 @@ class _BaseOperation(Enum):
     SIT = "sit"
 
 
+class _BaseTargetStrategy(Enum):
+    FROZEN_TARGET = "frozen_target"
+    FRESH_TAG_TARGET = "fresh_tag_target"
+
+
 class _BasePhase(Enum):
     IDLE = "idle"
     WAITING_FOR_POSTURE = "waiting_for_posture"
@@ -114,6 +124,7 @@ class BaseMovementExecutor(MovementExecutor):
         goal_verification_config=None,
         ros_time_sec=time.time,
         walking_profiles=None,
+        tag_stability_config=None,
     ):
         super().__init__(
             tf_listener,
@@ -141,6 +152,12 @@ class BaseMovementExecutor(MovementExecutor):
             )
 
         self.walking_profiles = walking_profiles or WalkingProfiles()
+        self.tag_stability_config = (
+            tag_stability_config or TagObservationStabilityConfig()
+        )
+        self._tag_observation_tracker = StableTagObservationTracker(
+            self.tag_stability_config
+        )
         self.motion_planner = BaseMotionPlanner(
             tf_listener,
             self.walking_profiles,
@@ -165,20 +182,26 @@ class BaseMovementExecutor(MovementExecutor):
         self._phase = _BasePhase.IDLE
         self._phase_started = None
         self._movement_plan_builder = None
+        self._target_strategy = None
+        self._semantic_tag_command = None
 
     def relative(self, command) -> BaseMovementUpdate:
         """Start a relative SE2 base movement."""
         return self._start_verified_base_movement(
-            lambda: self.motion_planner.resolve_relative(command)
+            lambda: self.motion_planner.resolve_relative(command),
+            _BaseTargetStrategy.FROZEN_TARGET,
         )
 
     def tag(self, command) -> BaseMovementUpdate:
         """Start an SE2 base movement relative to a live visible tag."""
+        semantic_command = deepcopy(command)
         return self._start_verified_base_movement(
             lambda: self.motion_planner.resolve_tag(
-                command,
+                semantic_command,
                 self.tag_state_source,
-            )
+            ),
+            _BaseTargetStrategy.FRESH_TAG_TARGET,
+            semantic_tag_command=semantic_command,
         )
 
     def stand(self) -> BaseMovementUpdate:
@@ -257,17 +280,33 @@ class BaseMovementExecutor(MovementExecutor):
     def _start_verified_base_movement(
         self,
         plan_builder,
+        target_strategy: _BaseTargetStrategy,
+        semantic_tag_command=None,
     ) -> BaseMovementUpdate:
         """Start one movement whose plan is resolved after readiness."""
         if self.active:
             return self._busy_update()
         if not callable(plan_builder):
             raise TypeError("Base movement requires a plan builder")
+        if not isinstance(target_strategy, _BaseTargetStrategy):
+            raise TypeError(
+                "Base movement requires an explicit target strategy"
+            )
+        if (
+            target_strategy is _BaseTargetStrategy.FRESH_TAG_TARGET
+            and semantic_tag_command is None
+        ):
+            raise ValueError(
+                "Fresh tag movement requires its semantic command"
+            )
 
         self.correction_policy.reset()
+        self._tag_observation_tracker.reset()
         self._active = True
         self._operation = _BaseOperation.MOVEMENT
         self._movement_plan_builder = plan_builder
+        self._target_strategy = target_strategy
+        self._semantic_tag_command = semantic_tag_command
         self._set_phase(_BasePhase.WAITING_FOR_POSTURE)
         return self._advance_movement_start()
 
@@ -352,6 +391,7 @@ class BaseMovementExecutor(MovementExecutor):
                 self.goal_verification_config,
                 self._monotonic_clock(),
             )
+            self._tag_observation_tracker.reset()
             self._set_phase(_BasePhase.VERIFYING_ENDPOINT)
             return self._poll_goal_verification()
 
@@ -374,13 +414,28 @@ class BaseMovementExecutor(MovementExecutor):
             self._ros_time_sec(),
             self._monotonic_clock(),
         )
+
+        if self._target_strategy is _BaseTargetStrategy.FRESH_TAG_TARGET:
+            if verifier.settled:
+                return self._poll_fresh_tag_target(verifier, pose)
+            if outcome is False:
+                return self._finish(
+                    BaseMovementOutcome.MOTION_FAILED,
+                    "Base did not settle before fresh tag verification; "
+                    f"{verifier.detail}",
+                )
+            return BaseMovementUpdate(
+                BaseMovementOutcome.RUNNING,
+                verifier.detail,
+            )
+
         if outcome is True:
             return self._finish(
                 BaseMovementOutcome.SUCCESS,
                 f"Base goal verified and settled; {verifier.detail}",
             )
         if outcome is False:
-            correction = self._correct_absolute_base_goal(verifier)
+            correction = self._correct_frozen_base_goal(verifier)
             if correction is not None:
                 return correction
             self._request_cancel()
@@ -393,7 +448,83 @@ class BaseMovementExecutor(MovementExecutor):
             verifier.detail,
         )
 
-    def _correct_absolute_base_goal(self, verifier):
+    def _poll_fresh_tag_target(self, verifier, pose):
+        command = self._semantic_tag_command
+        source = self.tag_state_source
+        boundary = verifier.settled_stamp
+        if command is None or boundary is None or pose is None:
+            return self._finish(
+                BaseMovementOutcome.EXECUTION_ERROR,
+                "Fresh tag correction is missing execution state",
+            )
+        lookup = getattr(source, "visible_tag_after", None)
+        if not callable(lookup):
+            return self._finish(
+                BaseMovementOutcome.EXECUTION_ERROR,
+                "Tag state source cannot provide post-settle observations",
+            )
+
+        tag_id = int(command.tag_id)
+        observation = lookup(tag_id, boundary)
+        stable = self._tag_observation_tracker.update(
+            observation,
+            boundary,
+        )
+        if stable is None:
+            return BaseMovementUpdate(
+                BaseMovementOutcome.RUNNING,
+                f"{verifier.detail}; waiting for stable post-settle "
+                f"tag {tag_id} observation",
+            )
+
+        fresh_plan = self.motion_planner.resolve_tag_observation(
+            command,
+            stable,
+        )
+        fresh_target = self.motion_planner.planar_target(fresh_plan)
+        error = BaseGoalVerifier.errors(pose, fresh_target)
+        config = self.goal_verification_config
+        if (
+            error[0] <= config.position_tolerance_m
+            and error[1] <= config.yaw_tolerance_rad
+        ):
+            return self._finish(
+                BaseMovementOutcome.SUCCESS,
+                "Fresh tag-relative target verified after settling; "
+                f"error {error[0]:.4f} m, "
+                f"{error[1]:.4f} rad",
+            )
+
+        result = self.correction_policy.decide(
+            error,
+            config.position_tolerance_m,
+            config.yaw_tolerance_rad,
+        )
+        if result.decision is not BaseCorrectionDecision.CORRECT:
+            detail = f"; {result.detail}" if result.detail else ""
+            return self._finish(
+                BaseMovementOutcome.MOTION_FAILED,
+                "Fresh tag-relative target remains outside tolerance"
+                f"{detail}",
+            )
+
+        self._goal_verifier = None
+        self._tag_observation_tracker.reset()
+        self._reset_goal_lifecycle()
+        update = self._submit_movement_plan(
+            lambda: fresh_plan,
+            _BasePhase.CORRECTING,
+        )
+        if update.outcome is BaseMovementOutcome.RUNNING:
+            return BaseMovementUpdate(
+                update.outcome,
+                "Correcting toward fresh tag-relative target, attempt "
+                f"{result.attempt}/"
+                f"{self.correction_policy.config.maximum_attempts}",
+            )
+        return update
+
+    def _correct_frozen_base_goal(self, verifier):
         """Apply correction policy and retry the current frozen plan."""
         plan = self._movement_plan
         if plan is None:
@@ -407,10 +538,7 @@ class BaseMovementExecutor(MovementExecutor):
         )
         if result.detail:
             verifier.detail += f"; {result.detail}"
-        if (
-            result.decision
-            is not BaseCorrectionDecision.CORRECT
-        ):
+        if result.decision is not BaseCorrectionDecision.CORRECT:
             return None
 
         self._goal_verifier = None
@@ -599,6 +727,9 @@ class BaseMovementExecutor(MovementExecutor):
         self._phase = _BasePhase.IDLE
         self._phase_started = None
         self._movement_plan_builder = None
+        self._target_strategy = None
+        self._semantic_tag_command = None
+        self._tag_observation_tracker.reset()
 
     def _build_stand_goal(self) -> RobotCommand.Goal:
         command = RobotCommandBuilder.synchro_stand_command()

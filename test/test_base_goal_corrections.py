@@ -1,8 +1,10 @@
 """Exercise correction lifecycle without ROS nodes or robot motion."""
 
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
+from fault_detector_msgs.msg import TagElement
 from geometry_msgs.msg import PoseStamped, TransformStamped
 
 from fault_detector_spot.navigation.base_correction_policy import (
@@ -22,6 +24,38 @@ from test_base_movement_executor import (
     ManualClock,
     ManualFuture,
 )
+
+
+class FakeTagStateSource:
+    def __init__(self, x=1.0, stamp_sec=100.0):
+        self.set_observation(x, stamp_sec)
+
+    def set_observation(self, x, stamp_sec):
+        tag = TagElement()
+        tag.id = 7
+        tag.pose.header.frame_id = "odom"
+        whole = int(stamp_sec)
+        tag.pose.header.stamp.sec = whole
+        tag.pose.header.stamp.nanosec = round(
+            (float(stamp_sec) - whole) * 1e9
+        )
+        tag.pose.pose.position.x = float(x)
+        tag.pose.pose.orientation.w = 1.0
+        self.tag = tag
+
+    def visible_snapshot(self):
+        return {7: deepcopy(self.tag)}
+
+    def visible_tag_after(self, tag_id, boundary):
+        if int(tag_id) != 7:
+            return None
+        stamp = (
+            float(self.tag.pose.header.stamp.sec)
+            + float(self.tag.pose.header.stamp.nanosec) * 1e-9
+        )
+        if stamp <= float(boundary):
+            return None
+        return deepcopy(self.tag)
 
 
 class Client:
@@ -52,6 +86,7 @@ def make_movement(kind="relative", correction_config=None):
     target.header.frame_id = "odom"
     target.pose.orientation.w = 1.0
     target.pose.position.x = 1.0
+    tag_state_source = FakeTagStateSource()
     executor = BaseMovementExecutor(
         tf_listener=SimpleNamespace(
             lookup_a_tform_b=lambda *a, **k: transform
@@ -62,11 +97,7 @@ def make_movement(kind="relative", correction_config=None):
         posture_state_source=FakePostureStateSource(
             PostureState.STANDING
         ),
-        tag_state_source=SimpleNamespace(
-            visible_snapshot=lambda: {
-                7: SimpleNamespace(pose=target)
-            }
-        ),
+        tag_state_source=tag_state_source,
         correction_policy=BaseCorrectionPolicy(
             correction_config or BaseCorrectionConfig()
         ),
@@ -77,11 +108,24 @@ def make_movement(kind="relative", correction_config=None):
         resolutions.append(1)
         return target
 
-    command = SimpleNamespace(
-        tag_id=7,
-        compute_goal_pose=resolve,
-        walking_profile="precision",
-    )
+    if kind == "tag":
+        class TagCommand:
+            tag_id = 7
+            walking_profile = "precision"
+
+            def __init__(self):
+                self.tag_pose = PoseStamped()
+
+            def compute_goal_pose(self, _):
+                resolutions.append(1)
+                return deepcopy(self.tag_pose)
+
+        command = TagCommand()
+    else:
+        command = SimpleNamespace(
+            compute_goal_pose=resolve,
+            walking_profile="precision",
+        )
     getattr(executor, kind)(command)
 
     def poll_at(x, advance=0, fresh=True):
@@ -107,9 +151,8 @@ def make_movement(kind="relative", correction_config=None):
     return executor, client, resolutions, poll_at, complete
 
 
-@pytest.mark.parametrize("kind", ["relative", "tag"])
-def test_retries_same_absolute_goal_and_profile_then_succeeds(kind):
-    executor, client, resolutions, poll, complete = make_movement(kind)
+def test_relative_retry_reuses_same_absolute_goal_and_profile():
+    executor, client, resolutions, poll, complete = make_movement("relative")
     complete(0.8)
     assert poll(0.8, 5).outcome is BaseMovementOutcome.RUNNING
     assert len(client.goals) == 2
@@ -118,6 +161,26 @@ def test_retries_same_absolute_goal_and_profile_then_succeeds(kind):
     complete(1.0)
     assert poll(1.0, 0.6).outcome is BaseMovementOutcome.SUCCESS
     assert not executor.active
+
+
+def test_tag_correction_replans_from_stable_post_settle_observation():
+    executor, client, resolutions, poll, complete = make_movement("tag")
+
+    complete(0.8)
+    executor.tag_state_source.set_observation(1.1, 100.7)
+    assert poll(0.8, 0.6).outcome is BaseMovementOutcome.RUNNING
+
+    executor.tag_state_source.set_observation(1.1, 100.8)
+    assert poll(0.8, 0.1).outcome is BaseMovementOutcome.RUNNING
+
+    executor.tag_state_source.set_observation(1.1, 100.9)
+    update = poll(0.8, 0.1)
+
+    assert update.outcome is BaseMovementOutcome.RUNNING
+    assert "fresh tag-relative target" in update.detail
+    assert len(client.goals) == 2
+    assert len(resolutions) == 2
+    assert executor._movement_plan.target.pose.position.x == pytest.approx(1.1)
 
 
 def test_two_correction_attempts_then_failure():

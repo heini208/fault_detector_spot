@@ -146,6 +146,8 @@ def test_base_motion_planner_owns_target_resolution():
     assert "visible_snapshot()" not in goal
     assert "self.motion_planner.resolve_relative(command)" in executor
     assert "self.motion_planner.resolve_tag(" in executor
+    assert "self.motion_planner.resolve_tag_observation(" in executor
+    assert "def resolve_tag_observation(" in planner
     assert "_movement_plan_builder" in executor
     assert "_movement_goal_builder" not in executor
     assert "def _build_relative_goal(" not in executor
@@ -190,6 +192,7 @@ def test_correction_policy_owns_retry_decisions():
     assert "_correction_attempts" not in executor
     assert "_previous_correction_error" not in executor
     assert "self.correction_policy.decide(" in executor
+    assert "RETRY_FROZEN_PLAN" not in policy
 
 
 def test_base_executor_uses_explicit_execution_phases():
@@ -205,6 +208,8 @@ def test_base_executor_uses_explicit_execution_phases():
     assert "VERIFYING_ENDPOINT" in executor
     assert "CORRECTING" in executor
     assert "CANCELLING" in executor
+    assert "FROZEN_TARGET" in executor
+    assert "FRESH_TAG_TARGET" in executor
     assert "EXECUTING_SIT" in executor
     assert "MOVEMENT_STAND" not in executor
     assert "_verification_started" not in executor
@@ -235,7 +240,7 @@ def test_direct_planar_moves_share_one_submission_choke_point():
         1,
     )[0]
     correction = executor.split(
-        "def _correct_absolute_base_goal",
+        "def _correct_frozen_base_goal",
         1,
     )[1].split(
         "def _poll_standing_confirmation",
