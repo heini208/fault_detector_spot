@@ -72,7 +72,10 @@ def test_profile_reaches_native_mobility_command(
     else:
         plan = executor.motion_planner.resolve_relative(command)
 
-    goal = executor._build_absolute_base_goal(plan)
+    goal = executor.motion_planner.build_goal(
+        plan,
+        executor.robot_name,
+    )
     native = robot_command_pb2.RobotCommand()
     convert(goal.command, native)
     mobility = native.synchronized_command.mobility_command

@@ -188,7 +188,7 @@ def test_standing_relative_starts_without_stand():
     executor.motion_planner.resolve_relative = (
         lambda value: built.append(value) or plan
     )
-    executor._build_absolute_base_goal = lambda value: object()
+    executor.motion_planner.build_goal = lambda value, robot_name="": object()
 
     update = executor.relative(command)
 
@@ -215,7 +215,7 @@ def test_sitting_relative_stands_before_resolving_requested_plan():
     executor.motion_planner.resolve_relative = (
         lambda value: built.append(value) or plan
     )
-    executor._build_absolute_base_goal = lambda value: object()
+    executor.motion_planner.build_goal = lambda value, robot_name="": object()
 
     started = executor.relative(command)
 

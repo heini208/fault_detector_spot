@@ -2,20 +2,12 @@
 
 from dataclasses import dataclass
 from enum import Enum
-import math
 import time
 
-from bosdyn.api.geometry_pb2 import SE2VelocityLimit
-from bosdyn.client import math_helpers
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_spot_api_msgs.conversions import convert
 from spot_msgs.action import RobotCommand
-from synchros2.utilities import namespace_with
 
-from fault_detector_spot.inspection.geometry.rotation import (
-    quaternion_to_rpy,
-)
-from fault_detector_spot.inspection.model.models import QuaternionData
 from fault_detector_spot.navigation.base_correction_policy import (
     BaseCorrectionDecision,
     BaseCorrectionPolicy,
@@ -32,10 +24,7 @@ from fault_detector_spot.navigation.base_pose_source import BasePoseSource
 from fault_detector_spot.navigation.posture_state_source import (
     PostureState,
 )
-from fault_detector_spot.navigation.walking_profile import (
-    GAITS,
-    WalkingProfiles,
-)
+from fault_detector_spot.navigation.walking_profile import WalkingProfiles
 from fault_detector_spot.shared.execution.movement_executor import (
     DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC,
     DEFAULT_RESULT_TIMEOUT_SEC,
@@ -330,7 +319,10 @@ class BaseMovementExecutor(MovementExecutor):
                     "Base movement plan builder must return BaseMovementPlan"
                 )
             self._movement_plan = plan
-            return self._build_absolute_base_goal(plan)
+            return self.motion_planner.build_goal(
+                plan,
+                self.robot_name,
+            )
 
         self._set_phase(phase)
         self._pending_goal_builder = build_goal
@@ -356,7 +348,7 @@ class BaseMovementExecutor(MovementExecutor):
                     "Base movement has no plan for endpoint verification",
                 )
             self._goal_verifier = BaseGoalVerifier(
-                self._planar_target(plan),
+                self.motion_planner.planar_target(plan),
                 self.goal_verification_config,
                 self._monotonic_clock(),
             )
@@ -620,69 +612,6 @@ class BaseMovementExecutor(MovementExecutor):
         convert(command, goal.command)
         return goal
 
-    @staticmethod
-    def _planar_target(plan: BaseMovementPlan):
-        target = plan.target
-        orientation = target.pose.orientation
-        _, _, yaw = quaternion_to_rpy(
-            QuaternionData(
-                x=float(orientation.x),
-                y=float(orientation.y),
-                z=float(orientation.z),
-                w=float(orientation.w),
-            )
-        )
-        return (
-            target.pose.position.x,
-            target.pose.position.y,
-            yaw,
-        )
-
-    def _build_absolute_base_goal(
-        self,
-        plan: BaseMovementPlan,
-    ) -> RobotCommand.Goal:
-        if not isinstance(plan, BaseMovementPlan):
-            raise TypeError(
-                "Absolute base goal requires a BaseMovementPlan"
-            )
-
-        target = plan.target
-        x, y, yaw = self._planar_target(plan)
-        profile = plan.profile
-        speed = float(plan.linear_speed_mps)
-        velocity_limit = SE2VelocityLimit(
-            max_vel=math_helpers.SE2Velocity(
-                speed,
-                speed,
-                profile.angular_speed_rad_s,
-            ).to_proto(),
-            min_vel=math_helpers.SE2Velocity(
-                -speed,
-                -speed,
-                -profile.angular_speed_rad_s,
-            ).to_proto(),
-        )
-        params = RobotCommandBuilder.mobility_params(
-            locomotion_hint=GAITS[profile.gait],
-        )
-        params.vel_limit.CopyFrom(velocity_limit)
-
-        command = (
-            RobotCommandBuilder.synchro_se2_trajectory_point_command(
-                goal_x=x,
-                goal_y=y,
-                goal_heading=yaw,
-                frame_name=namespace_with(
-                    self.robot_name,
-                    target.header.frame_id,
-                ),
-                params=params,
-            )
-        )
-        goal = RobotCommand.Goal()
-        convert(command, goal.command)
-        return goal
 
 
 __all__ = [

@@ -3,11 +3,23 @@
 from copy import deepcopy
 from dataclasses import dataclass
 
+from bosdyn.api.geometry_pb2 import SE2VelocityLimit
+from bosdyn.client import math_helpers
 from bosdyn.client.frame_helpers import ODOM_FRAME_NAME
+from bosdyn.client.robot_command import RobotCommandBuilder
+from bosdyn_spot_api_msgs.conversions import convert
 from geometry_msgs.msg import PoseStamped
+from spot_msgs.action import RobotCommand
+from synchros2.utilities import namespace_with
 from tf2_geometry_msgs import do_transform_pose_stamped
 
+from fault_detector_spot.inspection.geometry.rotation import (
+    quaternion_to_rpy,
+)
+from fault_detector_spot.inspection.model.models import QuaternionData
+
 from fault_detector_spot.navigation.walking_profile import (
+    GAITS,
     WalkingProfile,
     WalkingProfiles,
 )
@@ -111,6 +123,76 @@ class BaseMotionPlanner:
             linear_speed_mps=profile.tag_speed_mps,
             profile=profile,
         )
+
+    @staticmethod
+    def planar_target(plan: BaseMovementPlan):
+        if not isinstance(plan, BaseMovementPlan):
+            raise TypeError(
+                "Planar base target requires a BaseMovementPlan"
+            )
+
+        target = plan.target
+        orientation = target.pose.orientation
+        _, _, yaw = quaternion_to_rpy(
+            QuaternionData(
+                x=float(orientation.x),
+                y=float(orientation.y),
+                z=float(orientation.z),
+                w=float(orientation.w),
+            )
+        )
+        return (
+            target.pose.position.x,
+            target.pose.position.y,
+            yaw,
+        )
+
+    def build_goal(
+        self,
+        plan: BaseMovementPlan,
+        robot_name: str = "",
+    ) -> RobotCommand.Goal:
+        if not isinstance(plan, BaseMovementPlan):
+            raise TypeError(
+                "Base goal construction requires a BaseMovementPlan"
+            )
+
+        target = plan.target
+        x, y, yaw = self.planar_target(plan)
+        profile = plan.profile
+        speed = float(plan.linear_speed_mps)
+        velocity_limit = SE2VelocityLimit(
+            max_vel=math_helpers.SE2Velocity(
+                speed,
+                speed,
+                profile.angular_speed_rad_s,
+            ).to_proto(),
+            min_vel=math_helpers.SE2Velocity(
+                -speed,
+                -speed,
+                -profile.angular_speed_rad_s,
+            ).to_proto(),
+        )
+        params = RobotCommandBuilder.mobility_params(
+            locomotion_hint=GAITS[profile.gait],
+        )
+        params.vel_limit.CopyFrom(velocity_limit)
+
+        command = (
+            RobotCommandBuilder.synchro_se2_trajectory_point_command(
+                goal_x=x,
+                goal_y=y,
+                goal_heading=yaw,
+                frame_name=namespace_with(
+                    robot_name,
+                    target.header.frame_id,
+                ),
+                params=params,
+            )
+        )
+        goal = RobotCommand.Goal()
+        convert(command, goal.command)
+        return goal
 
     def normalize_target(self, target: PoseStamped) -> PoseStamped:
         if not isinstance(target, PoseStamped):

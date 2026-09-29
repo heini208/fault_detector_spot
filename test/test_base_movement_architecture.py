@@ -83,12 +83,15 @@ def test_base_behaviours_only_delegate_to_shared_executor():
     assert "RobotCommandBuilder" not in sit
 
 
-def test_base_executor_inherits_lifecycle_and_owns_goal_building():
+def test_base_executor_inherits_lifecycle_and_planner_builds_planar_goals():
     shared = read(
         "fault_detector_spot/shared/execution/movement_executor.py"
     )
     executor = read(
         "fault_detector_spot/navigation/base_movement_executor.py"
+    )
+    planner = read(
+        "fault_detector_spot/navigation/base_motion_planner.py"
     )
 
     assert "class BaseMovementExecutor(MovementExecutor)" in executor
@@ -103,8 +106,14 @@ def test_base_executor_inherits_lifecycle_and_owns_goal_building():
     assert "RobotCommandBuilder.synchro_sit_command()" in executor
     assert (
         "RobotCommandBuilder.synchro_se2_trajectory_point_command("
-        in executor
+        in planner
     )
+    assert (
+        "RobotCommandBuilder.synchro_se2_trajectory_point_command("
+        not in executor
+    )
+    assert "SE2VelocityLimit" in planner
+    assert "SE2VelocityLimit" not in executor
     assert "def relative(" in executor
     assert "def tag(" in executor
     assert "def stand(" in executor
@@ -127,6 +136,8 @@ def test_base_motion_planner_owns_target_resolution():
     assert "def resolve_relative(" in planner
     assert "def resolve_tag(" in planner
     assert "def normalize_target(" in planner
+    assert "def planar_target(" in planner
+    assert "def build_goal(" in planner
     assert "visible_snapshot()" in planner
     assert "do_transform_pose_stamped(" in planner
     assert "visible_snapshot()" not in executor
@@ -191,6 +202,7 @@ def test_base_executor_uses_explicit_execution_phases():
     assert "EXECUTING_MOVEMENT" in executor
     assert "VERIFYING_ENDPOINT" in executor
     assert "CORRECTING" in executor
+    assert "CANCELLING" in executor
     assert "EXECUTING_SIT" in executor
     assert "MOVEMENT_STAND" not in executor
     assert "_verification_started" not in executor
@@ -230,10 +242,9 @@ def test_direct_planar_moves_share_one_submission_choke_point():
 
     assert "self._submit_movement_plan(" in initial
     assert "self._submit_movement_plan(" in correction
-    assert "_build_absolute_base_goal(plan)" in submission
+    assert "self.motion_planner.build_goal(" in submission
     assert "self._submit_goal(build_goal)" in submission
-    assert "_build_absolute_base_goal(plan)" not in initial
-    assert "_build_absolute_base_goal(plan)" not in correction
+    assert "_build_absolute_base_goal" not in executor
     assert "self._submit_goal(" not in correction
 
 
