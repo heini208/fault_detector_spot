@@ -8,8 +8,13 @@ from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
 from bosdyn_spot_api_msgs.conversions import convert
 from geometry_msgs.msg import PoseStamped
 
-from fault_detector_spot.navigation.base_movement_executor import BaseMovementExecutor
-from fault_detector_spot.navigation.walking_profile import WalkingProfile, WalkingProfiles
+from fault_detector_spot.navigation.base_movement_executor import (
+    BaseMovementExecutor,
+)
+from fault_detector_spot.navigation.walking_profile import (
+    WalkingProfile,
+    WalkingProfiles,
+)
 
 
 @pytest.mark.parametrize("name,tag_relative,speed,angular,gait", [
@@ -19,25 +24,55 @@ from fault_detector_spot.navigation.walking_profile import WalkingProfile, Walki
     ("precision", True, 0.05, 0.10, spot_command_pb2.HINT_SPEED_SELECT_CRAWL),
 ])
 @pytest.mark.parametrize("per_command", [False, True])
-def test_profile_reaches_native_mobility_command(name, tag_relative, speed, angular, gait, per_command):
+def test_profile_reaches_native_mobility_command(
+    name,
+    tag_relative,
+    speed,
+    angular,
+    gait,
+    per_command,
+):
     target = PoseStamped()
     target.header.frame_id = "odom"
     target.pose.orientation.w = 1.0
     target.pose.position.x = 0.4
     profiles = WalkingProfiles(
-        relative_profile=name if not tag_relative and not per_command else "normal",
-        tag_profile=name if tag_relative and not per_command else "normal",
+        relative_profile=(
+            name
+            if not tag_relative and not per_command
+            else "normal"
+        ),
+        tag_profile=(
+            name
+            if tag_relative and not per_command
+            else "normal"
+        ),
+    )
+    tag_state_source = SimpleNamespace(
+        visible_snapshot=lambda: {
+            7: SimpleNamespace(pose=target)
+        }
     )
     executor = BaseMovementExecutor(
-        tf_listener=object(), walking_profiles=profiles,
-        tag_state_source=SimpleNamespace(visible_snapshot=lambda: {7: SimpleNamespace(pose=target)}),
+        tf_listener=object(),
+        walking_profiles=profiles,
+        tag_state_source=tag_state_source,
     )
-    executor._prepare_move_command = lambda command, frame: command
     command = SimpleNamespace(
-        tag_id=7, compute_goal_pose=lambda _: target,
+        tag_id=7,
+        compute_goal_pose=lambda _: target,
         walking_profile=name if per_command else "",
     )
-    goal = executor._build_tag_goal(command) if tag_relative else executor._build_relative_goal(command)
+
+    if tag_relative:
+        plan = executor.motion_planner.resolve_tag(
+            command,
+            tag_state_source,
+        )
+    else:
+        plan = executor.motion_planner.resolve_relative(command)
+
+    goal = executor._build_absolute_base_goal(plan)
     native = robot_command_pb2.RobotCommand()
     convert(goal.command, native)
     mobility = native.synchronized_command.mobility_command
@@ -50,11 +85,15 @@ def test_profile_reaches_native_mobility_command(name, tag_relative, speed, angu
     assert params.vel_limit.min_vel.linear.y == pytest.approx(-speed)
     assert params.vel_limit.max_vel.angular == pytest.approx(angular)
     assert params.vel_limit.min_vel.angular == pytest.approx(-angular)
-    assert mobility.se2_trajectory_request.trajectory.points[0].pose.position.x == pytest.approx(0.4)
+    assert (
+        mobility.se2_trajectory_request.trajectory.points[0]
+        .pose.position.x
+        == pytest.approx(0.4)
+    )
     assert not params.obstacle_params.disable_vision_body_obstacle_avoidance
 
 
-@pytest.mark.parametrize("speed", [0, -1, float('nan'), float('inf')])
+@pytest.mark.parametrize("speed", [0, -1, float("nan"), float("inf")])
 def test_invalid_speeds_fail_configuration(speed):
     with pytest.raises(ValueError):
         WalkingProfile(relative_speed_mps=speed)

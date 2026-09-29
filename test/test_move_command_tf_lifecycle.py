@@ -51,7 +51,9 @@ def test_behavior_tree_uses_one_robot_command_resource_owner():
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "helper_initializer.py"
     )
-    runner = _read("fault_detector_spot/application/behaviour_tree/runner.py")
+    runner = _read(
+        "fault_detector_spot/application/behaviour_tree/runner.py"
+    )
     assert resources.count("ActionClientWrapper(") == 1
     assert resources.count("TFListenerWrapper(") == 1
     assert "get_arm_movement_executor(" in resources
@@ -118,7 +120,7 @@ def test_move_goal_tf_lookups_are_nonblocking():
         "fault_detector_spot/application/behaviour_tree/commands/"
         "move_to_tag_command.py",
         "fault_detector_spot/manipulation/probe_motion_planner.py",
-        "fault_detector_spot/navigation/base_movement_executor.py",
+        "fault_detector_spot/navigation/base_motion_planner.py",
     )
     for path in paths:
         source = _read(path)

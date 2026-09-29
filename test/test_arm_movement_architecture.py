@@ -220,6 +220,9 @@ def test_probe_planner_owns_live_arm_geometry_preparation():
     planner = read(
         "fault_detector_spot/manipulation/probe_motion_planner.py"
     )
+    base_planner = read(
+        "fault_detector_spot/navigation/base_motion_planner.py"
+    )
     base = read(
         "fault_detector_spot/navigation/base_movement_executor.py"
     )
@@ -229,4 +232,6 @@ def test_probe_planner_owns_live_arm_geometry_preparation():
     assert "def resolve_and_transform_offset_if_tag(" in geometry
     assert "MovementGeometryResolver(" in planner
     assert "prepare_move_command(" in planner
-    assert "_prepare_move_command(" in base
+    assert "MovementGeometryResolver(" in base_planner
+    assert "prepare_move_command(" in base_planner
+    assert "_prepare_move_command(" not in base
