@@ -272,6 +272,28 @@ class BaseMovementExecutor(MovementExecutor):
                 BaseMovementOutcome.EXECUTION_ERROR,
                 "Base movement has no pending plan builder",
             )
+        return self._submit_movement_plan(
+            plan_builder,
+            _BasePhase.EXECUTING_MOVEMENT,
+        )
+
+    def _submit_movement_plan(
+        self,
+        plan_builder,
+        phase: _BasePhase,
+    ) -> BaseMovementUpdate:
+        """Resolve and submit one direct planar movement plan."""
+        if not callable(plan_builder):
+            raise TypeError(
+                "Base movement plan submission requires a plan builder"
+            )
+        if phase not in {
+            _BasePhase.EXECUTING_MOVEMENT,
+            _BasePhase.CORRECTING,
+        }:
+            raise ValueError(
+                "Base movement plan submission requires an execution phase"
+            )
 
         def build_goal():
             plan = plan_builder()
@@ -282,7 +304,7 @@ class BaseMovementExecutor(MovementExecutor):
             self._movement_plan = plan
             return self._build_absolute_base_goal(plan)
 
-        self._set_phase(_BasePhase.EXECUTING_MOVEMENT)
+        self._set_phase(phase)
         self._pending_goal_builder = build_goal
         return self._submit_goal(build_goal)
 
@@ -373,9 +395,9 @@ class BaseMovementExecutor(MovementExecutor):
 
         self._goal_verifier = None
         self._reset_goal_lifecycle()
-        self._set_phase(_BasePhase.CORRECTING)
-        update = self._submit_goal(
-            lambda: self._build_absolute_base_goal(plan)
+        update = self._submit_movement_plan(
+            lambda: plan,
+            _BasePhase.CORRECTING,
         )
         if update.outcome is BaseMovementOutcome.RUNNING:
             return BaseMovementUpdate(

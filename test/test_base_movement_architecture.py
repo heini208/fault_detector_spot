@@ -199,6 +199,34 @@ def test_base_executor_uses_explicit_execution_phases():
     assert "if self._goal_verifier is not None:" not in executor
 
 
+def test_direct_planar_moves_share_one_submission_choke_point():
+    executor = read(
+        "fault_detector_spot/navigation/base_movement_executor.py"
+    )
+
+    assert "def _submit_movement_plan(" in executor
+    assert executor.count("self._submit_movement_plan(") == 2
+
+    initial = executor.split(
+        "def _submit_movement_goal",
+        1,
+    )[1].split(
+        "def _submit_movement_plan",
+        1,
+    )[0]
+    correction = executor.split(
+        "def _correct_absolute_base_goal",
+        1,
+    )[1].split(
+        "def _poll_standing_confirmation",
+        1,
+    )[0]
+
+    assert "self._submit_movement_plan(" in initial
+    assert "self._submit_movement_plan(" in correction
+    assert "self._submit_goal(" not in correction
+
+
 def test_legacy_base_movement_behaviours_are_removed():
     legacy = (
         "fault_detector_spot/application/behaviour_tree/behaviours/"
