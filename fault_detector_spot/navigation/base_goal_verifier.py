@@ -45,7 +45,7 @@ class BaseGoalVerificationConfig:
 
 
 class BaseGoalVerifier:
-    """Require fresh, stable samples inside the requested goal tolerance."""
+    """Track physical settling independently from requested goal accuracy."""
 
     def __init__(self, target, config, started_at):
         if len(target) != 3 or not all(
@@ -62,6 +62,9 @@ class BaseGoalVerifier:
         self.last_stamp = None
         self.detail = "Waiting for measured base pose"
         self.current_error = None
+        self.within_tolerance = None
+        self.settled = False
+        self.settled_stamp = None
 
     @staticmethod
     def errors(first, second):
@@ -86,8 +89,7 @@ class BaseGoalVerifier:
             and stamp is not None
             and stamp < self.last_stamp
         ):
-            self.stable_since = None
-            self.anchor = None
+            self._reset_settling()
 
         fresh = (
             pose is not None
@@ -99,23 +101,22 @@ class BaseGoalVerifier:
             and 0 <= ros_now - stamp <= c.maximum_pose_age_sec
         )
         if not fresh:
-            self.stable_since = None
-            self.anchor = None
+            self._reset_settling()
+            self.within_tolerance = None
             self.detail = "Base pose unavailable or stale"
         else:
             position, yaw = self.errors(pose, self.target)
             self.current_error = (position, yaw)
+            self.within_tolerance = (
+                position <= c.position_tolerance_m
+                and yaw <= c.yaw_tolerance_rad
+            )
             self.detail = (
                 f"Base goal error: {position:.4f} m, "
                 f"{math.degrees(yaw):.2f} deg"
             )
-            if (
-                position > c.position_tolerance_m
-                or yaw > c.yaw_tolerance_rad
-            ):
-                self.stable_since = None
-                self.anchor = None
-            elif self.last_stamp is None or stamp > self.last_stamp:
+
+            if self.last_stamp is None or stamp > self.last_stamp:
                 drift = (
                     self.errors(pose, self.anchor)
                     if self.anchor
@@ -127,16 +128,34 @@ class BaseGoalVerifier:
                 ):
                     self.anchor = pose
                     self.stable_since = now
+                    self.settled = False
+                    self.settled_stamp = None
                 elif (
-                    now - self.stable_since >= c.settle_sec
+                    self.stable_since is not None
+                    and now - self.stable_since >= c.settle_sec
+                ):
+                    if not self.settled:
+                        self.settled = True
+                        self.settled_stamp = stamp
+                self.last_stamp = stamp
+
+            if self.settled:
+                self.detail += "; base settled"
+                if (
+                    self.within_tolerance
                     and now - self.started_at < c.timeout_sec
                 ):
                     return True
-            self.last_stamp = stamp
 
         if now - self.started_at >= c.timeout_sec:
             return False
         return None
+
+    def _reset_settling(self) -> None:
+        self.stable_since = None
+        self.anchor = None
+        self.settled = False
+        self.settled_stamp = None
 
 
 __all__ = [

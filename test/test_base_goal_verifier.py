@@ -27,6 +27,33 @@ def test_goal_error_does_not_succeed_even_after_action_success():
     assert "0.1000 m" in check.detail
 
 
+def test_settling_is_independent_of_goal_accuracy():
+    check = verifier()
+
+    assert check.update((0.1, 0, 0), 10, 10, 0) is None
+    assert check.within_tolerance is False
+    assert not check.settled
+
+    assert check.update((0.1, 0, 0), 10.6, 10.6, 0.6) is None
+    assert check.within_tolerance is False
+    assert check.settled
+    assert check.settled_stamp == pytest.approx(10.6)
+    assert "base settled" in check.detail
+
+
+def test_stale_pose_clears_independent_settled_state():
+    check = verifier()
+
+    check.update((0.1, 0, 0), 10, 10, 0)
+    check.update((0.1, 0, 0), 10.6, 10.6, 0.6)
+    assert check.settled
+
+    assert check.update((0.1, 0, 0), 10.6, 12, 0.7) is None
+    assert not check.settled
+    assert check.settled_stamp is None
+    assert check.within_tolerance is None
+
+
 def test_yaw_error_is_wrapped():
     check = verifier((0, 0, math.pi - 0.01))
     assert check.update((0, 0, -math.pi + 0.01), 10, 10, 0) is None
