@@ -346,6 +346,44 @@ def test_executor_rejects_second_base_operation_while_active():
     )
 
 
+def test_executor_remains_busy_while_cancellation_is_pending():
+    send_future = ManualFuture()
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future)
+    send_future.set_result(handle)
+
+    executor = BaseMovementExecutor(
+        tf_listener=object(),
+        action_client=FakeActionClient(send_future),
+    )
+    executor._build_stand_goal = lambda: object()
+
+    assert (
+        executor.stand().outcome
+        is BaseMovementOutcome.RUNNING
+    )
+    assert (
+        executor.poll().outcome
+        is BaseMovementOutcome.RUNNING
+    )
+
+    executor.cancel()
+
+    assert executor.active
+    assert (
+        executor.sit().outcome
+        is BaseMovementOutcome.BUSY
+    )
+
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=False)
+        )
+    )
+
+    assert not executor.active
+
+
 def test_cancel_retains_executor_until_goal_reaches_terminal_state():
     send_future = ManualFuture()
     result_future = ManualFuture()
