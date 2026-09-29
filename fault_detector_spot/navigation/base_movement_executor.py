@@ -394,7 +394,7 @@ class BaseMovementExecutor(MovementExecutor):
         )
 
     def _correct_absolute_base_goal(self, verifier):
-        """Apply the correction policy to the frozen movement plan."""
+        """Apply correction policy and retry the current frozen plan."""
         plan = self._movement_plan
         if plan is None:
             return None
@@ -409,7 +409,7 @@ class BaseMovementExecutor(MovementExecutor):
             verifier.detail += f"; {result.detail}"
         if (
             result.decision
-            is not BaseCorrectionDecision.RETRY_FROZEN_PLAN
+            is not BaseCorrectionDecision.CORRECT
         ):
             return None
 

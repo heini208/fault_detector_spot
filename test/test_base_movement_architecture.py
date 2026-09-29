@@ -181,7 +181,8 @@ def test_correction_policy_owns_retry_decisions():
     )
 
     assert "class BaseCorrectionPolicy:" in policy
-    assert "RETRY_FROZEN_PLAN" in policy
+    assert "CORRECT" in policy
+    assert "RETRY_FROZEN_PLAN" not in policy
     assert "maximum_attempts" in policy
     assert "minimum_progress_ratio" in policy
     assert "maximum_attempts" not in verifier

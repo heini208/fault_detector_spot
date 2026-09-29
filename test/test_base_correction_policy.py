@@ -9,7 +9,7 @@ from fault_detector_spot.navigation.base_correction_policy import (
 )
 
 
-def test_first_out_of_tolerance_error_retries_frozen_plan():
+def test_first_out_of_tolerance_error_requests_correction():
     policy = BaseCorrectionPolicy()
     result = policy.decide(
         (0.2, 0.0),
@@ -18,7 +18,7 @@ def test_first_out_of_tolerance_error_retries_frozen_plan():
     )
     assert (
         result.decision
-        is BaseCorrectionDecision.RETRY_FROZEN_PLAN
+        is BaseCorrectionDecision.CORRECT
     )
     assert result.attempt == 1
 
@@ -40,7 +40,7 @@ def test_progress_requirement_is_owned_by_policy():
     )
     assert (
         policy.decide((0.2, 0.0), 0.1, 0.1).decision
-        is BaseCorrectionDecision.RETRY_FROZEN_PLAN
+        is BaseCorrectionDecision.CORRECT
     )
     result = policy.decide((0.19, 0.0), 0.1, 0.1)
     assert result.decision is BaseCorrectionDecision.FAIL
@@ -53,7 +53,7 @@ def test_attempt_limit_is_owned_by_policy():
     )
     assert (
         policy.decide((0.2, 0.0), 0.1, 0.1).decision
-        is BaseCorrectionDecision.RETRY_FROZEN_PLAN
+        is BaseCorrectionDecision.CORRECT
     )
     result = policy.decide((0.1 + 1e-6, 0.0), 0.1, 0.1)
     assert result.decision is BaseCorrectionDecision.FAIL
@@ -68,7 +68,7 @@ def test_reset_clears_attempt_history():
     assert policy.attempts == 0
     assert (
         policy.decide((0.2, 0.0), 0.1, 0.1).decision
-        is BaseCorrectionDecision.RETRY_FROZEN_PLAN
+        is BaseCorrectionDecision.CORRECT
     )
 
 

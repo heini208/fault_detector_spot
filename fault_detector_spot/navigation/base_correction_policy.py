@@ -1,4 +1,4 @@
-"""Retry policy for measured Spot base endpoint errors."""
+"""Correction policy for measured Spot base endpoint errors."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -59,7 +59,7 @@ class BaseCorrectionConfig:
 class BaseCorrectionDecision(Enum):
     """Action selected after failed endpoint verification."""
 
-    RETRY_FROZEN_PLAN = "retry_frozen_plan"
+    CORRECT = "correct"
     FAIL = "fail"
 
 
@@ -73,7 +73,7 @@ class BaseCorrectionResult:
 
 
 class BaseCorrectionPolicy:
-    """Decide whether an inaccurate endpoint merits another frozen retry."""
+    """Decide whether an inaccurate endpoint merits correction."""
 
     def __init__(self, config=None):
         self.config = config or BaseCorrectionConfig()
@@ -150,7 +150,7 @@ class BaseCorrectionPolicy:
         self._previous_error_score = score
         self._attempts += 1
         return BaseCorrectionResult(
-            BaseCorrectionDecision.RETRY_FROZEN_PLAN,
+            BaseCorrectionDecision.CORRECT,
             attempt=self._attempts,
         )
 
