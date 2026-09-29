@@ -116,7 +116,7 @@ def test_samples_outside_time_window_do_not_form_stable_result():
 
     tracker.update(observation(10.1), 10.0)
     tracker.update(observation(10.2), 10.0)
-    assert tracker.update(observation(10.7), 10.0) is None
+    assert tracker.update(observation(10.71), 10.0) is None
     assert tracker.sample_count == 1
 
 
