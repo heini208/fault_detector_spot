@@ -143,7 +143,7 @@ def test_executor_verifies_actual_goal_and_cancellation_during_settling():
     executor.cancel()
     assert not executor.active
     assert executor._goal_verifier is None
-    assert handle.cancel_calls == 1
+    assert handle.cancel_calls == 0
 
 
 def test_late_sample_cannot_succeed_after_deadline():

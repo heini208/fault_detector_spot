@@ -198,6 +198,9 @@ def test_arm_and_base_executors_share_only_the_lifecycle_parent():
     base = read(
         "fault_detector_spot/navigation/base_movement_executor.py"
     )
+    base_planner = read(
+        "fault_detector_spot/navigation/base_motion_planner.py"
+    )
     shared = read(
         "fault_detector_spot/shared/execution/movement_executor.py"
     )
@@ -207,7 +210,8 @@ def test_arm_and_base_executors_share_only_the_lifecycle_parent():
     assert "class BaseMovementExecutor(MovementExecutor)" in base
     assert "_handle_successful_result" in arm
     assert "def build_probe_plan(" in planner
-    assert "_build_absolute_base_goal" in base
+    assert "def build_goal(" in base_planner
+    assert "_build_absolute_base_goal" not in base
 
 
 def test_probe_planner_owns_live_arm_geometry_preparation():

@@ -165,6 +165,14 @@ def test_cancel_during_correction_prevents_further_attempts():
     executor.poll()
     executor.cancel()
     assert client.handles[-1].cancel_calls == 1
+    assert executor.active
+
+    client.results[-1].set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=False)
+        )
+    )
+
     assert not executor.active
     assert executor._movement_plan is None
     assert executor.correction_policy.attempts == 0
