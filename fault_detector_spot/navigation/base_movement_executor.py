@@ -78,9 +78,19 @@ class BaseMovementUpdate:
 
 class _BaseOperation(Enum):
     MOVEMENT = "movement"
-    MOVEMENT_STAND = "movement_stand"
     STAND = "stand"
     SIT = "sit"
+
+
+class _BasePhase(Enum):
+    IDLE = "idle"
+    WAITING_FOR_POSTURE = "waiting_for_posture"
+    EXECUTING_STAND = "executing_stand"
+    CONFIRMING_STANDING = "confirming_standing"
+    EXECUTING_MOVEMENT = "executing_movement"
+    VERIFYING_ENDPOINT = "verifying_endpoint"
+    CORRECTING = "correcting"
+    EXECUTING_SIT = "executing_sit"
 
 
 class BaseMovementExecutor(MovementExecutor):
@@ -162,9 +172,9 @@ class BaseMovementExecutor(MovementExecutor):
         self._goal_verifier = None
         self._movement_plan = None
         self._operation = None
+        self._phase = _BasePhase.IDLE
+        self._phase_started = None
         self._movement_plan_builder = None
-        self._state_wait_started = None
-        self._verification_started = None
 
     def relative(self, command) -> BaseMovementUpdate:
         """Start a relative SE2 base movement."""
@@ -186,6 +196,7 @@ class BaseMovementExecutor(MovementExecutor):
         if self.active:
             return self._busy_update()
         self._operation = _BaseOperation.STAND
+        self._set_phase(_BasePhase.EXECUTING_STAND)
         return super()._start_goal(self._build_stand_goal)
 
     def sit(self) -> BaseMovementUpdate:
@@ -193,6 +204,7 @@ class BaseMovementExecutor(MovementExecutor):
         if self.active:
             return self._busy_update()
         self._operation = _BaseOperation.SIT
+        self._set_phase(_BasePhase.EXECUTING_SIT)
         return super()._start_goal(self._build_sit_goal)
 
     def poll(self) -> BaseMovementUpdate:
@@ -203,24 +215,27 @@ class BaseMovementExecutor(MovementExecutor):
                 "No base movement is active",
             )
 
-        if self._goal_verifier is not None:
-            return self._poll_goal_verification()
+        if self._phase is _BasePhase.WAITING_FOR_POSTURE:
+            return self._advance_movement_start()
 
-        if self._verification_started is not None:
+        if self._phase is _BasePhase.CONFIRMING_STANDING:
             return self._poll_standing_confirmation()
 
-        if self._send_goal_future is None:
-            if (
-                self._operation is _BaseOperation.MOVEMENT
-                and self._pending_goal_builder is None
-            ):
-                return self._advance_movement_start()
+        if self._phase is _BasePhase.VERIFYING_ENDPOINT:
+            return self._poll_goal_verification()
+
+        if self._phase in {
+            _BasePhase.EXECUTING_STAND,
+            _BasePhase.EXECUTING_MOVEMENT,
+            _BasePhase.CORRECTING,
+            _BasePhase.EXECUTING_SIT,
+        }:
             return super().poll()
 
-        if self._goal_handle is None:
-            return self._poll_goal_response()
-
-        return self._poll_result()
+        return self._finish(
+            BaseMovementOutcome.EXECUTION_ERROR,
+            f"Unexpected active base phase '{self._phase.value}'",
+        )
 
     def _start_verified_base_movement(
         self,
@@ -236,6 +251,7 @@ class BaseMovementExecutor(MovementExecutor):
         self._active = True
         self._operation = _BaseOperation.MOVEMENT
         self._movement_plan_builder = plan_builder
+        self._set_phase(_BasePhase.WAITING_FOR_POSTURE)
         return self._advance_movement_start()
 
     def _advance_movement_start(self) -> BaseMovementUpdate:
@@ -243,9 +259,8 @@ class BaseMovementExecutor(MovementExecutor):
         if state is None or state is PostureState.UNKNOWN:
             return self._wait_for_posture_state()
 
-        self._state_wait_started = None
         if state is PostureState.SITTING:
-            self._operation = _BaseOperation.MOVEMENT_STAND
+            self._set_phase(_BasePhase.EXECUTING_STAND)
             return self._submit_goal(self._build_stand_goal)
 
         return self._submit_movement_goal()
@@ -267,17 +282,23 @@ class BaseMovementExecutor(MovementExecutor):
             self._movement_plan = plan
             return self._build_absolute_base_goal(plan)
 
-        self._operation = _BaseOperation.MOVEMENT
+        self._set_phase(_BasePhase.EXECUTING_MOVEMENT)
         self._pending_goal_builder = build_goal
         return self._submit_goal(build_goal)
 
     def _handle_successful_result(self, result):
-        if self._operation is _BaseOperation.MOVEMENT_STAND:
+        if self._phase is _BasePhase.EXECUTING_STAND:
+            if self._operation is not _BaseOperation.MOVEMENT:
+                return super()._handle_successful_result(result)
+
             self._reset_goal_lifecycle()
-            self._verification_started = self._monotonic_clock()
+            self._set_phase(_BasePhase.CONFIRMING_STANDING)
             return self._poll_standing_confirmation()
 
-        if self._operation is _BaseOperation.MOVEMENT:
+        if self._phase in {
+            _BasePhase.EXECUTING_MOVEMENT,
+            _BasePhase.CORRECTING,
+        }:
             plan = self._movement_plan
             if plan is None:
                 return self._finish(
@@ -289,12 +310,19 @@ class BaseMovementExecutor(MovementExecutor):
                 self.goal_verification_config,
                 self._monotonic_clock(),
             )
+            self._set_phase(_BasePhase.VERIFYING_ENDPOINT)
             return self._poll_goal_verification()
 
         return super()._handle_successful_result(result)
 
     def _poll_goal_verification(self):
         verifier = self._goal_verifier
+        if verifier is None:
+            return self._finish(
+                BaseMovementOutcome.EXECUTION_ERROR,
+                "Base endpoint verification has no verifier",
+            )
+
         sample = self.base_pose_source.sample()
         pose = sample.planar_pose if sample is not None else None
         stamp = sample.stamp_sec if sample is not None else None
@@ -345,6 +373,7 @@ class BaseMovementExecutor(MovementExecutor):
 
         self._goal_verifier = None
         self._reset_goal_lifecycle()
+        self._set_phase(_BasePhase.CORRECTING)
         update = self._submit_goal(
             lambda: self._build_absolute_base_goal(plan)
         )
@@ -361,11 +390,10 @@ class BaseMovementExecutor(MovementExecutor):
     def _poll_standing_confirmation(self) -> BaseMovementUpdate:
         state = self._fresh_posture_state()
         if state is PostureState.STANDING:
-            self._verification_started = None
             return self._submit_movement_goal()
 
         if not self._deadline_expired(
-            self._verification_started,
+            self._phase_started,
             self.ready_standing_timeout_sec,
         ):
             return BaseMovementUpdate(
@@ -388,13 +416,9 @@ class BaseMovementExecutor(MovementExecutor):
         )
 
     def _wait_for_posture_state(self) -> BaseMovementUpdate:
-        now = self._monotonic_clock()
-        if self._state_wait_started is None:
-            self._state_wait_started = now
-
-        if (
-            now - self._state_wait_started
-            < self.ready_state_timeout_sec
+        if not self._deadline_expired(
+            self._phase_started,
+            self.ready_state_timeout_sec,
         ):
             return BaseMovementUpdate(
                 BaseMovementOutcome.RUNNING,
@@ -425,15 +449,25 @@ class BaseMovementExecutor(MovementExecutor):
             return BaseMovementOutcome.POSTURE_STATE_UNKNOWN
         return BaseMovementOutcome.POSTURE_STATE_UNKNOWN
 
+    def _set_phase(self, phase: _BasePhase) -> None:
+        if not isinstance(phase, _BasePhase):
+            raise TypeError("Base execution phase must be a _BasePhase")
+        self._phase = phase
+        self._phase_started = (
+            None
+            if phase is _BasePhase.IDLE
+            else self._monotonic_clock()
+        )
+
     def _reset_operation(self) -> None:
         super()._reset_operation()
         self.correction_policy.reset()
         self._goal_verifier = None
         self._movement_plan = None
         self._operation = None
+        self._phase = _BasePhase.IDLE
+        self._phase_started = None
         self._movement_plan_builder = None
-        self._state_wait_started = None
-        self._verification_started = None
 
     def _build_stand_goal(self) -> RobotCommand.Goal:
         command = RobotCommandBuilder.synchro_stand_command()

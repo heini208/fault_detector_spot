@@ -179,6 +179,26 @@ def test_correction_policy_owns_retry_decisions():
     assert "self.correction_policy.decide(" in executor
 
 
+def test_base_executor_uses_explicit_execution_phases():
+    executor = read(
+        "fault_detector_spot/navigation/base_movement_executor.py"
+    )
+
+    assert "class _BasePhase(Enum):" in executor
+    assert "WAITING_FOR_POSTURE" in executor
+    assert "EXECUTING_STAND" in executor
+    assert "CONFIRMING_STANDING" in executor
+    assert "EXECUTING_MOVEMENT" in executor
+    assert "VERIFYING_ENDPOINT" in executor
+    assert "CORRECTING" in executor
+    assert "EXECUTING_SIT" in executor
+    assert "MOVEMENT_STAND" not in executor
+    assert "_verification_started" not in executor
+    assert "_state_wait_started" not in executor
+    assert "if self._phase is _BasePhase.VERIFYING_ENDPOINT:" in executor
+    assert "if self._goal_verifier is not None:" not in executor
+
+
 def test_legacy_base_movement_behaviours_are_removed():
     legacy = (
         "fault_detector_spot/application/behaviour_tree/behaviours/"
