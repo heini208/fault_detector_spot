@@ -140,6 +140,23 @@ def test_base_motion_planner_owns_target_resolution():
     assert "def _build_tag_goal(" not in executor
 
 
+def test_base_pose_source_owns_measured_pose_resolution():
+    source = read(
+        "fault_detector_spot/navigation/base_pose_source.py"
+    )
+    executor = read(
+        "fault_detector_spot/navigation/base_movement_executor.py"
+    )
+
+    assert "class BasePoseSample:" in source
+    assert "class BasePoseSource:" in source
+    assert "lookup_a_tform_b(" in source
+    assert "ODOM_FRAME_NAME" in source
+    assert "BODY_FRAME_NAME" in source
+    assert "lookup_a_tform_b(" not in executor
+    assert "self.base_pose_source.sample()" in executor
+
+
 def test_legacy_base_movement_behaviours_are_removed():
     legacy = (
         "fault_detector_spot/application/behaviour_tree/behaviours/"

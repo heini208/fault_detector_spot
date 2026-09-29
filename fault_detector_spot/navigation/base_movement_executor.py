@@ -7,7 +7,6 @@ import time
 
 from bosdyn.api.geometry_pb2 import SE2VelocityLimit
 from bosdyn.client import math_helpers
-from bosdyn.client.frame_helpers import ODOM_FRAME_NAME, BODY_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_spot_api_msgs.conversions import convert
 from spot_msgs.action import RobotCommand
@@ -21,6 +20,7 @@ from fault_detector_spot.navigation.base_motion_planner import (
     BaseMotionPlanner,
     BaseMovementPlan,
 )
+from fault_detector_spot.navigation.base_pose_source import BasePoseSource
 from fault_detector_spot.navigation.posture_state_source import (
     PostureState,
 )
@@ -91,6 +91,7 @@ class BaseMovementExecutor(MovementExecutor):
         robot_name: str = "",
         action_client=None,
         posture_state_source=None,
+        base_pose_source=None,
         ready_state_timeout_sec: float = (
             DEFAULT_BASE_READY_STATE_TIMEOUT_SEC
         ),
@@ -124,6 +125,9 @@ class BaseMovementExecutor(MovementExecutor):
         self.motion_planner = BaseMotionPlanner(
             tf_listener,
             self.walking_profiles,
+        )
+        self.base_pose_source = (
+            base_pose_source or BasePoseSource(tf_listener)
         )
         self._ros_time_sec = ros_time_sec
         self.posture_state_source = posture_state_source
@@ -267,23 +271,14 @@ class BaseMovementExecutor(MovementExecutor):
 
     def _poll_goal_verification(self):
         verifier = self._goal_verifier
-        pose, stamp = None, None
-        try:
-            transform = self.tf_listener.lookup_a_tform_b(
-                ODOM_FRAME_NAME, BODY_FRAME_NAME, timeout_sec=0.0,
-            )
-            translation = transform.transform.translation
-            rotation = transform.transform.rotation
-            _, _, yaw = quaternion_to_rpy(QuaternionData(
-                x=rotation.x, y=rotation.y, z=rotation.z, w=rotation.w,
-            ))
-            pose = (translation.x, translation.y, yaw)
-            stamp = (transform.header.stamp.sec
-                     + transform.header.stamp.nanosec * 1e-9)
-        except Exception:
-            pass
+        sample = self.base_pose_source.sample()
+        pose = sample.planar_pose if sample is not None else None
+        stamp = sample.stamp_sec if sample is not None else None
         outcome = verifier.update(
-            pose, stamp, self._ros_time_sec(), self._monotonic_clock(),
+            pose,
+            stamp,
+            self._ros_time_sec(),
+            self._monotonic_clock(),
         )
         if outcome is True:
             return self._finish(
