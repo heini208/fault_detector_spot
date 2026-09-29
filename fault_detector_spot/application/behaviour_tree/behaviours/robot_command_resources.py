@@ -2,6 +2,8 @@
 
 from threading import RLock
 
+from fault_detector_spot.navigation.walking_profile import WalkingProfiles
+
 from spot_msgs.action import RobotCommand
 from synchros2.action_client import ActionClientWrapper
 from synchros2.tf_listener_wrapper import TFListenerWrapper
@@ -230,6 +232,7 @@ class RobotCommandResources:
                         BASE_READY_STANDING_TIMEOUT_PARAMETER,
                         DEFAULT_BASE_READY_STANDING_TIMEOUT_SEC,
                     ),
+                    walking_profiles=WalkingProfiles.from_node(node),
                     goal_verification_config=BaseGoalVerificationConfig.from_node(node),
                     ros_time_sec=lambda: node.get_clock().now().nanoseconds * 1e-9,
                     logger=node.get_logger(),

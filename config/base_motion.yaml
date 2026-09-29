@@ -8,3 +8,15 @@
     base.goal_verification.maximum_pose_age_sec: 0.5
     base.goal_verification.settle_position_tolerance_m: 0.005
     base.goal_verification.settle_yaw_tolerance_rad: 0.008726646259971648
+    # Select normal or precision independently for the two planar commands.
+    # Precision is an experimental slower profile, not an accuracy guarantee.
+    base.walking.relative_profile: normal
+    base.walking.tag_profile: normal
+    base.walking.normal.relative_speed_mps: 0.10
+    base.walking.normal.tag_speed_mps: 0.15
+    base.walking.normal.angular_speed_rad_s: 0.20
+    base.walking.normal.gait: auto
+    base.walking.precision.relative_speed_mps: 0.05
+    base.walking.precision.tag_speed_mps: 0.05
+    base.walking.precision.angular_speed_rad_s: 0.10
+    base.walking.precision.gait: speed_select_crawl

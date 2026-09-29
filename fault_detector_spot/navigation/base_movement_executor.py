@@ -33,6 +33,8 @@ from fault_detector_spot.navigation.base_goal_verifier import (
     BaseGoalVerifier, BaseGoalVerificationConfig,
 )
 
+from fault_detector_spot.navigation.walking_profile import GAITS, WalkingProfiles
+
 BASE_READY_STATE_TIMEOUT_PARAMETER = "base.ready_state_timeout_sec"
 BASE_READY_STANDING_TIMEOUT_PARAMETER = (
     "base.ready_standing_timeout_sec"
@@ -40,10 +42,6 @@ BASE_READY_STANDING_TIMEOUT_PARAMETER = (
 
 DEFAULT_BASE_READY_STATE_TIMEOUT_SEC = 2.0
 DEFAULT_BASE_READY_STANDING_TIMEOUT_SEC = 2.0
-
-RELATIVE_LINEAR_SPEED_MPS = 0.10
-TAG_LINEAR_SPEED_MPS = 0.15
-ANGULAR_SPEED_RAD_S = 0.20
 
 
 class BaseMovementOutcome(Enum):
@@ -106,6 +104,7 @@ class BaseMovementExecutor(MovementExecutor):
         logger=None,
         goal_verification_config=None,
         ros_time_sec=time.time,
+        walking_profiles=None,
     ):
         super().__init__(
             tf_listener,
@@ -120,6 +119,7 @@ class BaseMovementExecutor(MovementExecutor):
         self.goal_verification_config = (
             goal_verification_config or BaseGoalVerificationConfig()
         )
+        self.walking_profiles = walking_profiles or WalkingProfiles()
         self._ros_time_sec = ros_time_sec
         self.posture_state_source = posture_state_source
         self.ready_state_timeout_sec = self._positive_timeout(
@@ -363,7 +363,8 @@ class BaseMovementExecutor(MovementExecutor):
         target = self._normalize_to_odom(target)
         return self._build_se2_goal(
             target,
-            RELATIVE_LINEAR_SPEED_MPS,
+            self.walking_profiles.for_move().relative_speed_mps,
+            profile=self.walking_profiles.for_move(),
         )
 
     def _build_tag_goal(self, command) -> RobotCommand.Goal:
@@ -396,7 +397,8 @@ class BaseMovementExecutor(MovementExecutor):
         target = self._normalize_to_odom(target)
         return self._build_se2_goal(
             target,
-            TAG_LINEAR_SPEED_MPS,
+            self.walking_profiles.for_move(True).tag_speed_mps,
+            profile=self.walking_profiles.for_move(True),
         )
 
     def _build_stand_goal(self) -> RobotCommand.Goal:
@@ -441,6 +443,7 @@ class BaseMovementExecutor(MovementExecutor):
         self,
         target: PoseStamped,
         linear_speed_mps: float,
+        profile=None,
     ) -> RobotCommand.Goal:
         orientation = target.pose.orientation
         _, _, yaw = quaternion_to_rpy(
@@ -453,20 +456,23 @@ class BaseMovementExecutor(MovementExecutor):
         )
 
         self._target_pose = (target.pose.position.x, target.pose.position.y, yaw)
+        profile = profile or self.walking_profiles.for_move()
         speed = float(linear_speed_mps)
         velocity_limit = SE2VelocityLimit(
             max_vel=math_helpers.SE2Velocity(
                 speed,
                 speed,
-                ANGULAR_SPEED_RAD_S,
+                profile.angular_speed_rad_s,
             ).to_proto(),
             min_vel=math_helpers.SE2Velocity(
                 -speed,
                 -speed,
-                -ANGULAR_SPEED_RAD_S,
+                -profile.angular_speed_rad_s,
             ).to_proto(),
         )
-        params = RobotCommandBuilder.mobility_params()
+        params = RobotCommandBuilder.mobility_params(
+            locomotion_hint=GAITS[profile.gait],
+        )
         params.vel_limit.CopyFrom(velocity_limit)
 
         command = (
