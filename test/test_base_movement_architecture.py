@@ -205,6 +205,7 @@ def test_base_executor_uses_explicit_execution_phases():
     assert "CONFIRMING_STANDING" in executor
     assert "EXECUTING_MOVEMENT" in executor
     assert "VERIFYING_ENDPOINT" in executor
+    assert "WAITING_FOR_FRESH_TAG" in executor
     assert "CORRECTING" in executor
     assert "CANCELLING" in executor
     assert "FROZEN_TARGET" in executor
@@ -214,6 +215,10 @@ def test_base_executor_uses_explicit_execution_phases():
     assert "_verification_started" not in executor
     assert "_state_wait_started" not in executor
     assert "if self._phase is _BasePhase.VERIFYING_ENDPOINT:" in executor
+    assert (
+        "if self._phase is _BasePhase.WAITING_FOR_FRESH_TAG:"
+        in executor
+    )
     assert "if self._goal_verifier is not None:" not in executor
 
 

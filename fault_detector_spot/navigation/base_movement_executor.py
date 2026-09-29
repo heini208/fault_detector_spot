@@ -88,6 +88,7 @@ class _BasePhase(Enum):
     CONFIRMING_STANDING = "confirming_standing"
     EXECUTING_MOVEMENT = "executing_movement"
     VERIFYING_ENDPOINT = "verifying_endpoint"
+    WAITING_FOR_FRESH_TAG = "waiting_for_fresh_tag"
     CORRECTING = "correcting"
     CANCELLING = "cancelling"
     EXECUTING_SIT = "executing_sit"
@@ -184,6 +185,7 @@ class BaseMovementExecutor(MovementExecutor):
         self._movement_plan_builder = None
         self._target_strategy = None
         self._semantic_tag_command = None
+        self._tag_settle_boundary_stamp = None
 
     def relative(self, command) -> BaseMovementUpdate:
         """Start a relative SE2 base movement."""
@@ -259,6 +261,9 @@ class BaseMovementExecutor(MovementExecutor):
 
         if self._phase is _BasePhase.VERIFYING_ENDPOINT:
             return self._poll_goal_verification()
+
+        if self._phase is _BasePhase.WAITING_FOR_FRESH_TAG:
+            return self._poll_fresh_tag_target()
 
         if self._phase is _BasePhase.CANCELLING:
             return BaseMovementUpdate(
@@ -419,7 +424,17 @@ class BaseMovementExecutor(MovementExecutor):
 
         if self._target_strategy is _BaseTargetStrategy.FRESH_TAG_TARGET:
             if verifier.settled:
-                return self._poll_fresh_tag_target(verifier, pose)
+                boundary = verifier.settled_stamp
+                if boundary is None:
+                    return self._finish(
+                        BaseMovementOutcome.EXECUTION_ERROR,
+                        "Settled base verification has no timestamp",
+                    )
+                self._tag_settle_boundary_stamp = boundary
+                self._goal_verifier = None
+                self._tag_observation_tracker.reset()
+                self._set_phase(_BasePhase.WAITING_FOR_FRESH_TAG)
+                return self._poll_fresh_tag_target()
             if outcome is False:
                 return self._finish(
                     BaseMovementOutcome.MOTION_FAILED,
@@ -450,11 +465,11 @@ class BaseMovementExecutor(MovementExecutor):
             verifier.detail,
         )
 
-    def _poll_fresh_tag_target(self, verifier, pose):
+    def _poll_fresh_tag_target(self):
         command = self._semantic_tag_command
         source = self.tag_state_source
-        boundary = verifier.settled_stamp
-        if command is None or boundary is None or pose is None:
+        boundary = self._tag_settle_boundary_stamp
+        if command is None or boundary is None:
             return self._finish(
                 BaseMovementOutcome.EXECUTION_ERROR,
                 "Fresh tag correction is missing execution state",
@@ -475,8 +490,16 @@ class BaseMovementExecutor(MovementExecutor):
         if stable is None:
             return BaseMovementUpdate(
                 BaseMovementOutcome.RUNNING,
-                f"{verifier.detail}; waiting for stable post-settle "
+                "Waiting for stable post-settle "
                 f"tag {tag_id} observation",
+            )
+
+        sample = self.base_pose_source.sample()
+        pose = sample.planar_pose if sample is not None else None
+        if pose is None:
+            return BaseMovementUpdate(
+                BaseMovementOutcome.RUNNING,
+                "Waiting for measured base pose before tag re-planning",
             )
 
         fresh_plan = self.motion_planner.resolve_tag_observation(
@@ -510,7 +533,6 @@ class BaseMovementExecutor(MovementExecutor):
                 f"{detail}",
             )
 
-        self._goal_verifier = None
         self._tag_observation_tracker.reset()
         self._reset_goal_lifecycle()
         update = self._submit_movement_plan(
@@ -731,6 +753,7 @@ class BaseMovementExecutor(MovementExecutor):
         self._movement_plan_builder = None
         self._target_strategy = None
         self._semantic_tag_command = None
+        self._tag_settle_boundary_stamp = None
         self._tag_observation_tracker.reset()
 
     def _build_stand_goal(self) -> RobotCommand.Goal:
