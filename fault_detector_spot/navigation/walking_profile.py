@@ -45,8 +45,11 @@ class WalkingProfiles:
             if name not in ("normal", "precision"):
                 raise ValueError(f"Unknown walking profile: {name}")
 
-    def for_move(self, tag_relative=False):
-        return getattr(self, self.tag_profile if tag_relative else self.relative_profile)
+    def for_move(self, tag_relative=False, override=""):
+        name = override or (self.tag_profile if tag_relative else self.relative_profile)
+        if name not in ("normal", "precision"):
+            raise ValueError(f"Unknown walking profile: {name}")
+        return getattr(self, name)
 
     @classmethod
     def from_node(cls, node):

@@ -247,6 +247,7 @@ def operational_intent_to_command(
         ),
         map_name=intent.map_name,
         waypoint_name=intent.waypoint_name,
+        walking_profile=intent.walking_profile,
         inspection=InspectionSelection(
             object_id=intent.object_id,
             routine_id=intent.routine_id,

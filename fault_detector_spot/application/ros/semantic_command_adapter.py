@@ -89,6 +89,7 @@ def semantic_command_from_message(
             probe_point_id=message.probe_point_id,
         ),
         motion_sensor_id=message.motion_sensor_id,
+        walking_profile=message.walking_profile,
     )
 
 
@@ -122,6 +123,7 @@ def semantic_command_to_message(
     message.routine_id = command.inspection.routine_id
     message.probe_point_id = command.inspection.probe_point_id
     message.motion_sensor_id = command.motion_sensor_id
+    message.walking_profile = command.walking_profile
     return message
 
 

@@ -22,7 +22,9 @@ class BaseToTagCommand(MoveToTagCommand):
         tag_id: int,
         offset: PoseStamped = None,
         target_frame: str = "odom",
+        walking_profile: str = "",
     ):
+        self.walking_profile = walking_profile
         super().__init__(
             command_id,
             stamp,

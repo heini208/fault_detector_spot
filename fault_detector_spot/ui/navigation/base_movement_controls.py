@@ -32,11 +32,26 @@ class BaseMovementControls(UIControlHelper):
 
     def make_rows(self):
         return [
+            control_group("Walking profile", self._make_walking_profile_row()),
             control_group("Tag actions", self._make_tag_input_row()),
             control_group("Base offset", self._make_offset_row(),
                           self._make_reset_and_move_row()),
             control_group("Robot actions", self._make_navigation_buttons_row())
         ]
+
+    def _make_walking_profile_row(self):
+        row = QHBoxLayout()
+        self.walking_profile_dropdown = QComboBox()
+        self.walking_profile_dropdown.addItem("Normal", "normal")
+        self.walking_profile_dropdown.addItem("Precision", "precision")
+        self.walking_profile_dropdown.setToolTip(
+            "Applies to the next Move to Tag or Move Base by Offset command. "
+            "Precision uses the configured slower walking profile."
+        )
+        row.addWidget(QLabel("Profile:"))
+        row.addWidget(self.walking_profile_dropdown)
+        row.addStretch()
+        return row
 
     def _make_tag_input_row(self):
         row = QHBoxLayout()
@@ -187,6 +202,7 @@ class BaseMovementControls(UIControlHelper):
     def build_move_base_intent(self, intent_id):
         intent = OperationalIntent()
         intent.intent = intent_id
+        intent.walking_profile = self.walking_profile_dropdown.currentData()
 
         # add tag info if available
         text = self.tag_dropdown.currentText().strip()

@@ -445,6 +445,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 tag_pose=stamped_pose_to_message(tag.pose),
                 tag_id=tag.id,
                 offset=stamped_pose_to_message(command.offset),
+                walking_profile=command.walking_profile,
             )
         ]
 
@@ -454,6 +455,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 command_id=CommandID.MOVE_BASE_RELATIVE,
                 stamp=self._create_command_stamp(),
                 offset=stamped_pose_to_message(command.offset),
+                walking_profile=command.walking_profile,
             )
         ]
 

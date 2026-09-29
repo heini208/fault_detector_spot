@@ -22,10 +22,10 @@ def serialize_recorded_command(command: SemanticCommand) -> dict:
 
 
 def deserialize_recorded_command(data: dict) -> SemanticCommand:
-    return _deserialize_dataclass(
-        SemanticCommand,
-        _object(data, "Recorded command"),
-    )
+    data = dict(_object(data, "Recorded command"))
+    # Recordings predating per-command profiles retain configured defaults.
+    data.setdefault("walking_profile", "")
+    return _deserialize_dataclass(SemanticCommand, data)
 
 
 def deserialize_recording(document) -> List[SemanticCommand]:

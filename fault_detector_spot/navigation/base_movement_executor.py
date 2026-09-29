@@ -361,11 +361,10 @@ class BaseMovementExecutor(MovementExecutor):
         )
         target = command.compute_goal_pose(self.tf_listener)
         target = self._normalize_to_odom(target)
-        return self._build_se2_goal(
-            target,
-            self.walking_profiles.for_move().relative_speed_mps,
-            profile=self.walking_profiles.for_move(),
+        profile = self.walking_profiles.for_move(
+            override=getattr(command, "walking_profile", ""),
         )
+        return self._build_se2_goal(target, profile.relative_speed_mps, profile=profile)
 
     def _build_tag_goal(self, command) -> RobotCommand.Goal:
         if self.tag_state_source is None:
@@ -395,11 +394,10 @@ class BaseMovementExecutor(MovementExecutor):
         )
         target = command.compute_goal_pose(self.tf_listener)
         target = self._normalize_to_odom(target)
-        return self._build_se2_goal(
-            target,
-            self.walking_profiles.for_move(True).tag_speed_mps,
-            profile=self.walking_profiles.for_move(True),
+        profile = self.walking_profiles.for_move(
+            True, getattr(command, "walking_profile", ""),
         )
+        return self._build_se2_goal(target, profile.tag_speed_mps, profile=profile)
 
     def _build_stand_goal(self) -> RobotCommand.Goal:
         command = RobotCommandBuilder.synchro_stand_command()

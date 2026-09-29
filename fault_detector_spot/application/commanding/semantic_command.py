@@ -132,8 +132,11 @@ class SemanticCommand:
         default_factory=InspectionSelection
     )
     motion_sensor_id: str = ""
+    walking_profile: str = ""
 
     def __post_init__(self):
+        if self.walking_profile not in ("", "normal", "precision"):
+            raise ValueError("Walking profile must be empty, normal or precision")
         try:
             command_id = CommandID(self.command_id)
         except (TypeError, ValueError) as exception:

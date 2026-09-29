@@ -13,6 +13,10 @@ from synchros2.tf_listener_wrapper import TFListenerWrapper
 class BaseMoveRelativeCommand(MoveRelativeCommand):
     """Relative base movement flattened to SE2."""
 
+    def __init__(self, command_id, stamp, offset=None, target_frame="body", walking_profile=""):
+        super().__init__(command_id, stamp, offset, target_frame)
+        self.walking_profile = walking_profile
+
     def compute_goal_pose(
         self,
         transformer: TFListenerWrapper,

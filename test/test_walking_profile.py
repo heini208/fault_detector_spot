@@ -18,21 +18,25 @@ from fault_detector_spot.navigation.walking_profile import WalkingProfile, Walki
     ("precision", False, 0.05, 0.10, spot_command_pb2.HINT_SPEED_SELECT_CRAWL),
     ("precision", True, 0.05, 0.10, spot_command_pb2.HINT_SPEED_SELECT_CRAWL),
 ])
-def test_profile_reaches_native_mobility_command(name, tag_relative, speed, angular, gait):
+@pytest.mark.parametrize("per_command", [False, True])
+def test_profile_reaches_native_mobility_command(name, tag_relative, speed, angular, gait, per_command):
     target = PoseStamped()
     target.header.frame_id = "odom"
     target.pose.orientation.w = 1.0
     target.pose.position.x = 0.4
     profiles = WalkingProfiles(
-        relative_profile=name if not tag_relative else "normal",
-        tag_profile=name if tag_relative else "normal",
+        relative_profile=name if not tag_relative and not per_command else "normal",
+        tag_profile=name if tag_relative and not per_command else "normal",
     )
     executor = BaseMovementExecutor(
         tf_listener=object(), walking_profiles=profiles,
         tag_state_source=SimpleNamespace(visible_snapshot=lambda: {7: SimpleNamespace(pose=target)}),
     )
     executor._prepare_move_command = lambda command, frame: command
-    command = SimpleNamespace(tag_id=7, compute_goal_pose=lambda _: target)
+    command = SimpleNamespace(
+        tag_id=7, compute_goal_pose=lambda _: target,
+        walking_profile=name if per_command else "",
+    )
     goal = executor._build_tag_goal(command) if tag_relative else executor._build_relative_goal(command)
     native = robot_command_pb2.RobotCommand()
     convert(goal.command, native)
