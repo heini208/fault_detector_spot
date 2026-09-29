@@ -64,6 +64,9 @@ def test_invalid_tolerance_rejected(value):
 def test_executor_verifies_actual_goal_and_cancellation_during_settling():
     from types import SimpleNamespace
     from geometry_msgs.msg import PoseStamped, TransformStamped
+    from fault_detector_spot.navigation.base_motion_planner import (
+        BaseMovementPlan,
+    )
     from fault_detector_spot.navigation.base_movement_executor import (
         BaseMovementExecutor, BaseMovementOutcome,
     )
@@ -90,7 +93,14 @@ def test_executor_verifies_actual_goal_and_cancellation_during_settling():
     target.header.frame_id = "odom"
     target.pose.orientation.w = 1.0
     target.pose.position.x = 1.0
-    executor._build_relative_goal = lambda _: executor._build_absolute_base_goal(target, 0.1)
+
+    def build_relative(_):
+        profile = executor.walking_profiles.for_move()
+        plan = BaseMovementPlan(target, 0.1, profile)
+        executor._movement_plan = plan
+        return executor._build_absolute_base_goal(plan)
+
+    executor._build_relative_goal = build_relative
     executor.relative(object())
     handle = FakeGoalHandle(result)
     send.set_result(handle)
@@ -103,7 +113,6 @@ def test_executor_verifies_actual_goal_and_cancellation_during_settling():
     assert executor.poll().outcome is BaseMovementOutcome.SUCCESS
     assert not executor.active
 
-    # Starting another move must create a new settling interval.
     executor.relative(object())
     executor.poll()
     assert executor.poll().outcome is BaseMovementOutcome.RUNNING

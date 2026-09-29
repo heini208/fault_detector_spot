@@ -47,9 +47,11 @@ def make_movement(kind="relative"):
     )
     resolutions = []
     executor._prepare_move_command = lambda command, frame: command
+
     def resolve(_):
         resolutions.append(1)
         return target
+
     command = SimpleNamespace(tag_id=7, compute_goal_pose=resolve, walking_profile="precision")
     getattr(executor, kind)(command)
 
@@ -63,7 +65,7 @@ def make_movement(kind="relative"):
         return executor.poll()
 
     def complete(x, success=True):
-        executor.poll()  # Accept the current goal handle.
+        executor.poll()
         client.results[-1].set_result(SimpleNamespace(result=SimpleNamespace(success=success)))
         return poll_at(x)
 
@@ -127,7 +129,7 @@ def test_cancel_during_correction_prevents_further_attempts():
     executor.cancel()
     assert client.handles[-1].cancel_calls == 1
     assert not executor.active
-    assert executor._absolute_movement_goal is None
+    assert executor._movement_plan is None
     assert executor._correction_attempts == 0
     executor.poll()
     assert len(client.goals) == 2

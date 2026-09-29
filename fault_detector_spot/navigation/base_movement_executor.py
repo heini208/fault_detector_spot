@@ -20,6 +20,9 @@ from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_to_rpy,
 )
 from fault_detector_spot.inspection.model.models import QuaternionData
+from fault_detector_spot.navigation.base_motion_planner import (
+    BaseMovementPlan,
+)
 from fault_detector_spot.navigation.posture_state_source import (
     PostureState,
 )
@@ -132,8 +135,7 @@ class BaseMovementExecutor(MovementExecutor):
         )
 
         self._goal_verifier = None
-        self._target_pose = None
-        self._absolute_movement_goal = None
+        self._movement_plan = None
         self._correction_attempts = 0
         self._previous_correction_error = None
         self._operation = None
@@ -233,13 +235,15 @@ class BaseMovementExecutor(MovementExecutor):
             self._verification_started = self._monotonic_clock()
             return self._poll_standing_confirmation()
         if self._operation is _BaseOperation.MOVEMENT:
-            if self._target_pose is None:
+            plan = self._movement_plan
+            if plan is None:
                 return self._finish(
                     BaseMovementOutcome.EXECUTION_ERROR,
-                    "Base movement has no target for endpoint verification",
+                    "Base movement has no plan for endpoint verification",
                 )
             self._goal_verifier = BaseGoalVerifier(
-                self._target_pose, self.goal_verification_config,
+                self._planar_target(plan),
+                self.goal_verification_config,
                 self._monotonic_clock(),
             )
             return self._poll_goal_verification()
@@ -290,7 +294,7 @@ class BaseMovementExecutor(MovementExecutor):
         score = max(error[0] / c.position_tolerance_m,
                     error[1] / c.yaw_tolerance_rad)
         if score <= 1.0:
-            return None  # Unsettled, rather than an inaccurate endpoint.
+            return None
         if self._correction_attempts >= c.maximum_correction_attempts:
             verifier.detail += "; correction attempt limit reached"
             return None
@@ -298,13 +302,16 @@ class BaseMovementExecutor(MovementExecutor):
         if previous is not None and score > previous * (1 - c.minimum_correction_progress_ratio):
             verifier.detail += "; corrections made insufficient progress"
             return None
-        if self._absolute_movement_goal is None:
+        plan = self._movement_plan
+        if plan is None:
             return None
         self._previous_correction_error = score
         self._correction_attempts += 1
         self._goal_verifier = None
         self._reset_goal_lifecycle()
-        update = self._submit_goal(lambda: deepcopy(self._absolute_movement_goal))
+        update = self._submit_goal(
+            lambda: self._build_absolute_base_goal(plan)
+        )
         if update.outcome is BaseMovementOutcome.RUNNING:
             return BaseMovementUpdate(
                 update.outcome,
@@ -379,8 +386,7 @@ class BaseMovementExecutor(MovementExecutor):
     def _reset_operation(self) -> None:
         super()._reset_operation()
         self._goal_verifier = None
-        self._target_pose = None
-        self._absolute_movement_goal = None
+        self._movement_plan = None
         self._correction_attempts = 0
         self._previous_correction_error = None
         self._operation = None
@@ -406,7 +412,13 @@ class BaseMovementExecutor(MovementExecutor):
         profile = self.walking_profiles.for_move(
             override=getattr(command, "walking_profile", ""),
         )
-        return self._build_absolute_base_goal(target, profile.relative_speed_mps, profile=profile)
+        plan = BaseMovementPlan(
+            target=target,
+            linear_speed_mps=profile.relative_speed_mps,
+            profile=profile,
+        )
+        self._movement_plan = plan
+        return self._build_absolute_base_goal(plan)
 
     def _build_tag_goal(self, command) -> RobotCommand.Goal:
         if self.tag_state_source is None:
@@ -439,7 +451,13 @@ class BaseMovementExecutor(MovementExecutor):
         profile = self.walking_profiles.for_move(
             True, getattr(command, "walking_profile", ""),
         )
-        return self._build_absolute_base_goal(target, profile.tag_speed_mps, profile=profile)
+        plan = BaseMovementPlan(
+            target=target,
+            linear_speed_mps=profile.tag_speed_mps,
+            profile=profile,
+        )
+        self._movement_plan = plan
+        return self._build_absolute_base_goal(plan)
 
     def _build_stand_goal(self) -> RobotCommand.Goal:
         command = RobotCommandBuilder.synchro_stand_command()
@@ -479,12 +497,9 @@ class BaseMovementExecutor(MovementExecutor):
         normalized.header.frame_id = ODOM_FRAME_NAME
         return normalized
 
-    def _build_absolute_base_goal(
-        self,
-        target: PoseStamped,
-        linear_speed_mps: float,
-        profile=None,
-    ) -> RobotCommand.Goal:
+    @staticmethod
+    def _planar_target(plan: BaseMovementPlan):
+        target = plan.target
         orientation = target.pose.orientation
         _, _, yaw = quaternion_to_rpy(
             QuaternionData(
@@ -494,10 +509,25 @@ class BaseMovementExecutor(MovementExecutor):
                 w=float(orientation.w),
             )
         )
+        return (
+            target.pose.position.x,
+            target.pose.position.y,
+            yaw,
+        )
 
-        self._target_pose = (target.pose.position.x, target.pose.position.y, yaw)
-        profile = profile or self.walking_profiles.for_move()
-        speed = float(linear_speed_mps)
+    def _build_absolute_base_goal(
+        self,
+        plan: BaseMovementPlan,
+    ) -> RobotCommand.Goal:
+        if not isinstance(plan, BaseMovementPlan):
+            raise TypeError(
+                "Absolute base goal requires a BaseMovementPlan"
+            )
+
+        target = plan.target
+        x, y, yaw = self._planar_target(plan)
+        profile = plan.profile
+        speed = float(plan.linear_speed_mps)
         velocity_limit = SE2VelocityLimit(
             max_vel=math_helpers.SE2Velocity(
                 speed,
@@ -517,8 +547,8 @@ class BaseMovementExecutor(MovementExecutor):
 
         command = (
             RobotCommandBuilder.synchro_se2_trajectory_point_command(
-                goal_x=target.pose.position.x,
-                goal_y=target.pose.position.y,
+                goal_x=x,
+                goal_y=y,
                 goal_heading=yaw,
                 frame_name=namespace_with(
                     self.robot_name,
@@ -529,7 +559,6 @@ class BaseMovementExecutor(MovementExecutor):
         )
         goal = RobotCommand.Goal()
         convert(command, goal.command)
-        self._absolute_movement_goal = deepcopy(goal)
         return goal
 
 
