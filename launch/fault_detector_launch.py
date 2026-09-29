@@ -37,6 +37,11 @@ def generate_launch_description():
         "close_surface.yaml",
     )
 
+    base_motion_config = os.path.join(
+        pkg,
+        "config",
+        "base_motion.yaml",
+    )
     arm_motion_config = os.path.join(
         pkg,
         "config",
@@ -172,6 +177,7 @@ def generate_launch_description():
                 tag_sensing_config,
                 close_surface_config,
                 arm_motion_config,
+                base_motion_config,
                 {
                     "use_sim_time": use_sim_time,
                     "navigation.map_root": navigation_map_root,

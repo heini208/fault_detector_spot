@@ -1,0 +1,10 @@
+/**:
+  ros__parameters:
+    # Measured odom-frame endpoint, verified after the driver reports success.
+    base.goal_verification.position_tolerance_m: 0.1
+    base.goal_verification.yaw_tolerance_rad: 0.05235987755982989
+    base.goal_verification.settle_sec: 0.5
+    base.goal_verification.timeout_sec: 5.0
+    base.goal_verification.maximum_pose_age_sec: 0.5
+    base.goal_verification.settle_position_tolerance_m: 0.005
+    base.goal_verification.settle_yaw_tolerance_rad: 0.008726646259971648

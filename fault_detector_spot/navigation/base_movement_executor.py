@@ -8,7 +8,7 @@ import time
 
 from bosdyn.api.geometry_pb2 import SE2VelocityLimit
 from bosdyn.client import math_helpers
-from bosdyn.client.frame_helpers import ODOM_FRAME_NAME
+from bosdyn.client.frame_helpers import ODOM_FRAME_NAME, BODY_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_spot_api_msgs.conversions import convert
 from geometry_msgs.msg import PoseStamped
@@ -27,6 +27,10 @@ from fault_detector_spot.shared.execution.movement_executor import (
     DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC,
     DEFAULT_RESULT_TIMEOUT_SEC,
     MovementExecutor,
+)
+
+from fault_detector_spot.navigation.base_goal_verifier import (
+    BaseGoalVerifier, BaseGoalVerificationConfig,
 )
 
 BASE_READY_STATE_TIMEOUT_PARAMETER = "base.ready_state_timeout_sec"
@@ -100,6 +104,8 @@ class BaseMovementExecutor(MovementExecutor):
         result_timeout_sec: float = DEFAULT_RESULT_TIMEOUT_SEC,
         monotonic_clock=time.monotonic,
         logger=None,
+        goal_verification_config=None,
+        ros_time_sec=time.time,
     ):
         super().__init__(
             tf_listener,
@@ -111,6 +117,10 @@ class BaseMovementExecutor(MovementExecutor):
             monotonic_clock=monotonic_clock,
             logger=logger,
         )
+        self.goal_verification_config = (
+            goal_verification_config or BaseGoalVerificationConfig()
+        )
+        self._ros_time_sec = ros_time_sec
         self.posture_state_source = posture_state_source
         self.ready_state_timeout_sec = self._positive_timeout(
             ready_state_timeout_sec,
@@ -121,6 +131,8 @@ class BaseMovementExecutor(MovementExecutor):
             "Base ready standing timeout",
         )
 
+        self._goal_verifier = None
+        self._target_pose = None
         self._operation = None
         self._movement_goal_builder = None
         self._state_wait_started = None
@@ -159,6 +171,9 @@ class BaseMovementExecutor(MovementExecutor):
                 BaseMovementOutcome.EXECUTION_ERROR,
                 "No base movement is active",
             )
+
+        if self._goal_verifier is not None:
+            return self._poll_goal_verification()
 
         if self._verification_started is not None:
             return self._poll_standing_confirmation()
@@ -213,7 +228,51 @@ class BaseMovementExecutor(MovementExecutor):
             self._reset_goal_lifecycle()
             self._verification_started = self._monotonic_clock()
             return self._poll_standing_confirmation()
+        if self._operation is _BaseOperation.MOVEMENT:
+            if self._target_pose is None:
+                return self._finish(
+                    BaseMovementOutcome.EXECUTION_ERROR,
+                    "Base movement has no target for endpoint verification",
+                )
+            self._goal_verifier = BaseGoalVerifier(
+                self._target_pose, self.goal_verification_config,
+                self._monotonic_clock(),
+            )
+            return self._poll_goal_verification()
         return super()._handle_successful_result(result)
+
+    def _poll_goal_verification(self):
+        verifier = self._goal_verifier
+        pose, stamp = None, None
+        try:
+            transform = self.tf_listener.lookup_a_tform_b(
+                ODOM_FRAME_NAME, BODY_FRAME_NAME, timeout_sec=0.0,
+            )
+            translation = transform.transform.translation
+            rotation = transform.transform.rotation
+            _, _, yaw = quaternion_to_rpy(QuaternionData(
+                x=rotation.x, y=rotation.y, z=rotation.z, w=rotation.w,
+            ))
+            pose = (translation.x, translation.y, yaw)
+            stamp = (transform.header.stamp.sec
+                     + transform.header.stamp.nanosec * 1e-9)
+        except Exception:
+            pass
+        outcome = verifier.update(
+            pose, stamp, self._ros_time_sec(), self._monotonic_clock(),
+        )
+        if outcome is True:
+            return self._finish(
+                BaseMovementOutcome.SUCCESS,
+                f"Base goal verified and settled; {verifier.detail}",
+            )
+        if outcome is False:
+            self._request_cancel()
+            return self._finish(
+                BaseMovementOutcome.MOTION_FAILED,
+                f"Base endpoint verification timed out; {verifier.detail}",
+            )
+        return BaseMovementUpdate(BaseMovementOutcome.RUNNING, verifier.detail)
 
     def _poll_standing_confirmation(self) -> BaseMovementUpdate:
         state = self._fresh_posture_state()
@@ -280,6 +339,8 @@ class BaseMovementExecutor(MovementExecutor):
 
     def _reset_operation(self) -> None:
         super()._reset_operation()
+        self._goal_verifier = None
+        self._target_pose = None
         self._operation = None
         self._movement_goal_builder = None
         self._state_wait_started = None
@@ -391,6 +452,7 @@ class BaseMovementExecutor(MovementExecutor):
             )
         )
 
+        self._target_pose = (target.pose.position.x, target.pose.position.y, yaw)
         speed = float(linear_speed_mps)
         velocity_limit = SE2VelocityLimit(
             max_vel=math_helpers.SE2Velocity(
