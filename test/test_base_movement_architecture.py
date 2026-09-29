@@ -171,7 +171,7 @@ def test_base_pose_source_owns_measured_pose_resolution():
     assert "self.base_pose_source.sample()" in executor
 
 
-def test_correction_policy_owns_retry_decisions():
+def test_correction_policy_owns_correction_decisions():
     policy = read(
         "fault_detector_spot/navigation/base_correction_policy.py"
     )
@@ -245,20 +245,29 @@ def test_direct_planar_moves_share_one_submission_choke_point():
         "def _handle_successful_result",
         1,
     )[0]
-    correction = executor.split(
+    fresh_correction = executor.split(
+        "def _poll_fresh_tag_target",
+        1,
+    )[1].split(
+        "def _correct_frozen_base_goal",
+        1,
+    )[0]
+    frozen_correction = executor.split(
         "def _correct_frozen_base_goal",
         1,
     )[1].split(
-        "def _poll_standing_confirmation",
+        "def _begin_timeout_cancellation_if_needed",
         1,
     )[0]
 
     assert "self._submit_movement_plan(" in initial
-    assert "self._submit_movement_plan(" in correction
+    assert "self._submit_movement_plan(" in fresh_correction
+    assert "self._submit_movement_plan(" in frozen_correction
     assert "self.motion_planner.build_goal(" in submission
     assert "self._submit_goal(build_goal)" in submission
     assert "_build_absolute_base_goal" not in executor
-    assert "self._submit_goal(" not in correction
+    assert "self._submit_goal(" not in fresh_correction
+    assert "self._submit_goal(" not in frozen_correction
 
 
 def test_legacy_base_movement_behaviours_are_removed():

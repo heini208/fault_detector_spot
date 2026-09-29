@@ -16,24 +16,44 @@ using the updated UI. The isolated test build does not update the live install.
 
 ## Automatic endpoint correction
 
-Relative and tag-relative base commands are first resolved into a
-`BaseMovementPlan`. Initial execution and correction attempts both pass through
-`BaseMovementExecutor._submit_movement_plan`, which is the common submission
-boundary for direct planar Spot movement.
+Relative and tag-relative base commands are resolved into a
+`BaseMovementPlan`. All direct planar Spot movements, including corrections,
+pass through `BaseMovementExecutor._submit_movement_plan`. Trajectory
+construction belongs to `BaseMotionPlanner`; the behavior tree only starts the
+executor and polls its typed result.
 
-After the driver reports success, `BaseGoalVerifier` checks the measured
-odom-frame endpoint and settling behavior. `BaseCorrectionPolicy` independently
-decides whether an inaccurate endpoint should retry the frozen movement plan.
+After the driver reports success, `BaseGoalVerifier` measures the odom-frame
+base pose and determines physical settling independently from target accuracy.
+`BaseCorrectionPolicy` then makes only the bounded `CORRECT` or `FAIL`
+decision. It does not decide how a target is rebuilt.
 
-`base.correction.maximum_attempts` defaults to 2: one initial move plus at most
-two corrections. Set it to 0 to disable corrections. After a correction, the
-largest position/yaw error normalized by its respective goal tolerance must
-improve by at least `base.correction.minimum_progress_ratio` (default 0.10)
-before another correction is allowed. Otherwise the operation fails early.
+Relative movement uses a frozen-target strategy. If correction is allowed, the
+same resolved absolute `BaseMovementPlan` is submitted again. The original
+relative offset is not reapplied.
 
-A frozen retry rebuilds the Spot command from the same resolved
-`BaseMovementPlan`. It does not reapply the original relative offset or resolve
-a fresh tag target. Stale or missing measured pose data, failure to settle while
-already inside tolerance, RobotCommand failure or rejection, and cancellation do
-not cause a retry. Each attempt uses the existing action and verification
-timeouts. Existing configured position and yaw tolerances are unchanged.
+Tag-relative movement uses a fresh-target strategy. Once the base is physically
+settled, execution enters `WAITING_FOR_FRESH_TAG`. Only tag observations newer
+than that settle timestamp may be used. Several unique observations must remain
+within the configured position and yaw spans before they are accepted as
+stable. The original semantic tag request is then resolved again from that
+stable observation. If the measured base pose is already within tolerance of
+the fresh target, the operation succeeds; otherwise the freshly resolved plan
+is used for the next correction.
+
+`base.correction.maximum_attempts` defaults to 2, meaning one initial movement
+plus at most two corrections. Set it to 0 to disable corrections. After a
+correction, normalized position/yaw error must improve by at least
+`base.correction.minimum_progress_ratio` (default 0.10) before another
+correction is allowed.
+
+The post-settle tag window is bounded by
+`base.tag_correction.observation_timeout_sec`. Stability is configured with
+`base.tag_correction.stability.required_samples`,
+`maximum_position_span_m`, `maximum_yaw_span_rad`, and
+`maximum_sample_span_sec`. These values should be tuned from real robot
+measurements.
+
+Cancellation retains base-operation ownership until the active RobotCommand
+reaches a terminal state. Goal-response and result timeouts follow the same
+ownership rule. Emergency stop remains an independent preemption path and does
+not wait for normal cancellation bookkeeping.

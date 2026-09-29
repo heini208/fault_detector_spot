@@ -804,31 +804,34 @@ Command Selector to ensure that the correct subtree or action sequence is execut
 
 **Executors of commands** can be broadly divided into two categories based on how they interact with the robot:
 
-### 6.3.1 Action Client Behaviours [(`ActionClientBehaviour` / `SimpleSpotAction`)](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fspot_action.py)
+### 6.3.1 Robot Movement Behaviours and Executors
 
-These executors communicate **directly with the robot via the Spots ROS2 drivers `RobotCommand` action**. They handle asynchronous action sending, monitoring,
-and cancellation.
+Direct Spot movement is split between thin behavior-tree adapters and
+lower-level execution components. The tree owns orchestration, while movement
+executors own the lifecycle of one semantic robot operation.
 
-**Characteristics:**
+For geometric arm and base movement:
 
-- Inherit from [**`ActionClientBehaviour`**](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fspot_action.py) (custom Spot action lifecycle) or [**`SimpleSpotAction`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fspot_action.py)** (Spot-specific `RobotCommand` helper).
-- **Lifecycle Management:** Handles initialization, goal sending, result polling, and cleanup automatically.
-- **Emergency Handling:** Can cancel ongoing goals immediately if an emergency is triggered.
-- **Blackboard Integration:** Reads the current command from the py_trees blackboard set by the command manager (`last_command`) to set necessary parameters.
-- **Extensible:** Subclasses must implement:
-    - `_build_goal() → Goal`: Construct the goal message.
-- **Optional Overrides:** The following methods have default implementations in the base class and **do not need to be implemented by most subclasses**. Only
-  override if special logic is required:
-    - `_init_client() → bool`: Initialize the specific action client.
-    - `_send_goal(goal) → Future`: Send the goal via the action client.
-- **Spot-Specific Variant:** `SimpleSpotAction` wraps Spot's `RobotCommand` action, providing helpers to simplify sending robot-specific commands.
-- **Examples of Subclasses:**
-    - [`StowArmActionSimple`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fstow_arm_action.py)
-    - [`ReadyArmActionSimple`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fready_arm_action.py)
-    - [`CloseGripperAction`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fclose_gripper_action.py)
-    - [`ManipulatorMoveArmAction`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_arm_action.py)
-    - [`ManipulatorMoveRelativeAction`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_relative_action.py)
-    - [`BaseMoveToTagAction`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_to_tag_action.py)
+- `MovementBehaviour` starts an executor operation once, polls its typed
+  status, maps that status to py_trees, and requests cancellation when the tree
+  invalidates the operation.
+- `ArmMovementExecutor` and `BaseMovementExecutor` own RobotCommand
+  submission, result handling, cancellation, and operation state.
+- Motion planners own TF-dependent geometry and goal construction. For base
+  movement, `BaseMotionPlanner` resolves semantic requests into
+  `BaseMovementPlan` instances and builds the planar trajectory command.
+- State sources provide observations only. They do not decide when or how the
+  robot should move.
+- Base endpoint correction remains inside the executor lifecycle. Relative
+  movement may reuse a frozen resolved plan; tag-relative movement waits for a
+  fresh stable post-settle tag observation and re-resolves the semantic target.
+- Emergency stop is independent of normal movement ownership. It can preempt
+  the active behavior immediately while executor cancellation bookkeeping
+  completes separately.
+
+Current behavior-tree adapters include `ArmGoalBehaviour`,
+`BaseGoalBehaviour`, `ReadyArmBehaviour`, `StowArmBehaviour`,
+`StandUpBehaviour`, and `SitDownBehaviour`.
 
 `ManipulatorMoveCloseToSurfaceAction` is deliberately different. It is a thin
 client for the internal `MoveCloseToSurface` ROS action. Its dedicated server
@@ -872,16 +875,17 @@ The exact functionality of each command will become clear either:
 
 | CommandID                     | behaviour Sequence                                                                                                                                                                                                                                      |
 |-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| STOW_ARM                      | [StowArmActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fstow_arm_action.py)                                                                                                                                            |
-| READY_ARM                     | [ReadyArmActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fready_arm_action.py)                                                                                                                                          |
+| STOW_ARM                      | `StowArmBehaviour` → `ArmMovementExecutor` |
+| READY_ARM                     | `ReadyArmBehaviour` → `ArmMovementExecutor` |
 | TOGGLE_GRIPPER                | [ToggleGripperAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Ftoggle_gripper_action.py)                                                                                                                                      |
 | CLOSE_GRIPPER                 | [CloseGripperAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fclose_gripper_action.py)                                                                                                                                        |
-| MOVE_ARM_TO_TAG               | [ManipulatorGetGoalTag](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_get_goal_tag.py) → [ManipulatorMoveArmAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_arm_action.py) |
-| MOVE_BASE_TO_TAG              | [BaseGetGoalTag](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_get_goal_tag.py) → [BaseMoveToTagAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_to_tag_action.py)    |
-| MOVE_ARM_RELATIVE             | [ManipulatorMoveRelativeAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmanipulation%2Fmanipulator_move_relative_action.py)                                                                                                                 |
+| MOVE_ARM_TO_TAG               | `ArmGoalBehaviour` → `ArmMovementExecutor` |
+| MOVE_BASE_TO_TAG              | `BaseGoalBehaviour` → `BaseMovementExecutor` |
+| MOVE_ARM_RELATIVE             | `ArmGoalBehaviour` → `ArmMovementExecutor` |
 | MOVE_CLOSE_TO_SURFACE         | `ManipulatorMoveCloseToSurfaceAction` → dedicated `MoveCloseToSurface` ROS action server                                                                                                                                                           |
-| MOVE_BASE_RELATIVE            | [BaseMoveRelativeAction](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fmove_base%2Fbase_move_relative_action.py)                                                                                                                     |
-| STAND_UP                      | [StandUpActionSimple](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fstand_up_action.py)                                                                                                                                              |
+| MOVE_BASE_RELATIVE            | `BaseGoalBehaviour` → `BaseMovementExecutor` |
+| STAND_UP                      | `StandUpBehaviour` → `BaseMovementExecutor` |
+| SIT_DOWN                      | `SitDownBehaviour` → `BaseMovementExecutor` |
 | WAIT_TIME                     | [WaitForDuration](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fwait_for_duration.py)                                                                                                                                                   |
 | STOP_BASE                     | [PublishZeroVel](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fcancel_movement.py)                                                                                                                                                   |
 | START_SLAM                    | [EnableSLAM](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fmapping%2Fenable_slam.py)                                                                                                                                                              |
