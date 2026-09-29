@@ -216,11 +216,14 @@ class BaseMovementExecutor(MovementExecutor):
         if self.active:
             return self._busy_update()
         semantic_command = deepcopy(command)
+        def build_initial_plan():
+            prepared = self.motion_planner.prepare_tag_request(semantic_command)
+            plan = self.motion_planner.resolve_tag(prepared, self.tag_state_source)
+            self._semantic_tag_command = prepared
+            return plan
+
         return self._start_verified_base_movement(
-            lambda: self.motion_planner.resolve_tag(
-                semantic_command,
-                self.tag_state_source,
-            ),
+            build_initial_plan,
             _BaseTargetStrategy.FRESH_TAG_TARGET,
             semantic_tag_command=semantic_command,
         )

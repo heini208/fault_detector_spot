@@ -111,3 +111,18 @@ def test_base_observation_has_priority_over_hand_fallback():
     assert set(observations) == {7, 8}
     assert observations[7].pose.pose.position.x == 1.0
     assert observations[8].pose.pose.position.x == 3.0
+
+
+def test_base_tracker_requests_filtered_geometry_at_raw_capture_time():
+    class TimestampCheckingBuffer:
+        def lookup_transform(self, target_frame, source_frame, lookup_time):
+            if source_frame == "fiducial_7":
+                return transform(20, 1.2)
+            assert lookup_time.nanoseconds == 20_000_000_000
+            return transform(20, 1.0)
+
+    tracker = BaseTagObservationTracker(TimestampCheckingBuffer(), max_age_sec=1.5)
+    tracker.receive_tf_frames(tf_message("fiducial_7"))
+    observations = tracker.snapshot(Time(seconds=20.1))
+    assert observations[7].pose.header.stamp.sec == 20
+    assert observations[7].pose.pose.position.x == 1.0

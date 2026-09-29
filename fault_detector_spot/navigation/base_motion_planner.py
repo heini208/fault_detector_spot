@@ -9,6 +9,8 @@ from bosdyn.client.frame_helpers import ODOM_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_spot_api_msgs.conversions import convert
 from geometry_msgs.msg import PoseStamped
+from rclpy.time import Time
+from tf2_ros import TransformException
 from spot_msgs.action import RobotCommand
 from synchros2.utilities import namespace_with
 from tf2_geometry_msgs import do_transform_pose_stamped
@@ -25,6 +27,7 @@ from fault_detector_spot.navigation.walking_profile import (
 )
 from fault_detector_spot.shared.geometry.movement_geometry import (
     MovementGeometryResolver,
+    MovementGeometryUnavailable,
 )
 
 
@@ -81,6 +84,54 @@ class BaseMotionPlanner:
             profile=profile,
         )
 
+    def prepare_tag_request(self, command):
+        """Freeze robot-relative offsets once, after posture readiness."""
+        prepared = deepcopy(command)
+        offset = getattr(prepared, "offset", None)
+        if offset is None or offset.header.frame_id.strip().split("/")[-1] not in {
+            "body", "flat_body", "gpe",
+        }:
+            return prepared
+        source = offset.header.frame_id
+        try:
+            vector = prepared._rotate_vector_into_frame(
+                [offset.pose.position.x, offset.pose.position.y,
+                 offset.pose.position.z],
+                source, ODOM_FRAME_NAME, self.tf_listener,
+            )
+            rotation = prepared._rotate_quaternion_into_frame(
+                [offset.pose.orientation.x, offset.pose.orientation.y,
+                 offset.pose.orientation.z, offset.pose.orientation.w],
+                source, ODOM_FRAME_NAME, self.tf_listener,
+            )
+        except TransformException as exception:
+            raise MovementGeometryUnavailable(str(exception)) from exception
+        offset.header.frame_id = ODOM_FRAME_NAME
+        offset.pose.position.x, offset.pose.position.y, offset.pose.position.z = map(float, vector)
+        (offset.pose.orientation.x, offset.pose.orientation.y,
+         offset.pose.orientation.z, offset.pose.orientation.w) = map(float, rotation)
+        return prepared
+
+    def _observation_in_odom(self, pose):
+        if pose.header.frame_id.strip() == ODOM_FRAME_NAME:
+            return deepcopy(pose)
+        stamp = pose.header.stamp
+        if stamp.sec == 0 and stamp.nanosec == 0:
+            raise MovementGeometryUnavailable("Tag observation has no capture timestamp")
+        try:
+            transform = self.tf_listener.lookup_a_tform_b(
+                ODOM_FRAME_NAME,
+                pose.header.frame_id,
+                transform_time=Time.from_msg(stamp),
+                timeout_sec=0.0,
+            )
+        except TransformException as exception:
+            raise MovementGeometryUnavailable(str(exception)) from exception
+        result = do_transform_pose_stamped(pose, transform)
+        result.header.frame_id = ODOM_FRAME_NAME
+        result.header.stamp = deepcopy(stamp)
+        return result
+
     def resolve_tag(
         self,
         command,
@@ -134,7 +185,7 @@ class BaseMotionPlanner:
             )
 
         prepared = deepcopy(command)
-        prepared.tag_pose = deepcopy(observation.pose)
+        prepared.tag_pose = self._observation_in_odom(observation.pose)
         prepared = self.geometry_resolver.prepare_move_command(
             prepared,
             ODOM_FRAME_NAME,

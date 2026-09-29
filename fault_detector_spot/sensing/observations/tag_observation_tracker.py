@@ -84,7 +84,7 @@ class BaseTagObservationTracker:
                 filtered_transform = self.tf_buffer.lookup_transform(
                     self.target_frame,
                     filtered_frame_name,
-                    Time(),
+                    Time.from_msg(raw_transform.header.stamp),
                 )
             except (
                 tf2_ros.LookupException,
