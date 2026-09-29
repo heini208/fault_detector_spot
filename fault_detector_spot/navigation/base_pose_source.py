@@ -40,12 +40,8 @@ class BasePoseSource:
                 BODY_FRAME_NAME,
                 timeout_sec=0.0,
             )
-        except Exception:
-            return None
-
-        translation = transform.transform.translation
-        rotation = transform.transform.rotation
-        try:
+            translation = transform.transform.translation
+            rotation = transform.transform.rotation
             _, _, yaw = quaternion_to_rpy(
                 QuaternionData(
                     x=float(rotation.x),
@@ -64,7 +60,7 @@ class BasePoseSource:
                 float(yaw),
                 stamp,
             )
-        except (TypeError, ValueError):
+        except Exception:
             return None
 
         if not all(math.isfinite(value) for value in values):

@@ -205,13 +205,19 @@ def test_direct_planar_moves_share_one_submission_choke_point():
     )
 
     assert "def _submit_movement_plan(" in executor
-    assert executor.count("self._submit_movement_plan(") == 2
 
     initial = executor.split(
         "def _submit_movement_goal",
         1,
     )[1].split(
         "def _submit_movement_plan",
+        1,
+    )[0]
+    submission = executor.split(
+        "def _submit_movement_plan",
+        1,
+    )[1].split(
+        "def _handle_successful_result",
         1,
     )[0]
     correction = executor.split(
@@ -224,6 +230,10 @@ def test_direct_planar_moves_share_one_submission_choke_point():
 
     assert "self._submit_movement_plan(" in initial
     assert "self._submit_movement_plan(" in correction
+    assert "_build_absolute_base_goal(plan)" in submission
+    assert "self._submit_goal(build_goal)" in submission
+    assert "_build_absolute_base_goal(plan)" not in initial
+    assert "_build_absolute_base_goal(plan)" not in correction
     assert "self._submit_goal(" not in correction
 
 
