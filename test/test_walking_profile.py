@@ -50,7 +50,7 @@ def test_profile_reaches_native_mobility_command(
     )
     tag_state_source = SimpleNamespace(
         visible_snapshot=lambda: {
-            7: SimpleNamespace(pose=target)
+            7: SimpleNamespace(id=7, pose=target)
         }
     )
     executor = BaseMovementExecutor(

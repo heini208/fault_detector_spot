@@ -56,6 +56,9 @@ from fault_detector_spot.navigation.base_movement_executor import (
 from fault_detector_spot.navigation.posture_state_source import (
     PostureStateSource,
 )
+from fault_detector_spot.sensing.observations.tag_observation_stability import (
+    TagObservationStabilityConfig,
+)
 
 
 class RobotCommandResources:
@@ -242,6 +245,9 @@ class RobotCommandResources:
                     walking_profiles=WalkingProfiles.from_node(node),
                     goal_verification_config=(
                         BaseGoalVerificationConfig.from_node(node)
+                    ),
+                    tag_stability_config=(
+                        TagObservationStabilityConfig.from_node(node)
                     ),
                     ros_time_sec=lambda: (
                         node.get_clock().now().nanoseconds * 1e-9

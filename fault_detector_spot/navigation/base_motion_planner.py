@@ -105,18 +105,46 @@ class BaseMotionPlanner:
             raise RuntimeError(
                 f"Tag {tag_id} is not currently visible"
             )
+        return self.resolve_tag_observation(command, tag)
 
-        command.tag_pose = deepcopy(tag.pose)
-        command = self.geometry_resolver.prepare_move_command(
-            command,
+    def resolve_tag_observation(
+        self,
+        command,
+        observation,
+    ) -> BaseMovementPlan:
+        if command is None or not hasattr(command, "tag_id"):
+            raise TypeError(
+                "Tag base movement requires a command with tag_id"
+            )
+        if not callable(getattr(command, "compute_goal_pose", None)):
+            raise TypeError(
+                "Tag base movement requires compute_goal_pose()"
+            )
+        if observation is None or not hasattr(observation, "pose"):
+            raise TypeError(
+                "Tag base movement requires a tag observation"
+            )
+
+        tag_id = int(command.tag_id)
+        observed_id = int(getattr(observation, "id", tag_id))
+        if observed_id != tag_id:
+            raise ValueError(
+                f"Tag observation {observed_id} does not match "
+                f"requested tag {tag_id}"
+            )
+
+        prepared = deepcopy(command)
+        prepared.tag_pose = deepcopy(observation.pose)
+        prepared = self.geometry_resolver.prepare_move_command(
+            prepared,
             ODOM_FRAME_NAME,
         )
         target = self.normalize_target(
-            command.compute_goal_pose(self.tf_listener)
+            prepared.compute_goal_pose(self.tf_listener)
         )
         profile = self.walking_profiles.for_move(
             True,
-            getattr(command, "walking_profile", ""),
+            getattr(prepared, "walking_profile", ""),
         )
         return BaseMovementPlan(
             target=target,

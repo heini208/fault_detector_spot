@@ -17,10 +17,10 @@ from fault_detector_spot.inspection.model.models import QuaternionData
 class TagObservationStabilityConfig:
     """Explicit acceptance limits for one stable observation window."""
 
-    required_samples: int
-    maximum_position_span_m: float
-    maximum_yaw_span_rad: float
-    maximum_sample_span_sec: float
+    required_samples: int = 3
+    maximum_position_span_m: float = 0.02
+    maximum_yaw_span_rad: float = math.radians(2.0)
+    maximum_sample_span_sec: float = 0.5
 
     def __post_init__(self):
         if (
@@ -41,6 +41,30 @@ class TagObservationStabilityConfig:
                 raise ValueError(
                     f"Tag stability {name} must be positive and finite"
                 )
+
+    @classmethod
+    def from_node(cls, node):
+        defaults = cls()
+        prefix = "base.tag_correction.stability"
+        values = {}
+        for name in (
+            "required_samples",
+            "maximum_position_span_m",
+            "maximum_yaw_span_rad",
+            "maximum_sample_span_sec",
+        ):
+            key = f"{prefix}.{name}"
+            if not node.has_parameter(key):
+                node.declare_parameter(key, getattr(defaults, name))
+            values[name] = node.get_parameter(key).value
+        values["required_samples"] = int(values["required_samples"])
+        for name in (
+            "maximum_position_span_m",
+            "maximum_yaw_span_rad",
+            "maximum_sample_span_sec",
+        ):
+            values[name] = float(values[name])
+        return cls(**values)
 
 
 class StableTagObservationTracker:
