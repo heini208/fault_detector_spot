@@ -54,7 +54,9 @@ class StableTagObservationTracker:
             )
         self.config = config
         self._samples = deque(maxlen=config.required_samples)
+        self._boundary_stamp_sec = None
         self._frame_id = None
+        self._tag_id = None
         self._last_stamp_sec = None
 
     @property
@@ -62,8 +64,13 @@ class StableTagObservationTracker:
         return len(self._samples)
 
     def reset(self) -> None:
+        self._boundary_stamp_sec = None
+        self._reset_samples()
+
+    def _reset_samples(self) -> None:
         self._samples.clear()
         self._frame_id = None
+        self._tag_id = None
         self._last_stamp_sec = None
 
     def update(
@@ -76,6 +83,13 @@ class StableTagObservationTracker:
             raise ValueError(
                 "Tag stability observation boundary must be finite"
             )
+        if (
+            self._boundary_stamp_sec is None
+            or boundary != self._boundary_stamp_sec
+        ):
+            self._reset_samples()
+            self._boundary_stamp_sec = boundary
+
         if observation is None:
             return None
         if not isinstance(observation, TagElement):
@@ -89,28 +103,33 @@ class StableTagObservationTracker:
 
         frame_id = observation.pose.header.frame_id.strip()
         if not frame_id:
-            self.reset()
+            self._reset_samples()
             return None
+
+        tag_id = int(observation.id)
+        if self._tag_id is not None and tag_id != self._tag_id:
+            self._reset_samples()
 
         if (
             self._last_stamp_sec is not None
             and stamp_sec < self._last_stamp_sec
         ):
-            self.reset()
+            self._reset_samples()
 
         if stamp_sec == self._last_stamp_sec:
             return self._stable_observation()
 
         if self._frame_id is not None and frame_id != self._frame_id:
-            self.reset()
+            self._reset_samples()
 
         try:
             sample = self._sample(observation, stamp_sec)
         except (TypeError, ValueError):
-            self.reset()
+            self._reset_samples()
             return None
 
         self._frame_id = frame_id
+        self._tag_id = tag_id
         self._last_stamp_sec = stamp_sec
         self._samples.append(sample)
         self._discard_expired_window(stamp_sec)

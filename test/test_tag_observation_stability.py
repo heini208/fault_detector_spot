@@ -120,6 +120,34 @@ def test_samples_outside_time_window_do_not_form_stable_result():
     assert tracker.sample_count == 1
 
 
+def test_new_settle_boundary_discards_previous_samples():
+    tracker = StableTagObservationTracker(config())
+
+    tracker.update(observation(10.1), 10.0)
+    tracker.update(observation(10.2), 10.0)
+    assert tracker.sample_count == 2
+
+    assert tracker.update(observation(10.7), 10.6) is None
+    assert tracker.sample_count == 1
+    assert tracker.update(observation(10.8), 10.6) is None
+    assert (
+        tracker.update(observation(10.9), 10.6)
+        is not None
+    )
+
+
+def test_tag_identity_change_resets_stability_window():
+    tracker = StableTagObservationTracker(config())
+
+    tracker.update(observation(10.1), 10.0)
+    tracker.update(observation(10.2), 10.0)
+    changed = observation(10.3)
+    changed.id = 8
+
+    assert tracker.update(changed, 10.0) is None
+    assert tracker.sample_count == 1
+
+
 def test_frame_change_resets_stability_window():
     tracker = StableTagObservationTracker(config())
 
