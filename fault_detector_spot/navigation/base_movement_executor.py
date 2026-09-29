@@ -246,6 +246,9 @@ class BaseMovementExecutor(MovementExecutor):
         if not self.active:
             return
         if self._phase is _BasePhase.CANCELLING:
+            self._cancellation_terminal_update = None
+            if self._cancellation_complete:
+                self._reset_operation()
             return
         if (
             self._send_goal_future is None

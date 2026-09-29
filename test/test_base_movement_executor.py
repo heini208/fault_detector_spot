@@ -530,3 +530,34 @@ def test_result_timeout_retains_base_ownership_until_terminal():
     terminal = executor.poll()
     assert terminal.outcome is BaseMovementOutcome.RESULT_TIMEOUT
     assert not executor.active
+
+
+
+def test_explicit_cancel_during_timeout_cleanup_releases_without_polling():
+    clock = ManualClock()
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future)
+    send_future = ManualFuture()
+    send_future.set_result(handle)
+    executor = BaseMovementExecutor(
+        tf_listener=object(),
+        action_client=FakeActionClient(send_future),
+        monotonic_clock=clock,
+        result_timeout_sec=1.0,
+    )
+    executor._build_stand_goal = lambda: object()
+
+    assert executor.stand().outcome is BaseMovementOutcome.RUNNING
+    assert executor.poll().outcome is BaseMovementOutcome.RUNNING
+    clock.now = 1.0
+    assert executor.poll().outcome is BaseMovementOutcome.RUNNING
+    assert executor.active
+
+    executor.cancel()
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=False)
+        )
+    )
+
+    assert not executor.active
