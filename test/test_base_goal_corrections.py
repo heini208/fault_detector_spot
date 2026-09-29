@@ -18,6 +18,9 @@ from fault_detector_spot.navigation.base_movement_executor import (
 from fault_detector_spot.navigation.posture_state_source import (
     PostureState,
 )
+from fault_detector_spot.shared.geometry.movement_geometry import (
+    MovementGeometryUnavailable,
+)
 from test_base_movement_executor import (
     FakeGoalHandle,
     FakePostureStateSource,
@@ -43,10 +46,15 @@ class FakeTagStateSource:
         tag.pose.pose.orientation.w = 1.0
         self.tag = tag
 
+    def clear(self):
+        self.tag = None
+
     def visible_snapshot(self):
-        return {7: deepcopy(self.tag)}
+        return {} if self.tag is None else {7: deepcopy(self.tag)}
 
     def visible_tag_after(self, tag_id, boundary):
+        if self.tag is None:
+            return None
         if int(tag_id) != 7:
             return None
         stamp = (
@@ -78,7 +86,11 @@ class Client:
         return send
 
 
-def make_movement(kind="relative", correction_config=None):
+def make_movement(
+    kind="relative",
+    correction_config=None,
+    tag_observation_timeout_sec=5.0,
+):
     clock, client = ManualClock(), Client()
     transform = TransformStamped()
     transform.transform.rotation.w = 1.0
@@ -101,6 +113,7 @@ def make_movement(kind="relative", correction_config=None):
         correction_policy=BaseCorrectionPolicy(
             correction_config or BaseCorrectionConfig()
         ),
+        tag_observation_timeout_sec=tag_observation_timeout_sec,
     )
     resolutions = []
 
@@ -255,3 +268,102 @@ def test_zero_corrections_disables_retry():
         is BaseMovementOutcome.MOTION_FAILED
     )
     assert len(client.goals) == 1
+
+
+def test_missing_post_settle_tag_times_out():
+    executor, _, _, poll, complete = make_movement(
+        "tag",
+        tag_observation_timeout_sec=1.0,
+    )
+
+    complete(0.8)
+    executor.tag_state_source.clear()
+
+    waiting = poll(0.8, 0.6)
+    assert waiting.outcome is BaseMovementOutcome.RUNNING
+    assert "post-settle tag 7" in waiting.detail
+
+    failed = poll(0.8, 1.0)
+    assert (
+        failed.outcome
+        is BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT
+    )
+    assert "timed out after 1.0 s" in failed.detail
+    assert not executor.active
+
+
+def test_unstable_post_settle_tag_times_out():
+    executor, _, _, poll, complete = make_movement(
+        "tag",
+        tag_observation_timeout_sec=0.5,
+    )
+
+    complete(0.8)
+    executor.tag_state_source.set_observation(1.1, 100.7)
+    assert poll(0.8, 0.6).outcome is BaseMovementOutcome.RUNNING
+
+    executor.tag_state_source.set_observation(1.2, 100.8)
+    assert poll(0.8, 0.2).outcome is BaseMovementOutcome.RUNNING
+
+    executor.tag_state_source.set_observation(1.1, 101.2)
+    failed = poll(0.8, 0.4)
+
+    assert (
+        failed.outcome
+        is BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT
+    )
+    assert "stable post-settle tag 7" in failed.detail
+    assert not executor.active
+
+
+def test_transient_tag_replan_geometry_is_bounded():
+    executor, _, _, poll, complete = make_movement(
+        "tag",
+        tag_observation_timeout_sec=1.0,
+    )
+
+    complete(0.8)
+    executor.motion_planner.resolve_tag_observation = (
+        lambda *_: (_ for _ in ()).throw(
+            MovementGeometryUnavailable("Waiting for TF")
+        )
+    )
+
+    for stamp, advance in (
+        (100.7, 0.6),
+        (100.8, 0.1),
+        (100.9, 0.1),
+    ):
+        executor.tag_state_source.set_observation(1.1, stamp)
+        update = poll(0.8, advance)
+
+    assert update.outcome is BaseMovementOutcome.RUNNING
+    assert "tag re-planning geometry" in update.detail
+
+    failed = poll(0.8, 0.9)
+    assert failed.outcome is BaseMovementOutcome.MOTION_FAILED
+    assert "timed out after 1.0 s" in failed.detail
+    assert not executor.active
+
+
+def test_unexpected_tag_replan_failure_is_reported():
+    executor, _, _, poll, complete = make_movement("tag")
+
+    complete(0.8)
+    executor.motion_planner.resolve_tag_observation = (
+        lambda *_: (_ for _ in ()).throw(
+            ValueError("bad tag transform")
+        )
+    )
+
+    for stamp, advance in (
+        (100.7, 0.6),
+        (100.8, 0.1),
+        (100.9, 0.1),
+    ):
+        executor.tag_state_source.set_observation(1.1, stamp)
+        update = poll(0.8, advance)
+
+    assert update.outcome is BaseMovementOutcome.MOTION_FAILED
+    assert "bad tag transform" in update.detail
+    assert not executor.active

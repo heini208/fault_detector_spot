@@ -16,6 +16,7 @@
     base.tag_correction.stability.maximum_position_span_m: 0.02
     base.tag_correction.stability.maximum_yaw_span_rad: 0.03490658503988659
     base.tag_correction.stability.maximum_sample_span_sec: 0.5
+    base.tag_correction.observation_timeout_sec: 5.0
     # Select normal or precision independently for the two planar commands.
     # Precision is an experimental slower profile, not an accuracy guarantee.
     base.walking.relative_profile: normal

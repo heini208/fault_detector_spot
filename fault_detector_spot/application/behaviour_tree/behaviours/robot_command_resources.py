@@ -49,8 +49,10 @@ from fault_detector_spot.manipulation.force_contact_policy import (
 from fault_detector_spot.navigation.base_movement_executor import (
     BASE_READY_STANDING_TIMEOUT_PARAMETER,
     BASE_READY_STATE_TIMEOUT_PARAMETER,
+    BASE_TAG_OBSERVATION_TIMEOUT_PARAMETER,
     DEFAULT_BASE_READY_STANDING_TIMEOUT_SEC,
     DEFAULT_BASE_READY_STATE_TIMEOUT_SEC,
+    DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC,
     BaseMovementExecutor,
 )
 from fault_detector_spot.navigation.posture_state_source import (
@@ -248,6 +250,11 @@ class RobotCommandResources:
                     ),
                     tag_stability_config=(
                         TagObservationStabilityConfig.from_node(node)
+                    ),
+                    tag_observation_timeout_sec=self._positive_parameter(
+                        node,
+                        BASE_TAG_OBSERVATION_TIMEOUT_PARAMETER,
+                        DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC,
                     ),
                     ros_time_sec=lambda: (
                         node.get_clock().now().nanoseconds * 1e-9

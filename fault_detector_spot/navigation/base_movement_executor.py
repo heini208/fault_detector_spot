@@ -3,6 +3,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
+import math
 import time
 
 from bosdyn.client.robot_command import RobotCommandBuilder
@@ -30,6 +31,9 @@ from fault_detector_spot.sensing.observations.tag_observation_stability import (
     StableTagObservationTracker,
     TagObservationStabilityConfig,
 )
+from fault_detector_spot.shared.geometry.movement_geometry import (
+    MovementGeometryUnavailable,
+)
 from fault_detector_spot.shared.execution.movement_executor import (
     DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC,
     DEFAULT_RESULT_TIMEOUT_SEC,
@@ -40,9 +44,13 @@ BASE_READY_STATE_TIMEOUT_PARAMETER = "base.ready_state_timeout_sec"
 BASE_READY_STANDING_TIMEOUT_PARAMETER = (
     "base.ready_standing_timeout_sec"
 )
+BASE_TAG_OBSERVATION_TIMEOUT_PARAMETER = (
+    "base.tag_correction.observation_timeout_sec"
+)
 
 DEFAULT_BASE_READY_STATE_TIMEOUT_SEC = 2.0
 DEFAULT_BASE_READY_STANDING_TIMEOUT_SEC = 2.0
+DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC = 5.0
 
 
 class BaseMovementOutcome(Enum):
@@ -55,6 +63,7 @@ class BaseMovementOutcome(Enum):
     GOAL_RESPONSE_TIMEOUT = "goal_response_timeout"
     GOAL_REJECTED = "goal_rejected"
     RESULT_TIMEOUT = "result_timeout"
+    TAG_OBSERVATION_TIMEOUT = "tag_observation_timeout"
     MOTION_FAILED = "motion_failed"
     POSTURE_STATE_UNAVAILABLE = "posture_state_unavailable"
     POSTURE_STATE_STALE = "posture_state_stale"
@@ -126,6 +135,9 @@ class BaseMovementExecutor(MovementExecutor):
         ros_time_sec=time.time,
         walking_profiles=None,
         tag_stability_config=None,
+        tag_observation_timeout_sec: float = (
+            DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC
+        ),
     ):
         super().__init__(
             tf_listener,
@@ -175,6 +187,10 @@ class BaseMovementExecutor(MovementExecutor):
         self.ready_standing_timeout_sec = self._positive_timeout(
             ready_standing_timeout_sec,
             "Base ready standing timeout",
+        )
+        self.tag_observation_timeout_sec = self._positive_timeout(
+            tag_observation_timeout_sec,
+            "Fresh tag observation timeout",
         )
 
         self._goal_verifier = None
@@ -482,30 +498,59 @@ class BaseMovementExecutor(MovementExecutor):
             )
 
         tag_id = int(command.tag_id)
-        observation = lookup(tag_id, boundary)
+        try:
+            observation = lookup(tag_id, boundary)
+        except Exception as exception:
+            return self._finish(
+                BaseMovementOutcome.EXECUTION_ERROR,
+                "Fresh tag observation lookup failed: "
+                f"{exception}",
+            )
+
+        if observation is None:
+            return self._wait_for_fresh_tag(
+                f"Waiting for post-settle tag {tag_id} observation",
+                BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT,
+            )
+
         stable = self._tag_observation_tracker.update(
             observation,
             boundary,
         )
         if stable is None:
-            return BaseMovementUpdate(
-                BaseMovementOutcome.RUNNING,
+            return self._wait_for_fresh_tag(
                 "Waiting for stable post-settle "
-                f"tag {tag_id} observation",
+                f"tag {tag_id} observation "
+                f"({self._tag_observation_tracker.sample_count}/"
+                f"{self.tag_stability_config.required_samples} samples)",
+                BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT,
             )
 
         sample = self.base_pose_source.sample()
-        pose = sample.planar_pose if sample is not None else None
-        if pose is None:
-            return BaseMovementUpdate(
-                BaseMovementOutcome.RUNNING,
-                "Waiting for measured base pose before tag re-planning",
+        if not self._base_pose_sample_is_fresh(sample):
+            return self._wait_for_fresh_tag(
+                "Waiting for fresh measured base pose before "
+                "tag re-planning",
+                BaseMovementOutcome.MOTION_FAILED,
+            )
+        pose = sample.planar_pose
+
+        try:
+            fresh_plan = self.motion_planner.resolve_tag_observation(
+                command,
+                stable,
+            )
+        except MovementGeometryUnavailable as exception:
+            return self._wait_for_fresh_tag(
+                f"Waiting for tag re-planning geometry: {exception}",
+                BaseMovementOutcome.MOTION_FAILED,
+            )
+        except Exception as exception:
+            return self._finish(
+                BaseMovementOutcome.MOTION_FAILED,
+                f"Fresh tag re-planning failed: {exception}",
             )
 
-        fresh_plan = self.motion_planner.resolve_tag_observation(
-            command,
-            stable,
-        )
         fresh_target = self.motion_planner.planar_target(fresh_plan)
         error = BaseGoalVerifier.errors(pose, fresh_target)
         config = self.goal_verification_config
@@ -547,6 +592,35 @@ class BaseMovementExecutor(MovementExecutor):
                 f"{self.correction_policy.config.maximum_attempts}",
             )
         return update
+
+    def _wait_for_fresh_tag(self, detail, timeout_outcome):
+        if self._deadline_expired(
+            self._phase_started,
+            self.tag_observation_timeout_sec,
+        ):
+            return self._finish(
+                timeout_outcome,
+                f"{detail}; timed out after "
+                f"{self.tag_observation_timeout_sec:.1f} s",
+            )
+        return BaseMovementUpdate(
+            BaseMovementOutcome.RUNNING,
+            detail,
+        )
+
+    def _base_pose_sample_is_fresh(self, sample) -> bool:
+        if sample is None:
+            return False
+        now = float(self._ros_time_sec())
+        stamp = float(sample.stamp_sec)
+        if not math.isfinite(now) or not math.isfinite(stamp):
+            return False
+        age = now - stamp
+        return (
+            age >= 0.0
+            and age
+            <= self.goal_verification_config.maximum_pose_age_sec
+        )
 
     def _correct_frozen_base_goal(self, verifier):
         """Apply correction policy and retry the current frozen plan."""
@@ -771,6 +845,8 @@ class BaseMovementExecutor(MovementExecutor):
 
 
 __all__ = [
+    "BASE_TAG_OBSERVATION_TIMEOUT_PARAMETER",
+    "DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC",
     "BaseMovementExecutor",
     "BaseMovementOutcome",
     "BaseMovementUpdate",
