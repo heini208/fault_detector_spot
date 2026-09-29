@@ -235,3 +235,31 @@ def test_emergency_bypasses_local_command_handler():
     assert local_calls == []
     controller.poll()
     assert controller.active_request_id == request_id
+
+
+def test_emergency_publish_does_not_wait_for_active_request_completion():
+    node = FakeNode()
+    controller = CommandController()
+    RosCommandTransport(node, controller)
+    active = make_request(CommandID.MOVE_BASE_RELATIVE)
+
+    controller.submit(active)
+
+    dispatch = node.publishers[
+        "fault_detector/_internal/commands/request"
+    ]
+    assert [message.request_id for message in dispatch.messages] == [
+        active.request_id
+    ]
+
+    emergency_id = controller.cancel_all()
+
+    assert [message.request_id for message in dispatch.messages] == [
+        active.request_id,
+        emergency_id,
+    ]
+    assert controller.active_request_id == active.request_id
+
+    controller.poll()
+
+    assert controller.active_request_id == emergency_id
