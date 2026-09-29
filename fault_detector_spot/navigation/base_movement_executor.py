@@ -90,6 +90,7 @@ class _BasePhase(Enum):
     EXECUTING_MOVEMENT = "executing_movement"
     VERIFYING_ENDPOINT = "verifying_endpoint"
     CORRECTING = "correcting"
+    CANCELLING = "cancelling"
     EXECUTING_SIT = "executing_sit"
 
 
@@ -207,6 +208,27 @@ class BaseMovementExecutor(MovementExecutor):
         self._set_phase(_BasePhase.EXECUTING_SIT)
         return super()._start_goal(self._build_sit_goal)
 
+    def cancel(self) -> None:
+        """Cancel an active base command without releasing ownership early."""
+        if not self.active:
+            return
+        if self._phase is _BasePhase.CANCELLING:
+            return
+        if (
+            self._send_goal_future is None
+            or (
+                self._result_future is not None
+                and self._result_future.done()
+            )
+        ):
+            self._reset_operation()
+            return
+
+        self._pending_goal_builder = None
+        self._goal_verifier = None
+        self._set_phase(_BasePhase.CANCELLING)
+        self._begin_cancellation()
+
     def poll(self) -> BaseMovementUpdate:
         """Advance the active base operation without blocking."""
         if not self.active or self._operation is None:
@@ -223,6 +245,12 @@ class BaseMovementExecutor(MovementExecutor):
 
         if self._phase is _BasePhase.VERIFYING_ENDPOINT:
             return self._poll_goal_verification()
+
+        if self._phase is _BasePhase.CANCELLING:
+            return BaseMovementUpdate(
+                BaseMovementOutcome.RUNNING,
+                "Cancelling base movement",
+            )
 
         if self._phase in {
             _BasePhase.EXECUTING_STAND,
@@ -408,6 +436,95 @@ class BaseMovementExecutor(MovementExecutor):
                 f"{verifier.detail}",
             )
         return update
+
+    def _begin_cancellation(self) -> None:
+        send_future = self._send_goal_future
+        if send_future is None:
+            self._reset_operation()
+            return
+
+        if self._goal_handle is not None:
+            self._cancel_accepted_goal(self._goal_handle)
+            return
+
+        if send_future.done():
+            self._cancel_after_goal_response(send_future)
+        else:
+            send_future.add_done_callback(
+                self._cancel_after_goal_response
+            )
+
+    def _cancel_after_goal_response(self, send_future) -> None:
+        if (
+            not self.active
+            or self._phase is not _BasePhase.CANCELLING
+            or self._send_goal_future is not send_future
+        ):
+            return
+
+        try:
+            handle = send_future.result()
+        except Exception as exception:
+            self._log_error(
+                "Base goal submission finished during cancellation with "
+                f"an error: {exception}"
+            )
+            self._reset_operation()
+            return
+
+        if handle is None or not handle.accepted:
+            self._reset_operation()
+            return
+
+        self._goal_handle = handle
+        self._cancel_accepted_goal(handle)
+
+    def _cancel_accepted_goal(self, handle) -> None:
+        if (
+            not self.active
+            or self._phase is not _BasePhase.CANCELLING
+            or self._goal_handle is not handle
+        ):
+            return
+
+        result_future = self._result_future
+        if result_future is None:
+            try:
+                result_future = handle.get_result_async()
+            except Exception as exception:
+                self._log_error(
+                    "Base result request failed during cancellation: "
+                    f"{exception}"
+                )
+                result_future = None
+            self._result_future = result_future
+
+        try:
+            handle.cancel_goal_async()
+        except Exception as exception:
+            self._log_error(
+                "Base goal cancellation failed: "
+                f"{exception}"
+            )
+
+        if result_future is None:
+            return
+
+        if result_future.done():
+            self._complete_cancellation(result_future)
+        else:
+            result_future.add_done_callback(
+                self._complete_cancellation
+            )
+
+    def _complete_cancellation(self, result_future) -> None:
+        if (
+            not self.active
+            or self._phase is not _BasePhase.CANCELLING
+            or self._result_future is not result_future
+        ):
+            return
+        self._reset_operation()
 
     def _poll_standing_confirmation(self) -> BaseMovementUpdate:
         state = self._fresh_posture_state()

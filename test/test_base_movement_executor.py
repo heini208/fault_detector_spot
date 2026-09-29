@@ -346,7 +346,7 @@ def test_executor_rejects_second_base_operation_while_active():
     )
 
 
-def test_cancel_requests_goal_cancellation_and_releases_executor():
+def test_cancel_retains_executor_until_goal_reaches_terminal_state():
     send_future = ManualFuture()
     result_future = ManualFuture()
     handle = FakeGoalHandle(result_future)
@@ -370,4 +370,48 @@ def test_cancel_requests_goal_cancellation_and_releases_executor():
     executor.cancel()
 
     assert handle.cancel_calls == 1
+    assert executor.active
+
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=False)
+        )
+    )
+
+    assert not executor.active
+
+
+
+def test_cancel_before_goal_acceptance_retains_ownership_until_terminal():
+    send_future = ManualFuture()
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future)
+
+    executor = BaseMovementExecutor(
+        tf_listener=object(),
+        action_client=FakeActionClient(send_future),
+    )
+    executor._build_stand_goal = lambda: object()
+
+    assert (
+        executor.stand().outcome
+        is BaseMovementOutcome.RUNNING
+    )
+
+    executor.cancel()
+
+    assert executor.active
+    assert handle.cancel_calls == 0
+
+    send_future.set_result(handle)
+
+    assert handle.cancel_calls == 1
+    assert executor.active
+
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=False)
+        )
+    )
+
     assert not executor.active
