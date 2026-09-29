@@ -9,6 +9,10 @@ from synchros2.action_client import ActionClientWrapper
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 from synchros2.utilities import namespace_with
 
+from fault_detector_spot.navigation.base_correction_policy import (
+    BaseCorrectionConfig,
+    BaseCorrectionPolicy,
+)
 from fault_detector_spot.navigation.base_goal_verifier import (
     BaseGoalVerificationConfig,
 )
@@ -222,6 +226,9 @@ class RobotCommandResources:
                     posture_state_source=self.get_posture_state_source(
                         node
                     ),
+                    correction_policy=BaseCorrectionPolicy(
+                        BaseCorrectionConfig.from_node(node)
+                    ),
                     ready_state_timeout_sec=self._positive_parameter(
                         node,
                         BASE_READY_STATE_TIMEOUT_PARAMETER,
@@ -233,8 +240,12 @@ class RobotCommandResources:
                         DEFAULT_BASE_READY_STANDING_TIMEOUT_SEC,
                     ),
                     walking_profiles=WalkingProfiles.from_node(node),
-                    goal_verification_config=BaseGoalVerificationConfig.from_node(node),
-                    ros_time_sec=lambda: node.get_clock().now().nanoseconds * 1e-9,
+                    goal_verification_config=(
+                        BaseGoalVerificationConfig.from_node(node)
+                    ),
+                    ros_time_sec=lambda: (
+                        node.get_clock().now().nanoseconds * 1e-9
+                    ),
                     logger=node.get_logger(),
                 )
                 self._base_movement_executors[robot_name] = executor

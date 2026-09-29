@@ -9,8 +9,8 @@
     base.goal_verification.settle_position_tolerance_m: 0.005
     base.goal_verification.settle_yaw_tolerance_rad: 0.008726646259971648
     # Two retries after the initial movement; zero disables corrections.
-    base.goal_verification.maximum_correction_attempts: 2
-    base.goal_verification.minimum_correction_progress_ratio: 0.10
+    base.correction.maximum_attempts: 2
+    base.correction.minimum_progress_ratio: 0.10
     # Select normal or precision independently for the two planar commands.
     # Precision is an experimental slower profile, not an accuracy guarantee.
     base.walking.relative_profile: normal

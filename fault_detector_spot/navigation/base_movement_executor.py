@@ -16,6 +16,14 @@ from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_to_rpy,
 )
 from fault_detector_spot.inspection.model.models import QuaternionData
+from fault_detector_spot.navigation.base_correction_policy import (
+    BaseCorrectionDecision,
+    BaseCorrectionPolicy,
+)
+from fault_detector_spot.navigation.base_goal_verifier import (
+    BaseGoalVerifier,
+    BaseGoalVerificationConfig,
+)
 from fault_detector_spot.navigation.base_motion_planner import (
     BaseMotionPlanner,
     BaseMovementPlan,
@@ -24,17 +32,15 @@ from fault_detector_spot.navigation.base_pose_source import BasePoseSource
 from fault_detector_spot.navigation.posture_state_source import (
     PostureState,
 )
+from fault_detector_spot.navigation.walking_profile import (
+    GAITS,
+    WalkingProfiles,
+)
 from fault_detector_spot.shared.execution.movement_executor import (
     DEFAULT_GOAL_RESPONSE_TIMEOUT_SEC,
     DEFAULT_RESULT_TIMEOUT_SEC,
     MovementExecutor,
 )
-
-from fault_detector_spot.navigation.base_goal_verifier import (
-    BaseGoalVerifier, BaseGoalVerificationConfig,
-)
-
-from fault_detector_spot.navigation.walking_profile import GAITS, WalkingProfiles
 
 BASE_READY_STATE_TIMEOUT_PARAMETER = "base.ready_state_timeout_sec"
 BASE_READY_STANDING_TIMEOUT_PARAMETER = (
@@ -92,6 +98,7 @@ class BaseMovementExecutor(MovementExecutor):
         action_client=None,
         posture_state_source=None,
         base_pose_source=None,
+        correction_policy=None,
         ready_state_timeout_sec: float = (
             DEFAULT_BASE_READY_STATE_TIMEOUT_SEC
         ),
@@ -119,8 +126,20 @@ class BaseMovementExecutor(MovementExecutor):
             logger=logger,
         )
         self.goal_verification_config = (
-            goal_verification_config or BaseGoalVerificationConfig()
+            goal_verification_config
+            or BaseGoalVerificationConfig()
         )
+        self.correction_policy = (
+            correction_policy or BaseCorrectionPolicy()
+        )
+        if not isinstance(
+            self.correction_policy,
+            BaseCorrectionPolicy,
+        ):
+            raise TypeError(
+                "BaseMovementExecutor requires BaseCorrectionPolicy"
+            )
+
         self.walking_profiles = walking_profiles or WalkingProfiles()
         self.motion_planner = BaseMotionPlanner(
             tf_listener,
@@ -142,8 +161,6 @@ class BaseMovementExecutor(MovementExecutor):
 
         self._goal_verifier = None
         self._movement_plan = None
-        self._correction_attempts = 0
-        self._previous_correction_error = None
         self._operation = None
         self._movement_plan_builder = None
         self._state_wait_started = None
@@ -205,12 +222,17 @@ class BaseMovementExecutor(MovementExecutor):
 
         return self._poll_result()
 
-    def _start_verified_base_movement(self, plan_builder) -> BaseMovementUpdate:
+    def _start_verified_base_movement(
+        self,
+        plan_builder,
+    ) -> BaseMovementUpdate:
         """Start one movement whose plan is resolved after readiness."""
         if self.active:
             return self._busy_update()
         if not callable(plan_builder):
             raise TypeError("Base movement requires a plan builder")
+
+        self.correction_policy.reset()
         self._active = True
         self._operation = _BaseOperation.MOVEMENT
         self._movement_plan_builder = plan_builder
@@ -254,6 +276,7 @@ class BaseMovementExecutor(MovementExecutor):
             self._reset_goal_lifecycle()
             self._verification_started = self._monotonic_clock()
             return self._poll_standing_confirmation()
+
         if self._operation is _BaseOperation.MOVEMENT:
             plan = self._movement_plan
             if plan is None:
@@ -267,6 +290,7 @@ class BaseMovementExecutor(MovementExecutor):
                 self._monotonic_clock(),
             )
             return self._poll_goal_verification()
+
         return super()._handle_successful_result(result)
 
     def _poll_goal_verification(self):
@@ -294,30 +318,31 @@ class BaseMovementExecutor(MovementExecutor):
                 BaseMovementOutcome.MOTION_FAILED,
                 f"Base endpoint verification timed out; {verifier.detail}",
             )
-        return BaseMovementUpdate(BaseMovementOutcome.RUNNING, verifier.detail)
+        return BaseMovementUpdate(
+            BaseMovementOutcome.RUNNING,
+            verifier.detail,
+        )
 
     def _correct_absolute_base_goal(self, verifier):
-        """Retry only a fresh, out-of-tolerance endpoint at the frozen goal."""
-        c = self.goal_verification_config
-        error = verifier.current_error
-        if error is None:
-            return None
-        score = max(error[0] / c.position_tolerance_m,
-                    error[1] / c.yaw_tolerance_rad)
-        if score <= 1.0:
-            return None
-        if self._correction_attempts >= c.maximum_correction_attempts:
-            verifier.detail += "; correction attempt limit reached"
-            return None
-        previous = self._previous_correction_error
-        if previous is not None and score > previous * (1 - c.minimum_correction_progress_ratio):
-            verifier.detail += "; corrections made insufficient progress"
-            return None
+        """Apply the correction policy to the frozen movement plan."""
         plan = self._movement_plan
         if plan is None:
             return None
-        self._previous_correction_error = score
-        self._correction_attempts += 1
+
+        config = self.goal_verification_config
+        result = self.correction_policy.decide(
+            verifier.current_error,
+            config.position_tolerance_m,
+            config.yaw_tolerance_rad,
+        )
+        if result.detail:
+            verifier.detail += f"; {result.detail}"
+        if (
+            result.decision
+            is not BaseCorrectionDecision.RETRY_FROZEN_PLAN
+        ):
+            return None
+
         self._goal_verifier = None
         self._reset_goal_lifecycle()
         update = self._submit_goal(
@@ -326,8 +351,10 @@ class BaseMovementExecutor(MovementExecutor):
         if update.outcome is BaseMovementOutcome.RUNNING:
             return BaseMovementUpdate(
                 update.outcome,
-                f"Correcting base goal, attempt {self._correction_attempts}/"
-                f"{c.maximum_correction_attempts}; {verifier.detail}",
+                "Correcting base goal, attempt "
+                f"{result.attempt}/"
+                f"{self.correction_policy.config.maximum_attempts}; "
+                f"{verifier.detail}",
             )
         return update
 
@@ -352,6 +379,7 @@ class BaseMovementExecutor(MovementExecutor):
             and state is not PostureState.UNKNOWN
         ):
             outcome = BaseMovementOutcome.MOTION_FAILED
+
         return self._finish(
             outcome,
             "Stand movement completed, but Spot did not report "
@@ -364,7 +392,10 @@ class BaseMovementExecutor(MovementExecutor):
         if self._state_wait_started is None:
             self._state_wait_started = now
 
-        if now - self._state_wait_started < self.ready_state_timeout_sec:
+        if (
+            now - self._state_wait_started
+            < self.ready_state_timeout_sec
+        ):
             return BaseMovementUpdate(
                 BaseMovementOutcome.RUNNING,
                 "Waiting for fresh base posture before movement",
@@ -396,10 +427,9 @@ class BaseMovementExecutor(MovementExecutor):
 
     def _reset_operation(self) -> None:
         super()._reset_operation()
+        self.correction_policy.reset()
         self._goal_verifier = None
         self._movement_plan = None
-        self._correction_attempts = 0
-        self._previous_correction_error = None
         self._operation = None
         self._movement_plan_builder = None
         self._state_wait_started = None

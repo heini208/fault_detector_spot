@@ -157,6 +157,28 @@ def test_base_pose_source_owns_measured_pose_resolution():
     assert "self.base_pose_source.sample()" in executor
 
 
+def test_correction_policy_owns_retry_decisions():
+    policy = read(
+        "fault_detector_spot/navigation/base_correction_policy.py"
+    )
+    verifier = read(
+        "fault_detector_spot/navigation/base_goal_verifier.py"
+    )
+    executor = read(
+        "fault_detector_spot/navigation/base_movement_executor.py"
+    )
+
+    assert "class BaseCorrectionPolicy:" in policy
+    assert "RETRY_FROZEN_PLAN" in policy
+    assert "maximum_attempts" in policy
+    assert "minimum_progress_ratio" in policy
+    assert "maximum_attempts" not in verifier
+    assert "minimum_progress_ratio" not in verifier
+    assert "_correction_attempts" not in executor
+    assert "_previous_correction_error" not in executor
+    assert "self.correction_policy.decide(" in executor
+
+
 def test_legacy_base_movement_behaviours_are_removed():
     legacy = (
         "fault_detector_spot/application/behaviour_tree/behaviours/"

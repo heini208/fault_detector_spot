@@ -13,24 +13,19 @@ class BaseGoalVerificationConfig:
     maximum_pose_age_sec: float = 0.5
     settle_position_tolerance_m: float = 0.005
     settle_yaw_tolerance_rad: float = math.radians(0.5)
-    maximum_correction_attempts: int = 2
-    minimum_correction_progress_ratio: float = 0.10
 
     def __post_init__(self):
-        if (isinstance(self.maximum_correction_attempts, bool)
-                or not isinstance(self.maximum_correction_attempts, int)
-                or self.maximum_correction_attempts < 0):
-            raise ValueError("Maximum correction attempts must be a non-negative integer")
-        if not 0 < self.minimum_correction_progress_ratio < 1:
-            raise ValueError("Correction progress ratio must be between zero and one")
         for field in fields(self):
-            if field.name == "maximum_correction_attempts":
-                continue
             value = getattr(self, field.name)
             if not math.isfinite(value) or value <= 0:
-                raise ValueError(f"Base verification {field.name} must be positive and finite")
+                raise ValueError(
+                    f"Base verification {field.name} "
+                    "must be positive and finite"
+                )
         if self.timeout_sec <= self.settle_sec:
-            raise ValueError("Base verification timeout must exceed settling time")
+            raise ValueError(
+                "Base verification timeout must exceed settling time"
+            )
 
     @classmethod
     def from_node(cls, node):
@@ -39,10 +34,12 @@ class BaseGoalVerificationConfig:
         for field in fields(cls):
             key = f"base.goal_verification.{field.name}"
             if not node.has_parameter(key):
-                node.declare_parameter(key, getattr(defaults, field.name))
-            value = node.get_parameter(key).value
-            values[field.name] = (
-                value if field.name == "maximum_correction_attempts" else float(value)
+                node.declare_parameter(
+                    key,
+                    getattr(defaults, field.name),
+                )
+            values[field.name] = float(
+                node.get_parameter(key).value
             )
         return cls(**values)
 
@@ -51,8 +48,12 @@ class BaseGoalVerifier:
     """Require fresh, stable samples inside the requested goal tolerance."""
 
     def __init__(self, target, config, started_at):
-        if len(target) != 3 or not all(math.isfinite(value) for value in target):
-            raise ValueError("Base goal must contain finite x, y and yaw")
+        if len(target) != 3 or not all(
+            math.isfinite(value) for value in target
+        ):
+            raise ValueError(
+                "Base goal must contain finite x, y and yaw"
+            )
         self.target = target
         self.config = config
         self.started_at = started_at
@@ -65,20 +66,38 @@ class BaseGoalVerifier:
     @staticmethod
     def errors(first, second):
         return (
-            math.hypot(first[0] - second[0], first[1] - second[1]),
-            abs(math.atan2(math.sin(first[2] - second[2]),
-                           math.cos(first[2] - second[2]))),
+            math.hypot(
+                first[0] - second[0],
+                first[1] - second[1],
+            ),
+            abs(
+                math.atan2(
+                    math.sin(first[2] - second[2]),
+                    math.cos(first[2] - second[2]),
+                )
+            ),
         )
 
     def update(self, pose, stamp, ros_now, now):
         c = self.config
         self.current_error = None
-        if self.last_stamp is not None and stamp is not None and stamp < self.last_stamp:
+        if (
+            self.last_stamp is not None
+            and stamp is not None
+            and stamp < self.last_stamp
+        ):
             self.stable_since = None
             self.anchor = None
-        fresh = (pose is not None and stamp is not None
-                 and all(math.isfinite(value) for value in (*pose, stamp, ros_now))
-                 and 0 <= ros_now - stamp <= c.maximum_pose_age_sec)
+
+        fresh = (
+            pose is not None
+            and stamp is not None
+            and all(
+                math.isfinite(value)
+                for value in (*pose, stamp, ros_now)
+            )
+            and 0 <= ros_now - stamp <= c.maximum_pose_age_sec
+        )
         if not fresh:
             self.stable_since = None
             self.anchor = None
@@ -86,20 +105,41 @@ class BaseGoalVerifier:
         else:
             position, yaw = self.errors(pose, self.target)
             self.current_error = (position, yaw)
-            self.detail = f"Base goal error: {position:.4f} m, {math.degrees(yaw):.2f} deg"
-            if position > c.position_tolerance_m or yaw > c.yaw_tolerance_rad:
+            self.detail = (
+                f"Base goal error: {position:.4f} m, "
+                f"{math.degrees(yaw):.2f} deg"
+            )
+            if (
+                position > c.position_tolerance_m
+                or yaw > c.yaw_tolerance_rad
+            ):
                 self.stable_since = None
                 self.anchor = None
             elif self.last_stamp is None or stamp > self.last_stamp:
-                drift = self.errors(pose, self.anchor) if self.anchor else (math.inf, math.inf)
-                if (drift[0] > c.settle_position_tolerance_m
-                        or drift[1] > c.settle_yaw_tolerance_rad):
+                drift = (
+                    self.errors(pose, self.anchor)
+                    if self.anchor
+                    else (math.inf, math.inf)
+                )
+                if (
+                    drift[0] > c.settle_position_tolerance_m
+                    or drift[1] > c.settle_yaw_tolerance_rad
+                ):
                     self.anchor = pose
                     self.stable_since = now
-                elif (now - self.stable_since >= c.settle_sec
-                      and now - self.started_at < c.timeout_sec):
+                elif (
+                    now - self.stable_since >= c.settle_sec
+                    and now - self.started_at < c.timeout_sec
+                ):
                     return True
             self.last_stamp = stamp
+
         if now - self.started_at >= c.timeout_sec:
             return False
         return None
+
+
+__all__ = [
+    "BaseGoalVerificationConfig",
+    "BaseGoalVerifier",
+]

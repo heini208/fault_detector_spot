@@ -5,9 +5,23 @@ from types import SimpleNamespace
 import pytest
 from geometry_msgs.msg import PoseStamped, TransformStamped
 
-from fault_detector_spot.navigation.base_movement_executor import BaseMovementExecutor, BaseMovementOutcome
-from fault_detector_spot.navigation.posture_state_source import PostureState
-from test_base_movement_executor import ManualClock, ManualFuture, FakeGoalHandle, FakePostureStateSource
+from fault_detector_spot.navigation.base_correction_policy import (
+    BaseCorrectionConfig,
+    BaseCorrectionPolicy,
+)
+from fault_detector_spot.navigation.base_movement_executor import (
+    BaseMovementExecutor,
+    BaseMovementOutcome,
+)
+from fault_detector_spot.navigation.posture_state_source import (
+    PostureState,
+)
+from test_base_movement_executor import (
+    FakeGoalHandle,
+    FakePostureStateSource,
+    ManualClock,
+    ManualFuture,
+)
 
 
 class Client:
@@ -30,7 +44,7 @@ class Client:
         return send
 
 
-def make_movement(kind="relative"):
+def make_movement(kind="relative", correction_config=None):
     clock, client = ManualClock(), Client()
     transform = TransformStamped()
     transform.transform.rotation.w = 1.0
@@ -39,20 +53,35 @@ def make_movement(kind="relative"):
     target.pose.orientation.w = 1.0
     target.pose.position.x = 1.0
     executor = BaseMovementExecutor(
-        tf_listener=SimpleNamespace(lookup_a_tform_b=lambda *a, **k: transform),
-        action_client=client, monotonic_clock=clock,
+        tf_listener=SimpleNamespace(
+            lookup_a_tform_b=lambda *a, **k: transform
+        ),
+        action_client=client,
+        monotonic_clock=clock,
         ros_time_sec=lambda: 100 + clock.now,
-        posture_state_source=FakePostureStateSource(PostureState.STANDING),
-        tag_state_source=SimpleNamespace(visible_snapshot=lambda: {7: SimpleNamespace(pose=target)}),
+        posture_state_source=FakePostureStateSource(
+            PostureState.STANDING
+        ),
+        tag_state_source=SimpleNamespace(
+            visible_snapshot=lambda: {
+                7: SimpleNamespace(pose=target)
+            }
+        ),
+        correction_policy=BaseCorrectionPolicy(
+            correction_config or BaseCorrectionConfig()
+        ),
     )
     resolutions = []
-    executor._prepare_move_command = lambda command, frame: command
 
     def resolve(_):
         resolutions.append(1)
         return target
 
-    command = SimpleNamespace(tag_id=7, compute_goal_pose=resolve, walking_profile="precision")
+    command = SimpleNamespace(
+        tag_id=7,
+        compute_goal_pose=resolve,
+        walking_profile="precision",
+    )
     getattr(executor, kind)(command)
 
     def poll_at(x, advance=0, fresh=True):
@@ -61,12 +90,18 @@ def make_movement(kind="relative"):
         if fresh:
             stamp = 100 + clock.now
             transform.header.stamp.sec = int(stamp)
-            transform.header.stamp.nanosec = round((stamp - int(stamp)) * 1e9)
+            transform.header.stamp.nanosec = round(
+                (stamp - int(stamp)) * 1e9
+            )
         return executor.poll()
 
     def complete(x, success=True):
         executor.poll()
-        client.results[-1].set_result(SimpleNamespace(result=SimpleNamespace(success=success)))
+        client.results[-1].set_result(
+            SimpleNamespace(
+                result=SimpleNamespace(success=success)
+            )
+        )
         return poll_at(x)
 
     return executor, client, resolutions, poll_at, complete
@@ -111,13 +146,15 @@ def test_no_progress_stops_early():
 def test_stale_pose_at_deadline_does_not_retry_previous_error():
     _, client, _, poll, complete = make_movement()
     complete(0.8)
-    assert poll(0.8, 5, fresh=False).outcome is BaseMovementOutcome.MOTION_FAILED
+    update = poll(0.8, 5, fresh=False)
+    assert update.outcome is BaseMovementOutcome.MOTION_FAILED
     assert len(client.goals) == 1
 
 
 def test_execution_failure_is_not_retried():
     _, client, _, _, complete = make_movement()
-    assert complete(0.8, success=False).outcome is BaseMovementOutcome.MOTION_FAILED
+    update = complete(0.8, success=False)
+    assert update.outcome is BaseMovementOutcome.MOTION_FAILED
     assert len(client.goals) == 1
 
 
@@ -130,24 +167,20 @@ def test_cancel_during_correction_prevents_further_attempts():
     assert client.handles[-1].cancel_calls == 1
     assert not executor.active
     assert executor._movement_plan is None
-    assert executor._correction_attempts == 0
+    assert executor.correction_policy.attempts == 0
     executor.poll()
     assert len(client.goals) == 2
 
 
 def test_zero_corrections_disables_retry():
-    from dataclasses import replace
-    executor, client, _, poll, complete = make_movement()
-    executor.goal_verification_config = replace(
-        executor.goal_verification_config, maximum_correction_attempts=0,
+    _, client, _, poll, complete = make_movement(
+        correction_config=BaseCorrectionConfig(
+            maximum_attempts=0
+        )
     )
     complete(0.8)
-    assert poll(0.8, 5).outcome is BaseMovementOutcome.MOTION_FAILED
+    assert (
+        poll(0.8, 5).outcome
+        is BaseMovementOutcome.MOTION_FAILED
+    )
     assert len(client.goals) == 1
-
-
-@pytest.mark.parametrize("value", [-1, 1.5, True])
-def test_invalid_attempt_limit_rejected(value):
-    from fault_detector_spot.navigation.base_goal_verifier import BaseGoalVerificationConfig
-    with pytest.raises(ValueError):
-        BaseGoalVerificationConfig(maximum_correction_attempts=value)
