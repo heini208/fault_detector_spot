@@ -453,3 +453,80 @@ def test_cancel_before_goal_acceptance_retains_ownership_until_terminal():
     )
 
     assert not executor.active
+
+
+
+def test_goal_response_timeout_retains_base_ownership_until_terminal():
+    clock = ManualClock()
+    send_future = ManualFuture()
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future)
+    executor = BaseMovementExecutor(
+        tf_listener=object(),
+        action_client=FakeActionClient(send_future),
+        monotonic_clock=clock,
+        goal_response_timeout_sec=1.0,
+    )
+    executor._build_stand_goal = lambda: object()
+
+    assert executor.stand().outcome is BaseMovementOutcome.RUNNING
+    clock.now = 1.0
+
+    timeout = executor.poll()
+
+    assert timeout.outcome is BaseMovementOutcome.RUNNING
+    assert executor.active
+    assert executor.sit().outcome is BaseMovementOutcome.BUSY
+
+    send_future.set_result(handle)
+
+    assert handle.cancel_calls == 1
+    assert executor.active
+
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=False)
+        )
+    )
+
+    assert executor.active
+    terminal = executor.poll()
+    assert terminal.outcome is BaseMovementOutcome.GOAL_RESPONSE_TIMEOUT
+    assert not executor.active
+
+
+def test_result_timeout_retains_base_ownership_until_terminal():
+    clock = ManualClock()
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future)
+    send_future = ManualFuture()
+    send_future.set_result(handle)
+    executor = BaseMovementExecutor(
+        tf_listener=object(),
+        action_client=FakeActionClient(send_future),
+        monotonic_clock=clock,
+        result_timeout_sec=1.0,
+    )
+    executor._build_stand_goal = lambda: object()
+
+    assert executor.stand().outcome is BaseMovementOutcome.RUNNING
+    assert executor.poll().outcome is BaseMovementOutcome.RUNNING
+    clock.now = 1.0
+
+    timeout = executor.poll()
+
+    assert timeout.outcome is BaseMovementOutcome.RUNNING
+    assert handle.cancel_calls == 1
+    assert executor.active
+    assert executor.sit().outcome is BaseMovementOutcome.BUSY
+
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(success=False)
+        )
+    )
+
+    assert executor.active
+    terminal = executor.poll()
+    assert terminal.outcome is BaseMovementOutcome.RESULT_TIMEOUT
+    assert not executor.active

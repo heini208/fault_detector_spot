@@ -202,6 +202,8 @@ class BaseMovementExecutor(MovementExecutor):
         self._target_strategy = None
         self._semantic_tag_command = None
         self._tag_settle_boundary_stamp = None
+        self._cancellation_terminal_update = None
+        self._cancellation_complete = False
 
     def relative(self, command) -> BaseMovementUpdate:
         """Start a relative SE2 base movement."""
@@ -282,10 +284,7 @@ class BaseMovementExecutor(MovementExecutor):
             return self._poll_fresh_tag_target()
 
         if self._phase is _BasePhase.CANCELLING:
-            return BaseMovementUpdate(
-                BaseMovementOutcome.RUNNING,
-                "Cancelling base movement",
-            )
+            return self._poll_cancellation()
 
         if self._phase in {
             _BasePhase.EXECUTING_STAND,
@@ -293,6 +292,9 @@ class BaseMovementExecutor(MovementExecutor):
             _BasePhase.CORRECTING,
             _BasePhase.EXECUTING_SIT,
         }:
+            timeout = self._begin_timeout_cancellation_if_needed()
+            if timeout is not None:
+                return timeout
             return super().poll()
 
         return self._finish(
@@ -655,10 +657,72 @@ class BaseMovementExecutor(MovementExecutor):
             )
         return update
 
+    def _begin_timeout_cancellation_if_needed(self):
+        if (
+            self._goal_handle is None
+            and self._send_goal_future is not None
+            and not self._send_goal_future.done()
+            and self._deadline_expired(
+                self._goal_sent_monotonic,
+                self.goal_response_timeout_sec,
+            )
+        ):
+            return self._begin_timeout_cancellation(
+                BaseMovementOutcome.GOAL_RESPONSE_TIMEOUT,
+                "Action goal response timed out after "
+                f"{self.goal_response_timeout_sec:.1f} s",
+            )
+
+        if (
+            self._goal_handle is not None
+            and self._result_future is not None
+            and not self._result_future.done()
+            and self._deadline_expired(
+                self._result_started_monotonic,
+                self.result_timeout_sec,
+            )
+        ):
+            return self._begin_timeout_cancellation(
+                BaseMovementOutcome.RESULT_TIMEOUT,
+                "Action result timed out after "
+                f"{self.result_timeout_sec:.1f} s",
+            )
+        return None
+
+    def _begin_timeout_cancellation(self, outcome, detail):
+        self._cancellation_terminal_update = BaseMovementUpdate(
+            outcome,
+            detail,
+        )
+        self._cancellation_complete = False
+        self._pending_goal_builder = None
+        self._goal_verifier = None
+        self._set_phase(_BasePhase.CANCELLING)
+        self._begin_cancellation()
+        return self._poll_cancellation()
+
+    def _poll_cancellation(self):
+        terminal = self._cancellation_terminal_update
+        if self._cancellation_complete and terminal is not None:
+            return self._finish(
+                terminal.outcome,
+                terminal.detail,
+            )
+        return BaseMovementUpdate(
+            BaseMovementOutcome.RUNNING,
+            "Cancelling base movement",
+        )
+
+    def _complete_cancellation_lifecycle(self) -> None:
+        if self._cancellation_terminal_update is None:
+            self._reset_operation()
+            return
+        self._cancellation_complete = True
+
     def _begin_cancellation(self) -> None:
         send_future = self._send_goal_future
         if send_future is None:
-            self._reset_operation()
+            self._complete_cancellation_lifecycle()
             return
 
         if self._goal_handle is not None:
@@ -687,11 +751,11 @@ class BaseMovementExecutor(MovementExecutor):
                 "Base goal submission finished during cancellation with "
                 f"an error: {exception}"
             )
-            self._reset_operation()
+            self._complete_cancellation_lifecycle()
             return
 
         if handle is None or not handle.accepted:
-            self._reset_operation()
+            self._complete_cancellation_lifecycle()
             return
 
         self._goal_handle = handle
@@ -742,7 +806,7 @@ class BaseMovementExecutor(MovementExecutor):
             or self._result_future is not result_future
         ):
             return
-        self._reset_operation()
+        self._complete_cancellation_lifecycle()
 
     def _poll_standing_confirmation(self) -> BaseMovementUpdate:
         state = self._fresh_posture_state()
@@ -828,6 +892,8 @@ class BaseMovementExecutor(MovementExecutor):
         self._target_strategy = None
         self._semantic_tag_command = None
         self._tag_settle_boundary_stamp = None
+        self._cancellation_terminal_update = None
+        self._cancellation_complete = False
         self._tag_observation_tracker.reset()
 
     def _build_stand_goal(self) -> RobotCommand.Goal:
