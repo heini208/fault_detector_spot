@@ -268,6 +268,64 @@ def test_zero_corrections_disables_retry():
         is BaseMovementOutcome.MOTION_FAILED
     )
     assert len(client.goals) == 1
+    assert client.handles[-1].cancel_calls == 0
+
+
+def test_cancel_while_waiting_for_fresh_tag_releases_cleanly():
+    executor, client, _, poll, complete = make_movement("tag")
+
+    complete(0.8)
+    waiting = poll(0.8, 0.6)
+
+    assert waiting.outcome is BaseMovementOutcome.RUNNING
+    assert "post-settle tag 7" in waiting.detail
+    executor.cancel()
+
+    assert not executor.active
+    assert client.handles[-1].cancel_calls == 0
+
+
+def test_repeated_tag_corrections_use_new_settle_boundaries():
+    executor, client, _, poll, complete = make_movement("tag")
+
+    complete(0.8)
+    for stamp, advance in (
+        (100.7, 0.6),
+        (100.8, 0.1),
+        (100.9, 0.1),
+    ):
+        executor.tag_state_source.set_observation(1.1, stamp)
+        update = poll(0.8, advance)
+
+    assert update.outcome is BaseMovementOutcome.RUNNING
+    assert len(client.goals) == 2
+    assert executor._movement_plan.target.pose.position.x == pytest.approx(1.1)
+
+    complete(1.0)
+    for stamp, advance in (
+        (101.5, 0.6),
+        (101.6, 0.1),
+        (101.7, 0.1),
+    ):
+        executor.tag_state_source.set_observation(1.2, stamp)
+        update = poll(1.0, advance)
+
+    assert update.outcome is BaseMovementOutcome.RUNNING
+    assert len(client.goals) == 3
+    assert executor._movement_plan.target.pose.position.x == pytest.approx(1.2)
+
+    complete(1.2)
+    for stamp, advance in (
+        (102.3, 0.6),
+        (102.4, 0.1),
+        (102.5, 0.1),
+    ):
+        executor.tag_state_source.set_observation(1.2, stamp)
+        update = poll(1.2, advance)
+
+    assert update.outcome is BaseMovementOutcome.SUCCESS
+    assert len(client.goals) == 3
+    assert not executor.active
 
 
 def test_missing_post_settle_tag_times_out():

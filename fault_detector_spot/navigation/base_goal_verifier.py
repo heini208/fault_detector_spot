@@ -67,6 +67,21 @@ class BaseGoalVerifier:
         self.settled_stamp = None
 
     @staticmethod
+    def sample_is_fresh(
+        pose,
+        stamp,
+        ros_now,
+        maximum_age_sec,
+    ) -> bool:
+        if pose is None or stamp is None:
+            return False
+        values = (*pose, stamp, ros_now, maximum_age_sec)
+        if not all(math.isfinite(value) for value in values):
+            return False
+        age = ros_now - stamp
+        return 0.0 <= age <= maximum_age_sec
+
+    @staticmethod
     def errors(first, second):
         return (
             math.hypot(
@@ -92,14 +107,11 @@ class BaseGoalVerifier:
             self._reset_settling()
             self.last_stamp = None
 
-        fresh = (
-            pose is not None
-            and stamp is not None
-            and all(
-                math.isfinite(value)
-                for value in (*pose, stamp, ros_now)
-            )
-            and 0 <= ros_now - stamp <= c.maximum_pose_age_sec
+        fresh = self.sample_is_fresh(
+            pose,
+            stamp,
+            ros_now,
+            c.maximum_pose_age_sec,
         )
         if not fresh:
             self._reset_settling()

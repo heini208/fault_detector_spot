@@ -3,7 +3,6 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
-import math
 import time
 
 from bosdyn.client.robot_command import RobotCommandBuilder
@@ -473,7 +472,6 @@ class BaseMovementExecutor(MovementExecutor):
             correction = self._correct_frozen_base_goal(verifier)
             if correction is not None:
                 return correction
-            self._request_cancel()
             return self._finish(
                 BaseMovementOutcome.MOTION_FAILED,
                 f"Base endpoint verification timed out; {verifier.detail}",
@@ -529,14 +527,19 @@ class BaseMovementExecutor(MovementExecutor):
             )
 
         sample = self.base_pose_source.sample()
-        if not self._base_pose_sample_is_fresh(sample):
+        pose = sample.planar_pose if sample is not None else None
+        stamp = sample.stamp_sec if sample is not None else None
+        if not BaseGoalVerifier.sample_is_fresh(
+            pose,
+            stamp,
+            self._ros_time_sec(),
+            self.goal_verification_config.maximum_pose_age_sec,
+        ):
             return self._wait_for_fresh_tag(
                 "Waiting for fresh measured base pose before "
                 "tag re-planning",
                 BaseMovementOutcome.MOTION_FAILED,
             )
-        pose = sample.planar_pose
-
         try:
             fresh_plan = self.motion_planner.resolve_tag_observation(
                 command,
@@ -608,20 +611,6 @@ class BaseMovementExecutor(MovementExecutor):
         return BaseMovementUpdate(
             BaseMovementOutcome.RUNNING,
             detail,
-        )
-
-    def _base_pose_sample_is_fresh(self, sample) -> bool:
-        if sample is None:
-            return False
-        now = float(self._ros_time_sec())
-        stamp = float(sample.stamp_sec)
-        if not math.isfinite(now) or not math.isfinite(stamp):
-            return False
-        age = now - stamp
-        return (
-            age >= 0.0
-            and age
-            <= self.goal_verification_config.maximum_pose_age_sec
         )
 
     def _correct_frozen_base_goal(self, verifier):
