@@ -90,6 +90,7 @@ class BaseGoalVerifier:
             and stamp < self.last_stamp
         ):
             self._reset_settling()
+            self.last_stamp = None
 
         fresh = (
             pose is not None
