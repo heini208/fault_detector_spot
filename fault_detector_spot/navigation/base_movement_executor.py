@@ -133,6 +133,9 @@ class BaseMovementExecutor(MovementExecutor):
 
         self._goal_verifier = None
         self._target_pose = None
+        self._absolute_movement_goal = None
+        self._correction_attempts = 0
+        self._previous_correction_error = None
         self._operation = None
         self._movement_goal_builder = None
         self._state_wait_started = None
@@ -140,13 +143,13 @@ class BaseMovementExecutor(MovementExecutor):
 
     def relative(self, command) -> BaseMovementUpdate:
         """Start a relative SE2 base movement."""
-        return self._start_movement_goal(
+        return self._start_verified_base_movement(
             lambda: self._build_relative_goal(command)
         )
 
     def tag(self, command) -> BaseMovementUpdate:
         """Start an SE2 base movement relative to a live visible tag."""
-        return self._start_movement_goal(
+        return self._start_verified_base_movement(
             lambda: self._build_tag_goal(command)
         )
 
@@ -191,7 +194,8 @@ class BaseMovementExecutor(MovementExecutor):
 
         return self._poll_result()
 
-    def _start_movement_goal(self, goal_builder) -> BaseMovementUpdate:
+    def _start_verified_base_movement(self, goal_builder) -> BaseMovementUpdate:
+        """Shared relative/tag movement lifecycle with bounded endpoint correction."""
         if self.active:
             return self._busy_update()
         self._active = True
@@ -267,12 +271,47 @@ class BaseMovementExecutor(MovementExecutor):
                 f"Base goal verified and settled; {verifier.detail}",
             )
         if outcome is False:
+            correction = self._correct_absolute_base_goal(verifier)
+            if correction is not None:
+                return correction
             self._request_cancel()
             return self._finish(
                 BaseMovementOutcome.MOTION_FAILED,
                 f"Base endpoint verification timed out; {verifier.detail}",
             )
         return BaseMovementUpdate(BaseMovementOutcome.RUNNING, verifier.detail)
+
+    def _correct_absolute_base_goal(self, verifier):
+        """Retry only a fresh, out-of-tolerance endpoint at the frozen goal."""
+        c = self.goal_verification_config
+        error = verifier.current_error
+        if error is None:
+            return None
+        score = max(error[0] / c.position_tolerance_m,
+                    error[1] / c.yaw_tolerance_rad)
+        if score <= 1.0:
+            return None  # Unsettled, rather than an inaccurate endpoint.
+        if self._correction_attempts >= c.maximum_correction_attempts:
+            verifier.detail += "; correction attempt limit reached"
+            return None
+        previous = self._previous_correction_error
+        if previous is not None and score > previous * (1 - c.minimum_correction_progress_ratio):
+            verifier.detail += "; corrections made insufficient progress"
+            return None
+        if self._absolute_movement_goal is None:
+            return None
+        self._previous_correction_error = score
+        self._correction_attempts += 1
+        self._goal_verifier = None
+        self._reset_goal_lifecycle()
+        update = self._submit_goal(lambda: deepcopy(self._absolute_movement_goal))
+        if update.outcome is BaseMovementOutcome.RUNNING:
+            return BaseMovementUpdate(
+                update.outcome,
+                f"Correcting base goal, attempt {self._correction_attempts}/"
+                f"{c.maximum_correction_attempts}; {verifier.detail}",
+            )
+        return update
 
     def _poll_standing_confirmation(self) -> BaseMovementUpdate:
         state = self._fresh_posture_state()
@@ -341,6 +380,9 @@ class BaseMovementExecutor(MovementExecutor):
         super()._reset_operation()
         self._goal_verifier = None
         self._target_pose = None
+        self._absolute_movement_goal = None
+        self._correction_attempts = 0
+        self._previous_correction_error = None
         self._operation = None
         self._movement_goal_builder = None
         self._state_wait_started = None
@@ -364,7 +406,7 @@ class BaseMovementExecutor(MovementExecutor):
         profile = self.walking_profiles.for_move(
             override=getattr(command, "walking_profile", ""),
         )
-        return self._build_se2_goal(target, profile.relative_speed_mps, profile=profile)
+        return self._build_absolute_base_goal(target, profile.relative_speed_mps, profile=profile)
 
     def _build_tag_goal(self, command) -> RobotCommand.Goal:
         if self.tag_state_source is None:
@@ -397,7 +439,7 @@ class BaseMovementExecutor(MovementExecutor):
         profile = self.walking_profiles.for_move(
             True, getattr(command, "walking_profile", ""),
         )
-        return self._build_se2_goal(target, profile.tag_speed_mps, profile=profile)
+        return self._build_absolute_base_goal(target, profile.tag_speed_mps, profile=profile)
 
     def _build_stand_goal(self) -> RobotCommand.Goal:
         command = RobotCommandBuilder.synchro_stand_command()
@@ -437,7 +479,7 @@ class BaseMovementExecutor(MovementExecutor):
         normalized.header.frame_id = ODOM_FRAME_NAME
         return normalized
 
-    def _build_se2_goal(
+    def _build_absolute_base_goal(
         self,
         target: PoseStamped,
         linear_speed_mps: float,
@@ -487,6 +529,7 @@ class BaseMovementExecutor(MovementExecutor):
         )
         goal = RobotCommand.Goal()
         convert(command, goal.command)
+        self._absolute_movement_goal = deepcopy(goal)
         return goal
 
 

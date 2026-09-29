@@ -207,7 +207,7 @@ def test_arm_and_base_executors_share_only_the_lifecycle_parent():
     assert "class BaseMovementExecutor(MovementExecutor)" in base
     assert "_handle_successful_result" in arm
     assert "def build_probe_plan(" in planner
-    assert "_build_se2_goal" in base
+    assert "_build_absolute_base_goal" in base
 
 
 def test_probe_planner_owns_live_arm_geometry_preparation():

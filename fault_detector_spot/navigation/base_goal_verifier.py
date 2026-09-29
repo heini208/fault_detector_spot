@@ -13,9 +13,19 @@ class BaseGoalVerificationConfig:
     maximum_pose_age_sec: float = 0.5
     settle_position_tolerance_m: float = 0.005
     settle_yaw_tolerance_rad: float = math.radians(0.5)
+    maximum_correction_attempts: int = 2
+    minimum_correction_progress_ratio: float = 0.10
 
     def __post_init__(self):
+        if (isinstance(self.maximum_correction_attempts, bool)
+                or not isinstance(self.maximum_correction_attempts, int)
+                or self.maximum_correction_attempts < 0):
+            raise ValueError("Maximum correction attempts must be a non-negative integer")
+        if not 0 < self.minimum_correction_progress_ratio < 1:
+            raise ValueError("Correction progress ratio must be between zero and one")
         for field in fields(self):
+            if field.name == "maximum_correction_attempts":
+                continue
             value = getattr(self, field.name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"Base verification {field.name} must be positive and finite")
@@ -30,7 +40,10 @@ class BaseGoalVerificationConfig:
             key = f"base.goal_verification.{field.name}"
             if not node.has_parameter(key):
                 node.declare_parameter(key, getattr(defaults, field.name))
-            values[field.name] = float(node.get_parameter(key).value)
+            value = node.get_parameter(key).value
+            values[field.name] = (
+                value if field.name == "maximum_correction_attempts" else float(value)
+            )
         return cls(**values)
 
 
@@ -47,6 +60,7 @@ class BaseGoalVerifier:
         self.stable_since = None
         self.last_stamp = None
         self.detail = "Waiting for measured base pose"
+        self.current_error = None
 
     @staticmethod
     def errors(first, second):
@@ -58,8 +72,7 @@ class BaseGoalVerifier:
 
     def update(self, pose, stamp, ros_now, now):
         c = self.config
-        if now - self.started_at >= c.timeout_sec:
-            return False
+        self.current_error = None
         if self.last_stamp is not None and stamp is not None and stamp < self.last_stamp:
             self.stable_since = None
             self.anchor = None
@@ -72,6 +85,7 @@ class BaseGoalVerifier:
             self.detail = "Base pose unavailable or stale"
         else:
             position, yaw = self.errors(pose, self.target)
+            self.current_error = (position, yaw)
             self.detail = f"Base goal error: {position:.4f} m, {math.degrees(yaw):.2f} deg"
             if position > c.position_tolerance_m or yaw > c.yaw_tolerance_rad:
                 self.stable_since = None
@@ -82,7 +96,8 @@ class BaseGoalVerifier:
                         or drift[1] > c.settle_yaw_tolerance_rad):
                     self.anchor = pose
                     self.stable_since = now
-                elif now - self.stable_since >= c.settle_sec:
+                elif (now - self.stable_since >= c.settle_sec
+                      and now - self.started_at < c.timeout_sec):
                     return True
             self.last_stamp = stamp
         if now - self.started_at >= c.timeout_sec:

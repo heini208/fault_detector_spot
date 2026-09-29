@@ -90,7 +90,7 @@ def test_executor_verifies_actual_goal_and_cancellation_during_settling():
     target.header.frame_id = "odom"
     target.pose.orientation.w = 1.0
     target.pose.position.x = 1.0
-    executor._build_relative_goal = lambda _: executor._build_se2_goal(target, 0.1)
+    executor._build_relative_goal = lambda _: executor._build_absolute_base_goal(target, 0.1)
     executor.relative(object())
     handle = FakeGoalHandle(result)
     send.set_result(handle)
