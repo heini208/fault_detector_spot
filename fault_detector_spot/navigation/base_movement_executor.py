@@ -1,6 +1,5 @@
 """Centralized RobotCommand execution for Spot base movement."""
 
-from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 import math
@@ -11,16 +10,15 @@ from bosdyn.client import math_helpers
 from bosdyn.client.frame_helpers import ODOM_FRAME_NAME, BODY_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_spot_api_msgs.conversions import convert
-from geometry_msgs.msg import PoseStamped
 from spot_msgs.action import RobotCommand
 from synchros2.utilities import namespace_with
-from tf2_geometry_msgs import do_transform_pose_stamped
 
 from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_to_rpy,
 )
 from fault_detector_spot.inspection.model.models import QuaternionData
 from fault_detector_spot.navigation.base_motion_planner import (
+    BaseMotionPlanner,
     BaseMovementPlan,
 )
 from fault_detector_spot.navigation.posture_state_source import (
@@ -123,6 +121,10 @@ class BaseMovementExecutor(MovementExecutor):
             goal_verification_config or BaseGoalVerificationConfig()
         )
         self.walking_profiles = walking_profiles or WalkingProfiles()
+        self.motion_planner = BaseMotionPlanner(
+            tf_listener,
+            self.walking_profiles,
+        )
         self._ros_time_sec = ros_time_sec
         self.posture_state_source = posture_state_source
         self.ready_state_timeout_sec = self._positive_timeout(
@@ -395,66 +397,14 @@ class BaseMovementExecutor(MovementExecutor):
         self._verification_started = None
 
     def _build_relative_goal(self, command) -> RobotCommand.Goal:
-        if command is None or not callable(
-            getattr(command, "compute_goal_pose", None)
-        ):
-            raise TypeError(
-                "Relative base movement requires a command with "
-                "compute_goal_pose()"
-            )
-
-        command = self._prepare_move_command(
-            command,
-            ODOM_FRAME_NAME,
-        )
-        target = command.compute_goal_pose(self.tf_listener)
-        target = self._normalize_to_odom(target)
-        profile = self.walking_profiles.for_move(
-            override=getattr(command, "walking_profile", ""),
-        )
-        plan = BaseMovementPlan(
-            target=target,
-            linear_speed_mps=profile.relative_speed_mps,
-            profile=profile,
-        )
+        plan = self.motion_planner.resolve_relative(command)
         self._movement_plan = plan
         return self._build_absolute_base_goal(plan)
 
     def _build_tag_goal(self, command) -> RobotCommand.Goal:
-        if self.tag_state_source is None:
-            raise RuntimeError(
-                "Tag base movement requires a tag state source"
-            )
-        if command is None or not hasattr(command, "tag_id"):
-            raise TypeError(
-                "Tag base movement requires a command with tag_id"
-            )
-        if not callable(getattr(command, "compute_goal_pose", None)):
-            raise TypeError(
-                "Tag base movement requires compute_goal_pose()"
-            )
-
-        tag_id = int(command.tag_id)
-        tag = self.tag_state_source.visible_snapshot().get(tag_id)
-        if tag is None:
-            raise RuntimeError(
-                f"Tag {tag_id} is not currently visible"
-            )
-
-        command.tag_pose = deepcopy(tag.pose)
-        command = self._prepare_move_command(
+        plan = self.motion_planner.resolve_tag(
             command,
-            ODOM_FRAME_NAME,
-        )
-        target = command.compute_goal_pose(self.tf_listener)
-        target = self._normalize_to_odom(target)
-        profile = self.walking_profiles.for_move(
-            True, getattr(command, "walking_profile", ""),
-        )
-        plan = BaseMovementPlan(
-            target=target,
-            linear_speed_mps=profile.tag_speed_mps,
-            profile=profile,
+            self.tag_state_source,
         )
         self._movement_plan = plan
         return self._build_absolute_base_goal(plan)
@@ -470,32 +420,6 @@ class BaseMovementExecutor(MovementExecutor):
         goal = RobotCommand.Goal()
         convert(command, goal.command)
         return goal
-
-    def _normalize_to_odom(
-        self,
-        target: PoseStamped,
-    ) -> PoseStamped:
-        if not isinstance(target, PoseStamped):
-            raise TypeError("Base target must be a PoseStamped")
-
-        source_frame = target.header.frame_id.strip()
-        if not source_frame:
-            raise ValueError("Base target frame must not be empty")
-
-        if source_frame == ODOM_FRAME_NAME:
-            return deepcopy(target)
-
-        transform = self.tf_listener.lookup_a_tform_b(
-            ODOM_FRAME_NAME,
-            source_frame,
-            timeout_sec=0.0,
-        )
-        normalized = do_transform_pose_stamped(
-            target,
-            transform,
-        )
-        normalized.header.frame_id = ODOM_FRAME_NAME
-        return normalized
 
     @staticmethod
     def _planar_target(plan: BaseMovementPlan):

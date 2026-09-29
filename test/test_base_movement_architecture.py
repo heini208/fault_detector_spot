@@ -111,7 +111,10 @@ def test_base_executor_inherits_lifecycle_and_owns_goal_building():
     assert "def sit(" in executor
 
 
-def test_base_tag_movement_uses_authoritative_live_visible_tag_state():
+def test_base_motion_planner_owns_target_resolution():
+    planner = read(
+        "fault_detector_spot/navigation/base_motion_planner.py"
+    )
     executor = read(
         "fault_detector_spot/navigation/base_movement_executor.py"
     )
@@ -120,11 +123,17 @@ def test_base_tag_movement_uses_authoritative_live_visible_tag_state():
         "base_goal_behaviour.py"
     )
 
-    assert "visible_snapshot()" in executor
+    assert "class BaseMotionPlanner:" in planner
+    assert "def resolve_relative(" in planner
+    assert "def resolve_tag(" in planner
+    assert "def normalize_target(" in planner
+    assert "visible_snapshot()" in planner
+    assert "do_transform_pose_stamped(" in planner
+    assert "visible_snapshot()" not in executor
+    assert "do_transform_pose_stamped(" not in executor
     assert "visible_snapshot()" not in goal
-    assert "command.tag_pose = deepcopy(tag.pose)" in executor
-    assert "command.tag_pose = deepcopy(tag.pose)" not in goal
-    assert "_prepare_operation" not in goal
+    assert "self.motion_planner.resolve_relative(command)" in executor
+    assert "self.motion_planner.resolve_tag(" in executor
 
 
 def test_legacy_base_movement_behaviours_are_removed():
