@@ -85,6 +85,30 @@ class TagStateSource(RuntimeSource):
             now,
         )
 
+    def visible_tag(self, tag_id: int, now: float = None):
+        return self.visible_snapshot(now).get(int(tag_id))
+
+    def visible_tag_after(
+        self,
+        tag_id: int,
+        after_stamp_sec: float,
+        now: float = None,
+    ):
+        boundary = float(after_stamp_sec)
+        if not math.isfinite(boundary):
+            raise ValueError(
+                "Tag observation boundary must be finite"
+            )
+
+        tag = self.visible_tag(tag_id, now)
+        if tag is None:
+            return None
+
+        observed_at = self._observation_stamp_sec(tag)
+        if observed_at is None or observed_at <= boundary:
+            return None
+        return tag
+
     def usable_tag(self, tag_id: int, now: float = None):
         return self.usable_snapshot(now).get(int(tag_id))
 
@@ -109,6 +133,14 @@ class TagStateSource(RuntimeSource):
             ):
                 return {}
             return deepcopy(values)
+
+    @staticmethod
+    def _observation_stamp_sec(tag):
+        stamp = tag.pose.header.stamp
+        if stamp.sec == 0 and stamp.nanosec == 0:
+            return None
+        value = float(stamp.sec) + float(stamp.nanosec) * 1e-9
+        return value if math.isfinite(value) else None
 
     def _receive_base_tags(self, message: TagElementArray) -> None:
         self._store("_base_tags", "_base_received_at", message)
