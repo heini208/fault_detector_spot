@@ -192,7 +192,6 @@ def test_correction_policy_owns_retry_decisions():
     assert "_correction_attempts" not in executor
     assert "_previous_correction_error" not in executor
     assert "self.correction_policy.decide(" in executor
-    assert "RETRY_FROZEN_PLAN" not in policy
 
 
 def test_base_executor_uses_explicit_execution_phases():

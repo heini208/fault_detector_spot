@@ -194,6 +194,8 @@ class BaseMovementExecutor(MovementExecutor):
 
     def tag(self, command) -> BaseMovementUpdate:
         """Start an SE2 base movement relative to a live visible tag."""
+        if self.active:
+            return self._busy_update()
         semantic_command = deepcopy(command)
         return self._start_verified_base_movement(
             lambda: self.motion_planner.resolve_tag(
