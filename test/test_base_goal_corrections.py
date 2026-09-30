@@ -196,6 +196,98 @@ def test_tag_correction_replans_from_stable_post_settle_observation():
     assert executor._movement_plan.target.pose.position.x == pytest.approx(1.1)
 
 
+def test_tag_verification_accepts_observed_one_hz_spot_cadence():
+    executor, client, _, poll, complete = make_movement("tag")
+    complete(1.0)
+    assert poll(1.0, 0.6).outcome is BaseMovementOutcome.RUNNING
+
+    for stamp, advance in ((101.067, 0.467), (102.134, 1.067)):
+        executor.tag_state_source.set_observation(1.0, stamp)
+        assert poll(1.0, advance).outcome is BaseMovementOutcome.RUNNING
+        # Repeated state publications cannot satisfy the sample requirement.
+        assert poll(1.0).outcome is BaseMovementOutcome.RUNNING
+
+    executor.tag_state_source.set_observation(1.0, 103.201)
+    assert poll(1.0, 1.067).outcome is BaseMovementOutcome.SUCCESS
+    assert len(client.goals) == 1
+
+
+def test_tag_timeout_allows_full_five_seconds_after_settling():
+    executor, _, _, poll, complete = make_movement("tag")
+    # Time spent executing must not consume the post-settle timeout.
+    poll(0.0, 20.0)
+    complete(1.0)
+    executor.tag_state_source.clear()
+    assert poll(1.0, 0.6).outcome is BaseMovementOutcome.RUNNING
+    assert poll(1.0, 4.9).outcome is BaseMovementOutcome.RUNNING
+    assert (
+        poll(1.0, 0.11).outcome
+        is BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT
+    )
+
+
+def test_precision_approach_does_not_start_tag_wait_while_still_walking():
+    executor, client, _, poll, complete = make_movement("tag")
+    complete(0.5)
+    for second in range(1, 11):
+        update = poll(0.5 + second * 0.05, 1.0)
+        assert update.outcome is BaseMovementOutcome.RUNNING
+        assert executor._tag_settle_boundary_stamp is None
+        assert len(client.goals) == 1
+    assert poll(1.0, 0.6).outcome is BaseMovementOutcome.RUNNING
+    assert executor._tag_settle_boundary_stamp == pytest.approx(110.6)
+
+
+def test_body_sway_does_not_reject_stationary_tag_in_odom():
+    executor, client, _, poll, complete = make_movement("tag")
+    complete(1.0)
+    poll(1.0, 0.6)
+    capture_offsets = {101: 0.03, 102: -0.03, 103: 0.04}
+    requested = []
+    original_lookup = executor.motion_planner.tf_listener.lookup_a_tform_b
+
+    def lookup(target, source, transform_time=None, **kwargs):
+        if source != "body" or transform_time is None:
+            return original_lookup(target, source, **kwargs)
+        stamp = transform_time.nanoseconds // 1_000_000_000
+        requested.append(stamp)
+        transform = TransformStamped()
+        transform.header.frame_id = "odom"
+        transform.transform.rotation.w = 1.0
+        transform.transform.translation.x = capture_offsets[stamp]
+        return transform
+
+    executor.motion_planner.tf_listener.lookup_a_tform_b = lookup
+    for stamp, advance in ((101, 0.4), (102, 1.0), (103, 1.0)):
+        executor.tag_state_source.set_observation(
+            1.0 - capture_offsets[stamp], stamp,
+        )
+        executor.tag_state_source.tag.pose.header.frame_id = "body"
+        update = poll(1.0, advance)
+        if stamp < 103:
+            assert update.outcome is BaseMovementOutcome.RUNNING
+    assert update.outcome is BaseMovementOutcome.SUCCESS
+    assert requested == [101, 102, 103]
+    assert len(client.goals) == 1
+
+
+def test_missing_capture_time_transform_is_bounded():
+    executor, _, _, poll, complete = make_movement("tag")
+    complete(1.0)
+    poll(1.0, 0.6)
+    executor.tag_state_source.set_observation(1.0, 101)
+
+    def unavailable(_):
+        raise MovementGeometryUnavailable("capture TF unavailable")
+
+    executor.motion_planner.observation_in_odom = unavailable
+    update = poll(1.0, 0.4)
+    assert update.outcome is BaseMovementOutcome.RUNNING
+    assert "capture-time tag transform" in update.detail
+    update = poll(1.0, 5.0)
+    assert update.outcome is BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT
+
+
 def test_two_correction_attempts_then_failure():
     executor, client, _, poll, complete = make_movement()
     for x in (0.5, 0.65):

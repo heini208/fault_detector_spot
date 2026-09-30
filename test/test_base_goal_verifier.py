@@ -164,3 +164,49 @@ def test_clock_rewind_restarts_settling():
     check.update((0, 0, 0), 10, 10, 0)
     assert check.update((0, 0, 0), 9, 9, 0.6) is None
     assert check.update((0, 0, 0), 9.1, 9.1, 0.7) is None
+
+
+def test_slow_approach_continues_past_five_seconds_then_settles():
+    check = BaseGoalVerifier(
+        (1, 0, 0), BaseGoalVerificationConfig(), 0,
+        motion_timeout_sec=30.0,
+    )
+    for second in range(11):
+        assert check.update(
+            (0.5 + second * 0.05, 0, 0), 100 + second,
+            100 + second, second,
+        ) is None
+        assert not check.settled
+    assert check.update((1, 0, 0), 110.6, 110.6, 10.6) is True
+
+
+def test_approach_stall_times_out_after_last_progress():
+    check = BaseGoalVerifier(
+        (1, 0, 0), BaseGoalVerificationConfig(), 0,
+        motion_timeout_sec=30.0,
+    )
+    check.update((0.5, 0, 0), 100, 100, 0)
+    check.update((0.6, 0, 0), 102, 102, 2)
+    assert check.update((0.6, 0, 0), 106.9, 106.9, 6.9) is None
+    assert check.update((0.6, 0, 0), 107, 107, 7) is False
+
+
+def test_progress_cannot_extend_hard_motion_deadline():
+    check = BaseGoalVerifier(
+        (10, 0, 0), BaseGoalVerificationConfig(), 0,
+        motion_timeout_sec=8.0,
+    )
+    for second in range(8):
+        assert check.update(
+            (second * 0.05, 0, 0), 100 + second, 100 + second, second,
+        ) is None
+    assert check.update((0.4, 0, 0), 108, 108, 8) is False
+
+
+def test_late_progress_cannot_revive_expired_verification():
+    check = BaseGoalVerifier(
+        (1, 0, 0), BaseGoalVerificationConfig(), 0,
+        motion_timeout_sec=30.0,
+    )
+    check.update((0.5, 0, 0), 100, 100, 0)
+    assert check.update((0.8, 0, 0), 106, 106, 6) is False

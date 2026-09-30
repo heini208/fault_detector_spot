@@ -420,6 +420,7 @@ class BaseMovementExecutor(MovementExecutor):
                 self.motion_planner.planar_target(plan),
                 self.goal_verification_config,
                 self._monotonic_clock(),
+                motion_timeout_sec=self.result_timeout_sec,
             )
             self._tag_observation_tracker.reset()
             self._set_phase(_BasePhase.VERIFYING_ENDPOINT)
@@ -519,6 +520,22 @@ class BaseMovementExecutor(MovementExecutor):
                 BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT,
             )
 
+        try:
+            observation = deepcopy(observation)
+            observation.pose = self.motion_planner.observation_in_odom(
+                observation.pose,
+            )
+        except MovementGeometryUnavailable as exception:
+            return self._wait_for_fresh_tag(
+                f"Waiting for capture-time tag transform: {exception}",
+                BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT,
+            )
+        except Exception as exception:
+            return self._finish(
+                BaseMovementOutcome.EXECUTION_ERROR,
+                f"Tag stability transform failed: {exception}",
+            )
+
         stable = self._tag_observation_tracker.update(
             observation,
             boundary,
@@ -528,7 +545,8 @@ class BaseMovementExecutor(MovementExecutor):
                 "Waiting for stable post-settle "
                 f"tag {tag_id} observation "
                 f"({self._tag_observation_tracker.sample_count}/"
-                f"{self.tag_stability_config.required_samples} samples)",
+                f"{self.tag_stability_config.required_samples} samples); "
+                f"{self._tag_observation_tracker.detail}",
                 BaseMovementOutcome.TAG_OBSERVATION_TIMEOUT,
             )
 

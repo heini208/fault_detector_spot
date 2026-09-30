@@ -60,6 +60,18 @@ def test_requires_multiple_unique_post_boundary_samples():
     assert accepted.pose.header.stamp.nanosec == 300_000_000
 
 
+def test_default_yaw_span_accepts_reported_variation_but_rejects_larger_jump():
+    tracker = StableTagObservationTracker(TagObservationStabilityConfig())
+    tracker.update(observation(10.1), 10.0)
+    tracker.update(observation(11.1, yaw=math.radians(1)), 10.0)
+    assert tracker.update(
+        observation(12.1, yaw=math.radians(2.47)), 10.0,
+    ) is not None
+    assert tracker.update(
+        observation(13.1, yaw=math.radians(5)), 10.0,
+    ) is None
+
+
 def test_republished_same_camera_observation_does_not_count_again():
     tracker = StableTagObservationTracker(config())
     sample = observation(10.1)
@@ -91,6 +103,18 @@ def test_unstable_position_restarts_window_from_latest_sample():
         tracker.update(observation(10.5, x=1.102), 10.0)
         is not None
     )
+
+
+def test_rejection_detail_survives_repeated_cached_observation():
+    tracker = StableTagObservationTracker(config())
+    tracker.update(observation(10.1), 10.0)
+    tracker.update(observation(10.2), 10.0)
+    tracker.update(observation(10.3, x=1.1), 10.0)
+    assert "Pose variation in body" in tracker.detail
+    assert "0.1000 m" in tracker.detail
+    detail = tracker.detail
+    tracker.update(observation(10.3, x=1.1), 10.0)
+    assert tracker.detail == detail
 
 
 def test_unstable_yaw_restarts_window():

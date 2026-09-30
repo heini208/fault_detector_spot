@@ -164,3 +164,35 @@ def test_executor_retains_frozen_request_after_initial_submission():
     assert executor.motion_planner.planar_target(corrected) == pytest.approx(
         (0.6, 0, math.radians(30))
     )
+
+
+def test_selected_tag_zero_yaw_uses_observed_normal_not_latest_tf():
+    import math
+    import pytest
+    from scipy.spatial.transform import Rotation
+    listener = MovingTF()
+    planner = BaseMotionPlanner(listener, WalkingProfiles())
+    command = real_command("Tag_7")
+    command.offset.pose.orientation.z = 0.0
+    command.offset.pose.orientation.w = 1.0
+    tag = observation(1.0)
+    # A vertical tag whose inward normal points 40 degrees from odom X.
+    q = (Rotation.from_euler("z", 40, degrees=True)
+         * Rotation.from_euler("y", -90, degrees=True)).as_quat()
+    orientation = tag.pose.pose.orientation
+    orientation.x, orientation.y, orientation.z, orientation.w = map(float, q)
+    plan = planner.resolve_tag_observation(command, tag)
+    yaw = math.radians(40)
+    assert planner.planar_target(plan) == pytest.approx(
+        (1 - 0.5 * math.cos(yaw), -0.5 * math.sin(yaw), yaw)
+    )
+    assert listener.requested_times == []
+    assert command.offset.header.frame_id == "Tag_7"
+
+    # Confirm that the actual SDK command carries the same planar heading.
+    from bosdyn.api import robot_command_pb2
+    from bosdyn_spot_api_msgs.conversions import convert
+    proto = robot_command_pb2.RobotCommand()
+    convert(planner.build_goal(plan).command, proto)
+    point = proto.synchronized_command.mobility_command.se2_trajectory_request.trajectory.points[0]
+    assert point.pose.angle == pytest.approx(yaw)

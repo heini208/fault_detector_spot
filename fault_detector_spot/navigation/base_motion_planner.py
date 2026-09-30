@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 from dataclasses import dataclass
+import math
+import re
 
 from bosdyn.api.geometry_pb2 import SE2VelocityLimit
 from bosdyn.client import math_helpers
@@ -16,6 +18,9 @@ from synchros2.utilities import namespace_with
 from tf2_geometry_msgs import do_transform_pose_stamped
 
 from fault_detector_spot.inspection.geometry.rotation import (
+    multiply_quaternions,
+    quaternion_from_euler,
+    rotation_from_quaternion,
     quaternion_to_rpy,
 )
 from fault_detector_spot.inspection.model.models import QuaternionData
@@ -112,7 +117,8 @@ class BaseMotionPlanner:
          offset.pose.orientation.z, offset.pose.orientation.w) = map(float, rotation)
         return prepared
 
-    def _observation_in_odom(self, pose):
+    def observation_in_odom(self, pose):
+        """Express a tag pose in odom using its capture-time transform."""
         if pose.header.frame_id.strip() == ODOM_FRAME_NAME:
             return deepcopy(pose)
         stamp = pose.header.stamp
@@ -185,7 +191,8 @@ class BaseMotionPlanner:
             )
 
         prepared = deepcopy(command)
-        prepared.tag_pose = self._observation_in_odom(observation.pose)
+        prepared.tag_pose = self.observation_in_odom(observation.pose)
+        self._resolve_selected_tag_offset(prepared, tag_id)
         prepared = self.geometry_resolver.prepare_move_command(
             prepared,
             ODOM_FRAME_NAME,
@@ -202,6 +209,34 @@ class BaseMotionPlanner:
             linear_speed_mps=profile.tag_speed_mps,
             profile=profile,
         )
+
+    @staticmethod
+    def _resolve_selected_tag_offset(command, tag_id):
+        """Use the accepted observation for matching Tag_N offset and yaw."""
+        offset = getattr(command, "offset", None)
+        if offset is None:
+            return
+        alias = re.fullmatch(r"Tag[_:]?(\d+)", offset.header.frame_id.strip())
+        if alias is None or int(alias.group(1)) != tag_id:
+            return
+        q = command.tag_pose.pose.orientation
+        rotation = rotation_from_quaternion(
+            QuaternionData(x=q.x, y=q.y, z=q.z, w=q.w)
+        )
+        normal = rotation.apply([0.0, 0.0, -1.0])
+        if math.hypot(normal[0], normal[1]) <= 1e-12:
+            raise ValueError("Tag normal has no horizontal heading in odom")
+        yaw = math.atan2(normal[1], normal[0])
+        x, y = offset.pose.position.x, offset.pose.position.y
+        offset.pose.position.x = math.cos(yaw) * x - math.sin(yaw) * y
+        offset.pose.position.y = math.sin(yaw) * x + math.cos(yaw) * y
+        q = offset.pose.orientation
+        oriented = multiply_quaternions(
+            quaternion_from_euler("z", yaw),
+            QuaternionData(x=q.x, y=q.y, z=q.z, w=q.w),
+        )
+        q.x, q.y, q.z, q.w = oriented.x, oriented.y, oriented.z, oriented.w
+        offset.header.frame_id = ODOM_FRAME_NAME
 
     @staticmethod
     def planar_target(plan: BaseMovementPlan):

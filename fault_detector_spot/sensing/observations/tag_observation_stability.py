@@ -19,8 +19,10 @@ class TagObservationStabilityConfig:
 
     required_samples: int = 3
     maximum_position_span_m: float = 0.02
-    maximum_yaw_span_rad: float = math.radians(2.0)
-    maximum_sample_span_sec: float = 0.5
+    maximum_yaw_span_rad: float = math.radians(3.0)
+    # Spot world-object acquisition can advance only about once per second.
+    # Republishing TF/tag state does not produce a new camera observation.
+    maximum_sample_span_sec: float = 4.0
 
     def __post_init__(self):
         if (
@@ -82,6 +84,7 @@ class StableTagObservationTracker:
         self._frame_id = None
         self._tag_id = None
         self._last_stamp_sec = None
+        self.detail = "Waiting for distinct observation timestamps"
 
     @property
     def sample_count(self) -> int:
@@ -90,6 +93,7 @@ class StableTagObservationTracker:
     def reset(self) -> None:
         self._boundary_stamp_sec = None
         self._reset_samples()
+        self.detail = "Waiting for distinct observation timestamps"
 
     def _reset_samples(self) -> None:
         self._samples.clear()
@@ -141,6 +145,7 @@ class StableTagObservationTracker:
             self._reset_samples()
 
         if stamp_sec == self._last_stamp_sec:
+            # Preserve the last rejection reason across cached publications.
             return self._stable_observation()
 
         if self._frame_id is not None and frame_id != self._frame_id:
@@ -182,6 +187,10 @@ class StableTagObservationTracker:
             and latest_stamp_sec - self._samples[0][0] > maximum_span
         ):
             self._samples.popleft()
+            self.detail = (
+                "Distinct observations exceed sample window "
+                f"{maximum_span:.2f} s"
+            )
 
     def _window_is_stable(self) -> bool:
         samples = tuple(self._samples)
@@ -203,6 +212,14 @@ class StableTagObservationTracker:
                     or yaw_error
                     > self.config.maximum_yaw_span_rad
                 ):
+                    self.detail = (
+                        f"Pose variation in {self._frame_id}: "
+                        f"{position_error:.4f} m "
+                        f"(limit {self.config.maximum_position_span_m:.4f} m), "
+                        f"{math.degrees(yaw_error):.2f} deg "
+                        "(limit "
+                        f"{math.degrees(self.config.maximum_yaw_span_rad):.2f} deg)"
+                    )
                     return False
         return True
 

@@ -47,7 +47,7 @@ class BaseGoalVerificationConfig:
 class BaseGoalVerifier:
     """Track physical settling independently from requested goal accuracy."""
 
-    def __init__(self, target, config, started_at):
+    def __init__(self, target, config, started_at, motion_timeout_sec=None):
         if len(target) != 3 or not all(
             math.isfinite(value) for value in target
         ):
@@ -57,6 +57,9 @@ class BaseGoalVerifier:
         self.target = target
         self.config = config
         self.started_at = started_at
+        self.motion_timeout_sec = motion_timeout_sec
+        self._progress_at = started_at
+        self._progress_error = None
         self.anchor = None
         self.stable_since = None
         self.last_stamp = None
@@ -120,6 +123,24 @@ class BaseGoalVerifier:
         else:
             position, yaw = self.errors(pose, self.target)
             self.current_error = (position, yaw)
+            # Driver AT_GOAL can precede physical arrival. Give a moving
+            # base time to finish, but do not extend the deadline for noise,
+            # motion away from the goal, or an unavailable pose.
+            if self.motion_timeout_sec is not None and not self._timed_out(now):
+                previous = self._progress_error
+                if previous is None:
+                    self._progress_error = (position, yaw)
+                elif (
+                    position <= previous[0]
+                    and yaw <= previous[1] + c.settle_yaw_tolerance_rad
+                    and previous[0] - position > c.settle_position_tolerance_m
+                ) or (
+                    yaw <= previous[1]
+                    and position <= previous[0] + c.settle_position_tolerance_m
+                    and previous[1] - yaw > c.settle_yaw_tolerance_rad
+                ):
+                    self._progress_error = (position, yaw)
+                    self._progress_at = now
             self.within_tolerance = (
                 position <= c.position_tolerance_m
                 and yaw <= c.yaw_tolerance_rad
@@ -156,13 +177,22 @@ class BaseGoalVerifier:
                 self.detail += "; base settled"
                 if (
                     self.within_tolerance
-                    and now - self.started_at < c.timeout_sec
+                    and not self._timed_out(now)
                 ):
                     return True
 
-        if now - self.started_at >= c.timeout_sec:
+        if self._timed_out(now):
             return False
         return None
+
+    def _timed_out(self, now):
+        return (
+            now - self._progress_at >= self.config.timeout_sec
+            or (
+                self.motion_timeout_sec is not None
+                and now - self.started_at >= self.motion_timeout_sec
+            )
+        )
 
     def _reset_settling(self) -> None:
         self.stable_since = None
