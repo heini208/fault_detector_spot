@@ -412,10 +412,9 @@ class MoveItArmPlanner:
         motion.max_velocity_scaling_factor = self.velocity_scaling
         motion.max_acceleration_scaling_factor = self.acceleration_scaling
         motion.start_state.is_diff = True
-        motion.path_constraints = self._joint_limit_constraints()
-        motion.goal_constraints = [
-            self._pose_goal_constraints(target_hand)
-        ]
+        goal = self._pose_goal_constraints(target_hand)
+        goal.joint_constraints = [self._arm_sh1_floor_constraint()]
+        motion.goal_constraints = [goal]
         return request
 
     def _build_cartesian_request(self, target_hand: PoseStamped):
@@ -453,15 +452,21 @@ class MoveItArmPlanner:
         return detail
 
     @staticmethod
-    def _joint_limit_constraints() -> Constraints:
-        constraints = Constraints()
+    def _arm_sh1_floor_constraint() -> JointConstraint:
         shoulder = JointConstraint()
         shoulder.joint_name = "arm_sh1"
         shoulder.position = MIN_ARM_SH1_RAD
         shoulder.tolerance_below = 0.0
         shoulder.tolerance_above = 2.0 * math.pi
         shoulder.weight = 1.0
-        constraints.joint_constraints = [shoulder]
+        return shoulder
+
+    @classmethod
+    def _joint_limit_constraints(cls) -> Constraints:
+        constraints = Constraints()
+        constraints.joint_constraints = [
+            cls._arm_sh1_floor_constraint()
+        ]
         return constraints
 
     def _pose_goal_constraints(

@@ -57,7 +57,7 @@ def test_cartesian_defaults_require_dense_nearly_complete_path():
     assert DEFAULT_CARTESIAN_MIN_FRACTION == pytest.approx(0.999)
 
 
-def test_motion_request_constrains_arm_sh1_to_execution_floor():
+def test_motion_request_constrains_goal_but_not_entire_path():
     planner = planner_shell()
     planner.planner_id = "RRTConnectkConfigDefault"
     planner.allowed_planning_time_sec = 5.0
@@ -68,8 +68,10 @@ def test_motion_request_constrains_arm_sh1_to_execution_floor():
     target.pose.orientation.w = 1.0
 
     request = planner._build_request(target)
+    motion = request.motion_plan_request
 
-    constraint = request.motion_plan_request.path_constraints.joint_constraints[0]
+    assert not motion.path_constraints.joint_constraints
+    constraint = motion.goal_constraints[0].joint_constraints[0]
     assert constraint.joint_name == "arm_sh1"
     assert constraint.position == pytest.approx(MIN_ARM_SH1_RAD)
     assert constraint.tolerance_below == pytest.approx(0.0)
