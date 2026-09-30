@@ -47,8 +47,8 @@ def valid_trajectory():
     return trajectory
 
 
-def test_default_position_tolerance_is_two_millimeters():
-    assert DEFAULT_POSITION_TOLERANCE_M == pytest.approx(0.002)
+def test_default_position_tolerance_is_five_millimeters():
+    assert DEFAULT_POSITION_TOLERANCE_M == pytest.approx(0.005)
 
 
 def test_cartesian_defaults_require_dense_nearly_complete_path():
