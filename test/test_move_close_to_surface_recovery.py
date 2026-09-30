@@ -124,6 +124,32 @@ def test_execution_start_owns_lifecycle_and_cancel():
     assert not action.active
 
 
+@pytest.mark.parametrize("verified", [False, True])
+def test_sampling_rejects_misaligned_measured_plane_even_at_standoff(monkeypatch, verified):
+    action = execution()
+    action._clock = lambda: 4.0
+    action._phase_started = 0.0
+    action._sample_receipt_not_before = 0.0
+    action._surface_samples = {}
+    action._sensor_id = "probe"
+    action._require_attachment_unchanged = lambda: None
+    action._current_probe_pose = lambda: pose()
+    action.surface_source = SimpleNamespace(surface_distance_samples=lambda *a, **k: ())
+    monkeypatch.setattr(
+        "fault_detector_spot.manipulation.move_close_to_surface_execution.aggregate_surface_distance_samples",
+        lambda *a, **k: SimpleNamespace(
+            verified=verified, distance_m=0.03,
+            surface_plane_probe=SimpleNamespace(normal=Vector3Data(
+                x=-math.cos(math.radians(20)), y=math.sin(math.radians(20)), z=0.0,
+            )),
+        ),
+    )
+    result = action._update_sampling()
+    assert result is MoveCloseToSurfaceOutcome.FAILURE
+    assert "20.00 deg" in action.feedback_message
+    assert action.executor.guarded_calls == []
+
+
 def test_contact_mode_returns_success_after_shared_snap_retreat():
     action = execution()
     action._command = SimpleNamespace(target_surface_distance_m=0.0)

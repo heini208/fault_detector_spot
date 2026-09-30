@@ -212,3 +212,43 @@ def test_surface_samples_remain_centered_on_requested_image_location():
     source = inspect.getsource(surface_normal._collect_surface_samples)
 
     assert "center = projected_point.mapped_pixel" in source
+
+
+def test_explicit_neighborhood_center_uses_actual_depth_sample():
+    width = height = 41
+    camera_info = make_camera_info(width, height)
+    values = [float("nan")] * (width * height)
+    for v in range(31, 37):
+        for u in range(31, 37):
+            values[v * width + u] = 1.0
+    depth = make_32fc1(values, width, height)
+    projected = project_reference_pixel(
+        ImagePoint(u=20, v=20),
+        depth,
+        camera_info,
+        search_radius_px=16,
+    )
+
+    assert projected.sampled_pixel == ImagePoint(u=31, v=31)
+    with pytest.raises(ValueError, match="Too few consistent depth"):
+        estimate_surface_normal(
+            projected,
+            depth,
+            camera_info,
+            neighborhood_radius_px=16,
+            maximum_neighborhood_radius_px=16,
+            minimum_sample_count=12,
+        )
+
+    result = estimate_surface_normal(
+        projected,
+        depth,
+        camera_info,
+        neighborhood_radius_px=16,
+        maximum_neighborhood_radius_px=16,
+        minimum_sample_count=12,
+        neighborhood_center_pixel=projected.sampled_pixel,
+    )
+
+    assert result.sample_count == 36
+    assert result.normal_camera.z == pytest.approx(-1.0, abs=1e-6)

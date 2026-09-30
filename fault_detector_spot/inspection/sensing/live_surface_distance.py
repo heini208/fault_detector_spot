@@ -12,7 +12,11 @@ from fault_detector_spot.inspection.geometry.depth_point_cloud import (
 from fault_detector_spot.inspection.geometry.rotation import (
     rotation_from_quaternion,
 )
-from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
+from fault_detector_spot.inspection.geometry.surface_plane import (
+    DEFAULT_DEPTH_PLANE_TOLERANCE_M,
+    SurfacePlane,
+    fit_surface_plane,
+)
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ImageRegion,
@@ -133,15 +137,25 @@ def measure_probe_surface_distance(
     )
     source_region.validate()
 
-    reference_plane = SurfacePlane(
-        point=Vector3Data(x=distance_m, y=0.0, z=0.0),
-        normal=Vector3Data(x=-1.0, y=0.0, z=0.0),
-        frame_id="probe",
-        inlier_count=candidate_count,
-        sample_count=axis_count,
-        inlier_ratio=valid_pixel_ratio,
-        rmse_m=spread_m,
+    camera_plane = fit_surface_plane(
+        camera_points[roi_mask], frame_id, DEFAULT_DEPTH_PLANE_TOLERANCE_M, minimum_samples,
+        0.60, 100, 0.003,
+        depth_camera=True,
     )
+    point_probe = _transform_points(camera_plane.point_array()[None, :], probe_to_camera_pose)[0]
+    normal_probe = rotation_from_quaternion(probe_to_camera_pose.orientation).apply(
+        camera_plane.normal_array(),
+    )
+    reference_plane = SurfacePlane(
+        point=Vector3Data(*point_probe), normal=Vector3Data(*normal_probe),
+        frame_id="probe", inlier_count=camera_plane.inlier_count,
+        sample_count=camera_plane.sample_count, inlier_ratio=camera_plane.inlier_ratio,
+        rmse_m=camera_plane.rmse_m,
+    ).oriented_toward(Vector3Data(x=0.0, y=0.0, z=0.0))
+    if reference_plane.rmse_m > DEFAULT_DEPTH_PLANE_TOLERANCE_M:
+        raise ValueError("Probe surface plane residual exceeds 15 mm")
+    # Use perpendicular distance consistently with frozen-plane tracking.
+    distance_m = reference_plane.signed_distance(Vector3Data(0.0, 0.0, 0.0))
     stamp = depth_image.header.stamp
     return SurfaceDistanceSample(
         distance_m=distance_m,

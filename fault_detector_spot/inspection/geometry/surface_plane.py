@@ -8,6 +8,9 @@ import numpy as np
 from fault_detector_spot.inspection.model.models import Vector3Data
 
 
+DEFAULT_DEPTH_PLANE_TOLERANCE_M = 0.015
+
+
 @dataclass(frozen=True)
 class SurfacePlane:
     """One fitted plane expressed in a named coordinate frame."""
@@ -87,6 +90,8 @@ def fit_surface_plane(
     minimum_inlier_ratio: float,
     ransac_iterations: int,
     minimum_tangent_spread_m: float,
+    *,
+    depth_camera: bool = False,
 ) -> SurfacePlane:
     """Fit a robust RANSAC plane, retaining shared acceptance checks."""
     points = np.asarray(points, dtype=np.float64)
@@ -96,6 +101,8 @@ def fit_surface_plane(
         raise ValueError("Surface-plane fitting requires at least three samples")
     if not np.all(np.isfinite(points)):
         raise ValueError("Surface-plane samples must be finite")
+    if depth_camera and np.any(points[:, 2] <= 0.0):
+        raise ValueError("Camera depth must be positive")
     if not frame_id.strip():
         raise ValueError("Surface-plane frame must not be empty")
     if not math.isfinite(distance_threshold_m) or distance_threshold_m <= 0.0:
@@ -124,7 +131,7 @@ def fit_surface_plane(
         raise ValueError("Surface-plane tangent spread must be positive")
 
     plane_model, inlier_indices = _ransac_plane(
-        points, distance_threshold_m, ransac_iterations,
+        points, distance_threshold_m, ransac_iterations, depth_camera=depth_camera,
     )
     inlier_indices = np.asarray(inlier_indices, dtype=int)
     inlier_ratio = len(inlier_indices) / len(points)
@@ -168,7 +175,7 @@ def fit_surface_plane(
     return result
 
 
-def _ransac_plane(points, distance_threshold_m, iterations):
+def _ransac_plane(points, distance_threshold_m, iterations, *, depth_camera=False):
     """Select three-point consensus by count then error, and refine by SVD.
 
     Sample without replacement within each hypothesis.
@@ -179,6 +186,7 @@ def _ransac_plane(points, distance_threshold_m, iterations):
     rng = np.random.default_rng(0)
     best_indices = np.empty(0, dtype=int)
     best_error = math.inf
+    rays = points / points[:, 2, None] if depth_camera else None
     for _ in range(iterations):
         triple = points[rng.choice(len(points), size=3, replace=False)]
         normal = np.cross(triple[1] - triple[0], triple[2] - triple[0])
@@ -186,7 +194,17 @@ def _ransac_plane(points, distance_threshold_m, iterations):
         if norm <= np.finfo(np.float64).tiny:
             continue
         normal /= norm
-        distances = (points - triple[0]) @ normal
+        # Nx3 matrix-vector products can launch a full BLAS thread pool for
+        # every hypothesis. Elementwise reduction keeps this tiny operation
+        # local and avoids starving ROS callbacks during repeated fits.
+        distances = np.einsum('ij,j->i', points - triple[0], normal)
+        if depth_camera:
+            denominator = np.einsum('ij,j->i', rays, normal)
+            predicted = np.divide(np.dot(triple[0], normal), denominator,
+                                  out=np.full(len(points), np.nan),
+                                  where=np.abs(denominator) > 1e-12)
+            distances = points[:, 2] - predicted
+            distances[predicted <= 0.0] = np.inf
         indices = np.flatnonzero(np.abs(distances) < distance_threshold_m)
         error = float(np.sum(distances[indices] ** 2))
         if len(indices) > len(best_indices) or (
@@ -198,6 +216,30 @@ def _ransac_plane(points, distance_threshold_m, iterations):
         raise ValueError(
             "Depth neighborhood does not span a two-dimensional surface"
         )
+    if depth_camera:
+        # A plane has affine inverse depth on calibrated camera rays.
+        # Orthogonal SVD incorrectly treats depth noise as isotropic and can
+        # rotate a small noisy patch almost edge-on to reduce its residual.
+        for _ in range(5):
+            coefficients, _, rank, _ = np.linalg.lstsq(
+                rays[best_indices], 1.0 / points[best_indices, 2], rcond=None,
+            )
+            if rank < 3:
+                raise ValueError("Depth neighborhood does not span a two-dimensional surface")
+            inverse_depth = np.einsum('ij,j->i', rays, coefficients)
+            predicted = np.divide(1.0, inverse_depth,
+                                  out=np.full(len(points), np.nan),
+                                  where=inverse_depth > 1e-12)
+            indices = np.flatnonzero(np.abs(points[:, 2] - predicted) < distance_threshold_m)
+            if np.array_equal(indices, best_indices):
+                break
+            if len(indices) < 3:
+                raise ValueError("Too few consistent camera depth samples")
+            best_indices = indices
+        coefficients, _, _, _ = np.linalg.lstsq(
+            rays[best_indices], 1.0 / points[best_indices, 2], rcond=None,
+        )
+        return np.append(coefficients, -1.0), best_indices
     inliers = points[best_indices]
     centroid = inliers.mean(axis=0)
     _, _, axes = np.linalg.svd(inliers - centroid, full_matrices=False)

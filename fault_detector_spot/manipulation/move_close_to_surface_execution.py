@@ -289,16 +289,24 @@ class MoveCloseToSurfaceExecution:
             )
             current_probe = self._current_probe_pose()
 
+            if aggregate.surface_plane_probe is None:
+                raise RuntimeError(
+                    "Stable surface sampling did not produce surface geometry"
+                )
+            measured_axis_error = math.acos(max(-1.0, min(
+                1.0, -aggregate.surface_plane_probe.normal.x,
+            )))
+            if measured_axis_error > self.config.maximum_axis_error_rad:
+                raise ValueError(
+                    "Probe axis is not aligned with the measured surface: "
+                    f"{math.degrees(measured_axis_error):.2f} deg > "
+                    f"{math.degrees(self.config.maximum_axis_error_rad):.2f} deg"
+                )
             if not self.contact_mode and aggregate.verified:
                 return self._success(
                     "Surface stand-off already reached from live measurement: "
                     f"{aggregate.distance_m:.4f} m"
                 )
-            if aggregate.surface_plane_probe is None:
-                raise RuntimeError(
-                    "Stable surface sampling did not produce surface geometry"
-                )
-
             self._plan = freeze_probe_surface_approach(
                 current_probe_pose_execution=current_probe,
                 surface_plane_probe=aggregate.surface_plane_probe,

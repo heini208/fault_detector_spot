@@ -16,7 +16,7 @@ from fault_detector_spot.inspection.geometry.depth_point_cloud import (
 from fault_detector_spot.inspection.geometry.surface_plane import (
     fit_surface_plane,
 )
-from fault_detector_spot.inspection.model.models import Vector3Data
+from fault_detector_spot.inspection.model.models import ImagePoint, Vector3Data
 
 if TYPE_CHECKING:
     from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
@@ -33,6 +33,7 @@ class SurfaceNormalEstimate:
     sample_count: int
     plane_rmse_m: float
     neighborhood_radius_px: int = 0
+    stamp_nanoseconds: int = 0
 
 
 def estimate_surface_normal(
@@ -49,6 +50,7 @@ def estimate_surface_normal(
     ransac_iterations: int = 100,
     *,
     point_cloud: OrganizedDepthPointCloud | None = None,
+    neighborhood_center_pixel: ImagePoint | None = None,
 ) -> SurfaceNormalEstimate:
     """Fit a robust local plane, optionally reusing projected depth."""
     _validate_inputs(
@@ -68,6 +70,17 @@ def estimate_surface_normal(
             depth_image,
             camera_info,
         )
+    center_pixel = (
+        projected_point.mapped_pixel
+        if neighborhood_center_pixel is None
+        else neighborhood_center_pixel
+    )
+    center_pixel.validate()
+    if not (
+        0 <= center_pixel.u < point_cloud.width
+        and 0 <= center_pixel.v < point_cloud.height
+    ):
+        raise ValueError("Surface neighborhood center is outside depth image")
     best_sample_count = 0
     last_error = None
     for radius in _candidate_radii(
@@ -79,6 +92,7 @@ def estimate_surface_normal(
             point_cloud,
             radius,
             maximum_depth_delta_m,
+            center_pixel=center_pixel,
         )
         best_sample_count = max(best_sample_count, len(samples))
         if len(samples) < max(minimum_sample_count, 3):
@@ -92,6 +106,7 @@ def estimate_surface_normal(
                 minimum_plane_inlier_ratio,
                 ransac_iterations,
                 minimum_tangent_spread_m,
+                depth_camera=True,
             ).oriented_toward(Vector3Data(x=0.0, y=0.0, z=0.0))
             if plane.rmse_m > maximum_plane_rmse_m:
                 raise ValueError(
@@ -192,8 +207,13 @@ def _collect_surface_samples(
     point_cloud: OrganizedDepthPointCloud,
     radius,
     maximum_depth_delta_m,
+    *,
+    center_pixel=None,
 ) -> np.ndarray:
-    center = projected_point.mapped_pixel
+    if center_pixel is None:
+        center = projected_point.mapped_pixel
+    else:
+        center = center_pixel
     u_min = max(0, center.u - radius)
     u_max = min(point_cloud.width, center.u + radius + 1)
     v_min = max(0, center.v - radius)

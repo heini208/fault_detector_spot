@@ -2,9 +2,11 @@
 
 from collections import deque
 from copy import deepcopy
+from dataclasses import replace
 from threading import RLock
 import math
 import time
+import numpy as np
 
 from fault_detector_msgs.msg import SensorAttachmentState
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
@@ -16,6 +18,9 @@ import tf2_ros
 from fault_detector_spot.inspection.geometry.surface_normal import (
     SurfaceNormalEstimate,
     estimate_surface_normal,
+)
+from fault_detector_spot.inspection.geometry.surface_plane import (
+    DEFAULT_DEPTH_PLANE_TOLERANCE_M,
 )
 from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     create_organized_depth_point_cloud,
@@ -39,6 +44,8 @@ from fault_detector_spot.shared.runtime_source import RuntimeSource
 HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
 MAX_HAND_DEPTH_AGE_SEC = 0.5
 SURFACE_ORIENTATION_WINDOW_RADIUS_PX = 16
+SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX = 32
+SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT = 30
 MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M = 0.290
 SENSOR_ATTACHMENT_TOPIC = "fault_detector/application/sensor_attachment_state"
 
@@ -124,9 +131,12 @@ class ProbeSurfaceSource(RuntimeSource):
         receipt_time, depth_image = history[-1]
         age = time.monotonic() - receipt_time
         if age < -1e-9 or age > maximum_age_sec:
+            publishers = self.node.count_publishers("/depth_registered/hand/image")
             raise ValueError(
                 "Registered hand-depth image is stale: "
-                f"age={age:.3f}s, max_age={maximum_age_sec:.3f}s"
+                f"age={age:.3f}s, max_age={maximum_age_sec:.3f}s; "
+                f"discovered publishers={publishers}, buffered frames={len(history)}; "
+                "no depth callback has refreshed the cache within the age limit"
             )
         return deepcopy(depth_image), camera_info
 
@@ -151,9 +161,28 @@ class ProbeSurfaceSource(RuntimeSource):
             u=int(depth_image.width) // 2,
             v=int(depth_image.height) // 2,
         )
+        # Choose the dominant local depth rather than trusting one possibly
+        # isolated foreground/outlier pixel as the depth gate for the plane.
+        rows, columns = np.nonzero(point_cloud.valid_mask)
+        nearby = ((columns - center.u) ** 2 + (rows - center.v) ** 2
+                  <= window_radius_px ** 2)
+        rows, columns = rows[nearby], columns[nearby]
+        seed = center
+        if len(rows):
+            depths = point_cloud.depth_m[rows, columns]
+            median_depth = float(np.median(depths))
+            supported = np.abs(depths - median_depth) <= 0.05
+            if np.count_nonzero(supported) < 0.60 * len(depths):
+                raise ValueError("Ambiguous center depth: no dominant surface")
+            candidates = np.flatnonzero(supported)
+            nearest = candidates[np.argmin(
+                (columns[candidates] - center.u) ** 2
+                + (rows[candidates] - center.v) ** 2
+            )]
+            seed = ImagePoint(u=int(columns[nearest]), v=int(rows[nearest]))
         try:
             projected = project_reference_pixel(
-                center,
+                seed,
                 depth_image,
                 camera_info,
                 search_radius_px=window_radius_px,
@@ -181,13 +210,31 @@ class ProbeSurfaceSource(RuntimeSource):
             )
 
         try:
-            return estimate_surface_normal(
+            estimate = estimate_surface_normal(
                 projected,
                 depth_image,
                 camera_info,
-                neighborhood_radius_px=window_radius_px,
-                maximum_neighborhood_radius_px=window_radius_px,
+                neighborhood_radius_px=max(
+                    window_radius_px, SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
+                ),
+                maximum_neighborhood_radius_px=max(
+                    window_radius_px,
+                    SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
+                ),
+                minimum_sample_count=(
+                    SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT
+                ),
                 point_cloud=point_cloud,
+                neighborhood_center_pixel=projected.sampled_pixel,
+                maximum_plane_rmse_m=DEFAULT_DEPTH_PLANE_TOLERANCE_M,
+                minimum_tangent_spread_m=0.003,
+            )
+            stamp = depth_image.header.stamp
+            return replace(
+                estimate,
+                projected_point=replace(projected, requested_pixel=center,
+                                        mapped_pixel=center),
+                stamp_nanoseconds=int(stamp.sec) * 1000000000 + int(stamp.nanosec),
             )
         except ValueError as exception:
             raise ValueError(
@@ -338,5 +385,7 @@ class ProbeSurfaceSource(RuntimeSource):
 __all__ = [
     "MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M",
     "ProbeSurfaceSource",
+    "SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX",
+    "SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT",
     "SURFACE_ORIENTATION_WINDOW_RADIUS_PX",
 ]

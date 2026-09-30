@@ -17,6 +17,8 @@ from bosdyn.client.frame_helpers import (
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_spot_api_msgs.conversions import convert
 from geometry_msgs.msg import PoseStamped
+from rclpy.time import Time
+from tf2_ros import TransformException
 from spot_msgs.action import RobotCommand
 from spot_msgs.srv import RobotCommand as RobotCommandService
 from synchros2.utilities import namespace_with
@@ -440,8 +442,32 @@ class ArmMovementExecutor(MovementExecutor):
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Surface orientation source is not configured",
             )
+        estimate = None
+        deadline = None
+        last_tf_error = ""
+
+        def resolve_surface_target():
+            nonlocal estimate, deadline, last_tf_error
+            if estimate is None:
+                estimate = self.surface_source.surface_normal()
+                deadline = self._monotonic_clock() + 2.0
+            if self._monotonic_clock() >= deadline:
+                raise RuntimeError(
+                    "Surface orientation TF synchronization timed out after 2.0s; "
+                    f"{last_tf_error}"
+                )
+            try:
+                return self._resolve_surface_orientation_target(sensor_id, estimate)
+            except TransformException as exception:
+                detail = (
+                    "Waiting for surface orientation capture-time TF "
+                    f"at {estimate.stamp_nanoseconds / 1e9:.9f}: {exception}"
+                )
+                last_tf_error = detail
+                raise MovementGeometryUnavailable(detail) from exception
+
         return self.guarded_probe(
-            lambda: self._resolve_surface_orientation_target(sensor_id),
+            resolve_surface_target,
             speed=speed,
             force_threshold_n=force_threshold_n,
         )
@@ -848,12 +874,19 @@ class ArmMovementExecutor(MovementExecutor):
     def _resolve_surface_orientation_target(
         self,
         sensor_id: str,
+        surface_normal=None,
     ):
-        surface_normal = self.surface_source.surface_normal()
+        if surface_normal is None:
+            surface_normal = self.surface_source.surface_normal()
         projected = surface_normal.projected_point
+        if surface_normal.stamp_nanoseconds <= 0:
+            raise ValueError("Surface orientation depth timestamp is empty")
         camera_to_execution = self.tf_listener.lookup_a_tform_b(
             GRAV_ALIGNED_BODY_FRAME_NAME,
             projected.frame_id,
+            transform_time=Time(nanoseconds=surface_normal.stamp_nanoseconds),
+            # The command builder retains this estimate and retries on later
+            # ticks, releasing the executor while TF catches up.
             timeout_sec=0.0,
         )
         surface_normal_execution = rotate_vector(

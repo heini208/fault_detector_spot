@@ -105,6 +105,77 @@ def test_surface_source_preserves_known_normal():
     assert result.sample_count == 797
 
 
+def test_surface_source_accepts_noisy_planar_depth():
+    camera = make_camera_info(65, 65, 100.0)
+    expected = (0.2, -0.1, -math.sqrt(0.95))
+    values = np.array(plane_depth_values(65, 65, camera, expected, 0.6))
+    values += np.random.default_rng(7).normal(0.0, 0.009, len(values))
+    depth = make_32fc1(values, 65, 65)
+    source = SimpleNamespace(latest_hand_depth=lambda _age: (depth, camera))
+    result = ProbeSurfaceSource.surface_normal(source)
+    normal = np.array([result.normal_camera.x, result.normal_camera.y,
+                       result.normal_camera.z])
+    assert math.degrees(math.acos(np.clip(normal @ expected, -1, 1))) < 5.0
+    assert result.plane_rmse_m < 0.015
+
+
+@pytest.mark.parametrize('publishers', [0, 1])
+def test_stale_depth_is_rejected_with_stream_diagnostics(monkeypatch, publishers):
+    from collections import deque
+    from threading import RLock
+    from fault_detector_spot.inspection.sensing import probe_surface_source
+    source = ProbeSurfaceSource.__new__(ProbeSurfaceSource)
+    source._lock = RLock()
+    source._hand_depth_camera_info = make_camera_info()
+    source._hand_depth_history = deque([(1.0, make_32fc1([0.6] * 121))])
+    source.node = SimpleNamespace(count_publishers=lambda topic: publishers)
+    monkeypatch.setattr(probe_surface_source.time, 'monotonic', lambda: 9.0)
+    with pytest.raises(ValueError, match=f'discovered publishers={publishers}'):
+        source.latest_hand_depth()
+
+
+def test_surface_source_ignores_five_isolated_center_outliers():
+    camera = make_camera_info(81, 81, 300.0)
+    values = np.full((81, 81), 0.6)
+    for v, u in ((40, 40), (39, 40), (41, 40), (40, 39), (40, 41)):
+        values[v, u] = 0.8
+    depth = make_32fc1(values.ravel(), 81, 81)
+    depth.header.stamp.sec = 12
+    depth.header.stamp.nanosec = 34
+    source = SimpleNamespace(latest_hand_depth=lambda _age: (depth, camera))
+    result = ProbeSurfaceSource.surface_normal(source)
+    assert result.sample_count > 700
+    assert result.normal_camera.z == pytest.approx(-1.0, abs=1e-6)
+    assert result.stamp_nanoseconds == 12000000034
+
+
+def test_surface_source_rejects_two_equally_supported_depth_layers():
+    camera = make_camera_info(81, 81, 300.0)
+    values = np.full((81, 81), 0.6)
+    values[:, 41:] = 0.8
+    values[:, 40] = np.nan
+    depth = make_32fc1(values.ravel(), 81, 81)
+    source = SimpleNamespace(latest_hand_depth=lambda _age: (depth, camera))
+    with pytest.raises(ValueError, match="Ambiguous"):
+        ProbeSurfaceSource.surface_normal(source)
+
+
+def test_surface_source_centers_fit_on_nearest_valid_surface_sample():
+    width = height = 41
+    camera = make_camera_info(width, height, 100.0)
+    values = np.full((height, width), np.nan)
+    values[31:37, 31:37] = 0.6
+    depth = make_32fc1(values.ravel(), width, height)
+    source = SimpleNamespace(latest_hand_depth=lambda _age: (depth, camera))
+
+    result = ProbeSurfaceSource.surface_normal(source)
+
+    assert result.projected_point.mapped_pixel == ImagePoint(u=20, v=20)
+    assert result.projected_point.sampled_pixel == ImagePoint(u=31, v=31)
+    assert result.sample_count == 36
+    assert result.normal_camera.z == pytest.approx(-1.0, abs=1e-6)
+
+
 def test_depth_edge_and_missing_center_preserve_selection():
     camera = make_camera_info(33, 33, 300.0)
     values = np.full((33, 33), 0.6)

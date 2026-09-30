@@ -377,7 +377,11 @@ class MoveItArmPlanner:
                 MoveItPlanOutcome.FAILURE,
                 "MoveIt Cartesian path is incomplete: "
                 f"fraction {fraction:.6f} < "
-                f"{self.cartesian_min_fraction:.6f}",
+                f"{self.cartesian_min_fraction:.6f}; "
+                f"returned {len(response.solution.joint_trajectory.points)} trajectory points; "
+                "cause is not reported by the Cartesian service "
+                "(IK, collision, joint/path constraint, or jump rejection); "
+                "inspect move_group logs for the rejected segment",
             )
 
         trajectory = deepcopy(response.solution.joint_trajectory)

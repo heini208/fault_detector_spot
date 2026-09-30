@@ -37,6 +37,98 @@ class FakeClock:
         return SimpleNamespace(to_msg=lambda: Time(sec=12, nanosec=34))
 
 
+def test_orientation_requests_image_time_tf_without_latest_fallback():
+    calls = []
+    def lookup(target, source, **kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("historical transform unavailable")
+    executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
+    executor.surface_source = SimpleNamespace(surface_normal=lambda: SimpleNamespace(
+        stamp_nanoseconds=12000000034,
+        projected_point=SimpleNamespace(frame_id="camera"),
+    ))
+    executor.tf_listener = SimpleNamespace(lookup_a_tform_b=lookup)
+    with pytest.raises(RuntimeError, match="historical transform unavailable"):
+        executor._resolve_surface_orientation_target("hand")
+    assert len(calls) == 1
+    assert calls[0]["transform_time"].nanoseconds == 12000000034
+    assert calls[0]["timeout_sec"] == 0.0
+
+
+def test_orientation_allows_delayed_capture_time_transform():
+    from geometry_msgs.msg import Pose, PoseStamped, TransformStamped
+    from fault_detector_spot.inspection.model.models import Vector3Data
+    calls = []
+    from tf2_ros import ExtrapolationException
+    from fault_detector_spot.shared.geometry.movement_geometry import MovementGeometryUnavailable
+    now = [0.0]
+
+    def lookup(target, source, **kwargs):
+        calls.append(kwargs)
+        # Model a capture-time transform arriving 604 ms after the image.
+        assert kwargs["timeout_sec"] == 0.0
+        if now[0] < 0.604:
+            raise ExtrapolationException("extrapolation into the future")
+        result = TransformStamped()
+        result.transform.rotation.w = 1.0
+        return result
+
+    executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
+    executor.surface_source = SimpleNamespace(surface_normal=lambda: SimpleNamespace(
+        stamp_nanoseconds=12000000034,
+        projected_point=SimpleNamespace(frame_id="camera"),
+        normal_camera=Vector3Data(x=-1.0, y=0.0, z=0.0),
+    ))
+    executor.tf_listener = SimpleNamespace(lookup_a_tform_b=lookup)
+    executor._monotonic_clock = lambda: now[0]
+    executor.guarded_probe = lambda builder, **kwargs: builder
+    hand_to_probe = Pose()
+    hand_to_probe.orientation.w = 1.0
+    current = PoseStamped()
+    current.pose.orientation.w = 1.0
+    current.pose.position.x = 0.4
+    executor.probe_motion_planner = SimpleNamespace(
+        hand_to_probe_pose=lambda sensor: hand_to_probe,
+        current_pose=lambda *args: current,
+    )
+    builder = executor.orient_to_surface("hand")
+    with pytest.raises(MovementGeometryUnavailable):
+        builder()
+    # No refit or newer image may replace the retained observation on retry.
+    executor.surface_source.surface_normal = lambda: pytest.fail("refitted image")
+    now[0] = 0.7
+    target, sensor = builder()
+    assert sensor == "hand"
+    assert target.pose.position.x == 0.4
+    assert target.pose.orientation.w == pytest.approx(1.0)
+    assert len(calls) == 2
+    assert all(call["transform_time"].nanoseconds == 12000000034 for call in calls)
+
+
+def test_orientation_tf_retry_times_out_and_new_command_starts_fresh():
+    from tf2_ros import ExtrapolationException
+    from fault_detector_spot.shared.geometry.movement_geometry import MovementGeometryUnavailable
+    now = [0.0]
+    executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
+    executor._monotonic_clock = lambda: now[0]
+    executor.guarded_probe = lambda builder, **kwargs: builder
+    executor.surface_source = SimpleNamespace(surface_normal=lambda: SimpleNamespace(
+        stamp_nanoseconds=12000000034, projected_point=SimpleNamespace(frame_id="camera"),
+    ))
+    def unavailable(*args, **kwargs):
+        raise ExtrapolationException("TF still behind")
+    executor.tf_listener = SimpleNamespace(lookup_a_tform_b=unavailable)
+    builder = executor.orient_to_surface("hand")
+    with pytest.raises(MovementGeometryUnavailable):
+        builder()
+    now[0] = 2.1
+    with pytest.raises(RuntimeError, match="synchronization timed out"):
+        builder()
+    new_builder = executor.orient_to_surface("hand")
+    with pytest.raises(MovementGeometryUnavailable):
+        new_builder()
+
+
 def subscriber():
     result = CommandSubscriber()
     result.node = SimpleNamespace(get_clock=lambda: FakeClock())

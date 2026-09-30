@@ -157,6 +157,20 @@ def test_measurement_rejects_surface_behind_probe_axis():
         )
 
 
+def test_tilted_surface_has_measured_normal_and_perpendicular_distance():
+    from test_surface_normal import plane_depth_values
+    image, info = planar_depth()
+    angle = math.radians(20.0)
+    values = plane_depth_values(21, 21, info,
+                               (math.sin(angle), 0.0, -math.cos(angle)), 0.20)
+    image.data = b"".join(struct.pack("<f", value) for value in values)
+    sample = measure_probe_surface_distance(image, info, probe_to_camera_pose())
+    normal = sample.surface_plane_probe.normal
+    assert normal.x == pytest.approx(-math.cos(angle), abs=1e-5)
+    assert abs(normal.z) == pytest.approx(math.sin(angle), abs=1e-5)
+    assert sample.distance_m == pytest.approx(0.10 * math.cos(angle), abs=1e-5)
+
+
 @pytest.mark.parametrize(
     "measured,target,expected",
     [
