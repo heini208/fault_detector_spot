@@ -115,8 +115,31 @@ def test_surface_source_accepts_noisy_planar_depth():
     result = ProbeSurfaceSource.surface_normal(source)
     normal = np.array([result.normal_camera.x, result.normal_camera.y,
                        result.normal_camera.z])
-    assert math.degrees(math.acos(np.clip(normal @ expected, -1, 1))) < 5.0
+    assert math.degrees(math.acos(np.clip(normal @ expected, -1, 1))) < 1.0
     assert result.plane_rmse_m < 0.015
+
+
+def test_latest_hand_depth_can_require_frame_received_after_operation_start(monkeypatch):
+    from collections import deque
+    from threading import RLock
+    from fault_detector_spot.inspection.sensing import probe_surface_source
+
+    source = ProbeSurfaceSource.__new__(ProbeSurfaceSource)
+    source._lock = RLock()
+    source._hand_depth_camera_info = make_camera_info()
+    old = make_32fc1([0.5] * 121)
+    fresh = make_32fc1([0.7] * 121)
+    source._hand_depth_history = deque([(1.0, old), (2.0, fresh)])
+    source.node = SimpleNamespace(count_publishers=lambda topic: 1)
+    monkeypatch.setattr(probe_surface_source.time, 'monotonic', lambda: 2.1)
+
+    image, _ = source.latest_hand_depth(
+        receipt_not_before=1.5,
+    )
+    assert image.data == fresh.data
+
+    with pytest.raises(ValueError, match="after the required start time"):
+        source.latest_hand_depth(receipt_not_before=2.5)
 
 
 @pytest.mark.parametrize('publishers', [0, 1])

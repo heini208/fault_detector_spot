@@ -79,11 +79,17 @@ from fault_detector_spot.manipulation.arm_motion_parameters import (
 )
 
 
+SURFACE_ORIENTATION_MAX_ERROR_RAD = math.radians(5.0)
+SURFACE_ORIENTATION_TIMEOUT_SEC = 2.0
+SURFACE_ORIENTATION_MAX_CORRECTIONS = 1
+
+
 class _ArmOperation:
     MOVEMENT = "movement"
     READY_WAIT = "ready_wait"
     READY_PREPARE = "ready_prepare"
     GUARDED_MOVEMENT = "guarded_movement"
+    SURFACE_ORIENTATION_VERIFY = "surface_orientation_verify"
     PREPARE = "prepare"
     STOW = "stow"
 
@@ -284,6 +290,12 @@ class ArmMovementExecutor(MovementExecutor):
         self._pending_moveit_plan_builder = None
         self._pending_moveit_cartesian_path = False
         self._moveit_cartesian_plan = None
+        self._surface_orientation_sensor_id = None
+        self._surface_orientation_speed = None
+        self._surface_orientation_force_threshold_n = None
+        self._surface_orientation_corrections = 0
+        self._surface_orientation_verify_not_before = None
+        self._surface_orientation_verify_deadline = None
         self._arm_stop_service_future = None
         self._arm_stop_service_started = None
 
@@ -430,7 +442,7 @@ class ArmMovementExecutor(MovementExecutor):
         speed=None,
         force_threshold_n=None,
     ) -> ArmMovementUpdate:
-        """Orient the active probe to the front-facing live surface."""
+        """Orient the active probe and verify the achieved surface alignment."""
         sensor_id = str(motion_sensor_id).strip()
         if not sensor_id:
             return ArmMovementUpdate(
@@ -442,35 +454,78 @@ class ArmMovementExecutor(MovementExecutor):
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Surface orientation source is not configured",
             )
-        estimate = None
-        deadline = None
-        last_tf_error = ""
+        if self.active:
+            return self._busy_update()
 
-        def resolve_surface_target():
-            nonlocal estimate, deadline, last_tf_error
-            if estimate is None:
-                estimate = self.surface_source.surface_normal()
-                deadline = self._monotonic_clock() + 2.0
-            if self._monotonic_clock() >= deadline:
-                raise RuntimeError(
-                    "Surface orientation TF synchronization timed out after 2.0s; "
-                    f"{last_tf_error}"
-                )
-            try:
-                return self._resolve_surface_orientation_target(sensor_id, estimate)
-            except TransformException as exception:
-                detail = (
-                    "Waiting for surface orientation capture-time TF "
-                    f"at {estimate.stamp_nanoseconds / 1e9:.9f}: {exception}"
-                )
-                last_tf_error = detail
-                raise MovementGeometryUnavailable(detail) from exception
-
+        started_at = self._monotonic_clock()
+        self._surface_orientation_sensor_id = sensor_id
+        self._surface_orientation_speed = speed
+        self._surface_orientation_force_threshold_n = force_threshold_n
+        self._surface_orientation_corrections = 0
         return self.guarded_probe(
-            resolve_surface_target,
+            self._surface_orientation_target_builder(
+                sensor_id,
+                receipt_not_before=started_at,
+            ),
             speed=speed,
             force_threshold_n=force_threshold_n,
         )
+
+    def _surface_orientation_target_builder(
+        self,
+        sensor_id: str,
+        receipt_not_before: float,
+    ):
+        estimate = None
+        deadline = (
+            self._monotonic_clock()
+            + SURFACE_ORIENTATION_TIMEOUT_SEC
+        )
+        last_error = ""
+
+        def resolve_surface_target():
+            nonlocal estimate, last_error
+            if estimate is None:
+                try:
+                    estimate = self.surface_source.surface_normal(
+                        receipt_not_before=receipt_not_before,
+                    )
+                except ValueError as exception:
+                    last_error = (
+                        "Waiting for a fresh reliable surface normal: "
+                        f"{exception}"
+                    )
+                    if self._monotonic_clock() >= deadline:
+                        raise RuntimeError(
+                            "Surface orientation sensing timed out after "
+                            f"{SURFACE_ORIENTATION_TIMEOUT_SEC:.1f}s; "
+                            f"{last_error}"
+                        ) from exception
+                    raise MovementGeometryUnavailable(
+                        last_error
+                    ) from exception
+            try:
+                return self._resolve_surface_orientation_target(
+                    sensor_id,
+                    estimate,
+                )
+            except TransformException as exception:
+                last_error = (
+                    "Waiting for surface orientation capture-time TF "
+                    f"at {estimate.stamp_nanoseconds / 1e9:.9f}: "
+                    f"{exception}"
+                )
+                if self._monotonic_clock() >= deadline:
+                    raise RuntimeError(
+                        "Surface orientation TF synchronization timed out "
+                        f"after {SURFACE_ORIENTATION_TIMEOUT_SEC:.1f}s; "
+                        f"{last_error}"
+                    ) from exception
+                raise MovementGeometryUnavailable(
+                    last_error
+                ) from exception
+
+        return resolve_surface_target
 
     def orient_to_tag(
         self,
@@ -782,6 +837,12 @@ class ArmMovementExecutor(MovementExecutor):
                     "No arm movement is active",
                 )
 
+            if (
+                self._operation
+                == _ArmOperation.SURFACE_ORIENTATION_VERIFY
+            ):
+                return self._poll_surface_orientation_verification()
+
             # The guard must consume planning results and retain force monitoring.
             if self._operation == _ArmOperation.GUARDED_MOVEMENT:
                 return self._poll_guarded_probe()
@@ -878,20 +939,8 @@ class ArmMovementExecutor(MovementExecutor):
     ):
         if surface_normal is None:
             surface_normal = self.surface_source.surface_normal()
-        projected = surface_normal.projected_point
-        if surface_normal.stamp_nanoseconds <= 0:
-            raise ValueError("Surface orientation depth timestamp is empty")
-        camera_to_execution = self.tf_listener.lookup_a_tform_b(
-            GRAV_ALIGNED_BODY_FRAME_NAME,
-            projected.frame_id,
-            transform_time=Time(nanoseconds=surface_normal.stamp_nanoseconds),
-            # The command builder retains this estimate and retries on later
-            # ticks, releasing the executor while TF catches up.
-            timeout_sec=0.0,
-        )
-        surface_normal_execution = rotate_vector(
-            transform_to_pose_data(camera_to_execution).orientation,
-            surface_normal.normal_camera,
+        surface_normal_execution = (
+            self._surface_normal_execution(surface_normal)
         )
         hand_to_probe_orientation = pose_to_pose_data(
             self.probe_motion_planner.hand_to_probe_pose(sensor_id)
@@ -912,6 +961,44 @@ class ArmMovementExecutor(MovementExecutor):
         target_probe.pose.orientation.z = target_orientation.z
         target_probe.pose.orientation.w = target_orientation.w
         return target_probe, sensor_id
+
+    def _surface_normal_execution(self, surface_normal) -> Vector3Data:
+        projected = surface_normal.projected_point
+        if surface_normal.stamp_nanoseconds <= 0:
+            raise ValueError("Surface orientation depth timestamp is empty")
+        camera_to_execution = self.tf_listener.lookup_a_tform_b(
+            GRAV_ALIGNED_BODY_FRAME_NAME,
+            projected.frame_id,
+            transform_time=Time(
+                nanoseconds=surface_normal.stamp_nanoseconds
+            ),
+            timeout_sec=0.0,
+        )
+        return rotate_vector(
+            transform_to_pose_data(camera_to_execution).orientation,
+            surface_normal.normal_camera,
+        )
+
+    def _surface_orientation_error_rad(
+        self,
+        sensor_id: str,
+        surface_normal,
+    ) -> float:
+        outward = self._surface_normal_execution(surface_normal)
+        current_probe = self.probe_motion_planner.current_pose(
+            GRAV_ALIGNED_BODY_FRAME_NAME,
+            sensor_probe_frame(sensor_id),
+        )
+        probe_axis = rotate_vector(
+            pose_to_pose_data(current_probe.pose).orientation,
+            Vector3Data(x=1.0, y=0.0, z=0.0),
+        )
+        alignment = -(
+            probe_axis.x * outward.x
+            + probe_axis.y * outward.y
+            + probe_axis.z * outward.z
+        )
+        return math.acos(max(-1.0, min(1.0, alignment)))
 
     def _advance_ready_probe(self) -> ArmMovementUpdate:
         state = self._fresh_arm_state()
@@ -974,7 +1061,95 @@ class ArmMovementExecutor(MovementExecutor):
             return update
         if not self.active:
             return update
+        if (
+            update.outcome is ArmMovementOutcome.SUCCESS
+            and self._surface_orientation_sensor_id is not None
+        ):
+            now = self._monotonic_clock()
+            self._operation = _ArmOperation.SURFACE_ORIENTATION_VERIFY
+            self._surface_orientation_verify_not_before = now
+            self._surface_orientation_verify_deadline = (
+                now + SURFACE_ORIENTATION_TIMEOUT_SEC
+            )
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                "Surface orientation movement completed; verifying "
+                "alignment from a fresh depth frame",
+            )
         return super()._finish(update.outcome, update.detail)
+
+    def _poll_surface_orientation_verification(
+        self,
+    ) -> ArmMovementUpdate:
+        sensor_id = self._surface_orientation_sensor_id
+        receipt_not_before = self._surface_orientation_verify_not_before
+        deadline = self._surface_orientation_verify_deadline
+        if (
+            sensor_id is None
+            or receipt_not_before is None
+            or deadline is None
+        ):
+            return super()._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Surface orientation verification lost its state",
+            )
+
+        try:
+            estimate = self.surface_source.surface_normal(
+                receipt_not_before=receipt_not_before,
+            )
+            error_rad = self._surface_orientation_error_rad(
+                sensor_id,
+                estimate,
+            )
+        except (ValueError, TransformException) as exception:
+            if self._monotonic_clock() < deadline:
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.RUNNING,
+                    "Waiting for fresh post-orientation surface "
+                    f"verification: {exception}",
+                )
+            return super()._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Surface orientation verification timed out after "
+                f"{SURFACE_ORIENTATION_TIMEOUT_SEC:.1f}s: {exception}",
+            )
+
+        error_deg = math.degrees(error_rad)
+        if error_rad <= SURFACE_ORIENTATION_MAX_ERROR_RAD:
+            return super()._finish(
+                ArmMovementOutcome.SUCCESS,
+                "Surface orientation verified at "
+                f"{error_deg:.2f} deg axis error",
+            )
+
+        if (
+            self._surface_orientation_corrections
+            >= SURFACE_ORIENTATION_MAX_CORRECTIONS
+        ):
+            return super()._finish(
+                ArmMovementOutcome.MOTION_FAILED,
+                "Surface orientation remains outside tolerance after "
+                f"{SURFACE_ORIENTATION_MAX_CORRECTIONS} correction: "
+                f"{error_deg:.2f} deg > "
+                f"{math.degrees(SURFACE_ORIENTATION_MAX_ERROR_RAD):.2f} deg",
+            )
+
+        self._surface_orientation_corrections += 1
+        self._guarded_force_threshold_n = (
+            self._surface_orientation_force_threshold_n
+        )
+        self._guarded_cartesian_path = False
+        self._guarded_plan_builder = lambda: (
+            self.probe_motion_planner.build_plan(
+                lambda: self._resolve_surface_orientation_target(
+                    sensor_id,
+                    estimate,
+                ),
+                self._surface_orientation_speed,
+            )
+        )
+        return self._begin_guarded_probe()
 
     def _finish(self, outcome, detail: str):
         if self._operation == _ArmOperation.GUARDED_MOVEMENT:
@@ -1237,6 +1412,12 @@ class ArmMovementExecutor(MovementExecutor):
             self._guarded_cartesian_path = False
             self._next_probe_cartesian_path = False
             self._pending_moveit_cartesian_path = False
+            self._surface_orientation_sensor_id = None
+            self._surface_orientation_speed = None
+            self._surface_orientation_force_threshold_n = None
+            self._surface_orientation_corrections = 0
+            self._surface_orientation_verify_not_before = None
+            self._surface_orientation_verify_deadline = None
             self._reset_arm_stop_service_lifecycle(cancel=True)
             if self.guarded_probe_execution is not None:
                 self.guarded_probe_execution.reset()
@@ -1600,4 +1781,7 @@ __all__ = [
     "ArmMovementExecutor",
     "ArmMovementOutcome",
     "ArmMovementUpdate",
+    "SURFACE_ORIENTATION_MAX_CORRECTIONS",
+    "SURFACE_ORIENTATION_MAX_ERROR_RAD",
+    "SURFACE_ORIENTATION_TIMEOUT_SEC",
 ]

@@ -43,7 +43,8 @@ def test_orientation_requests_image_time_tf_without_latest_fallback():
         calls.append(kwargs)
         raise RuntimeError("historical transform unavailable")
     executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
-    executor.surface_source = SimpleNamespace(surface_normal=lambda: SimpleNamespace(
+    executor._active = False
+    executor.surface_source = SimpleNamespace(surface_normal=lambda **kwargs: SimpleNamespace(
         stamp_nanoseconds=12000000034,
         projected_point=SimpleNamespace(frame_id="camera"),
     ))
@@ -74,13 +75,14 @@ def test_orientation_allows_delayed_capture_time_transform():
         return result
 
     executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
-    executor.surface_source = SimpleNamespace(surface_normal=lambda: SimpleNamespace(
+    executor.surface_source = SimpleNamespace(surface_normal=lambda **kwargs: SimpleNamespace(
         stamp_nanoseconds=12000000034,
         projected_point=SimpleNamespace(frame_id="camera"),
         normal_camera=Vector3Data(x=-1.0, y=0.0, z=0.0),
     ))
     executor.tf_listener = SimpleNamespace(lookup_a_tform_b=lookup)
     executor._monotonic_clock = lambda: now[0]
+    executor._active = False
     executor.guarded_probe = lambda builder, **kwargs: builder
     hand_to_probe = Pose()
     hand_to_probe.orientation.w = 1.0
@@ -95,7 +97,7 @@ def test_orientation_allows_delayed_capture_time_transform():
     with pytest.raises(MovementGeometryUnavailable):
         builder()
     # No refit or newer image may replace the retained observation on retry.
-    executor.surface_source.surface_normal = lambda: pytest.fail("refitted image")
+    executor.surface_source.surface_normal = lambda **kwargs: pytest.fail("refitted image")
     now[0] = 0.7
     target, sensor = builder()
     assert sensor == "hand"
@@ -111,8 +113,9 @@ def test_orientation_tf_retry_times_out_and_new_command_starts_fresh():
     now = [0.0]
     executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
     executor._monotonic_clock = lambda: now[0]
+    executor._active = False
     executor.guarded_probe = lambda builder, **kwargs: builder
-    executor.surface_source = SimpleNamespace(surface_normal=lambda: SimpleNamespace(
+    executor.surface_source = SimpleNamespace(surface_normal=lambda **kwargs: SimpleNamespace(
         stamp_nanoseconds=12000000034, projected_point=SimpleNamespace(frame_id="camera"),
     ))
     def unavailable(*args, **kwargs):
@@ -127,6 +130,114 @@ def test_orientation_tf_retry_times_out_and_new_command_starts_fresh():
     new_builder = executor.orient_to_surface("hand")
     with pytest.raises(MovementGeometryUnavailable):
         new_builder()
+
+
+def test_surface_orientation_verification_starts_one_correction():
+    from fault_detector_spot.inspection.model.models import Vector3Data
+    from fault_detector_spot.manipulation.arm_movement_result import (
+        ArmMovementOutcome,
+        ArmMovementUpdate,
+    )
+
+    executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
+    executor._surface_orientation_sensor_id = "hand"
+    executor._surface_orientation_verify_not_before = 4.0
+    executor._surface_orientation_verify_deadline = 6.0
+    executor._surface_orientation_corrections = 0
+    executor._surface_orientation_force_threshold_n = 3.0
+    executor._surface_orientation_speed = None
+    executor._monotonic_clock = lambda: 5.0
+    estimate = SimpleNamespace(normal_camera=Vector3Data(x=-1.0, y=0.0, z=0.0))
+    executor.surface_source = SimpleNamespace(
+        surface_normal=lambda **kwargs: estimate
+    )
+    executor._surface_orientation_error_rad = (
+        lambda sensor_id, value: math.radians(7.0)
+    )
+    executor.probe_motion_planner = SimpleNamespace(
+        build_plan=lambda builder, speed: (builder, speed)
+    )
+    marker = ArmMovementUpdate(ArmMovementOutcome.RUNNING, "correction")
+    executor._begin_guarded_probe = lambda: marker
+
+    update = executor._poll_surface_orientation_verification()
+
+    assert update is marker
+    assert executor._surface_orientation_corrections == 1
+    assert executor._guarded_force_threshold_n == pytest.approx(3.0)
+    target_builder, speed = executor._guarded_plan_builder()
+    assert callable(target_builder)
+    assert speed is None
+
+
+def test_surface_orientation_full_frame_chain_preserves_probe_axis():
+    from geometry_msgs.msg import Pose, PoseStamped, TransformStamped
+    from fault_detector_spot.inspection.geometry.rotation import rotate_vector
+    from fault_detector_spot.inspection.model.models import Vector3Data
+    from fault_detector_spot.manipulation.probe_motion_planner import (
+        ProbeMotionPlanner,
+    )
+    from fault_detector_spot.shared.geometry.transforms import compose_poses
+
+    half_camera_yaw = math.radians(30.0) * 0.5
+    camera_tf = TransformStamped()
+    camera_tf.transform.rotation.z = math.sin(half_camera_yaw)
+    camera_tf.transform.rotation.w = math.cos(half_camera_yaw)
+
+    half_mount_roll = math.radians(20.0) * 0.5
+    mounting = Pose()
+    mounting.orientation.x = math.sin(half_mount_roll)
+    mounting.orientation.w = math.cos(half_mount_roll)
+
+    current = PoseStamped()
+    current.header.frame_id = "body"
+    current.pose.orientation.w = 1.0
+
+    executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
+    executor.surface_source = None
+    executor.tf_listener = SimpleNamespace(
+        lookup_a_tform_b=lambda *args, **kwargs: camera_tf
+    )
+    executor.probe_motion_planner = SimpleNamespace(
+        hand_to_probe_pose=lambda sensor_id: mounting,
+        current_pose=lambda *args: current,
+    )
+    estimate = SimpleNamespace(
+        stamp_nanoseconds=12000000034,
+        projected_point=SimpleNamespace(frame_id="camera"),
+        normal_camera=Vector3Data(x=-1.0, y=0.0, z=0.0),
+    )
+
+    target_probe, _ = executor._resolve_surface_orientation_target(
+        "hall_probe",
+        estimate,
+    )
+    target_hand = ProbeMotionPlanner.probe_pose_to_hand_pose(
+        target_probe,
+        mounting,
+    )
+    reconstructed_probe = PoseStamped()
+    reconstructed_probe.pose = compose_poses(
+        target_hand.pose,
+        mounting,
+    )
+    actual_axis = rotate_vector(
+        SimpleNamespace(
+            x=reconstructed_probe.pose.orientation.x,
+            y=reconstructed_probe.pose.orientation.y,
+            z=reconstructed_probe.pose.orientation.z,
+            w=reconstructed_probe.pose.orientation.w,
+        ),
+        Vector3Data(x=1.0, y=0.0, z=0.0),
+    )
+    expected_inward = Vector3Data(
+        x=-math.cos(math.radians(30.0)),
+        y=-math.sin(math.radians(30.0)),
+        z=0.0,
+    )
+    assert actual_axis.x == pytest.approx(expected_inward.x, abs=1e-9)
+    assert actual_axis.y == pytest.approx(expected_inward.y, abs=1e-9)
+    assert actual_axis.z == pytest.approx(expected_inward.z, abs=1e-9)
 
 
 def subscriber():
@@ -193,17 +304,25 @@ def test_surface_source_owns_live_depth_to_normal_resolution():
 
 def test_executor_owns_surface_orientation_calculation_and_guarded_move():
     start = inspect.getsource(ArmMovementExecutor.orient_to_surface)
+    acquire = inspect.getsource(
+        ArmMovementExecutor._surface_orientation_target_builder
+    )
     resolve = inspect.getsource(
         ArmMovementExecutor._resolve_surface_orientation_target
     )
+    verify = inspect.getsource(
+        ArmMovementExecutor._poll_surface_orientation_verification
+    )
 
     assert "self.guarded_probe(" in start
-    assert "_resolve_surface_orientation_target" in start
-    assert "self.surface_source.surface_normal()" in resolve
-    assert "latest_hand_depth()" not in resolve
-    assert "estimate_surface_normal(" not in resolve
+    assert "receipt_not_before=started_at" in start
+    assert "self.surface_source.surface_normal(" in acquire
+    assert "receipt_not_before=receipt_not_before" in acquire
     assert "surface_aligned_probe_orientation(" in resolve
     assert "sensor_probe_frame(sensor_id)" in resolve
+    assert "receipt_not_before=receipt_not_before" in verify
+    assert "SURFACE_ORIENTATION_MAX_ERROR_RAD" in verify
+    assert "self._begin_guarded_probe()" in verify
 
 
 def test_ui_button_dispatches_orient_to_surface_intent():

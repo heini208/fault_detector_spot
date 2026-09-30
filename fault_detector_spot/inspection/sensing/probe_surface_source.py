@@ -110,11 +110,15 @@ class ProbeSurfaceSource(RuntimeSource):
     def latest_hand_depth(
         self,
         maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
+        receipt_not_before: float = 0.0,
     ):
         """Return the newest fresh registered hand depth and camera info."""
         maximum_age_sec = float(maximum_age_sec)
+        receipt_not_before = float(receipt_not_before)
         if not math.isfinite(maximum_age_sec) or maximum_age_sec <= 0.0:
             raise ValueError("Maximum hand-depth age must be positive")
+        if not math.isfinite(receipt_not_before):
+            raise ValueError("Hand-depth receipt threshold must be finite")
 
         with self._lock:
             camera_info = deepcopy(self._hand_depth_camera_info)
@@ -128,7 +132,18 @@ class ProbeSurfaceSource(RuntimeSource):
                 "No registered hand-depth image is available"
             )
 
-        receipt_time, depth_image = history[-1]
+        eligible = [
+            item
+            for item in history
+            if item[0] + 1e-9 >= receipt_not_before
+        ]
+        if not eligible:
+            raise ValueError(
+                "No registered hand-depth image has been received after "
+                f"the required start time {receipt_not_before:.6f}"
+            )
+
+        receipt_time, depth_image = eligible[-1]
         age = time.monotonic() - receipt_time
         if age < -1e-9 or age > maximum_age_sec:
             publishers = self.node.count_publishers("/depth_registered/hand/image")
@@ -144,6 +159,7 @@ class ProbeSurfaceSource(RuntimeSource):
         self,
         maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
         window_radius_px: int = SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
+        receipt_not_before: float = 0.0,
     ) -> SurfaceNormalEstimate:
         """Return a live local surface-normal estimate at image center."""
         if (
@@ -153,7 +169,10 @@ class ProbeSurfaceSource(RuntimeSource):
         ):
             raise ValueError("Surface orientation window radius must be positive")
 
-        depth_image, camera_info = self.latest_hand_depth(maximum_age_sec)
+        depth_image, camera_info = self.latest_hand_depth(
+            maximum_age_sec,
+            receipt_not_before=receipt_not_before,
+        )
         point_cloud = create_organized_depth_point_cloud(
             depth_image, camera_info,
         )
