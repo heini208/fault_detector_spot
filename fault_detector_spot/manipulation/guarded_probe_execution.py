@@ -111,30 +111,23 @@ class GuardedProbeExecution:
             force_stale_timeout_sec,
             "Force stale timeout",
         )
-        self.stop_confirmation_linear_velocity_threshold_mps = (
-            self._positive(
-                stop_confirmation_linear_velocity_threshold_mps,
-                "Stop confirmation linear velocity threshold",
-            )
+        self._stop_linear_threshold_mps = self._positive(
+            stop_confirmation_linear_velocity_threshold_mps,
+            "Stop confirmation linear velocity threshold",
         )
-        self.stop_confirmation_angular_velocity_threshold_rad_s = (
-            self._positive(
-                stop_confirmation_angular_velocity_threshold_rad_s,
-                "Stop confirmation angular velocity threshold",
-            )
+        self._stop_angular_threshold_rad_s = self._positive(
+            stop_confirmation_angular_velocity_threshold_rad_s,
+            "Stop confirmation angular velocity threshold",
         )
-        self.stop_confirmation_stable_duration_sec = self._positive(
+        self._stop_stable_duration_sec = self._positive(
             stop_confirmation_stable_duration_sec,
             "Stop confirmation stable duration",
         )
-        self.stop_confirmation_timeout_sec = self._positive(
+        self._stop_timeout_sec = self._positive(
             stop_confirmation_timeout_sec,
             "Stop confirmation timeout",
         )
-        if (
-            self.stop_confirmation_timeout_sec
-            < self.stop_confirmation_stable_duration_sec
-        ):
+        if self._stop_timeout_sec < self._stop_stable_duration_sec:
             raise ValueError(
                 "Stop confirmation timeout must be at least the stable duration"
             )
@@ -875,17 +868,7 @@ class GuardedProbeExecution:
 
     def _poll_arm_settling(self) -> ArmMovementUpdate:
         accepted_at = self._stop_accepted_at
-        if accepted_at is None:
-            return self._terminal(
-                ArmMovementOutcome.STOP_UNCONFIRMED,
-                self._stop_detail(
-                    "Physical stop confirmation has no ArmStop acceptance time"
-                ),
-            )
-
-        now = self._monotonic_clock()
         sample = self.arm_state_source.hand_velocity_sample()
-        detail = "Waiting for fresh post-stop hand velocity"
         if (
             sample is not None
             and sample.received_at > accepted_at + 1e-12
@@ -896,53 +879,37 @@ class GuardedProbeExecution:
             )
         ):
             self._stop_last_velocity_received_at = sample.received_at
-            linear_speed = float(sample.linear_speed_mps)
-            angular_speed = float(sample.angular_speed_rad_s)
-            if not (
-                math.isfinite(linear_speed)
-                and math.isfinite(angular_speed)
-            ):
-                self._stop_stable_since = None
-                detail = "Measured post-stop hand velocity is not finite"
-            elif (
-                linear_speed
-                <= self.stop_confirmation_linear_velocity_threshold_mps
-                and angular_speed
-                <= self.stop_confirmation_angular_velocity_threshold_rad_s
-            ):
+            stopped = (
+                sample.linear_speed_mps <= self._stop_linear_threshold_mps
+                and sample.angular_speed_rad_s
+                <= self._stop_angular_threshold_rad_s
+            )
+            if stopped:
                 if self._stop_stable_since is None:
                     self._stop_stable_since = sample.received_at
-                stable_for = sample.received_at - self._stop_stable_since
-                if (
-                    stable_for + 1e-9
-                    >= self.stop_confirmation_stable_duration_sec
+                elif (
+                    sample.received_at - self._stop_stable_since + 1e-9
+                    >= self._stop_stable_duration_sec
                 ):
                     return self._complete_arm_stop()
-                detail = (
-                    "Hand is below stop thresholds for "
-                    f"{stable_for:.2f} s"
-                )
             else:
                 self._stop_stable_since = None
-                detail = (
-                    "Hand is still moving at "
-                    f"{linear_speed:.4f} m/s linear and "
-                    f"{angular_speed:.4f} rad/s angular"
-                )
 
-        if now - accepted_at + 1e-9 >= self.stop_confirmation_timeout_sec:
+        if (
+            self._monotonic_clock() - accepted_at + 1e-9
+            >= self._stop_timeout_sec
+        ):
             return self._terminal(
                 ArmMovementOutcome.STOP_UNCONFIRMED,
                 self._stop_detail(
                     "ArmStopCommand was accepted, but physical stop was not "
-                    f"confirmed within {self.stop_confirmation_timeout_sec:.2f} "
-                    f"s: {detail}"
+                    "confirmed before the timeout"
                 ),
             )
 
         return ArmMovementUpdate(
             ArmMovementOutcome.RUNNING,
-            f"ArmStopCommand accepted; {detail}",
+            "Waiting for physical arm stop confirmation",
         )
 
     def _complete_arm_stop(self) -> ArmMovementUpdate:

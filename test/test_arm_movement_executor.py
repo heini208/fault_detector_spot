@@ -18,6 +18,7 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
 )
 from fault_detector_spot.manipulation.arm_state_source import (
     ArmStowState,
+    HandVelocitySample,
 )
 
 
@@ -126,6 +127,7 @@ class FakeArmStateSource:
         self.state = state
         self.last_received_at = last_received_at
         self.stale = stale
+        self.velocity = None
 
     def stow_state(self):
         if self.stale:
@@ -134,6 +136,9 @@ class FakeArmStateSource:
 
     def is_stale(self):
         return self.stale
+
+    def hand_velocity_sample(self):
+        return self.velocity
 
 
 class FakeTransformer:
@@ -226,6 +231,29 @@ def capture_builder(monkeypatch):
         lambda source, target: None,
     )
     return captured
+
+
+def hand_velocity_sample(received_at, linear=0.0, angular=0.0):
+    return HandVelocitySample(
+        received_at=received_at,
+        linear_x_mps=linear,
+        linear_y_mps=0.0,
+        linear_z_mps=0.0,
+        angular_x_rad_s=angular,
+        angular_y_rad_s=0.0,
+        angular_z_rad_s=0.0,
+    )
+
+
+def confirm_physical_stop(executor, clock, first_sample_at):
+    executor.arm_state_source.velocity = hand_velocity_sample(first_sample_at)
+    clock.now = first_sample_at
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    executor.arm_state_source.velocity = hand_velocity_sample(
+        first_sample_at + 0.4
+    )
+    clock.now = first_sample_at + 0.4
+    return executor.poll()
 
 
 def executor_with_client(transformer, **kwargs):
@@ -660,7 +688,8 @@ def test_result_timeout_requests_goal_cancellation(monkeypatch):
     assert len(stop_client.requests) == 1
     assert executor.poll().outcome is ArmMovementOutcome.RUNNING
     stop_client.future.set_result(SimpleNamespace(success=True))
-    update = executor.poll()
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    update = confirm_physical_stop(executor, clock, 3.1)
 
     assert update.outcome is ArmMovementOutcome.RESULT_TIMEOUT
     assert handle.cancel_count == 1
@@ -1072,6 +1101,11 @@ def test_contact_retreat_uses_probe_and_preserves_guard_lifecycle(monkeypatch):
     client.send_future = ManualFuture()
 
     assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert len(calls) == 1
+    assert (
+        confirm_physical_stop(executor, clock, 0.3).outcome
+        is ArmMovementOutcome.RUNNING
+    )
     assert len(calls) == 2
     assert calls[1][1] == executor_module._ArmOperation.GUARDED_MOVEMENT
     retreat = calls[1][0][0]
@@ -1114,7 +1148,11 @@ def test_guarded_moveit_failure_stops_and_releases_executor(outcome_name):
     )
     from fault_detector_spot.manipulation.guarded_probe_execution import _Phase
 
-    executor, client = executor_with_client(FakeTransformer({}))
+    clock = ManualClock()
+    executor, client = executor_with_client(
+        FakeTransformer({}),
+        monotonic_clock=clock,
+    )
     executor.arm_stop_service_client = FakeArmStopServiceClient()
     executor.moveit_arm_planner = SimpleNamespace(
         poll=lambda: MoveItPlanUpdate(
@@ -1135,7 +1173,8 @@ def test_guarded_moveit_failure_stops_and_releases_executor(outcome_name):
     executor.arm_stop_service_client.future.set_result(
         SimpleNamespace(success=True, message="stopped")
     )
-    result = executor.poll()
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    result = confirm_physical_stop(executor, clock, 0.1)
     assert result.outcome is not ArmMovementOutcome.RUNNING
     assert "planning failed" in result.detail
     assert not executor.active
