@@ -218,6 +218,7 @@ def execution(
         ),
         default_angular_speed_rad_s=0.5,
         force_stale_timeout_sec=0.25,
+        hard_force_delta_limit_n=20.0,
         stop_confirmation_linear_velocity_threshold_mps=0.01,
         stop_confirmation_angular_velocity_threshold_rad_s=0.05,
         stop_confirmation_stable_duration_sec=0.4,
@@ -454,6 +455,44 @@ def test_explicit_threshold_override_replaces_generic_policy():
     assert driver.started_goals[-1] == ("arm_stop", 1)
 
 
+def test_hard_force_limit_stops_on_first_fresh_sample():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.0))
+
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+
+    clock.now = 0.1
+    state.sample = HandForceSample(0.1, -20.0, 2.0, 3.0)
+    update = guard.observe_force_sample(state.sample)
+
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 1
+    assert driver.stop_count == 1
+    assert guard._force_contact_count == 0
+
+
+def test_hard_force_limit_is_not_suppressed_by_self_motion():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    current = {"pose": pose(0.0)}
+    guard = execution(state, driver, clock, lambda: current["pose"])
+
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+
+    clock.now = 0.1
+    current["pose"] = pose(0.01)
+    current["pose"].pose.position.y = 0.01
+    state.sample = HandForceSample(0.1, -20.0, 2.0, 3.0)
+    guard.observe_force_sample(state.sample)
+
+    assert driver.cancel_count == 1
+    assert driver.stop_count == 1
+    assert guard._self_motion_suppression_count == 0
+
+
 def test_large_sideways_force_does_not_trigger_directional_contact():
     clock = ManualClock()
     state = FakeArmStateSource()
@@ -462,7 +501,7 @@ def test_large_sideways_force_does_not_trigger_directional_contact():
 
     assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
 
-    state.sample = HandForceSample(0.1, 1.0, 22.0, 3.0)
+    state.sample = HandForceSample(0.1, 1.0, 21.0, 3.0)
     guard.observe_force_sample(state.sample)
     update = guard.poll()
 

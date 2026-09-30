@@ -183,9 +183,22 @@ def test_duplicate_samples_do_not_advance_or_repeat_contact(monitored):
     assert len(m.telemetry.observations) == 2
 
 
+def test_hard_force_limit_stops_once_without_bt_poll(monitored):
+    m = monitored
+    m.emit(0.01, force=(-20.0, 2.0, 3.0))
+    m.emit(0.01, force=(-20.0, 2.0, 3.0))
+
+    assert m.driver.cancel_count == 1
+    assert m.driver.stop_count == 1
+    assert m.guard._force_contact_count == 0
+    assert m.telemetry.observations[-1]["authoritative_decision"] == (
+        "hard_force_limit"
+    )
+
+
 def test_sideways_force_remains_non_contact_without_polling(monitored):
     for received_at in (0.01, 0.02, 0.03):
-        monitored.emit(received_at, force=(1.0, 22.0, 3.0))
+        monitored.emit(received_at, force=(1.0, 21.0, 3.0))
     assert monitored.driver.stop_count == 0
     assert monitored.guard._force_contact_count == 0
 

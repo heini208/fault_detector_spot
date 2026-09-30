@@ -160,6 +160,7 @@ def execution(state, driver, policy):
         ),
         default_angular_speed_rad_s=0.5,
         force_stale_timeout_sec=0.25,
+        hard_force_delta_limit_n=20.0,
         stop_confirmation_linear_velocity_threshold_mps=0.01,
         stop_confirmation_angular_velocity_threshold_rad_s=0.05,
         stop_confirmation_stable_duration_sec=0.4,

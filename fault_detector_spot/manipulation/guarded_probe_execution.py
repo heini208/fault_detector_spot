@@ -55,6 +55,7 @@ class GuardedProbeExecution:
         build_motion_plan,
         default_angular_speed_rad_s: float,
         force_stale_timeout_sec: float,
+        hard_force_delta_limit_n: float,
         stop_confirmation_linear_velocity_threshold_mps: float,
         stop_confirmation_angular_velocity_threshold_rad_s: float,
         stop_confirmation_stable_duration_sec: float,
@@ -110,6 +111,10 @@ class GuardedProbeExecution:
         self.force_stale_timeout_sec = self._positive(
             force_stale_timeout_sec,
             "Force stale timeout",
+        )
+        self.hard_force_delta_limit_n = self._positive(
+            hard_force_delta_limit_n,
+            "Hard force delta limit",
         )
         self._stop_linear_threshold_mps = self._positive(
             stop_confirmation_linear_velocity_threshold_mps,
@@ -516,6 +521,25 @@ class GuardedProbeExecution:
             self._peak_total_force_delta_n,
             force_delta.total_n,
         )
+
+        if force_delta.total_n >= self.hard_force_delta_limit_n:
+            self._observe_contact_telemetry(
+                observed_at=now,
+                plan=plan,
+                force_sample=sample,
+                force_baseline=baseline,
+                force_delta=force_delta,
+                current_hand=current_hand,
+                contact_evidence=None,
+                authoritative_contact_count=self._force_contact_count,
+                authoritative_decision="hard_force_limit",
+                self_motion_suppressed=False,
+            )
+            return self._begin_contact(
+                "Hard force safety limit reached from total end-effector "
+                f"force delta {force_delta.total_n:.2f} N at or above "
+                f"{self.hard_force_delta_limit_n:.2f} N"
+            )
 
         threshold_n = self._force_threshold_n
         if threshold_n is None:

@@ -164,6 +164,7 @@ def execution(state, driver, clock, telemetry):
         ),
         default_angular_speed_rad_s=0.5,
         force_stale_timeout_sec=0.25,
+        hard_force_delta_limit_n=20.0,
         stop_confirmation_linear_velocity_threshold_mps=0.01,
         stop_confirmation_angular_velocity_threshold_rad_s=0.05,
         stop_confirmation_stable_duration_sec=0.4,
@@ -207,6 +208,25 @@ def test_guard_emits_shadow_observation_for_each_fresh_force_sample():
     assert observation["contact_evidence"] is not None
     assert observation["authoritative_contact_count"] == 0
     assert observation["authoritative_decision"] == "below_threshold"
+    assert not observation["self_motion_suppressed"]
+
+
+def test_hard_force_limit_is_recorded_as_authoritative_decision():
+    clock = ManualClock()
+    state = ArmState()
+    driver = Driver()
+    telemetry = Telemetry()
+    guard = execution(state, driver, clock, telemetry)
+
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+
+    clock.now = 0.1
+    state.sample = HandForceSample(0.1, -20.0, 2.0, 3.0)
+    guard.observe_force_sample(state.sample)
+
+    observation = telemetry.observations[-1]
+    assert observation["authoritative_decision"] == "hard_force_limit"
+    assert observation["authoritative_contact_count"] == 0
     assert not observation["self_motion_suppressed"]
 
 

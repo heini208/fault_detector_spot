@@ -108,6 +108,7 @@ class ArmMovementExecutor(MovementExecutor):
         force_contact_policy=None,
         contact_evidence_analyzer=None,
         force_stale_timeout_sec=None,
+        hard_force_delta_limit_n=None,
         stop_confirmation_linear_velocity_threshold_mps=None,
         stop_confirmation_angular_velocity_threshold_rad_s=None,
         stop_confirmation_stable_duration_sec=None,
@@ -153,6 +154,9 @@ class ArmMovementExecutor(MovementExecutor):
         )
         force_stale_timeout_sec = config.get(
             "contact.force_stale_timeout_sec", force_stale_timeout_sec
+        )
+        hard_force_delta_limit_n = config.get(
+            "contact.hard_force_delta_limit_n", hard_force_delta_limit_n
         )
         stop_confirmation_linear_velocity_threshold_mps = config.get(
             "contact.stop_confirmation.linear_velocity_threshold_mps",
@@ -306,6 +310,7 @@ class ArmMovementExecutor(MovementExecutor):
                     self.speed_policy.default_speed.angular_speed_rad_s
                 ),
                 force_stale_timeout_sec=force_stale_timeout_sec,
+                hard_force_delta_limit_n=hard_force_delta_limit_n,
                 stop_confirmation_linear_velocity_threshold_mps=(
                     stop_confirmation_linear_velocity_threshold_mps
                 ),

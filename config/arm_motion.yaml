@@ -40,6 +40,9 @@
     arm.contact.consecutive_samples: 2
     arm.contact.force_stale_timeout_sec: 0.25
 
+    # Provisional hard safety ceiling; validate against real probe loads
+    arm.contact.hard_force_delta_limit_n: 20.0
+
     # Physical stop confirmation after ArmStop acceptance
     arm.contact.stop_confirmation.linear_velocity_threshold_mps: 0.01
     arm.contact.stop_confirmation.angular_velocity_threshold_rad_s: 0.05
