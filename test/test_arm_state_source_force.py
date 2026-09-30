@@ -132,3 +132,39 @@ def test_force_becomes_unavailable_with_stale_manipulator_state():
     clock.now = 1.01
 
     assert source.hand_force_sample() is None
+
+
+def test_force_listeners_run_after_update_outside_lock_and_can_be_removed():
+    node = FakeNode()
+    source = ArmStateSource(node)
+    observations = []
+
+    def observe(sample):
+        assert not source._lock._is_owned()
+        assert source.hand_force_sample() is sample
+        observations.append(sample)
+
+    source.add_force_listener(observe)
+    node.callback(manipulator_state(force=(1.0, 2.0, 3.0)))
+    node.callback(manipulator_state(force_present=False))
+    source.remove_force_listener(observe)
+    node.callback(manipulator_state())
+    assert len(observations) == 2
+    assert observations[0].x_n == 1.0
+    assert observations[1] is None
+
+
+def test_failed_listener_cannot_prevent_other_listeners_or_later_updates():
+    node = FakeNode()
+    source = ArmStateSource(node)
+    observations = []
+
+    def broken(_sample):
+        raise RuntimeError('listener failed')
+
+    source.add_force_listener(broken)
+    source.add_force_listener(observations.append)
+    node.callback(manipulator_state(force=(1.0, 2.0, 3.0)))
+    node.callback(manipulator_state(force=(4.0, 5.0, 6.0)))
+    assert [sample.x_n for sample in observations] == [1.0, 4.0]
+    assert source.hand_force_sample().x_n == 4.0

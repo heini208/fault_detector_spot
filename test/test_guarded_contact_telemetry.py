@@ -187,6 +187,7 @@ def test_guard_emits_shadow_observation_for_each_fresh_force_sample():
         y_n=2.0,
         z_n=3.0,
     )
+    guard.observe_force_sample(state.sample)
     update = guard.poll()
 
     assert update.outcome is ArmMovementOutcome.RUNNING
@@ -220,6 +221,7 @@ def test_telemetry_failure_cannot_change_guard_decision():
         y_n=2.0,
         z_n=3.0,
     )
+    guard.observe_force_sample(state.sample)
     update = guard.poll()
 
     assert update.outcome is ArmMovementOutcome.RUNNING

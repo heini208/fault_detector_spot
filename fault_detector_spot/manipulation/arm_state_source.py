@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
+import logging
 from threading import RLock
 import math
 import time
@@ -95,6 +96,7 @@ class ArmStateSource(RuntimeSource):
         self._hand_velocity_sample = None
         self._hand_force_sample = None
         self._last_received_at = None
+        self._force_listeners = set()
         self._subscription = node.create_subscription(
             ManipulatorState,
             MANIPULATOR_STATE_TOPIC,
@@ -150,6 +152,21 @@ class ArmStateSource(RuntimeSource):
             received_at = self._last_received_at
         return not self._is_fresh(received_at, current)
 
+    def add_force_listener(self, listener) -> None:
+        """Observe each force update (including missing force) outside the lock.
+
+        Listeners must be nonblocking. Removal prevents future notifications;
+        a notification already in flight may still complete.
+        """
+        if not callable(listener):
+            raise TypeError("Force listener must be callable")
+        with self._lock:
+            self._force_listeners.add(listener)
+
+    def remove_force_listener(self, listener) -> None:
+        with self._lock:
+            self._force_listeners.discard(listener)
+
     def _receive_state(self, message) -> None:
         received_at = self._monotonic_clock()
         value = int(message.stow_state.value)
@@ -173,6 +190,15 @@ class ArmStateSource(RuntimeSource):
             self._hand_velocity_sample = velocity_sample
             self._hand_force_sample = force_sample
             self._last_received_at = received_at
+            listeners = tuple(self._force_listeners)
+
+        for listener in listeners:
+            try:
+                listener(force_sample)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Arm force listener failed"
+                )
 
     @staticmethod
     def _read_hand_velocity(message, received_at):
@@ -237,6 +263,8 @@ class ArmStateSource(RuntimeSource):
         return current - received_at <= self.stale_after_sec
 
     def destroy(self) -> None:
+        with self._lock:
+            self._force_listeners.clear()
         subscription = self._subscription
         self._subscription = None
         if subscription is not None:

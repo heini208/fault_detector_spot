@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from enum import Enum
+from threading import RLock
 import math
 import time
 
@@ -58,6 +59,7 @@ class GuardedProbeExecution:
         contact_evidence_analyzer=None,
         contact_telemetry=None,
         monotonic_clock=time.monotonic,
+        execution_lock=None,
     ):
         required = (
             (arm_state_source, "arm state source"),
@@ -119,6 +121,7 @@ class GuardedProbeExecution:
         )
         self.contact_telemetry = contact_telemetry
         self._monotonic_clock = monotonic_clock
+        self.lock = execution_lock if execution_lock is not None else RLock()
         self.reset()
 
     @property
@@ -130,17 +133,25 @@ class GuardedProbeExecution:
         plan_builder,
         force_threshold_n=None,
     ) -> ArmMovementUpdate:
-        if not callable(plan_builder):
-            return ArmMovementUpdate(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "Guarded probe movement requires a plan builder",
-            )
-        self.reset()
-        self._plan_builder = plan_builder
-        self._force_threshold_override_n = force_threshold_n
-        return self._prepare_plan()
+        with self.lock:
+            if not callable(plan_builder):
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.EXECUTION_ERROR,
+                    "Guarded probe movement requires a plan builder",
+                )
+            self.reset()
+            self._plan_builder = plan_builder
+            self._force_threshold_override_n = force_threshold_n
+            return self._prepare_plan()
 
     def poll(self) -> ArmMovementUpdate:
+        """Advance the lifecycle; force decisions arrive through sample events."""
+        with self.lock:
+            if self._terminal_update is not None:
+                return self._terminal_update
+            return self._advance()
+
+    def _advance(self) -> ArmMovementUpdate:
         phase = self._phase
         if phase is _Phase.FORCE_BASELINE:
             return self._handle_force_baseline(
@@ -160,35 +171,38 @@ class GuardedProbeExecution:
         )
 
     def cancel(self) -> None:
-        if self.active:
-            self._cancel_goal()
-        self.reset()
+        with self.lock:
+            if self.active:
+                self._cancel_goal()
+            self.reset()
 
     def reset(self) -> None:
-        self._phase = None
-        self._plan_builder = None
-        self._plan = None
-        self._force_baseline = None
-        self._force_threshold_override_n = None
-        self._force_threshold_n = None
-        self._force_last_received_at = None
-        self._force_contact_count = 0
-        self._self_motion_suppression_count = 0
-        self._contact_detail = ""
-        self._abort_outcome = None
-        self._abort_detail = ""
-        self._retreat_distance_m = 0.0
-        self._peak_opposing_force_delta_n = 0.0
-        self._peak_total_force_delta_n = 0.0
-        self._last_hand_orientation = None
-        self._last_hand_position = None
-        self._last_hand_position_at = None
-        self._primary_motion_started_at = None
-        self._telemetry_movement_sequence = None
-        self._stop_terminal_outcome = None
-        self._stop_terminal_detail = ""
-        self._stop_then_retreat = False
-        self.force_baseline_sampler.reset()
+        with self.lock:
+            self._terminal_update = None
+            self._phase = None
+            self._plan_builder = None
+            self._plan = None
+            self._force_baseline = None
+            self._force_threshold_override_n = None
+            self._force_threshold_n = None
+            self._force_last_received_at = None
+            self._force_contact_count = 0
+            self._self_motion_suppression_count = 0
+            self._contact_detail = ""
+            self._abort_outcome = None
+            self._abort_detail = ""
+            self._retreat_distance_m = 0.0
+            self._peak_opposing_force_delta_n = 0.0
+            self._peak_total_force_delta_n = 0.0
+            self._last_hand_orientation = None
+            self._last_hand_position = None
+            self._last_hand_position_at = None
+            self._primary_motion_started_at = None
+            self._telemetry_movement_sequence = None
+            self._stop_terminal_outcome = None
+            self._stop_terminal_detail = ""
+            self._stop_then_retreat = False
+            self.force_baseline_sampler.reset()
 
     def _begin_force_baseline(self) -> ArmMovementUpdate:
         self._phase = _Phase.FORCE_BASELINE
@@ -337,7 +351,7 @@ class GuardedProbeExecution:
             )
 
         if plan.force_guard_enabled:
-            guard_update = self._check_force_guard()
+            guard_update = self._check_force_timeout()
             if guard_update is not None:
                 return guard_update
 
@@ -382,41 +396,43 @@ class GuardedProbeExecution:
             terminal_detail=detail,
         )
 
-    def _check_force_guard(self):
-        now = self._monotonic_clock()
-        sample = self.arm_state_source.hand_force_sample()
+    def observe_force_sample(self, sample):
+        """Evaluate one observation without advancing planning or retreat."""
+        with self.lock:
+            if (
+                self._phase is _Phase.MOVING
+                and self._plan is not None
+                and self._plan.force_guard_enabled
+            ):
+                return self._check_force_guard(sample)
+            return None
 
-        if sample is None:
-            if not self._force_timed_out(now):
-                return None
-            if getattr(
-                self.arm_state_source,
-                "last_received_at",
-                None,
-            ) is None:
-                return self._begin_abort(
-                    ArmMovementOutcome.FORCE_UNAVAILABLE,
-                    "End-effector force is unavailable during "
-                    "guarded probe movement",
-                )
+    def _check_force_timeout(self):
+        now = self._monotonic_clock()
+        if not self._force_timed_out(now):
+            return None
+        if getattr(self.arm_state_source, "last_received_at", None) is None:
             return self._begin_abort(
-                ArmMovementOutcome.FORCE_STALE,
-                "End-effector force became stale during "
+                ArmMovementOutcome.FORCE_UNAVAILABLE,
+                "End-effector force is unavailable during "
                 "guarded probe movement",
             )
+        return self._begin_abort(
+            ArmMovementOutcome.FORCE_STALE,
+            "End-effector force stopped updating during guarded probe movement",
+        )
+
+    def _check_force_guard(self, sample):
+        now = self._monotonic_clock()
+        if sample is None:
+            return self._check_force_timeout()
 
         if (
             self._force_last_received_at is not None
             and sample.received_at
             <= self._force_last_received_at + 1e-12
         ):
-            if self._force_timed_out(now):
-                return self._begin_abort(
-                    ArmMovementOutcome.FORCE_STALE,
-                    "End-effector force stopped updating during "
-                    "guarded probe movement",
-                )
-            return None
+            return self._check_force_timeout()
 
         self._force_last_received_at = sample.received_at
         baseline = self._force_baseline
@@ -933,6 +949,7 @@ class GuardedProbeExecution:
             str(detail).strip(),
         )
         self._phase = None
+        self._terminal_update = update
         return update
 
     @staticmethod

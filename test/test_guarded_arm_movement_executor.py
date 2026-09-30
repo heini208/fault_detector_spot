@@ -209,8 +209,10 @@ def test_contact_cancels_stops_retreats_and_returns_contact():
     assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
 
     state.sample = HandForceSample(0.1, -5.0, 2.0, 3.0)
+    guard.observe_force_sample(state.sample)
     assert guard.poll().outcome is ArmMovementOutcome.RUNNING
     state.sample = HandForceSample(0.2, -5.0, 2.0, 3.0)
+    guard.observe_force_sample(state.sample)
     stopping = guard.poll()
 
     assert stopping.outcome is ArmMovementOutcome.RUNNING
@@ -248,6 +250,7 @@ def test_primary_success_finishes_without_arm_stop():
 
     guard.start(plan)
     state.sample = HandForceSample(0.1, 2.0, 2.0, 3.0)
+    guard.observe_force_sample(state.sample)
     driver.updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
     )
@@ -303,8 +306,10 @@ def test_explicit_threshold_override_replaces_generic_policy():
     ).outcome is ArmMovementOutcome.RUNNING
 
     state.sample = HandForceSample(0.1, -5.0, 2.0, 3.0)
+    guard.observe_force_sample(state.sample)
     assert guard.poll().outcome is ArmMovementOutcome.RUNNING
     state.sample = HandForceSample(0.2, -5.0, 2.0, 3.0)
+    guard.observe_force_sample(state.sample)
     contact = guard.poll()
 
     assert contact.outcome is ArmMovementOutcome.RUNNING
@@ -321,6 +326,7 @@ def test_large_sideways_force_does_not_trigger_directional_contact():
     assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
 
     state.sample = HandForceSample(0.1, 1.0, 22.0, 3.0)
+    guard.observe_force_sample(state.sample)
     update = guard.poll()
 
     assert update.outcome is ArmMovementOutcome.RUNNING
@@ -336,6 +342,7 @@ def test_force_in_commanded_direction_is_not_obstacle_contact():
     assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
 
     state.sample = HandForceSample(0.1, 8.0, 2.0, 3.0)
+    guard.observe_force_sample(state.sample)
     update = guard.poll()
 
     assert update.outcome is ArmMovementOutcome.RUNNING
@@ -371,6 +378,7 @@ def test_sustained_high_off_axis_self_motion_is_suppressed():
             2.0,
             3.0,
         )
+        guard.observe_force_sample(state.sample)
         assert guard.poll().outcome is ArmMovementOutcome.RUNNING
 
     assert driver.cancel_count == 0

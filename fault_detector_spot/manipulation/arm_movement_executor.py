@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import math
+from threading import RLock
 import time
 
 from bosdyn.api import (
@@ -48,6 +49,9 @@ from fault_detector_spot.manipulation.arm_state_source import (
 )
 from fault_detector_spot.manipulation.guarded_probe_execution import (
     GuardedProbeExecution,
+)
+from fault_detector_spot.manipulation.guarded_probe_monitor import (
+    GuardedProbeMonitor,
 )
 from fault_detector_spot.manipulation.moveit_arm_planner import (
     ARM_JOINT_NAMES,
@@ -121,6 +125,7 @@ class ArmMovementExecutor(MovementExecutor):
         logger=None,
         config=None,
     ):
+        self._execution_lock = RLock()
         config = config if config is not None else ArmMotionParameters(
             getattr(arm_state_source, "node", None)
         )
@@ -257,6 +262,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._arm_stop_service_started = None
 
         self.guarded_probe_execution = None
+        self._guarded_probe_monitor = None
         if (
             arm_state_source is not None
             and force_baseline_sampler is not None
@@ -283,7 +289,13 @@ class ArmMovementExecutor(MovementExecutor):
                 retreat_distance_m=contact_retreat_distance_m,
                 retreat_speed_mps=contact_retreat_speed_mps,
                 monotonic_clock=monotonic_clock,
+                execution_lock=self._execution_lock,
             )
+            node = getattr(arm_state_source, "node", None)
+            if node is not None:
+                self._guarded_probe_monitor = GuardedProbeMonitor(
+                    node, arm_state_source, self.guarded_probe_execution,
+                )
 
     def relative(
         self,
@@ -434,45 +446,46 @@ class ArmMovementExecutor(MovementExecutor):
         cartesian_path: bool = False,
     ) -> ArmMovementUpdate:
         """Execute one ready probe movement with force monitoring."""
-        if self.active:
-            return self._busy_update()
-        if self.guarded_probe_execution is None:
-            return ArmMovementUpdate(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "Guarded probe movement is not configured",
-            )
-        if self.force_contact_policy is None:
-            return ArmMovementUpdate(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "Guarded probe movement requires a force contact policy",
-            )
-        if cartesian_path and self.moveit_arm_planner is None:
-            return ArmMovementUpdate(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "Cartesian guarded probe movement requires MoveIt planning",
-            )
-
-        if callable(probe_target):
-            if str(motion_sensor_id).strip():
-                raise ValueError(
-                    "Guarded probe target builders must resolve their "
-                    "own motion sensor ID"
+        with self._execution_lock:
+            if self.active:
+                return self._busy_update()
+            if self.guarded_probe_execution is None:
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.EXECUTION_ERROR,
+                    "Guarded probe movement is not configured",
                 )
-            target_builder = probe_target
-        else:
-            target = deepcopy(probe_target)
-            sensor_id = str(motion_sensor_id).strip()
-            target_builder = lambda: (target, sensor_id)
+            if self.force_contact_policy is None:
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.EXECUTION_ERROR,
+                    "Guarded probe movement requires a force contact policy",
+                )
+            if cartesian_path and self.moveit_arm_planner is None:
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.EXECUTION_ERROR,
+                    "Cartesian guarded probe movement requires MoveIt planning",
+                )
 
-        self._guarded_force_threshold_n = force_threshold_n
-        self._guarded_cartesian_path = bool(cartesian_path)
-        self._guarded_plan_builder = lambda: (
-            self.probe_motion_planner.build_plan(
-                target_builder,
-                speed,
+            if callable(probe_target):
+                if str(motion_sensor_id).strip():
+                    raise ValueError(
+                        "Guarded probe target builders must resolve their "
+                        "own motion sensor ID"
+                    )
+                target_builder = probe_target
+            else:
+                target = deepcopy(probe_target)
+                sensor_id = str(motion_sensor_id).strip()
+                target_builder = lambda: (target, sensor_id)
+
+            self._guarded_force_threshold_n = force_threshold_n
+            self._guarded_cartesian_path = bool(cartesian_path)
+            self._guarded_plan_builder = lambda: (
+                self.probe_motion_planner.build_plan(
+                    target_builder,
+                    speed,
+                )
             )
-        )
-        return self.ready_probe(self._begin_guarded_probe)
+            return self.ready_probe(self._begin_guarded_probe)
 
     def ready_probe(
         self,
@@ -705,64 +718,69 @@ class ArmMovementExecutor(MovementExecutor):
 
     def poll(self) -> ArmMovementUpdate:
         """Advance the active arm operation without blocking."""
-        if not self.active or self._operation is None:
-            return ArmMovementUpdate(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "No arm movement is active",
-            )
+        with self._execution_lock:
+            if not self.active or self._operation is None:
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.EXECUTION_ERROR,
+                    "No arm movement is active",
+                )
 
-        # The guard must consume planning results and retain force monitoring.
-        if self._operation == _ArmOperation.GUARDED_MOVEMENT:
-            return self._poll_guarded_probe()
+            # The guard must consume planning results and retain force monitoring.
+            if self._operation == _ArmOperation.GUARDED_MOVEMENT:
+                return self._poll_guarded_probe()
 
-        if self._pending_moveit_plan_builder is not None:
-            return self._advance_moveit_planning_start()
+            if self._pending_moveit_plan_builder is not None:
+                return self._advance_moveit_planning_start()
 
-        if self._moveit_cartesian_plan is not None:
-            return self._poll_moveit_planning()
+            if self._moveit_cartesian_plan is not None:
+                return self._poll_moveit_planning()
 
-        if self._verification_started is not None:
-            return self._poll_state_confirmation()
+            if self._verification_started is not None:
+                return self._poll_state_confirmation()
 
-        if self._operation == _ArmOperation.READY_WAIT:
-            return self._advance_ready_probe()
+            if self._operation == _ArmOperation.READY_WAIT:
+                return self._advance_ready_probe()
 
-        if self._send_goal_future is None:
-            if self._pending_goal_builder is not None:
+            if self._send_goal_future is None:
+                if self._pending_goal_builder is not None:
+                    return super().poll()
+                if self._operation in (
+                    _ArmOperation.PREPARE,
+                    _ArmOperation.READY_PREPARE,
+                ):
+                    return self._advance_prepare_start()
+                if self._operation == _ArmOperation.STOW:
+                    return self._advance_stow_start()
                 return super().poll()
-            if self._operation in (
-                _ArmOperation.PREPARE,
-                _ArmOperation.READY_PREPARE,
-            ):
-                return self._advance_prepare_start()
-            if self._operation == _ArmOperation.STOW:
-                return self._advance_stow_start()
-            return super().poll()
 
-        if self._goal_handle is None:
-            return self._poll_goal_response()
+            if self._goal_handle is None:
+                return self._poll_goal_response()
 
-        return self._poll_result()
+            return self._poll_result()
 
     def cancel(self) -> None:
-        if (
-            self._operation == _ArmOperation.GUARDED_MOVEMENT
-            and self.guarded_probe_execution is not None
-        ):
-            self.guarded_probe_execution.cancel()
-        super().cancel()
+        with self._execution_lock:
+            if (
+                self._operation == _ArmOperation.GUARDED_MOVEMENT
+                and self.guarded_probe_execution is not None
+            ):
+                self.guarded_probe_execution.cancel()
+            super().cancel()
 
     def shutdown(self) -> None:
-        super().shutdown()
-        if (
-            self._owns_arm_stop_service_client
-            and self.arm_stop_service_client is not None
-        ):
-            try:
-                self.arm_stop_service_client.destroy()
-            finally:
-                self.arm_stop_service_client = None
-                self._owns_arm_stop_service_client = False
+        with self._execution_lock:
+            if self._guarded_probe_monitor is not None:
+                self._guarded_probe_monitor.close()
+            super().shutdown()
+            if (
+                self._owns_arm_stop_service_client
+                and self.arm_stop_service_client is not None
+            ):
+                try:
+                    self.arm_stop_service_client.destroy()
+                finally:
+                    self.arm_stop_service_client = None
+                    self._owns_arm_stop_service_client = False
 
     def _resolve_tag_orientation_target(
         self,
@@ -872,14 +890,16 @@ class ArmMovementExecutor(MovementExecutor):
                 "Guarded probe movement has no pending target",
             )
         self._next_probe_cartesian_path = self._guarded_cartesian_path
-        update = self.guarded_probe_execution.start(
+        owner = self._guarded_probe_monitor or self.guarded_probe_execution
+        update = owner.start(
             builder,
             force_threshold_n=self._guarded_force_threshold_n,
         )
         return self._finish_guarded_update(update)
 
     def _poll_guarded_probe(self) -> ArmMovementUpdate:
-        update = self.guarded_probe_execution.poll()
+        owner = self._guarded_probe_monitor or self.guarded_probe_execution
+        update = owner.poll()
         return self._finish_guarded_update(update)
 
     def _finish_guarded_update(
@@ -1135,24 +1155,27 @@ class ArmMovementExecutor(MovementExecutor):
         return getattr(feedback, "arm_cartesian_feedback", None)
 
     def _reset_operation(self) -> None:
-        self._reset_moveit_planning(cancel=True)
-        super()._reset_operation()
-        if hasattr(self, "_base_result_timeout_sec"):
-            self.result_timeout_sec = self._base_result_timeout_sec
-        self._operation = None
-        self._operation_speed = None
-        self._state_wait_started = None
-        self._tf_wait_started = None
-        self._verification_started = None
-        self._ready_probe_start = None
-        self._guarded_plan_builder = None
-        self._guarded_force_threshold_n = None
-        self._guarded_cartesian_path = False
-        self._next_probe_cartesian_path = False
-        self._pending_moveit_cartesian_path = False
-        self._reset_arm_stop_service_lifecycle(cancel=True)
-        if self.guarded_probe_execution is not None:
-            self.guarded_probe_execution.reset()
+        with self._execution_lock:
+            if self._guarded_probe_monitor is not None:
+                self._guarded_probe_monitor.stop()
+            self._reset_moveit_planning(cancel=True)
+            super()._reset_operation()
+            if hasattr(self, "_base_result_timeout_sec"):
+                self.result_timeout_sec = self._base_result_timeout_sec
+            self._operation = None
+            self._operation_speed = None
+            self._state_wait_started = None
+            self._tf_wait_started = None
+            self._verification_started = None
+            self._ready_probe_start = None
+            self._guarded_plan_builder = None
+            self._guarded_force_threshold_n = None
+            self._guarded_cartesian_path = False
+            self._next_probe_cartesian_path = False
+            self._pending_moveit_cartesian_path = False
+            self._reset_arm_stop_service_lifecycle(cancel=True)
+            if self.guarded_probe_execution is not None:
+                self.guarded_probe_execution.reset()
 
     def _advance_prepare_start(self) -> ArmMovementUpdate:
         state = self._fresh_arm_state()

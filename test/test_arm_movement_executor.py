@@ -1057,14 +1057,16 @@ def test_contact_retreat_uses_probe_and_preserves_guard_lifecycle(monkeypatch):
     calls.pop()  # The rejected public request does not submit a command.
     assert len(client.sent_goals) == 1
 
-    executor.arm_state_source.hand_force_sample = lambda: HandForceSample(
-        clock.now, -10.0, 0.0, 0.0
-    )
     clock.now = 0.1
-    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    executor.guarded_probe_execution.observe_force_sample(
+        HandForceSample(clock.now, -10.0, 0.0, 0.0)
+    )
     clock.now = 0.2
-    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    executor.guarded_probe_execution.observe_force_sample(
+        HandForceSample(clock.now, -10.0, 0.0, 0.0)
+    )
     assert len(stop_client.requests) == 1
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
     tf.transforms[(frame, "hand")] = transform(frame, "hand", x=0.008)
     stop_client.future.set_result(SimpleNamespace(success=True, message="stopped"))
     client.send_future = ManualFuture()

@@ -187,6 +187,7 @@ def test_rotation_self_load_below_angular_threshold_does_not_trigger_contact():
         y_n=2.0,
         z_n=3.0,
     )
+    guard.observe_force_sample(state.sample)
     assert guard.poll().outcome is ArmMovementOutcome.RUNNING
 
     state.sample = HandForceSample(
@@ -195,6 +196,7 @@ def test_rotation_self_load_below_angular_threshold_does_not_trigger_contact():
         y_n=2.0,
         z_n=3.0,
     )
+    guard.observe_force_sample(state.sample)
     assert guard.poll().outcome is ArmMovementOutcome.RUNNING
     assert driver.cancel_count == 0
     assert driver.stop_count == 0
@@ -212,6 +214,7 @@ def test_successful_rotation_finishes_without_arm_stop():
         y_n=2.0,
         z_n=3.0,
     )
+    guard.observe_force_sample(state.sample)
     driver.updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
     )
@@ -237,6 +240,7 @@ def test_rotation_contact_uses_total_delta_and_does_not_retreat():
         y_n=2.0,
         z_n=3.0,
     )
+    guard.observe_force_sample(state.sample)
     assert guard.poll().outcome is ArmMovementOutcome.RUNNING
 
     state.sample = HandForceSample(
@@ -245,6 +249,7 @@ def test_rotation_contact_uses_total_delta_and_does_not_retreat():
         y_n=2.0,
         z_n=3.0,
     )
+    guard.observe_force_sample(state.sample)
     stopping = guard.poll()
 
     assert stopping.outcome is ArmMovementOutcome.RUNNING
