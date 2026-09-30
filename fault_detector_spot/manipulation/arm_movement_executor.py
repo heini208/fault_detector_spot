@@ -108,6 +108,10 @@ class ArmMovementExecutor(MovementExecutor):
         force_contact_policy=None,
         contact_evidence_analyzer=None,
         force_stale_timeout_sec=None,
+        stop_confirmation_linear_velocity_threshold_mps=None,
+        stop_confirmation_angular_velocity_threshold_rad_s=None,
+        stop_confirmation_stable_duration_sec=None,
+        stop_confirmation_timeout_sec=None,
         contact_retreat_distance_m=None,
         contact_retreat_speed_mps=None,
         moveit_result_timeout_margin_sec=None,
@@ -149,6 +153,22 @@ class ArmMovementExecutor(MovementExecutor):
         )
         force_stale_timeout_sec = config.get(
             "contact.force_stale_timeout_sec", force_stale_timeout_sec
+        )
+        stop_confirmation_linear_velocity_threshold_mps = config.get(
+            "contact.stop_confirmation.linear_velocity_threshold_mps",
+            stop_confirmation_linear_velocity_threshold_mps,
+        )
+        stop_confirmation_angular_velocity_threshold_rad_s = config.get(
+            "contact.stop_confirmation.angular_velocity_threshold_rad_s",
+            stop_confirmation_angular_velocity_threshold_rad_s,
+        )
+        stop_confirmation_stable_duration_sec = config.get(
+            "contact.stop_confirmation.stable_duration_sec",
+            stop_confirmation_stable_duration_sec,
+        )
+        stop_confirmation_timeout_sec = config.get(
+            "contact.stop_confirmation.timeout_sec",
+            stop_confirmation_timeout_sec,
         )
         contact_retreat_distance_m = config.get(
             "contact.retreat_distance_m", contact_retreat_distance_m
@@ -286,6 +306,18 @@ class ArmMovementExecutor(MovementExecutor):
                     self.speed_policy.default_speed.angular_speed_rad_s
                 ),
                 force_stale_timeout_sec=force_stale_timeout_sec,
+                stop_confirmation_linear_velocity_threshold_mps=(
+                    stop_confirmation_linear_velocity_threshold_mps
+                ),
+                stop_confirmation_angular_velocity_threshold_rad_s=(
+                    stop_confirmation_angular_velocity_threshold_rad_s
+                ),
+                stop_confirmation_stable_duration_sec=(
+                    stop_confirmation_stable_duration_sec
+                ),
+                stop_confirmation_timeout_sec=(
+                    stop_confirmation_timeout_sec
+                ),
                 retreat_distance_m=contact_retreat_distance_m,
                 retreat_speed_mps=contact_retreat_speed_mps,
                 monotonic_clock=monotonic_clock,

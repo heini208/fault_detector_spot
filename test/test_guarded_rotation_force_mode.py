@@ -14,7 +14,10 @@ from fault_detector_spot.manipulation.arm_movement_result import (
     ArmMovementOutcome,
     ArmMovementUpdate,
 )
-from fault_detector_spot.manipulation.arm_state_source import HandForceSample
+from fault_detector_spot.manipulation.arm_state_source import (
+    HandForceSample,
+    HandVelocitySample,
+)
 from fault_detector_spot.manipulation.guarded_probe_execution import (
     GuardedProbeExecution,
 )
@@ -33,12 +36,13 @@ class FakeArmStateSource:
             z_n=3.0,
         )
         self.last_received_at = 0.0
+        self.velocity = None
 
     def hand_force_sample(self):
         return self.sample
 
     def hand_velocity_sample(self):
-        return None
+        return self.velocity
 
 
 class ImmediateBaseline:
@@ -156,6 +160,10 @@ def execution(state, driver, policy):
         ),
         default_angular_speed_rad_s=0.5,
         force_stale_timeout_sec=0.25,
+        stop_confirmation_linear_velocity_threshold_mps=0.01,
+        stop_confirmation_angular_velocity_threshold_rad_s=0.05,
+        stop_confirmation_stable_duration_sec=0.4,
+        stop_confirmation_timeout_sec=3.0,
         retreat_distance_m=0.01,
         retreat_speed_mps=0.01,
         monotonic_clock=lambda: 0.0,
@@ -259,6 +267,14 @@ def test_rotation_contact_uses_total_delta_and_does_not_retreat():
 
     driver.stop_updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    state.velocity = HandVelocitySample(
+        0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    state.velocity = HandVelocitySample(
+        0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     )
     finished = guard.poll()
 

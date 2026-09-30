@@ -39,6 +39,13 @@
     arm.contact.maximum_force_delta_threshold_n: 10.0
     arm.contact.consecutive_samples: 2
     arm.contact.force_stale_timeout_sec: 0.25
+
+    # Physical stop confirmation after ArmStop acceptance
+    arm.contact.stop_confirmation.linear_velocity_threshold_mps: 0.01
+    arm.contact.stop_confirmation.angular_velocity_threshold_rad_s: 0.05
+    arm.contact.stop_confirmation.stable_duration_sec: 0.40
+    arm.contact.stop_confirmation.timeout_sec: 3.0
+
     arm.contact.retreat_distance_m: 0.010
     arm.contact.retreat_speed_mps: 0.010
 

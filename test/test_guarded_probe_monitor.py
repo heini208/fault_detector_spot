@@ -52,9 +52,24 @@ def monitored():
     monitor = GuardedProbeMonitor(node, source, guard)
     monitor.start(plan)
 
-    def emit(received_at, force=(-5.0, 2.0, 3.0), present=True):
+    def emit(
+        received_at,
+        force=(-5.0, 2.0, 3.0),
+        present=True,
+        linear_velocity=None,
+        angular_velocity=None,
+    ):
         clock.now = received_at
-        node.callback(manipulator_state(force=force, force_present=present))
+        velocity_present = (
+            linear_velocity is not None or angular_velocity is not None
+        )
+        node.callback(manipulator_state(
+            force=force,
+            force_present=present,
+            velocity_present=velocity_present,
+            linear_velocity=linear_velocity or (0.0, 0.0, 0.0),
+            angular_velocity=angular_velocity or (0.0, 0.0, 0.0),
+        ))
 
     yield SimpleNamespace(
         clock=clock, node=node, source=source, driver=driver,
@@ -62,6 +77,15 @@ def monitored():
         telemetry=telemetry,
     )
     monitor.close()
+
+
+def confirm_physical_stop(monitored, first_sample_at):
+    for received_at in (first_sample_at, first_sample_at + 0.4):
+        monitored.emit(
+            received_at,
+            linear_velocity=(0.0, 0.0, 0.0),
+        )
+        monitored.node.timer.callback()
 
 
 def test_fresh_samples_confirm_contact_before_any_bt_poll(monitored):
@@ -193,6 +217,8 @@ def test_timer_stops_on_missing_or_stale_force_without_bt_poll(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, 'accepted')
     )
     m.node.timer.callback()
+    assert m.guard.active
+    confirm_physical_stop(m, 0.3)
     assert not m.guard.active
     assert m.guard.poll().outcome is ArmMovementOutcome.FORCE_STALE
 
@@ -208,6 +234,7 @@ def test_unavailable_force_remains_distinct_from_stale(monitored):
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, 'accepted')
     )
     m.node.timer.callback()
+    confirm_physical_stop(m, 0.3)
     assert m.guard.poll().outcome is ArmMovementOutcome.FORCE_UNAVAILABLE
 
 
@@ -220,6 +247,8 @@ def test_timer_completes_stop_and_retreat_and_latches_result(monitored):
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, 'accepted')
     )
     m.node.timer.callback()
+    assert m.driver.started_goals[-1] == ('arm_stop', 1)
+    confirm_physical_stop(m, 0.1)
     assert m.driver.started_goals[-1][0] == 'retreat'
     m.driver.updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, 'done')
@@ -378,6 +407,14 @@ def test_executor_wires_monitor_and_observes_its_terminal_result(monkeypatch):
             assert executor.poll().outcome is ArmMovementOutcome.RUNNING
         assert executor.guarded_probe_execution.active
         node.timer.callback()
+        assert executor.guarded_probe_execution.active
+        for received_at in (0.1, 0.5):
+            clock.now = received_at
+            node.callback(manipulator_state(
+                force=(-5.0, 2.0, 3.0),
+                velocity_present=True,
+            ))
+            node.timer.callback()
         assert not executor.guarded_probe_execution.active
         assert executor.poll().outcome is ArmMovementOutcome.CONTACT
         assert not executor.active

@@ -15,7 +15,10 @@ from fault_detector_spot.manipulation.arm_movement_result import (
     ArmMovementOutcome,
     ArmMovementUpdate,
 )
-from fault_detector_spot.manipulation.arm_state_source import HandForceSample
+from fault_detector_spot.manipulation.arm_state_source import (
+    HandForceSample,
+    HandVelocitySample,
+)
 from fault_detector_spot.manipulation.guarded_probe_execution import (
     GuardedProbeExecution,
 )
@@ -161,6 +164,27 @@ def plan():
     )
 
 
+def velocity_sample(received_at, linear=0.0, angular=0.0):
+    return HandVelocitySample(
+        received_at=received_at,
+        linear_x_mps=linear,
+        linear_y_mps=0.0,
+        linear_z_mps=0.0,
+        angular_x_rad_s=angular,
+        angular_y_rad_s=0.0,
+        angular_z_rad_s=0.0,
+    )
+
+
+def confirm_physical_stop(guard, state, clock, first_sample_at):
+    state.velocity = velocity_sample(first_sample_at)
+    clock.now = first_sample_at
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    state.velocity = velocity_sample(first_sample_at + 0.4)
+    clock.now = first_sample_at + 0.4
+    return guard.poll()
+
+
 def execution(
     state,
     driver,
@@ -194,6 +218,10 @@ def execution(
         ),
         default_angular_speed_rad_s=0.5,
         force_stale_timeout_sec=0.25,
+        stop_confirmation_linear_velocity_threshold_mps=0.01,
+        stop_confirmation_angular_velocity_threshold_rad_s=0.05,
+        stop_confirmation_stable_duration_sec=0.4,
+        stop_confirmation_timeout_sec=3.0,
         retreat_distance_m=0.01,
         retreat_speed_mps=0.01,
         monotonic_clock=clock,
@@ -208,9 +236,11 @@ def test_contact_cancels_stops_retreats_and_returns_contact():
 
     assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
 
+    clock.now = 0.1
     state.sample = HandForceSample(0.1, -5.0, 2.0, 3.0)
     guard.observe_force_sample(state.sample)
     assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    clock.now = 0.2
     state.sample = HandForceSample(0.2, -5.0, 2.0, 3.0)
     guard.observe_force_sample(state.sample)
     stopping = guard.poll()
@@ -222,6 +252,22 @@ def test_contact_cancels_stops_retreats_and_returns_contact():
     driver.stop_updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
     )
+    settling = guard.poll()
+
+    assert settling.outcome is ArmMovementOutcome.RUNNING
+    assert driver.started_goals[-1] == ("arm_stop", 1)
+
+    state.velocity = velocity_sample(0.3, linear=0.02)
+    clock.now = 0.3
+    moving = guard.poll()
+    assert moving.outcome is ArmMovementOutcome.RUNNING
+    assert driver.started_goals[-1] == ("arm_stop", 1)
+
+    state.velocity = velocity_sample(0.4)
+    clock.now = 0.4
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    state.velocity = velocity_sample(0.8)
+    clock.now = 0.8
     retreating = guard.poll()
 
     assert retreating.outcome is ArmMovementOutcome.RUNNING
@@ -281,10 +327,101 @@ def test_stale_force_cancels_and_finishes_after_arm_stop_confirmation():
     driver.stop_updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
     )
-    failed = guard.poll()
+    settling = guard.poll()
+
+    assert settling.outcome is ArmMovementOutcome.RUNNING
+    failed = confirm_physical_stop(guard, state, clock, 0.3)
 
     assert failed.outcome is ArmMovementOutcome.FORCE_STALE
-    assert "ArmStopCommand accepted" in failed.detail
+    assert "physical stop confirmed" in failed.detail
+    assert not guard.active
+
+
+def test_stop_confirmation_requires_new_post_acceptance_samples():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.0))
+
+    guard.start(plan)
+    clock.now = 0.25
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    driver.stop_updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    state.velocity = velocity_sample(0.2)
+    clock.now = 0.3
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    state.velocity = velocity_sample(0.3)
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    clock.now = 0.8
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    state.velocity = velocity_sample(0.7)
+    finished = guard.poll()
+
+    assert finished.outcome is ArmMovementOutcome.FORCE_STALE
+    assert "physical stop confirmed" in finished.detail
+
+
+def test_stop_confirmation_motion_resets_stability_before_retreat():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.008))
+
+    guard.start(plan)
+    for received_at in (0.1, 0.2):
+        clock.now = received_at
+        state.sample = HandForceSample(received_at, -5.0, 2.0, 3.0)
+        guard.observe_force_sample(state.sample)
+    assert driver.stop_count == 1
+    driver.stop_updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    for received_at in (0.3, 0.5):
+        state.velocity = velocity_sample(received_at)
+        clock.now = received_at
+        assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    state.velocity = velocity_sample(0.6, linear=0.02)
+    clock.now = 0.6
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    assert driver.started_goals[-1] == ("arm_stop", 1)
+
+    state.velocity = velocity_sample(0.7)
+    clock.now = 0.7
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    state.velocity = velocity_sample(1.1)
+    clock.now = 1.1
+    retreating = guard.poll()
+
+    assert retreating.outcome is ArmMovementOutcome.RUNNING
+    assert driver.started_goals[-1][0] == "retreat"
+
+
+def test_stop_confirmation_times_out_without_fresh_velocity():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.0))
+
+    guard.start(plan)
+    clock.now = 0.25
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    driver.stop_updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped")
+    )
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+
+    clock.now = 3.25
+    failed = guard.poll()
+
+    assert failed.outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert "physical stop was not confirmed" in failed.detail
     assert not guard.active
 
 

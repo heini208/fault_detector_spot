@@ -34,6 +34,7 @@ class _Phase(Enum):
     PLAN_WAIT = "plan_wait"
     MOVING = "moving"
     ARM_STOPPING = "arm_stopping"
+    ARM_SETTLING = "arm_settling"
     RETREATING = "retreating"
 
 
@@ -54,6 +55,10 @@ class GuardedProbeExecution:
         build_motion_plan,
         default_angular_speed_rad_s: float,
         force_stale_timeout_sec: float,
+        stop_confirmation_linear_velocity_threshold_mps: float,
+        stop_confirmation_angular_velocity_threshold_rad_s: float,
+        stop_confirmation_stable_duration_sec: float,
+        stop_confirmation_timeout_sec: float,
         retreat_distance_m: float,
         retreat_speed_mps: float,
         contact_evidence_analyzer=None,
@@ -106,6 +111,33 @@ class GuardedProbeExecution:
             force_stale_timeout_sec,
             "Force stale timeout",
         )
+        self.stop_confirmation_linear_velocity_threshold_mps = (
+            self._positive(
+                stop_confirmation_linear_velocity_threshold_mps,
+                "Stop confirmation linear velocity threshold",
+            )
+        )
+        self.stop_confirmation_angular_velocity_threshold_rad_s = (
+            self._positive(
+                stop_confirmation_angular_velocity_threshold_rad_s,
+                "Stop confirmation angular velocity threshold",
+            )
+        )
+        self.stop_confirmation_stable_duration_sec = self._positive(
+            stop_confirmation_stable_duration_sec,
+            "Stop confirmation stable duration",
+        )
+        self.stop_confirmation_timeout_sec = self._positive(
+            stop_confirmation_timeout_sec,
+            "Stop confirmation timeout",
+        )
+        if (
+            self.stop_confirmation_timeout_sec
+            < self.stop_confirmation_stable_duration_sec
+        ):
+            raise ValueError(
+                "Stop confirmation timeout must be at least the stable duration"
+            )
         self.retreat_distance_m = self._positive(
             retreat_distance_m,
             "Contact retreat distance",
@@ -163,6 +195,8 @@ class GuardedProbeExecution:
             return self._poll_primary_motion()
         if phase is _Phase.ARM_STOPPING:
             return self._poll_arm_stop()
+        if phase is _Phase.ARM_SETTLING:
+            return self._poll_arm_settling()
         if phase is _Phase.RETREATING:
             return self._poll_retreat()
         return self._terminal(
@@ -202,6 +236,9 @@ class GuardedProbeExecution:
             self._stop_terminal_outcome = None
             self._stop_terminal_detail = ""
             self._stop_then_retreat = False
+            self._stop_accepted_at = None
+            self._stop_stable_since = None
+            self._stop_last_velocity_received_at = None
             self.force_baseline_sampler.reset()
 
     def _begin_force_baseline(self) -> ArmMovementUpdate:
@@ -824,6 +861,91 @@ class GuardedProbeExecution:
                 ),
             )
 
+        return self._begin_arm_settling()
+
+    def _begin_arm_settling(self) -> ArmMovementUpdate:
+        self._phase = _Phase.ARM_SETTLING
+        self._stop_accepted_at = self._monotonic_clock()
+        self._stop_stable_since = None
+        self._stop_last_velocity_received_at = None
+        return ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING,
+            "ArmStopCommand accepted; confirming physical stop",
+        )
+
+    def _poll_arm_settling(self) -> ArmMovementUpdate:
+        accepted_at = self._stop_accepted_at
+        if accepted_at is None:
+            return self._terminal(
+                ArmMovementOutcome.STOP_UNCONFIRMED,
+                self._stop_detail(
+                    "Physical stop confirmation has no ArmStop acceptance time"
+                ),
+            )
+
+        now = self._monotonic_clock()
+        sample = self.arm_state_source.hand_velocity_sample()
+        detail = "Waiting for fresh post-stop hand velocity"
+        if (
+            sample is not None
+            and sample.received_at > accepted_at + 1e-12
+            and (
+                self._stop_last_velocity_received_at is None
+                or sample.received_at
+                > self._stop_last_velocity_received_at + 1e-12
+            )
+        ):
+            self._stop_last_velocity_received_at = sample.received_at
+            linear_speed = float(sample.linear_speed_mps)
+            angular_speed = float(sample.angular_speed_rad_s)
+            if not (
+                math.isfinite(linear_speed)
+                and math.isfinite(angular_speed)
+            ):
+                self._stop_stable_since = None
+                detail = "Measured post-stop hand velocity is not finite"
+            elif (
+                linear_speed
+                <= self.stop_confirmation_linear_velocity_threshold_mps
+                and angular_speed
+                <= self.stop_confirmation_angular_velocity_threshold_rad_s
+            ):
+                if self._stop_stable_since is None:
+                    self._stop_stable_since = sample.received_at
+                stable_for = sample.received_at - self._stop_stable_since
+                if (
+                    stable_for + 1e-9
+                    >= self.stop_confirmation_stable_duration_sec
+                ):
+                    return self._complete_arm_stop()
+                detail = (
+                    "Hand is below stop thresholds for "
+                    f"{stable_for:.2f} s"
+                )
+            else:
+                self._stop_stable_since = None
+                detail = (
+                    "Hand is still moving at "
+                    f"{linear_speed:.4f} m/s linear and "
+                    f"{angular_speed:.4f} rad/s angular"
+                )
+
+        if now - accepted_at + 1e-9 >= self.stop_confirmation_timeout_sec:
+            return self._terminal(
+                ArmMovementOutcome.STOP_UNCONFIRMED,
+                self._stop_detail(
+                    "ArmStopCommand was accepted, but physical stop was not "
+                    f"confirmed within {self.stop_confirmation_timeout_sec:.2f} "
+                    f"s: {detail}"
+                ),
+            )
+
+        return ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING,
+            f"ArmStopCommand accepted; {detail}",
+        )
+
+    def _complete_arm_stop(self) -> ArmMovementUpdate:
         if self._stop_then_retreat:
             return self._begin_retreat()
 
@@ -832,7 +954,7 @@ class GuardedProbeExecution:
             or ArmMovementOutcome.EXECUTION_ERROR
         )
         detail = self._stop_terminal_detail
-        suffix = "ArmStopCommand accepted"
+        suffix = "ArmStopCommand accepted and physical stop confirmed"
         return self._terminal(
             outcome,
             f"{detail}; {suffix}" if detail else suffix,

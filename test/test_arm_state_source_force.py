@@ -43,6 +43,9 @@ def manipulator_state(
     *,
     force_present=True,
     force=(0.0, 0.0, 0.0),
+    velocity_present=False,
+    linear_velocity=(0.0, 0.0, 0.0),
+    angular_velocity=(0.0, 0.0, 0.0),
 ):
     has_field = 0
     if force_present:
@@ -50,14 +53,26 @@ def manipulator_state(
             ManipulatorState
             .ESTIMATED_END_EFFECTOR_FORCE_IN_HAND_FIELD_SET
         )
+    if velocity_present:
+        has_field |= int(
+            ManipulatorState.VELOCITY_OF_HAND_IN_VISION_FIELD_SET
+        )
     return SimpleNamespace(
         stow_state=SimpleNamespace(
             value=ManipulatorStateStowState.STOWSTATE_DEPLOYED
         ),
         has_field=has_field,
         velocity_of_hand_in_vision=SimpleNamespace(
-            linear=SimpleNamespace(x=0.0, y=0.0, z=0.0),
-            angular=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            linear=SimpleNamespace(
+                x=linear_velocity[0],
+                y=linear_velocity[1],
+                z=linear_velocity[2],
+            ),
+            angular=SimpleNamespace(
+                x=angular_velocity[0],
+                y=angular_velocity[1],
+                z=angular_velocity[2],
+            ),
         ),
         estimated_end_effector_force_in_hand=SimpleNamespace(
             x=force[0],
