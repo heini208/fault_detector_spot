@@ -372,19 +372,20 @@ class MoveItArmPlanner:
                 MoveItPlanOutcome.ERROR,
                 f"MoveIt Cartesian path returned invalid fraction {fraction}",
             )
+        trajectory = response.solution.joint_trajectory
         if fraction + 1e-12 < self.cartesian_min_fraction:
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.FAILURE,
                 "MoveIt Cartesian path is incomplete: "
                 f"fraction {fraction:.6f} < "
                 f"{self.cartesian_min_fraction:.6f}; "
-                f"returned {len(response.solution.joint_trajectory.points)} trajectory points; "
+                f"{self._partial_trajectory_detail(trajectory)}; "
                 "cause is not reported by the Cartesian service "
-                "(IK, collision, joint/path constraint, or jump rejection); "
-                "inspect move_group logs for the rejected segment",
+                "(IK, collision, or jump rejection); inspect move_group logs "
+                "for the rejected segment",
             )
 
-        trajectory = deepcopy(response.solution.joint_trajectory)
+        trajectory = deepcopy(trajectory)
         try:
             trajectory_detail = self._validate_and_describe(trajectory)
         except Exception as exception:
@@ -432,7 +433,8 @@ class MoveItArmPlanner:
         request.prismatic_jump_threshold = 0.0
         request.revolute_jump_threshold = 0.0
         request.avoid_collisions = True
-        request.path_constraints = self._joint_limit_constraints()
+        # Keep custom joint floors out of Cartesian interpolation. The complete
+        # returned trajectory is validated before it is sent to Spot.
         # Humble's Cartesian service has no velocity/acceleration scaling fields.
         # The executor stretches trajectory timing to the requested duration.
         return request
@@ -514,6 +516,41 @@ class MoveItArmPlanner:
         goal.position_constraints = [position]
         goal.orientation_constraints = [orientation]
         return goal
+
+    @staticmethod
+    def _partial_trajectory_detail(trajectory) -> str:
+        names = tuple(trajectory.joint_names)
+        points = tuple(trajectory.points)
+        prefix = f"returned {len(points)} trajectory points"
+        if not points:
+            return prefix
+        if len(names) != len(ARM_JOINT_NAMES) or set(names) != set(
+            ARM_JOINT_NAMES
+        ):
+            return f"{prefix} with joints {list(names)}"
+
+        ranges = []
+        for name in ARM_JOINT_NAMES:
+            joint_index = names.index(name)
+            values = []
+            for point in points:
+                if len(point.positions) != len(names):
+                    continue
+                value = float(point.positions[joint_index])
+                if math.isfinite(value):
+                    values.append(value)
+            if not values:
+                ranges.append(f"{name}=unavailable")
+                continue
+            ranges.append(
+                f"{name} start={values[0]:.5f}, end={values[-1]:.5f}, "
+                f"min={min(values):.5f}, max={max(values):.5f}"
+            )
+        return (
+            f"{prefix}; "
+            + "; ".join(ranges)
+            + f"; arm_sh1 configured floor={MIN_ARM_SH1_RAD:.5f} rad"
+        )
 
     def _validate_and_describe(self, trajectory) -> str:
         names = tuple(trajectory.joint_names)

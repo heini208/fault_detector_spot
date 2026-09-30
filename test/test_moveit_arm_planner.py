@@ -95,10 +95,7 @@ def test_cartesian_request_is_straight_collision_checked_hand_path():
     assert request.max_step == pytest.approx(0.002)
     assert request.jump_threshold == pytest.approx(2.0)
     assert request.avoid_collisions
-    constraint = request.path_constraints.joint_constraints[0]
-    assert constraint.joint_name == "arm_sh1"
-    assert constraint.position == pytest.approx(MIN_ARM_SH1_RAD)
-    assert constraint.tolerance_below == pytest.approx(0.0)
+    assert not request.path_constraints.joint_constraints
 
 
 def test_complete_cartesian_response_returns_joint_trajectory():
@@ -129,7 +126,7 @@ def test_partial_cartesian_response_is_rejected():
         result=lambda: SimpleNamespace(
             error_code=MoveItErrorCodes(val=MoveItErrorCodes.SUCCESS),
             fraction=0.95,
-            solution=SimpleNamespace(joint_trajectory=JointTrajectory()),
+            solution=SimpleNamespace(joint_trajectory=valid_trajectory()),
         ),
     )
 
@@ -138,6 +135,8 @@ def test_partial_cartesian_response_is_rejected():
     assert update.outcome is MoveItPlanOutcome.FAILURE
     assert "incomplete" in update.detail
     assert "0.950000" in update.detail
+    assert "arm_sh1 start=0.00000" in update.detail
+    assert f"configured floor={MIN_ARM_SH1_RAD:.5f}" in update.detail
     assert not planner.active
 
 
