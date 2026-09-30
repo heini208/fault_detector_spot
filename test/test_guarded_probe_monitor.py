@@ -24,13 +24,33 @@ from test_guarded_arm_movement_executor import (
 from test_guarded_contact_telemetry import Telemetry
 
 
+class MonitorTimer:
+    def __init__(self, period, callback, group, clock):
+        self.period = period
+        self.callback = callback
+        self.group = group
+        self.clock = clock
+        self.destroyed = False
+        self.cancelled = False
+        self.reset_count = 0
+
+    def cancel(self):
+        self.cancelled = True
+
+    def reset(self):
+        self.cancelled = False
+        self.reset_count += 1
+
+
 class MonitorNode(FakeNode):
 
     def create_timer(self, period, callback, *, callback_group, clock):
         self.timer_creations = getattr(self, 'timer_creations', 0) + 1
-        self.timer = SimpleNamespace(
-            period=period, callback=callback, group=callback_group,
-            clock=clock, destroyed=False,
+        self.timer = MonitorTimer(
+            period,
+            callback,
+            callback_group,
+            clock,
         )
         return self.timer
 
@@ -143,7 +163,29 @@ def test_monitor_poll_only_reads_status(monitored):
     m.node.timer.callback()
     assert m.monitor.poll().outcome is ArmMovementOutcome.SUCCESS
     assert not m.driver.updates
-    assert m.node.timer.destroyed
+    assert m.node.timer.cancelled
+    assert not m.node.timer.destroyed
+    assert not m.source._force_listeners
+
+
+def test_terminal_start_does_not_destroy_live_timer(monitored, monkeypatch):
+    m = monitored
+    timer = m.node.timer
+    monkeypatch.setattr(
+        m.guard,
+        "start",
+        lambda *_args, **_kwargs: ArmMovementUpdate(
+            ArmMovementOutcome.EXECUTION_ERROR,
+            "orientation failed",
+        ),
+    )
+
+    result = m.monitor.start(plan)
+
+    assert result.outcome is ArmMovementOutcome.EXECUTION_ERROR
+    assert timer.cancelled
+    assert not timer.destroyed
+    assert m.node.timer_creations == 1
     assert not m.source._force_listeners
 
 
@@ -155,15 +197,19 @@ def test_monitor_removes_work_at_completion_and_rearms_on_next_start(monitored):
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, 'done')
     )
     old_timer.callback()
-    assert old_timer.destroyed
+    assert old_timer.cancelled
+    assert not old_timer.destroyed
     assert not m.source._force_listeners
     m.monitor.start(plan)
-    assert m.node.timer_creations == 2
+    assert m.node.timer_creations == 1
+    assert m.node.timer is old_timer
+    assert old_timer.reset_count == 1
     assert len(m.source._force_listeners) == 1
     old_callback(m.source.hand_force_sample())
     old_timer.callback()
     assert m.guard._force_contact_count == 0
-    assert not m.node.timer.destroyed
+    assert not old_timer.cancelled
+    assert not old_timer.destroyed
     m.emit(0.01)
     assert m.guard._force_contact_count == 1
 

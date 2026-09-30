@@ -13,8 +13,8 @@ class GuardedProbeMonitor:
     """Monitor only active operations; BT polling reads the latest update.
 
     Force events react immediately. One timer advances the lifecycle at 50 ms
-    intervals, including when force updates stop arriving. Idle monitors have
-    neither a timer nor a force listener.
+    intervals, including when force updates stop arriving. After first use,
+    idle monitors keep one cancelled timer but schedule no work.
     """
 
     def __init__(self, node, arm_state_source, execution):
@@ -44,12 +44,7 @@ class GuardedProbeMonitor:
             )
             try:
                 self._source.add_force_listener(self._listener)
-                self._timer = self._node.create_timer(
-                    0.05,
-                    lambda: self._advance(generation),
-                    callback_group=self._callback_group,
-                    clock=Clock(clock_type=ClockType.STEADY_TIME),
-                )
+                self._start_timer()
                 self._record(self._execution.start(
                     plan_builder, force_threshold_n=force_threshold_n,
                 ))
@@ -80,27 +75,41 @@ class GuardedProbeMonitor:
                     sample = None
                 self._record(self._execution.observe_force_sample(sample))
 
-    def _advance(self, generation):
+    def _advance(self):
         with self._execution.lock:
-            if not self._closed and generation == self._generation:
-                if self._execution.active:
-                    self._record(self._execution.poll())
-                else:
-                    self.stop()
+            if self._closed:
+                return
+            if self._execution.active:
+                self._record(self._execution.poll())
+            else:
+                self.stop()
+
+    def _start_timer(self):
+        if self._timer is None:
+            self._timer = self._node.create_timer(
+                0.05,
+                self._advance,
+                callback_group=self._callback_group,
+                clock=Clock(clock_type=ClockType.STEADY_TIME),
+            )
+            return
+        self._timer.reset()
 
     def stop(self):
-        """Remove scheduled work and invalidate callbacks already in flight."""
+        """Deactivate scheduled work without destroying a live ROS handle."""
         with self._execution.lock:
             self._generation += 1
             if self._listener is not None:
                 self._source.remove_force_listener(self._listener)
                 self._listener = None
             if self._timer is not None:
-                self._node.destroy_timer(self._timer)
-                self._timer = None
+                self._timer.cancel()
 
     def close(self):
-        """Detach monitoring permanently."""
+        """Detach monitoring permanently and release its timer."""
         with self._execution.lock:
             self._closed = True
             self.stop()
+            if self._timer is not None:
+                self._node.destroy_timer(self._timer)
+                self._timer = None

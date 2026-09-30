@@ -40,6 +40,13 @@ def test_operation_completion_uses_rclpy_future():
     assert isinstance(execution.finished, Future)
 
 
+def test_controller_side_cancel_does_not_use_ros_canceled_transition():
+    source = inspect.getsource(ApplicationApiNode._execute_operation)
+
+    assert "and goal_handle.is_cancel_requested" in source
+    assert "goal_handle.canceled()" in source
+
+
 def test_behavior_tree_tick_uses_steady_clock():
     node = FakeNode()
     tree = SimpleNamespace(

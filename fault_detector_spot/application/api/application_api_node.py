@@ -389,7 +389,10 @@ class ApplicationApiNode(Node):
         result.state = state
         if state.state == ApplicationCommandState.STATE_SUCCEEDED:
             goal_handle.succeed()
-        elif state.state == ApplicationCommandState.STATE_CANCELLED:
+        elif (
+            state.state == ApplicationCommandState.STATE_CANCELLED
+            and goal_handle.is_cancel_requested
+        ):
             goal_handle.canceled()
         else:
             goal_handle.abort()
