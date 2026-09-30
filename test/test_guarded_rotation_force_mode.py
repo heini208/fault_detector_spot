@@ -211,6 +211,109 @@ def test_rotation_self_load_below_angular_threshold_does_not_trigger_contact():
     assert driver.stop_count == 0
 
 
+def test_rotation_force_is_suppressed_while_hand_is_still_rotating():
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, RecordingForcePolicy(threshold_n=5.0))
+
+    guard.start(rotation_plan)
+    for received_at in (0.1, 0.2):
+        state.velocity = HandVelocitySample(
+            received_at,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.29,
+        )
+        state.sample = HandForceSample(
+            received_at=received_at,
+            x_n=7.0,
+            y_n=2.0,
+            z_n=3.0,
+        )
+        guard.observe_force_sample(state.sample)
+
+    assert driver.cancel_count == 0
+    assert driver.stop_count == 0
+    assert guard._self_motion_suppression_count == 2
+
+
+def test_rotation_force_triggers_after_measured_rotation_stalls():
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, RecordingForcePolicy(threshold_n=5.0))
+
+    guard.start(rotation_plan)
+
+    state.velocity = HandVelocitySample(
+        0.1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.29,
+    )
+    state.sample = HandForceSample(
+        received_at=0.1,
+        x_n=7.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    guard.observe_force_sample(state.sample)
+
+    for received_at in (0.2, 0.3):
+        state.velocity = HandVelocitySample(
+            received_at,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+        state.sample = HandForceSample(
+            received_at=received_at,
+            x_n=7.0,
+            y_n=2.0,
+            z_n=3.0,
+        )
+        guard.observe_force_sample(state.sample)
+
+    assert driver.cancel_count == 1
+    assert driver.stop_count == 1
+
+
+def test_rotation_hard_limit_is_never_suppressed_by_motion():
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, RecordingForcePolicy(threshold_n=5.0))
+
+    guard.start(rotation_plan)
+    state.velocity = HandVelocitySample(
+        0.1,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.29,
+    )
+    state.sample = HandForceSample(
+        received_at=0.1,
+        x_n=22.0,
+        y_n=2.0,
+        z_n=3.0,
+    )
+    guard.observe_force_sample(state.sample)
+
+    assert driver.cancel_count == 1
+    assert driver.stop_count == 1
+    assert guard._self_motion_suppression_count == 0
+
+
 def test_successful_rotation_finishes_without_arm_stop():
     state = FakeArmStateSource()
     driver = GoalDriver()

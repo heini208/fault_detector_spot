@@ -562,6 +562,8 @@ class GuardedProbeExecution:
                 and evidence.classification
                 is ShadowContactClassification.LIKELY_SELF_MOTION
             )
+        else:
+            self_motion_suppressed = self._rotation_is_moving()
 
         if force_delta.opposing_n < threshold_n:
             self._force_contact_count = 0
@@ -618,6 +620,16 @@ class GuardedProbeExecution:
                 f"peak total {self._peak_total_force_delta_n:.2f} N"
             )
         return self._begin_contact(detail)
+
+    def _rotation_is_moving(self) -> bool:
+        try:
+            sample = self.arm_state_source.hand_velocity_sample()
+        except Exception:
+            return False
+        return bool(
+            sample is not None
+            and sample.angular_speed_rad_s > self._stop_angular_threshold_rad_s
+        )
 
     def _contact_evidence(
         self,
