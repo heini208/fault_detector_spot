@@ -17,11 +17,11 @@ from fault_detector_spot.manipulation.arm_movement_result import (
     ArmMovementOutcome,
     ArmMovementUpdate,
 )
-from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
+from fault_detector_spot.manipulation.move_close_to_surface_execution import (
     MAX_CARTESIAN_CONTACT_MOVES,
     MAX_CARTESIAN_STANDOFF_MOVES,
-    MoveCloseToSurfaceBehaviour,
     MoveCloseToSurfaceConfig,
+    MoveCloseToSurfaceExecution,
 )
 from fault_detector_spot.manipulation.moveit_arm_planner import (
     MoveItPlanOutcome,
@@ -117,7 +117,7 @@ def test_cartesian_selection_is_consumed_by_primary_motion_only():
 
 
 def action(contact=False):
-    result = object.__new__(MoveCloseToSurfaceBehaviour)
+    result = object.__new__(MoveCloseToSurfaceExecution)
     result.config = MoveCloseToSurfaceConfig()
     result._command = SimpleNamespace(
         target_surface_distance_m=0.0 if contact else 0.03
@@ -127,30 +127,30 @@ def action(contact=False):
 
 
 def test_standoff_request_uses_full_remaining_distance():
-    behaviour = action(contact=False)
+    execution = action(contact=False)
     evaluation = SimpleNamespace(
         traveled_inward_m=0.04,
         remaining_inward_travel_m=0.12,
         requested_step_m=0.01,
     )
 
-    requested = behaviour._requested_step(evaluation)
+    requested = execution._requested_step(evaluation)
 
     assert requested == pytest.approx(0.12)
-    assert requested > behaviour.config.maximum_step_m
+    assert requested > execution.config.maximum_step_m
 
 
 def test_contact_request_adds_search_overtravel_once():
-    behaviour = action(contact=True)
+    execution = action(contact=True)
     evaluation = SimpleNamespace(
         traveled_inward_m=0.04,
         remaining_inward_travel_m=0.02,
         requested_step_m=0.01,
     )
 
-    first = behaviour._requested_step(evaluation)
-    behaviour._approach_steps = 1
-    second = behaviour._requested_step(evaluation)
+    first = execution._requested_step(evaluation)
+    execution._approach_steps = 1
+    second = execution._requested_step(evaluation)
 
     assert first == pytest.approx(0.025)
     assert second == pytest.approx(0.0)
@@ -165,17 +165,17 @@ def test_cartesian_move_limits_allow_one_standoff_correction_only():
 
 
 def test_close_surface_requests_guarded_cartesian_execution(monkeypatch):
-    behaviour = action(contact=False)
-    behaviour._sensor_id = "probe"
-    behaviour._attachment_revision = 1
-    behaviour._plan = FrozenPlan()
-    behaviour._aligned_probe_orientation = QuaternionData.identity()
-    behaviour._previous_probe_pose = pose()
-    behaviour._requested_step_m = 0.0
-    behaviour._recovery_hand_pose = pose()
-    behaviour._require_attachment_unchanged = lambda: None
-    behaviour._current_probe_pose = lambda: pose()
-    behaviour._validate_axis_guard = lambda evaluation: None
+    execution = action(contact=False)
+    execution._sensor_id = "probe"
+    execution._attachment_revision = 1
+    execution._plan = FrozenPlan()
+    execution._aligned_probe_orientation = QuaternionData.identity()
+    execution._previous_probe_pose = pose()
+    execution._requested_step_m = 0.0
+    execution._recovery_hand_pose = pose()
+    execution._require_attachment_unchanged = lambda: None
+    execution._current_probe_pose = lambda: pose()
+    execution._validate_axis_guard = lambda evaluation: None
 
     captured = {}
 
@@ -189,11 +189,11 @@ def test_close_surface_requests_guarded_cartesian_execution(monkeypatch):
             captured.update(kwargs)
             return ArmMovementUpdate(ArmMovementOutcome.RUNNING, "running")
 
-    behaviour.executor = FakeExecutor()
+    execution.executor = FakeExecutor()
 
     monkeypatch.setattr(
-        "fault_detector_spot.manipulation.behaviours."
-        "move_close_to_surface_behaviour.evaluate_probe_surface_approach",
+        "fault_detector_spot.manipulation."
+        "move_close_to_surface_execution.evaluate_probe_surface_approach",
         lambda *args, **kwargs: SimpleNamespace(
             reached=False,
             estimated_distance_m=0.15,
@@ -204,7 +204,7 @@ def test_close_surface_requests_guarded_cartesian_execution(monkeypatch):
         ),
     )
 
-    behaviour._prepare_next_approach_step()
+    execution._prepare_next_approach_step()
 
     assert captured["cartesian_path"] is True
-    assert behaviour._requested_step_m == pytest.approx(0.12)
+    assert execution._requested_step_m == pytest.approx(0.12)

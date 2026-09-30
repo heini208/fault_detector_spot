@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 from geometry_msgs.msg import PoseStamped
-from py_trees.common import Status
 
 from fault_detector_spot.inspection.geometry.rotation import (
     quaternion_from_euler,
@@ -20,9 +19,14 @@ from fault_detector_spot.manipulation.arm_movement_result import (
     ArmMovementOutcome,
     ArmMovementUpdate,
 )
-from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
-    MoveCloseToSurfaceBehaviour,
+from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.manipulation.commands.move_close_to_surface_command import (
+    MoveCloseToSurfaceCommand,
+)
+from fault_detector_spot.manipulation.move_close_to_surface_execution import (
     MoveCloseToSurfaceConfig,
+    MoveCloseToSurfaceExecution,
+    MoveCloseToSurfaceOutcome,
 )
 from fault_detector_spot.shared.geometry.transforms import pose_data_to_pose
 
@@ -80,20 +84,48 @@ class FrozenPlan:
         return Vector3Data(x=1.0, y=0.0, z=0.0)
 
 
-def behaviour(executor=None, **changes):
-    action = MoveCloseToSurfaceBehaviour(
-        surface_source=object(),
-        config=MoveCloseToSurfaceConfig(**changes),
+def execution(executor=None, **changes):
+    action = MoveCloseToSurfaceExecution(
+        executor or FakeExecutor(),
+        object(),
+        MoveCloseToSurfaceConfig(**changes),
     )
-    action.executor = executor or FakeExecutor()
     action._command = SimpleNamespace(target_surface_distance_m=0.03)
     action._phase = "approach"
     action._started = True
     return action
 
 
+def test_execution_start_owns_lifecycle_and_cancel():
+    executor = FakeExecutor()
+    source = SimpleNamespace(active_attachment=lambda: ("probe", 1))
+    action = MoveCloseToSurfaceExecution(
+        executor,
+        source,
+        MoveCloseToSurfaceConfig(),
+    )
+    command = MoveCloseToSurfaceCommand(
+        CommandID.MOVE_CLOSE_TO_SURFACE,
+        stamp=object(),
+        target_surface_distance_m=0.03,
+    )
+
+    result = action.start(command)
+
+    assert result is MoveCloseToSurfaceOutcome.RUNNING
+    assert action.active
+    assert action._phase == "sampling"
+    assert action.feedback_message == "Collecting initial live surface distance"
+
+    executor.active = True
+    action.cancel()
+
+    assert executor.cancel_count == 1
+    assert not action.active
+
+
 def test_contact_mode_returns_success_after_shared_snap_retreat():
-    action = behaviour()
+    action = execution()
     action._command = SimpleNamespace(target_surface_distance_m=0.0)
 
     result = action._handle_approach_update(
@@ -103,13 +135,13 @@ def test_contact_mode_returns_success_after_shared_snap_retreat():
         )
     )
 
-    assert result is Status.SUCCESS
+    assert result is MoveCloseToSurfaceOutcome.SUCCESS
     assert "snap retreat" in action.feedback_message
 
 
 def test_nonzero_contact_starts_recovery_to_original_start():
     executor = FakeExecutor(hand_pose=pose(x=0.06))
-    action = behaviour(executor=executor)
+    action = execution(executor=executor)
     action._recovery_hand_pose = pose(x=0.0)
     action._approach_steps = 1
 
@@ -120,7 +152,7 @@ def test_nonzero_contact_starts_recovery_to_original_start():
         )
     )
 
-    assert result is Status.RUNNING
+    assert result is MoveCloseToSurfaceOutcome.RUNNING
     assert len(executor.probe_calls) == 1
     target = executor.probe_calls[0][0][0]
     assert target.pose.position.x == pytest.approx(0.0)
@@ -129,13 +161,13 @@ def test_nonzero_contact_starts_recovery_to_original_start():
 
 def test_diagonal_recovery_targets_full_original_pose():
     executor = FakeExecutor(hand_pose=pose())
-    action = behaviour(executor=executor)
+    action = execution(executor=executor)
     original = pose(x=0.12, y=0.08, orientation=quaternion_from_euler("z", 0.03))
     action._recovery_hand_pose = original
 
     result = action._update_recovery_prepare()
 
-    assert result is Status.RUNNING
+    assert result is MoveCloseToSurfaceOutcome.RUNNING
     assert len(executor.probe_calls) == 1
     target = executor.probe_calls[0][0][0]
     assert target.pose == pose_data_to_pose(original)
@@ -145,7 +177,7 @@ def test_diagonal_recovery_targets_full_original_pose():
 @pytest.mark.parametrize("remaining", [0.0, 0.02])
 def test_completed_recovery_never_starts_another_move(remaining):
     executor = FakeExecutor(hand_pose=pose(x=0.12))
-    action = behaviour(executor=executor)
+    action = execution(executor=executor)
     action._recovery_hand_pose = pose()
     action._recovery_detail = "Unexpected contact"
     action._update_recovery_prepare()
@@ -156,7 +188,7 @@ def test_completed_recovery_never_starts_another_move(remaining):
 
     result = action._update_recovery_prepare()
 
-    assert result is Status.FAILURE
+    assert result is MoveCloseToSurfaceOutcome.FAILURE
     assert len(executor.probe_calls) == 1
     assert "Unexpected contact" in action.feedback_message
     if remaining:
@@ -180,7 +212,7 @@ def test_rotation_distance_matches_known_angle():
 
 
 def test_endpoint_validation_measures_settled_lateral_error():
-    action = behaviour(maximum_lateral_drift_m=0.010)
+    action = execution(maximum_lateral_drift_m=0.010)
     action._plan = FrozenPlan()
     action._previous_probe_pose = pose(x=0.050, y=0.0100)
     action._requested_step_m = 0.010
@@ -194,7 +226,7 @@ def test_endpoint_validation_measures_settled_lateral_error():
 
 
 def test_endpoint_validation_rejects_excessive_settled_lateral_error():
-    action = behaviour(maximum_lateral_drift_m=0.010)
+    action = execution(maximum_lateral_drift_m=0.010)
     action._plan = FrozenPlan()
     action._previous_probe_pose = pose()
     action._requested_step_m = 0.010

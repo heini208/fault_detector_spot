@@ -18,9 +18,9 @@ from fault_detector_spot.inspection.model.models import (
     QuaternionData,
     Vector3Data,
 )
-from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
-    MoveCloseToSurfaceBehaviour,
+from fault_detector_spot.manipulation.move_close_to_surface_execution import (
     MoveCloseToSurfaceConfig,
+    MoveCloseToSurfaceExecution,
 )
 
 
@@ -34,13 +34,12 @@ class FakeExecutor:
         pass
 
 
-def behaviour(**kwargs):
-    action = MoveCloseToSurfaceBehaviour(
-        surface_source=object(),
-        config=MoveCloseToSurfaceConfig(**kwargs),
+def execution(**kwargs):
+    return MoveCloseToSurfaceExecution(
+        FakeExecutor(),
+        object(),
+        MoveCloseToSurfaceConfig(**kwargs),
     )
-    action.executor = FakeExecutor()
-    return action
 
 
 def pose(orientation=None):
@@ -63,7 +62,7 @@ def plane(normal=None):
 
 
 def test_default_travel_allows_extra_steps_for_contact_mode():
-    action = behaviour()
+    action = execution()
 
     assert action.config.maximum_step_m == pytest.approx(0.010)
     assert action.config.maximum_approach_steps == 60
@@ -71,14 +70,14 @@ def test_default_travel_allows_extra_steps_for_contact_mode():
 
 
 def test_default_surface_sampling_uses_five_frames_over_one_second():
-    action = behaviour()
+    action = execution()
 
     assert action.config.minimum_surface_samples == 5
     assert action.config.minimum_surface_span_sec == pytest.approx(1.0)
 
 
 def test_force_threshold_becomes_more_sensitive_near_target():
-    action = behaviour(
+    action = execution(
         force_contact_threshold_n=5.0,
         force_near_target_threshold_n=3.0,
         force_near_target_distance_m=0.020,
@@ -91,7 +90,7 @@ def test_force_threshold_becomes_more_sensitive_near_target():
 
 
 def test_approach_speed_decreases_toward_expected_surface():
-    action = behaviour(
+    action = execution(
         approach_far_speed_mps=0.005,
         approach_near_speed_mps=0.001,
         approach_slowdown_distance_m=0.050,
@@ -108,7 +107,7 @@ def test_approach_speed_decreases_toward_expected_surface():
 
 def test_configuration_rejects_near_speed_above_far_speed():
     with pytest.raises(ValueError, match="Near-surface approach speed"):
-        behaviour(
+        execution(
             approach_far_speed_mps=0.003,
             approach_near_speed_mps=0.004,
         )
@@ -116,12 +115,12 @@ def test_configuration_rejects_near_speed_above_far_speed():
 
 def test_configuration_rejects_step_larger_than_ten_millimeters():
     with pytest.raises(ValueError, match="0.010 m"):
-        behaviour(maximum_step_m=0.0101)
+        execution(maximum_step_m=0.0101)
 
 
 def test_configuration_rejects_contact_search_beyond_one_step():
     with pytest.raises(ValueError, match="Contact search overtravel"):
-        behaviour(contact_search_overtravel_m=0.011)
+        execution(contact_search_overtravel_m=0.011)
 
 
 def test_frozen_plan_records_surface_normal_axis_error():

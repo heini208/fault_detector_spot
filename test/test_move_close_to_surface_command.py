@@ -25,7 +25,10 @@ from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
 )
 from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
     MoveCloseToSurfaceBehaviour,
+)
+from fault_detector_spot.manipulation.move_close_to_surface_execution import (
     MoveCloseToSurfaceConfig,
+    MoveCloseToSurfaceExecution,
 )
 from fault_detector_spot.manipulation.commands.move_close_to_surface_command import (
     MoveCloseToSurfaceCommand,
@@ -108,34 +111,28 @@ def test_bt_command_accepts_distance_and_tolerance():
     assert command.surface_tolerance_m == pytest.approx(0.004)
 
 
-def test_behaviour_uses_command_tolerance_when_supplied():
-    behaviour = MoveCloseToSurfaceBehaviour(
-        surface_source=object(),
-        config=MoveCloseToSurfaceConfig(tolerance_m=0.005),
-    )
-    behaviour._command = MoveCloseToSurfaceCommand(
+def execution_for_tolerance(tolerance):
+    execution = object.__new__(MoveCloseToSurfaceExecution)
+    execution.config = MoveCloseToSurfaceConfig(tolerance_m=0.005)
+    execution._command = MoveCloseToSurfaceCommand(
         CommandID.MOVE_CLOSE_TO_SURFACE,
         stamp=object(),
         target_surface_distance_m=0.03,
-        surface_tolerance_m=0.002,
+        surface_tolerance_m=tolerance,
     )
+    return execution
 
-    assert behaviour._surface_tolerance() == pytest.approx(0.002)
+
+def test_execution_uses_command_tolerance_when_supplied():
+    execution = execution_for_tolerance(0.002)
+
+    assert execution._surface_tolerance() == pytest.approx(0.002)
 
 
-def test_behaviour_falls_back_to_configured_tolerance():
-    behaviour = MoveCloseToSurfaceBehaviour(
-        surface_source=object(),
-        config=MoveCloseToSurfaceConfig(tolerance_m=0.005),
-    )
-    behaviour._command = MoveCloseToSurfaceCommand(
-        CommandID.MOVE_CLOSE_TO_SURFACE,
-        stamp=object(),
-        target_surface_distance_m=0.03,
-        surface_tolerance_m=0.0,
-    )
+def test_execution_falls_back_to_configured_tolerance():
+    execution = execution_for_tolerance(0.0)
 
-    assert behaviour._surface_tolerance() == pytest.approx(0.005)
+    assert execution._surface_tolerance() == pytest.approx(0.005)
 
 
 def test_command_subscriber_builds_close_surface_command():
@@ -156,15 +153,17 @@ def test_behaviour_tree_registers_close_surface_behaviour():
     assert "close_surface.action_name" not in source
 
 
-def test_close_surface_is_direct_arm_workflow_without_operation_class():
+def test_close_surface_behaviour_is_thin_execution_adapter():
     source = inspect.getsource(MoveCloseToSurfaceBehaviour)
 
     assert issubclass(MoveCloseToSurfaceBehaviour, ArmMovementBehaviour)
     assert "get_probe_surface_source(" in source
-    assert "guarded_probe(" in source
-    assert ".probe(" in source
-    assert "ArmMovementOutcome.CONTACT" in source
-    assert "MoveCloseToSurfaceOperation" not in source
+    assert "MoveCloseToSurfaceExecution" in source
+    assert "._execution.start(" in source
+    assert "._execution.poll(" in source
+    assert "guarded_probe(" not in source
+    assert ".probe(" not in source
+    assert "ArmMovementOutcome.CONTACT" not in source
     assert "MoveCloseToSurface.Goal" not in source
     assert "WorkflowActionBehaviour" not in source
 

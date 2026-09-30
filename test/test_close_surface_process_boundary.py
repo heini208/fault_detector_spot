@@ -18,22 +18,34 @@ def test_launch_has_no_dedicated_close_surface_process():
     assert "manipulation.move_close_to_surface_node:main" not in setup
 
 
-def test_close_surface_is_one_bt_behaviour_over_shared_executor():
+def test_close_surface_bt_behaviour_only_adapts_shared_execution():
     behaviour = read(
         "fault_detector_spot/manipulation/behaviours/"
         "move_close_to_surface_behaviour.py"
     )
+    execution = read(
+        "fault_detector_spot/manipulation/"
+        "move_close_to_surface_execution.py"
+    )
 
     assert "class MoveCloseToSurfaceBehaviour(ArmMovementBehaviour)" in behaviour
-    assert "guarded_probe(" in behaviour
-    assert ".probe(" in behaviour
-    assert "ArmMovementOutcome.CONTACT" in behaviour
-    assert "MoveCloseToSurfaceOperation" not in behaviour
-    assert "WorkflowActionBehaviour" not in behaviour
-    assert "RobotCommandBuilder" not in behaviour
-    assert "send_goal_async" not in behaviour
-    assert "cancel_goal_async" not in behaviour
-    assert "end_effector_force" not in behaviour
+    assert "MoveCloseToSurfaceExecution" in behaviour
+    assert "._execution.start(" in behaviour
+    assert "._execution.poll(" in behaviour
+    assert "._execution.cancel()" in behaviour
+    assert "guarded_probe(" not in behaviour
+    assert ".probe(" not in behaviour
+    assert "_phase ==" not in behaviour
+    assert "self.executor.cancel(" not in behaviour
+
+    assert "class MoveCloseToSurfaceExecution" in execution
+    assert "guarded_probe(" in execution
+    assert ".probe(" in execution
+    assert "ArmMovementOutcome.CONTACT" in execution
+    assert "py_trees" not in execution
+    assert "RobotCommandBuilder" not in execution
+    assert "send_goal_async" not in execution
+    assert "cancel_goal_async" not in execution
 
 
 def test_probe_surface_source_only_owns_surface_sensing_and_attachment():
@@ -50,11 +62,11 @@ def test_probe_surface_source_only_owns_surface_sensing_and_attachment():
     assert "current_probe_pose_execution" not in source
 
 
-def test_close_surface_uses_executor_planner_for_live_arm_geometry():
-    behaviour = read(
-        "fault_detector_spot/manipulation/behaviours/"
-        "move_close_to_surface_behaviour.py"
+def test_close_surface_execution_uses_shared_planner_for_live_arm_geometry():
+    execution = read(
+        "fault_detector_spot/manipulation/"
+        "move_close_to_surface_execution.py"
     )
 
-    assert "probe_motion_planner.current_pose(" in behaviour
-    assert "probe_motion_planner.current_hand_pose(" in behaviour
+    assert "probe_motion_planner.current_pose(" in execution
+    assert "probe_motion_planner.current_hand_pose(" in execution
