@@ -10,6 +10,9 @@
     arm.motion.linear_speed_mps: 0.08
     arm.motion.angular_speed_rad_s: 0.50
     arm.motion.minimum_duration_sec: 0.50
+    arm.motion.moveit_velocity_scaling: 0.50
+    arm.motion.moveit_acceleration_scaling: 0.40
+    arm.motion.arm_sh1_safe_min_rad: -3.106686
     arm.motion.moveit_result_timeout_margin_sec: 15.0
 
     # Probe setup safe-approach speed

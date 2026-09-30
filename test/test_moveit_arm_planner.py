@@ -27,8 +27,9 @@ def planner_shell():
     planner.cartesian_max_step_m = DEFAULT_CARTESIAN_MAX_STEP_M
     planner.cartesian_jump_threshold = DEFAULT_CARTESIAN_JUMP_THRESHOLD
     planner.cartesian_min_fraction = DEFAULT_CARTESIAN_MIN_FRACTION
-    planner.velocity_scaling = 1.0
-    planner.acceleration_scaling = 1.0
+    planner.velocity_scaling = 0.5
+    planner.acceleration_scaling = 0.4
+    planner.min_arm_sh1_rad = MIN_ARM_SH1_RAD
     planner.response_timeout_sec = 7.0
     planner._started_at = 0.0
     planner._planning_mode = None
@@ -57,7 +58,7 @@ def test_cartesian_defaults_require_dense_nearly_complete_path():
     assert DEFAULT_CARTESIAN_MIN_FRACTION == pytest.approx(0.999)
 
 
-def test_motion_request_constrains_goal_but_not_entire_path():
+def test_motion_request_relies_on_robot_model_joint_limits():
     planner = planner_shell()
     planner.planner_id = "RRTConnectkConfigDefault"
     planner.allowed_planning_time_sec = 5.0
@@ -71,10 +72,9 @@ def test_motion_request_constrains_goal_but_not_entire_path():
     motion = request.motion_plan_request
 
     assert not motion.path_constraints.joint_constraints
-    constraint = motion.goal_constraints[0].joint_constraints[0]
-    assert constraint.joint_name == "arm_sh1"
-    assert constraint.position == pytest.approx(MIN_ARM_SH1_RAD)
-    assert constraint.tolerance_below == pytest.approx(0.0)
+    assert not motion.goal_constraints[0].joint_constraints
+    assert motion.max_velocity_scaling_factor == pytest.approx(0.5)
+    assert motion.max_acceleration_scaling_factor == pytest.approx(0.4)
 
 
 def test_cartesian_request_is_straight_collision_checked_hand_path():
@@ -136,8 +136,18 @@ def test_partial_cartesian_response_is_rejected():
     assert "incomplete" in update.detail
     assert "0.950000" in update.detail
     assert "arm_sh1 start=0.00000" in update.detail
-    assert f"configured floor={MIN_ARM_SH1_RAD:.5f}" in update.detail
+    assert f"safety floor={MIN_ARM_SH1_RAD:.5f}" in update.detail
     assert not planner.active
+
+
+def test_trajectory_safety_gate_rejects_arm_sh1_below_margin():
+    planner = planner_shell()
+    trajectory = valid_trajectory()
+    sh1_index = trajectory.joint_names.index("arm_sh1")
+    trajectory.points[0].positions[sh1_index] = MIN_ARM_SH1_RAD - 0.01
+
+    with pytest.raises(ValueError, match="below configured safety floor"):
+        planner._validate_and_describe(trajectory)
 
 
 @pytest.mark.parametrize("code, name", [

@@ -9,7 +9,6 @@ import time
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.msg import (
     Constraints,
-    JointConstraint,
     MoveItErrorCodes,
     OrientationConstraint,
     PositionConstraint,
@@ -36,8 +35,8 @@ DEFAULT_ALLOWED_PLANNING_TIME_SEC = 5.0
 DEFAULT_RESPONSE_TIMEOUT_SEC = 7.0
 DEFAULT_POSITION_TOLERANCE_M = 0.005
 DEFAULT_ORIENTATION_TOLERANCE_RAD = 0.01
-DEFAULT_VELOCITY_SCALING = 1.0
-DEFAULT_ACCELERATION_SCALING = 1.0
+DEFAULT_VELOCITY_SCALING = 0.5
+DEFAULT_ACCELERATION_SCALING = 0.4
 DEFAULT_CARTESIAN_MAX_STEP_M = 0.002
 DEFAULT_CARTESIAN_JUMP_THRESHOLD = 2.0
 DEFAULT_CARTESIAN_MIN_FRACTION = 0.999
@@ -84,6 +83,7 @@ class MoveItArmPlanner:
         cartesian_max_step_m: float = DEFAULT_CARTESIAN_MAX_STEP_M,
         cartesian_jump_threshold: float = DEFAULT_CARTESIAN_JUMP_THRESHOLD,
         cartesian_min_fraction: float = DEFAULT_CARTESIAN_MIN_FRACTION,
+        min_arm_sh1_rad: float = MIN_ARM_SH1_RAD,
         monotonic_clock=time.monotonic,
     ):
         if node is None:
@@ -133,6 +133,10 @@ class MoveItArmPlanner:
         self.cartesian_min_fraction = self._fraction(
             cartesian_min_fraction,
             "Cartesian minimum fraction",
+        )
+        self.min_arm_sh1_rad = self._finite(
+            min_arm_sh1_rad,
+            "arm_sh1 safety floor",
         )
         if not self.service_name:
             raise ValueError("MoveIt planning service name must not be empty")
@@ -416,9 +420,9 @@ class MoveItArmPlanner:
         motion.max_velocity_scaling_factor = self.velocity_scaling
         motion.max_acceleration_scaling_factor = self.acceleration_scaling
         motion.start_state.is_diff = True
-        goal = self._pose_goal_constraints(target_hand)
-        goal.joint_constraints = [self._arm_sh1_floor_constraint()]
-        motion.goal_constraints = [goal]
+        motion.goal_constraints = [
+            self._pose_goal_constraints(target_hand)
+        ]
         return request
 
     def _build_cartesian_request(self, target_hand: PoseStamped):
@@ -455,24 +459,6 @@ class MoveItArmPlanner:
                 "check move_group logs for IK, collision, or joint-limit failures"
             )
         return detail
-
-    @staticmethod
-    def _arm_sh1_floor_constraint() -> JointConstraint:
-        shoulder = JointConstraint()
-        shoulder.joint_name = "arm_sh1"
-        shoulder.position = MIN_ARM_SH1_RAD
-        shoulder.tolerance_below = 0.0
-        shoulder.tolerance_above = 2.0 * math.pi
-        shoulder.weight = 1.0
-        return shoulder
-
-    @classmethod
-    def _joint_limit_constraints(cls) -> Constraints:
-        constraints = Constraints()
-        constraints.joint_constraints = [
-            cls._arm_sh1_floor_constraint()
-        ]
-        return constraints
 
     def _pose_goal_constraints(
         self,
@@ -517,8 +503,7 @@ class MoveItArmPlanner:
         goal.orientation_constraints = [orientation]
         return goal
 
-    @staticmethod
-    def _partial_trajectory_detail(trajectory) -> str:
+    def _partial_trajectory_detail(self, trajectory) -> str:
         names = tuple(trajectory.joint_names)
         points = tuple(trajectory.points)
         prefix = f"returned {len(points)} trajectory points"
@@ -549,7 +534,7 @@ class MoveItArmPlanner:
         return (
             f"{prefix}; "
             + "; ".join(ranges)
-            + f"; arm_sh1 configured floor={MIN_ARM_SH1_RAD:.5f} rad"
+            + f"; arm_sh1 safety floor={self.min_arm_sh1_rad:.5f} rad"
         )
 
     def _validate_and_describe(self, trajectory) -> str:
@@ -604,10 +589,10 @@ class MoveItArmPlanner:
                 ranges[name][1] = max(ranges[name][1], value)
 
         sh1_min = ranges["arm_sh1"][0]
-        if sh1_min < MIN_ARM_SH1_RAD - 1e-6:
+        if sh1_min < self.min_arm_sh1_rad - 1e-6:
             raise ValueError(
                 f"arm_sh1 reaches {sh1_min:.5f} rad below configured "
-                f"planning floor {MIN_ARM_SH1_RAD:.5f} rad"
+                f"safety floor {self.min_arm_sh1_rad:.5f} rad"
             )
 
         duration_sec = previous_time if previous_time is not None else 0.0
@@ -644,6 +629,13 @@ class MoveItArmPlanner:
         normalized = float(value)
         if not math.isfinite(normalized) or not 0.0 < normalized <= 1.0:
             raise ValueError(f"{label} must be in (0, 1]")
+        return normalized
+
+    @staticmethod
+    def _finite(value, label: str) -> float:
+        normalized = float(value)
+        if not math.isfinite(normalized):
+            raise ValueError(f"{label} must be finite")
         return normalized
 
     @staticmethod

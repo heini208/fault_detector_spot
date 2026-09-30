@@ -154,7 +154,19 @@ class RobotCommandResources:
         with self._lock:
             self._bind_node(node)
             if self._moveit_arm_planner is None:
-                self._moveit_arm_planner = MoveItArmPlanner(node)
+                config = ArmMotionParameters(node)
+                self._moveit_arm_planner = MoveItArmPlanner(
+                    node,
+                    velocity_scaling=config.get(
+                        "motion.moveit_velocity_scaling"
+                    ),
+                    acceleration_scaling=config.get(
+                        "motion.moveit_acceleration_scaling"
+                    ),
+                    min_arm_sh1_rad=config.get(
+                        "motion.arm_sh1_safe_min_rad"
+                    ),
+                )
             return self._moveit_arm_planner
 
     def get_arm_movement_executor(

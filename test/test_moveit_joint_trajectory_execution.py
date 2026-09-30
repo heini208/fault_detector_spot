@@ -181,9 +181,9 @@ def test_joint_goal_rejects_invalid_times(monkeypatch, seconds):
         executor._build_moveit_joint_goal(planned)
 
 
-def test_moveit_plans_at_full_model_limits_before_execution_retiming():
-    assert DEFAULT_VELOCITY_SCALING == pytest.approx(1.0)
-    assert DEFAULT_ACCELERATION_SCALING == pytest.approx(1.0)
+def test_moveit_uses_conservative_model_scaling_before_execution_retiming():
+    assert DEFAULT_VELOCITY_SCALING == pytest.approx(0.5)
+    assert DEFAULT_ACCELERATION_SCALING == pytest.approx(0.4)
 
 
 def test_requested_duration_stretches_moveit_times_and_velocities(monkeypatch):
