@@ -169,10 +169,15 @@ class ProbeSurfaceSource(RuntimeSource):
         ):
             raise ValueError("Surface orientation window radius must be positive")
 
-        depth_image, camera_info = self.latest_hand_depth(
-            maximum_age_sec,
-            receipt_not_before=receipt_not_before,
-        )
+        if float(receipt_not_before) > 0.0:
+            depth_image, camera_info = self.latest_hand_depth(
+                maximum_age_sec,
+                receipt_not_before=receipt_not_before,
+            )
+        else:
+            depth_image, camera_info = self.latest_hand_depth(
+                maximum_age_sec,
+            )
         point_cloud = create_organized_depth_point_cloud(
             depth_image, camera_info,
         )

@@ -462,7 +462,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._surface_orientation_speed = speed
         self._surface_orientation_force_threshold_n = force_threshold_n
         self._surface_orientation_corrections = 0
-        return self.guarded_probe(
+        update = self.guarded_probe(
             self._surface_orientation_target_builder(
                 sensor_id,
                 receipt_not_before=started_at,
@@ -470,6 +470,13 @@ class ArmMovementExecutor(MovementExecutor):
             speed=speed,
             force_threshold_n=force_threshold_n,
         )
+        if (
+            isinstance(update, ArmMovementUpdate)
+            and update.outcome is not ArmMovementOutcome.RUNNING
+            and not self.active
+        ):
+            self._clear_surface_orientation_state()
+        return update
 
     def _surface_orientation_target_builder(
         self,
@@ -1412,15 +1419,18 @@ class ArmMovementExecutor(MovementExecutor):
             self._guarded_cartesian_path = False
             self._next_probe_cartesian_path = False
             self._pending_moveit_cartesian_path = False
-            self._surface_orientation_sensor_id = None
-            self._surface_orientation_speed = None
-            self._surface_orientation_force_threshold_n = None
-            self._surface_orientation_corrections = 0
-            self._surface_orientation_verify_not_before = None
-            self._surface_orientation_verify_deadline = None
+            self._clear_surface_orientation_state()
             self._reset_arm_stop_service_lifecycle(cancel=True)
             if self.guarded_probe_execution is not None:
                 self.guarded_probe_execution.reset()
+
+    def _clear_surface_orientation_state(self) -> None:
+        self._surface_orientation_sensor_id = None
+        self._surface_orientation_speed = None
+        self._surface_orientation_force_threshold_n = None
+        self._surface_orientation_corrections = 0
+        self._surface_orientation_verify_not_before = None
+        self._surface_orientation_verify_deadline = None
 
     def _advance_prepare_start(self) -> ArmMovementUpdate:
         state = self._fresh_arm_state()

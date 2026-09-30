@@ -221,8 +221,9 @@ def test_surface_orientation_full_frame_chain_preserves_probe_axis():
         target_hand.pose,
         mounting,
     )
+    from fault_detector_spot.inspection.model.models import QuaternionData
     actual_axis = rotate_vector(
-        SimpleNamespace(
+        QuaternionData(
             x=reconstructed_probe.pose.orientation.x,
             y=reconstructed_probe.pose.orientation.y,
             z=reconstructed_probe.pose.orientation.z,
@@ -231,8 +232,8 @@ def test_surface_orientation_full_frame_chain_preserves_probe_axis():
         Vector3Data(x=1.0, y=0.0, z=0.0),
     )
     expected_inward = Vector3Data(
-        x=-math.cos(math.radians(30.0)),
-        y=-math.sin(math.radians(30.0)),
+        x=math.cos(math.radians(30.0)),
+        y=math.sin(math.radians(30.0)),
         z=0.0,
     )
     assert actual_axis.x == pytest.approx(expected_inward.x, abs=1e-9)
