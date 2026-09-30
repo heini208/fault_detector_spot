@@ -13,6 +13,7 @@ from fault_detector_spot.manipulation.moveit_arm_planner import (
     DEFAULT_CARTESIAN_MAX_STEP_M,
     DEFAULT_CARTESIAN_MIN_FRACTION,
     DEFAULT_POSITION_TOLERANCE_M,
+    MIN_ARM_SH1_RAD,
     MoveItArmPlanner,
     MoveItPlanOutcome,
 )
@@ -56,6 +57,24 @@ def test_cartesian_defaults_require_dense_nearly_complete_path():
     assert DEFAULT_CARTESIAN_MIN_FRACTION == pytest.approx(0.999)
 
 
+def test_motion_request_constrains_arm_sh1_to_execution_floor():
+    planner = planner_shell()
+    planner.planner_id = "RRTConnectkConfigDefault"
+    planner.allowed_planning_time_sec = 5.0
+    planner.position_tolerance_m = 0.002
+    planner.orientation_tolerance_rad = 0.01
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+
+    request = planner._build_request(target)
+
+    constraint = request.motion_plan_request.path_constraints.joint_constraints[0]
+    assert constraint.joint_name == "arm_sh1"
+    assert constraint.position == pytest.approx(MIN_ARM_SH1_RAD)
+    assert constraint.tolerance_below == pytest.approx(0.0)
+
+
 def test_cartesian_request_is_straight_collision_checked_hand_path():
     planner = planner_shell()
     target = PoseStamped()
@@ -74,6 +93,10 @@ def test_cartesian_request_is_straight_collision_checked_hand_path():
     assert request.max_step == pytest.approx(0.002)
     assert request.jump_threshold == pytest.approx(2.0)
     assert request.avoid_collisions
+    constraint = request.path_constraints.joint_constraints[0]
+    assert constraint.joint_name == "arm_sh1"
+    assert constraint.position == pytest.approx(MIN_ARM_SH1_RAD)
+    assert constraint.tolerance_below == pytest.approx(0.0)
 
 
 def test_complete_cartesian_response_returns_joint_trajectory():

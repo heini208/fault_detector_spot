@@ -396,6 +396,7 @@ class GuardedProbeExecution:
         if update.outcome in (
             ArmMovementOutcome.GOAL_REJECTED,
             ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT,
+            ArmMovementOutcome.PLANNING_FAILED,
         ):
             return self._terminal(update.outcome, update.detail)
 

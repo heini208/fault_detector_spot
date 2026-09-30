@@ -13,6 +13,7 @@ class ArmMovementOutcome(Enum):
     ACTION_SERVER_UNAVAILABLE = "action_server_unavailable"
     GOAL_RESPONSE_TIMEOUT = "goal_response_timeout"
     GOAL_REJECTED = "goal_rejected"
+    PLANNING_FAILED = "planning_failed"
     RESULT_TIMEOUT = "result_timeout"
     MOTION_FAILED = "motion_failed"
     TRAJECTORY_STALLED = "trajectory_stalled"

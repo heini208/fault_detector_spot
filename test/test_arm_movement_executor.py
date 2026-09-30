@@ -1142,17 +1142,13 @@ def test_public_probe_rejects_new_requests_during_preparation(monkeypatch):
 
 
 @pytest.mark.parametrize("outcome_name", ["FAILURE", "TIMEOUT", "ERROR"])
-def test_guarded_moveit_failure_stops_and_releases_executor(outcome_name):
+def test_guarded_moveit_failure_releases_without_arm_stop(outcome_name):
     from fault_detector_spot.manipulation.moveit_arm_planner import (
         MoveItPlanOutcome, MoveItPlanUpdate,
     )
     from fault_detector_spot.manipulation.guarded_probe_execution import _Phase
 
-    clock = ManualClock()
-    executor, client = executor_with_client(
-        FakeTransformer({}),
-        monotonic_clock=clock,
-    )
+    executor, client = executor_with_client(FakeTransformer({}))
     executor.arm_stop_service_client = FakeArmStopServiceClient()
     executor.moveit_arm_planner = SimpleNamespace(
         poll=lambda: MoveItPlanUpdate(
@@ -1167,17 +1163,12 @@ def test_guarded_moveit_failure_stops_and_releases_executor(outcome_name):
     guard._phase = _Phase.MOVING
     guard._plan = SimpleNamespace(force_guard_enabled=False)
 
-    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
-    assert executor.active
-    assert len(executor.arm_stop_service_client.requests) == 1
-    executor.arm_stop_service_client.future.set_result(
-        SimpleNamespace(success=True, message="stopped")
-    )
-    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
-    result = confirm_physical_stop(executor, clock, 0.1)
-    assert result.outcome is not ArmMovementOutcome.RUNNING
+    result = executor.poll()
+
+    assert result.outcome is ArmMovementOutcome.PLANNING_FAILED
     assert "planning failed" in result.detail
     assert not executor.active
     assert not guard.active
+    assert executor.arm_stop_service_client.requests == []
     assert client.sent_goals == []
     assert executor.stow().outcome is ArmMovementOutcome.RUNNING

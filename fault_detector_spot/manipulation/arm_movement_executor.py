@@ -697,14 +697,8 @@ class ArmMovementExecutor(MovementExecutor):
         return self._submit_goal(build_goal)
 
     @staticmethod
-    def _moveit_failure_outcome(outcome):
-        if outcome is MoveItPlanOutcome.SERVICE_UNAVAILABLE:
-            return ArmMovementOutcome.ACTION_SERVER_UNAVAILABLE
-        if outcome is MoveItPlanOutcome.TIMEOUT:
-            return ArmMovementOutcome.RESULT_TIMEOUT
-        if outcome is MoveItPlanOutcome.FAILURE:
-            return ArmMovementOutcome.MOTION_FAILED
-        return ArmMovementOutcome.EXECUTION_ERROR
+    def _moveit_failure_outcome(_outcome):
+        return ArmMovementOutcome.PLANNING_FAILED
 
     def _reset_moveit_planning(self, cancel=False) -> None:
         planner = self.moveit_arm_planner

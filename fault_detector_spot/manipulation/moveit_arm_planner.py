@@ -9,6 +9,7 @@ import time
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.msg import (
     Constraints,
+    JointConstraint,
     MoveItErrorCodes,
     OrientationConstraint,
     PositionConstraint,
@@ -411,6 +412,7 @@ class MoveItArmPlanner:
         motion.max_velocity_scaling_factor = self.velocity_scaling
         motion.max_acceleration_scaling_factor = self.acceleration_scaling
         motion.start_state.is_diff = True
+        motion.path_constraints = self._joint_limit_constraints()
         motion.goal_constraints = [
             self._pose_goal_constraints(target_hand)
         ]
@@ -428,6 +430,7 @@ class MoveItArmPlanner:
         request.prismatic_jump_threshold = 0.0
         request.revolute_jump_threshold = 0.0
         request.avoid_collisions = True
+        request.path_constraints = self._joint_limit_constraints()
         # Humble's Cartesian service has no velocity/acceleration scaling fields.
         # The executor stretches trajectory timing to the requested duration.
         return request
@@ -448,6 +451,18 @@ class MoveItArmPlanner:
                 "check move_group logs for IK, collision, or joint-limit failures"
             )
         return detail
+
+    @staticmethod
+    def _joint_limit_constraints() -> Constraints:
+        constraints = Constraints()
+        shoulder = JointConstraint()
+        shoulder.joint_name = "arm_sh1"
+        shoulder.position = MIN_ARM_SH1_RAD
+        shoulder.tolerance_below = 0.0
+        shoulder.tolerance_above = 2.0 * math.pi
+        shoulder.weight = 1.0
+        constraints.joint_constraints = [shoulder]
+        return constraints
 
     def _pose_goal_constraints(
         self,
