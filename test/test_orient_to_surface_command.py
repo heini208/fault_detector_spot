@@ -1,6 +1,7 @@
 """Focused regression tests for the orient-to-surface command."""
 
 import inspect
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -44,10 +45,12 @@ def test_orientation_requests_image_time_tf_without_latest_fallback():
         raise RuntimeError("historical transform unavailable")
     executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
     executor._active = False
-    executor.surface_source = SimpleNamespace(surface_normal=lambda **kwargs: SimpleNamespace(
-        stamp_nanoseconds=12000000034,
-        projected_point=SimpleNamespace(frame_id="camera"),
-    ))
+    executor.surface_source = SimpleNamespace(
+        surface_normal=lambda **kwargs: SimpleNamespace(
+            stamp_nanoseconds=12000000034,
+            projected_point=SimpleNamespace(frame_id="camera"),
+        )
+    )
     executor.tf_listener = SimpleNamespace(lookup_a_tform_b=lookup)
     with pytest.raises(RuntimeError, match="historical transform unavailable"):
         executor._resolve_surface_orientation_target("hand")
@@ -75,11 +78,13 @@ def test_orientation_allows_delayed_capture_time_transform():
         return result
 
     executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
-    executor.surface_source = SimpleNamespace(surface_normal=lambda **kwargs: SimpleNamespace(
-        stamp_nanoseconds=12000000034,
-        projected_point=SimpleNamespace(frame_id="camera"),
-        normal_camera=Vector3Data(x=-1.0, y=0.0, z=0.0),
-    ))
+    executor.surface_source = SimpleNamespace(
+        surface_normal=lambda **kwargs: SimpleNamespace(
+            stamp_nanoseconds=12000000034,
+            projected_point=SimpleNamespace(frame_id="camera"),
+            normal_camera=Vector3Data(x=-1.0, y=0.0, z=0.0),
+        )
+    )
     executor.tf_listener = SimpleNamespace(lookup_a_tform_b=lookup)
     executor._monotonic_clock = lambda: now[0]
     executor._active = False
@@ -97,7 +102,9 @@ def test_orientation_allows_delayed_capture_time_transform():
     with pytest.raises(MovementGeometryUnavailable):
         builder()
     # No refit or newer image may replace the retained observation on retry.
-    executor.surface_source.surface_normal = lambda **kwargs: pytest.fail("refitted image")
+    executor.surface_source.surface_normal = (
+        lambda **kwargs: pytest.fail("refitted image")
+    )
     now[0] = 0.7
     target, sensor = builder()
     assert sensor == "hand"
@@ -115,9 +122,12 @@ def test_orientation_tf_retry_times_out_and_new_command_starts_fresh():
     executor._monotonic_clock = lambda: now[0]
     executor._active = False
     executor.guarded_probe = lambda builder, **kwargs: builder
-    executor.surface_source = SimpleNamespace(surface_normal=lambda **kwargs: SimpleNamespace(
-        stamp_nanoseconds=12000000034, projected_point=SimpleNamespace(frame_id="camera"),
-    ))
+    executor.surface_source = SimpleNamespace(
+        surface_normal=lambda **kwargs: SimpleNamespace(
+            stamp_nanoseconds=12000000034,
+            projected_point=SimpleNamespace(frame_id="camera"),
+        )
+    )
     def unavailable(*args, **kwargs):
         raise ExtrapolationException("TF still behind")
     executor.tf_listener = SimpleNamespace(lookup_a_tform_b=unavailable)
@@ -222,6 +232,7 @@ def test_surface_orientation_full_frame_chain_preserves_probe_axis():
         mounting,
     )
     from fault_detector_spot.inspection.model.models import QuaternionData
+
     actual_axis = rotate_vector(
         QuaternionData(
             x=reconstructed_probe.pose.orientation.x,
