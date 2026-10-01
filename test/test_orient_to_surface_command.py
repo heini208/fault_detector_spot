@@ -345,3 +345,59 @@ def test_ui_button_dispatches_orient_to_surface_intent():
     assert "INTENT_ORIENT_TO_SURFACE" in source
     assert "execute_operation(intent)" in source
     assert "show_setup_unavailable" not in source
+
+
+def test_orientation_sensing_budget_starts_after_readiness_and_tf_gets_own_budget():
+    from tf2_ros import ExtrapolationException
+    from fault_detector_spot.shared.geometry.movement_geometry import MovementGeometryUnavailable
+    now = [0.0]
+    executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
+    executor._monotonic_clock = lambda: now[0]
+    def sense(**kwargs):
+        if now[0] < 15.0:
+            raise ValueError("No fresh depth yet")
+        return SimpleNamespace(stamp_nanoseconds=12000000034)
+    executor.surface_source = SimpleNamespace(surface_normal=sense)
+    def resolve(*args):
+        if now[0] < 16.0:
+            raise ExtrapolationException("TF behind")
+        return "target"
+    executor._resolve_surface_orientation_target = resolve
+    builder = executor._surface_orientation_target_builder("hand", 0.0)
+    now[0] = 10.0  # Arm readiness did not consume the sensing budget.
+    with pytest.raises(MovementGeometryUnavailable):
+        builder()
+    now[0] = 15.0  # Delayed image arrives, then starts its own TF budget.
+    with pytest.raises(MovementGeometryUnavailable):
+        builder()
+    now[0] = 16.1
+    assert builder() == "target"
+
+
+def test_verification_retains_post_motion_frame_while_waiting_for_tf():
+    from tf2_ros import ExtrapolationException
+    from fault_detector_spot.manipulation.arm_movement_result import ArmMovementOutcome
+    executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
+    executor._surface_orientation_sensor_id = "hand"
+    executor._surface_orientation_verify_not_before = 4.0
+    executor._surface_orientation_verify_deadline = 10.0
+    executor._surface_orientation_verify_estimate = None
+    executor._surface_orientation_corrections = 0
+    executor._surface_orientation_force_threshold_n = None
+    executor._surface_orientation_speed = None
+    now = [5.0]
+    executor._monotonic_clock = lambda: now[0]
+    estimate = object()
+    executor.surface_source = SimpleNamespace(surface_normal=lambda **kwargs: estimate)
+    def verify(sensor, selected):
+        assert selected is estimate
+        if now[0] < 5.5:
+            raise ExtrapolationException("TF behind")
+        return math.radians(7)
+    executor._surface_orientation_error_rad = verify
+    executor.probe_motion_planner = SimpleNamespace(build_plan=lambda *a: None)
+    executor._begin_guarded_probe = lambda: "correction"
+    assert executor._poll_surface_orientation_verification().outcome is ArmMovementOutcome.RUNNING
+    executor.surface_source.surface_normal = lambda **kwargs: pytest.fail("replaced retained frame")
+    now[0] = 5.7
+    assert executor._poll_surface_orientation_verification() == "correction"

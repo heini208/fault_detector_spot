@@ -81,6 +81,7 @@ from fault_detector_spot.manipulation.arm_motion_parameters import (
 
 SURFACE_ORIENTATION_MAX_ERROR_RAD = math.radians(5.0)
 SURFACE_ORIENTATION_TIMEOUT_SEC = 2.0
+SURFACE_ORIENTATION_SENSING_TIMEOUT_SEC = 6.0
 SURFACE_ORIENTATION_MAX_CORRECTIONS = 1
 
 
@@ -297,6 +298,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._surface_orientation_corrections = 0
         self._surface_orientation_verify_not_before = None
         self._surface_orientation_verify_deadline = None
+        self._surface_orientation_verify_estimate = None
         self._arm_stop_service_future = None
         self._arm_stop_service_started = None
 
@@ -485,19 +487,20 @@ class ArmMovementExecutor(MovementExecutor):
         receipt_not_before: float,
     ):
         estimate = None
-        deadline = (
-            self._monotonic_clock()
-            + SURFACE_ORIENTATION_TIMEOUT_SEC
-        )
+        deadline = None
         last_error = ""
 
         def resolve_surface_target():
-            nonlocal estimate, last_error
+            nonlocal estimate, last_error, deadline
+            if deadline is None:
+                deadline = self._monotonic_clock() + SURFACE_ORIENTATION_SENSING_TIMEOUT_SEC
             if estimate is None:
                 try:
                     estimate = self.surface_source.surface_normal(
                         receipt_not_before=receipt_not_before,
                     )
+                    # TF gets its own budget after a fresh observation arrives.
+                    deadline = self._monotonic_clock() + SURFACE_ORIENTATION_TIMEOUT_SEC
                 except ValueError as exception:
                     last_error = (
                         "Waiting for a fresh reliable surface normal: "
@@ -506,7 +509,7 @@ class ArmMovementExecutor(MovementExecutor):
                     if self._monotonic_clock() >= deadline:
                         raise RuntimeError(
                             "Surface orientation sensing timed out after "
-                            f"{SURFACE_ORIENTATION_TIMEOUT_SEC:.1f}s; "
+                            f"{SURFACE_ORIENTATION_SENSING_TIMEOUT_SEC:.1f}s; "
                             f"{last_error}"
                         ) from exception
                     raise MovementGeometryUnavailable(
@@ -1085,9 +1088,10 @@ class ArmMovementExecutor(MovementExecutor):
         ):
             now = self._monotonic_clock()
             self._operation = _ArmOperation.SURFACE_ORIENTATION_VERIFY
+            self._surface_orientation_verify_estimate = None
             self._surface_orientation_verify_not_before = now
             self._surface_orientation_verify_deadline = (
-                now + SURFACE_ORIENTATION_TIMEOUT_SEC
+                now + SURFACE_ORIENTATION_SENSING_TIMEOUT_SEC
             )
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING,
@@ -1113,9 +1117,15 @@ class ArmMovementExecutor(MovementExecutor):
             )
 
         try:
-            estimate = self.surface_source.surface_normal(
-                receipt_not_before=receipt_not_before,
-            )
+            estimate = getattr(self, "_surface_orientation_verify_estimate", None)
+            if estimate is None:
+                estimate = self.surface_source.surface_normal(
+                    receipt_not_before=receipt_not_before,
+                )
+                self._surface_orientation_verify_estimate = estimate
+                deadline = self._monotonic_clock() + SURFACE_ORIENTATION_TIMEOUT_SEC
+                self._surface_orientation_verify_deadline = deadline
+            # Retain this fresh post-motion observation while its TF catches up.
             error_rad = self._surface_orientation_error_rad(
                 sensor_id,
                 estimate,
@@ -1129,8 +1139,11 @@ class ArmMovementExecutor(MovementExecutor):
                 )
             return super()._finish(
                 ArmMovementOutcome.EXECUTION_ERROR,
-                "Surface orientation verification timed out after "
-                f"{SURFACE_ORIENTATION_TIMEOUT_SEC:.1f}s: {exception}",
+                "Surface orientation verification timed out while waiting for "
+                + ("capture-time TF" if getattr(
+                    self, "_surface_orientation_verify_estimate", None,
+                ) is not None else "fresh depth")
+                + f": {exception}",
             )
 
         error_deg = math.degrees(error_rad)
@@ -1443,6 +1456,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._surface_orientation_corrections = 0
         self._surface_orientation_verify_not_before = None
         self._surface_orientation_verify_deadline = None
+        self._surface_orientation_verify_estimate = None
 
     def _advance_prepare_start(self) -> ArmMovementUpdate:
         state = self._fresh_arm_state()
