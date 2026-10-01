@@ -229,13 +229,14 @@ def execution(
     )
 
 
-def test_contact_cancels_stops_retreats_and_returns_contact():
+@pytest.mark.parametrize("override,expected", [(None, 0.008), (0.003, 0.003), (0.02, 0.008)])
+def test_contact_cancels_stops_retreats_and_returns_contact(override, expected):
     clock = ManualClock()
     state = FakeArmStateSource()
     driver = GoalDriver()
     guard = execution(state, driver, clock, pose(0.008))
 
-    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+    assert guard.start(plan, retreat_distance_m=override).outcome is ArmMovementOutcome.RUNNING
 
     clock.now = 0.1
     state.sample = HandForceSample(0.1, -5.0, 2.0, 3.0)
@@ -274,7 +275,7 @@ def test_contact_cancels_stops_retreats_and_returns_contact():
     assert retreating.outcome is ArmMovementOutcome.RUNNING
     retreat_goal = driver.started_goals[-1]
     assert retreat_goal[0] == "retreat"
-    assert retreat_goal[2].pose.position.x == pytest.approx(0.0)
+    assert retreat_goal[2].pose.position.x == pytest.approx(0.008 - expected)
     assert retreat_goal[3].linear_speed_mps == pytest.approx(0.01)
 
     driver.updates.append(
@@ -283,10 +284,15 @@ def test_contact_cancels_stops_retreats_and_returns_contact():
     finished = guard.poll()
 
     assert finished.outcome is ArmMovementOutcome.CONTACT
-    assert "retreated 0.0080 m" in finished.detail
+    assert f"retreated {expected:.4f} m" in finished.detail
     assert "ArmStopCommand accepted" not in finished.detail
     assert driver.stop_count == 1
     assert not guard.active
+
+
+    guard.start(plan)
+    assert guard._retreat_distance_override_m is None
+    assert guard.retreat_distance_m == pytest.approx(0.01)
 
 
 def test_primary_success_finishes_without_arm_stop():

@@ -20,6 +20,11 @@
 
     close_surface.approach_far_speed_mps: 0.01
     close_surface.approach_near_speed_mps: 0.002
+    # Zero-distance contact search uses its own slower, more sensitive guard.
+    # Local backoff after contact for target distance = 0 only (metres).
+    close_surface.contact_search_retreat_distance_m: 0.005
+    close_surface.contact_search_speed_mps: 0.001
+    close_surface.contact_search_force_threshold_n: 2.0
     close_surface.approach_slowdown_distance_m: 0.050
     close_surface.contact_search_overtravel_m: 0.005
 

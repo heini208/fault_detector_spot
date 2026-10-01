@@ -162,6 +162,7 @@ class GuardedProbeExecution:
         self,
         plan_builder,
         force_threshold_n=None,
+        retreat_distance_m=None,
     ) -> ArmMovementUpdate:
         with self.lock:
             if not callable(plan_builder):
@@ -170,6 +171,10 @@ class GuardedProbeExecution:
                     "Guarded probe movement requires a plan builder",
                 )
             self.reset()
+            if retreat_distance_m is not None:
+                self._retreat_distance_override_m = self._positive(
+                    retreat_distance_m, "Contact retreat distance override",
+                )
             self._plan_builder = plan_builder
             self._force_threshold_override_n = force_threshold_n
             return self._prepare_plan()
@@ -224,6 +229,7 @@ class GuardedProbeExecution:
             self._abort_outcome = None
             self._abort_detail = ""
             self._retreat_distance_m = 0.0
+            self._retreat_distance_override_m = None
             self._peak_opposing_force_delta_n = 0.0
             self._peak_total_force_delta_n = 0.0
             self._last_hand_orientation = None
@@ -940,7 +946,17 @@ class GuardedProbeExecution:
                 ArmMovementOutcome.STOP_UNCONFIRMED,
                 self._stop_detail(
                     "ArmStopCommand was accepted, but physical stop was not "
-                    "confirmed before the timeout"
+                    "confirmed before the timeout; "
+                    + (
+                        "no fresh hand velocity sample available"
+                        if sample is None else
+                        f"last hand velocity: linear {sample.linear_speed_mps:.4f} "
+                        f"m/s (limit {self._stop_linear_threshold_mps:.4f}), "
+                        f"angular {sample.angular_speed_rad_s:.4f} rad/s "
+                        f"(limit {self._stop_angular_threshold_rad_s:.4f}), "
+                        f"sample age {self._monotonic_clock() - sample.received_at:.3f} s; "
+                        f"required stable duration {self._stop_stable_duration_sec:.3f} s"
+                    )
                 ),
             )
 
@@ -1000,7 +1016,8 @@ class GuardedProbeExecution:
             + (current.z - start.z) * plan.direction_z
         )
         self._retreat_distance_m = min(
-            self.retreat_distance_m,
+            (self.retreat_distance_m if self._retreat_distance_override_m is None
+             else self._retreat_distance_override_m),
             max(0.0, forward),
         )
         if self._retreat_distance_m <= 1e-4:

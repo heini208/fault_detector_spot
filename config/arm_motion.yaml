@@ -47,7 +47,8 @@
     arm.contact.hard_force_delta_limit_n: 20.0
 
     # Physical stop confirmation after ArmStop acceptance
-    arm.contact.stop_confirmation.linear_velocity_threshold_mps: 0.01
+    # Vision-frame hand velocity includes idle body sway; retain the stable-time gate.
+    arm.contact.stop_confirmation.linear_velocity_threshold_mps: 0.015
     arm.contact.stop_confirmation.angular_velocity_threshold_rad_s: 0.05
     arm.contact.stop_confirmation.stable_duration_sec: 0.40
     arm.contact.stop_confirmation.timeout_sec: 3.0

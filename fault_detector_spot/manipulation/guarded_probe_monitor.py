@@ -32,7 +32,7 @@ class GuardedProbeMonitor:
         )
         self._callback_group = MutuallyExclusiveCallbackGroup()
 
-    def start(self, plan_builder, force_threshold_n=None):
+    def start(self, plan_builder, force_threshold_n=None, retreat_distance_m=None):
         """Attach monitoring before starting the guarded operation."""
         with self._execution.lock:
             if self._closed:
@@ -45,8 +45,11 @@ class GuardedProbeMonitor:
             try:
                 self._source.add_force_listener(self._listener)
                 self._start_timer()
+                options = {}
+                if retreat_distance_m is not None:
+                    options["retreat_distance_m"] = retreat_distance_m
                 self._record(self._execution.start(
-                    plan_builder, force_threshold_n=force_threshold_n,
+                    plan_builder, force_threshold_n=force_threshold_n, **options,
                 ))
             except Exception:
                 self.stop()

@@ -13,7 +13,10 @@ from fault_detector_spot.inspection.execution.probe_surface_approach import (
     evaluate_probe_surface_approach,
     freeze_probe_surface_approach,
 )
-from fault_detector_spot.inspection.geometry.rotation import rotation_distance_rad
+from fault_detector_spot.inspection.geometry.rotation import (
+    rotate_vector,
+    rotation_distance_rad,
+)
 from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
@@ -62,6 +65,9 @@ class MoveCloseToSurfaceConfig:
     force_near_target_distance_m: float = 0.020
     approach_far_speed_mps: float = 0.005
     approach_near_speed_mps: float = 0.001
+    contact_search_retreat_distance_m: float = 0.010
+    contact_search_speed_mps: float = 0.001
+    contact_search_force_threshold_n: float = 2.0
     approach_slowdown_distance_m: float = 0.050
     contact_search_overtravel_m: float = 0.005
     recovery_speed_mps: float = 0.020
@@ -105,6 +111,9 @@ class MoveCloseToSurfaceConfig:
             c.force_near_target_distance_m,
             c.approach_far_speed_mps,
             c.approach_near_speed_mps,
+            c.contact_search_speed_mps,
+            c.contact_search_retreat_distance_m,
+            c.contact_search_force_threshold_n,
             c.approach_slowdown_distance_m,
             c.contact_search_overtravel_m,
             c.recovery_speed_mps,
@@ -199,6 +208,8 @@ class MoveCloseToSurfaceExecution:
         try:
             if self._phase == "acquire":
                 return self._update_acquire()
+            if self._phase == "contact_replan":
+                return self._start_contact_search()
             if self._phase == "sampling":
                 return self._update_sampling()
             if self._phase == "approach":
@@ -244,8 +255,49 @@ class MoveCloseToSurfaceExecution:
         self._sensor_id = sensor_id
         self._attachment_revision = revision
         self._recovery_hand_pose = deepcopy(recovery_pose)
+        if self.contact_mode:
+            return self._start_contact_search()
         self._start_sampling()
         return MoveCloseToSurfaceOutcome.RUNNING
+
+    def _start_contact_search(self) -> MoveCloseToSurfaceOutcome:
+        """Search along probe +X with a force guard, without surface sensing."""
+        self._require_attachment_unchanged()
+        current = self._current_probe_pose()
+        current.validate()
+        self._previous_probe_pose = deepcopy(current)
+        self._aligned_probe_orientation = deepcopy(current.orientation)
+        self._contact_inward = rotate_vector(
+            current.orientation, Vector3Data(x=1.0, y=0.0, z=0.0)
+        )
+        if self._contact_search_distance_m is None:
+            self._contact_search_distance_m = self.config.maximum_travel_m
+        self._requested_step_m = self._contact_search_distance_m
+        target = PoseData(
+            position=Vector3Data(
+                x=current.position.x + self._contact_inward.x * self._requested_step_m,
+                y=current.position.y + self._contact_inward.y * self._requested_step_m,
+                z=current.position.z + self._contact_inward.z * self._requested_step_m,
+            ),
+            orientation=deepcopy(self._aligned_probe_orientation),
+        )
+        self._approach_steps = 1
+        self._phase = "approach"
+        speed = self._speed(self.config.contact_search_speed_mps)
+        threshold = self.config.contact_search_force_threshold_n
+        update = self.executor.guarded_probe(
+            self._pose_stamped(target),
+            self._sensor_id,
+            speed=speed,
+            force_threshold_n=threshold,
+            retreat_distance_m=self.config.contact_search_retreat_distance_m,
+            cartesian_path=True,
+        )
+        self.feedback_message = (
+            f"Searching for contact along probe +X by {self._requested_step_m:.4f} m "
+            f"at {speed.linear_speed_mps:.4f} m/s with {threshold:.2f} N guard"
+        )
+        return self._handle_approach_update(update)
 
     def _start_sampling(self) -> None:
         self._surface_samples = {}
@@ -429,6 +481,32 @@ class MoveCloseToSurfaceExecution:
         return self._handle_approach_update(update)
 
     def _handle_approach_update(self, update) -> MoveCloseToSurfaceOutcome:
+        if self.contact_mode and update.outcome in (
+            ArmMovementOutcome.STOP_UNCONFIRMED,
+            ArmMovementOutcome.RETREAT_FAILED,
+        ):
+            return self._fail_workflow(
+                "Contact search could not complete its local stop/retreat: "
+                f"{update.outcome.value}: {update.detail}; "
+                "no return to the pre-approach pose was commanded"
+            )
+        # An incomplete Cartesian plan has not been executed. Shorten its
+        # endpoint and replan; the eventual successful path executes once.
+        if (
+            self.contact_mode
+            and update.outcome is ArmMovementOutcome.PLANNING_FAILED
+            and update.detail.startswith("MoveIt Cartesian path is incomplete:")
+            and self._contact_plan_retries < 8
+            and self._requested_step_m * 0.8 >= self.config.maximum_step_m
+        ):
+            self._contact_plan_retries += 1
+            self._contact_search_distance_m = self._requested_step_m * 0.8
+            self._phase = "contact_replan"
+            self.feedback_message = (
+                "Shortening contact-search endpoint before motion to "
+                f"{self._contact_search_distance_m:.4f} m for Cartesian replanning"
+            )
+            return MoveCloseToSurfaceOutcome.RUNNING
         if update.outcome is ArmMovementOutcome.RUNNING:
             return MoveCloseToSurfaceOutcome.RUNNING
         if update.outcome is ArmMovementOutcome.CONTACT:
@@ -459,6 +537,17 @@ class MoveCloseToSurfaceExecution:
             return MoveCloseToSurfaceOutcome.RUNNING
 
         current_probe = self._current_probe_pose()
+        if self.contact_mode:
+            orientation_error = rotation_distance_rad(
+                current_probe.orientation, self._aligned_probe_orientation,
+            )
+            if orientation_error > self.config.maximum_axis_error_rad:
+                raise RuntimeError("Probe rotated away from the contact search axis")
+            self._validate_step_motion(current_probe)
+            return self._begin_recovery(
+                "Cartesian contact search reached its planned endpoint without "
+                "detecting surface contact"
+            )
         evaluation = evaluate_probe_surface_approach(
             self._plan,
             current_probe_pose_execution=current_probe,
@@ -473,11 +562,6 @@ class MoveCloseToSurfaceExecution:
             f"{evaluation.estimated_distance_m:.4f} m"
         )
 
-        if self.contact_mode:
-            return self._begin_recovery(
-                "Cartesian contact search reached its planned endpoint without "
-                "detecting surface contact"
-            )
         return self._prepare_next_approach_step()
 
     def _begin_recovery(self, detail: str) -> MoveCloseToSurfaceOutcome:
@@ -653,7 +737,10 @@ class MoveCloseToSurfaceExecution:
             )
 
     def _validate_step_motion(self, current_probe: PoseData):
-        inward = self._plan.inward_direction()
+        inward = (
+            self._contact_inward if self.contact_mode
+            else self._plan.inward_direction()
+        )
         previous = self._previous_probe_pose.position
         current = current_probe.position
         delta = Vector3Data(
@@ -711,6 +798,9 @@ class MoveCloseToSurfaceExecution:
         self._attachment_revision = -1
         self._recovery_hand_pose = None
         self._aligned_probe_orientation = None
+        self._contact_inward = None
+        self._contact_search_distance_m = None
+        self._contact_plan_retries = 0
         self._surface_samples = {}
         self._sample_receipt_not_before = 0.0
         self._plan = None

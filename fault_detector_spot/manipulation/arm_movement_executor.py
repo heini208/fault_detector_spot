@@ -284,6 +284,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._verification_started = None
         self._ready_probe_start = None
         self._guarded_plan_builder = None
+        self._guarded_retreat_distance_m = None
         self._guarded_force_threshold_n = None
         self._guarded_cartesian_path = False
         self._next_probe_cartesian_path = False
@@ -569,8 +570,13 @@ class ArmMovementExecutor(MovementExecutor):
         speed=None,
         force_threshold_n=None,
         cartesian_path: bool = False,
+        retreat_distance_m=None,
     ) -> ArmMovementUpdate:
-        """Execute one ready probe movement with force monitoring."""
+        """Execute a force-guarded probe movement.
+
+        retreat_distance_m overrides contact backoff for this movement only;
+        None uses the configured arm.contact.retreat_distance_m default.
+        """
         with self._execution_lock:
             if self.active:
                 return self._busy_update()
@@ -602,6 +608,7 @@ class ArmMovementExecutor(MovementExecutor):
                 sensor_id = str(motion_sensor_id).strip()
                 target_builder = lambda: (target, sensor_id)
 
+            self._guarded_retreat_distance_m = retreat_distance_m
             self._guarded_force_threshold_n = force_threshold_n
             self._guarded_cartesian_path = bool(cartesian_path)
             self._guarded_plan_builder = lambda: (
@@ -1049,8 +1056,12 @@ class ArmMovementExecutor(MovementExecutor):
             )
         self._next_probe_cartesian_path = self._guarded_cartesian_path
         owner = self._guarded_probe_monitor or self.guarded_probe_execution
+        options = {}
+        if self._guarded_retreat_distance_m is not None:
+            options["retreat_distance_m"] = self._guarded_retreat_distance_m
         update = owner.start(
             builder,
+            **options,
             force_threshold_n=self._guarded_force_threshold_n,
         )
         return self._finish_guarded_update(update)
@@ -1415,6 +1426,7 @@ class ArmMovementExecutor(MovementExecutor):
             self._verification_started = None
             self._ready_probe_start = None
             self._guarded_plan_builder = None
+            self._guarded_retreat_distance_m = None
             self._guarded_force_threshold_n = None
             self._guarded_cartesian_path = False
             self._next_probe_cartesian_path = False

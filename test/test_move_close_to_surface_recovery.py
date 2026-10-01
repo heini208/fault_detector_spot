@@ -124,6 +124,111 @@ def test_execution_start_owns_lifecycle_and_cancel():
     assert not action.active
 
 
+@pytest.mark.parametrize("angle", [0.0, math.pi / 2])
+def test_zero_distance_search_needs_no_reading_and_uses_sensitive_guard(angle):
+    executor = FakeExecutor()
+    # No surface_distance_samples method: contact search must never request it.
+    source = SimpleNamespace(active_attachment=lambda: ("probe", 1))
+    action = MoveCloseToSurfaceExecution(
+        executor, source, MoveCloseToSurfaceConfig(),
+    )
+    start = pose(x=0.1, orientation=quaternion_from_euler("z", angle))
+    action._current_probe_pose = lambda: start
+    command = MoveCloseToSurfaceCommand(
+        CommandID.MOVE_CLOSE_TO_SURFACE, stamp=object(),
+        target_surface_distance_m=0.0,
+    )
+
+    assert action.start(command) is MoveCloseToSurfaceOutcome.RUNNING
+    assert action._phase == "approach"
+    args, options = executor.guarded_calls[0]
+    target = args[0].pose
+    assert target.position.x == pytest.approx(0.1 + 0.4 * math.cos(angle))
+    assert target.position.y == pytest.approx(0.4 * math.sin(angle))
+    assert target.orientation == pose_data_to_pose(start).orientation
+    assert options["speed"].linear_speed_mps == pytest.approx(0.001)
+    assert options["force_threshold_n"] == pytest.approx(2.0)
+    assert options["cartesian_path"] is True
+    assert action._plan is None
+
+    result = action._handle_approach_update(
+        ArmMovementUpdate(ArmMovementOutcome.CONTACT, "contact; snap retreat")
+    )
+    assert result is MoveCloseToSurfaceOutcome.SUCCESS
+    assert executor.probe_calls == []
+
+
+def test_contact_search_without_contact_recovers_at_planned_endpoint():
+    executor = FakeExecutor()
+    action = MoveCloseToSurfaceExecution(
+        executor, SimpleNamespace(active_attachment=lambda: ("probe", 1)),
+        MoveCloseToSurfaceConfig(maximum_travel_m=0.1),
+    )
+    action._current_probe_pose = lambda: executor.probe_motion_planner.hand_pose
+    action.start(MoveCloseToSurfaceCommand(
+        CommandID.MOVE_CLOSE_TO_SURFACE, stamp=object(),
+        target_surface_distance_m=0.0,
+    ))
+    executor.probe_motion_planner.hand_pose = pose(x=0.1)
+    action._handle_approach_update(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "endpoint reached")
+    )
+    action._clock = lambda: action._settle_deadline + 1.0
+
+    assert action.poll() is MoveCloseToSurfaceOutcome.RUNNING
+    assert "planned endpoint" in action._recovery_detail
+    assert len(executor.guarded_calls) == 1
+    assert len(executor.probe_calls) == 1
+    assert executor.probe_calls[0][0][0].pose.position.x == pytest.approx(0.0)
+
+
+def test_incomplete_contact_plan_shortens_endpoint_before_single_motion():
+    executor = FakeExecutor()
+    action = MoveCloseToSurfaceExecution(
+        executor, SimpleNamespace(active_attachment=lambda: ("probe", 1)),
+        MoveCloseToSurfaceConfig(),
+    )
+    action._current_probe_pose = lambda: pose()
+    action.start(MoveCloseToSurfaceCommand(
+        CommandID.MOVE_CLOSE_TO_SURFACE, stamp=object(),
+        target_surface_distance_m=0.0,
+    ))
+    # Planning failed before any trajectory was submitted to the robot.
+    executor.active = False
+    result = action._handle_approach_update(ArmMovementUpdate(
+        ArmMovementOutcome.PLANNING_FAILED,
+        "MoveIt Cartesian path is incomplete: fraction 0.925743 < 0.999000",
+    ))
+    assert result is MoveCloseToSurfaceOutcome.RUNNING
+    assert action._phase == "contact_replan"
+    assert action.poll() is MoveCloseToSurfaceOutcome.RUNNING
+    target, options = executor.guarded_calls[-1]
+    assert target[0].pose.position.x == pytest.approx(0.32)
+    assert options["speed"].linear_speed_mps == pytest.approx(0.001)
+    assert options["force_threshold_n"] == pytest.approx(2.0)
+    assert action._approach_steps == 1
+    assert executor.probe_calls == []
+    assert action._handle_approach_update(ArmMovementUpdate(
+        ArmMovementOutcome.CONTACT, "contact; snap retreat",
+    )) is MoveCloseToSurfaceOutcome.SUCCESS
+
+
+@pytest.mark.parametrize("detail,retries", [
+    ("MoveIt Cartesian path is incomplete: fraction 0.9", 8),
+    ("MoveIt Cartesian planning error", 0),
+])
+def test_contact_replanning_is_bounded_and_only_for_incomplete_paths(detail, retries):
+    action = execution()
+    action._command = SimpleNamespace(target_surface_distance_m=0.0)
+    action._requested_step_m = 0.4
+    action._contact_plan_retries = retries
+    result = action._handle_approach_update(ArmMovementUpdate(
+        ArmMovementOutcome.PLANNING_FAILED, detail,
+    ))
+    assert result is MoveCloseToSurfaceOutcome.FAILURE
+    assert detail in action.feedback_message
+
+
 @pytest.mark.parametrize("verified", [False, True])
 def test_sampling_rejects_misaligned_measured_plane_even_at_standoff(monkeypatch, verified):
     action = execution()
@@ -261,3 +366,45 @@ def test_endpoint_validation_rejects_excessive_settled_lateral_error():
         action._validate_step_motion(
             pose(x=0.010, y=0.0102)
         )
+
+
+@pytest.mark.parametrize("outcome", [
+    ArmMovementOutcome.STOP_UNCONFIRMED, ArmMovementOutcome.RETREAT_FAILED,
+])
+@pytest.mark.parametrize("target", [0.0, 0.03])
+def test_contact_stop_failure_never_returns_to_start_in_zero_mode(outcome, target):
+    executor = FakeExecutor(hand_pose=pose(x=0.06))
+    action = execution(executor=executor)
+    action._command = SimpleNamespace(target_surface_distance_m=target)
+    action._recovery_hand_pose = pose()
+    action._approach_steps = 1
+    result = action._handle_approach_update(ArmMovementUpdate(
+        outcome, "Contact detected; stop or retreat failed",
+    ))
+    if target == 0.0:
+        assert result is MoveCloseToSurfaceOutcome.FAILURE
+        assert executor.probe_calls == []
+        assert "no return" in action.feedback_message
+    else:
+        assert result is MoveCloseToSurfaceOutcome.RUNNING
+        assert len(executor.probe_calls) == 1
+
+
+def test_contact_search_settings_are_independent_of_standoff_settings():
+    executor = FakeExecutor()
+    action = MoveCloseToSurfaceExecution(
+        executor, SimpleNamespace(active_attachment=lambda: ("probe", 1)),
+        MoveCloseToSurfaceConfig(
+            approach_near_speed_mps=0.002, contact_search_retreat_distance_m=0.003,
+        ),
+    )
+    action._current_probe_pose = lambda: pose()
+    action.start(MoveCloseToSurfaceCommand(
+        CommandID.MOVE_CLOSE_TO_SURFACE, stamp=object(),
+        target_surface_distance_m=0.0,
+    ))
+    options = executor.guarded_calls[-1][1]
+    assert options["speed"].linear_speed_mps == pytest.approx(0.001)
+    assert options["force_threshold_n"] == pytest.approx(2.0)
+
+    assert options["retreat_distance_m"] == pytest.approx(0.003)
