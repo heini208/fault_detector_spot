@@ -5,17 +5,10 @@ import math
 from threading import RLock
 import time
 
-from bosdyn.api import (
-    arm_command_pb2,
-    robot_command_pb2,
-    synchronized_command_pb2,
-)
 from bosdyn.client.frame_helpers import (
     GRAV_ALIGNED_BODY_FRAME_NAME,
     HAND_FRAME_NAME,
 )
-from bosdyn.client.robot_command import RobotCommandBuilder
-from bosdyn_spot_api_msgs.conversions import convert
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
 from tf2_ros import TransformException
@@ -35,6 +28,15 @@ from fault_detector_spot.inspection.geometry.alignment_orientation import (
     surface_aligned_probe_orientation,
     tag_aligned_probe_orientation,
 )
+from fault_detector_spot.manipulation.arm_command_builder import (
+    build_arm_stop_request,
+    build_stow_goal,
+    build_moveit_joint_goal,
+    build_pose_goal,
+)
+from fault_detector_spot.manipulation.arm_command_feedback import arm_failure_result
+from fault_detector_spot.manipulation.surface_orientation_target import SurfaceOrientationTarget
+
 from fault_detector_spot.manipulation.arm_contact_evidence import (
     ArmContactEvidenceAnalyzer,
 )
@@ -56,7 +58,6 @@ from fault_detector_spot.manipulation.guarded_probe_monitor import (
     GuardedProbeMonitor,
 )
 from fault_detector_spot.manipulation.moveit_arm_planner import (
-    ARM_JOINT_NAMES,
     MoveItPlanOutcome,
 )
 from fault_detector_spot.manipulation.probe_motion_planner import (
@@ -143,56 +144,6 @@ class ArmMovementExecutor(MovementExecutor):
         config = config if config is not None else ArmMotionParameters(
             getattr(arm_state_source, "node", None)
         )
-        ready_forward_distance_m = config.get(
-            "ready_forward_distance_m", ready_forward_distance_m
-        )
-        ready_lift_distance_m = config.get(
-            "ready_lift_distance_m", ready_lift_distance_m
-        )
-        ready_state_timeout_sec = config.get(
-            "ready_state_timeout_sec", ready_state_timeout_sec
-        )
-        ready_tf_timeout_sec = config.get(
-            "ready_tf_timeout_sec", ready_tf_timeout_sec
-        )
-        ready_deployed_timeout_sec = config.get(
-            "ready_deployed_timeout_sec", ready_deployed_timeout_sec
-        )
-        stow_state_timeout_sec = config.get(
-            "stow_state_timeout_sec", stow_state_timeout_sec
-        )
-        force_stale_timeout_sec = config.get(
-            "contact.force_stale_timeout_sec", force_stale_timeout_sec
-        )
-        hard_force_delta_limit_n = config.get(
-            "contact.hard_force_delta_limit_n", hard_force_delta_limit_n
-        )
-        stop_confirmation_linear_velocity_threshold_mps = config.get(
-            "contact.stop_confirmation.linear_velocity_threshold_mps",
-            stop_confirmation_linear_velocity_threshold_mps,
-        )
-        stop_confirmation_angular_velocity_threshold_rad_s = config.get(
-            "contact.stop_confirmation.angular_velocity_threshold_rad_s",
-            stop_confirmation_angular_velocity_threshold_rad_s,
-        )
-        stop_confirmation_stable_duration_sec = config.get(
-            "contact.stop_confirmation.stable_duration_sec",
-            stop_confirmation_stable_duration_sec,
-        )
-        stop_confirmation_timeout_sec = config.get(
-            "contact.stop_confirmation.timeout_sec",
-            stop_confirmation_timeout_sec,
-        )
-        contact_retreat_distance_m = config.get(
-            "contact.retreat_distance_m", contact_retreat_distance_m
-        )
-        contact_retreat_speed_mps = config.get(
-            "contact.retreat_speed_mps", contact_retreat_speed_mps
-        )
-        moveit_result_timeout_margin_sec = config.get(
-            "motion.moveit_result_timeout_margin_sec",
-            moveit_result_timeout_margin_sec,
-        )
         super().__init__(
             tf_listener,
             tag_state_source=tag_state_source,
@@ -203,33 +154,102 @@ class ArmMovementExecutor(MovementExecutor):
             monotonic_clock=monotonic_clock,
             logger=logger,
         )
-        self._base_result_timeout_sec = self.result_timeout_sec
-        self.moveit_result_timeout_margin_sec = self._positive_timeout(
-            moveit_result_timeout_margin_sec,
-            "MoveIt result timeout margin",
-        )
-        self.speed_policy = (
-            speed_policy
-            if speed_policy is not None
-            else ArmMotionSpeedPolicy.from_config(config)
-        )
-        self.ready_speed = ArmMotionSpeed(
-            linear_speed_mps=config.get("ready_linear_speed_mps"),
-            angular_speed_rad_s=(
-                self.speed_policy.default_speed.angular_speed_rad_s
-            ),
-        )
-        self.safe_approach_speed = ArmMotionSpeed(
-            linear_speed_mps=config.get(
-                "safe_approach_linear_speed_mps"
-            ),
-            angular_speed_rad_s=config.get(
-                "safe_approach_angular_speed_rad_s"
-            ),
+        self._configure_motion_speeds(
+            config=config,
+            speed_policy=speed_policy,
+            moveit_result_timeout_margin_sec=moveit_result_timeout_margin_sec,
         )
         self.arm_state_source = arm_state_source
         self.surface_source = surface_source
         self.moveit_arm_planner = moveit_arm_planner
+        self._configure_arm_stop_client(
+            arm_stop_service_client=arm_stop_service_client,
+            arm_state_source=arm_state_source,
+            robot_name=robot_name,
+        )
+        self.force_contact_policy = force_contact_policy
+        if contact_evidence_analyzer is not None:
+            self.contact_evidence_analyzer = contact_evidence_analyzer
+        else:
+            self.contact_evidence_analyzer = ArmContactEvidenceAnalyzer(
+                config=config
+            )
+        self._configure_readiness(
+            config=config,
+            ready_forward_distance_m=ready_forward_distance_m,
+            ready_lift_distance_m=ready_lift_distance_m,
+            ready_state_timeout_sec=ready_state_timeout_sec,
+            ready_tf_timeout_sec=ready_tf_timeout_sec,
+            ready_deployed_timeout_sec=ready_deployed_timeout_sec,
+            stow_state_timeout_sec=stow_state_timeout_sec,
+        )
+        self.probe_motion_planner = ProbeMotionPlanner(
+            tf_listener=tf_listener,
+            speed_policy=self.speed_policy,
+        )
+
+        self._probe_continuation = object()
+        self._clear_arm_operation_state()
+        self._pending_moveit_plan_builder = None
+        self._pending_moveit_cartesian_path = False
+        self._moveit_cartesian_plan = None
+        self._clear_surface_orientation_state()
+        self._arm_stop_service_future = None
+        self._arm_stop_service_started = None
+
+        self._configure_contact_guard(
+            config=config,
+            arm_state_source=arm_state_source,
+            force_baseline_sampler=force_baseline_sampler,
+            force_contact_policy=force_contact_policy,
+            force_stale_timeout_sec=force_stale_timeout_sec,
+            hard_force_delta_limit_n=hard_force_delta_limit_n,
+            stop_confirmation_linear_velocity_threshold_mps=(
+                stop_confirmation_linear_velocity_threshold_mps
+            ),
+            stop_confirmation_angular_velocity_threshold_rad_s=(
+                stop_confirmation_angular_velocity_threshold_rad_s
+            ),
+            stop_confirmation_stable_duration_sec=stop_confirmation_stable_duration_sec,
+            stop_confirmation_timeout_sec=stop_confirmation_timeout_sec,
+            contact_retreat_distance_m=contact_retreat_distance_m,
+            contact_retreat_speed_mps=contact_retreat_speed_mps,
+            monotonic_clock=monotonic_clock,
+        )
+
+    def _configure_motion_speeds(
+        self,
+        config,
+        speed_policy,
+        moveit_result_timeout_margin_sec,
+    ):
+        self._base_result_timeout_sec = self.result_timeout_sec
+        self.moveit_result_timeout_margin_sec = self._positive_timeout(
+            config.get(
+                'motion.moveit_result_timeout_margin_sec',
+                moveit_result_timeout_margin_sec,
+            ),
+            'MoveIt result timeout margin',
+        )
+        self.speed_policy = (
+            speed_policy if speed_policy is not None
+            else ArmMotionSpeedPolicy.from_config(config)
+        )
+        self.ready_speed = ArmMotionSpeed(
+            linear_speed_mps=config.get('ready_linear_speed_mps'),
+            angular_speed_rad_s=self.speed_policy.default_speed.angular_speed_rad_s,
+        )
+        self.safe_approach_speed = ArmMotionSpeed(
+            linear_speed_mps=config.get('safe_approach_linear_speed_mps'),
+            angular_speed_rad_s=config.get('safe_approach_angular_speed_rad_s'),
+        )
+
+    def _configure_arm_stop_client(
+        self,
+        arm_stop_service_client,
+        arm_state_source,
+        robot_name,
+    ):
         self._owns_arm_stop_service_client = False
         self.arm_stop_service_client = arm_stop_service_client
         if (
@@ -242,66 +262,91 @@ class ArmMovementExecutor(MovementExecutor):
                 namespace_with(robot_name, "robot_command"),
             )
             self._owns_arm_stop_service_client = True
-        self.force_contact_policy = force_contact_policy
-        if contact_evidence_analyzer is not None:
-            self.contact_evidence_analyzer = contact_evidence_analyzer
-        else:
-            self.contact_evidence_analyzer = ArmContactEvidenceAnalyzer(
-                config=config
-            )
+
+    def _configure_readiness(
+        self,
+        config,
+        ready_forward_distance_m,
+        ready_lift_distance_m,
+        ready_state_timeout_sec,
+        ready_tf_timeout_sec,
+        ready_deployed_timeout_sec,
+        stow_state_timeout_sec,
+    ):
         self.ready_forward_distance_m = self._ready_forward_distance(
-            ready_forward_distance_m,
+            config.get('ready_forward_distance_m', ready_forward_distance_m),
         )
         self.ready_lift_distance_m = self._positive_timeout(
-            ready_lift_distance_m,
-            "Ready arm lift distance",
+            config.get('ready_lift_distance_m', ready_lift_distance_m),
+            'Ready arm lift distance',
         )
         self.ready_state_timeout_sec = self._positive_timeout(
-            ready_state_timeout_sec,
-            "Ready arm state timeout",
+            config.get('ready_state_timeout_sec', ready_state_timeout_sec),
+            'Ready arm state timeout',
         )
         self.ready_tf_timeout_sec = self._positive_timeout(
-            ready_tf_timeout_sec,
-            "Ready arm TF timeout",
+            config.get('ready_tf_timeout_sec', ready_tf_timeout_sec),
+            'Ready arm TF timeout',
         )
         self.ready_deployed_timeout_sec = self._positive_timeout(
-            ready_deployed_timeout_sec,
-            "Ready arm deployed timeout",
+            config.get('ready_deployed_timeout_sec', ready_deployed_timeout_sec),
+            'Ready arm deployed timeout',
         )
         self.stow_state_timeout_sec = self._positive_timeout(
-            stow_state_timeout_sec,
-            "Stow arm state timeout",
-        )
-        self.probe_motion_planner = ProbeMotionPlanner(
-            tf_listener=tf_listener,
-            speed_policy=self.speed_policy,
+            config.get('stow_state_timeout_sec', stow_state_timeout_sec),
+            'Stow arm state timeout',
         )
 
-        self._operation = None
-        self._probe_continuation = object()
-        self._operation_speed = None
-        self._state_wait_started = None
-        self._tf_wait_started = None
-        self._verification_started = None
-        self._ready_probe_start = None
-        self._guarded_plan_builder = None
-        self._guarded_retreat_distance_m = None
-        self._guarded_force_threshold_n = None
-        self._guarded_cartesian_path = False
-        self._next_probe_cartesian_path = False
-        self._pending_moveit_plan_builder = None
-        self._pending_moveit_cartesian_path = False
-        self._moveit_cartesian_plan = None
-        self._surface_orientation_sensor_id = None
-        self._surface_orientation_speed = None
-        self._surface_orientation_force_threshold_n = None
-        self._surface_orientation_corrections = 0
-        self._surface_orientation_verify_not_before = None
-        self._surface_orientation_verify_deadline = None
-        self._surface_orientation_verify_estimate = None
-        self._arm_stop_service_future = None
-        self._arm_stop_service_started = None
-
+    def _configure_contact_guard(
+        self,
+        config,
+        arm_state_source,
+        force_baseline_sampler,
+        force_contact_policy,
+        force_stale_timeout_sec,
+        hard_force_delta_limit_n,
+        stop_confirmation_linear_velocity_threshold_mps,
+        stop_confirmation_angular_velocity_threshold_rad_s,
+        stop_confirmation_stable_duration_sec,
+        stop_confirmation_timeout_sec,
+        contact_retreat_distance_m,
+        contact_retreat_speed_mps,
+        monotonic_clock,
+    ):
+        guard_settings = {
+            "force_stale_timeout_sec": config.get(
+                'contact.force_stale_timeout_sec',
+                force_stale_timeout_sec,
+            ),
+            "hard_force_delta_limit_n": config.get(
+                'contact.hard_force_delta_limit_n',
+                hard_force_delta_limit_n,
+            ),
+            "stop_confirmation_linear_velocity_threshold_mps": config.get(
+                'contact.stop_confirmation.linear_velocity_threshold_mps',
+                stop_confirmation_linear_velocity_threshold_mps,
+            ),
+            "stop_confirmation_angular_velocity_threshold_rad_s": config.get(
+                'contact.stop_confirmation.angular_velocity_threshold_rad_s',
+                stop_confirmation_angular_velocity_threshold_rad_s,
+            ),
+            "stop_confirmation_stable_duration_sec": config.get(
+                'contact.stop_confirmation.stable_duration_sec',
+                stop_confirmation_stable_duration_sec,
+            ),
+            "stop_confirmation_timeout_sec": config.get(
+                'contact.stop_confirmation.timeout_sec',
+                stop_confirmation_timeout_sec,
+            ),
+            "contact_retreat_distance_m": config.get(
+                'contact.retreat_distance_m',
+                contact_retreat_distance_m,
+            ),
+            "contact_retreat_speed_mps": config.get(
+                'contact.retreat_speed_mps',
+                contact_retreat_speed_mps,
+            ),
+        }
         self.guarded_probe_execution = None
         self._guarded_probe_monitor = None
         if (
@@ -313,9 +358,7 @@ class ArmMovementExecutor(MovementExecutor):
                 arm_state_source=arm_state_source,
                 force_baseline_sampler=force_baseline_sampler,
                 force_contact_policy=force_contact_policy,
-                contact_evidence_analyzer=(
-                    self.contact_evidence_analyzer
-                ),
+                contact_evidence_analyzer=self.contact_evidence_analyzer,
                 start_motion=self._continue_probe,
                 poll_goal=self._guard_poll_goal,
                 cancel_goal=self._guard_cancel_goal,
@@ -326,29 +369,31 @@ class ArmMovementExecutor(MovementExecutor):
                 default_angular_speed_rad_s=(
                     self.speed_policy.default_speed.angular_speed_rad_s
                 ),
-                force_stale_timeout_sec=force_stale_timeout_sec,
-                hard_force_delta_limit_n=hard_force_delta_limit_n,
+                force_stale_timeout_sec=guard_settings["force_stale_timeout_sec"],
+                hard_force_delta_limit_n=guard_settings["hard_force_delta_limit_n"],
                 stop_confirmation_linear_velocity_threshold_mps=(
-                    stop_confirmation_linear_velocity_threshold_mps
+                    guard_settings["stop_confirmation_linear_velocity_threshold_mps"]
                 ),
                 stop_confirmation_angular_velocity_threshold_rad_s=(
-                    stop_confirmation_angular_velocity_threshold_rad_s
+                    guard_settings["stop_confirmation_angular_velocity_threshold_rad_s"]
                 ),
                 stop_confirmation_stable_duration_sec=(
-                    stop_confirmation_stable_duration_sec
+                    guard_settings["stop_confirmation_stable_duration_sec"]
                 ),
                 stop_confirmation_timeout_sec=(
-                    stop_confirmation_timeout_sec
+                    guard_settings["stop_confirmation_timeout_sec"]
                 ),
-                retreat_distance_m=contact_retreat_distance_m,
-                retreat_speed_mps=contact_retreat_speed_mps,
+                retreat_distance_m=guard_settings["contact_retreat_distance_m"],
+                retreat_speed_mps=guard_settings["contact_retreat_speed_mps"],
                 monotonic_clock=monotonic_clock,
                 execution_lock=self._execution_lock,
             )
-            node = getattr(arm_state_source, "node", None)
+            node = getattr(arm_state_source, 'node', None)
             if node is not None:
                 self._guarded_probe_monitor = GuardedProbeMonitor(
-                    node, arm_state_source, self.guarded_probe_execution,
+                    node,
+                    arm_state_source,
+                    self.guarded_probe_execution,
                 )
 
     def relative(
@@ -486,57 +531,15 @@ class ArmMovementExecutor(MovementExecutor):
         sensor_id: str,
         receipt_not_before: float,
     ):
-        estimate = None
-        deadline = None
-        last_error = ""
-
-        def resolve_surface_target():
-            nonlocal estimate, last_error, deadline
-            if deadline is None:
-                deadline = self._monotonic_clock() + SURFACE_ORIENTATION_SENSING_TIMEOUT_SEC
-            if estimate is None:
-                try:
-                    estimate = self.surface_source.surface_normal(
-                        receipt_not_before=receipt_not_before,
-                    )
-                    # TF gets its own budget after a fresh observation arrives.
-                    deadline = self._monotonic_clock() + SURFACE_ORIENTATION_TIMEOUT_SEC
-                except ValueError as exception:
-                    last_error = (
-                        "Waiting for a fresh reliable surface normal: "
-                        f"{exception}"
-                    )
-                    if self._monotonic_clock() >= deadline:
-                        raise RuntimeError(
-                            "Surface orientation sensing timed out after "
-                            f"{SURFACE_ORIENTATION_SENSING_TIMEOUT_SEC:.1f}s; "
-                            f"{last_error}"
-                        ) from exception
-                    raise MovementGeometryUnavailable(
-                        last_error
-                    ) from exception
-            try:
-                return self._resolve_surface_orientation_target(
-                    sensor_id,
-                    estimate,
-                )
-            except TransformException as exception:
-                last_error = (
-                    "Waiting for surface orientation capture-time TF "
-                    f"at {estimate.stamp_nanoseconds / 1e9:.9f}: "
-                    f"{exception}"
-                )
-                if self._monotonic_clock() >= deadline:
-                    raise RuntimeError(
-                        "Surface orientation TF synchronization timed out "
-                        f"after {SURFACE_ORIENTATION_TIMEOUT_SEC:.1f}s; "
-                        f"{last_error}"
-                    ) from exception
-                raise MovementGeometryUnavailable(
-                    last_error
-                ) from exception
-
-        return resolve_surface_target
+        return SurfaceOrientationTarget(
+            surface_source=self.surface_source,
+            resolve_target=self._resolve_surface_orientation_target,
+            sensor_id=sensor_id,
+            receipt_not_before=receipt_not_before,
+            clock=self._monotonic_clock,
+            sensing_timeout_sec=SURFACE_ORIENTATION_SENSING_TIMEOUT_SEC,
+            tf_timeout_sec=SURFACE_ORIENTATION_TIMEOUT_SEC,
+        )
 
     def orient_to_tag(
         self,
@@ -583,33 +586,10 @@ class ArmMovementExecutor(MovementExecutor):
         with self._execution_lock:
             if self.active:
                 return self._busy_update()
-            if self.guarded_probe_execution is None:
-                return ArmMovementUpdate(
-                    ArmMovementOutcome.EXECUTION_ERROR,
-                    "Guarded probe movement is not configured",
-                )
-            if self.force_contact_policy is None:
-                return ArmMovementUpdate(
-                    ArmMovementOutcome.EXECUTION_ERROR,
-                    "Guarded probe movement requires a force contact policy",
-                )
-            if cartesian_path and self.moveit_arm_planner is None:
-                return ArmMovementUpdate(
-                    ArmMovementOutcome.EXECUTION_ERROR,
-                    "Cartesian guarded probe movement requires MoveIt planning",
-                )
-
-            if callable(probe_target):
-                if str(motion_sensor_id).strip():
-                    raise ValueError(
-                        "Guarded probe target builders must resolve their "
-                        "own motion sensor ID"
-                    )
-                target_builder = probe_target
-            else:
-                target = deepcopy(probe_target)
-                sensor_id = str(motion_sensor_id).strip()
-                target_builder = lambda: (target, sensor_id)
+            error = self._guarded_probe_precondition_error(cartesian_path)
+            if error is not None:
+                return error
+            target_builder = self._probe_target_builder(probe_target, motion_sensor_id)
 
             self._guarded_retreat_distance_m = retreat_distance_m
             self._guarded_force_threshold_n = force_threshold_n
@@ -621,6 +601,41 @@ class ArmMovementExecutor(MovementExecutor):
                 )
             )
             return self.ready_probe(self._begin_guarded_probe)
+
+    def _guarded_probe_precondition_error(self, cartesian_path):
+        if self.guarded_probe_execution is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Guarded probe movement is not configured",
+            )
+        if self.force_contact_policy is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Guarded probe movement requires a force contact policy",
+            )
+        if cartesian_path and self.moveit_arm_planner is None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Cartesian guarded probe movement requires MoveIt planning",
+            )
+
+        return None
+
+    @staticmethod
+    def _probe_target_builder(probe_target, motion_sensor_id):
+        if callable(probe_target):
+            if str(motion_sensor_id).strip():
+                raise ValueError(
+                    "Guarded probe target builders must resolve their "
+                    "own motion sensor ID"
+                )
+            target_builder = probe_target
+        else:
+            target = deepcopy(probe_target)
+            sensor_id = str(motion_sensor_id).strip()
+            target_builder = lambda: (target, sensor_id)
+
+        return target_builder
 
     def ready_probe(
         self,
@@ -739,17 +754,18 @@ class ArmMovementExecutor(MovementExecutor):
             update = planner.start_cartesian(target_hand)
         else:
             update = planner.start(target_hand)
+        return self._handle_moveit_planning_start(update, plan)
+
+    def _handle_moveit_planning_start(self, update, plan):
+        self._pending_moveit_plan_builder = None
+        self._pending_moveit_cartesian_path = False
         if update.outcome is MoveItPlanOutcome.RUNNING:
-            self._pending_moveit_plan_builder = None
-            self._pending_moveit_cartesian_path = False
             self._moveit_cartesian_plan = plan
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING,
                 update.detail,
             )
 
-        self._pending_moveit_plan_builder = None
-        self._pending_moveit_cartesian_path = False
         return self._finish(
             self._moveit_failure_outcome(update.outcome),
             update.detail,
@@ -876,22 +892,25 @@ class ArmMovementExecutor(MovementExecutor):
             if self._operation == _ArmOperation.READY_WAIT:
                 return self._advance_ready_probe()
 
-            if self._send_goal_future is None:
-                if self._pending_goal_builder is not None:
-                    return super().poll()
-                if self._operation in (
-                    _ArmOperation.PREPARE,
-                    _ArmOperation.READY_PREPARE,
-                ):
-                    return self._advance_prepare_start()
-                if self._operation == _ArmOperation.STOW:
-                    return self._advance_stow_start()
+            return self._poll_arm_goal()
+
+    def _poll_arm_goal(self):
+        if self._send_goal_future is None:
+            if self._pending_goal_builder is not None:
                 return super().poll()
+            if self._operation in (
+                _ArmOperation.PREPARE,
+                _ArmOperation.READY_PREPARE,
+            ):
+                return self._advance_prepare_start()
+            if self._operation == _ArmOperation.STOW:
+                return self._advance_stow_start()
+            return super().poll()
 
-            if self._goal_handle is None:
-                return self._poll_goal_response()
+        if self._goal_handle is None:
+            return self._poll_goal_response()
 
-            return self._poll_result()
+        return self._poll_result()
 
     def cancel(self) -> None:
         with self._execution_lock:
@@ -1131,21 +1150,28 @@ class ArmMovementExecutor(MovementExecutor):
                 estimate,
             )
         except (ValueError, TransformException) as exception:
-            if self._monotonic_clock() < deadline:
-                return ArmMovementUpdate(
-                    ArmMovementOutcome.RUNNING,
-                    "Waiting for fresh post-orientation surface "
-                    f"verification: {exception}",
-                )
-            return super()._finish(
-                ArmMovementOutcome.EXECUTION_ERROR,
-                "Surface orientation verification timed out while waiting for "
-                + ("capture-time TF" if getattr(
-                    self, "_surface_orientation_verify_estimate", None,
-                ) is not None else "fresh depth")
-                + f": {exception}",
-            )
+            return self._surface_orientation_verification_wait(exception, deadline)
 
+        return self._handle_surface_orientation_error(sensor_id, estimate, error_rad)
+
+    def _surface_orientation_verification_wait(self, exception, deadline):
+        if self._monotonic_clock() < deadline:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                "Waiting for fresh post-orientation surface "
+                f"verification: {exception}",
+            )
+        return super()._finish(
+            ArmMovementOutcome.EXECUTION_ERROR,
+            "Surface orientation verification timed out while waiting for "
+            + ("capture-time TF" if getattr(
+                self, "_surface_orientation_verify_estimate", None,
+            ) is not None else "fresh depth")
+            + f": {exception}",
+        )
+
+
+    def _handle_surface_orientation_error(self, sensor_id, estimate, error_rad):
         error_deg = math.degrees(error_rad)
         if error_rad <= SURFACE_ORIENTATION_MAX_ERROR_RAD:
             return super()._finish(
@@ -1337,92 +1363,8 @@ class ArmMovementExecutor(MovementExecutor):
         return self._finish(outcome, detail)
 
     def _arm_failure_result(self, result):
-        command = getattr(getattr(result, "result", None), "command", None)
-        if (
-            getattr(command, "command_choice", None) == 0
-            and not getattr(result, "message", "")
-            and not getattr(result, "detail", "")
-        ):
-            return (
-                ArmMovementOutcome.MOTION_FAILED,
-                "Spot RobotCommand failed without feedback or an error "
-                "message; check spot_driver logs for the underlying failure",
-            )
-        feedback = self._cartesian_feedback(result)
-        status = getattr(feedback, "status", None)
-        value = getattr(status, "value", None)
+        return arm_failure_result(result, self._command_failure_detail)
 
-        if self._status_matches(
-            status,
-            value,
-            "STATUS_TRAJECTORY_STALLED",
-        ):
-            return (
-                ArmMovementOutcome.TRAJECTORY_STALLED,
-                self._cartesian_failure_detail(
-                    "Cartesian arm trajectory stalled",
-                    result,
-                ),
-            )
-
-        if self._status_matches(
-            status,
-            value,
-            "STATUS_TRAJECTORY_CANCELLED",
-        ):
-            return (
-                ArmMovementOutcome.TRAJECTORY_CANCELLED,
-                self._cartesian_failure_detail(
-                    "Cartesian arm trajectory cancelled",
-                    result,
-                ),
-            )
-
-        return (
-            ArmMovementOutcome.MOTION_FAILED,
-            self._command_failure_detail(result),
-        )
-
-    @staticmethod
-    def _cartesian_failure_detail(prefix: str, result) -> str:
-        detail = str(
-            getattr(result, "message", "")
-            or getattr(result, "detail", "")
-        ).strip()
-        if not detail:
-            return prefix
-        return f"{prefix}; {detail}"
-
-    @staticmethod
-    def _status_matches(status, value, constant_name: str) -> bool:
-        if status is None or value is None:
-            return False
-        expected = getattr(status, constant_name, None)
-        return expected is not None and value == expected
-
-    @staticmethod
-    def _cartesian_feedback(result):
-        command_feedback = getattr(result, "result", None)
-        command = getattr(command_feedback, "command", None)
-        synchronized = getattr(command, "synchronized_feedback", None)
-        arm = getattr(synchronized, "arm_command_feedback", None)
-        feedback = getattr(arm, "feedback", None)
-        if feedback is None:
-            return None
-
-        cartesian_choice = getattr(
-            feedback,
-            "FEEDBACK_ARM_CARTESIAN_FEEDBACK_SET",
-            None,
-        )
-        feedback_choice = getattr(feedback, "feedback_choice", None)
-        if (
-            cartesian_choice is not None
-            and feedback_choice != cartesian_choice
-        ):
-            return None
-
-        return getattr(feedback, "arm_cartesian_feedback", None)
 
     def _reset_operation(self) -> None:
         with self._execution_lock:
@@ -1432,22 +1374,25 @@ class ArmMovementExecutor(MovementExecutor):
             super()._reset_operation()
             if hasattr(self, "_base_result_timeout_sec"):
                 self.result_timeout_sec = self._base_result_timeout_sec
-            self._operation = None
-            self._operation_speed = None
-            self._state_wait_started = None
-            self._tf_wait_started = None
-            self._verification_started = None
-            self._ready_probe_start = None
-            self._guarded_plan_builder = None
-            self._guarded_retreat_distance_m = None
-            self._guarded_force_threshold_n = None
-            self._guarded_cartesian_path = False
-            self._next_probe_cartesian_path = False
+            self._clear_arm_operation_state()
             self._pending_moveit_cartesian_path = False
             self._clear_surface_orientation_state()
             self._reset_arm_stop_service_lifecycle(cancel=True)
             if self.guarded_probe_execution is not None:
                 self.guarded_probe_execution.reset()
+
+    def _clear_arm_operation_state(self) -> None:
+        self._operation = None
+        self._operation_speed = None
+        self._state_wait_started = None
+        self._tf_wait_started = None
+        self._verification_started = None
+        self._ready_probe_start = None
+        self._guarded_plan_builder = None
+        self._guarded_retreat_distance_m = None
+        self._guarded_force_threshold_n = None
+        self._guarded_cartesian_path = False
+        self._next_probe_cartesian_path = False
 
     def _clear_surface_orientation_state(self) -> None:
         self._surface_orientation_sensor_id = None
@@ -1625,19 +1570,7 @@ class ArmMovementExecutor(MovementExecutor):
         return ArmMovementOutcome.ARM_STATE_UNKNOWN
 
     def _build_arm_stop_request(self) -> RobotCommandService.Request:
-        arm_stop = arm_command_pb2.ArmStopCommand.Request()
-        arm_command = arm_command_pb2.ArmCommand.Request(
-            arm_stop_command=arm_stop
-        )
-        synchronized = synchronized_command_pb2.SynchronizedCommand.Request(
-            arm_command=arm_command
-        )
-        command = robot_command_pb2.RobotCommand(
-            synchronized_command=synchronized
-        )
-        request = RobotCommandService.Request()
-        convert(command, request.command)
-        return request
+        return build_arm_stop_request()
 
     @staticmethod
     def _ready_forward_distance(value) -> float:
@@ -1649,168 +1582,18 @@ class ArmMovementExecutor(MovementExecutor):
         return value
 
     def _build_stow_goal(self) -> RobotCommand.Goal:
-        stow_command = RobotCommandBuilder.arm_stow_command()
-        goal = RobotCommand.Goal()
-        convert(stow_command, goal.command)
-        return goal
+        return build_stow_goal()
 
-    def _build_moveit_joint_goal(
-        self,
-        trajectory,
-        minimum_duration_sec=None,
-    ) -> RobotCommand.Goal:
-        names = tuple(trajectory.joint_names)
-        if len(names) != len(ARM_JOINT_NAMES) or set(names) != set(
-            ARM_JOINT_NAMES
-        ):
-            raise ValueError(
-                "MoveIt trajectory must contain exactly the six Spot arm joints"
-            )
-
-        points = tuple(trajectory.points)
-        if not points:
-            raise ValueError("MoveIt trajectory contains no points")
-
-        joint_indices = [
-            names.index(name)
-            for name in ARM_JOINT_NAMES
-        ]
-        joint_positions = []
-        times = []
-        joint_velocities = []
-        use_velocities = None
-
-        for index, point in enumerate(points):
-            if len(point.positions) != len(names):
-                raise ValueError(
-                    f"MoveIt trajectory point {index} has "
-                    f"{len(point.positions)} positions for {len(names)} joints"
-                )
-
-            joint_positions.append([
-                float(point.positions[joint_index])
-                for joint_index in joint_indices
-            ])
-            times.append(
-                float(point.time_from_start.sec)
-                + float(point.time_from_start.nanosec) * 1e-9
-            )
-
-            velocity_count = len(point.velocities)
-            point_has_velocities = velocity_count > 0
-            if point_has_velocities and velocity_count != len(names):
-                raise ValueError(
-                    f"MoveIt trajectory point {index} has "
-                    f"{velocity_count} velocities for {len(names)} joints"
-                )
-            if use_velocities is None:
-                use_velocities = point_has_velocities
-            elif use_velocities != point_has_velocities:
-                raise ValueError(
-                    "MoveIt trajectory must provide velocities for every "
-                    "point or for none"
-                )
-            if point_has_velocities:
-                joint_velocities.append([
-                    float(point.velocities[joint_index])
-                    for joint_index in joint_indices
-                ])
-
-        if any(not math.isfinite(value) or value < 0.0 for value in times):
-            raise ValueError(
-                "MoveIt trajectory times must be finite and nonnegative"
-            )
-        if any(right <= left for left, right in zip(times, times[1:])):
-            raise ValueError(
-                "MoveIt trajectory times must be strictly increasing"
-            )
-
-        moveit_duration_sec = times[-1]
-        requested_duration_sec = 0.0
-        if minimum_duration_sec is not None:
-            requested_duration_sec = float(minimum_duration_sec)
-            if (
-                not math.isfinite(requested_duration_sec)
-                or requested_duration_sec <= 0.0
-            ):
-                raise ValueError(
-                    "Requested arm movement duration must be positive and finite"
-                )
-
-        target_duration_sec = max(
-            moveit_duration_sec,
-            requested_duration_sec,
-        )
-        time_scale = 1.0
-        if (
-            moveit_duration_sec > 1e-9
-            and target_duration_sec > moveit_duration_sec
-        ):
-            time_scale = target_duration_sec / moveit_duration_sec
-            times = [
-                value * time_scale
-                for value in times
-            ]
-            if use_velocities:
-                joint_velocities = [
-                    [
-                        value / time_scale
-                        for value in velocities
-                    ]
-                    for velocities in joint_velocities
-                ]
-
-        start_delay = max(0.0, 0.25 - times[0])
-        times = [value + start_delay for value in times]
-        execution_duration_sec = times[-1]
+    def _build_moveit_joint_goal(self, trajectory, minimum_duration_sec=None):
+        goal, duration = build_moveit_joint_goal(trajectory, minimum_duration_sec)
         self.result_timeout_sec = max(
             self._base_result_timeout_sec,
-            execution_duration_sec + self.moveit_result_timeout_margin_sec,
+            duration + self.moveit_result_timeout_margin_sec,
         )
-
-        command = RobotCommandBuilder.arm_joint_move_helper(
-            joint_positions,
-            times,
-            joint_velocities=(
-                joint_velocities
-                if use_velocities
-                else None
-            ),
-        )
-        goal = RobotCommand.Goal()
-        convert(command, goal.command)
         return goal
 
-    def _build_pose_goal(
-        self,
-        target: PoseStamped,
-        duration_sec: float,
-    ) -> RobotCommand.Goal:
-        duration = float(duration_sec)
-        if not math.isfinite(duration) or duration <= 0.0:
-            raise ValueError(
-                "Arm movement duration must be positive and finite"
-            )
-
-        target_frame = target.header.frame_id.strip()
-        if not target_frame:
-            raise ValueError("Arm pose target frame must not be empty")
-
-        pose = target.pose
-        command = RobotCommandBuilder.arm_pose_command(
-            pose.position.x,
-            pose.position.y,
-            pose.position.z,
-            pose.orientation.w,
-            pose.orientation.x,
-            pose.orientation.y,
-            pose.orientation.z,
-            namespace_with(self.robot_name, target_frame),
-            duration,
-        )
-        goal = RobotCommand.Goal()
-        convert(command, goal.command)
-        return goal
+    def _build_pose_goal(self, target: PoseStamped, duration_sec: float):
+        return build_pose_goal(target, duration_sec, self.robot_name)
 
 
 __all__ = [

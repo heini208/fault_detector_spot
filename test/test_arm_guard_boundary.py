@@ -141,12 +141,14 @@ def test_force_threshold_policy_belongs_to_guard_not_motion_planner():
     assert "threshold_for(" in guard
 
 
-def test_executor_keeps_only_robot_command_translation():
+def test_command_builder_owns_robot_command_translation():
     executor = _source(EXECUTOR)
 
-    assert "RobotCommandBuilder.arm_pose_command" in executor
-    assert "RobotCommandBuilder.arm_stow_command" in executor
-    assert "ArmStopCommand.Request" in executor
+    builder = _source(EXECUTOR.with_name("arm_command_builder.py"))
+    assert "RobotCommandBuilder.arm_pose_command" in builder
+    assert "RobotCommandBuilder.arm_stow_command" in builder
+    assert "ArmStopCommand.Request" in builder
+    assert "RobotCommandBuilder" not in executor
     assert "tf2_geometry_msgs" not in executor
     assert "MovementGeometryResolver" not in executor
 

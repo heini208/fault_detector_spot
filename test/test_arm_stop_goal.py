@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import fault_detector_spot.manipulation.arm_movement_executor as executor_module
+import fault_detector_spot.manipulation.arm_command_builder as command_builder_module
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
 )
@@ -50,7 +51,7 @@ def test_arm_stop_request_converts_native_arm_stop_command(monkeypatch):
     def capture(source, _target):
         captured["source"] = source
 
-    monkeypatch.setattr(executor_module, "convert", capture)
+    monkeypatch.setattr(command_builder_module, "convert", capture)
     executor = ArmMovementExecutor(object())
 
     executor._build_arm_stop_request()

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import fault_detector_spot.manipulation.arm_movement_executor as executor_module
+import fault_detector_spot.manipulation.arm_command_builder as command_builder_module
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
     ArmMovementOutcome,
@@ -68,12 +69,12 @@ def capture_joint_move(monkeypatch):
         return object()
 
     monkeypatch.setattr(
-        executor_module.RobotCommandBuilder,
+        command_builder_module.RobotCommandBuilder,
         "arm_joint_move_helper",
         build,
     )
     monkeypatch.setattr(
-        executor_module,
+        command_builder_module,
         "convert",
         lambda source, target: None,
     )

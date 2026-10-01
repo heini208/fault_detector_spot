@@ -8,6 +8,7 @@ import pytest
 from geometry_msgs.msg import PoseStamped, TransformStamped
 
 import fault_detector_spot.manipulation.arm_movement_executor as executor_module
+import fault_detector_spot.manipulation.arm_command_builder as command_builder_module
 from fault_detector_spot.manipulation.arm_motion_speed import (
     ArmMotionSpeed,
     ArmMotionSpeedPolicy,
@@ -221,12 +222,12 @@ def capture_builder(monkeypatch):
         return object()
 
     monkeypatch.setattr(
-        executor_module.RobotCommandBuilder,
+        command_builder_module.RobotCommandBuilder,
         "arm_pose_command",
         build,
     )
     monkeypatch.setattr(
-        executor_module,
+        command_builder_module,
         "convert",
         lambda source, target: None,
     )
@@ -979,12 +980,12 @@ def test_stow_uses_native_command_and_verifies_stowed(monkeypatch):
         return object()
 
     monkeypatch.setattr(
-        executor_module.RobotCommandBuilder,
+        command_builder_module.RobotCommandBuilder,
         "arm_stow_command",
         build_stow,
     )
     monkeypatch.setattr(
-        executor_module,
+        command_builder_module,
         "convert",
         lambda source, target: None,
     )

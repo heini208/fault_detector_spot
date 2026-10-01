@@ -7,6 +7,7 @@ from geometry_msgs.msg import TransformStamped
 
 from fault_detector_spot.manipulation import (
     arm_movement_executor as executor_module,
+    arm_command_builder as command_builder_module,
 )
 from fault_detector_spot.manipulation.arm_motion_parameters import (
     ArmMotionParameters,
@@ -24,11 +25,11 @@ def test_ready_arm_applies_yaml_forward_and_lift_offsets(monkeypatch):
     current.transform.rotation.w = 1.0
     captured = []
     monkeypatch.setattr(
-        executor_module.RobotCommandBuilder,
+        command_builder_module.RobotCommandBuilder,
         "arm_pose_command",
         lambda *args: captured.append(args),
     )
-    monkeypatch.setattr(executor_module, "convert", lambda *_: None)
+    monkeypatch.setattr(command_builder_module, "convert", lambda *_: None)
     executor = executor_module.ArmMovementExecutor(
         SimpleNamespace(lookup_a_tform_b=lambda *_args, **_kwargs: current),
         arm_state_source=SimpleNamespace(

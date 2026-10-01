@@ -328,13 +328,14 @@ def test_executor_owns_surface_orientation_calculation_and_guarded_move():
 
     assert "self.guarded_probe(" in start
     assert "receipt_not_before=started_at" in start
-    assert "self.surface_source.surface_normal(" in acquire
+    assert "SurfaceOrientationTarget(" in acquire
     assert "receipt_not_before=receipt_not_before" in acquire
     assert "surface_aligned_probe_orientation(" in resolve
     assert "sensor_probe_frame(sensor_id)" in resolve
     assert "receipt_not_before=receipt_not_before" in verify
-    assert "SURFACE_ORIENTATION_MAX_ERROR_RAD" in verify
-    assert "self._begin_guarded_probe()" in verify
+    correction = inspect.getsource(ArmMovementExecutor._handle_surface_orientation_error)
+    assert "SURFACE_ORIENTATION_MAX_ERROR_RAD" in correction
+    assert "self._begin_guarded_probe()" in correction
 
 
 def test_ui_button_dispatches_orient_to_surface_intent():

@@ -50,7 +50,7 @@
     # Vision-frame hand velocity includes idle body sway; retain the stable-time gate.
     arm.contact.stop_confirmation.linear_velocity_threshold_mps: 0.015
     arm.contact.stop_confirmation.angular_velocity_threshold_rad_s: 0.05
-    arm.contact.stop_confirmation.stable_duration_sec: 0.40
+    arm.contact.stop_confirmation.stable_duration_sec: 0.30
     arm.contact.stop_confirmation.timeout_sec: 3.0
 
     arm.contact.retreat_distance_m: 0.010
