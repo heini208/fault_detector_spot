@@ -109,6 +109,28 @@ def test_workspace_uses_entry_panel_and_single_dialog_preview(
     assert not hasattr(controls, "save_probe_point_button")
 
 
+def test_base_position_dialog_uses_routine_setup_defaults(
+    application,
+    tmp_path,
+):
+    ui = FakeUI(tmp_path)
+    ui.visible_tags = {7: object()}
+    ui.available_frames = ["body", "Tag_7"]
+    controls = FinalizingInspectionControls(ui)
+    state = ProbeSetupState()
+    state.selected_object_id = "motor"
+    state.selected_routine_id = "scan"
+    state.selected_reference_tag_id = 7
+    controls._probe_setup_state = state
+
+    assert controls.show_base_position_dialog()
+    popup = controls.base_position_movement_controls
+
+    assert popup.walking_profile_dropdown.currentData() == "precision"
+    assert popup.frames_dropdown.currentText() == "Tag_7"
+    assert popup.offset_fields["X"].text() == "-1.00"
+
+
 def test_base_position_dialog_follows_live_tag_and_frame_updates(
     application,
     tmp_path,

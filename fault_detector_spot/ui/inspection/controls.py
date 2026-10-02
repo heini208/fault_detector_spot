@@ -735,11 +735,37 @@ class InspectionControls(UIControlHelper):
             self._make_base_position_dialog()
         self.update_base_position_tags_dropdown()
         self.update_base_position_frames_dropdown()
+        self._apply_base_position_movement_defaults()
         self.save_base_position_button.setEnabled(True)
         self.base_position_dialog.show()
         self.base_position_dialog.raise_()
         self.base_position_dialog.activateWindow()
         return True
+
+    def _apply_base_position_movement_defaults(self):
+        controls = self.base_position_movement_controls
+        state = self._probe_setup_state
+        if controls is None or state is None:
+            return
+
+        precision_index = (
+            controls.walking_profile_dropdown.findData("precision")
+        )
+        if precision_index >= 0:
+            controls.walking_profile_dropdown.setCurrentIndex(
+                precision_index
+            )
+
+        controls.offset_fields["X"].setText("-1.00")
+
+        if state.selected_reference_tag_id < 0:
+            return
+        tag_frame = f"Tag_{state.selected_reference_tag_id}"
+        frame_index = controls.frames_dropdown.findText(tag_frame)
+        if frame_index < 0:
+            controls.frames_dropdown.addItem(tag_frame)
+            frame_index = controls.frames_dropdown.findText(tag_frame)
+        controls.frames_dropdown.setCurrentIndex(frame_index)
 
     def update_base_position_tags_dropdown(self):
         controls = self.base_position_movement_controls
