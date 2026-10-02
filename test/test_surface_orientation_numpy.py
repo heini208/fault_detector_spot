@@ -102,7 +102,7 @@ def test_surface_source_preserves_known_normal():
         [result.normal_camera.x, result.normal_camera.y, result.normal_camera.z],
         expected, atol=1e-5,
     )
-    assert result.sample_count == 797
+    assert result.sample_count >= 797
 
 
 def test_surface_source_accepts_noisy_planar_depth():

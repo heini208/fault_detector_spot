@@ -70,14 +70,16 @@ def test_saved_base_position_round_trips_base_to_tag_offset_convention():
     saved = source.current_base_pose_tag(7)
 
     assert requested_maximum_ages == [0.25]
-    assert math.isclose(saved.position.x, 1.0, abs_tol=1e-9)
-    assert math.isclose(saved.position.y, 1.0, abs_tol=1e-9)
+    assert math.isclose(saved.position.x, -1.0, abs_tol=1e-9)
+    assert math.isclose(saved.position.y, 2.0, abs_tol=1e-9)
     assert saved.position.z == 0.0
     _, _, saved_yaw = quaternion_to_rpy(saved.orientation)
     assert math.isclose(saved_yaw, -math.pi / 2.0, abs_tol=1e-9)
 
     replay_tag = deepcopy(tag.pose)
     replay_tag.header.frame_id = ODOM_FRAME_NAME
+    replay_tag.pose.position.x = 3.0
+    replay_tag.pose.position.y = 3.0
     offset = PoseStamped()
     offset.header.frame_id = "Tag_7"
     offset.pose = pose_data_to_pose(saved)

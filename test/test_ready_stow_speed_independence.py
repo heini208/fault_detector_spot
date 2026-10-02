@@ -19,7 +19,10 @@ def test_ready_arm_has_dedicated_linear_speed():
     parameters = yaml.safe_load(config)["/**"]["ros__parameters"]
     ready_speed = parameters["arm.ready_linear_speed_mps"]
     assert math.isfinite(ready_speed) and ready_speed > 0.0
-    assert 'config.get("ready_linear_speed_mps")' in executor
+    assert (
+        "config.get('ready_linear_speed_mps')" in executor
+        or 'config.get("ready_linear_speed_mps")' in executor
+    )
     assert "speed if speed is not None else self.ready_speed" in executor
     assert "self._operation_speed = self.ready_speed" in executor
 
@@ -31,11 +34,18 @@ def test_stow_uses_native_spot_command_without_general_motion_speed():
         / "manipulation"
         / "arm_movement_executor.py"
     ).read_text(encoding="utf-8")
+    command_builder = (
+        ROOT
+        / "fault_detector_spot"
+        / "manipulation"
+        / "arm_command_builder.py"
+    ).read_text(encoding="utf-8")
 
     start = executor.index("    def _build_stow_goal")
     end = executor.index("    def _build_moveit_joint_goal", start)
     stow_builder = executor[start:end]
 
-    assert "RobotCommandBuilder.arm_stow_command()" in stow_builder
+    assert "return build_stow_goal()" in stow_builder
+    assert "RobotCommandBuilder.arm_stow_command()" in command_builder
     assert "motion.linear_speed_mps" not in stow_builder
     assert "ready_speed" not in stow_builder

@@ -1,14 +1,14 @@
 """Shared feedback-driven stand/sit button for manual movement tabs."""
 
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QPushButton
+from PyQt5.QtWidgets import QPushButton, QWidget
 from fault_detector_msgs.msg import OperationalIntent
 from fault_detector_spot.navigation.posture_state_source import PostureState
 
 
 class PostureToggle(QPushButton):
     def __init__(self, ui, source):
-        super().__init__(ui)
+        super().__init__(ui if isinstance(ui, QWidget) else None)
         self.ui = ui
         self.source = source
         self.clicked.connect(self._toggle)

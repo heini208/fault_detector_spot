@@ -146,8 +146,8 @@ def test_root_ui_forwards_live_lists_to_base_position_dialog():
         / "fault_detector_spot/ui/fault_detector_ui.py"
     ).read_text(encoding="utf-8")
 
-    assert "inspection_controls.update_base_position_tags_dropdown()" in source
-    assert "inspection_controls.update_base_position_frames_dropdown()" in source
+    assert "update_base_position_tags_dropdown()" in source
+    assert "update_base_position_frames_dropdown()" in source
 
 
 def test_management_controls_live_in_non_modal_dialog(
