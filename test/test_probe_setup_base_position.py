@@ -1,7 +1,12 @@
 """Tests for routine tag-relative base-position capture geometry."""
 
 import math
+from collections import deque
 from copy import deepcopy
+from threading import RLock
+from types import SimpleNamespace
+
+import pytest
 
 from bosdyn.client.frame_helpers import BODY_FRAME_NAME, ODOM_FRAME_NAME
 from builtin_interfaces.msg import Time
@@ -42,25 +47,29 @@ def test_saved_base_position_round_trips_base_to_tag_offset_convention():
     tag.pose.pose.orientation.w = orientation.w
 
     source = object.__new__(ProbeSetupMotionStateSource)
-    source.reference_tag = lambda _tag_id: tag
+    requested_maximum_ages = []
+
+    def reference_tag(_tag_id, maximum_age_sec):
+        requested_maximum_ages.append(maximum_age_sec)
+        return tag
+
+    source.reference_tag = reference_tag
 
     current_body = PoseData.identity()
     current_body.position.x = 1.0
     current_body.position.y = 2.0
 
     def lookup(target, source_frame, lookup_time=None):
+        assert lookup_time is None
         if target != ODOM_FRAME_NAME or source_frame != BODY_FRAME_NAME:
             return _unexpected_transform(target, source_frame)
-        return (
-            PoseData.identity()
-            if lookup_time is not None
-            else current_body
-        )
+        return current_body
 
     source._lookup_pose = lookup
 
     saved = source.current_base_pose_tag(7)
 
+    assert requested_maximum_ages == [0.25]
     assert math.isclose(saved.position.x, 1.0, abs_tol=1e-9)
     assert math.isclose(saved.position.y, 1.0, abs_tol=1e-9)
     assert saved.position.z == 0.0
@@ -90,6 +99,47 @@ def test_saved_base_position_round_trips_base_to_tag_offset_convention():
         goal.pose.orientation.w,
     )
     assert math.isclose(goal_yaw, 0.0, abs_tol=1e-9)
+
+
+def test_base_position_capture_rejects_stale_stable_tag():
+    source = object.__new__(ProbeSetupMotionStateSource)
+    source._lock = RLock()
+    source.node = SimpleNamespace(
+        get_clock=lambda: SimpleNamespace(
+            now=lambda: SimpleNamespace(
+                nanoseconds=int(10.50 * 1_000_000_000)
+            )
+        )
+    )
+    history = deque()
+    for stamp_seconds in (10.00, 10.10, 10.20):
+        tag = TagElement()
+        tag.id = 7
+        tag.pose.header.frame_id = BODY_FRAME_NAME
+        tag.pose.header.stamp.sec = int(stamp_seconds)
+        tag.pose.header.stamp.nanosec = int(
+            round(
+                (stamp_seconds - int(stamp_seconds))
+                * 1_000_000_000
+            )
+        )
+        tag.pose.pose.position.x = 1.0
+        tag.pose.pose.orientation.w = 1.0
+        stamp = tag.pose.header.stamp
+        history.append(
+            (
+                0.0,
+                (int(stamp.sec), int(stamp.nanosec)),
+                tag,
+            )
+        )
+    source._base_tag_histories = {7: history}
+
+    with pytest.raises(
+        ValueError,
+        match="Newest base-tag observation is stale",
+    ):
+        source.current_base_pose_tag(7)
 
 
 def _unexpected_transform(target, source):

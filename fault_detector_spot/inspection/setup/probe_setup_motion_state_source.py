@@ -51,6 +51,7 @@ from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
 
 
 BASE_TAG_MAXIMUM_AGE_SEC = 1.5
+BASE_POSITION_TAG_MAXIMUM_AGE_SEC = 0.25
 BASE_TAG_STABILIZATION_HISTORY_SEC = 4.0
 BASE_TAG_HISTORY_MAX_SAMPLES = 64
 BASE_TAG_MINIMUM_SPAN_SEC = 0.10
@@ -107,10 +108,17 @@ class ProbeSetupMotionStateSource:
             qos_profile_sensor_data,
         )
 
-    def reference_tag(self, tag_id: int):
+    def reference_tag(
+        self,
+        tag_id: int,
+        maximum_age_sec: float = BASE_TAG_MAXIMUM_AGE_SEC,
+    ):
         """Return one stabilized authoritative base-camera observation."""
         if isinstance(tag_id, bool) or not isinstance(tag_id, int):
             raise TypeError("Reference tag ID must be an integer")
+        maximum_age_sec = float(maximum_age_sec)
+        if not math.isfinite(maximum_age_sec) or maximum_age_sec <= 0.0:
+            raise ValueError("Maximum reference-tag age must be positive")
         with self._lock:
             history = tuple(self._base_tag_histories.get(tag_id, ()))
         samples = []
@@ -128,7 +136,7 @@ class ProbeSetupMotionStateSource:
         stable = stabilize_tag_pose(
             samples,
             now_seconds=self.node.get_clock().now().nanoseconds * 1e-9,
-            maximum_age_sec=BASE_TAG_MAXIMUM_AGE_SEC,
+            maximum_age_sec=maximum_age_sec,
             stabilization_window_sec=BASE_TAG_STABILIZATION_HISTORY_SEC,
             minimum_samples=3,
             minimum_span_sec=BASE_TAG_MINIMUM_SPAN_SEC,
@@ -207,26 +215,28 @@ class ProbeSetupMotionStateSource:
 
     def current_base_pose_tag(self, reference_tag_id: int) -> PoseData:
         """Return the current planar base pose in the routine tag frame."""
-        tag = self.reference_tag(reference_tag_id)
+        tag = self.reference_tag(
+            reference_tag_id,
+            maximum_age_sec=BASE_POSITION_TAG_MAXIMUM_AGE_SEC,
+        )
         source_frame = tag.pose.header.frame_id.strip()
         if not source_frame:
             raise ValueError("Reference tag frame must not be empty")
-        capture_time = Time.from_msg(tag.pose.header.stamp)
         source_to_tag = pose_to_pose_data(tag.pose.pose)
-        odom_to_source = (
-            PoseData.identity()
-            if source_frame == ODOM_FRAME_NAME
-            else self._lookup_pose(
-                ODOM_FRAME_NAME,
-                source_frame,
-                capture_time,
-            )
-        )
-        odom_to_tag = compose_poses(odom_to_source, source_to_tag)
         odom_to_body = self._lookup_pose(
             ODOM_FRAME_NAME,
             BODY_FRAME_NAME,
         )
+        if source_frame == ODOM_FRAME_NAME:
+            odom_to_source = PoseData.identity()
+        elif source_frame == BODY_FRAME_NAME:
+            odom_to_source = odom_to_body
+        else:
+            odom_to_source = self._lookup_pose(
+                ODOM_FRAME_NAME,
+                source_frame,
+            )
+        odom_to_tag = compose_poses(odom_to_source, source_to_tag)
         tag_normal = rotation_from_quaternion(
             odom_to_tag.orientation
         ).apply([0.0, 0.0, -1.0])
