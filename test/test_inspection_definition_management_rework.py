@@ -4,7 +4,12 @@ import os
 from types import SimpleNamespace
 
 import pytest
-from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
+from fault_detector_msgs.msg import (
+    ApplicationCommandState,
+    OperationalIntent,
+    ProbeSetupIntent,
+    ProbeSetupState,
+)
 from PyQt5.QtWidgets import QApplication, QLabel
 
 from fault_detector_spot.ui.inspection.finalizing_controls import (
@@ -30,10 +35,15 @@ class FakeUI:
         self.status_label = QLabel()
         self.probe_setup_client = FakeProbeSetupClient()
         self.requests = []
+        self.operations = []
 
     def execute_probe_setup(self, intent):
         self.requests.append(intent)
         return f"request-{len(self.requests)}"
+
+    def execute_operation(self, intent, context_id=""):
+        self.operations.append((intent, context_id))
+        return f"operation-{len(self.operations)}"
 
     def show_setup_unavailable(self, workflow):
         return False
@@ -48,6 +58,7 @@ def application():
 def controls(application):
     result = FinalizingInspectionControls(FakeUI())
     result.ui.requests.clear()
+    result.ui.operations.clear()
     result.show_warning = lambda title, message: None
     result.ask_question = lambda title, message: True
     return result
@@ -121,12 +132,36 @@ def test_base_position_status_and_save_submit_typed_intent(controls):
     assert controls.base_position_status_label.text() == (
         "Base position: configured"
     )
-    assert not controls.move_to_base_position_button.isEnabled()
+    assert controls.move_to_base_position_button.isEnabled()
 
     assert controls.handle_save_base_position() is True
     assert controls.ui.requests[-1].operation == (
         ProbeSetupIntent.OPERATION_SAVE_BASE_POSITION
     )
+
+
+def test_move_to_base_position_submits_selected_routine_intent(controls):
+    controls.apply_setup_state(
+        state("motor", "magnetic_scan", has_base_position=True)
+    )
+
+    assert controls.handle_move_to_base_position() is True
+    intent, context_id = controls.ui.operations[-1]
+    assert intent.intent == (
+        OperationalIntent.INTENT_MOVE_TO_ROUTINE_BASE_POSITION
+    )
+    assert intent.object_id == "motor"
+    assert intent.routine_id == "magnetic_scan"
+    assert context_id.startswith("routine-base-")
+    assert not controls.move_to_base_position_button.isEnabled()
+
+    result = ApplicationCommandState()
+    result.context_id = context_id
+    result.intent = intent.intent
+    result.state = ApplicationCommandState.STATE_SUCCEEDED
+    controls.handle_application_state(result)
+
+    assert controls.move_to_base_position_button.isEnabled()
 
 
 def test_deletion_submits_typed_intent_without_local_mutation(controls):

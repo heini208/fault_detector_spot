@@ -54,6 +54,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._abort_refinement_after_start = False
         self._saved_probe_scope = None
         self._saved_probe_operation_context = ""
+        self._base_position_operation_context = ""
         self._delete_probe_point_pending = ""
         self._probe_finalization_point_id = ""
         self._probe_finalization_scope = None
@@ -61,6 +62,9 @@ class FinalizingInspectionControls(InspectionControls):
         self._probe_point_entry_panel = None
         self._probe_point_overview_label = None
         super().__init__(ui)
+        self.move_to_base_position_button.clicked.connect(
+            self.handle_move_to_base_position
+        )
         self.alignment_step_status_label.setWordWrap(True)
         self.refinement_dialog.attach_workflow_controls()
         self._configure_probe_point_entry_ui()
@@ -334,6 +338,57 @@ class FinalizingInspectionControls(InspectionControls):
             self._refresh_saved_probe_actions()
             return False
         return True
+
+    def handle_move_to_base_position(self):
+        state = self._probe_setup_state
+        if state is None:
+            return False
+        self._apply_base_position_state(state)
+        if not self.move_to_base_position_button.isEnabled():
+            return False
+
+        intent = OperationalIntent()
+        intent.intent = (
+            OperationalIntent.INTENT_MOVE_TO_ROUTINE_BASE_POSITION
+        )
+        intent.object_id = state.selected_object_id
+        intent.routine_id = state.selected_routine_id
+        self._base_position_operation_context = (
+            "routine-base-" + uuid4().hex
+        )
+        self._apply_base_position_state(state)
+        request_id = self.ui.execute_operation(
+            intent,
+            context_id=self._base_position_operation_context,
+        )
+        if request_id is None:
+            self.handle_base_position_rejected(
+                "Movement could not be submitted."
+            )
+            return False
+        return True
+
+    def handle_base_position_rejected(self, _detail):
+        if not self._base_position_operation_context:
+            return
+        self._base_position_operation_context = ""
+        if self._probe_setup_state is not None:
+            self._apply_base_position_state(self._probe_setup_state)
+
+    def _handle_base_position_status(self, status):
+        if (
+            not self._base_position_operation_context
+            or status.context_id != self._base_position_operation_context
+        ):
+            return
+        if status.state in {
+            ApplicationCommandState.STATE_SUCCEEDED,
+            ApplicationCommandState.STATE_FAILED,
+            ApplicationCommandState.STATE_CANCELLED,
+        }:
+            self._base_position_operation_context = ""
+            if self._probe_setup_state is not None:
+                self._apply_base_position_state(self._probe_setup_state)
 
     def handle_saved_probe_motion(self, operation):
         self._refresh_saved_probe_actions()
@@ -1071,7 +1126,8 @@ class FinalizingInspectionControls(InspectionControls):
         return True
 
     def handle_application_state(self, status):
-        """Track saved-point movements and standalone close-surface tests."""
+        """Track inspection movements and standalone close-surface tests."""
+        self._handle_base_position_status(status)
         self._handle_saved_probe_status(status)
         if (
             not self._surface_test_active

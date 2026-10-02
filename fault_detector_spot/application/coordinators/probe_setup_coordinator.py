@@ -135,6 +135,20 @@ class ProbeSetupCoordinator:
             self.refinement_controller.motion_command_factory,
         )
 
+    def routine_base_position_command(self, intent):
+        """Resolve one saved routine base position into base-to-tag motion."""
+        from fault_detector_spot.inspection.execution.routine_base_motion import (
+            routine_base_position_command,
+        )
+        self.setup_coordinator.require_command_lane_idle(
+            "Robot command lane must be idle for routine base-position motion"
+        )
+        return routine_base_position_command(
+            intent,
+            self.object_repository,
+            self.motion_state_source,
+        )
+
     def open_context(self, client_id: str) -> ProbeSetupSnapshot:
         """Open one independent server-owned probe setup draft."""
         context = self.setup_coordinator.open_context(

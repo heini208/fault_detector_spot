@@ -780,6 +780,12 @@ class InspectionControls(UIControlHelper):
         )
         self.set_base_position_button.setEnabled(selected)
         configured = selected and bool(state.has_base_position)
+        base_move_active = bool(
+            getattr(self, "_base_position_operation_context", "")
+        )
+        self.move_to_base_position_button.setEnabled(
+            configured and not base_move_active
+        )
         self.base_position_status_label.setText(
             "Base position: configured"
             if configured

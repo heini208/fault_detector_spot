@@ -964,6 +964,7 @@ class Fault_Detector_UI(QWidget):
     def _process_application_error(self, detail):
         controls = getattr(self, "inspection_controls", None)
         if controls is not None:
+            controls.handle_base_position_rejected(detail)
             controls.handle_saved_probe_rejected(detail)
         self.status_label.setText(f"Operation rejected: {detail}")
 

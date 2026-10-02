@@ -27,7 +27,14 @@ SAVED_PROBE_INTENTS = frozenset({
     OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE,
 })
 
+ROUTINE_BASE_POSITION_INTENTS = frozenset({
+    OperationalIntent.INTENT_MOVE_TO_ROUTINE_BASE_POSITION,
+})
+
 _INTENT_COMMAND_IDS = {
+    OperationalIntent.INTENT_MOVE_TO_ROUTINE_BASE_POSITION: (
+        CommandID.MOVE_BASE_TO_TAG
+    ),
     OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH: CommandID.MOVE_ARM_TO_TAG,
     OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH: CommandID.MOVE_ARM_TO_TAG,
     OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE: CommandID.MOVE_CLOSE_TO_SURFACE,
@@ -216,6 +223,9 @@ def operational_intent_to_command(
             intent.probe_point_id,
             "Probe point ID",
         )
+    if intent.intent in ROUTINE_BASE_POSITION_INTENTS:
+        _required_text(intent.object_id, "Object ID")
+        _required_text(intent.routine_id, "Routine ID")
     if intent.intent == OperationalIntent.INTENT_START_SENSOR_RECORDING:
         validate_measurement_context(
             intent.object_id,
