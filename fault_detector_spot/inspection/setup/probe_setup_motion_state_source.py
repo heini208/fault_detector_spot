@@ -6,7 +6,11 @@ import math
 from threading import RLock
 import time
 
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
+from bosdyn.client.frame_helpers import (
+    BODY_FRAME_NAME,
+    GRAV_ALIGNED_BODY_FRAME_NAME,
+    ODOM_FRAME_NAME,
+)
 from fault_detector_msgs.msg import TagElementArray
 from rclpy.duration import Duration
 from rclpy.qos import qos_profile_sensor_data
@@ -15,6 +19,11 @@ from geometry_msgs.msg import Vector3Stamped
 from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
+from fault_detector_spot.inspection.geometry.rotation import (
+    quaternion_from_euler,
+    quaternion_to_rpy,
+    rotation_from_quaternion,
+)
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     PoseData,
@@ -195,6 +204,59 @@ class ProbeSetupMotionStateSource:
         )
         body_to_object = pose_to_pose_data(tag.pose.pose)
         return relative_pose(body_to_object, body_to_probe)
+
+    def current_base_pose_tag(self, reference_tag_id: int) -> PoseData:
+        """Return the current planar base pose in the routine tag frame."""
+        tag = self.reference_tag(reference_tag_id)
+        source_frame = tag.pose.header.frame_id.strip()
+        if not source_frame:
+            raise ValueError("Reference tag frame must not be empty")
+        capture_time = Time.from_msg(tag.pose.header.stamp)
+        source_to_tag = pose_to_pose_data(tag.pose.pose)
+        odom_to_source = (
+            PoseData.identity()
+            if source_frame == ODOM_FRAME_NAME
+            else self._lookup_pose(
+                ODOM_FRAME_NAME,
+                source_frame,
+                capture_time,
+            )
+        )
+        odom_to_tag = compose_poses(odom_to_source, source_to_tag)
+        odom_to_body = self._lookup_pose(
+            ODOM_FRAME_NAME,
+            BODY_FRAME_NAME,
+            capture_time,
+        )
+        tag_normal = rotation_from_quaternion(
+            odom_to_tag.orientation
+        ).apply([0.0, 0.0, -1.0])
+        if math.hypot(tag_normal[0], tag_normal[1]) <= 1e-12:
+            raise ValueError(
+                "Reference tag normal has no horizontal heading"
+            )
+        tag_yaw = math.atan2(tag_normal[1], tag_normal[0])
+        delta_x = odom_to_body.position.x - odom_to_tag.position.x
+        delta_y = odom_to_body.position.y - odom_to_tag.position.y
+        cosine = math.cos(tag_yaw)
+        sine = math.sin(tag_yaw)
+        offset_x = cosine * delta_x + sine * delta_y
+        offset_y = -sine * delta_x + cosine * delta_y
+        _, _, body_yaw = quaternion_to_rpy(odom_to_body.orientation)
+        relative_yaw = math.atan2(
+            math.sin(body_yaw - tag_yaw),
+            math.cos(body_yaw - tag_yaw),
+        )
+        result = PoseData(
+            position=Vector3Data(
+                x=float(offset_x),
+                y=float(offset_y),
+                z=0.0,
+            ),
+            orientation=quaternion_from_euler("z", relative_yaw),
+        )
+        result.validate()
+        return result
 
     def minimum_aligned_probe_distance_m(
         self,

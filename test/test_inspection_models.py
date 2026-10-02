@@ -1,5 +1,7 @@
 """Tests for strict inspection and map models."""
 
+import math
+
 import pytest
 
 from fault_detector_spot.inspection.model.models import (
@@ -79,6 +81,28 @@ def test_inspection_object_round_trip_preserves_routine_order():
     assert "sensor_id" not in restored.get_routine(
         "temperature_scan"
     ).to_dict()
+
+
+def test_routine_base_position_round_trip_is_optional_and_planar():
+    routine = make_routine()
+    assert "base_position" not in routine.to_dict()
+
+    base_position = PoseData.identity()
+    base_position.position.x = -1.25
+    base_position.position.y = 0.40
+    base_position.orientation.z = math.sin(math.radians(-35.0) * 0.5)
+    base_position.orientation.w = math.cos(math.radians(-35.0) * 0.5)
+    routine.base_position = base_position
+
+    restored = InspectionRoutine.from_dict(routine.to_dict())
+    restored.validate()
+
+    assert restored.base_position == base_position
+    assert restored.to_dict()["base_position"] == base_position.to_dict()
+
+    restored.base_position.position.z = 0.01
+    with pytest.raises(ValueError, match="planar tag-relative"):
+        restored.validate()
 
 
 def test_uncaptured_routine_round_trip_preserves_empty_reference_views():

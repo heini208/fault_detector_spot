@@ -73,6 +73,9 @@ class ProbeSetupApi:
             ProbeSetupIntent.OPERATION_DELETE_PROBE_POINT: (
                 self._delete_probe_point
             ),
+            ProbeSetupIntent.OPERATION_SAVE_BASE_POSITION: (
+                self._save_base_position
+            ),
             ProbeSetupIntent.OPERATION_SELECT_REFERENCE_PIXEL: (
                 self._select_reference_pixel
             ),
@@ -189,6 +192,9 @@ class ProbeSetupApi:
             intent.routine_id,
             intent.probe_point_id,
         )
+
+    def _save_base_position(self, context, _intent):
+        return self.coordinator.save_base_position(context)
 
     def _select_reference_pixel(self, context, intent):
         return self.coordinator.select_reference_pixel(

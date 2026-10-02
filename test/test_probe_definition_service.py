@@ -34,6 +34,25 @@ class FakeObjectRepository:
             routines=[*definition.routines, routine],
         )
 
+    def set_routine_base_position(
+        self,
+        object_id,
+        routine_id,
+        base_position,
+    ):
+        definition = self.load(object_id)
+        routine = definition.get_routine(routine_id)
+        stored = replace(routine, base_position=base_position)
+        self.definitions[object_id] = replace(
+            definition,
+            routines=[
+                stored
+                if candidate.routine_id == routine_id
+                else candidate
+                for candidate in definition.routines
+            ],
+        )
+
     def delete_routine(self, object_id, routine_id):
         definition = self.load(object_id)
         self.definitions[object_id] = replace(
@@ -130,7 +149,28 @@ def test_definition_service_builds_snapshot_metadata():
     assert metadata[2] == ("hand",)
     assert metadata[4] == 7
     assert metadata[5] == "36h11"
-    assert len(metadata) == 6
+    assert metadata[6] is False
+    assert len(metadata) == 7
+
+    base_position = PoseData.identity()
+    base_position.position.x = -1.0
+    definitions.set_routine_base_position(
+        "motor",
+        "magnetic_scan",
+        base_position,
+    )
+    metadata = definitions.selected_definition_lists(
+        "motor",
+        "magnetic_scan",
+        ("motor",),
+    )
+    assert metadata[6] is True
+    assert (
+        objects.load("motor")
+        .get_routine("magnetic_scan")
+        .base_position
+        == base_position
+    )
 
 
 def test_definition_service_delete_operations_are_repository_owned():

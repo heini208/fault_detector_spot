@@ -11,6 +11,7 @@ import yaml
 from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
+    PoseData,
     ProbePoint,
 )
 from fault_detector_spot.shared.persistence.file_storage import (
@@ -149,6 +150,38 @@ class ObjectRepository:
         stored_definition = replace(
             definition,
             routines=[*definition.routines, routine],
+        )
+        self.save(stored_definition)
+        return stored_definition
+
+    def set_routine_base_position(
+        self,
+        object_id: str,
+        routine_id: str,
+        base_position: PoseData,
+    ) -> InspectionObject:
+        """Replace one routine's saved tag-relative base position."""
+        validate_storage_name(object_id, "object ID")
+        validate_storage_name(routine_id, "routine ID")
+        if not isinstance(base_position, PoseData):
+            raise TypeError("Routine base position must be a PoseData")
+        definition = self.load(object_id)
+        routine = definition.get_routine(routine_id)
+        if routine is None:
+            raise KeyError(
+                "Inspection routine does not exist: "
+                f"{object_id}/{routine_id}"
+            )
+        stored_routine = replace(routine, base_position=base_position)
+        stored_routine.validate()
+        stored_definition = replace(
+            definition,
+            routines=[
+                stored_routine
+                if candidate.routine_id == routine_id
+                else candidate
+                for candidate in definition.routines
+            ],
         )
         self.save(stored_definition)
         return stored_definition

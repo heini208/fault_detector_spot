@@ -60,6 +60,7 @@ from fault_detector_spot.inspection.setup.reference_view_surface_target import (
 )
 
 from .probe_refinement_dialog import ProbeRefinementDialog
+from ..navigation.base_movement_controls import BaseMovementControls
 from .reference_view_widget import ReferenceViewWidget
 from ..ros.probe_setup_state_adapter import probe_setup_state_to_view
 from ..shared.control_helper import UIControlHelper
@@ -100,6 +101,9 @@ class InspectionControls(UIControlHelper):
         self._retraction_failed = False
         self._editing_probe_point_id = None
         self.management_dialog = None
+        self.base_position_dialog = None
+        self.base_position_movement_controls = None
+        self.save_base_position_button = None
         super().__init__(parent_ui)
         self.refresh_setup_state()
 
@@ -583,6 +587,9 @@ class InspectionControls(UIControlHelper):
             "Set Base Position"
         )
         self.set_base_position_button.setEnabled(False)
+        self.set_base_position_button.clicked.connect(
+            self.show_base_position_dialog
+        )
         self.move_to_base_position_button = QPushButton(
             "Move to Base Position"
         )
@@ -696,6 +703,76 @@ class InspectionControls(UIControlHelper):
         layout.addLayout(buttons)
         layout.addWidget(self.base_position_status_label)
         return group
+
+    def _make_base_position_dialog(self):
+        self.base_position_dialog = QDialog(self.ui)
+        self.base_position_dialog.setWindowTitle(
+            "Base Movement Control - Routine Base Position"
+        )
+        self.base_position_dialog.setModal(False)
+        self.base_position_dialog.resize(620, 520)
+        layout = QVBoxLayout(self.base_position_dialog)
+        self.base_position_movement_controls = BaseMovementControls(self.ui)
+        for row in self.base_position_movement_controls.rows:
+            layout.addLayout(row)
+        self.save_base_position_button = QPushButton(
+            "Save Current Tag Relative Position as Routine Base Position"
+        )
+        self.save_base_position_button.clicked.connect(
+            self.handle_save_base_position
+        )
+        layout.addWidget(self.save_base_position_button)
+        close_buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        close_buttons.rejected.connect(self.base_position_dialog.hide)
+        layout.addWidget(close_buttons)
+
+    def show_base_position_dialog(self):
+        state = self._probe_setup_state
+        if state is None or not state.selected_routine_id:
+            return False
+        if self.base_position_dialog is None:
+            self._make_base_position_dialog()
+        controls = self.base_position_movement_controls
+        controls.update_tags_dropdown()
+        controls.update_frames_dropdown()
+        tag_index = controls.tag_dropdown.findText(
+            str(state.selected_reference_tag_id)
+        )
+        if tag_index >= 0:
+            controls.tag_dropdown.setCurrentIndex(tag_index)
+        self.save_base_position_button.setEnabled(True)
+        self.base_position_dialog.show()
+        self.base_position_dialog.raise_()
+        self.base_position_dialog.activateWindow()
+        return True
+
+    def handle_save_base_position(self):
+        state = self._probe_setup_state
+        if state is None or not state.selected_routine_id:
+            return False
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_SAVE_BASE_POSITION
+        request_id = self._submit_probe_setup(intent)
+        if request_id is None:
+            return False
+        self.base_position_status_label.setText(
+            "Base position: saving current tag-relative pose..."
+        )
+        return True
+
+    def _apply_base_position_state(self, state):
+        selected = bool(
+            state.selected_object_id and state.selected_routine_id
+        )
+        self.set_base_position_button.setEnabled(selected)
+        configured = selected and bool(state.has_base_position)
+        self.base_position_status_label.setText(
+            "Base position: configured"
+            if configured
+            else "Base position: not configured"
+        )
+        if self.save_base_position_button is not None:
+            self.save_base_position_button.setEnabled(selected)
 
     def _create_reference_camera_dropdowns(self):
         for slot_index, content in enumerate(self.reference_view_widgets):
@@ -2056,6 +2133,7 @@ class InspectionControls(UIControlHelper):
         previous_views = tuple(self._reference_slot_view_ids)
         self._probe_setup_state = state
         self._apply_object_and_routine_lists(state)
+        self._apply_base_position_state(state)
         self._apply_probe_setup_view(view)
         signature = (
             state.selected_object_id,

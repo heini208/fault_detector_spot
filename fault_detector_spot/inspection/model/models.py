@@ -434,6 +434,7 @@ class InspectionRoutine:
     routine_id: str
     display_name: str
     reference_tag: ReferenceTag
+    base_position: Optional[PoseData] = None
     reference_views: List[ReferenceView] = field(
         default_factory=list
     )
@@ -464,6 +465,11 @@ class InspectionRoutine:
             reference_tag=ReferenceTag.from_dict(
                 data["reference_tag"]
             ),
+            base_position=(
+                PoseData.from_dict(data["base_position"])
+                if data.get("base_position") is not None
+                else None
+            ),
             reference_views=[
                 ReferenceView.from_dict(view)
                 for view in reference_views
@@ -481,6 +487,16 @@ class InspectionRoutine:
             "Routine display name",
         )
         self.reference_tag.validate()
+        if self.base_position is not None:
+            self.base_position.validate()
+            if (
+                abs(self.base_position.position.z) > 1e-9
+                or abs(self.base_position.orientation.x) > 1e-9
+                or abs(self.base_position.orientation.y) > 1e-9
+            ):
+                raise ValueError(
+                    "Routine base position must be a planar tag-relative pose"
+                )
         if not 0 <= len(self.reference_views) <= 6:
             raise ValueError(
                 "Routine must contain at most six reference views"
@@ -567,7 +583,7 @@ class InspectionRoutine:
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "routine_id": self.routine_id,
             "display_name": self.display_name,
             "reference_tag": self.reference_tag.to_dict(),
@@ -580,6 +596,9 @@ class InspectionRoutine:
                 for point in self.probe_points
             ],
         }
+        if self.base_position is not None:
+            result["base_position"] = self.base_position.to_dict()
+        return result
 
 
 @dataclass

@@ -3,6 +3,7 @@
 from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
+    PoseData,
     ReferenceTag,
 )
 from fault_detector_spot.shared.persistence.file_storage import (
@@ -89,6 +90,21 @@ class ProbeDefinitionService:
         self.object_repository.add_routine(object_name, routine)
         return object_name, routine
 
+    def set_routine_base_position(
+        self,
+        object_id: str,
+        routine_id: str,
+        base_position: PoseData,
+    ) -> tuple[str, str]:
+        object_name = self._name(object_id, "object ID")
+        routine_name = self._name(routine_id, "routine ID")
+        self.object_repository.set_routine_base_position(
+            object_name,
+            routine_name,
+            base_position,
+        )
+        return object_name, routine_name
+
     def delete_routine(
         self,
         object_id: str,
@@ -125,14 +141,14 @@ class ProbeDefinitionService:
         object_ids: tuple,
     ):
         if selected_object_id not in object_ids:
-            return (), (), (), (), -1, ""
+            return (), (), (), (), -1, "", False
         definition = self.object_repository.load(selected_object_id)
         routine_ids = tuple(
             routine.routine_id for routine in definition.routines
         )
         routine = definition.get_routine(selected_routine_id)
         if routine is None:
-            return routine_ids, (), (), (), -1, ""
+            return routine_ids, (), (), (), -1, "", False
         return (
             routine_ids,
             tuple(view.view_id for view in routine.reference_views),
@@ -140,6 +156,7 @@ class ProbeDefinitionService:
             tuple(point.probe_point_id for point in routine.probe_points),
             routine.reference_tag.tag_id,
             routine.reference_tag.tag_family,
+            routine.base_position is not None,
         )
 
     @staticmethod

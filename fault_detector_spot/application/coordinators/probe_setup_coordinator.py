@@ -213,6 +213,7 @@ class ProbeSetupCoordinator:
             probe_ids,
             reference_tag_id,
             reference_tag_family,
+            has_base_position,
         ) = (
             self.definition_service.selected_definition_lists(
                 draft.selected_object_id,
@@ -238,6 +239,7 @@ class ProbeSetupCoordinator:
             selected_reference_tag_family=reference_tag_family,
             probe_point_ids=probe_ids,
             probe_point_target_surface_distances_m=distances,
+            has_base_position=has_base_position,
         )
 
     @_serialized_transaction
@@ -349,6 +351,37 @@ class ProbeSetupCoordinator:
             draft.selected_routine_id = routine.routine_id
             draft.selected_reference_view_id = ""
             draft.clear_geometry()
+        return self._advance(draft)
+
+    @_serialized_transaction
+    def save_base_position(
+        self,
+        context: SetupContextSnapshot,
+    ) -> ProbeSetupSnapshot:
+        """Persist the current base pose relative to the selected routine tag."""
+        draft = self._draft(context)
+        if not draft.selected_object_id or not draft.selected_routine_id:
+            raise ValueError(
+                "Select an inspection object and routine before saving "
+                "a base position"
+            )
+        self.setup_coordinator.require_command_lane_idle(
+            "Robot command lane must be idle before saving a base position"
+        )
+        if self.motion_state_source is None:
+            raise RuntimeError("Live robot pose data is unavailable")
+        definition = self.object_repository.load(draft.selected_object_id)
+        routine = definition.get_routine(draft.selected_routine_id)
+        if routine is None:
+            raise LookupError("Selected inspection routine is unavailable")
+        base_position = self.motion_state_source.current_base_pose_tag(
+            routine.reference_tag.tag_id
+        )
+        self.definition_service.set_routine_base_position(
+            draft.selected_object_id,
+            draft.selected_routine_id,
+            base_position,
+        )
         return self._advance(draft)
 
     @_serialized_transaction

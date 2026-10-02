@@ -53,7 +53,7 @@ def controls(application):
     return result
 
 
-def state(object_id="", routine_id=""):
+def state(object_id="", routine_id="", has_base_position=False):
     message = ProbeSetupState()
     message.client_id = "probe-ui"
     message.context_id = "probe-context"
@@ -67,6 +67,7 @@ def state(object_id="", routine_id=""):
     if object_id:
         message.routine_ids = ["magnetic_scan"]
     message.selected_routine_id = routine_id
+    message.has_base_position = bool(has_base_position)
     return message
 
 
@@ -109,6 +110,23 @@ def test_routine_creation_submits_typed_intent(controls):
     assert intent.reference_tag_id == 7
     assert intent.reference_tag_family == "36h11"
     assert not hasattr(intent, "sensor_id")
+
+
+def test_base_position_status_and_save_submit_typed_intent(controls):
+    controls.apply_setup_state(
+        state("motor", "magnetic_scan", has_base_position=True)
+    )
+
+    assert controls.set_base_position_button.isEnabled()
+    assert controls.base_position_status_label.text() == (
+        "Base position: configured"
+    )
+    assert not controls.move_to_base_position_button.isEnabled()
+
+    assert controls.handle_save_base_position() is True
+    assert controls.ui.requests[-1].operation == (
+        ProbeSetupIntent.OPERATION_SAVE_BASE_POSITION
+    )
 
 
 def test_deletion_submits_typed_intent_without_local_mutation(controls):

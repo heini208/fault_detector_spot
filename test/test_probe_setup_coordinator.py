@@ -111,12 +111,16 @@ class FakeMotionStateSource:
     def __init__(self):
         self.pose = pose()
         self.gravity_object_pose = pose()
+        self.base_pose = pose()
 
     def current_probe_pose_object(self, _tag_id, _sensor_id):
         return self.pose
 
     def gravity_aligned_object_pose(self, _tag_id):
         return self.gravity_object_pose
+
+    def current_base_pose_tag(self, _tag_id):
+        return self.base_pose
 
     def reference_tag(self, _tag_id):
         return None
@@ -680,6 +684,36 @@ def test_selected_definition_metadata_is_server_owned(tmp_path):
     assert object_only.selected_routine_id == ""
     assert object_only.selected_reference_tag_id == -1
     assert object_only.selected_reference_tag_family == ""
+
+
+def test_routine_base_position_is_persisted_and_overwritten(tmp_path):
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe,
+        probe.open_context("probe-ui").context,
+    )
+
+    first = pose(-1.2, 0.4)
+    first.orientation = yaw_quaternion(-30.0)
+    probe.motion_state_source.base_pose = first
+    saved = probe.save_base_position(state.context)
+
+    routine = probe.object_repository.load("motor").get_routine(
+        "magnetic_scan"
+    )
+    assert saved.has_base_position
+    assert routine.base_position == first
+
+    second = pose(-0.9, -0.2)
+    second.orientation = yaw_quaternion(15.0)
+    probe.motion_state_source.base_pose = second
+    saved = probe.save_base_position(saved.context)
+
+    routine = probe.object_repository.load("motor").get_routine(
+        "magnetic_scan"
+    )
+    assert saved.has_base_position
+    assert routine.base_position == second
 
 
 def test_geometry_and_approvals_are_owned_by_context(tmp_path):
