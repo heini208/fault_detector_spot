@@ -47,10 +47,10 @@ def test_saved_base_position_round_trips_base_to_tag_offset_convention():
     tag.pose.pose.orientation.w = orientation.w
 
     source = object.__new__(ProbeSetupMotionStateSource)
-    requested_maximum_ages = []
+    requested_tag_ids = []
 
-    def reference_tag(_tag_id, maximum_age_sec):
-        requested_maximum_ages.append(maximum_age_sec)
+    def reference_tag(tag_id):
+        requested_tag_ids.append(tag_id)
         return tag
 
     source.reference_tag = reference_tag
@@ -69,7 +69,7 @@ def test_saved_base_position_round_trips_base_to_tag_offset_convention():
 
     saved = source.current_base_pose_tag(7)
 
-    assert requested_maximum_ages == [0.25]
+    assert requested_tag_ids == [7]
     assert math.isclose(saved.position.x, -1.0, abs_tol=1e-9)
     assert math.isclose(saved.position.y, 2.0, abs_tol=1e-9)
     assert saved.position.z == 0.0
@@ -103,13 +103,13 @@ def test_saved_base_position_round_trips_base_to_tag_offset_convention():
     assert math.isclose(goal_yaw, 0.0, abs_tol=1e-9)
 
 
-def test_base_position_capture_rejects_stale_stable_tag():
+def test_base_position_capture_uses_normal_stable_tag_age_limit():
     source = object.__new__(ProbeSetupMotionStateSource)
     source._lock = RLock()
     source.node = SimpleNamespace(
         get_clock=lambda: SimpleNamespace(
             now=lambda: SimpleNamespace(
-                nanoseconds=int(10.50 * 1_000_000_000)
+                nanoseconds=int(12.00 * 1_000_000_000)
             )
         )
     )

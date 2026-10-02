@@ -51,7 +51,6 @@ from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
 
 
 BASE_TAG_MAXIMUM_AGE_SEC = 1.5
-BASE_POSITION_TAG_MAXIMUM_AGE_SEC = 0.25
 BASE_TAG_STABILIZATION_HISTORY_SEC = 4.0
 BASE_TAG_HISTORY_MAX_SAMPLES = 64
 BASE_TAG_MINIMUM_SPAN_SEC = 0.10
@@ -215,10 +214,7 @@ class ProbeSetupMotionStateSource:
 
     def current_base_pose_tag(self, reference_tag_id: int) -> PoseData:
         """Return the current planar base pose in the routine tag frame."""
-        tag = self.reference_tag(
-            reference_tag_id,
-            maximum_age_sec=BASE_POSITION_TAG_MAXIMUM_AGE_SEC,
-        )
+        tag = self.reference_tag(reference_tag_id)
         source_frame = tag.pose.header.frame_id.strip()
         if not source_frame:
             raise ValueError("Reference tag frame must not be empty")
