@@ -1,5 +1,7 @@
 """Tests for strict inspection and map models."""
 
+from copy import deepcopy
+
 import pytest
 
 from fault_detector_spot.inspection.model.models import (
@@ -34,10 +36,11 @@ def make_probe(probe_point_id="point_a") -> ProbePoint:
     )
 
 
-def make_routine(routine_id="magnetic_scan") -> InspectionRoutine:
+def make_routine(routine_id="magnetic_scan", tag_id=23) -> InspectionRoutine:
     return InspectionRoutine(
         routine_id=routine_id,
         display_name=routine_id,
+        reference_tag=ReferenceTag(tag_id=tag_id, tag_family="36h11"),
         reference_views=[ReferenceView(
             controlled_frame_pose_object=PoseData.identity(),
             controlled_frame="hand_color_image_sensor",
@@ -54,10 +57,9 @@ def make_object() -> InspectionObject:
     return InspectionObject(
         object_id="motor_a",
         display_name="Motor A",
-        reference_tag=ReferenceTag(tag_id=23, tag_family="36h11"),
         routines=[
-            make_routine("magnetic_scan"),
-            make_routine("temperature_scan"),
+            make_routine("magnetic_scan", 23),
+            make_routine("temperature_scan", 24),
         ],
     )
 
@@ -71,6 +73,11 @@ def test_inspection_object_round_trip_preserves_routine_order():
         "magnetic_scan",
         "temperature_scan",
     ]
+    assert [
+        routine.reference_tag.tag_id
+        for routine in restored.routines
+    ] == [23, 24]
+    assert "reference_tag" not in restored.to_dict()
     assert "sensor_id" not in restored.get_routine(
         "temperature_scan"
     ).to_dict()
@@ -80,6 +87,7 @@ def test_uncaptured_routine_round_trip_preserves_empty_reference_views():
     routine = InspectionRoutine(
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
+        reference_tag=ReferenceTag(tag_id=23, tag_family="36h11"),
     )
     restored = InspectionRoutine.from_dict(routine.to_dict())
     restored.validate()
@@ -91,6 +99,7 @@ def test_probe_points_require_a_captured_reference_view():
     routine = InspectionRoutine(
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
+        reference_tag=ReferenceTag(tag_id=23, tag_family="36h11"),
         probe_points=[make_probe()],
     )
     with pytest.raises(ValueError, match="requires a reference view"):
@@ -222,3 +231,41 @@ def test_map_validates_internal_and_external_references():
     definition.validate_object_references({"motor_a"})
     with pytest.raises(ValueError, match="Unknown inspection object"):
         definition.validate_object_references(set())
+
+
+@pytest.mark.parametrize("keep_explicit_tag", [False, True])
+def test_legacy_object_tag_is_inherited_only_by_untagged_routines(keep_explicit_tag):
+    serialized = make_object().to_dict()
+    serialized["reference_tag"] = serialized["routines"][0].pop("reference_tag")
+    if not keep_explicit_tag:
+        serialized["routines"][1].pop("reference_tag")
+    original = deepcopy(serialized)
+
+    restored = InspectionObject.from_dict(serialized)
+    restored.validate()
+
+    assert serialized == original
+    assert [routine.reference_tag.tag_id for routine in restored.routines] == (
+        [23, 24] if keep_explicit_tag else [23, 23]
+    )
+    assert "reference_tag" not in restored.to_dict()
+    assert restored.to_dict()["routines"][0]["probe_points"] == (
+        serialized["routines"][0]["probe_points"]
+    )
+    restored.routines[0].reference_tag.tag_id = 99
+    assert restored.routines[1].reference_tag.tag_id != 99
+
+
+def test_routine_without_any_reference_tag_is_rejected():
+    serialized = make_object().to_dict()
+    serialized["routines"][0].pop("reference_tag")
+    with pytest.raises(KeyError, match="reference_tag"):
+        InspectionObject.from_dict(serialized)
+
+
+def test_invalid_explicit_routine_tag_does_not_fall_back_to_object_tag():
+    serialized = make_object().to_dict()
+    serialized["reference_tag"] = {"tag_id": 23, "tag_family": "36h11"}
+    serialized["routines"][0]["reference_tag"] = None
+    with pytest.raises(ValueError):
+        InspectionObject.from_dict(serialized)

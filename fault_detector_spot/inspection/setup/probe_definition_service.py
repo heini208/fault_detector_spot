@@ -39,26 +39,12 @@ class ProbeDefinitionService:
         self,
         object_id: str,
         display_name: str,
-        reference_tag_id: int,
-        reference_tag_family: str,
     ) -> InspectionObject:
-        if (
-            isinstance(reference_tag_id, bool)
-            or not isinstance(reference_tag_id, int)
-        ):
-            raise TypeError("Reference tag ID must be an integer")
         definition = InspectionObject(
             object_id=self._name(object_id, "object ID"),
             display_name=self._text(
                 display_name,
                 "object display name",
-            ),
-            reference_tag=ReferenceTag(
-                tag_id=reference_tag_id,
-                tag_family=self._text(
-                    reference_tag_family,
-                    "reference tag family",
-                ),
             ),
         )
         self.object_repository.create(definition)
@@ -77,13 +63,27 @@ class ProbeDefinitionService:
         object_id: str,
         routine_id: str,
         display_name: str,
+        reference_tag_id: int,
+        reference_tag_family: str,
     ) -> tuple[str, InspectionRoutine]:
+        if (
+            isinstance(reference_tag_id, bool)
+            or not isinstance(reference_tag_id, int)
+        ):
+            raise TypeError("Reference tag ID must be an integer")
         object_name = self._name(object_id, "object ID")
         routine = InspectionRoutine(
             routine_id=self._name(routine_id, "routine ID"),
             display_name=self._text(
                 display_name,
                 "routine display name",
+            ),
+            reference_tag=ReferenceTag(
+                tag_id=reference_tag_id,
+                tag_family=self._text(
+                    reference_tag_family,
+                    "reference tag family",
+                ),
             ),
         )
         self.object_repository.add_routine(object_name, routine)
@@ -132,21 +132,14 @@ class ProbeDefinitionService:
         )
         routine = definition.get_routine(selected_routine_id)
         if routine is None:
-            return (
-                routine_ids,
-                (),
-                (),
-                (),
-                definition.reference_tag.tag_id,
-                definition.reference_tag.tag_family,
-            )
+            return routine_ids, (), (), (), -1, ""
         return (
             routine_ids,
             tuple(view.view_id for view in routine.reference_views),
             tuple(view.camera_id for view in routine.reference_views),
             tuple(point.probe_point_id for point in routine.probe_points),
-            definition.reference_tag.tag_id,
-            definition.reference_tag.tag_family,
+            routine.reference_tag.tag_id,
+            routine.reference_tag.tag_family,
         )
 
     @staticmethod

@@ -59,13 +59,16 @@ def inspection_object(point=None):
     routine = InspectionRoutine(
         routine_id="scan",
         display_name="Scan",
+        reference_tag=ReferenceTag(
+            tag_id=2,
+            tag_family="36h11",
+        ),
         reference_views=[view],
         probe_points=[point or probe_point()],
     )
     return InspectionObject(
         object_id="motor_a",
         display_name="Motor A",
-        reference_tag=ReferenceTag(tag_id=2, tag_family="36h11"),
         routines=[routine],
     )
 

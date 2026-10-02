@@ -169,8 +169,8 @@ class ProbeExecutionConfiguration:
             object_id=inspection_object.object_id,
             routine_id=routine.routine_id,
             probe_point_id=probe_point.probe_point_id,
-            reference_tag_id=inspection_object.reference_tag.tag_id,
-            reference_tag_family=inspection_object.reference_tag.tag_family,
+            reference_tag_id=routine.reference_tag.tag_id,
+            reference_tag_family=routine.reference_tag.tag_family,
             sensor_id=attachment.sensor_id,
             attachment_revision=attachment.attachment_revision,
             safe_approach_pose_object=FrozenPoseData.from_pose(

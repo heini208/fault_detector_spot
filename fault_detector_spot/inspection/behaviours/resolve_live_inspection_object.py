@@ -131,11 +131,12 @@ class ResolveLiveInspectionObject(
             return self._store(result)
 
         now = self.node.get_clock().now()
-        tag_id = self.inspection_object.reference_tag.tag_id
+        tag_id = self.inspection_routine.reference_tag.tag_id
         tag = self._get_base_tags().get(tag_id)
         if tag is None:
             result = self.resolver.resolve(
                 self.inspection_object,
+                self.routine_id,
                 marker_pose=None,
                 current_time=now,
                 observed_tag_id=None,
@@ -152,6 +153,7 @@ class ResolveLiveInspectionObject(
         ):
             result = self.resolver.unavailable(
                 self.inspection_object,
+                self.routine_id,
                 f"Base-camera tag is stale: {age_sec:.3f} s",
                 stamp=stamp,
                 age_sec=age_sec,
@@ -167,6 +169,7 @@ class ResolveLiveInspectionObject(
         if marker_error:
             result = self.resolver.invalid(
                 self.inspection_object,
+                self.routine_id,
                 marker_error,
             )
             return self._store(result)
@@ -186,6 +189,7 @@ class ResolveLiveInspectionObject(
         ) as exception:
             result = self.resolver.unavailable(
                 self.inspection_object,
+                self.routine_id,
                 "Cannot transform base-camera tag to "
                 f"{self.execution_frame}: {exception}",
                 stamp=stamp,
@@ -195,6 +199,7 @@ class ResolveLiveInspectionObject(
 
         result = self.resolver.resolve(
             self.inspection_object,
+            self.routine_id,
             marker_pose=marker_in_execution_frame,
             current_time=now,
             observed_tag_id=int(tag.id),

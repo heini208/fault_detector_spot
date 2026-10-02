@@ -202,20 +202,6 @@ class InspectionControls(UIControlHelper):
             self.object_display_name_field,
         )
 
-        self.reference_tag_id_field = QLineEdit()
-        self.reference_tag_id_field.setPlaceholderText("Tag ID")
-        self.reference_tag_id_field.setValidator(
-            QIntValidator(0, 2147483647, self.reference_tag_id_field)
-        )
-        object_layout.addRow("Reference tag ID:", self.reference_tag_id_field)
-
-        self.reference_tag_family_field = QLineEdit("36h11")
-        self.reference_tag_family_field.setPlaceholderText("Tag family")
-        object_layout.addRow(
-            "Reference tag family:",
-            self.reference_tag_family_field,
-        )
-
         object_buttons = QHBoxLayout()
         self.create_object_button = QPushButton("Create Object")
         self.create_object_button.clicked.connect(self.handle_create_object)
@@ -246,6 +232,23 @@ class InspectionControls(UIControlHelper):
         routine_layout.addRow(
             "Display name:",
             self.routine_display_name_field,
+        )
+
+        self.reference_tag_id_field = QLineEdit()
+        self.reference_tag_id_field.setPlaceholderText("Tag ID")
+        self.reference_tag_id_field.setValidator(
+            QIntValidator(0, 2147483647, self.reference_tag_id_field)
+        )
+        routine_layout.addRow(
+            "Reference tag ID:",
+            self.reference_tag_id_field,
+        )
+
+        self.reference_tag_family_field = QLineEdit("36h11")
+        self.reference_tag_family_field.setPlaceholderText("Tag family")
+        routine_layout.addRow(
+            "Reference tag family:",
+            self.reference_tag_family_field,
         )
 
         routine_buttons = QHBoxLayout()
@@ -2515,30 +2518,10 @@ class InspectionControls(UIControlHelper):
             self.object_display_name_field,
             "an object display name",
         )
-        tag_id_text = self._required_text(
-            self.reference_tag_id_field,
-            "a reference tag ID",
-        )
-        tag_family = self._required_text(
-            self.reference_tag_family_field,
-            "a reference tag family",
-        )
         if None in (
             object_id,
             display_name,
-            tag_id_text,
-            tag_family,
         ):
-            return False
-        try:
-            tag_id = int(tag_id_text)
-            if tag_id < 0:
-                raise ValueError
-        except ValueError:
-            self.show_warning(
-                "Invalid Input",
-                "Reference tag ID must be a non-negative integer.",
-            )
             return False
         intent = ProbeSetupIntent()
         intent.operation = (
@@ -2546,14 +2529,10 @@ class InspectionControls(UIControlHelper):
         )
         intent.object_id = object_id
         intent.object_display_name = display_name
-        intent.reference_tag_id = tag_id
-        intent.reference_tag_family = tag_family
         submitted = self._submit_probe_setup(intent) is not None
         if submitted:
             self.object_id_field.clear()
             self.object_display_name_field.clear()
-            self.reference_tag_id_field.clear()
-            self.reference_tag_family_field.setText("36h11")
         return submitted
 
     def handle_create_routine(self):
@@ -2572,7 +2551,30 @@ class InspectionControls(UIControlHelper):
             self.routine_display_name_field,
             "a routine display name",
         )
-        if None in (routine_id, display_name):
+        tag_id_text = self._required_text(
+            self.reference_tag_id_field,
+            "a reference tag ID",
+        )
+        tag_family = self._required_text(
+            self.reference_tag_family_field,
+            "a reference tag family",
+        )
+        if None in (
+            routine_id,
+            display_name,
+            tag_id_text,
+            tag_family,
+        ):
+            return False
+        try:
+            tag_id = int(tag_id_text)
+            if tag_id < 0:
+                raise ValueError
+        except ValueError:
+            self.show_warning(
+                "Invalid Input",
+                "Reference tag ID must be a non-negative integer.",
+            )
             return False
         intent = ProbeSetupIntent()
         intent.operation = (
@@ -2581,10 +2583,14 @@ class InspectionControls(UIControlHelper):
         intent.object_id = object_id
         intent.routine_id = routine_id
         intent.routine_display_name = display_name
+        intent.reference_tag_id = tag_id
+        intent.reference_tag_family = tag_family
         submitted = self._submit_probe_setup(intent) is not None
         if submitted:
             self.routine_id_field.clear()
             self.routine_display_name_field.clear()
+            self.reference_tag_id_field.clear()
+            self.reference_tag_family_field.setText("36h11")
         return submitted
 
     def handle_capture_reference_view(self):

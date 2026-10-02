@@ -3,6 +3,7 @@
 from fault_detector_spot.inspection.model.models import (
     InspectionRoutine,
     PoseData,
+    ReferenceTag,
     ReferenceView,
 )
 
@@ -26,6 +27,7 @@ def test_routine_has_one_authoritative_multi_view_collection():
     routine = InspectionRoutine(
         routine_id="routine",
         display_name="Routine",
+        reference_tag=ReferenceTag(tag_id=7, tag_family="36h11"),
         reference_views=[first, second],
     )
 
@@ -44,6 +46,7 @@ def test_routine_round_trip_preserves_all_reference_views():
     routine = InspectionRoutine(
         routine_id="routine",
         display_name="Routine",
+        reference_tag=ReferenceTag(tag_id=7, tag_family="36h11"),
         reference_views=[
             stored_view("slot1_left", "left", 0),
             stored_view("slot2_right", "right", 1),

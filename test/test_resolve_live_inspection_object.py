@@ -69,6 +69,10 @@ def make_routine() -> InspectionRoutine:
     return InspectionRoutine(
         routine_id="phase3",
         display_name="Phase 3",
+        reference_tag=ReferenceTag(
+            tag_id=7,
+            tag_family="36h11",
+        ),
         reference_views=[ReferenceView(
             controlled_frame_pose_object=PoseData.identity(),
             controlled_frame="hand_color_image_sensor",
@@ -88,10 +92,6 @@ def make_object() -> InspectionObject:
     return InspectionObject(
         object_id="panel",
         display_name="Panel",
-        reference_tag=ReferenceTag(
-            tag_id=7,
-            tag_family="36h11",
-        ),
         routines=[make_routine()],
     )
 

@@ -2,6 +2,7 @@
 
 import json
 import pytest
+import yaml
 
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
 from fault_detector_spot.mapping.model.models import (
@@ -26,10 +27,13 @@ def make_object() -> InspectionObject:
     return InspectionObject(
         object_id="motor_a",
         display_name="Motor A",
-        reference_tag=ReferenceTag(tag_id=23, tag_family="36h11"),
         routines=[InspectionRoutine(
             routine_id="magnetic_scan",
             display_name="Magnetic scan",
+            reference_tag=ReferenceTag(
+                tag_id=23,
+                tag_family="36h11",
+            ),
         )],
     )
 
@@ -89,7 +93,6 @@ def test_object_repository_creates_new_object_without_overwrite(tmp_path):
     definition = InspectionObject(
         object_id="motor_b",
         display_name="Motor B",
-        reference_tag=ReferenceTag(tag_id=24, tag_family="36h11"),
     )
     created = repository.create(definition)
     assert created == definition
@@ -103,12 +106,15 @@ def test_object_repository_adds_uncaptured_routine_once(tmp_path):
     definition = InspectionObject(
         object_id="motor_b",
         display_name="Motor B",
-        reference_tag=ReferenceTag(tag_id=24, tag_family="36h11"),
     )
     repository.create(definition)
     routine = InspectionRoutine(
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
+        reference_tag=ReferenceTag(
+            tag_id=24,
+            tag_family="36h11",
+        ),
     )
     stored = repository.add_routine("motor_b", routine)
     assert stored.get_routine("magnetic_scan") == routine
@@ -122,6 +128,10 @@ def test_object_repository_requires_object_before_routine(tmp_path):
     routine = InspectionRoutine(
         routine_id="magnetic_scan",
         display_name="Magnetic scan",
+        reference_tag=ReferenceTag(
+            tag_id=24,
+            tag_family="36h11",
+        ),
     )
     with pytest.raises(FileNotFoundError):
         ObjectRepository(tmp_path).add_routine("missing", routine)
@@ -273,3 +283,22 @@ def test_map_repository_rejects_id_mismatch(tmp_path):
     repository = MapRepository(tmp_path)
     with pytest.raises(ValueError, match="does not match"):
         repository.save("other", make_map())
+
+
+def test_legacy_object_tag_loads_without_rewriting_and_saves_on_routines(tmp_path):
+    repository = ObjectRepository(tmp_path)
+    expected = make_object()
+    legacy = expected.to_dict()
+    legacy["reference_tag"] = legacy["routines"][0].pop("reference_tag")
+    path = repository.get_object_path(expected.object_id)
+    path.parent.mkdir(parents=True)
+    original = yaml.safe_dump(legacy)
+    path.write_text(original)
+
+    restored = repository.load(expected.object_id)
+
+    assert restored == expected
+    assert path.read_text() == original
+    repository.save(restored)
+    assert yaml.safe_load(path.read_text()) == expected.to_dict()
+    assert repository.load(expected.object_id) == expected

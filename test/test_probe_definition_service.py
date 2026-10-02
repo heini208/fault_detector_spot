@@ -57,17 +57,18 @@ def test_definition_service_creates_and_selects_object_and_routine():
     definition = definitions.create_object(
         "motor",
         "Motor",
-        7,
-        "36h11",
     )
     object_id, routine = definitions.create_routine(
         "motor",
         "magnetic_scan",
         "Magnetic scan",
+        7,
+        "36h11",
     )
 
     assert definition.object_id == "motor"
-    assert definition.reference_tag == ReferenceTag(
+    assert not hasattr(definition, "reference_tag")
+    assert routine.reference_tag == ReferenceTag(
         tag_id=7,
         tag_family="36h11",
     )
@@ -88,13 +89,13 @@ def test_definition_service_builds_snapshot_metadata():
     definitions.create_object(
         "motor",
         "Motor",
-        7,
-        "36h11",
     )
     definitions.create_routine(
         "motor",
         "magnetic_scan",
         "Magnetic scan",
+        7,
+        "36h11",
     )
     definition = objects.load("motor")
     routine = definition.get_routine("magnetic_scan")
@@ -137,13 +138,13 @@ def test_definition_service_delete_operations_are_repository_owned():
     definitions.create_object(
         "motor",
         "Motor",
-        7,
-        "36h11",
     )
     definitions.create_routine(
         "motor",
         "magnetic_scan",
         "Magnetic scan",
+        7,
+        "36h11",
     )
 
     assert definitions.delete_routine(

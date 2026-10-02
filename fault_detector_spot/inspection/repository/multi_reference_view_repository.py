@@ -90,7 +90,7 @@ class MultiReferenceViewRepository:
             raise KeyError(f"Routine does not exist: {routine_id}")
         normalized = self._validate_captures(
             captures,
-            definition.reference_tag.tag_id,
+            routine.reference_tag.tag_id,
             maximum_timestamp_skew_sec,
         )
 
@@ -250,7 +250,7 @@ class MultiReferenceViewRepository:
             self._validate_loaded_dataset(
                 metadata,
                 reference_view,
-                definition.reference_tag.tag_id,
+                routine.reference_tag.tag_id,
                 rgb_image,
                 depth_image,
                 rgb_camera_info,

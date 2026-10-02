@@ -160,8 +160,6 @@ class ProbeSetupApi:
             context,
             intent.object_id,
             intent.object_display_name,
-            int(intent.reference_tag_id),
-            intent.reference_tag_family,
         )
 
     def _delete_object(self, context, intent):
@@ -173,6 +171,8 @@ class ProbeSetupApi:
             intent.object_id,
             intent.routine_id,
             intent.routine_display_name,
+            int(intent.reference_tag_id),
+            intent.reference_tag_family,
         )
 
     def _delete_routine(self, context, intent):

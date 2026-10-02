@@ -46,7 +46,7 @@ def validate_multi_reference_view_capture_target(
             "Routine already has captured reference views: "
             f"{object_id}/{routine_id}"
         )
-    return definition.reference_tag.tag_id
+    return routine.reference_tag.tag_id
 
 
 def capture_reference_views(

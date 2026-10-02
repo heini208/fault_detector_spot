@@ -56,7 +56,7 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
         pose = point.aligned_preapproach_pose_object
     else:
         raise ValueError("Unsupported saved probe-point motion")
-    tag = state_source.reference_tag(definition.reference_tag.tag_id)
+    tag = state_source.reference_tag(routine.reference_tag.tag_id)
     return replace(
         factory.absolute(pose, tag, attachment.motion_sensor_id),
         inspection=selection,

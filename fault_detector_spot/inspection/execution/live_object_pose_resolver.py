@@ -35,30 +35,43 @@ class LiveObjectPoseResolver:
     def resolve(
         self,
         inspection_object: InspectionObject,
+        routine_id: str,
         marker_pose: Optional[PoseStamped],
         current_time: Time,
         observed_tag_id: Optional[int] = None,
         observation_source: str = "base",
     ) -> ResolvedObjectPose:
-        """Resolve the tag-defined object frame."""
+        """Resolve the selected routine's tag-defined object frame."""
         try:
             inspection_object.validate()
         except ValueError as exception:
             return self._result(
                 inspection_object,
+                routine_id,
                 ObjectPoseState.INVALID,
                 str(exception),
+            )
+
+        routine = inspection_object.get_routine(routine_id)
+        if routine is None:
+            return self._result(
+                inspection_object,
+                routine_id,
+                ObjectPoseState.INVALID,
+                f"Unknown routine {routine_id}",
             )
 
         if observation_source != "base":
             return self._result(
                 inspection_object,
+                routine_id,
                 ObjectPoseState.INVALID,
                 "Local object motion accepts base-camera tags only",
             )
         if marker_pose is None:
             return self._result(
                 inspection_object,
+                routine_id,
                 ObjectPoseState.UNAVAILABLE,
                 "Expected base-camera tag is not visible",
             )
@@ -67,21 +80,24 @@ class LiveObjectPoseResolver:
         if marker_error:
             return self._result(
                 inspection_object,
+                routine_id,
                 ObjectPoseState.INVALID,
                 marker_error,
             )
 
-        expected_tag_id = inspection_object.reference_tag.tag_id
+        expected_tag_id = routine.reference_tag.tag_id
         if observed_tag_id != expected_tag_id:
             return self._result(
                 inspection_object,
+                routine_id,
                 ObjectPoseState.INVALID,
-                "Observed tag does not match object tag: "
+                "Observed tag does not match routine tag: "
                 f"{observed_tag_id} != {expected_tag_id}",
             )
         if marker_pose.header.frame_id != self.execution_frame:
             return self._result(
                 inspection_object,
+                routine_id,
                 ObjectPoseState.INVALID,
                 f"Marker is in frame '{marker_pose.header.frame_id}', "
                 f"expected '{self.execution_frame}'",
@@ -91,6 +107,7 @@ class LiveObjectPoseResolver:
         if stamp.sec == 0 and stamp.nanosec == 0:
             return self._result(
                 inspection_object,
+                routine_id,
                 ObjectPoseState.INVALID,
                 "Marker observation has a zero timestamp",
             )
@@ -106,6 +123,7 @@ class LiveObjectPoseResolver:
         if age_sec < -0.1:
             return self._result(
                 inspection_object,
+                routine_id,
                 ObjectPoseState.INVALID,
                 "Marker observation timestamp is in the future",
                 stamp=stamp,
@@ -114,6 +132,7 @@ class LiveObjectPoseResolver:
         if age_sec > self.maximum_age_sec:
             return self._result(
                 inspection_object,
+                routine_id,
                 ObjectPoseState.UNAVAILABLE,
                 f"Base-camera tag is stale: {age_sec:.3f} s",
                 stamp=stamp,
@@ -174,6 +193,7 @@ class LiveObjectPoseResolver:
     def unavailable(
         self,
         definition: InspectionObject,
+        routine_id: str,
         message: str,
         stamp=None,
         age_sec=None,
@@ -181,6 +201,7 @@ class LiveObjectPoseResolver:
         """Create an unavailable result."""
         return self._result(
             definition,
+            routine_id,
             ObjectPoseState.UNAVAILABLE,
             message,
             stamp=stamp,
@@ -190,11 +211,13 @@ class LiveObjectPoseResolver:
     def invalid(
         self,
         definition: InspectionObject,
+        routine_id: str,
         message: str,
     ) -> ResolvedObjectPose:
         """Create an invalid result."""
         return self._result(
             definition,
+            routine_id,
             ObjectPoseState.INVALID,
             message,
         )
@@ -202,15 +225,22 @@ class LiveObjectPoseResolver:
     def _result(
         self,
         definition: InspectionObject,
+        routine_id: str,
         state: ObjectPoseState,
         message: str,
         stamp=None,
         age_sec=None,
     ) -> ResolvedObjectPose:
         """Create a non-live result with consistent metadata."""
+        routine = definition.get_routine(routine_id)
+        tag_id = (
+            routine.reference_tag.tag_id
+            if routine is not None
+            else None
+        )
         return ResolvedObjectPose(
             object_id=definition.object_id,
-            tag_id=definition.reference_tag.tag_id,
+            tag_id=tag_id,
             state=state,
             message=message,
             frame_id=self.execution_frame,

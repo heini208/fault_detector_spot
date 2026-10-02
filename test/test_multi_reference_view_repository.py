@@ -26,10 +26,13 @@ def make_object():
     return InspectionObject(
         object_id="motor_a",
         display_name="Motor A",
-        reference_tag=ReferenceTag(tag_id=23, tag_family="36h11"),
         routines=[InspectionRoutine(
             routine_id="magnetic_scan",
             display_name="Magnetic scan",
+            reference_tag=ReferenceTag(
+                tag_id=23,
+                tag_family="36h11",
+            ),
         )],
     )
 

@@ -330,14 +330,14 @@ def create_selected_routine(probe, context):
         context,
         "motor",
         "Motor",
-        7,
-        "36h11",
     )
     state = probe.create_routine(
         state.context,
         "motor",
         "magnetic_scan",
         "Magnetic scan",
+        7,
+        "36h11",
     )
     definition = probe.object_repository.load("motor")
     routine = definition.get_routine("magnetic_scan")
@@ -678,7 +678,8 @@ def test_selected_definition_metadata_is_server_owned(tmp_path):
 
     assert object_only.selected_object_id == "motor"
     assert object_only.selected_routine_id == ""
-    assert object_only.selected_reference_tag_id == 7
+    assert object_only.selected_reference_tag_id == -1
+    assert object_only.selected_reference_tag_family == ""
 
 
 def test_geometry_and_approvals_are_owned_by_context(tmp_path):
@@ -826,8 +827,6 @@ def test_context_ownership_and_stale_revisions_are_enforced(tmp_path):
         opened.context,
         "motor",
         "Motor",
-        7,
-        "36h11",
     )
 
     with pytest.raises(ValueError, match="does not own"):

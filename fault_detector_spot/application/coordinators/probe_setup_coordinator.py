@@ -295,16 +295,12 @@ class ProbeSetupCoordinator:
         context: SetupContextSnapshot,
         object_id: str,
         display_name: str,
-        reference_tag_id: int,
-        reference_tag_family: str,
     ) -> ProbeSetupSnapshot:
         """Create one map-independent inspection object."""
         draft = self._draft(context)
         definition = self.definition_service.create_object(
             object_id,
             display_name,
-            reference_tag_id,
-            reference_tag_family,
         )
         with self._lock:
             draft.selected_object_id = definition.object_id
@@ -336,6 +332,8 @@ class ProbeSetupCoordinator:
         object_id: str,
         routine_id: str,
         display_name: str,
+        reference_tag_id: int,
+        reference_tag_family: str,
     ) -> ProbeSetupSnapshot:
         """Create one inspection routine."""
         draft = self._draft(context)
@@ -343,6 +341,8 @@ class ProbeSetupCoordinator:
             object_id,
             routine_id,
             display_name,
+            reference_tag_id,
+            reference_tag_family,
         )
         with self._lock:
             draft.selected_object_id = object_name

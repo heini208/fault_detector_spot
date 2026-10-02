@@ -167,7 +167,7 @@ class ImagePoint:
 
 @dataclass
 class ReferenceTag:
-    """AprilTag that rigidly defines an inspection object frame."""
+    """AprilTag that defines a routine-local inspection frame."""
 
     tag_id: int
     tag_family: str
@@ -429,10 +429,11 @@ class ProbePoint:
 
 @dataclass
 class InspectionRoutine:
-    """Ordered probe procedure with up to six reference views."""
+    """Ordered probe procedure with its own reference tag."""
 
     routine_id: str
     display_name: str
+    reference_tag: ReferenceTag
     reference_views: List[ReferenceView] = field(
         default_factory=list
     )
@@ -460,6 +461,9 @@ class InspectionRoutine:
         return cls(
             routine_id=str(data["routine_id"]),
             display_name=str(data["display_name"]),
+            reference_tag=ReferenceTag.from_dict(
+                data["reference_tag"]
+            ),
             reference_views=[
                 ReferenceView.from_dict(view)
                 for view in reference_views
@@ -476,6 +480,7 @@ class InspectionRoutine:
             self.display_name,
             "Routine display name",
         )
+        self.reference_tag.validate()
         if not 0 <= len(self.reference_views) <= 6:
             raise ValueError(
                 "Routine must contain at most six reference views"
@@ -565,6 +570,7 @@ class InspectionRoutine:
         return {
             "routine_id": self.routine_id,
             "display_name": self.display_name,
+            "reference_tag": self.reference_tag.to_dict(),
             "reference_views": [
                 view.to_dict()
                 for view in self.reference_views
@@ -582,7 +588,6 @@ class InspectionObject:
 
     object_id: str
     display_name: str
-    reference_tag: ReferenceTag
     routines: List[InspectionRoutine] = field(
         default_factory=list
     )
@@ -600,12 +605,19 @@ class InspectionObject:
             data["routines"],
             "routines",
         )
+        # Older definitions stored one shared tag on the object. Inherit it
+        # only where a routine has no explicit tag; serialization writes the
+        # routine-owned format without modifying the input or files on load.
+        if "reference_tag" in data:
+            routines = [
+                {"reference_tag": data["reference_tag"], **_require_dict(
+                    routine, "inspection_routine"
+                )}
+                for routine in routines
+            ]
         return cls(
             object_id=str(data["object_id"]),
             display_name=str(data["display_name"]),
-            reference_tag=ReferenceTag.from_dict(
-                data["reference_tag"]
-            ),
             routines=[
                 InspectionRoutine.from_dict(routine)
                 for routine in routines
@@ -621,7 +633,6 @@ class InspectionObject:
             self.display_name,
             "Inspection object display name",
         )
-        self.reference_tag.validate()
         routine_ids: Set[str] = set()
         for routine in self.routines:
             routine.validate()
@@ -649,7 +660,6 @@ class InspectionObject:
         return {
             "object_id": self.object_id,
             "display_name": self.display_name,
-            "reference_tag": self.reference_tag.to_dict(),
             "routines": [
                 routine.to_dict()
                 for routine in self.routines

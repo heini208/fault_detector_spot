@@ -1,5 +1,6 @@
 """Offline coverage for browsing and moving saved probe points."""
 import os
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -82,6 +83,10 @@ def test_transport_rejection_allows_retry(controls):
 ])
 def test_saved_pose_uses_repository_geometry_and_live_tag(operation, field):
     definition = inspection_object()
+    other_routine = deepcopy(definition.routines[0])
+    other_routine.routine_id = "other"
+    other_routine.reference_tag.tag_id = 99
+    definition.routines.insert(0, other_routine)
     tag = TagElement()
     tag.id = 2
     tag.pose.header.frame_id = "body"
@@ -93,7 +98,7 @@ def test_saved_pose_uses_repository_geometry_and_live_tag(operation, field):
     command = saved_probe_command(intent, Mock(load=Mock(return_value=definition)), source,
                                   Mock(require_motion_attachment=Mock(return_value=sensor())),
                                   ProbeSetupMotionCommandFactory())
-    pose = getattr(definition.routines[0].probe_points[0], field)
+    pose = getattr(definition.get_routine(intent.routine_id).probe_points[0], field)
     assert command.command_id == CommandID.MOVE_ARM_TO_TAG
     assert command.offset.position.x == pose.position.x
     assert command.offset.orientation.w == pose.orientation.w

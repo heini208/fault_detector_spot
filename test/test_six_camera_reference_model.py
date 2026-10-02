@@ -4,6 +4,7 @@ from fault_detector_spot.inspection.model.models import (
     InspectionRoutine,
     PoseData,
     ReferenceView,
+    ReferenceTag,
 )
 
 
@@ -38,6 +39,7 @@ def test_routine_accepts_six_reference_views():
     routine = InspectionRoutine(
         routine_id="scan",
         display_name="Scan",
+        reference_tag=ReferenceTag(tag_id=23, tag_family="36h11"),
         reference_views=[
             make_view(slot_index, camera_id)
             for slot_index, camera_id in enumerate(CAMERAS)

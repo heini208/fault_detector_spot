@@ -211,11 +211,9 @@ class ProbeRefinementController:
             updates_candidate = True
             verify_achieved_pose = False
         elif motion.kind is ProbeMotionKind.ORIENT_TO_TAG:
-            definition = self.object_repository.load(
-                draft.selected_object_id
-            )
+            routine = self._selected_routine(draft)
             reference_tag = self._motion_state_source().reference_tag(
-                definition.reference_tag.tag_id
+                routine.reference_tag.tag_id
             )
             target = self.current_probe_pose(draft, attachment)
             command = self.motion_command_factory.orient_to_tag(
@@ -419,14 +417,25 @@ class ProbeRefinementController:
             raise RuntimeError("Probe refinement is not active")
         return draft.refinement
 
-    def current_probe_pose(self, draft, attachment=None):
+    def _selected_routine(self, draft):
         definition = self.object_repository.load(
             draft.selected_object_id
         )
+        routine = definition.get_routine(
+            draft.selected_routine_id
+        )
+        if routine is None:
+            raise RuntimeError(
+                "Selected inspection routine is unavailable"
+            )
+        return routine
+
+    def current_probe_pose(self, draft, attachment=None):
+        routine = self._selected_routine(draft)
         active = attachment or self._active_attachment(draft)
         source = self._motion_state_source()
         return source.current_probe_pose_object(
-            definition.reference_tag.tag_id,
+            routine.reference_tag.tag_id,
             active.motion_sensor_id,
         )
 
@@ -648,11 +657,9 @@ class ProbeRefinementController:
         attachment,
         motion_kind,
     ):
-        definition = self.object_repository.load(
-            draft.selected_object_id
-        )
+        routine = self._selected_routine(draft)
         tag = self._motion_state_source().reference_tag(
-            definition.reference_tag.tag_id
+            routine.reference_tag.tag_id
         )
         return self.motion_command_factory.absolute(
             target,
@@ -669,13 +676,11 @@ class ProbeRefinementController:
         motion,
         attachment,
     ):
-        definition = self.object_repository.load(
-            draft.selected_object_id
-        )
+        routine = self._selected_routine(draft)
         frame_id = self.motion_command_factory.frame_id(
             motion.frame,
             attachment.motion_sensor_id,
-            definition.reference_tag.tag_id,
+            routine.reference_tag.tag_id,
         )
         return self.motion_command_factory.relative(
             frame_id,
