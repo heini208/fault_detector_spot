@@ -605,16 +605,6 @@ class InspectionObject:
             data["routines"],
             "routines",
         )
-        # Older definitions stored one shared tag on the object. Inherit it
-        # only where a routine has no explicit tag; serialization writes the
-        # routine-owned format without modifying the input or files on load.
-        if "reference_tag" in data:
-            routines = [
-                {"reference_tag": data["reference_tag"], **_require_dict(
-                    routine, "inspection_routine"
-                )}
-                for routine in routines
-            ]
         return cls(
             object_id=str(data["object_id"]),
             display_name=str(data["display_name"]),

@@ -2,7 +2,6 @@
 
 import json
 import pytest
-import yaml
 
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
 from fault_detector_spot.mapping.model.models import (
@@ -283,22 +282,3 @@ def test_map_repository_rejects_id_mismatch(tmp_path):
     repository = MapRepository(tmp_path)
     with pytest.raises(ValueError, match="does not match"):
         repository.save("other", make_map())
-
-
-def test_legacy_object_tag_loads_without_rewriting_and_saves_on_routines(tmp_path):
-    repository = ObjectRepository(tmp_path)
-    expected = make_object()
-    legacy = expected.to_dict()
-    legacy["reference_tag"] = legacy["routines"][0].pop("reference_tag")
-    path = repository.get_object_path(expected.object_id)
-    path.parent.mkdir(parents=True)
-    original = yaml.safe_dump(legacy)
-    path.write_text(original)
-
-    restored = repository.load(expected.object_id)
-
-    assert restored == expected
-    assert path.read_text() == original
-    repository.save(restored)
-    assert yaml.safe_load(path.read_text()) == expected.to_dict()
-    assert repository.load(expected.object_id) == expected
