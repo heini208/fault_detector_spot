@@ -579,6 +579,23 @@ class InspectionControls(UIControlHelper):
         self.refinement_recovery_status_label.setWordWrap(True)
         self.refinement_summary_status_label = QLabel("")
         self.refinement_summary_status_label.setWordWrap(True)
+        self.set_base_position_button = QPushButton(
+            "Set Base Position"
+        )
+        self.set_base_position_button.setEnabled(False)
+        self.move_to_base_position_button = QPushButton(
+            "Move to Base Position"
+        )
+        self.move_to_base_position_button.setEnabled(False)
+        self.move_to_base_position_button.setStyleSheet(
+            "QPushButton { background-color: #C62828; color: white; "
+            "font-weight: bold; }"
+        )
+        self.base_position_status_label = QLabel(
+            "Base position: not configured"
+        )
+        self.base_position_status_label.setWordWrap(True)
+
         self.start_probe_refinement_button = QPushButton(
             "Start Probe Point Position Refinement Workflow"
         )
@@ -927,6 +944,17 @@ class InspectionControls(UIControlHelper):
             self.save_probe_status_label,
         )
         layout.addWidget(summary)
+
+        base_group = QGroupBox("Routine Base Position")
+        base_layout = QVBoxLayout(base_group)
+        base_buttons = QHBoxLayout()
+        base_buttons.addWidget(self.set_base_position_button)
+        base_buttons.addWidget(self.move_to_base_position_button)
+        base_buttons.addStretch()
+        base_layout.addLayout(base_buttons)
+        base_layout.addWidget(self.base_position_status_label)
+        layout.addWidget(base_group)
+
         layout.addWidget(self.start_probe_refinement_button)
         layout.addWidget(self.refinement_summary_status_label)
         layout.addStretch()
