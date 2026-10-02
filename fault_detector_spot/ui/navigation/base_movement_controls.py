@@ -1,7 +1,9 @@
 import math
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QComboBox, QMessageBox
+    QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QComboBox,
+    QMessageBox, QSlider,
 )
 
 from fault_detector_msgs.msg import OperationalIntent, TagElement
@@ -21,6 +23,10 @@ class BaseMovementControls(UIControlHelper):
         "Yaw": 0.0,
     }
 
+    MIN_BODY_HEIGHT_M = -0.20
+    MAX_BODY_HEIGHT_M = 0.20
+    BODY_HEIGHT_STEP_M = 0.01
+
     def __init__(self, parent_ui: "Fault_Detector_UI"):
         self.offset_fields = {}
         super().__init__(parent_ui)
@@ -36,6 +42,7 @@ class BaseMovementControls(UIControlHelper):
             control_group("Tag actions", self._make_tag_input_row()),
             control_group("Base offset", self._make_offset_row(),
                           self._make_reset_and_move_row()),
+            control_group("Body height", self._make_body_height_row()),
             control_group("Robot actions", self._make_navigation_buttons_row())
         ]
 
@@ -140,6 +147,43 @@ class BaseMovementControls(UIControlHelper):
 
         return row
 
+    def _make_body_height_row(self):
+        row = QHBoxLayout()
+
+        min_height_cm = round(self.MIN_BODY_HEIGHT_M * 100)
+        max_height_cm = round(self.MAX_BODY_HEIGHT_M * 100)
+        step_cm = round(self.BODY_HEIGHT_STEP_M * 100)
+
+        row.addWidget(QLabel(f"{self.MIN_BODY_HEIGHT_M:+.2f} m"))
+
+        self.body_height_slider = QSlider(Qt.Horizontal)
+        self.body_height_slider.setRange(min_height_cm, max_height_cm)
+        self.body_height_slider.setSingleStep(step_cm)
+        self.body_height_slider.setPageStep(step_cm)
+        self.body_height_slider.setValue(0)
+        self.body_height_slider.valueChanged.connect(
+            self._update_body_height_label
+        )
+        row.addWidget(self.body_height_slider, 1)
+
+        row.addWidget(QLabel(f"{self.MAX_BODY_HEIGHT_M:+.2f} m"))
+
+        self.body_height_value_label = QLabel("0.00 m")
+        self.body_height_value_label.setFixedWidth(65)
+        self.body_height_value_label.setAlignment(
+            Qt.AlignRight | Qt.AlignVCenter
+        )
+        row.addWidget(self.body_height_value_label)
+
+        self.change_height_button = QPushButton("Change Height")
+        self.change_height_button.setEnabled(False)
+        self.change_height_button.setToolTip(
+            "Body-height execution will be enabled when command support is added."
+        )
+        row.addWidget(self.change_height_button)
+
+        return row
+
     def _make_navigation_buttons_row(self):
         row = QHBoxLayout()
         self.posture_button = PostureToggle(
@@ -181,6 +225,9 @@ class BaseMovementControls(UIControlHelper):
         elif val < -180.0:
             val += 360.0
         fld.setText(f"{val:.1f}")
+
+    def _update_body_height_label(self, value_cm):
+        self.body_height_value_label.setText(f"{value_cm / 100.0:.2f} m")
 
     def _reset_all_zero(self):
         for fld in self.offset_fields.values():
