@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QLabel
+from fault_detector_msgs.msg import ProbeSetupState
 
 from fault_detector_spot.ui.inspection.finalizing_controls import (
     FinalizingInspectionControls,
@@ -26,6 +27,30 @@ class FakeUI:
         self.complex_command_publisher = FakePublisher()
         self.inspection_object_root = object_root
         self.visible_tags = {}
+        self.available_frames = []
+        self.posture_state_source = None
+
+    def update_tags_dropdown(self, dropdown):
+        previous = dropdown.currentText()
+        tag_ids = sorted(self.visible_tags)
+        dropdown.clear()
+        if tag_ids:
+            dropdown.addItems([str(tag_id) for tag_id in tag_ids])
+            index = dropdown.findText(previous)
+            dropdown.setCurrentIndex(max(0, index))
+        else:
+            dropdown.addItem("no tags available")
+        dropdown.setEnabled(bool(tag_ids))
+
+    def update_frames_dropdown(self, dropdown):
+        previous = dropdown.currentText()
+        frames = list(self.available_frames)
+        dropdown.clear()
+        if not frames:
+            frames = ["no frames available"]
+        dropdown.addItems(frames)
+        index = dropdown.findText(previous)
+        dropdown.setCurrentIndex(max(0, index))
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -82,6 +107,47 @@ def test_workspace_uses_entry_panel_and_single_dialog_preview(
         } == expected_ids
     assert not hasattr(controls, "workflow_tabs")
     assert not hasattr(controls, "save_probe_point_button")
+
+
+def test_base_position_dialog_follows_live_tag_and_frame_updates(
+    application,
+    tmp_path,
+):
+    ui = FakeUI(tmp_path)
+    controls = FinalizingInspectionControls(ui)
+    state = ProbeSetupState()
+    state.selected_object_id = "motor"
+    state.selected_routine_id = "scan"
+    state.selected_reference_tag_id = 7
+    controls._probe_setup_state = state
+
+    assert controls.show_base_position_dialog()
+    popup = controls.base_position_movement_controls
+    assert popup.tag_dropdown.currentText() == "no tags available"
+
+    ui.visible_tags = {5: object(), 7: object()}
+    ui.available_frames = ["body", "odom"]
+    controls.update_base_position_tags_dropdown()
+    controls.update_base_position_frames_dropdown()
+
+    assert popup.tag_dropdown.currentText() == "7"
+    assert popup.tag_dropdown.isEnabled()
+    assert {
+        popup.frames_dropdown.itemText(index)
+        for index in range(popup.frames_dropdown.count())
+    } == {"body", "odom"}
+
+
+def test_root_ui_forwards_live_lists_to_base_position_dialog():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).parents[1]
+        / "fault_detector_spot/ui/fault_detector_ui.py"
+    ).read_text(encoding="utf-8")
+
+    assert "inspection_controls.update_base_position_tags_dropdown()" in source
+    assert "inspection_controls.update_base_position_frames_dropdown()" in source
 
 
 def test_management_controls_live_in_non_modal_dialog(

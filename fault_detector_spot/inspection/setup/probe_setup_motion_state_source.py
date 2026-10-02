@@ -226,7 +226,6 @@ class ProbeSetupMotionStateSource:
         odom_to_body = self._lookup_pose(
             ODOM_FRAME_NAME,
             BODY_FRAME_NAME,
-            capture_time,
         )
         tag_normal = rotation_from_quaternion(
             odom_to_tag.orientation

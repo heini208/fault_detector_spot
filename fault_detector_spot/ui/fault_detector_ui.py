@@ -900,6 +900,7 @@ class Fault_Detector_UI(QWidget):
         self.visible_tags = {tag.id: tag for tag in msg.elements}
         self.manipulation_controls.update_tags_dropdown()
         self.base_movement_controls.update_tags_dropdown()
+        self.inspection_controls.update_base_position_tags_dropdown()
 
     def _process_usable_tags(self, msg: TagElementArray):
         self.usable_tags = {tag.id: tag for tag in msg.elements}
@@ -1109,6 +1110,7 @@ class Fault_Detector_UI(QWidget):
         self.available_frames = list(msg.names)
         self.manipulation_controls.update_frames_dropdown()
         self.base_movement_controls.update_frames_dropdown()
+        self.inspection_controls.update_base_position_frames_dropdown()
 
     def execute_operation(self, intent, context_id=""):
         if self.application_client is None:

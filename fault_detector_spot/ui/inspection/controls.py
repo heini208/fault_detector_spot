@@ -705,7 +705,8 @@ class InspectionControls(UIControlHelper):
         return group
 
     def _make_base_position_dialog(self):
-        self.base_position_dialog = QDialog(self.ui)
+        parent = self.ui if isinstance(self.ui, QWidget) else None
+        self.base_position_dialog = QDialog(parent)
         self.base_position_dialog.setWindowTitle(
             "Base Movement Control - Routine Base Position"
         )
@@ -732,19 +733,32 @@ class InspectionControls(UIControlHelper):
             return False
         if self.base_position_dialog is None:
             self._make_base_position_dialog()
-        controls = self.base_position_movement_controls
-        controls.update_tags_dropdown()
-        controls.update_frames_dropdown()
-        tag_index = controls.tag_dropdown.findText(
-            str(state.selected_reference_tag_id)
-        )
-        if tag_index >= 0:
-            controls.tag_dropdown.setCurrentIndex(tag_index)
+        self.update_base_position_tags_dropdown()
+        self.update_base_position_frames_dropdown()
         self.save_base_position_button.setEnabled(True)
         self.base_position_dialog.show()
         self.base_position_dialog.raise_()
         self.base_position_dialog.activateWindow()
         return True
+
+    def update_base_position_tags_dropdown(self):
+        controls = self.base_position_movement_controls
+        if controls is None:
+            return
+        controls.update_tags_dropdown()
+        state = self._probe_setup_state
+        if state is None or state.selected_reference_tag_id < 0:
+            return
+        tag_index = controls.tag_dropdown.findText(
+            str(state.selected_reference_tag_id)
+        )
+        if tag_index >= 0:
+            controls.tag_dropdown.setCurrentIndex(tag_index)
+
+    def update_base_position_frames_dropdown(self):
+        controls = self.base_position_movement_controls
+        if controls is not None:
+            controls.update_frames_dropdown()
 
     def handle_save_base_position(self):
         state = self._probe_setup_state

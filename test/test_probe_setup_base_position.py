@@ -43,16 +43,26 @@ def test_saved_base_position_round_trips_base_to_tag_offset_convention():
 
     source = object.__new__(ProbeSetupMotionStateSource)
     source.reference_tag = lambda _tag_id: tag
-    source._lookup_pose = lambda target, source_frame, _time=None: (
-        PoseData.identity()
-        if target == ODOM_FRAME_NAME and source_frame == BODY_FRAME_NAME
-        else _unexpected_transform(target, source_frame)
-    )
+
+    current_body = PoseData.identity()
+    current_body.position.x = 1.0
+    current_body.position.y = 2.0
+
+    def lookup(target, source_frame, lookup_time=None):
+        if target != ODOM_FRAME_NAME or source_frame != BODY_FRAME_NAME:
+            return _unexpected_transform(target, source_frame)
+        return (
+            PoseData.identity()
+            if lookup_time is not None
+            else current_body
+        )
+
+    source._lookup_pose = lookup
 
     saved = source.current_base_pose_tag(7)
 
-    assert math.isclose(saved.position.x, -1.0, abs_tol=1e-9)
-    assert math.isclose(saved.position.y, 2.0, abs_tol=1e-9)
+    assert math.isclose(saved.position.x, 1.0, abs_tol=1e-9)
+    assert math.isclose(saved.position.y, 1.0, abs_tol=1e-9)
     assert saved.position.z == 0.0
     _, _, saved_yaw = quaternion_to_rpy(saved.orientation)
     assert math.isclose(saved_yaw, -math.pi / 2.0, abs_tol=1e-9)
@@ -73,8 +83,8 @@ def test_saved_base_position_round_trips_base_to_tag_offset_convention():
     BaseMotionPlanner._resolve_selected_tag_offset(command, 7)
     goal = command.compute_goal_pose(None)
 
-    assert math.isclose(goal.pose.position.x, 0.0, abs_tol=1e-9)
-    assert math.isclose(goal.pose.position.y, 0.0, abs_tol=1e-9)
+    assert math.isclose(goal.pose.position.x, 1.0, abs_tol=1e-9)
+    assert math.isclose(goal.pose.position.y, 2.0, abs_tol=1e-9)
     goal_yaw = 2.0 * math.atan2(
         goal.pose.orientation.z,
         goal.pose.orientation.w,
