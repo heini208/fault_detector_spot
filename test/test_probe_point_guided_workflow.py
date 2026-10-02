@@ -93,8 +93,8 @@ def test_main_workspace_is_reduced_to_add_probe_point(application):
         "Add New Probe Point"
     )
     assert controls._probe_point_entry_panel is not None
-    assert controls.inspection_workspace_splitter.widget(0).isHidden()
-    assert controls.inspection_workspace_splitter.widget(1).isHidden()
+    assert controls.inspection_workspace_splitter.count() == 2
+    assert controls.inspection_workspace_splitter.widget(1) is controls._probe_point_entry_panel
 
 
 def test_add_probe_point_opens_reference_step_before_refinement(application):

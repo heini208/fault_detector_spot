@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QGroupBox, QLabel
+from PyQt5.QtWidgets import QApplication, QLabel
 
 from fault_detector_spot.ui.inspection.finalizing_controls import (
     FinalizingInspectionControls,
@@ -42,10 +42,17 @@ def test_workspace_uses_entry_panel_and_single_dialog_preview(
     assert controls.inspection_workspace_splitter.orientation() == (
         Qt.Vertical
     )
-    assert controls.inspection_workspace_splitter.count() == 3
-    assert controls.inspection_workspace_splitter.widget(0).isHidden()
-    assert controls.inspection_workspace_splitter.widget(1).isHidden()
-    assert controls.inspection_workspace_splitter.widget(2) is (
+    assert controls.inspection_workspace_splitter.count() == 2
+    base_group = controls.inspection_workspace_splitter.widget(0)
+    assert base_group.title() == "Routine Base Position"
+    assert controls.set_base_position_button.parent() is base_group
+    assert controls.move_to_base_position_button.parent() is base_group
+    assert controls.base_position_status_label.parent() is base_group
+    assert controls.base_position_status_label.text() == "Base position: not configured"
+    assert not controls.set_base_position_button.isEnabled()
+    assert not controls.move_to_base_position_button.isEnabled()
+    assert "#C62828" in controls.move_to_base_position_button.styleSheet()
+    assert controls.inspection_workspace_splitter.widget(1) is (
         controls._probe_point_entry_panel
     )
     assert controls.reference_view_widget.window() is controls.refinement_dialog
@@ -73,12 +80,7 @@ def test_workspace_uses_entry_panel_and_single_dialog_preview(
             dropdown.itemData(index)
             for index in range(dropdown.count())
         } == expected_ids
-    assert controls.workflow_tabs.count() == 3
-    assert [
-        controls.workflow_tabs.tabText(index)
-        for index in range(controls.workflow_tabs.count())
-    ] == ["Target", "Refine", "Save"]
-    assert controls.geometry_details_section.content_frame.isHidden()
+    assert not hasattr(controls, "workflow_tabs")
     assert not hasattr(controls, "save_probe_point_button")
 
 
@@ -99,7 +101,7 @@ def test_management_controls_live_in_non_modal_dialog(
     assert not hasattr(controls, "new_sensor_id_field")
 
 
-def test_transient_approval_statuses_update_all_tabs(
+def test_transient_approval_statuses_update_workflow_controls(
     application,
     tmp_path,
 ):
@@ -122,14 +124,9 @@ def test_transient_approval_statuses_update_all_tabs(
     assert controls.save_probe_status_label.text() == "Not approved"
 
 
-def test_refine_tab_uses_stage_safe_controls(application, tmp_path):
+def test_refinement_dialog_uses_stage_safe_controls(application, tmp_path):
     controls = FinalizingInspectionControls(FakeUI(tmp_path))
 
-    group_titles = {
-        group.title()
-        for group in controls.workflow_tabs.findChildren(QGroupBox)
-    }
-    assert "Workflow Summary" in group_titles
     assert not controls.refinement_dialog.isModal()
     assert controls.refinement_dialog.stage_stack.count() == 5
     assert controls.move_aligned_pose_button.text() == "Move to Candidate"

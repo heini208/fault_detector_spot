@@ -66,15 +66,8 @@ class FinalizingInspectionControls(InspectionControls):
         self._configure_probe_point_entry_ui()
 
     def _configure_probe_point_entry_ui(self):
-        """Replace the old setup workspace with one probe-point entry action."""
+        """Build the probe-point panel below the routine base position."""
         splitter = self.inspection_workspace_splitter
-        original_widgets = [
-            splitter.widget(index)
-            for index in range(splitter.count())
-        ]
-        for widget in original_widgets:
-            if widget is not None:
-                widget.hide()
 
         panel = QFrame()
         panel.setFrameShape(QFrame.StyledPanel)
@@ -187,9 +180,7 @@ class FinalizingInspectionControls(InspectionControls):
 
         splitter.addWidget(panel)
         splitter.setStretchFactor(splitter.count() - 1, 1)
-        splitter.setSizes(
-            [0] * (splitter.count() - 1) + [500]
-        )
+        splitter.setSizes([100, 500])
         self._probe_point_entry_panel = panel
 
     def _saved_probe_selection_changed(self, _row=None):
