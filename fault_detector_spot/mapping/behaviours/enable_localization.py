@@ -1,6 +1,6 @@
 import py_trees
 
-from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
+from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 
 
 class EnableLocalization(py_trees.behaviour.Behaviour):
@@ -8,12 +8,12 @@ class EnableLocalization(py_trees.behaviour.Behaviour):
 
     def __init__(
         self,
-        slam_helper: RTABHelper,
+        rtabmap_runtime: RtabmapRuntimeManager,
         name: str = "EnableLocalization",
     ):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client(name=name)
-        self.slam_helper = slam_helper
+        self.rtabmap_runtime = rtabmap_runtime
         self.blackboard.register_key(
             "active_map_name",
             access=py_trees.common.Access.READ,
@@ -31,11 +31,11 @@ class EnableLocalization(py_trees.behaviour.Behaviour):
 
     def _start_localization(self, requested_map, current_map):
         if requested_map and requested_map != current_map:
-            if self.slam_helper.change_map(requested_map) is False:
+            if self.rtabmap_runtime.change_map(requested_map) is False:
                 raise RuntimeError(
                     "Could not synchronize the selected map"
                 )
-        process = self.slam_helper.start_localization()
+        process = self.rtabmap_runtime.start_localization()
         if process is None:
             raise RuntimeError(
                 "Localization launch did not return a process"
@@ -57,7 +57,7 @@ class EnableLocalization(py_trees.behaviour.Behaviour):
                 return py_trees.common.Status.FAILURE
 
             try:
-                started = self.slam_helper.begin_runtime_operation(
+                started = self.rtabmap_runtime.begin_runtime_operation(
                     self._operation_name,
                     self._start_localization,
                     requested_map,
@@ -80,7 +80,7 @@ class EnableLocalization(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.RUNNING
 
         try:
-            result = self.slam_helper.poll_runtime_operation(
+            result = self.rtabmap_runtime.poll_runtime_operation(
                 self._operation_name
             )
         except Exception as exception:
@@ -95,15 +95,15 @@ class EnableLocalization(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.RUNNING
 
         self._launch_requested = False
-        if self.slam_helper.is_localization_running():
+        if self.rtabmap_runtime.is_localization_running():
             self.feedback_message = "Localization enabled"
             return py_trees.common.Status.SUCCESS
 
-        if not self.slam_helper.is_rtabmap_running():
+        if not self.rtabmap_runtime.is_running():
             self.feedback_message = (
                 "RTAB-Map stopped before localization became active"
             )
-        elif not self.slam_helper.nav2_helper.is_running():
+        elif not self.rtabmap_runtime.nav2_runtime.is_running():
             self.feedback_message = (
                 "Nav2 stopped before localization became active"
             )

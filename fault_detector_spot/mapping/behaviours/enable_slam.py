@@ -1,14 +1,14 @@
 import py_trees
 
-from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
+from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 
 
 class EnableSLAM(py_trees.behaviour.Behaviour):
     """Start RTAB-Map mapping without blocking the BT executor."""
 
-    def __init__(self, slam_helper: RTABHelper, name: str = "EnableSLAM"):
+    def __init__(self, rtabmap_runtime: RtabmapRuntimeManager, name: str = "EnableSLAM"):
         super().__init__(name)
-        self.slam_helper = slam_helper
+        self.rtabmap_runtime = rtabmap_runtime
         self.blackboard = self.attach_blackboard_client(name=name)
         self.blackboard.register_key(
             "active_map_name",
@@ -27,11 +27,11 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
 
     def _start_mapping(self, requested_map, current_map):
         if requested_map and requested_map != current_map:
-            if self.slam_helper.change_map(requested_map) is False:
+            if self.rtabmap_runtime.change_map(requested_map) is False:
                 raise RuntimeError(
                     "Could not synchronize the selected map"
                 )
-        process = self.slam_helper.start_mapping_from_existing()
+        process = self.rtabmap_runtime.start_mapping()
         if process is None:
             raise RuntimeError(
                 "Mapping launch did not return a process"
@@ -53,7 +53,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
                 return py_trees.common.Status.FAILURE
 
             try:
-                started = self.slam_helper.begin_runtime_operation(
+                started = self.rtabmap_runtime.begin_runtime_operation(
                     self._operation_name,
                     self._start_mapping,
                     requested_map,
@@ -76,7 +76,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.RUNNING
 
         try:
-            result = self.slam_helper.poll_runtime_operation(
+            result = self.rtabmap_runtime.poll_runtime_operation(
                 self._operation_name
             )
         except Exception as exception:
@@ -91,7 +91,7 @@ class EnableSLAM(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.RUNNING
 
         self._launch_requested = False
-        if self.slam_helper.is_mapping_running():
+        if self.rtabmap_runtime.is_mapping_running():
             self.feedback_message = "Mapping enabled"
             return py_trees.common.Status.SUCCESS
 

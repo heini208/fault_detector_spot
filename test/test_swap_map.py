@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import py_trees
 
 from fault_detector_spot.mapping.behaviours.swap_map import SwapMap
-from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
+from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 
 
 class _Helper:
@@ -13,7 +13,7 @@ class _Helper:
         self.calls = []
         self.failure = None
         self.result = True
-        self.mode = RTABHelper.MODE_NONE
+        self.mode = RtabmapRuntimeManager.MODE_NONE
         self._operation = None
         self._result = None
         self._error = None
@@ -52,10 +52,10 @@ class _Helper:
         return self.result
 
     def is_mapping_running(self):
-        return self.mode == RTABHelper.MODE_MAPPING
+        return self.mode == RtabmapRuntimeManager.MODE_MAPPING
 
     def is_localization_running(self):
-        return self.mode == RTABHelper.MODE_LOCALIZATION
+        return self.mode == RtabmapRuntimeManager.MODE_LOCALIZATION
 
 
 def _behavior(helper, requested="map_b", active="map_a"):

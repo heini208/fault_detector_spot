@@ -204,9 +204,9 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     live_object_publisher = PublishLiveInspectionObject(
         name="PublishLiveInspectionObject",
     )
-    slam_helper = get_helper_container(node).slam_helper
+    rtabmap_runtime = get_helper_container(node).rtabmap_runtime
     world_frame_transformer = VisibleTagToMap(
-        slam_helper=slam_helper,
+        rtabmap_runtime=rtabmap_runtime,
         name="VisibleTagToMap",
     )
     tag_scan_sequence.add_children([
@@ -265,7 +265,7 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         name="CommandSelector",
         memory=True,
     )
-    slam_helper = get_helper_container(node).slam_helper
+    rtabmap_runtime = get_helper_container(node).rtabmap_runtime
     helper = get_helper_container(node)
     robot_command_resources = helper.robot_command_resources
     tag_state_source = helper.tag_state_source
@@ -408,19 +408,19 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         ),
         (
             CommandID.START_SLAM,
-            lambda n: EnableSLAM(slam_helper),
+            lambda n: EnableSLAM(rtabmap_runtime),
         ),
         (
             CommandID.START_LOCALIZATION,
-            lambda n: EnableLocalization(slam_helper),
+            lambda n: EnableLocalization(rtabmap_runtime),
         ),
         (
             CommandID.SWAP_MAP,
-            lambda n: SwapMap(slam_helper),
+            lambda n: SwapMap(rtabmap_runtime),
         ),
         (
             CommandID.STOP_MAPPING,
-            lambda n: StopMapping(slam_helper),
+            lambda n: StopMapping(rtabmap_runtime),
         ),
         (
             CommandID.MOVE_TO_WAYPOINT,
@@ -445,7 +445,7 @@ def build_cancelable_command_tree(
     cancel_check = match_command_checker(CommandID.EMERGENCY_CANCEL)
     stop_base = PublishZeroVel(name="StopBase")
     stop_mapping = StopMapping(
-        get_helper_container(node).slam_helper,
+        get_helper_container(node).rtabmap_runtime,
         with_save=False,
         name="ESTOP MAPPING",
     )
@@ -506,7 +506,7 @@ def build_publisher_tree(
 ) -> py_trees.behaviour.Behaviour:
     cmd_pub = BufferStatusPublisher(name="CommandStatusPublisher")
     init_pose_pub = LandmarkRelocalizer(
-        get_helper_container(node).slam_helper,
+        get_helper_container(node).rtabmap_runtime,
         name="InitPosePublisher",
     )
     publisher_tree = py_trees.composites.Parallel(

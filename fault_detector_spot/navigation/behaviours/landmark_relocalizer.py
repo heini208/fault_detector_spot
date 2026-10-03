@@ -7,7 +7,7 @@ import py_trees
 import rclpy
 import tf2_ros
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
-from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
+from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 from fault_detector_spot.shared.geometry.transforms import (
     pose_data_to_pose,
 )
@@ -22,18 +22,18 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
 
     def __init__(
         self,
-        slam_helper: RTABHelper,
+        rtabmap_runtime: RtabmapRuntimeManager,
         map_repository=None,
         node=None,
         base_frame: str = "base_link",
         name="LandmarkRelocalizer",
     ):
         super().__init__(name)
-        self.slam_helper = slam_helper
+        self.rtabmap_runtime = rtabmap_runtime
         self.map_repository = (
             map_repository
             if map_repository is not None
-            else MapRepository(self.slam_helper.maps_dir)
+            else MapRepository(self.rtabmap_runtime.maps_dir)
         )
         self.node = node
         self.blackboard = self.attach_blackboard_client()
@@ -170,7 +170,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         return dx < tol and dy < tol and dyaw < (tol * 10)
 
     def update(self):
-        if not self.slam_helper.is_rtabmap_running():
+        if not self.rtabmap_runtime.is_running():
             self.candidate_samples.clear()
             self.feedback_message = "RTAB-Map not running"
             return py_trees.common.Status.SUCCESS

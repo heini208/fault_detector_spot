@@ -390,3 +390,25 @@ this application-owned preparation.
 
 Changes to this interface require rebuilding `fault_detector_msgs` together with
 `fault_detector_spot` before launching the updated application.
+
+### Runtime managers
+
+`RtabmapRuntimeManager` and `Nav2RuntimeManager` inherit from the shared
+`RuntimeManager` in `shared/ros/runtime_manager.py`. The parent owns the nested
+ROS launch process, simulated-time propagation, process-group termination,
+background-operation submission/polling, and retryable, idempotent shutdown.
+`is_running()` reports process-group liveness; it does not claim that ROS nodes
+are active or that navigation is ready. Runtime lifecycle management remains
+separate from the arm, base, and waypoint movement executors.
+
+RTAB-Map keeps its mapping/localization modes, database selection, active-map
+publication, and save services. It uses one launch path for both modes and owns
+its Nav2 runtime manager. The current API is `start_mapping()`,
+`start_localization()`, `change_map()`, `stop(save=True)`, and `close()`;
+`close()` stops without saving. Nav2 exposes `start()`, `stop()`, and `close()`.
+Both expose `begin_runtime_operation()` and `poll_runtime_operation()` for
+behavior-tree callers. Slow process termination does not hold the polling lock.
+
+The old helper modules/classes and unused path/pose aliases, standalone save
+wrapper, configuration setters, and process-only `wait_until_active()` were
+removed. Internal imports and callers use the new runtime-manager names.

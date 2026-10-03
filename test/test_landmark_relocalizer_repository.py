@@ -36,7 +36,7 @@ def test_landmark_relocalizer_uses_its_repository_dependency():
     )
 
 
-def test_landmark_relocalizer_does_not_require_repository_on_rtab_helper():
+def test_landmark_relocalizer_does_not_require_repository_on_rtabmap_runtime_manager():
     repository = FakeRepository()
     helper = FakeSlamHelper()
     assert not hasattr(helper, "map_repository")

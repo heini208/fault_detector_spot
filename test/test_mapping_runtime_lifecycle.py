@@ -9,9 +9,10 @@ from fault_detector_spot.mapping.behaviours.enable_localization import (
     EnableLocalization,
 )
 from fault_detector_spot.mapping.behaviours.stop_mapping import StopMapping
-from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
-from fault_detector_spot.navigation.runtime import nav2_helper as nav2_module
-from fault_detector_spot.navigation.runtime.nav2_helper import Nav2Helper
+from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
+from fault_detector_spot.shared.ros import runtime_manager as runtime_module
+from threading import RLock
+from fault_detector_spot.navigation.runtime.nav2_runtime_manager import Nav2RuntimeManager
 
 
 class _AsyncHelper:
@@ -19,7 +20,7 @@ class _AsyncHelper:
         self.rtab_running = True
         self.mapping = False
         self.localization = True
-        self.nav2_helper = SimpleNamespace(is_running=lambda: True)
+        self.nav2_runtime = SimpleNamespace(is_running=lambda: True)
         self._operation = None
         self._result = None
         self._error = None
@@ -48,16 +49,13 @@ class _AsyncHelper:
         self._result = None
         return result
 
-    def stop_current_process(self):
+    def stop(self, save=True):
         self.stop_calls += 1
         self.rtab_running = False
-        self.nav2_helper = SimpleNamespace(is_running=lambda: False)
+        self.nav2_runtime = SimpleNamespace(is_running=lambda: False)
         return True
 
-    def stop_without_save(self):
-        return self.stop_current_process()
-
-    def is_rtabmap_running(self):
+    def is_running(self):
         return self.rtab_running
 
     def change_map(self, map_name):
@@ -72,7 +70,7 @@ class _AsyncHelper:
         return (
             self.rtab_running
             and self.localization
-            and self.nav2_helper.is_running()
+            and self.nav2_runtime.is_running()
         )
 
 
@@ -101,7 +99,7 @@ def test_localization_does_not_succeed_when_rtabmap_is_dead():
 
 
 def test_running_mode_no_longer_shells_out_to_ros2_param_get():
-    source = inspect.getsource(RTABHelper.get_running_mode)
+    source = inspect.getsource(RtabmapRuntimeManager.get_running_mode)
 
     assert "subprocess.run" not in source
     assert "slam_runtime_mode" in source
@@ -111,8 +109,9 @@ def test_nav2_stop_keeps_process_reference_when_termination_fails(
     monkeypatch,
 ):
     process = SimpleNamespace()
-    helper = Nav2Helper.__new__(Nav2Helper)
+    helper = Nav2RuntimeManager.__new__(Nav2RuntimeManager)
     helper.bb = SimpleNamespace(nav2_launch_process=process)
+    helper._process_lock = RLock()
     helper.node = SimpleNamespace(
         get_logger=lambda: SimpleNamespace(
             error=lambda _message: None,
@@ -120,7 +119,7 @@ def test_nav2_stop_keeps_process_reference_when_termination_fails(
         )
     )
     monkeypatch.setattr(
-        nav2_module,
+        runtime_module,
         "terminate_process_group",
         lambda *_args, **_kwargs: False,
     )

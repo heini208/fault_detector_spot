@@ -50,7 +50,7 @@ def test_navigation_ui_does_not_own_setup_persistence_or_topics():
     source = path.read_text(encoding="utf-8")
     forbidden = (
         "MapRepository",
-        "RTABHelper",
+        "RtabmapRuntimeManager",
         "ComplexCommand",
         "'/map_list'",
         "'/waypoint_list'",
@@ -143,7 +143,7 @@ def test_behaviour_tree_has_no_navigation_authoring_commands():
 def test_legacy_navigation_state_topics_are_removed():
     root = UI_ROOT.parents[0]
     paths = (
-        root / "mapping" / "runtime" / "rtab_helper.py",
+        root / "mapping" / "runtime" / "rtabmap_runtime_manager.py",
         root / "application" / "behaviour_tree" / "runner.py",
     )
     source = "".join(path.read_text(encoding="utf-8") for path in paths)

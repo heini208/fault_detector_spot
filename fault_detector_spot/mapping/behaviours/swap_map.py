@@ -1,12 +1,12 @@
 import py_trees
 
-from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
+from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 
 
 class SwapMap(py_trees.behaviour.Behaviour):
     """Switch the active RTAB-Map database without blocking the BT."""
 
-    def __init__(self, slam_helper: RTABHelper, name="SwapMap"):
+    def __init__(self, rtabmap_runtime: RtabmapRuntimeManager, name="SwapMap"):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client(name=name)
         self.blackboard.register_key(
@@ -17,10 +17,10 @@ class SwapMap(py_trees.behaviour.Behaviour):
             "active_map_name",
             access=py_trees.common.Access.READ,
         )
-        self.slam_helper = slam_helper
+        self.rtabmap_runtime = rtabmap_runtime
         self._operation_name = f"swap_map:{name}"
         self._requested_map = ""
-        self._previous_mode = RTABHelper.MODE_NONE
+        self._previous_mode = RtabmapRuntimeManager.MODE_NONE
         self._swap_requested = False
 
     def _validate_last_command(self):
@@ -44,10 +44,10 @@ class SwapMap(py_trees.behaviour.Behaviour):
                 return py_trees.common.Status.SUCCESS
 
             try:
-                previous_mode = self.slam_helper.get_running_mode()
-                started = self.slam_helper.begin_runtime_operation(
+                previous_mode = self.rtabmap_runtime.get_running_mode()
+                started = self.rtabmap_runtime.begin_runtime_operation(
                     self._operation_name,
-                    self.slam_helper.change_map,
+                    self.rtabmap_runtime.change_map,
                     requested_map,
                 )
             except Exception as exception:
@@ -71,7 +71,7 @@ class SwapMap(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.RUNNING
 
         try:
-            result = self.slam_helper.poll_runtime_operation(
+            result = self.rtabmap_runtime.poll_runtime_operation(
                 self._operation_name
             )
         except Exception as exception:
@@ -105,8 +105,8 @@ class SwapMap(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
         if (
-            previous_mode == RTABHelper.MODE_MAPPING
-            and not self.slam_helper.is_mapping_running()
+            previous_mode == RtabmapRuntimeManager.MODE_MAPPING
+            and not self.rtabmap_runtime.is_mapping_running()
         ):
             self.feedback_message = (
                 "Map switch did not restore mapping mode"
@@ -114,8 +114,8 @@ class SwapMap(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
         if (
-            previous_mode == RTABHelper.MODE_LOCALIZATION
-            and not self.slam_helper.is_localization_running()
+            previous_mode == RtabmapRuntimeManager.MODE_LOCALIZATION
+            and not self.rtabmap_runtime.is_localization_running()
         ):
             self.feedback_message = (
                 "Map switch did not restore localization mode"
@@ -127,5 +127,5 @@ class SwapMap(py_trees.behaviour.Behaviour):
 
     def _reset(self):
         self._requested_map = ""
-        self._previous_mode = RTABHelper.MODE_NONE
+        self._previous_mode = RtabmapRuntimeManager.MODE_NONE
         self._swap_requested = False

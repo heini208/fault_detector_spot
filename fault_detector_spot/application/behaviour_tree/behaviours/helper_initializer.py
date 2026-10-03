@@ -1,6 +1,6 @@
 import py_trees
 
-from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
+from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 from fault_detector_spot.shared.persistence.runtime_paths import (
     default_map_root,
 )
@@ -16,8 +16,8 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
     def __init__(self, name: str, node):
         super().__init__(name)
         self.node = node
-        self.slam_helper = None
-        self.nav2_helper = None
+        self.rtabmap_runtime = None
+        self.nav2_runtime = None
         self.tag_state_source = None
         self.robot_command_resources = RobotCommandResources()
 
@@ -53,7 +53,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
         ).strip()
         map_root = configured_map_root or str(default_map_root())
 
-        self.slam_helper = RTABHelper(
+        self.rtabmap_runtime = RtabmapRuntimeManager(
             node=self.node,
             blackboard=self.bb_client,
             maps_dir=map_root,
@@ -62,7 +62,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
             nav2_params_file="nav2_lidar_params.yaml",
         )
 
-        self.nav2_helper = self.slam_helper.nav2_helper
+        self.nav2_runtime = self.rtabmap_runtime.nav2_runtime
         return True
 
     def initialise(self):
@@ -74,8 +74,8 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
     def close(self):
         """Close shared ROS entities that are not tree children."""
         try:
-            if self.slam_helper is not None:
-                self.slam_helper.close()
+            if self.rtabmap_runtime is not None:
+                self.rtabmap_runtime.close()
         finally:
             try:
                 if self.tag_state_source is not None:

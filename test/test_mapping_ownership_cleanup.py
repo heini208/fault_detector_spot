@@ -14,11 +14,11 @@ from fault_detector_spot.mapping.model.models import (
     Waypoint,
 )
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
-from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
+from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 from fault_detector_spot.navigation.behaviours.set_waypoint_as_goal import (
     SetWaypointAsGoal,
 )
-from fault_detector_spot.navigation.runtime.nav2_helper import Nav2Helper
+from fault_detector_spot.navigation.runtime.nav2_runtime_manager import Nav2RuntimeManager
 
 
 def test_map_models_are_not_owned_by_inspection_module():
@@ -54,8 +54,8 @@ def test_waypoint_goal_uses_configured_persistent_map_root():
 
 
 def test_current_runtime_defaults_are_lidar_launches():
-    rtab_signature = inspect.signature(RTABHelper.__init__)
-    nav2_signature = inspect.signature(Nav2Helper.__init__)
+    rtab_signature = inspect.signature(RtabmapRuntimeManager.__init__)
+    nav2_signature = inspect.signature(Nav2RuntimeManager.__init__)
     assert rtab_signature.parameters["launch_file"].default == (
         "lidar_rtab_mapping_launch.py"
     )

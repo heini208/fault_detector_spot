@@ -8,9 +8,9 @@ from rclpy.duration import Duration
 
 
 class VisibleTagToMap(py_trees.behaviour.Behaviour):
-    def __init__(self, slam_helper, name="VisibleTagToMap"):
+    def __init__(self, rtabmap_runtime, name="VisibleTagToMap"):
         super().__init__(name)
-        self.slam_helper = slam_helper
+        self.rtabmap_runtime = rtabmap_runtime
         self.node = None
         self.blackboard = self.attach_blackboard_client()
         self.tags_in_map = set()
@@ -28,12 +28,12 @@ class VisibleTagToMap(py_trees.behaviour.Behaviour):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self.node)
 
     def update(self):
-        if not self.slam_helper.is_rtabmap_running():
+        if not self.rtabmap_runtime.is_running():
             self.blackboard.visible_tags_map_frame = {}
             self.feedback_message = "Localization not running"
             return py_trees.common.Status.SUCCESS
 
-        map_name = self.slam_helper.bb.active_map_name
+        map_name = self.rtabmap_runtime.bb.active_map_name
         if not map_name:
             self.blackboard.visible_tags_map_frame = {}
             self.feedback_message = "No active map"

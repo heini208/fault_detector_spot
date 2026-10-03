@@ -1,6 +1,6 @@
 import py_trees
 
-from fault_detector_spot.mapping.runtime.rtab_helper import RTABHelper
+from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 
 
 class StopMapping(py_trees.behaviour.Behaviour):
@@ -8,7 +8,7 @@ class StopMapping(py_trees.behaviour.Behaviour):
 
     def __init__(
         self,
-        helper: RTABHelper,
+        helper: RtabmapRuntimeManager,
         name="StopMapping",
         with_save: bool = True,
     ):
@@ -21,17 +21,13 @@ class StopMapping(py_trees.behaviour.Behaviour):
     def update(self) -> py_trees.common.Status:
         if not self._stop_requested:
             if not (
-                self.helper.is_rtabmap_running()
-                or self.helper.nav2_helper.is_running()
+                self.helper.is_running()
+                or self.helper.nav2_runtime.is_running()
             ):
                 self.feedback_message = "Mapping runtime stopped"
                 return py_trees.common.Status.SUCCESS
 
-            callback = (
-                self.helper.stop_current_process
-                if self.with_save
-                else self.helper.stop_without_save
-            )
+            callback = lambda: self.helper.stop(save=self.with_save)
             try:
                 started = self.helper.begin_runtime_operation(
                     self._operation_name,
@@ -70,11 +66,12 @@ class StopMapping(py_trees.behaviour.Behaviour):
 
         self._stop_requested = False
         if (
-            self.helper.is_rtabmap_running()
-            or self.helper.nav2_helper.is_running()
+            result is False
+            or self.helper.is_running()
+            or self.helper.nav2_runtime.is_running()
         ):
             self.feedback_message = (
-                "Mapping runtime stop completed but a process is still alive"
+                "Mapping runtime stop failed or a process is still alive"
             )
             return py_trees.common.Status.FAILURE
 

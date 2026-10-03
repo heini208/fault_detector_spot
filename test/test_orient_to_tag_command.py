@@ -213,7 +213,7 @@ def test_runner_passes_tag_source_on_first_orientation(monkeypatch):
         get_arm_movement_executor=Mock(return_value=executor),
     )
     helper = SimpleNamespace(
-        slam_helper=object(),
+        rtabmap_runtime=object(),
         robot_command_resources=resources,
         tag_state_source=source,
     )

@@ -41,7 +41,7 @@ class FakeHelper:
         self.change_calls.append(map_name)
         return True
 
-    def start_mapping_from_existing(self):
+    def start_mapping(self):
         self.start_calls += 1
         self.running = True
         return SimpleNamespace(poll=lambda: None)
