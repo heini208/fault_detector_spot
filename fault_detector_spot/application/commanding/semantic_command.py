@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass, field
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.navigation.body_height import validate_body_height
 
 
 def _finite(value, label):
@@ -132,6 +133,7 @@ class SemanticCommand:
         default_factory=InspectionSelection
     )
     motion_sensor_id: str = ""
+    body_height_m: float = 0.0
     walking_profile: str = ""
 
     def __post_init__(self):
@@ -161,6 +163,7 @@ class SemanticCommand:
             )
         if not isinstance(self.motion_sensor_id, str):
             raise TypeError("Motion sensor ID must be a string")
+        object.__setattr__(self, "body_height_m", validate_body_height(self.body_height_m))
         object.__setattr__(self, "command_id", command_id)
         object.__setattr__(
             self,

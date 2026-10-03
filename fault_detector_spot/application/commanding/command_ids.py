@@ -13,6 +13,7 @@ class CommandID(str, Enum):
     MOVE_CLOSE_TO_SURFACE = "move_close_to_surface"
     ORIENT_TO_SURFACE = "orient_to_surface"
     ORIENT_TO_TAG = "orient_to_tag"
+    CHANGE_BODY_HEIGHT = "change_body_height"
     STAND_UP = "stand_up"
     SIT_DOWN = "sit_down"
     WAIT_TIME = "wait_time"

@@ -1,5 +1,9 @@
 import math
 
+from fault_detector_spot.navigation.body_height import (
+    MIN_BODY_HEIGHT_M, MAX_BODY_HEIGHT_M,
+)
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QComboBox,
@@ -23,8 +27,8 @@ class BaseMovementControls(UIControlHelper):
         "Yaw": 0.0,
     }
 
-    MIN_BODY_HEIGHT_M = -0.20
-    MAX_BODY_HEIGHT_M = 0.20
+    MIN_BODY_HEIGHT_M = MIN_BODY_HEIGHT_M
+    MAX_BODY_HEIGHT_M = MAX_BODY_HEIGHT_M
     BODY_HEIGHT_STEP_M = 0.01
 
     def __init__(self, parent_ui: "Fault_Detector_UI"):
@@ -176,9 +180,10 @@ class BaseMovementControls(UIControlHelper):
         row.addWidget(self.body_height_value_label)
 
         self.change_height_button = QPushButton("Change Height")
-        self.change_height_button.setEnabled(False)
+        self.change_height_button.clicked.connect(self.handle_change_height)
         self.change_height_button.setToolTip(
-            "Body-height execution will be enabled when command support is added."
+            "Apply this height offset while stationary. The next base movement "
+            "restores normal walking height."
         )
         row.addWidget(self.change_height_button)
 
@@ -278,6 +283,12 @@ class BaseMovementControls(UIControlHelper):
         return intent
 
     # ---------------------- Button Handlers ----------------------
+
+    def handle_change_height(self):
+        intent = OperationalIntent()
+        intent.intent = OperationalIntent.INTENT_CHANGE_BODY_HEIGHT
+        intent.body_height_m = self.body_height_slider.value() / 100.0
+        self.ui.execute_operation(intent)
 
     def handle_move_base_relative(self):
         intent = self.build_move_base_intent(

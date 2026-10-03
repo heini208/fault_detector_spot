@@ -1,5 +1,9 @@
 from typing import List, Optional
 
+from fault_detector_spot.navigation.commands.change_body_height_command import (
+    ChangeBodyHeightCommand,
+)
+
 import py_trees
 import rclpy
 from fault_detector_msgs.msg import (
@@ -87,6 +91,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.STOW_ARM: self._simple_command,
             CommandID.READY_ARM: self._simple_command,
             CommandID.READY_SAFE_APPROACH: self._simple_command,
+            CommandID.CHANGE_BODY_HEIGHT: self._change_body_height,
             CommandID.STAND_UP: self._simple_command,
             CommandID.SIT_DOWN: self._simple_command,
             CommandID.TOGGLE_GRIPPER: self._simple_command,
@@ -253,6 +258,13 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             commands = [builder(command)]
         self.logger.info(f"Received {command_id.value} command")
         return commands
+
+    def _change_body_height(self, command: SemanticCommand):
+        return ChangeBodyHeightCommand(
+            command_id=command.command_id,
+            stamp=self._create_command_stamp(),
+            body_height_m=command.body_height_m,
+        )
 
     def _simple_command(
         self,

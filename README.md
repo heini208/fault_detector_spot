@@ -356,3 +356,15 @@ Checkout execution reads the checkout's config; installed execution reads
 `share/fault_detector_spot/config/arm_motion.yaml`. An installed copy must be
 updated through the normal package installation workflow. Other configuration
 files are unaffected by this arm-motion refactor.
+
+### Body height
+
+Select a body-height offset with the slider, then press **Change Height** to
+apply it as a stationary stand command. Moving the slider alone sends no command.
+The offset is relative to nominal standing height (−0.20 to +0.20 m).
+The next relative/tag movement or Nav2 velocity command restores normal walking
+height: height is scoped to the stand command and never changes the driver’s
+persistent mobility parameters. The slider retains the selected value for reuse.
+
+Changes to this interface require rebuilding `fault_detector_msgs` together with
+`fault_detector_spot` before launching the updated application.

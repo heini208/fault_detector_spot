@@ -90,6 +90,7 @@ def semantic_command_from_message(
         ),
         motion_sensor_id=message.motion_sensor_id,
         walking_profile=message.walking_profile,
+        body_height_m=message.body_height_m,
     )
 
 
@@ -124,6 +125,7 @@ def semantic_command_to_message(
     message.probe_point_id = command.inspection.probe_point_id
     message.motion_sensor_id = command.motion_sensor_id
     message.walking_profile = command.walking_profile
+    message.body_height_m = command.body_height_m
     return message
 
 

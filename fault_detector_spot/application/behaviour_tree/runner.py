@@ -73,6 +73,9 @@ from fault_detector_spot.navigation.behaviours.landmark_relocalizer import (
 from fault_detector_spot.navigation.behaviours.base_goal_behaviour import (
     BaseGoalBehaviour,
 )
+from fault_detector_spot.navigation.behaviours.change_body_height_behaviour import (
+    ChangeBodyHeightBehaviour,
+)
 from fault_detector_spot.navigation.behaviours.stand_up_behaviour import (
     StandUpBehaviour,
 )
@@ -365,6 +368,13 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             lambda n: OrientToTagBehaviour(
                 name="OrientToTagBehaviour",
                 tag_state_source=tag_state_source,
+                robot_command_resources=robot_command_resources,
+            ),
+        ),
+        (
+            CommandID.CHANGE_BODY_HEIGHT,
+            lambda n: ChangeBodyHeightBehaviour(
+                name="ChangeBodyHeightBehaviour",
                 robot_command_resources=robot_command_resources,
             ),
         ),

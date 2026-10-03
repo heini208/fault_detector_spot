@@ -38,6 +38,7 @@ _INTENT_COMMAND_IDS = {
     OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH: CommandID.MOVE_ARM_TO_TAG,
     OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH: CommandID.MOVE_ARM_TO_TAG,
     OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE: CommandID.MOVE_CLOSE_TO_SURFACE,
+    OperationalIntent.INTENT_CHANGE_BODY_HEIGHT: CommandID.CHANGE_BODY_HEIGHT,
     OperationalIntent.INTENT_STAND_UP: CommandID.STAND_UP,
     OperationalIntent.INTENT_SIT_DOWN: CommandID.SIT_DOWN,
     OperationalIntent.INTENT_READY_ARM: CommandID.READY_ARM,
@@ -258,6 +259,7 @@ def operational_intent_to_command(
         map_name=intent.map_name,
         waypoint_name=intent.waypoint_name,
         walking_profile=intent.walking_profile,
+        body_height_m=intent.body_height_m,
         inspection=InspectionSelection(
             object_id=intent.object_id,
             routine_id=intent.routine_id,

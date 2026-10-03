@@ -25,6 +25,7 @@ def deserialize_recorded_command(data: dict) -> SemanticCommand:
     data = dict(_object(data, "Recorded command"))
     # Recordings predating per-command profiles retain configured defaults.
     data.setdefault("walking_profile", "")
+    data.setdefault("body_height_m", 0.0)
     return _deserialize_dataclass(SemanticCommand, data)
 
 

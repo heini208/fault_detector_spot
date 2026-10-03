@@ -287,7 +287,9 @@ class BaseMotionPlanner:
                 -profile.angular_speed_rad_s,
             ).to_proto(),
         )
+        # Every walk uses nominal height, independent of the last stand command.
         params = RobotCommandBuilder.mobility_params(
+            body_height=0.0,
             locomotion_hint=GAITS[profile.gait],
         )
         params.vel_limit.CopyFrom(velocity_limit)

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 
+from fault_detector_spot.navigation.body_height import validate_body_height
+
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_spot_api_msgs.conversions import convert
 from spot_msgs.action import RobotCommand
@@ -235,6 +237,15 @@ class BaseMovementExecutor(MovementExecutor):
         self._operation = _BaseOperation.STAND
         self._set_phase(_BasePhase.EXECUTING_STAND)
         return super()._start_goal(self._build_stand_goal)
+
+    def change_height(self, body_height_m: float) -> BaseMovementUpdate:
+        """Send a command-local stand height; never change walking defaults."""
+        if self.active:
+            return self._busy_update()
+        height = validate_body_height(body_height_m)
+        self._operation = _BaseOperation.STAND
+        self._set_phase(_BasePhase.EXECUTING_STAND)
+        return super()._start_goal(lambda: self._build_stand_goal(height))
 
     def sit(self) -> BaseMovementUpdate:
         """Start Spot's native sit command directly."""
@@ -909,8 +920,10 @@ class BaseMovementExecutor(MovementExecutor):
         self._cancellation_complete = False
         self._tag_observation_tracker.reset()
 
-    def _build_stand_goal(self) -> RobotCommand.Goal:
-        command = RobotCommandBuilder.synchro_stand_command()
+    def _build_stand_goal(self, body_height_m=0.0) -> RobotCommand.Goal:
+        command = RobotCommandBuilder.synchro_stand_command(
+            body_height=body_height_m,
+        )
         goal = RobotCommand.Goal()
         convert(command, goal.command)
         return goal
