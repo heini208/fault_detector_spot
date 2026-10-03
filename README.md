@@ -362,9 +362,31 @@ files are unaffected by this arm-motion refactor.
 Select a body-height offset with the slider, then press **Change Height** to
 apply it as a stationary stand command. Moving the slider alone sends no command.
 The offset is relative to nominal standing height (−0.20 to +0.20 m).
-The next relative/tag movement or Nav2 velocity command restores normal walking
-height: height is scoped to the stand command and never changes the driver’s
-persistent mobility parameters. The slider retains the selected value for reuse.
+Before relative/tag movement or dispatching a mapping waypoint to Nav2, the shared
+base executor checks fresh `feet_center` → `body` TF height. It skips resetting
+when the measured height matches its nominal reference within 1 cm. A changed
+or unknown height triggers a zero-offset stand; movement waits for successful
+stand completion, standing posture, and fresh height samples settled for 0.3 s.
+The first preparation after executor startup establishes the nominal reference
+from that completed stand, without assuming a fixed physical robot height.
+Explicit height changes always require this reset, even if TF has not updated yet.
+
+Missing/stale height feedback, reset rejection/failure, or confirmation timeout
+blocks movement. Height is scoped to the stand command and never changes the
+driver's persistent mobility parameters. The slider retains the selection for
+reuse.
+
+Waypoint execution owns its preparation in `WaypointNavigationExecutor`, so both
+the waypoint tree and direct application callers must pass the same sequence:
+confirm/stow the arm, prepare walking height, then dispatch the Nav2 goal. The
+shared arm executor skips the stow command when fresh feedback already confirms
+STOWED; otherwise it waits for stow completion and state confirmation. Arm state
+is rechecked after height preparation and monitored during navigation. Loss of
+stowed-arm confirmation requests Nav2 cancellation and fails the operation.
+Preparation failures prevent Nav2 dispatch, and cancellation reaches the current
+preparation or navigation operation, including goals accepted after cancellation.
+Nav2 goals sent straight to its action server by external clients still bypass
+this application-owned preparation.
 
 Changes to this interface require rebuilding `fault_detector_msgs` together with
 `fault_detector_spot` before launching the updated application.

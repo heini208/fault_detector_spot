@@ -16,6 +16,24 @@ from fault_detector_spot.navigation.posture_state_source import (
 )
 
 
+class ReadyHeight:
+    """Height already verified; isolate existing movement lifecycle tests."""
+    def sample(self, _now):
+        return object()
+
+    def at_nominal_height(self, _sample):
+        return True
+
+    def require_reset(self):
+        pass
+
+    def begin_confirmation(self, _stamp):
+        pass
+
+    def confirm_reset(self, _now):
+        return True
+
+
 class ManualFuture:
 
     def __init__(self):
@@ -120,6 +138,7 @@ def test_stand_uses_executor_lifecycle_until_success():
     result_future = ManualFuture()
     client = FakeActionClient(send_future)
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=client,
     )
@@ -149,6 +168,7 @@ def test_sit_uses_executor_lifecycle_until_success():
     result_future = ManualFuture()
     client = FakeActionClient(send_future)
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=client,
     )
@@ -178,6 +198,7 @@ def test_standing_relative_starts_without_stand():
     client = FakeActionClient(send_future)
     posture = FakePostureStateSource(PostureState.STANDING)
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=client,
         posture_state_source=posture,
@@ -204,6 +225,7 @@ def test_sitting_relative_stands_before_resolving_requested_plan():
     client = FakeActionClient(stand_send_future)
     posture = FakePostureStateSource(PostureState.SITTING)
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=client,
         posture_state_source=posture,
@@ -259,6 +281,7 @@ def test_relative_reports_missing_posture_after_bounded_wait():
     send_future = ManualFuture()
     client = FakeActionClient(send_future)
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=client,
         posture_state_source=posture,
@@ -296,6 +319,7 @@ def test_stand_confirmation_requires_reported_standing():
     client = FakeActionClient(stand_send_future)
     posture = FakePostureStateSource(PostureState.SITTING)
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=client,
         posture_state_source=posture,
@@ -331,6 +355,7 @@ def test_stand_confirmation_requires_reported_standing():
 def test_executor_rejects_second_base_operation_while_active():
     send_future = ManualFuture()
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=FakeActionClient(send_future),
     )
@@ -353,6 +378,7 @@ def test_executor_remains_busy_while_cancellation_is_pending():
     send_future.set_result(handle)
 
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=FakeActionClient(send_future),
     )
@@ -391,6 +417,7 @@ def test_cancel_retains_executor_until_goal_reaches_terminal_state():
     send_future.set_result(handle)
 
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=FakeActionClient(send_future),
     )
@@ -426,6 +453,7 @@ def test_cancel_before_goal_acceptance_retains_ownership_until_terminal():
     handle = FakeGoalHandle(result_future)
 
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=FakeActionClient(send_future),
     )
@@ -462,6 +490,7 @@ def test_goal_response_timeout_retains_base_ownership_until_terminal():
     result_future = ManualFuture()
     handle = FakeGoalHandle(result_future)
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=FakeActionClient(send_future),
         monotonic_clock=clock,
@@ -502,6 +531,7 @@ def test_result_timeout_retains_base_ownership_until_terminal():
     send_future = ManualFuture()
     send_future.set_result(handle)
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=FakeActionClient(send_future),
         monotonic_clock=clock,
@@ -540,6 +570,7 @@ def test_explicit_cancel_during_timeout_cleanup_releases_without_polling():
     send_future = ManualFuture()
     send_future.set_result(handle)
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=object(),
         action_client=FakeActionClient(send_future),
         monotonic_clock=clock,

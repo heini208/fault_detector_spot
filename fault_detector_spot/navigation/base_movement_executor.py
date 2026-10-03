@@ -6,6 +6,9 @@ from enum import Enum
 import time
 
 from fault_detector_spot.navigation.body_height import validate_body_height
+from fault_detector_spot.navigation.body_height_readiness import (
+    BodyHeightReadiness, BodyHeightSource,
+)
 
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn_spot_api_msgs.conversions import convert
@@ -66,6 +69,8 @@ class BaseMovementOutcome(Enum):
     RESULT_TIMEOUT = "result_timeout"
     TAG_OBSERVATION_TIMEOUT = "tag_observation_timeout"
     MOTION_FAILED = "motion_failed"
+    HEIGHT_STATE_UNAVAILABLE = "height_state_unavailable"
+    HEIGHT_RESET_TIMEOUT = "height_reset_timeout"
     POSTURE_STATE_UNAVAILABLE = "posture_state_unavailable"
     POSTURE_STATE_STALE = "posture_state_stale"
     POSTURE_STATE_UNKNOWN = "posture_state_unknown"
@@ -82,6 +87,7 @@ class BaseMovementUpdate:
 
 class _BaseOperation(Enum):
     MOVEMENT = "movement"
+    PREPARE = "prepare"
     STAND = "stand"
     SIT = "sit"
 
@@ -95,6 +101,8 @@ class _BasePhase(Enum):
     IDLE = "idle"
     WAITING_FOR_POSTURE = "waiting_for_posture"
     EXECUTING_STAND = "executing_stand"
+    CHECKING_HEIGHT = "checking_height"
+    CONFIRMING_HEIGHT = "confirming_height"
     CONFIRMING_STANDING = "confirming_standing"
     EXECUTING_MOVEMENT = "executing_movement"
     VERIFYING_ENDPOINT = "verifying_endpoint"
@@ -135,6 +143,8 @@ class BaseMovementExecutor(MovementExecutor):
         goal_verification_config=None,
         ros_time_sec=time.time,
         walking_profiles=None,
+        height_readiness=None,
+        height_reset_timeout_sec=5.0,
         tag_stability_config=None,
         tag_observation_timeout_sec: float = (
             DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC
@@ -180,6 +190,12 @@ class BaseMovementExecutor(MovementExecutor):
             base_pose_source or BasePoseSource(tf_listener)
         )
         self._ros_time_sec = ros_time_sec
+        self.height_readiness = height_readiness or BodyHeightReadiness(
+            BodyHeightSource(tf_listener, robot_name)
+        )
+        self.height_reset_timeout_sec = self._positive_timeout(
+            height_reset_timeout_sec, "Height reset confirmation timeout",
+        )
         self.posture_state_source = posture_state_source
         self.ready_state_timeout_sec = self._positive_timeout(
             ready_state_timeout_sec,
@@ -230,6 +246,15 @@ class BaseMovementExecutor(MovementExecutor):
             semantic_tag_command=semantic_command,
         )
 
+    def prepare_for_navigation(self) -> BaseMovementUpdate:
+        """Complete walking-height readiness before dispatching a Nav2 goal."""
+        if self.active:
+            return self._busy_update()
+        self._active = True
+        self._operation = _BaseOperation.PREPARE
+        self._set_phase(_BasePhase.WAITING_FOR_POSTURE)
+        return self._advance_movement_start()
+
     def stand(self) -> BaseMovementUpdate:
         """Start Spot's native stand command directly."""
         if self.active:
@@ -243,6 +268,7 @@ class BaseMovementExecutor(MovementExecutor):
         if self.active:
             return self._busy_update()
         height = validate_body_height(body_height_m)
+        self.height_readiness.require_reset()
         self._operation = _BaseOperation.STAND
         self._set_phase(_BasePhase.EXECUTING_STAND)
         return super()._start_goal(lambda: self._build_stand_goal(height))
@@ -289,6 +315,12 @@ class BaseMovementExecutor(MovementExecutor):
 
         if self._phase is _BasePhase.WAITING_FOR_POSTURE:
             return self._advance_movement_start()
+
+        if self._phase is _BasePhase.CHECKING_HEIGHT:
+            return self._check_walking_height()
+
+        if self._phase is _BasePhase.CONFIRMING_HEIGHT:
+            return self._confirm_walking_height()
 
         if self._phase is _BasePhase.CONFIRMING_STANDING:
             return self._poll_standing_confirmation()
@@ -360,6 +392,46 @@ class BaseMovementExecutor(MovementExecutor):
             self._set_phase(_BasePhase.EXECUTING_STAND)
             return self._submit_goal(self._build_stand_goal)
 
+        self._set_phase(_BasePhase.CHECKING_HEIGHT)
+        return self._check_walking_height()
+
+    def _check_walking_height(self):
+        sample = self.height_readiness.sample(self._ros_time_sec())
+        if sample is None:
+            if self._deadline_expired(self._phase_started, self.ready_state_timeout_sec):
+                return self._finish(
+                    BaseMovementOutcome.HEIGHT_STATE_UNAVAILABLE,
+                    "Walking height unavailable: need fresh feet_center-to-body TF",
+                )
+            return BaseMovementUpdate(BaseMovementOutcome.RUNNING,
+                                      "Waiting for measured body height")
+        state = self._fresh_posture_state()
+        if state is not PostureState.STANDING:
+            return self._finish(
+                self._posture_state_failure_outcome(state),
+                "Standing posture was lost while checking walking height",
+            )
+        if self.height_readiness.at_nominal_height(sample):
+            return self._walking_height_ready()
+        self.height_readiness.require_reset()
+        self._set_phase(_BasePhase.EXECUTING_STAND)
+        return self._submit_goal(self._build_stand_goal)
+
+    def _confirm_walking_height(self):
+        if (self._fresh_posture_state() is PostureState.STANDING
+                and self.height_readiness.confirm_reset(self._ros_time_sec())):
+            return self._walking_height_ready()
+        if self._deadline_expired(self._phase_started, self.height_reset_timeout_sec):
+            return self._finish(
+                BaseMovementOutcome.HEIGHT_RESET_TIMEOUT,
+                "Default-height stand did not produce fresh, settled walking height",
+            )
+        return BaseMovementUpdate(BaseMovementOutcome.RUNNING,
+                                  "Waiting for measured walking height to settle")
+
+    def _walking_height_ready(self):
+        if self._operation is _BaseOperation.PREPARE:
+            return self._finish(BaseMovementOutcome.SUCCESS, "Walking height ready")
         return self._submit_movement_goal()
 
     def _submit_movement_goal(self) -> BaseMovementUpdate:
@@ -410,10 +482,13 @@ class BaseMovementExecutor(MovementExecutor):
 
     def _handle_successful_result(self, result):
         if self._phase is _BasePhase.EXECUTING_STAND:
-            if self._operation is not _BaseOperation.MOVEMENT:
+            if self._operation not in {_BaseOperation.MOVEMENT, _BaseOperation.PREPARE}:
                 return super()._handle_successful_result(result)
 
             self._reset_goal_lifecycle()
+            # The action reports completion of the stand trajectory. Require
+            # newer measured samples too; a cached standing flag is insufficient.
+            self.height_readiness.begin_confirmation(self._ros_time_sec())
             self._set_phase(_BasePhase.CONFIRMING_STANDING)
             return self._poll_standing_confirmation()
 
@@ -835,7 +910,8 @@ class BaseMovementExecutor(MovementExecutor):
     def _poll_standing_confirmation(self) -> BaseMovementUpdate:
         state = self._fresh_posture_state()
         if state is PostureState.STANDING:
-            return self._submit_movement_goal()
+            self._set_phase(_BasePhase.CONFIRMING_HEIGHT)
+            return self._confirm_walking_height()
 
         if not self._deadline_expired(
             self._phase_started,

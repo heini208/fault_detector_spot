@@ -1,5 +1,7 @@
 """Offline tests for measured base arrival and settling."""
 
+from test_base_movement_executor import ReadyHeight
+
 import math
 
 import pytest
@@ -110,6 +112,7 @@ def test_executor_verifies_actual_goal_and_cancellation_during_settling():
     transform.transform.rotation.w = 1.0
     transform.transform.translation.x = 1.0
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=SimpleNamespace(lookup_a_tform_b=lambda *a, **k: transform),
         action_client=FakeActionClient(send),
         posture_state_source=FakePostureStateSource(PostureState.STANDING),

@@ -1,5 +1,7 @@
 """Exercise correction lifecycle without ROS nodes or robot motion."""
 
+from test_base_movement_executor import ReadyHeight
+
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -100,6 +102,7 @@ def make_movement(
     target.pose.position.x = 1.0
     tag_state_source = FakeTagStateSource()
     executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
         tf_listener=SimpleNamespace(
             lookup_a_tform_b=lambda *a, **k: transform
         ),

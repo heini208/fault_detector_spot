@@ -1,5 +1,7 @@
 """Validate semantic tag re-planning in BaseMotionPlanner."""
 
+from test_base_movement_executor import ReadyHeight
+
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -152,6 +154,7 @@ def test_executor_retains_frozen_request_after_initial_submission():
     listener = MovingTF()
     executor = BaseMovementExecutor(
         listener,
+        height_readiness=ReadyHeight(),
         action_client=Client(),
         posture_state_source=FakePostureStateSource(PostureState.STANDING),
         tag_state_source=SimpleNamespace(visible_snapshot=lambda: {7: observation(1.0)}),

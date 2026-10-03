@@ -595,7 +595,8 @@ def build_navigate_to_goal_pose_tree(
         name="SetWaypointAsGoal"
     )
     navigate = NavigateToGoalPose(
-        name="NavigateToGoalPose"
+        name="NavigateToGoalPose",
+        robot_command_resources=get_helper_container(node).robot_command_resources,
     )
     sequence.add_children([
         set_goal,
