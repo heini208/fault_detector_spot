@@ -23,7 +23,10 @@ def test_reference_capture_api_shutdown_stops_work_before_destroying_server():
 
 def test_reference_capture_coordinator_shutdown_interrupts_waits():
     source = inspect.getsource(ProbeReferenceCaptureCoordinator.close)
-    assert "_shutdown.set()" in source
+    assert "request_shutdown()" in source
+    assert "_shutdown.set()" in inspect.getsource(
+        ProbeReferenceCaptureCoordinator.request_shutdown
+    )
     assert "unregister" in source
 
 

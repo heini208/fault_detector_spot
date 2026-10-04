@@ -1,5 +1,6 @@
 """Expose probe refinement finalization as one typed ROS action."""
 
+from threading import Event
 from uuid import uuid4
 
 from fault_detector_msgs.action import FinalizeProbeRefinement
@@ -30,6 +31,7 @@ class ProbeRefinementFinalizationApi:
         state_publisher,
         state_adapter,
     ):
+        self._shutdown = Event()
         self.node = node
         self.coordinator = coordinator
         self.state_publisher = state_publisher
@@ -47,6 +49,8 @@ class ProbeRefinementFinalizationApi:
         )
 
     def _accept(self, goal_request):
+        if self._shutdown.is_set():
+            return GoalResponse.REJECT
         try:
             required_client_id(goal_request.client_id)
             validate_context_id(goal_request.context_id)
@@ -289,6 +293,11 @@ class ProbeRefinementFinalizationApi:
             ),
         }
         return values[phase]
+
+    def request_shutdown(self):
+        """Stop setup work before destroying its action transport."""
+        self._shutdown.set()
+        self.runner.request_shutdown()
 
     def close(self):
         """Destroy finalization transport and detach its runner."""

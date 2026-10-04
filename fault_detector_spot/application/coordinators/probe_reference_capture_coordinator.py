@@ -501,9 +501,13 @@ class ProbeReferenceCaptureCoordinator:
                     f"{name} must be finite and non-negative"
                 )
 
+    def request_shutdown(self):
+        """Interrupt collection while keeping TF alive until callbacks finish."""
+        self._shutdown.set()
+
     def close(self):
         """Stop active waits and detach capture TF observation."""
-        self._shutdown.set()
+        self.request_shutdown()
         listener = self.tf_listener
         if listener is not None and hasattr(listener, "unregister"):
             listener.unregister()

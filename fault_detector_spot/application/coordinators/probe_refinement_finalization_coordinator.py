@@ -59,6 +59,7 @@ class ProbeRefinementFinalizationCoordinator:
         self.poll_sec = float(poll_sec)
         self._lock = RLock()
         self._waiters = {}
+        self._shutdown = Event()
         coordinator.add_motion_status_listener(self._receive_motion_status)
 
     def run(
@@ -76,6 +77,9 @@ class ProbeRefinementFinalizationCoordinator:
             raise TypeError("Cancellation predicate must be callable")
         if state_changed is not None and not callable(state_changed):
             raise TypeError("State listener must be callable")
+
+        if self._shutdown.is_set():
+            raise RuntimeError("Application is shutting down")
 
         context_id = context.context_id
         client_id = context.client_id
@@ -269,6 +273,8 @@ class ProbeRefinementFinalizationCoordinator:
         position_tolerance_m,
         orientation_tolerance_rad,
     ):
+        if self._shutdown.is_set():
+            raise RuntimeError("Application is shutting down")
         context = self.coordinator.context(context_id, client_id)
         operation = self.coordinator.prepare_motion(
             context,
@@ -279,6 +285,8 @@ class ProbeRefinementFinalizationCoordinator:
             ),
             finalization_request_id=finalization_request_id,
         )
+        if self._shutdown.is_set():
+            raise RuntimeError("Application is shutting down")
         waiter = _MotionWaiter()
         with self._lock:
             self._waiters[operation.request_id] = waiter
@@ -291,6 +299,10 @@ class ProbeRefinementFinalizationCoordinator:
 
         cancellation_sent = False
         while not waiter.event.wait(self.poll_sec):
+            if self._shutdown.is_set():
+                with self._lock:
+                    self._waiters.pop(operation.request_id, None)
+                raise RuntimeError("Application shutdown interrupted retraction")
             if cancel_requested() and not cancellation_sent:
                 cancellation_sent = True
                 try:
@@ -333,6 +345,10 @@ class ProbeRefinementFinalizationCoordinator:
     def _emit(listener, phase, saved, snapshot):
         if listener is not None:
             listener(phase, saved, snapshot)
+
+    def request_shutdown(self):
+        """Interrupt retraction waits before the ROS executor is drained."""
+        self._shutdown.set()
 
     def close(self):
         """Detach finalization status observation."""

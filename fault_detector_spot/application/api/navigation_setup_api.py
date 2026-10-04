@@ -58,6 +58,7 @@ class NavigationSetupApi:
         self.coordinator = coordinator
         self._lock = RLock()
         self._executions = {}
+        self._shutdown = Event()
         self._early_states = {}
         self._callback_group = ReentrantCallbackGroup()
         self._transaction_handlers = {
@@ -102,6 +103,8 @@ class NavigationSetupApi:
         coordinator.add_status_listener(self._receive_status)
 
     def _accept(self, goal_request):
+        if self._shutdown.is_set():
+            return GoalResponse.REJECT
         try:
             required_client_id(goal_request.client_id)
             self._validate_operation(goal_request.intent.operation)
@@ -115,6 +118,8 @@ class NavigationSetupApi:
 
     def _execute(self, goal_handle):
         goal = goal_handle.request
+        if self._shutdown.is_set():
+            return self._abort(goal_handle, goal, "Application is shutting down")
         operation_code = int(goal.intent.operation)
         try:
             if operation_code == NavigationSetupIntent.OPERATION_OPEN:
@@ -246,12 +251,19 @@ class NavigationSetupApi:
                 NavigationSetupState.STATE_CANCELLED,
             }:
                 execution.finished.set()
-        self._wait_for_runtime_execution(execution)
+        try:
+            self._wait_for_runtime_execution(execution)
+        except RuntimeError as exception:
+            with self._lock:
+                self._executions.pop(execution.request_id, None)
+            return self._abort(goal_handle, goal_handle.request, str(exception))
         return self._runtime_result(execution)
 
     def _wait_for_runtime_execution(self, execution):
         goal_handle = execution.goal_handle
         while not execution.finished.wait(0.05):
+            if self._shutdown.is_set():
+                raise RuntimeError("Application shutdown interrupted navigation setup")
             if (
                 goal_handle.is_cancel_requested
                 and not execution.cancellation_requested
@@ -456,6 +468,10 @@ class NavigationSetupApi:
         if mode == MODE_LOCALIZATION:
             return NavigationSetupState.MODE_LOCALIZATION
         return NavigationSetupState.MODE_NONE
+
+    def request_shutdown(self) -> None:
+        """Release action waits without destroying resources used by callbacks."""
+        self._shutdown.set()
 
     def close(self) -> None:
         """Detach transport resources from the coordinator."""

@@ -526,6 +526,13 @@ class ApplicationApiNode(Node):
         }
         return values[state]
 
+    def request_shutdown(self):
+        """Release setup callbacks before waiting for the executor to drain."""
+        self.navigation_setup_api.request_shutdown()
+        self.probe_setup_motion_api.request_shutdown()
+        self.probe_reference_capture_api.request_shutdown()
+        self.probe_refinement_finalization_api.request_shutdown()
+
     def destroy_node(self):
         self.probe_reference_capture_api.close()
         self.probe_refinement_finalization_api.close()
@@ -560,9 +567,14 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        executor.shutdown()
-        node.destroy_node()
-        rclpy.try_shutdown()
+        node.request_shutdown()
+        try:
+            executor.shutdown()
+        finally:
+            try:
+                node.destroy_node()
+            finally:
+                rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

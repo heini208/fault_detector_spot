@@ -60,6 +60,7 @@ class ProbeSetupMotionApi:
         self.state_adapter = state_adapter
         self._lock = RLock()
         self._executions = {}
+        self._shutdown = Event()
         self._callback_group = ReentrantCallbackGroup()
         self._action_server = ActionServer(
             node,
@@ -73,6 +74,8 @@ class ProbeSetupMotionApi:
         coordinator.add_motion_status_listener(self._receive_status)
 
     def _accept(self, goal_request):
+        if self._shutdown.is_set():
+            return GoalResponse.REJECT
         try:
             required_client_id(goal_request.client_id)
             self._motion_request(goal_request.intent)
@@ -86,6 +89,8 @@ class ProbeSetupMotionApi:
 
     def _execute(self, goal_handle):
         goal = goal_handle.request
+        if self._shutdown.is_set():
+            return self._abort(goal_handle, goal, "Application is shutting down")
         try:
             context = self.coordinator.context(
                 goal.context_id,
@@ -109,6 +114,10 @@ class ProbeSetupMotionApi:
                 self._executions.pop(operation.request_id, None)
             return self._abort(goal_handle, goal, str(exception))
         while not execution.finished.wait(0.05):
+            if self._shutdown.is_set():
+                with self._lock:
+                    self._executions.pop(operation.request_id, None)
+                return self._abort(goal_handle, goal, "Application shutdown interrupted probe motion")
             if (
                 goal_handle.is_cancel_requested
                 and not execution.cancellation_requested
@@ -275,6 +284,10 @@ class ProbeSetupMotionApi:
             CommandControllerState.FAILED: ProbeSetupState.STATE_FAILED,
             CommandControllerState.CANCELLED: ProbeSetupState.STATE_CANCELLED,
         }[state]
+
+    def request_shutdown(self) -> None:
+        """Release action waits without destroying resources used by callbacks."""
+        self._shutdown.set()
 
     def close(self) -> None:
         """Destroy the motion action and detach status observation."""

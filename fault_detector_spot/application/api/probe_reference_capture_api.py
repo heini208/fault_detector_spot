@@ -1,5 +1,6 @@
 """Expose synchronized probe reference capture as one ROS action."""
 
+from threading import Event
 from uuid import uuid4
 
 from fault_detector_msgs.action import CaptureProbeReferenceViews
@@ -34,6 +35,7 @@ class ProbeReferenceCaptureApi:
         state_publisher,
         state_adapter,
     ):
+        self._shutdown = Event()
         self.node = node
         self.probe_setup_coordinator = probe_setup_coordinator
         self.capture_coordinator = capture_coordinator
@@ -51,6 +53,8 @@ class ProbeReferenceCaptureApi:
         )
 
     def _accept(self, goal_request):
+        if self._shutdown.is_set():
+            return GoalResponse.REJECT
         try:
             required_client_id(goal_request.client_id)
             validate_context_id(goal_request.context_id)
@@ -204,6 +208,11 @@ class ProbeReferenceCaptureApi:
             ),
         }
         return values[phase]
+
+    def request_shutdown(self):
+        """Stop setup work before destroying its action transport."""
+        self._shutdown.set()
+        self.capture_coordinator.request_shutdown()
 
     def close(self):
         """Stop capture work and destroy its action transport."""
