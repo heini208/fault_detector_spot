@@ -138,6 +138,7 @@ class ProbeExecutionConfiguration:
     orientation_tolerance_rad: float
     measurement_duration_sec: float
     aligned_preapproach_distance_m: float
+    pre_approach_path: Tuple[FrozenPoseData, ...] = ()
 
     @classmethod
     def load(
@@ -166,6 +167,8 @@ class ProbeExecutionConfiguration:
                 f"{object_id}/{routine_id}/{probe_point_id}"
             )
         return cls(
+            pre_approach_path=tuple(FrozenPoseData.from_pose(point.pose_object)
+                                    for point in probe_point.pre_approach_path),
             object_id=inspection_object.object_id,
             routine_id=routine.routine_id,
             probe_point_id=probe_point.probe_point_id,
@@ -206,6 +209,7 @@ class ProbeExecutionConfiguration:
     ) -> ProbeExecutionTarget:
         """Resolve frozen geometry against the current live object pose."""
         return resolve_probe_execution_geometry(
+            pre_approach_path=tuple(point.to_pose() for point in self.pre_approach_path),
             object_id=self.object_id,
             routine_id=self.routine_id,
             probe_point_id=self.probe_point_id,

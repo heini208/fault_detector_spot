@@ -39,6 +39,8 @@ MAX_REFINEMENT_ROTATION_RAD = math.radians(15.0)
 class ProbeMotionKind(str, Enum):
     """Supported single-step setup movement kinds."""
 
+    MOVE_PATHING_POINT = "move_pathing_point"
+    MOVE_PRE_APPROACH_PATH = "move_pre_approach_path"
     MOVE_SAFE_APPROACH = "move_safe_approach"
     MOVE_ALIGNED_PREAPPROACH = "move_aligned_preapproach"
     ADJUST_SAFE_APPROACH = "adjust_safe_approach"
@@ -68,6 +70,7 @@ class ProbeMotionRequest:
     yaw_rad: float = 0.0
     position_tolerance_m: float = 0.01
     orientation_tolerance_rad: float = math.radians(5.0)
+    pathing_point_index: int = 0
 
     def validate(self) -> None:
         if not isinstance(self.kind, ProbeMotionKind):

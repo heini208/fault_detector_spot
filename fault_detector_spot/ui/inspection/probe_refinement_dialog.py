@@ -1,5 +1,8 @@
 """Guided probe-point setup dialog."""
 
+from fault_detector_msgs.msg import ProbeSetupMotionIntent
+from .pre_approach_path_dialog import PreApproachPathDialog
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
@@ -376,6 +379,21 @@ class ProbeRefinementDialog(QDialog):
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
+        self.pathing_point_count_label = QLabel("Pathing points: 0")
+        content_layout.addWidget(self.pathing_point_count_label)
+        self.path_dialog = PreApproachPathDialog(self.controls, self)
+        self.add_pathing_point_button = QPushButton("Add Pathing Point")
+        self.add_pathing_point_button.clicked.connect(self.path_dialog.show)
+        self.move_path_button = QPushButton("Move Along Set Path")
+        self.move_path_button.clicked.connect(lambda: self.controls.handle_path_motion(
+            ProbeSetupMotionIntent.OPERATION_MOVE_PRE_APPROACH_PATH
+        ))
+        self.move_safe_pose_button = QPushButton("Move to Safe Pre-approach Pose")
+        self.move_safe_pose_button.clicked.connect(self.controls.handle_move_to_approach_pose)
+        path_actions = QHBoxLayout()
+        for button in (self.add_pathing_point_button, self.move_path_button, self.move_safe_pose_button):
+            path_actions.addWidget(button)
+        content_layout.addLayout(path_actions)
         content_layout.addWidget(distance_widget)
 
         clearance_group = QGroupBox("Camera clearance recovery")
@@ -417,8 +435,8 @@ class ProbeRefinementDialog(QDialog):
         content_layout.addWidget(clearance_group)
         return self._make_scroll_page(
             RefinementStage.ALIGNMENT,
-            "Aligned Pre-approach Pose",
-            "Refine the shared lateral position and orientation at the "
+            "Pre-approach Path",
+            "Add optional pathing points, then refine the final lateral position and orientation at the "
             "absolute pre-approach distance. No independent axial offset "
             "is permitted.",
             self.controls.alignment_step_status_label,
@@ -426,6 +444,18 @@ class ProbeRefinementDialog(QDialog):
             self.controls.use_current_alignment_button,
             content,
         )
+
+    def hideEvent(self, event):
+        self.path_dialog.hide()
+        super().hideEvent(event)
+
+    def refresh_path_controls(self, enabled):
+        state = self.controls._probe_setup_state
+        count = len(state.pathing_point_names) if state is not None else 0
+        self.pathing_point_count_label.setText(f"Pathing points: {count}")
+        for button in (self.add_pathing_point_button, self.move_path_button, self.move_safe_pose_button):
+            button.setEnabled(enabled)
+        self.path_dialog.refresh(state, enabled)
 
     def _make_probe_page(self):
         content = QWidget()
@@ -914,7 +944,7 @@ class ProbeRefinementDialog(QDialog):
     def _stage_title(stage):
         return {
             RefinementStage.SAFE_APPROACH: "Reach Routine Safe Pose",
-            RefinementStage.ALIGNMENT: "Aligned Pre-approach",
+            RefinementStage.ALIGNMENT: "Pre-approach Path",
             RefinementStage.PROBE: "Probe",
         }[stage]
 

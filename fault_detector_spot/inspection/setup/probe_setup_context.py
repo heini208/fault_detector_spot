@@ -1,13 +1,13 @@
 """Internal probe draft and immutable public snapshots."""
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 from fault_detector_spot.application.setup.setup_context import (
     SetupContextSnapshot,
 )
-from fault_detector_spot.inspection.model.models import ImagePoint
+from fault_detector_spot.inspection.model.models import ImagePoint, PreApproachPathPoint
 from fault_detector_spot.inspection.setup.probe_setup_geometry import (
     ProbeGeometryResult,
 )
@@ -31,6 +31,7 @@ class ProbeSetupDraft:
     geometry: Optional[ProbeGeometryResult] = None
     setup: Optional[ReferenceProbeSetup] = None
     refinement: Optional[ProbeRefinementSession] = None
+    pre_approach_path: list[PreApproachPathPoint] = field(default_factory=list)
     dirty: bool = False
     validation_error: str = ""
 
@@ -39,6 +40,7 @@ class ProbeSetupDraft:
         self.selected_routine_id = ""
         self.selected_reference_view_id = ""
         self.reference_pixel = None
+        self.pre_approach_path.clear()
         self.geometry = None
         self.setup = None
         self.refinement = None
@@ -47,6 +49,7 @@ class ProbeSetupDraft:
 
     def clear_geometry(self) -> None:
         self.reference_pixel = None
+        self.pre_approach_path.clear()
         self.geometry = None
         self.setup = None
         self.refinement = None
@@ -76,6 +79,7 @@ class ProbeSetupSnapshot:
     dirty: bool
     validation_error: str
     probe_point_target_surface_distances_m: Tuple[float, ...] = ()
+    pre_approach_path: Tuple[PreApproachPathPoint, ...] = ()
     has_base_position: bool = False
     has_routine_safe_approach_pose: bool = False
 
@@ -95,6 +99,7 @@ class ProbeSetupSnapshot:
         has_routine_safe_approach_pose=False,
     ) -> "ProbeSetupSnapshot":
         return cls(
+            pre_approach_path=tuple(deepcopy(draft.pre_approach_path)),
             context=draft.context,
             selected_object_id=draft.selected_object_id,
             selected_routine_id=draft.selected_routine_id,

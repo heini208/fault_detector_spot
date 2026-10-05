@@ -238,6 +238,7 @@ class ProbeFinalizationController:
     ):
         setup = draft.setup
         point = ProbePoint(
+            pre_approach_path=deepcopy(draft.pre_approach_path),
             probe_point_id=self._name(
                 probe_point_id,
                 "probe point ID",

@@ -217,9 +217,9 @@ def test_refinement_dialog_uses_stage_safe_controls(application, tmp_path):
 
     assert not controls.refinement_dialog.isModal()
     assert controls.refinement_dialog.stage_stack.count() == 5
-    assert controls.move_aligned_pose_button.text() == "Move to Candidate"
+    assert controls.move_aligned_pose_button.text() == "Move to Final Candidate"
     assert controls.use_current_alignment_button.text() == (
-        "Approve Current Pose"
+        "Save Final Aligned Pre-approach Pose"
     )
     assert controls.refinement_buttons["approach"] == {}
     assert "front" not in controls.refinement_buttons["alignment"]

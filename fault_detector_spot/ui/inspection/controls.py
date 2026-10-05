@@ -455,9 +455,9 @@ class InspectionControls(UIControlHelper):
         self.use_current_approach_button = QPushButton(
             "Approve Current Pose"
         )
-        self.move_aligned_pose_button = QPushButton("Move to Candidate")
+        self.move_aligned_pose_button = QPushButton("Move to Final Candidate")
         self.use_current_alignment_button = QPushButton(
-            "Approve Current Pose"
+            "Save Final Aligned Pre-approach Pose"
         )
         self.orient_to_surface_button = QPushButton("Orient to Surface")
         self.orient_to_surface_button.setEnabled(False)
@@ -1693,7 +1693,7 @@ class InspectionControls(UIControlHelper):
         stage = presentation.active_stage
         if (
             not presentation.stage_is_approved(stage)
-            or (stage is RefinementStage.SAFE_APPROACH
+            or (stage in (RefinementStage.SAFE_APPROACH, RefinementStage.ALIGNMENT)
                 and presentation.motion_states[stage]
                 is not RefinementMotionState.REACHED)
         ):
@@ -1822,6 +1822,7 @@ class InspectionControls(UIControlHelper):
             and not pending
             and not recovery_only
         )
+        self.refinement_dialog.refresh_path_controls(alignment_enabled)
         self.move_aligned_pose_button.setEnabled(
             alignment_enabled
         )
@@ -1883,6 +1884,7 @@ class InspectionControls(UIControlHelper):
         self.refinement_dialog.next_button.setEnabled(
             presentation.stage_is_approved(current) and not pending
             and (not safe_page or safe_reached)
+            and (not alignment_page or alignment_reached)
         )
         self.refinement_dialog.next_button.setText(
             "Keep Existing and Continue"
@@ -2124,6 +2126,17 @@ class InspectionControls(UIControlHelper):
         )
         return False
 
+    def handle_path_motion(self, operation, index=0):
+        intent = ProbeSetupMotionIntent()
+        intent.operation = operation
+        intent.pathing_point_index = index
+        intent.frame = ProbeSetupMotionIntent.FRAME_SENSOR
+        self._write_motion_tolerances(intent)
+        submitted = self._submit_probe_motion(intent, "pre-approach path")
+        if submitted:
+            self.refinement_dialog.refresh_path_controls(False)
+        return submitted
+
     def _send_alignment_motion(self):
         intent = ProbeSetupMotionIntent()
         intent.operation = (
@@ -2304,6 +2317,8 @@ class InspectionControls(UIControlHelper):
         self._apply_object_and_routine_lists(state)
         self._apply_base_position_state(state)
         self._apply_probe_setup_view(view)
+        if not state.refinement_active:
+            self.refinement_dialog.refresh_path_controls(False)
         signature = (
             state.selected_object_id,
             state.selected_routine_id,

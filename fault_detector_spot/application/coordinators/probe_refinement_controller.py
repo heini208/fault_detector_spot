@@ -168,6 +168,11 @@ class ProbeRefinementController:
         if motion.kind is ProbeMotionKind.ADJUST_SAFE_APPROACH:
             raise ValueError("Change the shared safe pose in routine setup")
         attachment = self._active_attachment(draft)
+        if motion.kind in {
+            ProbeMotionKind.MOVE_PATHING_POINT,
+            ProbeMotionKind.MOVE_PRE_APPROACH_PATH,
+        }:
+            return self._prepare_path_motion(context, draft, motion, attachment)
         stage = self.motion_stage(motion.kind)
         if stage is RefinementStage.ALIGNMENT:
             self._ensure_minimum_camera_clearance_geometry(
@@ -282,6 +287,53 @@ class ProbeRefinementController:
         )
         return operation
 
+    def _prepare_path_motion(self, context, draft, motion, attachment):
+        final = motion.kind is ProbeMotionKind.MOVE_PRE_APPROACH_PATH
+        if final:
+            self._ensure_minimum_camera_clearance_geometry(draft, attachment)
+        refinement = self.require_refinement(draft)
+        if final:
+            target = refinement.candidate_pose(RefinementStage.ALIGNMENT)
+            path = [point.pose_object for point in draft.pre_approach_path]
+        else:
+            index = motion.pathing_point_index
+            if not 0 <= index < len(draft.pre_approach_path):
+                raise ValueError("Select an existing pathing point")
+            target = draft.pre_approach_path[index].pose_object
+            path = []
+        routine = self._selected_routine(draft)
+        tag = self._motion_state_source().reference_tag(
+            routine.reference_tag.tag_id
+        )
+        command = self.motion_command_factory.absolute(
+            target, tag, attachment.motion_sensor_id
+        )
+        offsets = tuple(
+            self.motion_command_factory.absolute(
+                pose, tag, attachment.motion_sensor_id
+            ).offset
+            for pose in path
+        )
+        operation = self.setup_coordinator.prepare_command(
+            context, replace(command, pre_approach_offsets=offsets)
+        )
+        refinement.begin_motion(PendingRefinementMotion(
+            request_id=operation.request_id,
+            stage=RefinementStage.ALIGNMENT,
+            purpose="pre-approach path" if final else "pathing point",
+            target_pose_object=deepcopy(target),
+            updates_candidate=False,
+            verify_achieved_pose=final,
+        ))
+        refinement.active_stage = RefinementStage.ALIGNMENT
+        self._invalidate_downstream_motion_state(
+            refinement, RefinementStage.ALIGNMENT
+        )
+        self._operations.register(
+            operation.request_id, context, (motion, RefinementStage.ALIGNMENT)
+        )
+        return operation
+
     def require_operation(self, operation):
         tracked = self._operations.owned(
             operation.request_id,
@@ -336,7 +388,15 @@ class ProbeRefinementController:
                     motion,
                     achieved,
                 )
-                if motion.kind in _ORIENTATION_MOTION_KINDS:
+                if motion.kind is ProbeMotionKind.MOVE_PATHING_POINT:
+                    refinement.complete_motion_without_pose_capture(
+                        status.operation.request_id
+                    )
+                    refinement.motion_states[stage] = (
+                        RefinementMotionState.NOT_TESTED
+                    )
+                    refinement.alignment_candidate_reached = False
+                elif motion.kind in _ORIENTATION_MOTION_KINDS:
                     refinement.complete_alignment_orientation(
                         status.operation.request_id,
                         achieved,

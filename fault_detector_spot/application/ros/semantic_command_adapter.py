@@ -73,6 +73,7 @@ def semantic_command_from_message(
     return SemanticCommand(
         command_id=command_id,
         tag=tag,
+        pre_approach_offsets=tuple(stamped_pose_from_message(pose) for pose in message.pre_approach_offsets),
         offset=stamped_pose_from_message(message.offset),
         orientation_mode=message.orientation_mode,
         wait_time=message.wait_time,
@@ -108,6 +109,7 @@ def semantic_command_to_message(
         message.tag.id = command.tag.id
         message.tag.pose = stamped_pose_to_message(command.tag.pose)
 
+    message.pre_approach_offsets = [stamped_pose_to_message(pose) for pose in command.pre_approach_offsets]
     message.offset = stamped_pose_to_message(command.offset)
     message.orientation_mode = command.orientation_mode
     message.wait_time = float(command.wait_time)

@@ -202,6 +202,8 @@ class ProbeSetupMotionApi:
     @staticmethod
     def _motion_request(intent):
         kinds = {
+            ProbeSetupMotionIntent.OPERATION_MOVE_PATHING_POINT: ProbeMotionKind.MOVE_PATHING_POINT,
+            ProbeSetupMotionIntent.OPERATION_MOVE_PRE_APPROACH_PATH: ProbeMotionKind.MOVE_PRE_APPROACH_PATH,
             ProbeSetupMotionIntent.OPERATION_MOVE_SAFE_APPROACH: (
                 ProbeMotionKind.MOVE_SAFE_APPROACH
             ),
@@ -237,6 +239,7 @@ class ProbeSetupMotionApi:
             ) from exception
         request = ProbeMotionRequest(
             kind=kind,
+            pathing_point_index=int(intent.pathing_point_index),
             frame=frame,
             translation=Vector3Data(
                 x=float(intent.translation.x),
@@ -256,6 +259,8 @@ class ProbeSetupMotionApi:
     @staticmethod
     def _motion_operation(kind):
         return {
+            ProbeMotionKind.MOVE_PATHING_POINT: ProbeSetupMotionIntent.OPERATION_MOVE_PATHING_POINT,
+            ProbeMotionKind.MOVE_PRE_APPROACH_PATH: ProbeSetupMotionIntent.OPERATION_MOVE_PRE_APPROACH_PATH,
             ProbeMotionKind.MOVE_SAFE_APPROACH: (
                 ProbeSetupMotionIntent.OPERATION_MOVE_SAFE_APPROACH
             ),

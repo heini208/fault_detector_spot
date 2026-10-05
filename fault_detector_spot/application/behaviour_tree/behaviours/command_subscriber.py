@@ -442,10 +442,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 self._create_command_stamp(),
                 stamped_pose_to_message(tag.pose),
                 tag.id,
-                stamped_pose_to_message(command.offset),
+                stamped_pose_to_message(offset),
                 command.orientation_mode,
                 motion_sensor_id=command.motion_sensor_id,
             )
+            for offset in (*command.pre_approach_offsets, command.offset)
         ]
 
     def _move_base_to_tag(self, command: SemanticCommand):

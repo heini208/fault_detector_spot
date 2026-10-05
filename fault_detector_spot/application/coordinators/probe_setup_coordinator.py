@@ -19,7 +19,7 @@ from fault_detector_spot.application.controllers.command_controller import (
 from fault_detector_spot.application.setup.setup_context import (
     SetupContextSnapshot,
 )
-from fault_detector_spot.inspection.model.models import ImagePoint
+from fault_detector_spot.inspection.model.models import ImagePoint, PreApproachPathPoint
 from fault_detector_spot.application.coordinators.probe_finalization_controller import (
     ProbeFinalizationController,
 )
@@ -41,6 +41,7 @@ from fault_detector_spot.inspection.setup.probe_setup_geometry import (
 )
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementStage,
+    RefinementMotionState,
 )
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
     ProbeMotionRequest,
@@ -604,6 +605,7 @@ class ProbeSetupCoordinator:
 
         self.refinement_controller.discard_context(context)
         self.refinement_controller.abort(draft)
+        draft.pre_approach_path.clear()
         draft.setup = (
             deepcopy(draft.geometry.probe_setup)
             if draft.geometry is not None
@@ -751,6 +753,41 @@ class ProbeSetupCoordinator:
                 detail,
             )
             return self._advance(draft)
+
+    @_serialized_transaction
+    def add_pathing_point(self, context, name):
+        """Capture a full tag-relative tip pose without changing final alignment."""
+        draft = self._selected_draft(context)
+        self.refinement_controller.require_refinement(draft)
+        self.refinement_controller.require_physical_lane_idle()
+        point = PreApproachPathPoint(
+            name.strip(), self.refinement_controller.current_probe_pose(draft)
+        )
+        point.validate()
+        draft.pre_approach_path.append(deepcopy(point))
+        # Capturing a waypoint does not approve it as the final alignment.
+        refinement = draft.refinement
+        refinement.alignment_candidate_reached = False
+        for stage in (RefinementStage.ALIGNMENT, RefinementStage.PROBE):
+            refinement.motion_states[stage] = RefinementMotionState.NOT_TESTED
+        draft.dirty = True
+        return self._advance(draft)
+
+    @_serialized_transaction
+    def reorder_pathing_point(self, context, index, direction):
+        draft = self._selected_draft(context)
+        self.refinement_controller.require_refinement(draft)
+        if direction not in (-1, 1):
+            raise ValueError("Pathing point direction must be -1 or 1")
+        destination = index + direction
+        if not (0 <= index < len(draft.pre_approach_path)
+                and 0 <= destination < len(draft.pre_approach_path)):
+            raise ValueError("Pathing point reorder is outside the path")
+        draft.pre_approach_path[index], draft.pre_approach_path[destination] = (
+            draft.pre_approach_path[destination], draft.pre_approach_path[index]
+        )
+        draft.dirty = True
+        return self._advance(draft)
 
     def prepare_motion(
         self,

@@ -150,7 +150,7 @@ class FinalizingInspectionControls(InspectionControls):
         layout.addWidget(self.saved_probe_distance)
         self.saved_probe_action_buttons = {}
         for label, operation in (
-            ("Move to Saved Aligned Pre-approach", OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH),
+            ("Move Along Saved Pre-approach Path", OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH),
             ("Move Close to Wall", OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE),
         ):
             button = QPushButton(label)

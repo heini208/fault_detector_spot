@@ -46,6 +46,8 @@ class ProbeExecutionTarget:
     orientation_tolerance_rad: float
     measurement_duration_sec: float
     aligned_preapproach_distance_m: float
+    pre_approach_path_probe_poses_execution: tuple = ()
+    pre_approach_path_hand_poses_execution: tuple = ()
 
 
 def resolve_probe_execution_target(
@@ -79,6 +81,7 @@ def resolve_probe_execution_target(
         )
 
     return resolve_probe_execution_geometry(
+        pre_approach_path=tuple(point.pose_object for point in probe_point.pre_approach_path),
         object_id=inspection_object.object_id,
         routine_id=routine.routine_id,
         probe_point_id=probe_point.probe_point_id,
@@ -117,6 +120,7 @@ def resolve_probe_execution_geometry(
     object_pose_execution: PoseData,
     execution_frame: str = "odom",
     attachment_revision: int = 0,
+    pre_approach_path: tuple = (),
 ) -> ProbeExecutionTarget:
     for value, label in (
         (object_id, "Object ID"),
@@ -171,7 +175,12 @@ def resolve_probe_execution_geometry(
     )
     motion_sensor_id = sensor_id or BARE_HAND_MOTION_ID
 
+    path_poses = tuple(compose_poses(object_pose_execution, pose) for pose in pre_approach_path)
     return ProbeExecutionTarget(
+        pre_approach_path_probe_poses_execution=path_poses,
+        pre_approach_path_hand_poses_execution=tuple(
+            probe_pose_to_hand_pose(pose, hand_to_probe) for pose in path_poses
+        ),
         object_id=object_id,
         routine_id=routine_id,
         probe_point_id=probe_point_id,

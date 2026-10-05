@@ -63,6 +63,8 @@ class ProbeSetupApi:
         )
     def _transaction_handlers(self):
         return {
+            ProbeSetupIntent.OPERATION_ADD_PATHING_POINT: self._add_pathing_point,
+            ProbeSetupIntent.OPERATION_REORDER_PATHING_POINT: self._reorder_pathing_point,
             ProbeSetupIntent.OPERATION_REFRESH: self._refresh,
             ProbeSetupIntent.OPERATION_SELECT_OBJECT: self._select_object,
             ProbeSetupIntent.OPERATION_SELECT_ROUTINE: self._select_routine,
@@ -194,6 +196,14 @@ class ProbeSetupApi:
             intent.object_id,
             intent.routine_id,
             intent.probe_point_id,
+        )
+
+    def _add_pathing_point(self, context, intent):
+        return self.coordinator.add_pathing_point(context, intent.pathing_point_name)
+
+    def _reorder_pathing_point(self, context, intent):
+        return self.coordinator.reorder_pathing_point(
+            context, int(intent.pathing_point_index), int(intent.pathing_point_direction)
         )
 
     def _save_routine_safe_approach_pose(self, context, _intent):

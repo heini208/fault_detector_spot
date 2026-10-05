@@ -64,6 +64,7 @@ class Draft(SimpleNamespace):
 
 def draft():
     return Draft(
+        pre_approach_path=[],
         selected_object_id="motor",
         selected_routine_id="magnetic_scan",
         selected_reference_view_id="",

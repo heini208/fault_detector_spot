@@ -59,6 +59,7 @@ class ProbeGeometryEditor:
             target_surface_distance_m,
             aligned_preapproach_distance_m,
         )
+        draft.pre_approach_path.clear()
         draft.selected_reference_view_id = view_id
         draft.reference_pixel = deepcopy(pixel)
         draft.geometry = geometry

@@ -135,6 +135,7 @@ class SemanticCommand:
     motion_sensor_id: str = ""
     body_height_m: float = 0.0
     walking_profile: str = ""
+    pre_approach_offsets: tuple[StampedPose, ...] = ()
 
     def __post_init__(self):
         if self.walking_profile not in ("", "normal", "precision"):
@@ -145,6 +146,12 @@ class SemanticCommand:
             raise ValueError(
                 f"Unsupported command ID: {self.command_id!r}"
             ) from exception
+        if not isinstance(self.pre_approach_offsets, tuple) or any(
+            not isinstance(pose, StampedPose) for pose in self.pre_approach_offsets
+        ):
+            raise TypeError("Pre-approach offsets must be a tuple of stamped poses")
+        if self.pre_approach_offsets and command_id is not CommandID.MOVE_ARM_TO_TAG:
+            raise ValueError("Pre-approach paths require a move-to-tag command")
         if self.tag is not None and not isinstance(
             self.tag, SemanticTag
         ):

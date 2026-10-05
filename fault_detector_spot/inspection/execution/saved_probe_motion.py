@@ -57,8 +57,15 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
     else:
         raise ValueError("Unsupported saved probe-point motion")
     tag = state_source.reference_tag(routine.reference_tag.tag_id)
+    offsets = ()
+    if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH:
+        offsets = tuple(
+            factory.absolute(waypoint.pose_object, tag, attachment.motion_sensor_id).offset
+            for waypoint in point.pre_approach_path
+        )
     return replace(
         factory.absolute(pose, tag, attachment.motion_sensor_id),
+        pre_approach_offsets=offsets,
         inspection=selection,
     )
 

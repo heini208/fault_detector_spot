@@ -1,0 +1,68 @@
+"""Path popup state and intents, independent of a running robot."""
+
+from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupMotionIntent, ProbeSetupState
+from test_probe_point_guided_workflow import application, FakeUI
+from test_probe_safe_approach_navigation import safe_state
+from fault_detector_spot.ui.inspection.finalizing_controls import FinalizingInspectionControls
+from fault_detector_spot.inspection.setup.probe_refinement_session import RefinementStage
+
+
+def test_popup_captures_names_reorders_and_emits_selected_move(application):
+    ui = FakeUI()
+    motions = []
+    ui.probe_setup_client.execute_motion = lambda intent: motions.append(intent) or "motion"
+    controls = FinalizingInspectionControls(ui)
+    state = safe_state()
+    state.safe_approach_motion_state = ProbeSetupState.MOTION_REACHED
+    state.alignment_motion_state = ProbeSetupState.MOTION_REACHED
+    state.surface_alignment_approved = True
+    state.pathing_point_names = ["Clear housing", "Above bearing"]
+    controls.apply_setup_state(state)
+    dialog = controls.refinement_dialog
+    dialog.show_stage(RefinementStage.ALIGNMENT)
+    assert dialog.pathing_point_count_label.text() == "Pathing points: 2"
+    dialog.add_pathing_point_button.click()
+    popup = dialog.path_dialog
+    assert popup.isVisible()
+    popup.points.setCurrentRow(1)
+    assert popup.up_button.isEnabled()
+    assert not popup.down_button.isEnabled()
+    popup.up_button.click()
+    assert ui.requests[-1].operation == ProbeSetupIntent.OPERATION_REORDER_PATHING_POINT
+    assert ui.requests[-1].pathing_point_index == 1
+    assert ui.requests[-1].pathing_point_direction == -1
+    state.pathing_point_names = ["Above bearing", "Clear housing"]
+    controls.apply_setup_state(state)
+    assert popup.points.currentRow() == 0
+    popup.move_button.click()
+    assert motions[-1].operation == ProbeSetupMotionIntent.OPERATION_MOVE_PATHING_POINT
+    assert motions[-1].pathing_point_index == 0
+    controls.apply_setup_state(state)
+    popup.name_field.setText("Third point")
+    popup.add_button.click()
+    assert ui.requests[-1].operation == ProbeSetupIntent.OPERATION_ADD_PATHING_POINT
+    assert ui.requests[-1].pathing_point_name == "Third point"
+    controls.apply_setup_state(state)
+    dialog.move_path_button.click()
+    assert motions[-1].operation == ProbeSetupMotionIntent.OPERATION_MOVE_PRE_APPROACH_PATH
+    popup.close_button.click()
+    assert not popup.isVisible()
+    dialog.hide()
+
+
+def test_path_popup_disables_edits_during_movement(application):
+    controls = FinalizingInspectionControls(FakeUI())
+    state = safe_state()
+    state.safe_approach_motion_state = ProbeSetupState.MOTION_REACHED
+    controls.apply_setup_state(state)
+    dialog = controls.refinement_dialog
+    dialog.show_stage(RefinementStage.ALIGNMENT)
+    state.pathing_point_names = ["Point"]
+    dialog.path_dialog.name_field.setText("Next")
+    dialog.refresh_path_controls(True)
+    assert dialog.path_dialog.add_button.isEnabled()
+    dialog.refresh_path_controls(False)
+    assert not dialog.path_dialog.add_button.isEnabled()
+    assert not dialog.path_dialog.move_button.isEnabled()
+    assert not dialog.move_path_button.isEnabled()
+    dialog.hide()

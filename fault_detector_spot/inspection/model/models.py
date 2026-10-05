@@ -179,6 +179,29 @@ class ReferenceView:
 
 
 @dataclass
+class PreApproachPathPoint:
+    """Named probe-tip pose relative to the routine reference tag."""
+
+    name: str
+    pose_object: PoseData
+
+    def validate(self) -> None:
+        _require_text(self.name, "Pathing point name")
+        self.pose_object.validate()
+
+    @classmethod
+    def from_dict(cls, data):
+        data = _require_dict(data, "pre_approach_path_point")
+        point = cls(str(data["name"]), PoseData.from_dict(data["pose_object"]))
+        point.validate()
+        return point
+
+    def to_dict(self):
+        self.validate()
+        return {"name": self.name, "pose_object": self.pose_object.to_dict()}
+
+
+@dataclass
 class ProbePoint:
     """Persisted probe execution target with local +X pointing inward."""
 
@@ -192,6 +215,7 @@ class ProbePoint:
     aligned_preapproach_distance_m: float
     reference_pixel: Optional[ImagePoint] = None
     reference_view_id: Optional[str] = None
+    pre_approach_path: List[PreApproachPathPoint] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProbePoint":
@@ -199,6 +223,12 @@ class ProbePoint:
         pixel = data.get("reference_pixel")
         reference_view_id = data.get("reference_view_id")
         return cls(
+            pre_approach_path=[
+                PreApproachPathPoint.from_dict(point)
+                for point in _require_list(
+                    data.get("pre_approach_path", []), "pre_approach_path"
+                )
+            ],
             probe_point_id=str(data["probe_point_id"]),
             display_name=str(data["display_name"]),
             aligned_preapproach_pose_object=PoseData.from_dict(
@@ -237,6 +267,8 @@ class ProbePoint:
             self.display_name,
             "Probe point display name",
         )
+        for point in self.pre_approach_path:
+            point.validate()
         self.aligned_preapproach_pose_object.validate()
         numeric_values = (
             self.target_surface_distance_m,
@@ -282,6 +314,7 @@ class ProbePoint:
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
+            "pre_approach_path": [point.to_dict() for point in self.pre_approach_path],
             "probe_point_id": self.probe_point_id,
             "display_name": self.display_name,
             "aligned_preapproach_pose_object": (
