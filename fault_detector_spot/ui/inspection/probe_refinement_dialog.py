@@ -325,15 +325,16 @@ class ProbeRefinementDialog(QDialog):
     def _make_safe_approach_page(self):
         page = self._make_scroll_page(
             RefinementStage.SAFE_APPROACH,
-            "Safe Approach Pose",
-            "Capture or reach an obstacle-safe sensor-tip pose. This pose "
-            "is independent from the surface-aligned geometry.",
+            "Reach Routine Safe Pre-approach Pose",
+            "Move to the shared safe pose configured in Routine Base and "
+            "Safe Pre-approach Poses before aligning this probe point.",
             self.controls.approach_step_status_label,
             self.controls.move_calculated_approach_button,
-            self.controls.use_current_approach_button,
-            self.controls._make_refinement_controls("approach"),
+            None,
+            None,
         )
 
+        self.controls.use_current_approach_button.hide()
         self.refinement_start_status_label = QLabel("")
         self.refinement_start_status_label.setWordWrap(True)
         self.retry_refinement_start_button = QPushButton("Retry Starting Refinement")
@@ -499,7 +500,7 @@ class ProbeRefinementDialog(QDialog):
         self.summary_aligned_pose_label = QLabel("Not set")
         self.summary_aligned_pose_label.setWordWrap(True)
         pose_layout.addRow(
-            "Approach pose:",
+            "Shared routine safe pre-approach pose:",
             self.summary_safe_pose_label,
         )
         pose_layout.addRow(
@@ -562,14 +563,17 @@ class ProbeRefinementDialog(QDialog):
         page_layout.addLayout(status_row)
         page_layout.addWidget(self._make_pose_comparison(stage))
 
-        if move_button is not None and approve_button is not None:
+        if move_button is not None or approve_button is not None:
             actions = QHBoxLayout()
-            actions.addWidget(move_button)
-            actions.addWidget(approve_button)
+            if move_button is not None:
+                actions.addWidget(move_button)
+            if approve_button is not None:
+                actions.addWidget(approve_button)
             actions.addStretch()
             page_layout.addLayout(actions)
 
-        page_layout.addWidget(controls_widget)
+        if controls_widget is not None:
+            page_layout.addWidget(controls_widget)
         page_layout.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -833,7 +837,9 @@ class ProbeRefinementDialog(QDialog):
             f"Step {index + 2} of 5 — "
             f"{self._stage_title(stage)}"
         )
-        self.refinement_controls_widget.show()
+        self.refinement_controls_widget.setVisible(
+            stage is RefinementStage.ALIGNMENT
+        )
         self.emergency_stop_button.show()
         self.back_button.show()
         self.next_button.show()
@@ -907,7 +913,7 @@ class ProbeRefinementDialog(QDialog):
     @staticmethod
     def _stage_title(stage):
         return {
-            RefinementStage.SAFE_APPROACH: "Safe Approach",
+            RefinementStage.SAFE_APPROACH: "Reach Routine Safe Pose",
             RefinementStage.ALIGNMENT: "Aligned Pre-approach",
             RefinementStage.PROBE: "Probe",
         }[stage]

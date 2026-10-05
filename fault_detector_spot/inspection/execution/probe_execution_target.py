@@ -84,7 +84,7 @@ def resolve_probe_execution_target(
         probe_point_id=probe_point.probe_point_id,
         sensor_id=attachment.sensor_id,
         attachment_revision=attachment.attachment_revision,
-        safe_approach_pose_object=probe_point.safe_approach_pose_object,
+        safe_approach_pose_object=routine.require_safe_approach_pose(),
         aligned_preapproach_pose_object=(
             probe_point.aligned_preapproach_pose_object
         ),

@@ -967,6 +967,7 @@ class Fault_Detector_UI(QWidget):
         controls = getattr(self, "inspection_controls", None)
         if controls is not None:
             controls.handle_base_position_rejected(detail)
+            controls.handle_routine_arm_pose_rejected(detail)
             controls.handle_saved_probe_rejected(detail)
         self.status_label.setText(f"Operation rejected: {detail}")
 
@@ -1144,6 +1145,9 @@ class Fault_Detector_UI(QWidget):
         return False
 
     def closeEvent(self, event):
+        routine_arm_controls = self.inspection_controls.routine_arm_movement_controls
+        if routine_arm_controls is not None:
+            routine_arm_controls.destroy()
         self.posture_state_source.destroy()
         self.timer.stop()
         self.navigation_setup_timer.stop()

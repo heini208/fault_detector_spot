@@ -65,6 +65,7 @@ def make_state(with_references=True):
     state.selected_object_id = "motor"
     state.routine_ids = ["scan"]
     state.selected_routine_id = "scan"
+    state.has_routine_safe_approach_pose = True
     if with_references:
         state.reference_view_ids = [
             "slot1_frontleft",
@@ -165,3 +166,67 @@ def test_reference_approval_starts_existing_refinement_operation(application):
     assert ui.requests[-1].operation == (
         ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT
     )
+
+
+def test_safe_pose_capture_is_in_routine_section_and_not_probe_workflow(application):
+    from PyQt5.QtWidgets import QGroupBox
+
+    ui = FakeUI()
+    controls = FinalizingInspectionControls(ui)
+    state = make_state()
+    controls.apply_setup_state(state)
+    group = controls.set_routine_arm_pose_button.parentWidget()
+    assert isinstance(group, QGroupBox)
+    assert controls.set_base_position_button.parentWidget() is group
+    assert controls.use_current_approach_button.isHidden()
+    assert controls.refinement_buttons["approach"] == {}
+    assert controls.handle_save_routine_arm_pose()
+    assert ui.requests[-1].operation == ProbeSetupIntent.OPERATION_SAVE_ROUTINE_SAFE_APPROACH_POSE
+    state.refinement_active = True
+    controls.apply_setup_state(state)
+    assert not controls.set_routine_arm_pose_button.isEnabled()
+    assert not controls.handle_save_routine_arm_pose()
+
+
+def test_probe_workflow_requires_routine_safe_pose_first(application, monkeypatch):
+    ui = FakeUI()
+    controls = FinalizingInspectionControls(ui)
+    state = make_state()
+    state.has_routine_safe_approach_pose = False
+    controls.apply_setup_state(state)
+    warnings = []
+    monkeypatch.setattr(controls, "show_warning", lambda *args: warnings.append(args))
+    assert not controls.handle_start_probe_refinement()
+    assert "routine safe pre-approach" in warnings[-1][1]
+
+
+def test_routine_arm_dialog_saves_and_closes_when_selection_changes(application):
+    ui = FakeUI()
+    ui.update_frames_dropdown = lambda dropdown: dropdown.addItem("body")
+    ui.update_tags_dropdown = lambda dropdown: dropdown.addItem("7")
+    controls = FinalizingInspectionControls(ui)
+    state = make_state()
+    controls.apply_setup_state(state)
+    assert controls.show_routine_arm_pose_dialog()
+    assert controls.routine_arm_pose_dialog.isVisible()
+    assert controls.routine_arm_movement_controls.offset_fields["X"]
+    controls.save_routine_arm_pose_button.click()
+    assert ui.requests[-1].operation == (
+        ProbeSetupIntent.OPERATION_SAVE_ROUTINE_SAFE_APPROACH_POSE
+    )
+    state.selected_routine_id = "other"
+    state.routine_ids = ["scan", "other"]
+    controls.apply_setup_state(state)
+    assert not controls.routine_arm_pose_dialog.isVisible()
+    controls.routine_arm_movement_controls.destroy()
+    controls.routine_arm_pose_dialog.close()
+
+
+def test_probe_entry_does_not_repeat_attachment_check(application):
+    ui = FakeUI()
+    ui._sensor_attachment_state = None
+    controls = FinalizingInspectionControls(ui)
+    controls.apply_setup_state(make_state())
+    assert controls.handle_start_probe_refinement()
+    assert controls.refinement_dialog.isVisible()
+    controls.refinement_dialog.hide()

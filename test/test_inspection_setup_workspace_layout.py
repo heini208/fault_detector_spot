@@ -69,7 +69,7 @@ def test_workspace_uses_entry_panel_and_single_dialog_preview(
     )
     assert controls.inspection_workspace_splitter.count() == 2
     base_group = controls.inspection_workspace_splitter.widget(0)
-    assert base_group.title() == "Routine Base Position"
+    assert base_group.title() == "Routine Base and Safe Pre-approach Poses"
     assert controls.set_base_position_button.parent() is base_group
     assert controls.move_to_base_position_button.parent() is base_group
     assert controls.base_position_status_label.parent() is base_group
@@ -221,8 +221,7 @@ def test_refinement_dialog_uses_stage_safe_controls(application, tmp_path):
     assert controls.use_current_alignment_button.text() == (
         "Approve Current Pose"
     )
-    assert "front" in controls.refinement_buttons["approach"]
-    assert "back" in controls.refinement_buttons["approach"]
+    assert controls.refinement_buttons["approach"] == {}
     assert "front" not in controls.refinement_buttons["alignment"]
     assert "back" not in controls.refinement_buttons["alignment"]
     assert controls.refinement_buttons["probe"] == {}

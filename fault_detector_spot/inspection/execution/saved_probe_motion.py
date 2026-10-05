@@ -48,7 +48,7 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
     if state_source is None:
         raise RuntimeError("Live robot pose data is unavailable")
     if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH:
-        pose = point.safe_approach_pose_object
+        pose = routine.require_safe_approach_pose()
     elif intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH:
         state_source.validate_aligned_probe_distance(
             attachment.motion_sensor_id, point.aligned_preapproach_distance_m,
@@ -60,4 +60,34 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
     return replace(
         factory.absolute(pose, tag, attachment.motion_sensor_id),
         inspection=selection,
+    )
+
+
+def routine_safe_approach_command(
+    intent, repository, state_source, attachments, factory,
+):
+    """Resolve the shared routine pose without requiring a probe point."""
+    if intent.intent != OperationalIntent.INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH:
+        raise ValueError("Unsupported routine safe-approach motion")
+    definition = repository.load(intent.object_id)
+    definition.validate()
+    routine = definition.get_routine(intent.routine_id)
+    if routine is None:
+        raise ValueError("The selected routine does not exist for this object")
+    pose = routine.require_safe_approach_pose()
+    if attachments is None:
+        raise RuntimeError("Sensor attachment state is unavailable")
+    attachment = attachments.require_motion_attachment()
+    if state_source is None:
+        raise RuntimeError("Live robot pose data is unavailable")
+    tag = state_source.reference_tag(routine.reference_tag.tag_id)
+    if int(tag.id) != routine.reference_tag.tag_id:
+        raise ValueError("Live reference tag does not match the selected routine")
+    return replace(
+        factory.absolute(
+            pose, tag, attachment.motion_sensor_id, safe_approach=True,
+        ),
+        inspection=InspectionSelection(
+            object_id=intent.object_id, routine_id=intent.routine_id,
+        ),
     )

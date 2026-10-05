@@ -246,9 +246,6 @@ class ProbeFinalizationController:
                 display_name,
                 "probe point display name",
             ),
-            safe_approach_pose_object=deepcopy(
-                setup.safe_approach_pose_object
-            ),
             aligned_preapproach_pose_object=deepcopy(
                 setup.aligned_preapproach_pose_object
             ),

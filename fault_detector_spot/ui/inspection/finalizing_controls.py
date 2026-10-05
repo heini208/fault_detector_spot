@@ -32,7 +32,6 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
     ImageRegion,
 )
 
-from fault_detector_spot.ui.sensor.models import SensorAttachmentViewStatus
 
 from .controls import InspectionControls
 
@@ -55,6 +54,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._saved_probe_scope = None
         self._saved_probe_operation_context = ""
         self._base_position_operation_context = ""
+        self._routine_arm_pose_operation_context = ""
         self._delete_probe_point_pending = ""
         self._probe_finalization_point_id = ""
         self._probe_finalization_scope = None
@@ -64,6 +64,9 @@ class FinalizingInspectionControls(InspectionControls):
         super().__init__(ui)
         self.move_to_base_position_button.clicked.connect(
             self.handle_move_to_base_position
+        )
+        self.move_to_routine_arm_pose_button.clicked.connect(
+            self.handle_move_to_routine_arm_pose
         )
         self.alignment_step_status_label.setWordWrap(True)
         self.refinement_dialog.attach_workflow_controls()
@@ -147,7 +150,6 @@ class FinalizingInspectionControls(InspectionControls):
         layout.addWidget(self.saved_probe_distance)
         self.saved_probe_action_buttons = {}
         for label, operation in (
-            ("Move to Saved Safe Approach", OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH),
             ("Move to Saved Aligned Pre-approach", OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH),
             ("Move Close to Wall", OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE),
         ):
@@ -390,6 +392,57 @@ class FinalizingInspectionControls(InspectionControls):
             if self._probe_setup_state is not None:
                 self._apply_base_position_state(self._probe_setup_state)
 
+    def handle_move_to_routine_arm_pose(self):
+        state = self._probe_setup_state
+        if state is None:
+            return False
+        self._apply_base_position_state(state)
+        if not self.move_to_routine_arm_pose_button.isEnabled():
+            return False
+
+        intent = OperationalIntent()
+        intent.intent = (
+            OperationalIntent.INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH
+        )
+        intent.object_id = state.selected_object_id
+        intent.routine_id = state.selected_routine_id
+        self._routine_arm_pose_operation_context = (
+            "routine-arm-" + uuid4().hex
+        )
+        self._apply_base_position_state(state)
+        request_id = self.ui.execute_operation(
+            intent,
+            context_id=self._routine_arm_pose_operation_context,
+        )
+        if request_id is None:
+            self.handle_routine_arm_pose_rejected(
+                "Movement could not be submitted."
+            )
+            return False
+        return True
+
+    def handle_routine_arm_pose_rejected(self, _detail):
+        if not self._routine_arm_pose_operation_context:
+            return
+        self._routine_arm_pose_operation_context = ""
+        if self._probe_setup_state is not None:
+            self._apply_base_position_state(self._probe_setup_state)
+
+    def _handle_routine_arm_pose_status(self, status):
+        if (
+            not self._routine_arm_pose_operation_context
+            or status.context_id != self._routine_arm_pose_operation_context
+        ):
+            return
+        if status.state in {
+            ApplicationCommandState.STATE_SUCCEEDED,
+            ApplicationCommandState.STATE_FAILED,
+            ApplicationCommandState.STATE_CANCELLED,
+        }:
+            self._routine_arm_pose_operation_context = ""
+            if self._probe_setup_state is not None:
+                self._apply_base_position_state(self._probe_setup_state)
+
     def handle_saved_probe_motion(self, operation):
         self._refresh_saved_probe_actions()
         button = self.saved_probe_action_buttons.get(operation)
@@ -459,16 +512,11 @@ class FinalizingInspectionControls(InspectionControls):
                 "Select a saved object and routine first.",
             )
             return False
-        attachment = getattr(self.ui, "_sensor_attachment_state", None)
-        if (
-            attachment is None
-            or attachment.status is not SensorAttachmentViewStatus.ACTIVE
-        ):
+        if not state.has_routine_safe_approach_pose:
             self.show_warning(
                 "Add Probe Point",
-                "Confirm the sensor attachment in the sensor controls before "
-                "adding a probe point. If using the bare hand, select and "
-                "confirm No sensor.",
+                "Set the routine safe pre-approach arm pose beside the base "
+                "pose before adding a probe point.",
             )
             return False
         self._reference_start_pending = False
@@ -1128,6 +1176,7 @@ class FinalizingInspectionControls(InspectionControls):
     def handle_application_state(self, status):
         """Track inspection movements and standalone close-surface tests."""
         self._handle_base_position_status(status)
+        self._handle_routine_arm_pose_status(status)
         self._handle_saved_probe_status(status)
         if (
             not self._surface_test_active

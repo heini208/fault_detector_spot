@@ -73,6 +73,9 @@ class ProbeSetupApi:
             ProbeSetupIntent.OPERATION_DELETE_PROBE_POINT: (
                 self._delete_probe_point
             ),
+            ProbeSetupIntent.OPERATION_SAVE_ROUTINE_SAFE_APPROACH_POSE: (
+                self._save_routine_safe_approach_pose
+            ),
             ProbeSetupIntent.OPERATION_SAVE_BASE_POSITION: (
                 self._save_base_position
             ),
@@ -192,6 +195,9 @@ class ProbeSetupApi:
             intent.routine_id,
             intent.probe_point_id,
         )
+
+    def _save_routine_safe_approach_pose(self, context, _intent):
+        return self.coordinator.save_routine_safe_approach_pose(context)
 
     def _save_base_position(self, context, _intent):
         return self.coordinator.save_base_position(context)

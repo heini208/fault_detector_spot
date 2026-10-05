@@ -1,6 +1,7 @@
 """Geometry calculation and draft editing for probe setup."""
 
 from copy import deepcopy
+from dataclasses import replace
 import math
 
 from fault_detector_spot.inspection.model.models import (
@@ -140,7 +141,7 @@ class ProbeGeometryEditor:
         aligned_preapproach_distance_m,
     ):
         attachment = self._active_attachment()
-        return self.geometry.resolve(
+        geometry = self.geometry.resolve(
             object_id=draft.selected_object_id,
             routine_id=draft.selected_routine_id,
             reference_view_id=reference_view_id,
@@ -151,6 +152,20 @@ class ProbeGeometryEditor:
                 aligned_preapproach_distance_m
             ),
             hand_to_probe_pose=attachment.hand_to_probe(),
+        )
+
+        return replace(
+            geometry,
+            probe_setup=self._with_routine_safe_pose(draft, geometry.probe_setup),
+        )
+
+    def _with_routine_safe_pose(self, draft, setup):
+        definition = self.object_repository.load(draft.selected_object_id)
+        routine = definition.get_routine(draft.selected_routine_id)
+        if routine is None:
+            raise LookupError("Selected inspection routine is unavailable")
+        return approve_safe_approach_pose(
+            setup, deepcopy(routine.require_safe_approach_pose()),
         )
 
     def _active_attachment(self):

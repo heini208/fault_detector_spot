@@ -7,6 +7,8 @@ import pytest
 
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
+    InspectionRoutine,
+    ReferenceTag,
 )
 from fault_detector_spot.shared.geometry.models import (
     PoseData,
@@ -20,8 +22,11 @@ class FakeObjectRepository:
     def load(self, object_id):
         assert object_id == "motor"
         return SimpleNamespace(
-            get_routine=lambda routine_id: SimpleNamespace(
+            get_routine=lambda routine_id: InspectionRoutine(
                 routine_id=routine_id,
+                display_name="Scan",
+                reference_tag=ReferenceTag(7, "36h11"),
+                safe_approach_pose_object=PoseData.identity(),
             )
         )
 
@@ -35,18 +40,16 @@ class FakeSensorAttachmentController:
         )
 
 
-class FakeGeometry:
+from test_probe_setup_coordinator import FakeGeometry as GeometryStub
+
+
+class FakeGeometry(GeometryStub):
     def __init__(self):
         self.calls = []
 
     def resolve(self, **kwargs):
         self.calls.append(kwargs)
-        return SimpleNamespace(
-            probe_setup=SimpleNamespace(
-                safe_approach_approved=False,
-                surface_alignment_approved=False,
-            )
-        )
+        return super().resolve(**kwargs)
 
 
 class Draft(SimpleNamespace):
@@ -104,6 +107,8 @@ def test_select_reference_pixel_updates_draft_and_resolves_geometry():
     assert current.selected_reference_view_id == "slot1_hand"
     assert current.reference_pixel == pixel
     assert current.reference_pixel is not pixel
+    assert current.setup.safe_approach_approved
+    assert current.setup.safe_approach_pose_object == PoseData.identity()
     assert current.dirty
     assert current.validation_error == ""
     assert geometry.calls[0]["object_id"] == "motor"

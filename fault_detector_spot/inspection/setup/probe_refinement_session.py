@@ -329,11 +329,19 @@ class ProbeRefinementSession:
     def complete_motion(
         self,
         request_id: str,
-        achieved_pose_object: PoseData,
+        achieved_pose_object: Optional[PoseData],
     ) -> None:
-        """Commit a successful motion using its achieved tip pose."""
+        """Complete motion; the shared safe pose needs no endpoint resampling."""
         motion = self._matching_motion(request_id)
-        achieved_pose_object.validate()
+        if achieved_pose_object is None:
+            if (
+                motion.stage is not RefinementStage.SAFE_APPROACH
+                or motion.updates_candidate
+                or motion.verify_achieved_pose
+            ):
+                raise ValueError("This movement requires an achieved probe pose")
+        else:
+            achieved_pose_object.validate()
         if motion.updates_candidate:
             self.set_candidate(motion.stage, achieved_pose_object)
         if motion.seeds_safe_approach_from_ready:

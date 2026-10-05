@@ -77,6 +77,7 @@ class ProbeSetupSnapshot:
     validation_error: str
     probe_point_target_surface_distances_m: Tuple[float, ...] = ()
     has_base_position: bool = False
+    has_routine_safe_approach_pose: bool = False
 
     @classmethod
     def from_draft(
@@ -91,6 +92,7 @@ class ProbeSetupSnapshot:
         probe_point_ids,
         probe_point_target_surface_distances_m=(),
         has_base_position=False,
+        has_routine_safe_approach_pose=False,
     ) -> "ProbeSetupSnapshot":
         return cls(
             context=draft.context,
@@ -108,6 +110,7 @@ class ProbeSetupSnapshot:
             probe_point_ids=tuple(probe_point_ids),
             probe_point_target_surface_distances_m=tuple(probe_point_target_surface_distances_m),
             has_base_position=bool(has_base_position),
+            has_routine_safe_approach_pose=bool(has_routine_safe_approach_pose),
             reference_pixel=deepcopy(draft.reference_pixel),
             geometry=deepcopy(draft.geometry),
             setup=deepcopy(draft.setup),

@@ -26,7 +26,6 @@ def make_probe(probe_point_id="point_a") -> ProbePoint:
     return ProbePoint(
         probe_point_id=probe_point_id,
         display_name=probe_point_id,
-        safe_approach_pose_object=PoseData.identity(),
         aligned_preapproach_pose_object=PoseData.identity(),
         target_surface_distance_m=0.01,
         position_tolerance_m=0.005,
@@ -132,12 +131,11 @@ def test_probe_points_require_a_captured_reference_view():
 
 def test_probe_point_round_trip_preserves_execution_geometry():
     original = make_probe()
-    original.safe_approach_pose_object.position.x = 0.30
     original.aligned_preapproach_pose_object.position.x = 0.08
     restored = ProbePoint.from_dict(original.to_dict())
     restored.validate()
     assert restored == original
-    assert restored.safe_approach_pose_object.position.x == 0.30
+    assert "safe_approach_pose_object" not in restored.to_dict()
     assert restored.aligned_preapproach_pose_object.position.x == 0.08
     assert restored.target_surface_distance_m == 0.01
     assert restored.aligned_preapproach_distance_m == 0.08

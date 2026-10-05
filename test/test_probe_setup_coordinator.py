@@ -204,6 +204,9 @@ class FakeSensorAttachmentController:
         return Reservation()
 
 
+from fault_detector_spot.inspection.setup.probe_setup_geometry import ProbeGeometryResult
+
+
 class FakeGeometry:
     def resolve(
         self,
@@ -229,11 +232,13 @@ class FakeGeometry:
             ),
             direction_source=approach_mode,
         )
-        return SimpleNamespace(
-            object_id=object_id,
-            routine_id=routine_id,
-            reference_view_id=reference_view_id,
-            pixel=pixel,
+        return ProbeGeometryResult(
+            capture=None,
+            projected_point=None,
+            surface_normal=None,
+            surface_normal_error="",
+            approach_direction=None,
+            surface_target=target,
             probe_setup=initialize_reference_probe_setup(
                 target,
             ),
@@ -299,7 +304,12 @@ def coordinator(tmp_path, active_sensor_id="hall_probe"):
 def approve_all(probe, command_controller, state):
     probe.motion_state_source.pose = pose(0.8)
     state = probe.begin_refinement(state.context)
-    state = probe.approve_safe_pose(state.context)
+    safe = probe.prepare_motion(
+        state.context, ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH),
+    )
+    probe.submit_motion(safe)
+    command_controller.succeed(safe.request)
+    state = probe.snapshot(probe.context(state.context.context_id, "probe-ui"))
 
     orientation = probe.prepare_motion(
         state.context,
@@ -349,6 +359,7 @@ def create_selected_routine(probe, context):
     routine = definition.get_routine("magnetic_scan")
     stored_routine = replace(
         routine,
+        safe_approach_pose_object=pose(0.8),
         reference_views=[ReferenceView(
             controlled_frame_pose_object=PoseData.identity(),
             controlled_frame="hand_depth",
@@ -464,7 +475,7 @@ def test_probe_motion_uses_active_sensor_attachment(tmp_path):
 
 
 def test_alignment_candidate_move_is_allowed_before_orientation(tmp_path):
-    probe, _ = coordinator(tmp_path)
+    probe, commands = coordinator(tmp_path)
     state = create_selected_routine(
         probe,
         probe.open_context("probe-ui").context,
@@ -479,6 +490,12 @@ def test_alignment_candidate_move_is_allowed_before_orientation(tmp_path):
     )
     probe.motion_state_source.pose = pose(0.8)
     state = probe.begin_refinement(state.context)
+    safe = probe.prepare_motion(
+        state.context, ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH),
+    )
+    probe.submit_motion(safe)
+    commands.succeed(safe.request)
+    state = probe.snapshot(probe.context(state.context.context_id, "probe-ui"))
 
     operation = probe.prepare_motion(
         state.context,

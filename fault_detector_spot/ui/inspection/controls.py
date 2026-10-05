@@ -62,7 +62,9 @@ from fault_detector_spot.inspection.setup.reference_view_surface_target import (
 )
 
 from .probe_refinement_dialog import ProbeRefinementDialog
+from ..sensor.models import SensorAttachmentViewStatus
 from ..navigation.base_movement_controls import BaseMovementControls
+from ..manipulation.controls import ManipulationControls
 from .reference_view_widget import ReferenceViewWidget
 from ..ros.probe_setup_state_adapter import probe_setup_state_to_view
 from ..shared.control_helper import UIControlHelper
@@ -103,6 +105,9 @@ class InspectionControls(UIControlHelper):
         self._retraction_failed = False
         self._editing_probe_point_id = None
         self.management_dialog = None
+        self._routine_arm_pose_scope = None
+        self.routine_arm_pose_dialog = None
+        self.routine_arm_movement_controls = None
         self.base_position_dialog = None
         self.base_position_movement_controls = None
         self.save_base_position_button = None
@@ -504,8 +509,8 @@ class InspectionControls(UIControlHelper):
         self.refine_frame_dropdown.setToolTip(
             "Coordinate frame used by each finite relative adjustment"
         )
-        self.refinement_buttons = {}
-        for stage in ("approach", "alignment", "probe"):
+        self.refinement_buttons = {"approach": {}}
+        for stage in ("alignment", "probe"):
             actions = [
                 "up",
                 "down",
@@ -516,8 +521,6 @@ class InspectionControls(UIControlHelper):
                 "yaw_left",
                 "yaw_right",
             ]
-            if stage == "approach":
-                actions.extend(("front", "back"))
             if stage == "probe":
                 actions = []
             stage_buttons = {}
@@ -599,6 +602,7 @@ class InspectionControls(UIControlHelper):
         self.move_to_base_position_button.setStyleSheet(
             "QPushButton { background-color: #C62828; color: white; "
             "font-weight: bold; }"
+            "QPushButton:enabled { background-color: #2E7D32; }"
         )
         self.base_position_status_label = QLabel(
             "Base position: not configured"
@@ -696,7 +700,7 @@ class InspectionControls(UIControlHelper):
         return self.inspection_workspace_splitter
 
     def _make_base_position_group(self):
-        group = QGroupBox("Routine Base Position")
+        group = QGroupBox("Routine Base and Safe Pre-approach Poses")
         layout = QVBoxLayout(group)
         buttons = QHBoxLayout()
         buttons.addWidget(self.set_base_position_button)
@@ -704,7 +708,102 @@ class InspectionControls(UIControlHelper):
         buttons.addStretch()
         layout.addLayout(buttons)
         layout.addWidget(self.base_position_status_label)
+        self.set_routine_arm_pose_button = QPushButton(
+            "Set Safe Pre-approach Arm Pose"
+        )
+        self.set_routine_arm_pose_button.clicked.connect(
+            self.show_routine_arm_pose_dialog
+        )
+        self.move_to_routine_arm_pose_button = QPushButton(
+            "Move to Safe Pre-approach Pose"
+        )
+        self.move_to_routine_arm_pose_button.setEnabled(False)
+        self.move_to_routine_arm_pose_button.setStyleSheet(
+            self.move_to_base_position_button.styleSheet()
+        )
+        arm_buttons = QHBoxLayout()
+        arm_buttons.addWidget(self.set_routine_arm_pose_button)
+        arm_buttons.addWidget(self.move_to_routine_arm_pose_button)
+        arm_buttons.addStretch()
+        layout.addLayout(arm_buttons)
+        self.routine_arm_pose_status_label = QLabel(
+            "Safe pre-approach arm pose: not configured"
+        )
+        layout.addWidget(self.routine_arm_pose_status_label)
         return group
+
+    def show_routine_arm_pose_dialog(self):
+        state = self._probe_setup_state
+        if (state is None or not state.selected_routine_id
+                or state.refinement_active):
+            return False
+        attachment = getattr(self.ui, "_sensor_attachment_state", None)
+        if (
+            attachment is None
+            or attachment.status is not SensorAttachmentViewStatus.ACTIVE
+        ):
+            self.show_warning(
+                "Set Safe Pre-approach Arm Pose",
+                "Confirm the sensor attachment in the sensor controls before "
+                "setting the safe pre-approach arm pose. If using the bare hand, "
+                "select and confirm No sensor.",
+            )
+            return False
+        if self.routine_arm_pose_dialog is None:
+            parent = self.ui if isinstance(self.ui, QWidget) else None
+            dialog = QDialog(parent)
+            dialog.setWindowTitle("Routine Safe Pre-approach Arm Pose")
+            dialog.setModal(False)
+            layout = QVBoxLayout(dialog)
+            hint = QLabel(
+                "Position the arm safely, then save the current sensor-tip pose. "
+                "All probe points in the selected routine use this pose."
+            )
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+            controls = ManipulationControls(self.ui)
+            for row in controls.rows:
+                layout.addLayout(row)
+            self.routine_arm_movement_controls = controls
+            self.save_routine_arm_pose_button = QPushButton(
+                "Save Current Pose as Routine Safe Pre-approach"
+            )
+            self.save_routine_arm_pose_button.clicked.connect(
+                self.handle_save_routine_arm_pose
+            )
+            layout.addWidget(self.save_routine_arm_pose_button)
+            close = QDialogButtonBox(QDialogButtonBox.Close)
+            close.rejected.connect(dialog.hide)
+            layout.addWidget(close)
+            self.routine_arm_pose_dialog = dialog
+        self._routine_arm_pose_scope = (
+            state.selected_object_id, state.selected_routine_id,
+        )
+        self.routine_arm_pose_dialog.setWindowTitle(
+            f"Safe Pre-approach Arm Pose — {state.selected_routine_id}"
+        )
+        self.routine_arm_movement_controls.update_tags_dropdown()
+        self.routine_arm_movement_controls.update_frames_dropdown()
+        self.routine_arm_pose_dialog.show()
+        self.routine_arm_pose_dialog.raise_()
+        self.routine_arm_pose_dialog.activateWindow()
+        return True
+
+    def handle_save_routine_arm_pose(self):
+        state = self._probe_setup_state
+        if (state is None or not state.selected_routine_id
+                or state.refinement_active):
+            return False
+        intent = ProbeSetupIntent()
+        intent.operation = (
+            ProbeSetupIntent.OPERATION_SAVE_ROUTINE_SAFE_APPROACH_POSE
+        )
+        if self._submit_probe_setup(intent) is None:
+            return False
+        self.routine_arm_pose_status_label.setText(
+            "Safe pre-approach arm pose: saving..."
+        )
+        return True
 
     def _make_base_position_dialog(self):
         parent = self.ui if isinstance(self.ui, QWidget) else None
@@ -807,6 +906,26 @@ class InspectionControls(UIControlHelper):
             state.selected_object_id and state.selected_routine_id
         )
         self.set_base_position_button.setEnabled(selected)
+        arm_editable = selected and not state.refinement_active
+        self.set_routine_arm_pose_button.setEnabled(arm_editable)
+        arm_move_active = bool(
+            getattr(self, "_routine_arm_pose_operation_context", "")
+        )
+        self.move_to_routine_arm_pose_button.setEnabled(
+            arm_editable and state.has_routine_safe_approach_pose
+            and not state.motion_pending and not arm_move_active
+        )
+        if self.routine_arm_pose_dialog is not None:
+            self.save_routine_arm_pose_button.setEnabled(arm_editable)
+            if (not arm_editable or self._routine_arm_pose_scope != (
+                state.selected_object_id, state.selected_routine_id,
+            )):
+                self.routine_arm_pose_dialog.hide()
+        self.routine_arm_pose_status_label.setText(
+            "Safe pre-approach arm pose: configured (shared by all probe points)"
+            if selected and state.has_routine_safe_approach_pose
+            else "Safe pre-approach arm pose: not configured"
+        )
         configured = selected and bool(state.has_base_position)
         base_move_active = bool(
             getattr(self, "_base_position_operation_context", "")
@@ -1489,7 +1608,7 @@ class InspectionControls(UIControlHelper):
             "aligned pre-approach approved="
             f"{setup.surface_alignment_approved}; "
             f"probe approved={setup.probe_pose_approved}. "
-            "Nothing is persisted until Save Probe Point is pressed."
+            "Probe-point geometry is persisted when Save Probe Point is pressed."
         )
 
     def handle_start_probe_refinement(self):
@@ -1572,7 +1691,12 @@ class InspectionControls(UIControlHelper):
     def handle_refinement_next(self):
         presentation = self._require_refinement_presentation()
         stage = presentation.active_stage
-        if not presentation.stage_is_approved(stage):
+        if (
+            not presentation.stage_is_approved(stage)
+            or (stage is RefinementStage.SAFE_APPROACH
+                and presentation.motion_states[stage]
+                is not RefinementMotionState.REACHED)
+        ):
             self.refinement_recovery_status_label.setText(
                 "Approve the current stage before continuing."
             )
@@ -1687,11 +1811,7 @@ class InspectionControls(UIControlHelper):
             safe_enabled and safe_reached
         )
         self.move_calculated_approach_button.setText(
-            "Ready Arm as Candidate"
-            if presentation.motion_states[
-                RefinementStage.SAFE_APPROACH
-            ] is RefinementMotionState.NOT_TESTED
-            else "Move to Candidate"
+            "Move to Routine Safe Pre-approach Pose"
         )
         for button in self.refinement_buttons["approach"].values():
             button.setEnabled(safe_enabled and safe_adjustable)
@@ -1762,6 +1882,7 @@ class InspectionControls(UIControlHelper):
         approved = presentation.approved_pose(current)
         self.refinement_dialog.next_button.setEnabled(
             presentation.stage_is_approved(current) and not pending
+            and (not safe_page or safe_reached)
         )
         self.refinement_dialog.next_button.setText(
             "Keep Existing and Continue"

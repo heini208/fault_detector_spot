@@ -184,7 +184,6 @@ class ProbePoint:
 
     probe_point_id: str
     display_name: str
-    safe_approach_pose_object: PoseData
     aligned_preapproach_pose_object: PoseData
     target_surface_distance_m: float
     position_tolerance_m: float
@@ -202,9 +201,6 @@ class ProbePoint:
         return cls(
             probe_point_id=str(data["probe_point_id"]),
             display_name=str(data["display_name"]),
-            safe_approach_pose_object=PoseData.from_dict(
-                data["safe_approach_pose_object"]
-            ),
             aligned_preapproach_pose_object=PoseData.from_dict(
                 data["aligned_preapproach_pose_object"]
             ),
@@ -241,7 +237,6 @@ class ProbePoint:
             self.display_name,
             "Probe point display name",
         )
-        self.safe_approach_pose_object.validate()
         self.aligned_preapproach_pose_object.validate()
         numeric_values = (
             self.target_surface_distance_m,
@@ -289,9 +284,6 @@ class ProbePoint:
         result = {
             "probe_point_id": self.probe_point_id,
             "display_name": self.display_name,
-            "safe_approach_pose_object": (
-                self.safe_approach_pose_object.to_dict()
-            ),
             "aligned_preapproach_pose_object": (
                 self.aligned_preapproach_pose_object.to_dict()
             ),
@@ -328,6 +320,8 @@ class InspectionRoutine:
     display_name: str
     reference_tag: ReferenceTag
     base_position: Optional[PoseData] = None
+    # Shared probe-tip pose in the object frame, resolved through calibration.
+    safe_approach_pose_object: Optional[PoseData] = None
     reference_views: List[ReferenceView] = field(
         default_factory=list
     )
@@ -363,6 +357,11 @@ class InspectionRoutine:
                 if data.get("base_position") is not None
                 else None
             ),
+            safe_approach_pose_object=(
+                PoseData.from_dict(data["safe_approach_pose_object"])
+                if data.get("safe_approach_pose_object") is not None
+                else None
+            ),
             reference_views=[
                 ReferenceView.from_dict(view)
                 for view in reference_views
@@ -380,6 +379,8 @@ class InspectionRoutine:
             "Routine display name",
         )
         self.reference_tag.validate()
+        if self.safe_approach_pose_object is not None:
+            self.safe_approach_pose_object.validate()
         if self.base_position is not None:
             self.base_position.validate()
             if (
@@ -462,6 +463,12 @@ class InspectionRoutine:
                 )
             probe_ids.add(probe_point.probe_point_id)
 
+    def require_safe_approach_pose(self) -> PoseData:
+        if self.safe_approach_pose_object is None:
+            raise ValueError("Set the routine safe pre-approach arm pose first")
+        self.safe_approach_pose_object.validate()
+        return self.safe_approach_pose_object
+
     def get_probe_point(
         self,
         probe_point_id: str,
@@ -489,6 +496,10 @@ class InspectionRoutine:
                 for point in self.probe_points
             ],
         }
+        if self.safe_approach_pose_object is not None:
+            result["safe_approach_pose_object"] = (
+                self.safe_approach_pose_object.to_dict()
+            )
         if self.base_position is not None:
             result["base_position"] = self.base_position.to_dict()
         return result

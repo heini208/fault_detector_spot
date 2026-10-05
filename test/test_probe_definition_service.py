@@ -152,7 +152,8 @@ def test_definition_service_builds_snapshot_metadata():
     assert metadata[4] == 7
     assert metadata[5] == "36h11"
     assert metadata[6] is False
-    assert len(metadata) == 7
+    assert metadata[7] is False
+    assert len(metadata) == 8
 
     base_position = PoseData.identity()
     base_position.position.x = -1.0

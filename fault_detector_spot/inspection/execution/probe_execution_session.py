@@ -174,7 +174,7 @@ class ProbeExecutionConfiguration:
             sensor_id=attachment.sensor_id,
             attachment_revision=attachment.attachment_revision,
             safe_approach_pose_object=FrozenPoseData.from_pose(
-                probe_point.safe_approach_pose_object
+                routine.require_safe_approach_pose()
             ),
             aligned_preapproach_pose_object=FrozenPoseData.from_pose(
                 probe_point.aligned_preapproach_pose_object

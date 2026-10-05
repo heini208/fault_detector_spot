@@ -111,7 +111,7 @@ def test_approve_valid_point_starts_refinement_without_confirmation_wait(
 
 
 @pytest.mark.parametrize("status", [None, "pending", "none"])
-def test_entry_requires_confirmed_attachment(application, status):
+def test_safe_arm_pose_setup_requires_confirmed_attachment(application, status):
     from types import SimpleNamespace
     from fault_detector_spot.ui.sensor.models import SensorAttachmentViewStatus
     controls = prepared_controls()
@@ -123,9 +123,10 @@ def test_entry_requires_confirmed_attachment(application, status):
     )
     warnings = []
     controls.show_warning = lambda title, detail: warnings.append(detail)
-    assert controls.handle_start_probe_refinement() is False
-    assert not controls.refinement_dialog.isVisible()
+    controls.set_routine_arm_pose_button.click()
+    assert controls.routine_arm_pose_dialog is None
     assert "Confirm the sensor attachment" in warnings[-1]
+    assert "setting the safe pre-approach arm pose" in warnings[-1]
     assert controls.ui.requests == []
 
 

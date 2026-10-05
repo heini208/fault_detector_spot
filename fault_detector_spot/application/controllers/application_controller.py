@@ -23,6 +23,7 @@ from fault_detector_spot.application.controllers.command_controller import (
 from fault_detector_spot.application.ros.operational_intent_adapter import (
     operational_intent_to_command,
     ROUTINE_BASE_POSITION_INTENTS,
+    ROUTINE_SAFE_APPROACH_INTENTS,
     SAVED_PROBE_INTENTS,
 )
 from fault_detector_spot.application.coordinators.setup_coordinator import (
@@ -89,6 +90,12 @@ class ApplicationController:
                 self.probe_setup_coordinator.routine_base_position_command(
                     intent
                 )
+            )
+        elif intent.intent in ROUTINE_SAFE_APPROACH_INTENTS:
+            if self.probe_setup_coordinator is None:
+                raise RuntimeError("Routine safe-approach controls are unavailable")
+            command = (
+                self.probe_setup_coordinator.routine_safe_approach_command(intent)
             )
         request = CommandRequest.create(
             command=command,

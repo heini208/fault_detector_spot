@@ -34,11 +34,10 @@ def pose(x=0.0, y=0.0, z=0.0):
     return value
 
 
-def probe_point(safe_x=0.30):
+def probe_point():
     return ProbePoint(
         probe_point_id="point_1",
         display_name="Point 1",
-        safe_approach_pose_object=pose(x=safe_x),
         aligned_preapproach_pose_object=pose(x=0.10),
         target_surface_distance_m=0.03,
         position_tolerance_m=0.005,
@@ -59,6 +58,7 @@ def inspection_object(point=None):
         slot_index=0,
     )
     routine = InspectionRoutine(
+        safe_approach_pose_object=pose(x=0.30),
         routine_id="scan",
         display_name="Scan",
         reference_tag=ReferenceTag(
@@ -105,8 +105,7 @@ def test_loaded_configuration_is_not_changed_by_later_repository_edits(
     tmp_path,
 ):
     session, objects = load_session(tmp_path)
-    changed = replace(probe_point(), safe_approach_pose_object=pose(x=0.80))
-    objects.replace_probe_point("motor_a", "scan", changed)
+    objects.set_routine_safe_approach_pose("motor_a", "scan", pose(x=0.80))
 
     target = session.configuration.resolve_target(PoseData.identity())
 

@@ -53,6 +53,9 @@ class ProbeSetupStateAdapter:
             snapshot.selected_reference_tag_family
         )
         message.has_base_position = bool(snapshot.has_base_position)
+        message.has_routine_safe_approach_pose = bool(
+            snapshot.has_routine_safe_approach_pose
+        )
         message.object_ids = list(snapshot.object_ids)
         message.routine_ids = list(snapshot.routine_ids)
         message.reference_view_ids = list(snapshot.reference_view_ids)

@@ -107,6 +107,21 @@ class ProbeDefinitionService:
         )
         return object_name, routine_name
 
+    def set_routine_safe_approach_pose(
+        self,
+        object_id: str,
+        routine_id: str,
+        safe_approach_pose_object: PoseData,
+    ) -> tuple[str, str]:
+        object_name = self._name(object_id, "object ID")
+        routine_name = self._name(routine_id, "routine ID")
+        self.object_repository.set_routine_safe_approach_pose(
+            object_name,
+            routine_name,
+            safe_approach_pose_object,
+        )
+        return object_name, routine_name
+
     def delete_routine(
         self,
         object_id: str,
@@ -143,14 +158,14 @@ class ProbeDefinitionService:
         object_ids: tuple,
     ):
         if selected_object_id not in object_ids:
-            return (), (), (), (), -1, "", False
+            return (), (), (), (), -1, "", False, False
         definition = self.object_repository.load(selected_object_id)
         routine_ids = tuple(
             routine.routine_id for routine in definition.routines
         )
         routine = definition.get_routine(selected_routine_id)
         if routine is None:
-            return routine_ids, (), (), (), -1, "", False
+            return routine_ids, (), (), (), -1, "", False, False
         return (
             routine_ids,
             tuple(view.view_id for view in routine.reference_views),
@@ -159,6 +174,7 @@ class ProbeDefinitionService:
             routine.reference_tag.tag_id,
             routine.reference_tag.tag_family,
             routine.base_position is not None,
+            routine.safe_approach_pose_object is not None,
         )
 
     @staticmethod

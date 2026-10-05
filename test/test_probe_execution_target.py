@@ -56,7 +56,6 @@ def inspection_object():
     point = ProbePoint(
         probe_point_id="point_1",
         display_name="Point 1",
-        safe_approach_pose_object=pose(x=0.30),
         aligned_preapproach_pose_object=pose(
             x=0.10,
             orientation=yaw_quaternion(180.0),
@@ -69,6 +68,7 @@ def inspection_object():
         reference_view_id="slot1_hand",
     )
     routine = InspectionRoutine(
+        safe_approach_pose_object=pose(x=0.30),
         routine_id="scan",
         display_name="Scan",
         reference_tag=ReferenceTag(

@@ -33,7 +33,14 @@ ROUTINE_BASE_POSITION_INTENTS = frozenset({
     OperationalIntent.INTENT_MOVE_TO_ROUTINE_BASE_POSITION,
 })
 
+ROUTINE_SAFE_APPROACH_INTENTS = frozenset({
+    OperationalIntent.INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH,
+})
+
 _INTENT_COMMAND_IDS = {
+    OperationalIntent.INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH: (
+        CommandID.MOVE_SAFE_APPROACH
+    ),
     OperationalIntent.INTENT_MOVE_TO_ROUTINE_BASE_POSITION: (
         CommandID.MOVE_BASE_TO_TAG
     ),
@@ -226,7 +233,9 @@ def operational_intent_to_command(
             intent.probe_point_id,
             "Probe point ID",
         )
-    if intent.intent in ROUTINE_BASE_POSITION_INTENTS:
+    if intent.intent in (
+        ROUTINE_BASE_POSITION_INTENTS | ROUTINE_SAFE_APPROACH_INTENTS
+    ):
         _required_text(intent.object_id, "Object ID")
         _required_text(intent.routine_id, "Routine ID")
     if intent.intent == OperationalIntent.INTENT_START_SENSOR_RECORDING:

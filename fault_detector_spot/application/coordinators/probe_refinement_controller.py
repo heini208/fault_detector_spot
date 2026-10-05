@@ -88,9 +88,7 @@ class ProbeRefinementController:
                 draft.setup,
             )
             if not draft.setup.safe_approach_approved:
-                refinement.seed_safe_approach_from_current_pose(
-                    self.current_probe_pose(draft, attachment)
-                )
+                raise ValueError("Set the routine safe pre-approach arm pose first")
             refinement.active_stage = RefinementStage.SAFE_APPROACH
             with self.state_lock:
                 draft.refinement = refinement
@@ -115,6 +113,8 @@ class ProbeRefinementController:
         self._release_attachment(draft)
 
     def approve(self, draft, stage: RefinementStage) -> None:
+        if stage is RefinementStage.SAFE_APPROACH:
+            raise ValueError("Set the shared safe pose in routine setup")
         self.require_physical_lane_idle()
         if draft.setup is None:
             raise ValueError("No calculated probe setup is available")
@@ -165,6 +165,8 @@ class ProbeRefinementController:
     def prepare_motion(self, context, draft, motion):
         self.require_physical_lane_idle()
         motion.validate()
+        if motion.kind is ProbeMotionKind.ADJUST_SAFE_APPROACH:
+            raise ValueError("Change the shared safe pose in routine setup")
         attachment = self._active_attachment(draft)
         stage = self.motion_stage(motion.kind)
         if stage is RefinementStage.ALIGNMENT:
@@ -253,7 +255,8 @@ class ProbeRefinementController:
                 motion.kind,
             )
             purpose = stage.value
-            verify_achieved_pose = True
+            # The routine safe pose only requires successful command completion.
+            verify_achieved_pose = motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH
         operation = self.setup_coordinator.prepare_command(
             context,
             command,
@@ -323,11 +326,11 @@ class ProbeRefinementController:
         refinement = self.require_refinement(draft)
         if status.state == CommandControllerState.SUCCEEDED:
             try:
-                attachment = self._active_attachment(draft)
-                achieved = self.current_probe_pose(
-                    draft,
-                    attachment,
-                )
+                pending = refinement.pending_motion
+                achieved = None
+                if pending.verify_achieved_pose or pending.updates_candidate:
+                    attachment = self._active_attachment(draft)
+                    achieved = self.current_probe_pose(draft, attachment)
                 self.verify_achieved_motion(
                     refinement.pending_motion,
                     motion,

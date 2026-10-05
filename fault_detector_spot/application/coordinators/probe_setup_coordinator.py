@@ -135,6 +135,22 @@ class ProbeSetupCoordinator:
             self.refinement_controller.motion_command_factory,
         )
 
+    def routine_safe_approach_command(self, intent):
+        """Resolve shared safe motion through the existing command lane."""
+        from fault_detector_spot.inspection.execution.saved_probe_motion import (
+            routine_safe_approach_command,
+        )
+        self.setup_coordinator.require_command_lane_idle(
+            "Robot command lane must be idle for routine safe-approach motion"
+        )
+        return routine_safe_approach_command(
+            intent,
+            self.object_repository,
+            self.motion_state_source,
+            self.refinement_controller.sensor_attachment_controller,
+            self.refinement_controller.motion_command_factory,
+        )
+
     def routine_base_position_command(self, intent):
         """Resolve one saved routine base position into base-to-tag motion."""
         from fault_detector_spot.inspection.execution.routine_base_motion import (
@@ -228,6 +244,7 @@ class ProbeSetupCoordinator:
             reference_tag_id,
             reference_tag_family,
             has_base_position,
+            has_routine_safe_approach_pose,
         ) = (
             self.definition_service.selected_definition_lists(
                 draft.selected_object_id,
@@ -254,6 +271,7 @@ class ProbeSetupCoordinator:
             probe_point_ids=probe_ids,
             probe_point_target_surface_distances_m=distances,
             has_base_position=has_base_position,
+            has_routine_safe_approach_pose=has_routine_safe_approach_pose,
         )
 
     @_serialized_transaction
@@ -396,6 +414,26 @@ class ProbeSetupCoordinator:
             draft.selected_routine_id,
             base_position,
         )
+        return self._advance(draft)
+
+    @_serialized_transaction
+    def save_routine_safe_approach_pose(self, context):
+        """Capture the routine's shared, object-referenced probe-tip pose."""
+        draft = self._draft(context)
+        if not draft.selected_object_id or not draft.selected_routine_id:
+            raise ValueError(
+                "Select an object and routine before saving an arm pose"
+            )
+        self.refinement_controller.require_physical_lane_idle()
+        if draft.refinement is not None:
+            raise RuntimeError(
+                "Close probe refinement before changing the routine arm pose"
+            )
+        pose = self.refinement_controller.current_probe_pose(draft)
+        self.definition_service.set_routine_safe_approach_pose(
+            draft.selected_object_id, draft.selected_routine_id, pose,
+        )
+        draft.clear_geometry()
         return self._advance(draft)
 
     @_serialized_transaction

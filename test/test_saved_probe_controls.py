@@ -49,7 +49,7 @@ def test_list_updates_and_selection_does_not_cross_routines(controls):
     assert not any(b.isEnabled() for b in controls.saved_probe_action_buttons.values())
 
 
-@pytest.mark.parametrize("operation", [24, 25, 26])
+@pytest.mark.parametrize("operation", [25, 26])
 def test_click_sends_selected_ids_and_disables_duplicates(controls, operation):
     controls.saved_probe_points_list.setCurrentRow(1)
     assert controls.handle_saved_probe_motion(operation)
@@ -73,9 +73,9 @@ def test_click_sends_selected_ids_and_disables_duplicates(controls, operation):
 
 def test_transport_rejection_allows_retry(controls):
     controls.saved_probe_points_list.setCurrentRow(0)
-    controls.handle_saved_probe_motion(24)
+    controls.handle_saved_probe_motion(25)
     controls.handle_saved_probe_rejected("Disconnected")
-    assert controls.handle_saved_probe_motion(24)
+    assert controls.handle_saved_probe_motion(25)
 
 
 @pytest.mark.parametrize("operation, field", [
@@ -98,7 +98,8 @@ def test_saved_pose_uses_repository_geometry_and_live_tag(operation, field):
     command = saved_probe_command(intent, Mock(load=Mock(return_value=definition)), source,
                                   Mock(require_motion_attachment=Mock(return_value=sensor())),
                                   ProbeSetupMotionCommandFactory())
-    pose = getattr(definition.get_routine(intent.routine_id).probe_points[0], field)
+    routine = definition.get_routine(intent.routine_id)
+    pose = getattr(routine if operation == 24 else routine.probe_points[0], field)
     assert command.command_id == CommandID.MOVE_ARM_TO_TAG
     assert command.offset.position.x == pose.position.x
     assert command.offset.orientation.w == pose.orientation.w
@@ -134,7 +135,7 @@ def test_missing_saved_selection_rejected(field):
         saved_probe_command(intent, Mock(load=Mock(return_value=inspection_object())), None, None, None)
 
 
-@pytest.mark.parametrize("operation", [24, 25, 26])
+@pytest.mark.parametrize("operation", [25, 26])
 def test_adapter_requires_saved_selection(operation):
     intent = saved_intent(operation)
     operational_intent_to_command(intent)

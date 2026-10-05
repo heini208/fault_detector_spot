@@ -104,22 +104,14 @@ def draft_for(setup):
     )
 
 
-def test_new_safe_approach_starts_from_current_live_probe_pose():
-    setup = calculated_setup()
-    current = pose(x=0.42, y=0.10, z=0.30)
-    draft = draft_for(setup)
-    controller = CurrentPoseRefinementController(current)
+def test_new_safe_approach_requires_routine_configuration():
+    import pytest
 
-    controller.begin(draft)
-
-    refinement = draft.refinement
-    assert refinement.active_stage is RefinementStage.SAFE_APPROACH
-    assert refinement.candidate_pose(RefinementStage.SAFE_APPROACH) == current
-    assert refinement.motion_states[RefinementStage.SAFE_APPROACH] is (
-        RefinementMotionState.REACHED
-    )
-    assert not refinement.stage_is_approved(RefinementStage.SAFE_APPROACH)
-    assert not hasattr(draft, "surface_verification")
+    draft = draft_for(calculated_setup())
+    controller = CurrentPoseRefinementController(pose(x=0.42))
+    with pytest.raises(ValueError, match="routine safe pre-approach"):
+        controller.begin(draft)
+    assert draft.refinement is None
 
 
 def test_existing_approved_safe_pose_is_not_replaced_by_current_pose():

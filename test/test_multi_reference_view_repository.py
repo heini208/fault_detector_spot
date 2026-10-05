@@ -190,7 +190,6 @@ def test_recapture_preserves_probe_geometry_and_clears_provenance(
     original_probe = ProbePoint(
         probe_point_id="point_a",
         display_name="Point A",
-        safe_approach_pose_object=safe_approach_pose,
         aligned_preapproach_pose_object=aligned_pose,
         target_surface_distance_m=0.01,
         position_tolerance_m=0.005,
