@@ -30,6 +30,7 @@ from fault_detector_spot.application.ros.command_request_adapter import (
     command_request_from_message,
     command_request_to_message,
 )
+from fault_detector_spot.shared.persistence.file_storage import validate_storage_name
 from fault_detector_spot.shared.persistence.runtime_paths import default_recording_root
 from fault_detector_spot.shared.ros.qos_profiles import (
     COMMAND_REQUEST_QOS,
@@ -98,14 +99,17 @@ class RecordManager(Node):
     def handle_control(self, message: CommandRecordControl):
         mode = message.mode.lower()
         name = message.name.strip()
-        if mode == "start":
-            self.start_recording(name)
-        elif mode == "stop":
-            self.stop_recording()
-        elif mode == "play":
-            self.play_recording(name)
-        elif mode == "delete":
-            self.delete_recording(name)
+        try:
+            if mode == "start":
+                self.start_recording(name)
+            elif mode == "stop":
+                self.stop_recording()
+            elif mode == "play":
+                self.play_recording(name)
+            elif mode == "delete":
+                self.delete_recording(name)
+        except (OSError, TypeError, ValueError) as exception:
+            self.get_logger().error(f"Recording {mode} request failed: {exception}")
 
     def start_recording(self, name: str):
         if not name:
@@ -233,15 +237,25 @@ class RecordManager(Node):
             self.publish_recordings_list()
 
     def publish_recordings_list(self):
-        files = [
-            file_name[:-5]
-            for file_name in os.listdir(self.recordings_dir)
-            if file_name.endswith(".json")
-        ]
+        files = []
+        for file_name in os.listdir(self.recordings_dir):
+            if not file_name.endswith(".json"):
+                continue
+            name = file_name[:-5]
+            try:
+                path = self._recording_path(name)
+            except (TypeError, ValueError):
+                continue
+            if os.path.isfile(path):
+                files.append(name)
         self.list_pub.publish(StringArray(names=sorted(files)))
 
     def _recording_path(self, name):
-        return os.path.join(self.recordings_dir, f"{name}.json")
+        validate_storage_name(name, "recording name")
+        path = os.path.join(self.recordings_dir, f"{name}.json")
+        if os.path.islink(path):
+            raise ValueError("Recording files must not be symbolic links")
+        return path
 
 
 def main(args=None):

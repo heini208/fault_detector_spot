@@ -290,3 +290,93 @@ def test_playback_stops_and_discards_remaining_commands_on_failure():
     assert manager._playback_request_id == ""
     assert manager.playback_state_pub.messages == [Bool(data=False)]
     assert manager.logger.warning_messages
+
+
+class RecordingStorageHarness(RecordManagerHarness):
+    handle_control = RecordManager.handle_control
+    start_recording = RecordManager.start_recording
+    stop_recording = RecordManager.stop_recording
+    play_recording = RecordManager.play_recording
+    delete_recording = RecordManager.delete_recording
+    publish_recordings_list = RecordManager.publish_recordings_list
+    _recording_path = RecordManager._recording_path
+
+    def __init__(self, root):
+        super().__init__()
+        self.recordings_dir = str(root)
+        self.current_name = None
+        self.list_pub = FakePublisher()
+
+    def control(self, mode, name=""):
+        from fault_detector_msgs.msg import CommandRecordControl
+        self.handle_control(CommandRecordControl(mode=mode, name=name))
+
+
+@pytest.mark.parametrize("mode", ["start", "play", "delete"])
+@pytest.mark.parametrize("name", ["../outside", "absolute", "nested/name", "bad\\name", "bad\x00name", ".", ".."])
+def test_recording_control_rejects_unsafe_paths(tmp_path, mode, name):
+    root = tmp_path / "recordings"
+    root.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"commands": []}')
+    manager = RecordingStorageHarness(root)
+    if name == "absolute":
+        name = str(outside.with_suffix(""))
+    manager.control(mode, name)
+    assert outside.read_text() == '{"commands": []}'
+    assert list(root.iterdir()) == []
+    assert not manager.recording
+    assert not manager.command_submission_pub.messages
+    assert not manager.playback_state_pub.messages
+    assert manager.logger.error_messages
+
+
+@pytest.mark.parametrize("mode", ["start", "play", "delete"])
+def test_recording_control_rejects_symlinks(tmp_path, mode):
+    root = tmp_path / "recordings"
+    root.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"commands": []}')
+    link = root / "linked.json"
+    link.symlink_to(outside)
+    manager = RecordingStorageHarness(root)
+    manager.control(mode, "linked")
+    assert outside.read_text() == '{"commands": []}'
+    assert link.is_symlink()
+    assert not manager.recording
+    assert not manager.playback_state_pub.messages
+    assert manager.logger.error_messages
+    manager.publish_recordings_list()
+    assert manager.list_pub.messages[-1].names == []
+
+
+def test_recording_save_rechecks_path_and_keeps_unsaved_data(tmp_path):
+    root = tmp_path / "recordings"
+    root.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text("do not overwrite")
+    manager = RecordingStorageHarness(root)
+    manager.control("start", "session")
+    manager.temp_data.append({"pending": True})
+    (root / "session.json").symlink_to(outside)
+    manager.control("stop")
+    assert outside.read_text() == "do not overwrite"
+    assert manager.recording
+    assert manager.temp_data == [{"pending": True}]
+    assert manager.logger.error_messages
+
+
+def test_valid_recording_storage_lifecycle(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    (tmp_path / "directory.json").mkdir()
+    manager.control("start", "inspection run-1")
+    manager.control("stop")
+    assert not manager.recording
+    assert (tmp_path / "inspection run-1.json").is_file()
+    assert manager.list_pub.messages[-1].names == ["inspection run-1"]
+    manager.control("play", "inspection run-1")
+    assert [message.data for message in manager.playback_state_pub.messages] == [True, False]
+    manager.control("delete", "inspection run-1")
+    assert not (tmp_path / "inspection run-1.json").exists()
+    assert manager.list_pub.messages[-1].names == []
+    assert not manager.logger.error_messages
