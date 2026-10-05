@@ -20,8 +20,10 @@ class ManipulatorMoveRelativeCommand(MoveRelativeCommand):
             stamp: Time,
             offset: PoseStamped = None,
             target_frame: str = HAND_FRAME_NAME,  # Default relative to hand
+            arm_speed_scale: float = 1.0,
     ):
         super().__init__(command_id, stamp, offset, target_frame)
+        self.arm_speed_scale = arm_speed_scale
 
     def compute_goal_pose(self, transformer: TFListenerWrapper) -> PoseStamped:
         # Parent computes result = offset rotated into target_frame.

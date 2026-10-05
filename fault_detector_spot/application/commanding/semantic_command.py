@@ -134,10 +134,13 @@ class SemanticCommand:
     )
     motion_sensor_id: str = ""
     body_height_m: float = 0.0
+    arm_speed_scale: float = 1.0
     walking_profile: str = ""
     pre_approach_offsets: tuple[StampedPose, ...] = ()
 
     def __post_init__(self):
+        if not math.isfinite(self.arm_speed_scale) or not 0 < self.arm_speed_scale <= 1:
+            raise ValueError("Arm speed scale must be in (0, 1]")
         if self.walking_profile not in ("", "normal", "precision"):
             raise ValueError("Walking profile must be empty, normal or precision")
         try:

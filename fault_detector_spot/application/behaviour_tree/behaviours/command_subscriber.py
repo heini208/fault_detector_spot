@@ -424,6 +424,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 command.command_id,
                 self._create_command_stamp(),
                 stamped_pose_to_message(command.offset),
+                arm_speed_scale=command.arm_speed_scale,
             )
         ]
 

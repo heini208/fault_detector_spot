@@ -407,6 +407,15 @@ class ArmMovementExecutor(MovementExecutor):
         force_threshold_n=None,
     ) -> ArmMovementUpdate:
         """Resolve a relative hand target and execute it through the guard."""
+        scale = float(getattr(command, "arm_speed_scale", 1.0))
+        if not math.isfinite(scale) or not 0 < scale <= 1:
+            raise ValueError("Arm speed scale must be in (0, 1]")
+        if scale != 1.0:
+            baseline = speed or self.speed_policy.default_speed
+            speed = ArmMotionSpeed(
+                baseline.linear_speed_mps * scale,
+                baseline.angular_speed_rad_s * scale,
+            )
         if self.probe_motion_planner.relative_command_is_noop(command):
             return ArmMovementUpdate(
                 ArmMovementOutcome.SUCCESS,

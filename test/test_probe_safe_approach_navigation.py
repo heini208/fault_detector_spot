@@ -30,7 +30,7 @@ def test_reached_safe_pose_enables_continue_without_per_point_approval(applicati
     controls.apply_setup_state(state)
     dialog = controls.refinement_dialog
     assert not dialog.next_button.isEnabled()
-    assert dialog.refinement_controls_widget.isHidden()
+    assert dialog.fine_adjustment_dialog.isHidden()
     state.motion_pending = True
     state.safe_approach_motion_state = state.MOTION_MOVING
     controls.apply_setup_state(state)
@@ -42,7 +42,7 @@ def test_reached_safe_pose_enables_continue_without_per_point_approval(applicati
     assert dialog.next_button.isEnabled()
     dialog.next_button.click()
     assert dialog.workflow_stack.currentIndex() == dialog.ALIGNMENT_PAGE
-    assert not dialog.refinement_controls_widget.isHidden()
+    assert dialog.fine_adjustment_dialog.isHidden()
     controls.refinement_dialog.hide()
 
 

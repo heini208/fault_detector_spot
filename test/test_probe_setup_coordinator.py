@@ -158,6 +158,7 @@ class FakeMotionCommandFactory:
         _pitch,
         _yaw,
         motion_sensor_id,
+        safe_approach=False,
     ):
         return SemanticCommand(
             command_id=CommandID.MOVE_ARM_RELATIVE,

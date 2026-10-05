@@ -2,6 +2,7 @@
 
 from fault_detector_msgs.msg import ProbeSetupMotionIntent
 from .pre_approach_path_dialog import PreApproachPathDialog
+from .fine_adjustment_dialog import FineAdjustmentDialog
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -81,19 +82,7 @@ class ProbeRefinementDialog(QDialog):
         self.progress_label.setFont(progress_font)
         layout.addWidget(self.progress_label)
 
-        self.refinement_controls_widget = QWidget()
-        step_row = QHBoxLayout(self.refinement_controls_widget)
-        step_row.setContentsMargins(0, 0, 0, 0)
-        step_row.addWidget(QLabel("Translation step [m]:"))
-        step_row.addWidget(self.controls.refine_translation_step_field)
-        step_row.addSpacing(12)
-        step_row.addWidget(QLabel("Rotation step [deg]:"))
-        step_row.addWidget(self.controls.refine_rotation_step_field)
-        step_row.addSpacing(12)
-        step_row.addWidget(QLabel("Adjustment frame:"))
-        step_row.addWidget(self.controls.refine_frame_dropdown)
-        step_row.addStretch()
-        layout.addWidget(self.refinement_controls_widget)
+        self.fine_adjustment_dialog = FineAdjustmentDialog(controls, self)
 
         self.workflow_stack = QStackedWidget()
         self.stage_stack = self.workflow_stack
@@ -146,7 +135,7 @@ class ProbeRefinementDialog(QDialog):
         footer.addWidget(self.close_button)
         layout.addLayout(footer)
 
-        self.refinement_controls_widget.hide()
+        self.fine_adjustment_dialog.hide()
         self.emergency_stop_button.hide()
         self.back_button.hide()
         self.next_button.hide()
@@ -437,8 +426,7 @@ class ProbeRefinementDialog(QDialog):
             RefinementStage.ALIGNMENT,
             "Pre-approach Path",
             "Add optional pathing points, then refine the final lateral position and orientation at the "
-            "absolute pre-approach distance. No independent axial offset "
-            "is permitted.",
+            "absolute pre-approach distance.",
             self.controls.alignment_step_status_label,
             self.controls.move_aligned_pose_button,
             self.controls.use_current_alignment_button,
@@ -446,6 +434,7 @@ class ProbeRefinementDialog(QDialog):
         )
 
     def hideEvent(self, event):
+        self.fine_adjustment_dialog.hide()
         self.path_dialog.hide()
         super().hideEvent(event)
 
@@ -456,6 +445,8 @@ class ProbeRefinementDialog(QDialog):
         for button in (self.add_pathing_point_button, self.move_path_button, self.move_safe_pose_button):
             button.setEnabled(enabled)
         self.path_dialog.refresh(state, enabled)
+        if state is None or not state.refinement_active:
+            self.fine_adjustment_dialog.hide()
 
     def _make_probe_page(self):
         content = QWidget()
@@ -689,7 +680,7 @@ class ProbeRefinementDialog(QDialog):
         self._reference_selection_enabled = False
         self.workflow_stack.setCurrentIndex(self.REFERENCE_PAGE)
         self.progress_label.setText("Step 1 of 5 — Select Reference Point")
-        self.refinement_controls_widget.hide()
+        self.fine_adjustment_dialog.hide()
         self.emergency_stop_button.hide()
         self.back_button.hide()
         self.next_button.hide()
@@ -867,9 +858,7 @@ class ProbeRefinementDialog(QDialog):
             f"Step {index + 2} of 5 — "
             f"{self._stage_title(stage)}"
         )
-        self.refinement_controls_widget.setVisible(
-            stage is RefinementStage.ALIGNMENT
-        )
+        self.fine_adjustment_dialog.hide()
         self.emergency_stop_button.show()
         self.back_button.show()
         self.next_button.show()
@@ -891,7 +880,7 @@ class ProbeRefinementDialog(QDialog):
     def show_summary(self):
         self.workflow_stack.setCurrentIndex(self.SUMMARY_PAGE)
         self.progress_label.setText("Step 5 of 5 — Probe Point Summary")
-        self.refinement_controls_widget.hide()
+        self.fine_adjustment_dialog.hide()
         self.emergency_stop_button.show()
         self.back_button.show()
         self.next_button.hide()

@@ -174,7 +174,8 @@ class ProbeRefinementController:
         }:
             return self._prepare_path_motion(context, draft, motion, attachment)
         stage = self.motion_stage(motion.kind)
-        if stage is RefinementStage.ALIGNMENT:
+        if (stage is RefinementStage.ALIGNMENT
+                and motion.kind is not ProbeMotionKind.ADJUST_PATHING_POSE):
             self._ensure_minimum_camera_clearance_geometry(
                 draft,
                 attachment,
@@ -238,7 +239,9 @@ class ProbeRefinementController:
             )
             target = refinement.candidate_pose(stage)
             purpose = f"{stage.value} adjustment"
-            updates_candidate = True
+            updates_candidate = (
+                motion.kind is not ProbeMotionKind.ADJUST_PATHING_POSE
+            )
             verify_achieved_pose = False
         else:
             target = refinement.candidate_pose(stage)
@@ -388,7 +391,10 @@ class ProbeRefinementController:
                     motion,
                     achieved,
                 )
-                if motion.kind is ProbeMotionKind.MOVE_PATHING_POINT:
+                if motion.kind in {
+                    ProbeMotionKind.MOVE_PATHING_POINT,
+                    ProbeMotionKind.ADJUST_PATHING_POSE,
+                }:
                     refinement.complete_motion_without_pose_capture(
                         status.operation.request_id
                     )
@@ -510,6 +516,7 @@ class ProbeRefinementController:
         }:
             return RefinementStage.SAFE_APPROACH
         if kind in {
+            ProbeMotionKind.ADJUST_PATHING_POSE,
             ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
             ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH,
             ProbeMotionKind.ORIENT_TO_SURFACE,
@@ -745,7 +752,7 @@ class ProbeRefinementController:
             attachment.motion_sensor_id,
             routine.reference_tag.tag_id,
         )
-        return self.motion_command_factory.relative(
+        command = self.motion_command_factory.relative(
             frame_id,
             motion.translation,
             motion.pitch_rad,
@@ -755,6 +762,8 @@ class ProbeRefinementController:
                 motion.kind is ProbeMotionKind.ADJUST_SAFE_APPROACH
             ),
         )
+
+        return replace(command, arm_speed_scale=motion.arm_speed_scale)
 
     def motion_attachment(self):
         return self._active_attachment()

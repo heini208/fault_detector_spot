@@ -222,8 +222,8 @@ def test_refinement_dialog_uses_stage_safe_controls(application, tmp_path):
         "Save Final Aligned Pre-approach Pose"
     )
     assert controls.refinement_buttons["approach"] == {}
-    assert "front" not in controls.refinement_buttons["alignment"]
-    assert "back" not in controls.refinement_buttons["alignment"]
+    assert "front" in controls.refinement_buttons["alignment"]
+    assert "back" in controls.refinement_buttons["alignment"]
     assert controls.refinement_buttons["probe"] == {}
     assert controls.test_surface_distance_button.text() == (
         "Move Close to Surface"

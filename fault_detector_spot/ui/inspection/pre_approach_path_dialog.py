@@ -23,6 +23,12 @@ class PreApproachPathDialog(QDialog):
         for button in (self.move_button, self.up_button, self.down_button):
             row.addWidget(button)
         layout.addLayout(row)
+        self.adjust_button = QPushButton("Open Fine Adjustment")
+        self.adjust_button.setAutoDefault(False)
+        self.adjust_button.clicked.connect(
+            lambda: controls.refinement_dialog.fine_adjustment_dialog.open_for(True)
+        )
+        layout.addWidget(self.adjust_button)
         self.name_field = QLineEdit()
         self.name_field.setPlaceholderText("Pathing point name")
         layout.addWidget(self.name_field)
@@ -60,6 +66,7 @@ class PreApproachPathDialog(QDialog):
     def _update_buttons(self, *_):
         row = self.points.currentRow()
         selected = self._enabled and row >= 0
+        self.adjust_button.setEnabled(self._enabled)
         self.move_button.setEnabled(selected)
         self.up_button.setEnabled(selected and row > 0)
         self.down_button.setEnabled(selected and row + 1 < self.points.count())

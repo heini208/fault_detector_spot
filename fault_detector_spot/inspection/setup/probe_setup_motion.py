@@ -39,6 +39,7 @@ MAX_REFINEMENT_ROTATION_RAD = math.radians(15.0)
 class ProbeMotionKind(str, Enum):
     """Supported single-step setup movement kinds."""
 
+    ADJUST_PATHING_POSE = "adjust_pathing_pose"
     MOVE_PATHING_POINT = "move_pathing_point"
     MOVE_PRE_APPROACH_PATH = "move_pre_approach_path"
     MOVE_SAFE_APPROACH = "move_safe_approach"
@@ -71,12 +72,15 @@ class ProbeMotionRequest:
     position_tolerance_m: float = 0.01
     orientation_tolerance_rad: float = math.radians(5.0)
     pathing_point_index: int = 0
+    arm_speed_scale: float = 1.0
 
     def validate(self) -> None:
         if not isinstance(self.kind, ProbeMotionKind):
             raise TypeError("Probe motion kind is invalid")
         if not isinstance(self.frame, ProbeMotionFrame):
             raise TypeError("Probe motion frame is invalid")
+        if not math.isfinite(self.arm_speed_scale) or not 0 < self.arm_speed_scale <= 1:
+            raise ValueError("Arm speed scale must be in (0, 1]")
         self.translation.validate()
         for value, label in (
             (self.pitch_rad, "Pitch adjustment"),
@@ -107,6 +111,7 @@ class ProbeMotionRequest:
     @property
     def relative(self) -> bool:
         return self.kind in {
+            ProbeMotionKind.ADJUST_PATHING_POSE,
             ProbeMotionKind.ADJUST_SAFE_APPROACH,
             ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH,
         }

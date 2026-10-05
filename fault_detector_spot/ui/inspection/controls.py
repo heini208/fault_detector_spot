@@ -516,6 +516,8 @@ class InspectionControls(UIControlHelper):
                 "down",
                 "left",
                 "right",
+                "back",
+                "front",
                 "pitch_up",
                 "pitch_down",
                 "yaw_left",
@@ -529,11 +531,8 @@ class InspectionControls(UIControlHelper):
                     self._refinement_button_label(action)
                 )
                 button.clicked.connect(
-                    lambda _checked=False, selected_stage=stage,
-                    selected_action=action: self.handle_refine_pose(
-                        selected_stage,
-                        selected_action,
-                    )
+                    lambda _checked=False, selected_action=action:
+                    self.handle_fine_adjustment(selected_action)
                 )
                 stage_buttons[action] = button
                 setattr(
@@ -974,21 +973,11 @@ class InspectionControls(UIControlHelper):
             orientation_layout.addRow(orientation_actions)
             layout.addWidget(orientation_group)
 
-        movement_group = QGroupBox("Finite adjustments")
-        movement_layout = QGridLayout(movement_group)
-        buttons = self.refinement_buttons[stage]
-        movement_layout.addWidget(buttons["up"], 0, 1)
-        movement_layout.addWidget(buttons["left"], 1, 0)
-        movement_layout.addWidget(buttons["right"], 1, 2)
-        movement_layout.addWidget(buttons["down"], 2, 1)
-        if "back" in buttons:
-            movement_layout.addWidget(buttons["back"], 3, 0)
-            movement_layout.addWidget(buttons["front"], 3, 2)
-        movement_layout.addWidget(buttons["pitch_up"], 4, 0)
-        movement_layout.addWidget(buttons["pitch_down"], 4, 2)
-        movement_layout.addWidget(buttons["yaw_left"], 5, 0)
-        movement_layout.addWidget(buttons["yaw_right"], 5, 2)
-        layout.addWidget(movement_group)
+        self.open_fine_adjustment_button = QPushButton("Open Fine Adjustment")
+        self.open_fine_adjustment_button.clicked.connect(
+            lambda: self.refinement_dialog.fine_adjustment_dialog.open_for(False)
+        )
+        layout.addWidget(self.open_fine_adjustment_button)
 
         if stage == "probe":
             layout.addWidget(self._make_surface_distance_controls())
@@ -1171,7 +1160,7 @@ class InspectionControls(UIControlHelper):
             "down": "Down",
             "left": "Left",
             "right": "Right",
-            "front": "Front",
+            "front": "Forward",
             "back": "Back",
             "pitch_up": "Pitch Up",
             "pitch_down": "Pitch Down",
@@ -1874,6 +1863,10 @@ class InspectionControls(UIControlHelper):
         self.refine_translation_step_field.setEnabled(not pending)
         self.refine_rotation_step_field.setEnabled(not pending)
         self.refine_frame_dropdown.setEnabled(not pending)
+        self.open_fine_adjustment_button.setEnabled(alignment_enabled and alignment_adjustable)
+        self.refinement_dialog.fine_adjustment_dialog.refresh(
+            alignment_enabled and alignment_adjustable, alignment_enabled
+        )
         self.refinement_dialog.back_button.setEnabled(
             current != RefinementStage.SAFE_APPROACH
             and not pending
@@ -2016,6 +2009,38 @@ class InspectionControls(UIControlHelper):
             ),
         )
         return False
+
+    def handle_fine_adjustment(self, action):
+        dialog = self.refinement_dialog.fine_adjustment_dialog
+        if not dialog.pathing:
+            submitted = self.handle_refine_pose("alignment", action)
+            if submitted:
+                dialog.refresh(False, False)
+            return submitted
+        try:
+            translation_step = self._bounded_positive_value(
+                self.refine_translation_step_field, "Translation step", MAX_REFINEMENT_TRANSLATION_M
+            )
+            rotation_step = math.radians(self._bounded_positive_value(
+                self.refine_rotation_step_field, "Rotation step", MAX_REFINEMENT_ROTATION_DEG
+            ))
+            translation, pitch, yaw = self._refinement_delta(action, translation_step, rotation_step)
+            intent = ProbeSetupMotionIntent()
+            intent.operation = ProbeSetupMotionIntent.OPERATION_ADJUST_PATHING_POSE
+            intent.frame = self._selected_refinement_frame_code()
+            intent.translation.x, intent.translation.y, intent.translation.z = (
+                translation.x, translation.y, translation.z
+            )
+            intent.pitch_rad, intent.yaw_rad = pitch, yaw
+            intent.arm_speed_scale = dialog.speed_field.value() / 100.0
+            self._write_motion_tolerances(intent)
+            submitted = self._submit_probe_motion(intent, "pathing pose adjustment")
+            if submitted:
+                dialog.refresh(False, False)
+            return submitted
+        except Exception as exception:
+            self._show_setup_error("Fine Arm Adjustment", exception)
+            return False
 
     def handle_refine_pose(self, stage, action):
         try:
@@ -2197,6 +2222,7 @@ class InspectionControls(UIControlHelper):
             )
         intent = ProbeSetupMotionIntent()
         intent.operation = operations[stage]
+        intent.arm_speed_scale = self.refinement_dialog.fine_adjustment_dialog.speed_field.value() / 100.0
         intent.frame = self._selected_refinement_frame_code()
         intent.translation.x = translation.x
         intent.translation.y = translation.y
