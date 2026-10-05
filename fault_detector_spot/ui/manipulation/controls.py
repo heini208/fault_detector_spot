@@ -1,7 +1,7 @@
 import math
 
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QMessageBox
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox
 
 from fault_detector_msgs.msg import OperationalIntent, TagElement
 from fault_detector_spot.application.commanding.command_ids import OrientationModes
@@ -534,7 +534,7 @@ class ManipulationControls(UIControlHelper):
         )
 
         reply = self.ask_question("Confirm Move & Wait", message)
-        if reply != QMessageBox.Yes:
+        if not reply:
             self.status_label.setText(f"Move & Wait to tag {intent.tag.id} canceled")
             return
 
@@ -556,7 +556,7 @@ class ManipulationControls(UIControlHelper):
         )
         reply = self.ask_question("Confirm Move", message)
 
-        if reply != QMessageBox.Yes:
+        if not reply:
             self.status_label.setText(f"Move to tag {intent.tag.id} canceled")
             return
 

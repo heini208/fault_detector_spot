@@ -35,7 +35,7 @@ class UIControlHelper(ABC):
         reply = QMessageBox.question(
             self.ui, title, message, QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
-        return reply
+        return reply == QMessageBox.Yes
 
     def show_setup_unavailable(self, workflow: str) -> bool:
         """Report a setup workflow awaiting its coordinator API."""

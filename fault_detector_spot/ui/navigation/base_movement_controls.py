@@ -7,7 +7,7 @@ from fault_detector_spot.navigation.body_height import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QComboBox,
-    QMessageBox, QSlider,
+    QSlider,
 )
 
 from fault_detector_msgs.msg import OperationalIntent, TagElement
@@ -300,7 +300,7 @@ class BaseMovementControls(UIControlHelper):
             f"Yaw={math.degrees(2 * math.asin(intent.offset.pose.orientation.z)):.1f}° "
             f"in frame {intent.offset.header.frame_id}?"
         )
-        if self.ask_question("Confirm Move Base Relative", msg) == QMessageBox.Yes:
+        if self.ask_question("Confirm Move Base Relative", msg):
             self.ui.execute_operation(intent)
 
     def handle_move_to_tag(self):
@@ -320,5 +320,5 @@ class BaseMovementControls(UIControlHelper):
             f"Y={intent.offset.pose.position.y:.2f}, "
             f"Yaw={math.degrees(2 * math.asin(intent.offset.pose.orientation.z)):.1f}°?"
         )
-        if self.ask_question("Confirm Move to Tag", msg) == QMessageBox.Yes:
+        if self.ask_question("Confirm Move to Tag", msg):
             self.ui.execute_operation(intent)
