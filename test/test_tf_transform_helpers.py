@@ -4,7 +4,9 @@ import pytest
 from geometry_msgs.msg import TransformStamped
 from rclpy.time import Time
 
-from fault_detector_spot.inspection.model.models import QuaternionData
+from fault_detector_spot.shared.geometry.models import (
+    QuaternionData,
+)
 from fault_detector_spot.shared.ros.tf_transforms import (
     lookup_pose_data,
     transform_to_pose_data,

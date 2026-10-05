@@ -2,7 +2,9 @@
 
 import pytest
 
-from fault_detector_spot.inspection.model.models import Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 from fault_detector_spot.inspection.sensing.end_effector_force import (
     EndEffectorForceSample,
     estimate_force_baseline,

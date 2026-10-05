@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from geometry_msgs.msg import PoseStamped
+from fault_detector_spot.shared.geometry.models import PoseData
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
@@ -61,10 +61,8 @@ class FakeCommandController:
 
 
 def map_pose(x=1.0):
-    pose = PoseStamped()
-    pose.header.frame_id = "map"
-    pose.pose.position.x = x
-    pose.pose.orientation.w = 1.0
+    pose = PoseData.identity()
+    pose.position.x = x
     return pose
 
 

@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     Vector3Data,
 )

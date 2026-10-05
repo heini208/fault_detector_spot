@@ -31,19 +31,3 @@ class CommandID(str, Enum):
     MOVE_BASE_RELATIVE = "move_base_relative"
     START_SENSOR_RECORDING = "start_sensor_recording"
     STOP_SENSOR_RECORDING = "stop_sensor_recording"
-
-
-class OrientationModes(str, Enum):
-    CUSTOM_ORIENTATION = "custom"
-    STRAIGHT = "look_straight"
-    TAG_ORIENTATION = "relative_to_tag"
-    LOOK_LEFT = "left"
-    LOOK_RIGHT = "right"
-    LOOK_UP = "up"
-    LOOK_DOWN = "down"
-
-
-class TagFrames(str, Enum):
-    SPOT_FRAME = "fiducial_"
-    APRILTAG_ROS_FRAME = "tag36h11:"
-    SPOT_FRAME_FILTERED = "filtered_fiducial_"

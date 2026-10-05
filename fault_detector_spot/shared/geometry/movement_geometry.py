@@ -6,7 +6,7 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
 
-from fault_detector_spot.application.commanding.command_ids import (
+from fault_detector_spot.shared.geometry.movement_frames import (
     OrientationModes,
     TagFrames,
 )

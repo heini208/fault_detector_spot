@@ -14,7 +14,7 @@ from synchros2.static_transform_broadcaster import (
     StaticTransformBroadcaster,
 )
 
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

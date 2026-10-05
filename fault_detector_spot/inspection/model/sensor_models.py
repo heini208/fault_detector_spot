@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, Tuple
 
-from .models import PoseData, QuaternionData, Vector3Data
+from fault_detector_spot.shared.geometry.models import PoseData, QuaternionData, Vector3Data
 from fault_detector_spot.shared.persistence.file_storage import (
     validate_storage_name,
 )

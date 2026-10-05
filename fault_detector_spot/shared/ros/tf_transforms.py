@@ -5,7 +5,7 @@ import math
 from rclpy.duration import Duration
 from rclpy.time import Time
 
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

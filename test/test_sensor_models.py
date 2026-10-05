@@ -4,7 +4,10 @@ import math
 
 import pytest
 
-from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+    Vector3Data,
+)
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     SensorChannel,

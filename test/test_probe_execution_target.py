@@ -7,11 +7,13 @@ import pytest
 from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
-    PoseData,
     ProbePoint,
-    QuaternionData,
     ReferenceTag,
     ReferenceView,
+)
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+    QuaternionData,
     Vector3Data,
 )
 from fault_detector_spot.inspection.execution.probe_execution_target import (

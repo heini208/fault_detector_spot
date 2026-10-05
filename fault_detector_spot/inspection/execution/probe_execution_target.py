@@ -6,9 +6,11 @@ from fault_detector_spot.inspection.geometry.pose import (
     compose_poses,
     probe_pose_to_hand_pose,
 )
-from fault_detector_spot.inspection.geometry.rotation import rotate_vector
+from fault_detector_spot.shared.geometry.rotation import rotate_vector
 from fault_detector_spot.inspection.model.models import (
     InspectionObject,
+)
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     Vector3Data,
 )

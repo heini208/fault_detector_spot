@@ -5,7 +5,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from fault_detector_spot.inspection.model.models import Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 
 
 DEFAULT_DEPTH_PLANE_TOLERANCE_M = 0.015

@@ -3,7 +3,12 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from fault_detector_spot.inspection.model.models import PoseData, ReferenceTag
+from fault_detector_spot.inspection.model.models import (
+    ReferenceTag,
+)
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+)
 
 
 def _require_dict(data: Any, field_name: str) -> Dict[str, Any]:

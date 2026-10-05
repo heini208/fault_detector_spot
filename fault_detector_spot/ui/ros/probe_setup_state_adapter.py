@@ -6,7 +6,12 @@ from typing import Mapping, Optional
 
 from fault_detector_msgs.msg import ProbeSetupState
 
-from fault_detector_spot.inspection.model.models import ImagePoint, Vector3Data
+from fault_detector_spot.inspection.model.models import (
+    ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
     RefinementStage,

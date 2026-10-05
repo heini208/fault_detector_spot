@@ -2,7 +2,7 @@
 from fault_detector_spot.application.behaviour_tree.commands.move_relative_command import (
     MoveRelativeCommand,
 )
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     quaternion_from_euler,
     quaternion_to_rpy,
 )

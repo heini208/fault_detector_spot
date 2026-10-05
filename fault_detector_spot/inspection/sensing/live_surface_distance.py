@@ -9,7 +9,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     create_organized_depth_point_cloud,
 )
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     rotation_from_quaternion,
 )
 from fault_detector_spot.inspection.geometry.surface_plane import (
@@ -17,7 +17,10 @@ from fault_detector_spot.inspection.geometry.surface_plane import (
     SurfacePlane,
     fit_surface_plane,
 )
-from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+    Vector3Data,
+)
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     ImageRegion,
 )

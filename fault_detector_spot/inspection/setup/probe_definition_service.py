@@ -3,8 +3,10 @@
 from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
-    PoseData,
     ReferenceTag,
+)
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
 )
 from fault_detector_spot.shared.persistence.file_storage import (
     validate_storage_name,

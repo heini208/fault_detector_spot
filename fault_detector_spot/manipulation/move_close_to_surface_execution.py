@@ -13,11 +13,14 @@ from fault_detector_spot.inspection.execution.probe_surface_approach import (
     evaluate_probe_surface_approach,
     freeze_probe_surface_approach,
 )
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     rotate_vector,
     rotation_distance_rad,
 )
-from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+    Vector3Data,
+)
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     sensor_probe_frame,

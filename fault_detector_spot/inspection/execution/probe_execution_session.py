@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Tuple
 
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

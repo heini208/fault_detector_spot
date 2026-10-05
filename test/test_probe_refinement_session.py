@@ -8,7 +8,7 @@ import pytest
 from fault_detector_spot.application.commanding.request_identity import (
     new_request_id,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

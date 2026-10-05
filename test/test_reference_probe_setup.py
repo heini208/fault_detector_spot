@@ -4,8 +4,8 @@ import math
 
 import pytest
 
-from fault_detector_spot.inspection.geometry.rotation import quaternion_from_euler
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.rotation import quaternion_from_euler
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

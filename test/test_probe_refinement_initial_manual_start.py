@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from fault_detector_spot.application.coordinators.probe_refinement_controller import (
     ProbeRefinementController,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

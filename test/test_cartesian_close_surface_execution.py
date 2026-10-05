@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from geometry_msgs.msg import PoseStamped
 
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

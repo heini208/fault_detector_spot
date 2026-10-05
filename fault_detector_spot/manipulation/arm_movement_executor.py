@@ -15,11 +15,13 @@ from tf2_ros import TransformException
 from spot_msgs.action import RobotCommand
 from spot_msgs.srv import RobotCommand as RobotCommandService
 from synchros2.utilities import namespace_with
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     multiply_quaternions,
     rotate_vector,
 )
-from fault_detector_spot.inspection.model.models import Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     sensor_probe_frame,

@@ -3,7 +3,7 @@ from builtin_interfaces.msg import Time
 from fault_detector_spot.application.behaviour_tree.commands.move_to_tag_command import (
     MoveToTagCommand,
 )
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     quaternion_from_euler,
     quaternion_to_rpy,
 )

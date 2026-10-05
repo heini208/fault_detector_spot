@@ -2,8 +2,7 @@
 """Record and replay accepted semantic command requests."""
 
 from collections import deque
-import json
-import os
+from copy import deepcopy
 from typing import Deque, List
 
 import rclpy
@@ -22,15 +21,11 @@ from fault_detector_spot.application.commanding.command_request import (
     RecordingPolicy,
 )
 from fault_detector_spot.application.commanding.semantic_command import SemanticCommand
-from fault_detector_spot.application.recording.semantic_command_codec import (
-    deserialize_recording,
-    serialize_recorded_command,
-)
+from fault_detector_spot.application.recording.recording_repository import RecordingRepository
 from fault_detector_spot.application.ros.command_request_adapter import (
     command_request_from_message,
     command_request_to_message,
 )
-from fault_detector_spot.shared.persistence.file_storage import validate_storage_name
 from fault_detector_spot.shared.persistence.runtime_paths import default_recording_root
 from fault_detector_spot.shared.ros.qos_profiles import (
     COMMAND_REQUEST_QOS,
@@ -48,13 +43,12 @@ class RecordManager(Node):
             str(default_recording_root()),
         )
         configured_root = str(self.get_parameter("recording.root").value).strip()
-        self.recordings_dir = os.path.expanduser(
-            configured_root or str(default_recording_root())
+        self.repository = RecordingRepository(
+            configured_root or default_recording_root()
         )
-        os.makedirs(self.recordings_dir, exist_ok=True)
         self.recording = False
         self.current_name = None
-        self.temp_data: List[dict] = []
+        self.temp_data: List[SemanticCommand] = []
         self._recorded_request_ids = set()
         self._playback_commands: Deque[SemanticCommand] = deque()
         self._playback_request_id = ""
@@ -141,10 +135,8 @@ class RecordManager(Node):
     def stop_recording(self):
         if not self.recording:
             return
-        file_path = self._recording_path(self.current_name)
-        with open(file_path, "w") as file:
-            json.dump({"commands": self.temp_data}, file, indent=2)
-        self.get_logger().info(f"Saved recording: {file_path}")
+        self.repository.save(self.current_name, self.temp_data)
+        self.get_logger().info(f"Saved recording: {self.current_name}")
         self.recording = False
         self.current_name = None
         self._recorded_request_ids.clear()
@@ -168,20 +160,15 @@ class RecordManager(Node):
         if request.request_id in self._recorded_request_ids:
             return False
         self._recorded_request_ids.add(request.request_id)
-        self.temp_data.append(serialize_recorded_command(request.command))
+        self.temp_data.append(deepcopy(request.command))
         return True
 
     def play_recording(self, name: str):
         if self._playback_request_id or self._playback_commands:
             self.get_logger().warning("Playback is already active.")
             return
-        file_path = self._recording_path(name)
-        if not os.path.exists(file_path):
-            self.get_logger().warning(f"Recording not found: {name}")
-            return
         try:
-            with open(file_path, "r") as file:
-                commands = deserialize_recording(json.load(file))
+            commands = self.repository.load(name)
         except (OSError, TypeError, ValueError) as exception:
             self.get_logger().error(
                 f"Could not load recording {name}: {exception}"
@@ -246,32 +233,12 @@ class RecordManager(Node):
             self.get_logger().info(message)
 
     def delete_recording(self, name: str):
-        file_path = self._recording_path(name)
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if self.repository.delete(name):
             self.get_logger().info(f"Deleted recording: {name}")
             self.publish_recordings_list()
 
     def publish_recordings_list(self):
-        files = []
-        for file_name in os.listdir(self.recordings_dir):
-            if not file_name.endswith(".json"):
-                continue
-            name = file_name[:-5]
-            try:
-                path = self._recording_path(name)
-            except (TypeError, ValueError):
-                continue
-            if os.path.isfile(path):
-                files.append(name)
-        self.list_pub.publish(StringArray(names=sorted(files)))
-
-    def _recording_path(self, name):
-        validate_storage_name(name, "recording name")
-        path = os.path.join(self.recordings_dir, f"{name}.json")
-        if os.path.islink(path):
-            raise ValueError("Recording files must not be symbolic links")
-        return path
+        self.list_pub.publish(StringArray(names=self.repository.list_names()))
 
 
 def main(args=None):

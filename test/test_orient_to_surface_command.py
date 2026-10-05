@@ -61,7 +61,9 @@ def test_orientation_requests_image_time_tf_without_latest_fallback():
 
 def test_orientation_allows_delayed_capture_time_transform():
     from geometry_msgs.msg import Pose, PoseStamped, TransformStamped
-    from fault_detector_spot.inspection.model.models import Vector3Data
+    from fault_detector_spot.shared.geometry.models import (
+        Vector3Data,
+    )
     calls = []
     from tf2_ros import ExtrapolationException
     from fault_detector_spot.shared.geometry.movement_geometry import MovementGeometryUnavailable
@@ -143,7 +145,9 @@ def test_orientation_tf_retry_times_out_and_new_command_starts_fresh():
 
 
 def test_surface_orientation_verification_starts_one_correction():
-    from fault_detector_spot.inspection.model.models import Vector3Data
+    from fault_detector_spot.shared.geometry.models import (
+        Vector3Data,
+    )
     from fault_detector_spot.manipulation.arm_movement_result import (
         ArmMovementOutcome,
         ArmMovementUpdate,
@@ -182,8 +186,10 @@ def test_surface_orientation_verification_starts_one_correction():
 
 def test_surface_orientation_full_frame_chain_preserves_probe_axis():
     from geometry_msgs.msg import Pose, PoseStamped, TransformStamped
-    from fault_detector_spot.inspection.geometry.rotation import rotate_vector
-    from fault_detector_spot.inspection.model.models import Vector3Data
+    from fault_detector_spot.shared.geometry.rotation import rotate_vector
+    from fault_detector_spot.shared.geometry.models import (
+        Vector3Data,
+    )
     from fault_detector_spot.manipulation.probe_motion_planner import (
         ProbeMotionPlanner,
     )
@@ -231,7 +237,9 @@ def test_surface_orientation_full_frame_chain_preserves_probe_axis():
         target_hand.pose,
         mounting,
     )
-    from fault_detector_spot.inspection.model.models import QuaternionData
+    from fault_detector_spot.shared.geometry.models import (
+        QuaternionData,
+    )
 
     actual_axis = rotate_vector(
         QuaternionData(

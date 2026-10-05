@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from threading import RLock
 from typing import Callable, Optional
 
-from geometry_msgs.msg import PoseStamped
+from fault_detector_spot.shared.geometry.models import PoseData
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
@@ -37,7 +37,6 @@ from fault_detector_spot.mapping.repository.map_repository import MapRepository
 from fault_detector_spot.navigation.setup.navigation_setup_command_factory import (
     NavigationSetupCommandFactory,
 )
-from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
 from fault_detector_spot.shared.persistence.file_storage import (
     validate_storage_name,
 )
@@ -80,8 +79,8 @@ class NavigationSetupCoordinator:
         setup_coordinator: SetupCoordinator,
         map_repository: MapRepository,
         map_artifacts: MapArtifactStore,
-        current_pose: Callable[[], Optional[PoseStamped]],
-        visible_tag_pose: Callable[[int], Optional[PoseStamped]],
+        current_pose: Callable[[], Optional[PoseData]],
+        visible_tag_pose: Callable[[int], Optional[PoseData]],
         command_factory=None,
     ):
         self.setup_coordinator = setup_coordinator
@@ -305,7 +304,7 @@ class NavigationSetupCoordinator:
                 Waypoint(
                     waypoint_id=waypoint_id,
                     display_name=waypoint_id,
-                    pose_map=pose_to_pose_data(pose),
+                    pose_map=pose,
                 ),
             )
             return self._advance(context)
@@ -340,7 +339,7 @@ class NavigationSetupCoordinator:
                         tag_id=tag_id,
                         tag_family="36h11",
                     ),
-                    pose_map=pose_to_pose_data(pose),
+                    pose_map=pose,
                 ),
             )
             return self._advance(context)
@@ -571,15 +570,14 @@ class NavigationSetupCoordinator:
 
     @staticmethod
     def _map_pose(
-        pose: Optional[PoseStamped],
+        pose: Optional[PoseData],
         label: str,
-    ) -> PoseStamped:
+    ) -> PoseData:
         if pose is None:
             raise ValueError(f"No {label} is available")
-        if not isinstance(pose, PoseStamped):
-            raise TypeError(f"{label.title()} must be a PoseStamped")
-        if pose.header.frame_id != "map":
-            raise ValueError(f"{label.title()} must use the map frame")
+        if not isinstance(pose, PoseData):
+            raise TypeError(f"{label.title()} must be map-frame PoseData")
+        pose.validate()
         return deepcopy(pose)
 
 

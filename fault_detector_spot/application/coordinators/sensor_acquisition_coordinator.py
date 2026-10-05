@@ -16,7 +16,9 @@ from fault_detector_spot.inspection.measurement import (
     SpotGeometryRecordingSource,
     validate_measurement_context,
 )
-from fault_detector_spot.inspection.model.models import PoseData
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+)
 from fault_detector_spot.inspection.model.sensor_models import (
     SensorChannelSource,
 )

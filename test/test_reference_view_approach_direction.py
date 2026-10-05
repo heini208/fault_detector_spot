@@ -9,6 +9,8 @@ from fault_detector_spot.inspection.geometry.surface_normal import (
 )
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

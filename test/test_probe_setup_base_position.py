@@ -14,12 +14,14 @@ from fault_detector_msgs.msg import TagElement
 from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     multiply_quaternions,
     quaternion_from_euler,
     quaternion_to_rpy,
 )
-from fault_detector_spot.inspection.model.models import PoseData
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+)
 from fault_detector_spot.inspection.setup.probe_setup_motion_state_source import (
     ProbeSetupMotionStateSource,
 )

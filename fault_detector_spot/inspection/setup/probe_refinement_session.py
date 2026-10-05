@@ -12,8 +12,11 @@ from fault_detector_spot.inspection.geometry.pose import (
     add_vectors,
     scale_vector,
 )
-from fault_detector_spot.inspection.geometry.rotation import rotate_vector
-from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
+from fault_detector_spot.shared.geometry.rotation import rotate_vector
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+    Vector3Data,
+)
 from .reference_probe_setup import (
     ReferenceProbeSetup,
     derive_aligned_preapproach_pose,

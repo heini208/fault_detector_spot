@@ -5,13 +5,13 @@ import math
 
 import numpy as np
 
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     inverse_quaternion,
     multiply_quaternions,
     quaternion_from_matrix,
     rotate_vector,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     QuaternionData,
     Vector3Data,
 )

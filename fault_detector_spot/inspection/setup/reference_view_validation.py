@@ -4,9 +4,11 @@ import math
 from typing import TYPE_CHECKING
 
 from fault_detector_spot.inspection.model.models import (
+    ReferenceView,
+)
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
-    ReferenceView,
     Vector3Data,
 )
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (

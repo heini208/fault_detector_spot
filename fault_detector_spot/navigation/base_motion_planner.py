@@ -17,13 +17,15 @@ from spot_msgs.action import RobotCommand
 from synchros2.utilities import namespace_with
 from tf2_geometry_msgs import do_transform_pose_stamped
 
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     multiply_quaternions,
     quaternion_from_euler,
     rotation_from_quaternion,
     quaternion_to_rpy,
 )
-from fault_detector_spot.inspection.model.models import QuaternionData
+from fault_detector_spot.shared.geometry.models import (
+    QuaternionData,
+)
 
 from fault_detector_spot.navigation.walking_profile import (
     GAITS,

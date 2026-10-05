@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     QuaternionData,
     Vector3Data,
 )

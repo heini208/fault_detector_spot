@@ -22,8 +22,10 @@ from fault_detector_spot.inspection.execution.routine_base_motion import (
 from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
-    PoseData,
     ReferenceTag,
+)
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
 )
 from test_application_controller import FakeCommandController
 

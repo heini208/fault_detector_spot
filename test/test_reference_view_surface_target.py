@@ -5,9 +5,11 @@ import math
 import numpy as np
 import pytest
 
-from fault_detector_spot.inspection.geometry.rotation import quaternion_to_rpy
+from fault_detector_spot.shared.geometry.rotation import quaternion_to_rpy
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

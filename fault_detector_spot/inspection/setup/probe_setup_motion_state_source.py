@@ -19,13 +19,15 @@ from geometry_msgs.msg import Vector3Stamped
 from sensor_msgs.msg import CameraInfo, Image
 import tf2_ros
 
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     quaternion_from_euler,
     quaternion_to_rpy,
     rotation_from_quaternion,
 )
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

@@ -2,12 +2,15 @@
 
 import math
 
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     inverse_quaternion,
     multiply_quaternions,
     rotate_vector,
 )
-from fault_detector_spot.inspection.model.models import PoseData, Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+    Vector3Data,
+)
 
 
 def compose_poses(

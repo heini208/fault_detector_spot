@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     inverse_quaternion,
     multiply_quaternions,
     quaternion_from_euler,
@@ -16,7 +16,7 @@ from fault_detector_spot.inspection.geometry.rotation import (
     rotate_vector,
     rotation_from_quaternion,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     QuaternionData,
     Vector3Data,
 )

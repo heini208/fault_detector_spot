@@ -4,7 +4,9 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox
 
 from fault_detector_msgs.msg import OperationalIntent, TagElement
-from fault_detector_spot.application.commanding.command_ids import OrientationModes
+from fault_detector_spot.shared.geometry.movement_frames import (
+    OrientationModes,
+)
 from fault_detector_spot.manipulation.arm_state_source import ArmStateSource, ArmStowState
 from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper

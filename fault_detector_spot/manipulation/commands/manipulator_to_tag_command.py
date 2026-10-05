@@ -2,16 +2,18 @@
 from math import cos, pi, sin
 
 from builtin_interfaces.msg import Time
-from fault_detector_spot.application.commanding.command_ids import (
+from fault_detector_spot.shared.geometry.movement_frames import (
     OrientationModes,
 )
 from fault_detector_spot.application.behaviour_tree.commands.move_to_tag_command import (
     MoveToTagCommand,
 )
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     multiply_quaternions,
 )
-from fault_detector_spot.inspection.model.models import QuaternionData
+from fault_detector_spot.shared.geometry.models import (
+    QuaternionData,
+)
 from geometry_msgs.msg import PoseStamped, Quaternion
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 

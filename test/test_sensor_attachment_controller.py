@@ -18,7 +18,7 @@ from fault_detector_spot.application.controllers.sensor_attachment_controller im
     SensorAttachmentController,
     SensorAttachmentStatus,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

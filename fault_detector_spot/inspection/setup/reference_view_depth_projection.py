@@ -13,7 +13,12 @@ from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     camera_intrinsics,
     create_organized_depth_point_cloud,
 )
-from fault_detector_spot.inspection.model.models import ImagePoint, Vector3Data
+from fault_detector_spot.inspection.model.models import (
+    ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 
 
 class RegisteredDepthSupportNotReady(ValueError):

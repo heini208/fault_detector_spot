@@ -7,12 +7,14 @@ import pytest
 from geometry_msgs.msg import PoseStamped
 from scipy.spatial.transform import Rotation
 
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     quaternion_from_euler,
     rotation_from_quaternion,
 )
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     Vector3Data,
 )

@@ -6,11 +6,11 @@ from typing import Union
 import numpy as np
 from geometry_msgs.msg import Pose, PoseStamped
 
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     quaternion_from_matrix,
     rotation_from_quaternion,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

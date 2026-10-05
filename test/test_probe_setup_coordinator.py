@@ -27,9 +27,11 @@ from fault_detector_spot.application.setup.setup_context import (
 )
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
+    ReferenceView,
+)
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
-    ReferenceView,
     Vector3Data,
 )
 from fault_detector_spot.inspection.repository import (

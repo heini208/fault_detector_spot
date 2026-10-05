@@ -13,9 +13,11 @@ from fault_detector_spot.inspection.behaviours import (
 from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
-    PoseData,
     ReferenceTag,
     ReferenceView,
+)
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
 )
 from fault_detector_spot.inspection.repository.object_repository import (
     ObjectRepository,

@@ -6,7 +6,9 @@ import pytest
 from fault_detector_spot.inspection.geometry.surface_plane import (
     fit_surface_plane,
 )
-from fault_detector_spot.inspection.model.models import Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 
 
 def test_surface_plane_fits_flat_points_and_orients_toward_target():

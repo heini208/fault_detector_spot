@@ -12,7 +12,9 @@ from fault_detector_spot.inspection.measurement.measurement_models import (
 from fault_detector_spot.inspection.measurement.measurement_repository import (
     MeasurementRepository,
 )
-from fault_detector_spot.inspection.model.models import PoseData
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+)
 from fault_detector_spot.inspection.model.sensor_models import (
     SENSOR_PARENT_FRAME,
     SensorChannel,

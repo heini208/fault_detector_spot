@@ -6,13 +6,15 @@ from builtin_interfaces.msg import Time
 from fault_detector_spot.application.behaviour_tree.commands.execution_command import (
     ExecutionCommand,
 )
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     multiply_quaternions,
     quaternion_from_euler,
     quaternion_from_rotation,
     rotation_from_quaternion,
 )
-from fault_detector_spot.inspection.model.models import QuaternionData
+from fault_detector_spot.shared.geometry.models import (
+    QuaternionData,
+)
 from geometry_msgs.msg import PoseStamped, Quaternion
 from synchros2.tf_listener_wrapper import TFListenerWrapper
 

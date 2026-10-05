@@ -6,7 +6,9 @@ from typing import Optional
 from fault_detector_spot.inspection.geometry.surface_normal import (
     SurfaceNormalEstimate,
 )
-from fault_detector_spot.inspection.model.models import Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 from .reference_view_depth_projection import ProjectedReferencePoint
 
 

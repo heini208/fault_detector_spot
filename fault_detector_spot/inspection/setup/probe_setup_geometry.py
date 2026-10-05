@@ -9,11 +9,13 @@ import numpy as np
 from fault_detector_spot.inspection.geometry import (
     surface_normal as surface_normal_geometry,
 )
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     rotation_from_quaternion,
 )
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     Vector3Data,
 )

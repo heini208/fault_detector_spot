@@ -2,9 +2,11 @@
 
 from fault_detector_spot.inspection.model.models import (
     InspectionRoutine,
-    PoseData,
     ReferenceTag,
     ReferenceView,
+)
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
 )
 
 

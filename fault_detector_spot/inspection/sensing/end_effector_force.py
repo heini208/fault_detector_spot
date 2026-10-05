@@ -4,7 +4,9 @@ import math
 import statistics
 from dataclasses import dataclass
 
-from fault_detector_spot.inspection.model.models import Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 
 
 DEFAULT_MAXIMUM_BASELINE_COMPONENT_SPAN_N = 1.0

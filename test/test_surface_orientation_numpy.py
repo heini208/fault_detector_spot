@@ -19,7 +19,12 @@ from fault_detector_spot.inspection.sensing.probe_surface_source import (
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     project_reference_pixel,
 )
-from fault_detector_spot.inspection.model.models import ImagePoint, Vector3Data
+from fault_detector_spot.inspection.model.models import (
+    ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 from test_surface_normal import make_camera_info, make_32fc1, plane_depth_values
 
 

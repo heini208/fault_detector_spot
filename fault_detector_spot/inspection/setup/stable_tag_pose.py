@@ -6,7 +6,11 @@ from typing import Iterable, Tuple
 
 import numpy as np
 
-from fault_detector_spot.inspection.model.models import PoseData, QuaternionData, Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+    QuaternionData,
+    Vector3Data,
+)
 
 
 @dataclass(frozen=True)

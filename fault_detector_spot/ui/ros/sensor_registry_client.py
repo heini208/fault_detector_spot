@@ -8,7 +8,9 @@ from fault_detector_msgs.srv import (
     UpdateSensor,
 )
 
-from fault_detector_spot.inspection.model.models import QuaternionData
+from fault_detector_spot.shared.geometry.models import (
+    QuaternionData,
+)
 from fault_detector_spot.inspection.model.sensor_models import (
     quaternion_from_rpy_degrees,
     rpy_degrees_from_quaternion,

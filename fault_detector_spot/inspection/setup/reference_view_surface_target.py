@@ -3,10 +3,10 @@
 from dataclasses import dataclass
 from typing import Tuple
 
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     quaternion_to_rpy as scipy_quaternion_to_rpy,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

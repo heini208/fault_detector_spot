@@ -21,6 +21,7 @@ from fault_detector_spot.application.commanding.semantic_command import (
     StampedPose,
 )
 from fault_detector_spot.application.recording.record_manager_node import RecordManager
+from fault_detector_spot.application.recording.recording_repository import RecordingRepository
 from fault_detector_spot.application.recording.semantic_command_codec import (
     deserialize_recorded_command,
     deserialize_recording,
@@ -112,8 +113,8 @@ def test_only_included_accepted_requests_are_recorded():
     assert manager.capture_request(command_request_to_message(excluded)) is False
     assert manager.capture_request(command_request_to_message(included)) is False
     assert len(manager.temp_data) == 1
-    assert manager.temp_data[0]["command_id"] == CommandID.STAND_UP.value
-    assert "command" not in manager.temp_data[0]
+    assert manager.temp_data[0].command_id is CommandID.STAND_UP
+    assert isinstance(manager.temp_data[0], SemanticCommand)
 
 
 def test_recorded_wait_is_preserved_as_an_explicit_command():
@@ -300,11 +301,10 @@ class RecordingStorageHarness(RecordManagerHarness):
     play_recording = RecordManager.play_recording
     delete_recording = RecordManager.delete_recording
     publish_recordings_list = RecordManager.publish_recordings_list
-    _recording_path = RecordManager._recording_path
 
     def __init__(self, root):
         super().__init__()
-        self.recordings_dir = str(root)
+        self.repository = RecordingRepository(root)
         self.current_name = None
         self.list_pub = FakePublisher()
         self.recording_state_pub = FakePublisher()
@@ -359,12 +359,12 @@ def test_recording_save_rechecks_path_and_keeps_unsaved_data(tmp_path):
     outside.write_text("do not overwrite")
     manager = RecordingStorageHarness(root)
     manager.control("start", "session")
-    manager.temp_data.append({"pending": True})
+    manager.temp_data.append(SemanticCommand(command_id=CommandID.STAND_UP))
     (root / "session.json").symlink_to(outside)
     manager.control("stop")
     assert outside.read_text() == "do not overwrite"
     assert manager.recording
-    assert manager.temp_data == [{"pending": True}]
+    assert manager.temp_data == [SemanticCommand(command_id=CommandID.STAND_UP)]
     assert manager.logger.error_messages
 
 
@@ -389,19 +389,19 @@ def test_recording_state_reports_actual_start_stop_and_failures(tmp_path, monkey
     manager.publish_recording_state()
     manager.control("start", "../invalid")
     manager.control("start", "valid")
-    manager.temp_data.append({"pending": True})
+    manager.temp_data.append(SemanticCommand(command_id=CommandID.STAND_UP))
     manager.control("start", "duplicate")
     assert manager.current_name == "valid"
-    assert manager.temp_data == [{"pending": True}]
+    assert manager.temp_data == [SemanticCommand(command_id=CommandID.STAND_UP)]
 
     def fail_open(*_args, **_kwargs):
         raise OSError("disk full")
 
     with monkeypatch.context() as patch:
-        patch.setattr("builtins.open", fail_open)
+        patch.setattr(manager.repository, "save", fail_open)
         manager.control("stop")
     assert manager.recording
-    assert manager.temp_data == [{"pending": True}]
+    assert manager.temp_data == [SemanticCommand(command_id=CommandID.STAND_UP)]
     manager.control("stop")
     assert [message.data for message in manager.recording_state_pub.messages] == [
         False, False, True, True, True, False,

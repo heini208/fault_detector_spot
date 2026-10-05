@@ -33,6 +33,8 @@ from fault_detector_msgs.msg import (
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
+)
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

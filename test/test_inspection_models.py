@@ -8,10 +8,12 @@ from fault_detector_spot.inspection.model.models import (
     ImagePoint,
     InspectionObject,
     InspectionRoutine,
-    PoseData,
     ProbePoint,
     ReferenceTag,
     ReferenceView,
+)
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
 )
 from fault_detector_spot.mapping.model.models import (
     MapDefinition,

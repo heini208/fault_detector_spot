@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     QuaternionData,
     Vector3Data,
 )

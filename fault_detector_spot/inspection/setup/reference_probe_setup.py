@@ -12,12 +12,12 @@ from fault_detector_spot.inspection.geometry.pose import (
     scale_vector,
     subtract_vectors,
 )
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     multiply_quaternions,
     quaternion_from_euler,
     rotate_vector,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

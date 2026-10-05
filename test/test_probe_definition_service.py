@@ -3,9 +3,11 @@
 from dataclasses import replace
 
 from fault_detector_spot.inspection.model.models import (
-    PoseData,
     ReferenceTag,
     ReferenceView,
+)
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
 )
 from fault_detector_spot.inspection.setup.probe_definition_service import (
     ProbeDefinitionService,

@@ -19,7 +19,9 @@ from fault_detector_spot.application.commanding.client_identity import (
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
 )
-from fault_detector_spot.inspection.model.models import Vector3Data
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
     ProbeSetupCoordinator,
     ProbeSetupMotionStatus,

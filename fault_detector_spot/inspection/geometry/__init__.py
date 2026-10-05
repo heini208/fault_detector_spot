@@ -1,6 +1,6 @@
 """Geometry adapters backed by external 3D libraries."""
 
-from .rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     inverse_quaternion,
     multiply_quaternions,
     quaternion_from_euler,

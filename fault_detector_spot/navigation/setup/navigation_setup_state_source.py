@@ -7,6 +7,7 @@ import tf2_ros
 from fault_detector_msgs.msg import TagElementArray
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from rclpy.duration import Duration
+from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
 from std_msgs.msg import String
 
 from fault_detector_spot.shared.ros.qos_profiles import (
@@ -80,7 +81,9 @@ class NavigationSetupStateSource:
         pose = PoseStamped()
         pose.header = source.header
         pose.pose = source.pose.pose
-        return pose
+        if pose.header.frame_id != "map":
+            return None
+        return pose_to_pose_data(pose)
 
     def visible_tag_pose(self, tag_id: int):
         """Return one currently visible tag transformed into map frame."""
@@ -92,11 +95,14 @@ class NavigationSetupStateSource:
         source.header = tag.pose.header
         source.pose = tag.pose.pose
         try:
-            return self._tf_buffer.transform(
+            pose = self._tf_buffer.transform(
                 source,
                 "map",
                 timeout=Duration(seconds=0.2),
             )
+            if pose.header.frame_id != "map":
+                return None
+            return pose_to_pose_data(pose)
         except (
             tf2_ros.LookupException,
             tf2_ros.ConnectivityException,

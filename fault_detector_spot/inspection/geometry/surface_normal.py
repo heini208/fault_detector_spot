@@ -16,7 +16,12 @@ from fault_detector_spot.inspection.geometry.depth_point_cloud import (
 from fault_detector_spot.inspection.geometry.surface_plane import (
     fit_surface_plane,
 )
-from fault_detector_spot.inspection.model.models import ImagePoint, Vector3Data
+from fault_detector_spot.inspection.model.models import (
+    ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
+    Vector3Data,
+)
 
 if TYPE_CHECKING:
     from fault_detector_spot.inspection.setup.reference_view_depth_projection import (

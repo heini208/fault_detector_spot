@@ -13,7 +13,7 @@ from fault_detector_spot.inspection.setup.reference_probe_setup import (
 from fault_detector_spot.inspection.setup.reference_view_surface_target import (
     ReferenceSurfaceTarget,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

@@ -7,10 +7,12 @@ import math
 
 from fault_detector_msgs.msg import TagElement
 
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     quaternion_to_rpy,
 )
-from fault_detector_spot.inspection.model.models import QuaternionData
+from fault_detector_spot.shared.geometry.models import (
+    QuaternionData,
+)
 
 
 @dataclass(frozen=True)

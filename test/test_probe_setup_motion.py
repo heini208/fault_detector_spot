@@ -7,12 +7,14 @@ from fault_detector_msgs.msg import TagElement
 
 from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
+)
+from fault_detector_spot.shared.geometry.movement_frames import (
     OrientationModes,
 )
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
 )
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,

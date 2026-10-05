@@ -11,8 +11,10 @@ import yaml
 from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
-    PoseData,
     ProbePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
 )
 from fault_detector_spot.shared.persistence.file_storage import (
     atomic_write_text,

@@ -5,7 +5,7 @@ import math
 import pytest
 from fault_detector_msgs.msg import TagElement
 
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     quaternion_from_euler,
 )
 from fault_detector_spot.sensing.observations.tag_observation_stability import (

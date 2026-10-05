@@ -8,6 +8,8 @@ from geometry_msgs.msg import PoseStamped, TransformStamped
 
 from fault_detector_spot.application.commanding.command_ids import (
     CommandID,
+)
+from fault_detector_spot.shared.geometry.movement_frames import (
     OrientationModes,
 )
 from fault_detector_spot.shared.geometry.movement_geometry import (

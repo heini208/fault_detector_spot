@@ -15,7 +15,9 @@ from fault_detector_spot.application.coordinators.sensor_acquisition_coordinator
 )
 from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
 from fault_detector_spot.shared.ros.qos_profiles import LIVE_OBJECT_QOS
-from fault_detector_spot.inspection.model.models import PoseData
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+)
 
 
 class SensorAcquisitionCommandHandler:

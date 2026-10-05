@@ -25,7 +25,12 @@ from fault_detector_spot.inspection.geometry.surface_plane import (
 from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     create_organized_depth_point_cloud,
 )
-from fault_detector_spot.inspection.model.models import ImagePoint, PoseData
+from fault_detector_spot.inspection.model.models import (
+    ImagePoint,
+)
+from fault_detector_spot.shared.geometry.models import (
+    PoseData,
+)
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     sensor_probe_frame,

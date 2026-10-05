@@ -9,11 +9,11 @@ from fault_detector_spot.inspection.execution.probe_surface_approach import (
     evaluate_probe_surface_approach,
     freeze_probe_surface_approach,
 )
-from fault_detector_spot.inspection.geometry.rotation import (
+from fault_detector_spot.shared.geometry.rotation import (
     quaternion_from_euler,
 )
 from fault_detector_spot.inspection.geometry.surface_plane import SurfacePlane
-from fault_detector_spot.inspection.model.models import (
+from fault_detector_spot.shared.geometry.models import (
     PoseData,
     QuaternionData,
     Vector3Data,
