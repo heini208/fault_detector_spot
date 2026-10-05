@@ -93,6 +93,7 @@ class ArmStateSource(RuntimeSource):
         self._lock = RLock()
         self._callback_group = MutuallyExclusiveCallbackGroup()
         self._stow_state = ArmStowState.UNKNOWN
+        self._gripper_open_percentage = None
         self._hand_velocity_sample = None
         self._hand_force_sample = None
         self._last_received_at = None
@@ -119,6 +120,16 @@ class ArmStateSource(RuntimeSource):
         if not self._is_fresh(received_at, current):
             return None
         return state
+
+    def gripper_open_percentage(self, now: float = None):
+        """Return fresh measured gripper opening (0–100), or None."""
+        current = self._monotonic_clock() if now is None else float(now)
+        with self._lock:
+            received_at = self._last_received_at
+            percentage = self._gripper_open_percentage
+        if not self._is_fresh(received_at, current):
+            return None
+        return percentage
 
     def hand_velocity_sample(
         self,
@@ -185,8 +196,17 @@ class ArmStateSource(RuntimeSource):
             message,
             received_at,
         )
+        percentage = getattr(message, "gripper_open_percentage", None)
+        if (
+            not isinstance(percentage, (float, int))
+            or isinstance(percentage, bool)
+            or not math.isfinite(percentage)
+            or not 0.0 <= percentage <= 100.0
+        ):
+            percentage = None
         with self._lock:
             self._stow_state = state
+            self._gripper_open_percentage = percentage
             self._hand_velocity_sample = velocity_sample
             self._hand_force_sample = force_sample
             self._last_received_at = received_at

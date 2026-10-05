@@ -31,6 +31,7 @@ from fault_detector_spot.inspection.geometry.alignment_orientation import (
 from fault_detector_spot.manipulation.arm_command_builder import (
     build_arm_stop_request,
     build_stow_goal,
+    build_gripper_goal,
     build_moveit_joint_goal,
     build_pose_goal,
 )
@@ -94,6 +95,7 @@ class _ArmOperation:
     SURFACE_ORIENTATION_VERIFY = "surface_orientation_verify"
     PREPARE = "prepare"
     STOW = "stow"
+    GRIPPER = "gripper"
 
 
 class ArmMovementExecutor(MovementExecutor):
@@ -852,6 +854,34 @@ class ArmMovementExecutor(MovementExecutor):
             speed if speed is not None else self.ready_speed
         )
         return self._advance_prepare_start()
+
+    def toggle_gripper(self) -> ArmMovementUpdate:
+        """Toggle toward the opposite endpoint of the measured opening."""
+        with self._execution_lock:
+            if self.active:
+                return self._busy_update()
+            percentage = (
+                self.arm_state_source.gripper_open_percentage()
+                if self.arm_state_source is not None else None
+            )
+            if percentage is None:
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.ARM_STATE_UNAVAILABLE,
+                    "Fresh gripper opening feedback is required to toggle",
+                )
+            # The midpoint selects the opposite endpoint for a partial opening.
+            return self._start_gripper(0.0 if percentage > 50.0 else 1.0)
+
+    def close_gripper(self) -> ArmMovementUpdate:
+        """Request closing explicitly without guessing the current position."""
+        with self._execution_lock:
+            if self.active:
+                return self._busy_update()
+            return self._start_gripper(0.0)
+
+    def _start_gripper(self, open_fraction):
+        self._operation = _ArmOperation.GRIPPER
+        return self._start_goal(lambda: build_gripper_goal(open_fraction))
 
     def stow(self) -> ArmMovementUpdate:
         """Stow a deployed arm through Spot's native stow command."""

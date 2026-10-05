@@ -1,30 +1,22 @@
-from bosdyn.client.robot_command import RobotCommandBuilder
-from bosdyn_spot_api_msgs.conversions import convert
-from py_trees.common import Access
-from spot_msgs.action import RobotCommand
-from fault_detector_spot.application.behaviour_tree.behaviours.spot_action import (
-    RobotCommandActionBehaviour,
+"""Behavior-tree adapter for the shared gripper execution lifecycle."""
+
+from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
+    ArmMovementBehaviour,
 )
-from py_trees.blackboard import Blackboard
 
 
-class ToggleGripperAction(RobotCommandActionBehaviour):
+class ToggleGripperAction(ArmMovementBehaviour):
     def __init__(
         self,
         name="ToggleGripperAction",
         robot_name="",
         robot_command_resources=None,
     ):
-        super().__init__(name, robot_name, robot_command_resources)
-        self.blackboard = self.attach_blackboard_client()
-        self.blackboard.register_key(key="gripper_open", access=Access.WRITE)
-        self.blackboard.gripper_open = False
+        super().__init__(
+            name,
+            robot_name=robot_name,
+            robot_command_resources=robot_command_resources,
+        )
 
-    def _build_goal(self) -> RobotCommand.Goal:
-        open_fraction = 0.0 if self.blackboard.gripper_open else 1.0
-        cmd = RobotCommandBuilder.claw_gripper_open_fraction_command(open_fraction)
-        self.blackboard.gripper_open = not self.blackboard.gripper_open
-
-        goal = RobotCommand.Goal()
-        convert(cmd, goal.command)
-        return goal
+    def _start_operation(self):
+        return self.executor.toggle_gripper()

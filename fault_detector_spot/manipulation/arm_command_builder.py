@@ -36,6 +36,12 @@ def build_arm_stop_request() -> RobotCommandService.Request:
     return request
 
 
+def build_gripper_goal(open_fraction: float) -> RobotCommand.Goal:
+    return _command_goal(
+        RobotCommandBuilder.claw_gripper_open_fraction_command(open_fraction)
+    )
+
+
 def build_stow_goal() -> RobotCommand.Goal:
     stow_command = RobotCommandBuilder.arm_stow_command()
     return _command_goal(stow_command)
