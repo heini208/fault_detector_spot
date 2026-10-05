@@ -66,3 +66,33 @@ def test_path_popup_disables_edits_during_movement(application):
     assert not dialog.path_dialog.move_button.isEnabled()
     assert not dialog.move_path_button.isEnabled()
     dialog.hide()
+
+
+def test_delete_selection_and_duplicate_name_feedback(application):
+    controls = FinalizingInspectionControls(FakeUI())
+    state = safe_state()
+    state.safe_approach_motion_state = state.MOTION_REACHED
+    state.pathing_point_names = ["Clear housing"]
+    controls.apply_setup_state(state)
+    dialog = controls.refinement_dialog
+    dialog.show_stage(RefinementStage.ALIGNMENT)
+    popup = dialog.path_dialog
+    popup.name_field.setText(" CLEAR HOUSING ")
+    assert not popup.add_button.isEnabled()
+    assert "already exists" in popup.name_error_label.text()
+    popup.points.setCurrentRow(-1)
+    assert not popup.delete_button.isEnabled()
+    popup.points.setCurrentRow(0)
+    assert popup.delete_button.isEnabled()
+    popup.delete_button.click()
+    intent = controls.ui.requests[-1]
+    assert intent.operation == ProbeSetupIntent.OPERATION_DELETE_PATHING_POINT
+    assert intent.pathing_point_index == 0
+    assert not popup.delete_button.isEnabled()
+    state.pathing_point_names = []
+    controls.apply_setup_state(state)
+    assert dialog.pathing_point_count_label.text() == "Pathing points: 0"
+    assert popup.add_button.isEnabled()
+    assert not popup.delete_button.isEnabled()
+    assert not popup.name_error_label.text()
+    dialog.hide()

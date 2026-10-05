@@ -760,8 +760,14 @@ class ProbeSetupCoordinator:
         draft = self._selected_draft(context)
         self.refinement_controller.require_refinement(draft)
         self.refinement_controller.require_physical_lane_idle()
+        name = name.strip()
+        if not name:
+            raise ValueError("Pathing point name must not be empty")
+        if any(point.name.strip().casefold() == name.casefold()
+               for point in draft.pre_approach_path):
+            raise ValueError("A pathing point with this name already exists")
         point = PreApproachPathPoint(
-            name.strip(), self.refinement_controller.current_probe_pose(draft)
+            name, self.refinement_controller.current_probe_pose(draft)
         )
         point.validate()
         draft.pre_approach_path.append(deepcopy(point))
@@ -770,6 +776,17 @@ class ProbeSetupCoordinator:
         refinement.alignment_candidate_reached = False
         for stage in (RefinementStage.ALIGNMENT, RefinementStage.PROBE):
             refinement.motion_states[stage] = RefinementMotionState.NOT_TESTED
+        draft.dirty = True
+        return self._advance(draft)
+
+    @_serialized_transaction
+    def delete_pathing_point(self, context, index):
+        """Remove the selected waypoint without changing the final pose."""
+        draft = self._selected_draft(context)
+        self.refinement_controller.require_refinement(draft)
+        if not 0 <= index < len(draft.pre_approach_path):
+            raise ValueError("Select an existing pathing point")
+        del draft.pre_approach_path[index]
         draft.dirty = True
         return self._advance(draft)
 

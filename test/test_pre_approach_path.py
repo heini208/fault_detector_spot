@@ -176,3 +176,44 @@ def test_execution_snapshot_freezes_path_and_resolves_hand_geometry(tmp_path):
     target = config.resolve_target(pose(1.))
     assert [p.position.x for p in target.pre_approach_path_probe_poses_execution] == pytest.approx([1.9, 1.75])
     assert [p.position.x for p in target.pre_approach_path_hand_poses_execution] == pytest.approx([1.7, 1.55])
+
+
+@pytest.mark.parametrize("name", ["Clear housing", " Clear housing ", "CLEAR HOUSING"])
+def test_duplicate_path_names_are_rejected_without_changing_draft(tmp_path, name):
+    probe, commands = coordinator(tmp_path)
+    state = add_points(probe, begin_setup(probe, commands))
+    with pytest.raises(ValueError, match="already exists"):
+        probe.add_pathing_point(state.context, name)
+    current = snapshot(probe, state)
+    assert current.context == state.context
+    assert current.pre_approach_path == state.pre_approach_path
+
+
+def test_delete_preserves_final_pose_and_allows_name_reuse(tmp_path):
+    probe, commands = coordinator(tmp_path)
+    state = add_points(probe, begin_setup(probe, commands, approved=True))
+    final = state.refinement.approved_pose(RefinementStage.ALIGNMENT)
+    state = probe.delete_pathing_point(state.context, 0)
+    assert [point.name for point in state.pre_approach_path] == ["Above bearing"]
+    assert state.refinement.approved_pose(RefinementStage.ALIGNMENT) == final
+    state = probe.add_pathing_point(state.context, "Clear housing")
+    state = probe.delete_pathing_point(state.context, 0)
+    state = probe.delete_pathing_point(state.context, 0)
+    assert not state.pre_approach_path
+    probe.save_probe_point(state.context, "front", "Front", .01, .1, 1.)
+    point = probe.object_repository.load("motor").get_routine("magnetic_scan").get_probe_point("front")
+    assert point.pre_approach_path == []
+
+
+def test_delete_rejects_missing_selection_and_active_motion(tmp_path):
+    probe, commands = coordinator(tmp_path)
+    state = add_points(probe, begin_setup(probe, commands))
+    for index in (-1, 2):
+        with pytest.raises(ValueError, match="existing pathing point"):
+            probe.delete_pathing_point(state.context, index)
+    operation = probe.prepare_motion(state.context, ProbeMotionRequest(ProbeMotionKind.MOVE_PRE_APPROACH_PATH))
+    probe.submit_motion(operation)
+    with pytest.raises(RuntimeError, match="active motion"):
+        probe.delete_pathing_point(state.context, 0)
+    commands.cancel(operation.request_id)
+    assert snapshot(probe, state).pre_approach_path == state.pre_approach_path

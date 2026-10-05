@@ -23,6 +23,10 @@ class PreApproachPathDialog(QDialog):
         for button in (self.move_button, self.up_button, self.down_button):
             row.addWidget(button)
         layout.addLayout(row)
+        self.delete_button = QPushButton("Delete Selected Pathing Point")
+        self.delete_button.setAutoDefault(False)
+        self.delete_button.clicked.connect(self._delete)
+        layout.addWidget(self.delete_button)
         self.adjust_button = QPushButton("Open Fine Adjustment")
         self.adjust_button.setAutoDefault(False)
         self.adjust_button.clicked.connect(
@@ -32,6 +36,9 @@ class PreApproachPathDialog(QDialog):
         self.name_field = QLineEdit()
         self.name_field.setPlaceholderText("Pathing point name")
         layout.addWidget(self.name_field)
+        self.name_error_label = QLabel()
+        self.name_error_label.setWordWrap(True)
+        layout.addWidget(self.name_error_label)
         self.add_button = QPushButton("Add Current Arm Pose as Pathing Point")
         layout.addWidget(self.add_button)
         self.close_button = QPushButton("Close Pathing Point View")
@@ -68,15 +75,31 @@ class PreApproachPathDialog(QDialog):
         selected = self._enabled and row >= 0
         self.adjust_button.setEnabled(self._enabled)
         self.move_button.setEnabled(selected)
+        self.delete_button.setEnabled(selected)
         self.up_button.setEnabled(selected and row > 0)
         self.down_button.setEnabled(selected and row + 1 < self.points.count())
-        self.add_button.setEnabled(self._enabled and bool(self.name_field.text().strip()))
+        name = self.name_field.text().strip()
+        duplicate = any(
+            self.points.item(i).text().strip().casefold() == name.casefold()
+            for i in range(self.points.count())
+        )
+        self.name_error_label.setText("A pathing point with this name already exists." if duplicate else "")
+        self.name_error_label.setVisible(duplicate)
+        self.add_button.setEnabled(self._enabled and bool(name) and not duplicate)
         self.name_field.setEnabled(self._enabled)
 
     def _add(self):
         intent = ProbeSetupIntent()
         intent.operation = ProbeSetupIntent.OPERATION_ADD_PATHING_POINT
         intent.pathing_point_name = self.name_field.text().strip()
+        if self.controls._submit_probe_setup(intent):
+            self._enabled = False
+            self._update_buttons()
+
+    def _delete(self):
+        intent = ProbeSetupIntent()
+        intent.operation = ProbeSetupIntent.OPERATION_DELETE_PATHING_POINT
+        intent.pathing_point_index = self.points.currentRow()
         if self.controls._submit_probe_setup(intent):
             self._enabled = False
             self._update_buttons()

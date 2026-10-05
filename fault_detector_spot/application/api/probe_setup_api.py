@@ -63,6 +63,7 @@ class ProbeSetupApi:
         )
     def _transaction_handlers(self):
         return {
+            ProbeSetupIntent.OPERATION_DELETE_PATHING_POINT: self._delete_pathing_point,
             ProbeSetupIntent.OPERATION_ADD_PATHING_POINT: self._add_pathing_point,
             ProbeSetupIntent.OPERATION_REORDER_PATHING_POINT: self._reorder_pathing_point,
             ProbeSetupIntent.OPERATION_REFRESH: self._refresh,
@@ -197,6 +198,9 @@ class ProbeSetupApi:
             intent.routine_id,
             intent.probe_point_id,
         )
+
+    def _delete_pathing_point(self, context, intent):
+        return self.coordinator.delete_pathing_point(context, int(intent.pathing_point_index))
 
     def _add_pathing_point(self, context, intent):
         return self.coordinator.add_pathing_point(context, intent.pathing_point_name)
