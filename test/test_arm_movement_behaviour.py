@@ -158,10 +158,13 @@ def test_common_movement_behaviour_preserves_correlated_failure_detail():
     )
 
 
-def test_emergency_stow_cancels_active_executor_before_starting():
+def test_emergency_stow_waits_for_arm_and_navigation_stop():
     calls = []
-    action = StowArmBehaviour(preempt=True)
+    navigation = SimpleNamespace(stopping=True)
+    resources = SimpleNamespace(navigation_stopping=lambda: navigation.stopping)
+    action = StowArmBehaviour(preempt=True, robot_command_resources=resources)
     action.executor = SimpleNamespace(
+        active=True,
         cancel=lambda: calls.append("cancel"),
         stow=lambda: calls.append("stow") or ArmMovementUpdate(
             ArmMovementOutcome.RUNNING, "stowing"
@@ -169,5 +172,11 @@ def test_emergency_stow_cancels_active_executor_before_starting():
     )
     action.blackboard = blackboard("cancel-all")
     action.initialise()
+    assert action.update() is Status.RUNNING
+    assert calls == ["cancel"]
+    action.executor.active = False
+    assert action.update() is Status.RUNNING
+    assert calls == ["cancel"]
+    navigation.stopping = False
     assert action.update() is Status.RUNNING
     assert calls == ["cancel", "stow"]

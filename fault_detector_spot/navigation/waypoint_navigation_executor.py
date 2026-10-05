@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 import time
+from threading import RLock
+
+from rclpy.clock import Clock, ClockType
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from fault_detector_spot.navigation.base_goal_verifier import BaseGoalVerifier
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
@@ -33,15 +38,22 @@ class _Phase(Enum):
     PREPARING_BASE = "preparing_base"
     WAITING_FOR_GOAL = "waiting_for_goal"
     NAVIGATING = "navigating"
+    CANCELLING = "cancelling"
 
 
 class WaypointNavigationExecutor:
     """Stow, prepare height, then navigate; poll without spinning or blocking."""
 
     def __init__(self, arm_executor, base_executor, action_client, stamp_now,
-                 monotonic_clock=time.monotonic, goal_response_timeout_sec=2.0):
+                 monotonic_clock=time.monotonic, goal_response_timeout_sec=2.0, node=None):
         if not math.isfinite(goal_response_timeout_sec) or goal_response_timeout_sec <= 0:
             raise ValueError("Nav2 goal response timeout must be positive and finite")
+        self._node = node
+        self._lock = RLock()
+        self._cancel_timer = None
+        self._cancel_terminal = False
+        self._stop_verifier = None
+        self._cancel_detail = ""
         self.arm_executor = arm_executor
         self.base_executor = base_executor
         self.action_client = action_client
@@ -61,6 +73,10 @@ class WaypointNavigationExecutor:
         return self._phase is not None
 
     def navigate(self, goal_pose):
+        with self._lock:
+            return self._navigate(goal_pose)
+
+    def _navigate(self, goal_pose):
         if self.active or self.arm_executor.active or self.base_executor.active:
             return WaypointNavigationUpdate(WaypointNavigationOutcome.BUSY,
                                             "Waypoint or robot movement is already active")
@@ -122,9 +138,15 @@ class WaypointNavigationExecutor:
         return self._running("Prepared arm and height; waiting for Nav2 goal acceptance")
 
     def poll(self):
+        with self._lock:
+            return self._poll()
+
+    def _poll(self):
         if not self.active:
             return WaypointNavigationUpdate(WaypointNavigationOutcome.FAILURE,
                                             "No waypoint navigation is active")
+        if self._phase is _Phase.CANCELLING:
+            return self._poll_cancellation()
         try:
             if self._phase in {_Phase.STOWING, _Phase.PREPARING_BASE}:
                 return self._preparation_update(self._owned_preparation.poll())
@@ -153,28 +175,101 @@ class WaypointNavigationExecutor:
         except Exception as exception:
             return self._failure(f"Waypoint navigation failed: {exception}")
 
+    @property
+    def cancelling(self):
+        return self._phase is _Phase.CANCELLING
+
     def cancel(self):
-        try:
+        with self._lock:
+            if not self.active or self.cancelling:
+                return
+            self._phase = _Phase.CANCELLING
+            self._cancel_detail = "Waiting for Nav2 cancellation"
+            if self._node is not None and self._cancel_timer is None:
+                self._cancel_timer = self._node.create_timer(
+                    0.05, self._poll_cancellation,
+                    clock=Clock(clock_type=ClockType.STEADY_TIME),
+                    callback_group=MutuallyExclusiveCallbackGroup(),
+                )
+            elif self._cancel_timer is not None:
+                self._cancel_timer.reset()
             if self._owned_preparation is not None:
                 self._owned_preparation.cancel()
-            if self._goal_handle is not None:
-                if self._goal_handle.accepted:
-                    self._goal_handle.cancel_goal_async()
-            elif self._send_future is not None:
-                # Cancellation may precede acceptance. This callback uses only
-                # its own future, so a late reply cannot alter a subsequent run.
-                def cancel_late_goal(future):
-                    try:
-                        handle = future.result()
-                        if handle is not None and handle.accepted:
-                            handle.cancel_goal_async()
-                    except Exception:
-                        pass
-                self._send_future.add_done_callback(cancel_late_goal)
-        finally:
-            self._clear()
+            if self._send_future is None:
+                self._cancel_terminal = True
+                return
+            self._send_future.add_done_callback(self._cancel_accepted)
+
+    def _cancel_accepted(self, future):
+        with self._lock:
+            if not self.cancelling or future is not self._send_future:
+                return
+            try:
+                handle = future.result()
+                if handle is None or not handle.accepted:
+                    self._cancel_terminal = True
+                    return
+                self._goal_handle = handle
+                self._result_future = self._result_future or handle.get_result_async()
+                handle.cancel_goal_async()
+            except Exception as exception:
+                self._cancel_detail = f"Navigation stop unconfirmed: {exception}"
+
+    def _poll_cancellation(self):
+        with self._lock:
+            if not self.cancelling:
+                return self._running("Navigation cancellation completed")
+            preparation = self._owned_preparation
+            if preparation is not None and preparation.active:
+                preparation.poll()
+                return self._running("Waiting for preparation to stop")
+            try:
+                if not self._cancel_terminal:
+                    if self._result_future is None or not self._result_future.done():
+                        return self._running(self._cancel_detail)
+                    result = self._result_future.result()
+                    if result.status not in {
+                        GoalStatus.STATUS_CANCELED, GoalStatus.STATUS_SUCCEEDED,
+                        GoalStatus.STATUS_ABORTED,
+                    }:
+                        return self._running("Navigation result is not terminal; stop unconfirmed")
+                    self._cancel_terminal = True
+                if self._goal_handle is not None and self._goal_handle.accepted:
+                    sample = self.base_executor.base_pose_source.sample()
+                    stamp = self._stamp_now()
+                    ros_now = stamp.sec + stamp.nanosec * 1e-9
+                    if self._stop_verifier is None:
+                        self._stop_verifier = BaseGoalVerifier(
+                            (0.0, 0.0, 0.0), self.base_executor.goal_verification_config,
+                            self._clock(),
+                        )
+                        self._stop_after_stamp = ros_now
+                    pose = sample.planar_pose if sample is not None else None
+                    observed = sample.stamp_sec if sample is not None else None
+                    if observed is None or observed <= self._stop_after_stamp:
+                        pose = None
+                    self._stop_verifier.update(pose, observed, ros_now, self._clock())
+                    if not self._stop_verifier.settled:
+                        return self._running("Nav2 ended; waiting for fresh stationary base feedback")
+                detail = self._cancel_detail
+                self._clear()
+                return WaypointNavigationUpdate(WaypointNavigationOutcome.FAILURE, detail)
+            except Exception as exception:
+                self._cancel_detail = f"Navigation stop unconfirmed: {exception}"
+                return self._running(self._cancel_detail)
+
+    def shutdown(self):
+        self.cancel()
+        if self._cancel_timer is not None:
+            self._node.destroy_timer(self._cancel_timer)
+            self._cancel_timer = None
+        self.action_client.destroy()
 
     def _clear(self):
+        if self._cancel_timer is not None:
+            self._cancel_timer.cancel()
+        self._cancel_terminal = False
+        self._stop_verifier = None
         self._phase = None
         self._owned_preparation = None
         self._goal_pose = None
@@ -184,10 +279,11 @@ class WaypointNavigationExecutor:
         self._sent_at = None
 
     def _failure(self, detail):
-        try:
+        if self.active:
             self.cancel()
-        except Exception as exception:
-            detail += f"; cancellation failed: {exception}"
+            self._cancel_detail = detail
+            return self._poll_cancellation()
+        self._clear()
         return WaypointNavigationUpdate(WaypointNavigationOutcome.FAILURE, detail)
 
     @staticmethod

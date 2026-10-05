@@ -26,6 +26,7 @@ class GuardedProbeMonitor:
         self._generation = 0
         self._timer = None
         self._listener = None
+        self._cancel_complete = None
         self._update = ArmMovementUpdate(
             ArmMovementOutcome.EXECUTION_ERROR,
             "No guarded probe movement is active",
@@ -56,6 +57,15 @@ class GuardedProbeMonitor:
                 raise
             return self._update
 
+    def cancel(self, on_complete):
+        """Keep the existing steady timer running through physical stop."""
+        with self._execution.lock:
+            if self._closed:
+                return
+            self._cancel_complete = on_complete
+            self._start_timer()
+            self._record(self._execution.cancel())
+
     def poll(self):
         """Return status without advancing the operation a second time."""
         with self._execution.lock:
@@ -65,7 +75,11 @@ class GuardedProbeMonitor:
         if update is not None:
             self._update = update
             if update.outcome is not ArmMovementOutcome.RUNNING:
+                callback = self._cancel_complete
+                self._cancel_complete = None
                 self.stop()
+                if callback is not None:
+                    callback(update)
 
     def _observe_force(self, sample, generation):
         with self._execution.lock:

@@ -80,6 +80,7 @@ class RobotCommandResources:
         self._moveit_arm_planner = None
         self._arm_movement_executors = {}
         self._base_movement_executors = {}
+        self._waypoint_executor = None
 
     def get_action_client(self, node, robot_name: str = ""):
         """Return the single RobotCommand client for a robot namespace."""
@@ -221,6 +222,28 @@ class RobotCommandResources:
                     )
             return executor
 
+    def get_waypoint_navigation_executor(self, node):
+        """Share navigation ownership with emergency cancellation."""
+        from rclpy.action import ActionClient
+        from nav2_msgs.action import NavigateToPose
+        from fault_detector_spot.navigation.waypoint_navigation_executor import WaypointNavigationExecutor
+
+        with self._lock:
+            self._bind_node(node)
+            if self._waypoint_executor is None:
+                self._waypoint_executor = WaypointNavigationExecutor(
+                    self.get_arm_movement_executor(node),
+                    self.get_base_movement_executor(node),
+                    ActionClient(node, NavigateToPose, "/navigate_to_pose"),
+                    stamp_now=lambda: node.get_clock().now().to_msg(),
+                    node=node,
+                )
+            return self._waypoint_executor
+
+    def navigation_stopping(self):
+        """Expose outstanding Nav2 stop confirmation to emergency orchestration."""
+        return self._waypoint_executor is not None and self._waypoint_executor.cancelling
+
     def get_base_movement_executor(
         self,
         node,
@@ -301,6 +324,8 @@ class RobotCommandResources:
             base_executors = tuple(
                 self._base_movement_executors.values()
             )
+            waypoint_executor = self._waypoint_executor
+            self._waypoint_executor = None
             clients = tuple(self._clients.values())
             self._tf_listener = None
             self._arm_state_source = None
@@ -316,6 +341,8 @@ class RobotCommandResources:
             self._node = None
 
         resources = []
+        if waypoint_executor is not None:
+            resources.append(("waypoint executor", waypoint_executor.shutdown))
         resources.extend(
             ("arm movement executor", executor.shutdown)
             for executor in arm_executors

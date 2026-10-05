@@ -325,7 +325,7 @@ def test_cancellation_and_close_ignore_late_callbacks(monitored):
     m.guard.cancel()
     m.emit(0.02)
     m.node.timer.callback()
-    assert m.driver.stop_count == 0
+    assert m.driver.stop_count == 1
 
     m.monitor.start(plan)
     callback = m.monitor._listener
@@ -333,7 +333,7 @@ def test_cancellation_and_close_ignore_late_callbacks(monitored):
     callback(m.source.hand_force_sample())
     m.emit(0.03)
     m.node.timer.callback()
-    assert m.driver.stop_count == 0
+    assert m.driver.stop_count == 1
     assert m.guard._force_contact_count == 0
     assert m.node.timer.destroyed
     assert not m.source._force_listeners
@@ -390,7 +390,7 @@ def test_sample_waiting_for_lock_cannot_affect_a_new_operation(monitored):
         worker.join(timeout=1.0)
     assert not worker.is_alive()
     assert m.guard._force_contact_count == 0
-    assert m.driver.stop_count == 0
+    assert m.driver.stop_count == 1
     m.emit(0.02)
     assert m.guard._force_contact_count == 1
 
@@ -481,3 +481,18 @@ def test_executor_wires_monitor_and_observes_its_terminal_result(monkeypatch):
         executor.shutdown()
     assert node.timer.destroyed
     assert not source._force_listeners
+
+
+def test_monitor_cancellation_confirms_stop_without_bt_poll(monitored):
+    m = monitored
+    completed = []
+    m.monitor.cancel(completed.append)
+    assert m.guard.active
+    assert m.driver.stop_count == 1
+    assert not completed
+    m.driver.stop_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, 'stopped'))
+    m.node.timer.callback()
+    confirm_physical_stop(m, 0.1)
+    assert completed[-1].outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED
+    assert not m.guard.active
+    assert not any(isinstance(goal, tuple) and goal[0] == 'retreat' for goal in m.driver.started_goals)

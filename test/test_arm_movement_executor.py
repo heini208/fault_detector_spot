@@ -724,7 +724,9 @@ def test_explicit_cancel_requests_goal_cancellation(monkeypatch, poll_acceptance
     executor.cancel()
 
     assert handle.cancel_count == 1
-    assert not executor.active
+    assert executor.active
+    assert executor.cancelling
+    assert executor.pose(target).outcome is ArmMovementOutcome.BUSY
 
 
 def test_executor_rejects_overlapping_arm_movement(monkeypatch):
@@ -1139,7 +1141,8 @@ def test_public_probe_rejects_new_requests_during_preparation(monkeypatch):
     assert len(client.sent_goals) == 1
     assert executor._operation == executor_module._ArmOperation.PREPARE
     executor.cancel()
-    assert not executor.active
+    assert executor.active
+    assert executor.cancelling
 
 
 @pytest.mark.parametrize("outcome_name", ["FAILURE", "TIMEOUT", "ERROR"])

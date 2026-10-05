@@ -864,6 +864,10 @@ class ArmMovementExecutor(MovementExecutor):
     def poll(self) -> ArmMovementUpdate:
         """Advance the active arm operation without blocking."""
         with self._execution_lock:
+            if self.cancelling:
+                if self._guarded_probe_monitor is None and self.guarded_probe_execution is not None:
+                    self._cancel_stop_finished(self.guarded_probe_execution.poll())
+                return ArmMovementUpdate(ArmMovementOutcome.RUNNING, self._cancellation_detail)
             if not self.active or self._operation is None:
                 return ArmMovementUpdate(
                     ArmMovementOutcome.EXECUTION_ERROR,
@@ -914,18 +918,44 @@ class ArmMovementExecutor(MovementExecutor):
 
     def cancel(self) -> None:
         with self._execution_lock:
-            if (
-                self._operation == _ArmOperation.GUARDED_MOVEMENT
-                and self.guarded_probe_execution is not None
-            ):
-                self.guarded_probe_execution.cancel()
+            if self.cancelling or not self.active:
+                return
+            self._cancel_goal_done = False
+            self._reset_moveit_planning(cancel=True)
             super().cancel()
+            if self.cancelling and not self._cancel_goal_done:
+                self._monitor_cancel_stop()
+
+    def _cancellation_goal_finished(self):
+        with self._execution_lock:
+            self._cancel_goal_done = True
+            # A late goal acceptance could follow the first stop request.
+            # Confirm another stop after the action has actually terminated.
+            self._monitor_cancel_stop()
+
+    def _monitor_cancel_stop(self):
+        guard = self.guarded_probe_execution
+        if guard is None:
+            self._cancellation_detail = "Stop unconfirmed: arm stop monitor unavailable"
+            return
+        guard.reset()
+        if self._guarded_probe_monitor is not None:
+            self._guarded_probe_monitor.cancel(self._cancel_stop_finished)
+        else:
+            self._cancel_stop_finished(guard.cancel())
+
+    def _cancel_stop_finished(self, update):
+        with self._execution_lock:
+            if update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED and self._cancel_goal_done:
+                self._reset_operation()
+            elif update.outcome is not ArmMovementOutcome.RUNNING:
+                self._cancellation_detail = update.detail
 
     def shutdown(self) -> None:
         with self._execution_lock:
+            super().shutdown()
             if self._guarded_probe_monitor is not None:
                 self._guarded_probe_monitor.close()
-            super().shutdown()
             if (
                 self._owns_arm_stop_service_client
                 and self.arm_stop_service_client is not None
@@ -1237,7 +1267,8 @@ class ArmMovementExecutor(MovementExecutor):
     def _guard_cancel_goal(self) -> None:
         self._reset_moveit_planning(cancel=True)
         self._pending_goal_builder = None
-        self._request_cancel()
+        if not self.cancelling:
+            self._request_cancel()
         self._reset_goal_lifecycle()
 
     def _guard_start_arm_stop(self) -> ArmMovementUpdate:

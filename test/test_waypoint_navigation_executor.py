@@ -16,6 +16,8 @@ from fault_detector_spot.navigation.base_movement_executor import BaseMovementOu
 from fault_detector_spot.manipulation.arm_movement_executor import ArmMovementOutcome as ArmOutcome
 from fault_detector_spot.manipulation.arm_state_source import ArmStowState
 from test_base_movement_executor import ManualFuture, FakeGoalHandle, ManualClock
+from fault_detector_spot.navigation.base_pose_source import BasePoseSample
+from fault_detector_spot.navigation.base_goal_verifier import BaseGoalVerificationConfig
 
 
 class Preparation:
@@ -62,7 +64,12 @@ def rig():
     client.send_goal_async.side_effect = dispatch
     client.wait_for_server.return_value = True
     clock = ManualClock()
-    executor = WaypointNavigationExecutor(arm, base, client, lambda: Time(sec=12), clock)
+    base.goal_verification_config = BaseGoalVerificationConfig()
+    base.base_pose_source = SimpleNamespace(sample=lambda: BasePoseSample(0.0, 0.0, 0.0, 12.0 + clock.now))
+    def stamp():
+        value = 12.0 + clock.now
+        return Time(sec=int(value), nanosec=round((value % 1) * 1e9))
+    executor = WaypointNavigationExecutor(arm, base, client, stamp, clock)
     pose = PoseStamped()
     pose.header.frame_id = "map"
     pose.pose.orientation.w = 1.0
@@ -132,19 +139,27 @@ def test_cancellation_reaches_owned_operation_in_every_phase(phase):
         send.set_result(handle)
         executor.poll()
     executor.cancel()
-    assert not executor.active
+    assert executor.active
+    assert executor.navigate(pose).outcome is Outcome.BUSY
     if phase == "pending_nav2":
         send.set_result(handle)
     assert arm.cancel_calls == (1 if phase == "arm" else 0)
     assert base.cancel_calls == (1 if phase == "base" else 0)
     assert handle.cancel_calls == (1 if phase in ("pending_nav2", "nav2") else 0)
+    if phase in ("pending_nav2", "nav2"):
+        result.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+        settle_cancel(executor, clock)
+    else:
+        executor.poll()
+    assert not executor.active
 
 
 def test_goal_response_timeout_cancels_late_acceptance():
     executor, arm, base, client, send, clock, pose, events = rig()
     prepare(executor, arm, base, pose)
     clock.now = 2.1
-    assert executor.poll().outcome is Outcome.FAILURE
+    assert executor.poll().outcome is Outcome.RUNNING
+    assert executor.active
     handle = FakeGoalHandle(ManualFuture())
     send.set_result(handle)
     assert handle.cancel_calls == 1
@@ -159,7 +174,9 @@ def test_nav2_result_is_propagated(success):
     send.set_result(handle)
     assert executor.poll().outcome is Outcome.RUNNING
     result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED if success else GoalStatus.STATUS_ABORTED))
-    assert executor.poll().outcome is (Outcome.SUCCESS if success else Outcome.FAILURE)
+    assert executor.poll().outcome is (Outcome.SUCCESS if success else Outcome.RUNNING)
+    if not success:
+        settle_cancel(executor, clock)
     assert not executor.active
     if success:
         assert handle.cancel_calls == 0
@@ -179,7 +196,8 @@ def test_arm_deployment_during_navigation_cancels_goal():
     send.set_result(handle)
     executor.poll()
     arm.state = ArmStowState.DEPLOYED
-    assert executor.poll().outcome is Outcome.FAILURE
+    assert executor.poll().outcome is Outcome.RUNNING
+    assert executor.active
     assert handle.cancel_calls == 1
 
 
@@ -217,3 +235,50 @@ def test_waypoint_tree_only_resolves_then_calls_prepared_navigation(monkeypatch)
     tree = runner.build_navigate_to_goal_pose_tree(object())
     assert [child.name for child in tree.children] == ["SetWaypointAsGoal", "NavigateToGoalPose"]
     assert tree.children[1].robot_command_resources is resources
+
+
+def settle_cancel(executor, clock):
+    assert executor.poll().outcome is Outcome.RUNNING
+    for delta in (0.1, 0.6):
+        clock.now += delta
+        update = executor.poll()
+    assert update.outcome is Outcome.FAILURE
+
+
+def test_cancel_without_result_or_fresh_pose_keeps_ownership():
+    executor, arm, base, client, send, clock, pose, events = rig()
+    prepare(executor, arm, base, pose)
+    result = ManualFuture()
+    send.set_result(FakeGoalHandle(result))
+    executor.poll()
+    executor.cancel()
+    clock.now = 10.0
+    assert executor.poll().outcome is Outcome.RUNNING
+    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    base.base_pose_source.sample = lambda: None
+    assert executor.poll().outcome is Outcome.RUNNING
+    assert executor.active
+    assert executor.navigate(pose).outcome is Outcome.BUSY
+
+
+def test_cancel_monitor_finishes_without_further_bt_ticks():
+    executor, arm, base, client, send, clock, pose, events = rig()
+    timer = SimpleNamespace(cancel=Mock(), reset=Mock())
+    def create_timer(_period, callback, **_options):
+        timer.callback = callback
+        return timer
+    executor._node = SimpleNamespace(create_timer=create_timer)
+    prepare(executor, arm, base, pose)
+    result = ManualFuture()
+    send.set_result(FakeGoalHandle(result))
+    executor.poll()
+    executor.cancel()
+    timer.callback()
+    assert executor.active
+    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    timer.callback()
+    for value in (0.1, 0.7):
+        clock.now = value
+        timer.callback()
+    assert not executor.active
+    timer.cancel.assert_called_once()

@@ -84,7 +84,8 @@ def test_ready_and_stow_are_small_executor_dispatchers():
     assert "RobotCommandBuilder" not in stow
     assert "def update(" not in ready
     assert "def terminate(" not in ready
-    assert "def update(" not in stow
+    assert "navigation_stopping()" in stow
+    assert "self.executor.active" in stow
     assert "def terminate(" not in stow
 
 

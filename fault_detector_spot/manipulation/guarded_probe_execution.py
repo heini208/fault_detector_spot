@@ -207,11 +207,17 @@ class GuardedProbeExecution:
             "No guarded probe movement is active",
         )
 
-    def cancel(self) -> None:
+    def cancel(self):
+        """Stop without retreating and confirm fresh stationary arm feedback."""
         with self.lock:
-            if self.active:
-                self._cancel_goal()
-            self.reset()
+            if self._stop_terminal_outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED:
+                return self.poll()
+            self._cancel_goal()
+            self._terminal_update = None
+            return self._begin_arm_stop(
+                terminal_outcome=ArmMovementOutcome.TRAJECTORY_CANCELLED,
+                terminal_detail="Arm cancellation physically confirmed",
+            )
 
     def reset(self) -> None:
         with self.lock:

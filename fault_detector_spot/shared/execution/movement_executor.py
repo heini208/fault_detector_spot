@@ -3,6 +3,8 @@
 import math
 import time
 
+from action_msgs.msg import GoalStatus
+
 from synchros2.utilities import namespace_with
 
 from fault_detector_spot.shared.geometry.movement_geometry import (
@@ -60,6 +62,8 @@ class MovementExecutor:
             tf_listener
         )
 
+        self._cancelling = False
+        self._cancellation_detail = ""
         self._active = False
         self._send_goal_future = None
         self._goal_handle = None
@@ -80,6 +84,9 @@ class MovementExecutor:
                 f"No {self.MOVEMENT_NAME} movement is active",
             )
 
+        if self._cancelling:
+            return self._new_update(self.OUTCOME_TYPE.RUNNING, self._cancellation_detail)
+
         if self._send_goal_future is None:
             if self._pending_goal_builder is not None:
                 return self._submit_goal(
@@ -95,11 +102,61 @@ class MovementExecutor:
 
         return self._poll_result()
 
+    @property
+    def cancelling(self):
+        return self._cancelling
+
     def cancel(self) -> None:
-        """Request cancellation of the active movement and release it."""
-        if not self.active:
+        """Keep ownership until the submitted goal has a terminal result."""
+        if not self.active or self._cancelling:
             return
-        self._request_cancel()
+        self._cancelling = True
+        token = object()
+        self._cancel_token = token
+        self._cancellation_detail = "Waiting for movement cancellation"
+        self._pending_goal_builder = None
+        future = self._send_goal_future
+        if future is None:
+            self._cancellation_goal_finished()
+            return
+
+        def accepted(completed):
+            if not self._cancelling or self._cancel_token is not token:
+                return
+            try:
+                handle = completed.result()
+                if handle is None or not handle.accepted:
+                    self._cancellation_goal_finished()
+                    return
+                self._goal_handle = handle
+                result = self._result_future or handle.get_result_async()
+                self._result_future = result
+                # Register before requesting cancellation: a fast result may
+                # arrive synchronously, and cancel rejection is not completion.
+                if result is not None:
+                    result.add_done_callback(finished)
+                handle.cancel_goal_async()
+            except Exception as exception:
+                self._cancellation_detail = f"Stop unconfirmed: {exception}"
+
+        def finished(completed):
+            if not self._cancelling or self._cancel_token is not token:
+                return
+            try:
+                result = completed.result()
+                if result.status not in {
+                    GoalStatus.STATUS_SUCCEEDED, GoalStatus.STATUS_CANCELED,
+                    GoalStatus.STATUS_ABORTED,
+                }:
+                    raise RuntimeError("Movement result is not terminal")
+            except Exception as exception:
+                self._cancellation_detail = f"Stop unconfirmed: {exception}"
+                return
+            self._cancellation_goal_finished()
+
+        future.add_done_callback(accepted)
+
+    def _cancellation_goal_finished(self):
         self._reset_operation()
 
     def shutdown(self) -> None:
@@ -337,6 +394,7 @@ class MovementExecutor:
         self._result_started_monotonic = None
 
     def _reset_operation(self) -> None:
+        self._cancelling = False
         self._reset_goal_lifecycle()
         self._pending_goal_builder = None
         self._active = False
