@@ -23,6 +23,7 @@ class _OpenRecording:
     recording: MeasurementRecording
     channel_files: Dict[str, TextIO]
     sample_counts: Dict[str, int]
+    sample_write_failed: bool = False
 
 
 class MeasurementRepository:
@@ -127,15 +128,21 @@ class MeasurementRepository:
         context = self._require_open(recording)
         if channel_id not in context.channel_files:
             raise KeyError(f"Unknown configured channel: {channel_id}")
-        if not isinstance(sample, Mapping):
-            raise TypeError("Measurement sample must be an object")
-        line = json.dumps(
-            dict(sample),
-            ensure_ascii=False,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        context.channel_files[channel_id].write(line + "\n")
+        try:
+            if not isinstance(sample, Mapping):
+                raise TypeError("Measurement sample must be an object")
+            line = json.dumps(
+                dict(sample),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ) + "\n"
+            if context.channel_files[channel_id].write(line) != len(line):
+                raise OSError("Incomplete measurement sample write")
+        except Exception:
+            # Later successful samples must not erase an earlier data loss.
+            context.sample_write_failed = True
+            raise
         context.sample_counts[channel_id] += 1
 
     def flush(self, recording: MeasurementRecording) -> None:
@@ -155,6 +162,8 @@ class MeasurementRepository:
         if completion_state == MeasurementCompletionState.RECORDING:
             raise ValueError("Final completion state must be terminal")
         context = self._require_open(recording)
+        if context.sample_write_failed:
+            completion_state = MeasurementCompletionState.FAILED
         finalized = replace(
             recording,
             completion_state=completion_state,

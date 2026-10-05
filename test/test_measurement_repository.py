@@ -194,3 +194,37 @@ def test_optional_context_rejects_hierarchy_gaps(context):
             started_at_ns=STARTED_AT_NS,
             configured_channels=channels(),
         )
+
+
+@pytest.mark.parametrize("failure", ["write", "short_write", "serialization"])
+@pytest.mark.parametrize("requested_state", [
+    MeasurementCompletionState.COMPLETE,
+    MeasurementCompletionState.CANCELLED,
+])
+def test_sample_failure_survives_later_success_and_finalization(
+    tmp_path, monkeypatch, failure, requested_state,
+):
+    repository = MeasurementRepository(tmp_path)
+    active = repository.create(recording())
+    channel_id = "magnetic_field"
+    stream = repository._open_recordings[active.identity].channel_files[channel_id]
+    with monkeypatch.context() as patch:
+        sample = {"value": 1.0}
+        if failure == "serialization":
+            sample = {"value": float("nan")}
+        elif failure == "short_write":
+            patch.setattr(stream, "write", lambda _line: 0)
+        else:
+            def fail_write(_line):
+                raise OSError("disk full")
+            patch.setattr(stream, "write", fail_write)
+        with pytest.raises((OSError, ValueError)):
+            repository.append_sample(active, channel_id, sample)
+
+    repository.append_sample(active, channel_id, {"value": 2.0})
+    finalized = repository.finalize(active, requested_state, STARTED_AT_NS + 1)
+    assert finalized.completion_state is MeasurementCompletionState.FAILED
+    assert finalized.sample_counts[channel_id] == 1
+    metadata = json.loads(repository.get_metadata_path(active).read_text())
+    assert metadata["completion_state"] == "failed"
+    assert not repository.is_open(active)

@@ -162,3 +162,40 @@ def test_offline_head_skips_without_creating_files(tmp_path):
     assert "offline" in state.detail
     assert not tuple(tmp_path.rglob("metadata.json"))
     node.destroy_client.assert_called_once()
+
+
+def test_sample_write_failure_is_preserved_through_source_and_stop(tmp_path, monkeypatch):
+    coordinator, repository, node, client, started, stopped = make_coordinator(tmp_path)
+    coordinator.start(request())
+    complete(started)
+    callbacks = {
+        call.args[1]: call.args[2]
+        for call in node.create_subscription.call_args_list
+    }
+    receive = callbacks["/sensors/bmm150_probe/magnetic_field"]
+    receive(MagneticField())
+    assert coordinator.snapshot().status is SensorAcquisitionStatus.RECORDING
+    active = coordinator._session.recording
+    stream = repository._open_recordings[active.identity].channel_files["magnetic_field"]
+
+    def fail_write(_line):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(stream, "write", fail_write)
+        receive(MagneticField())
+    receive(MagneticField())
+    coordinator.stop()
+    complete(stopped)
+
+    assert coordinator.snapshot().status is SensorAcquisitionStatus.FAILED
+    assert "samples could not be saved" in coordinator.snapshot().detail
+    saved = repository.load(
+        object_id="motor_01", routine_id="magnetic_scan",
+        probe_point_id="bearing_front", sensor_id="bmm150_probe",
+        started_at_ns=START_NS,
+    )
+    assert saved.completion_state is MeasurementCompletionState.FAILED
+    assert saved.sample_counts["magnetic_field"] == 2
+    assert not repository.is_open(active)
+    assert coordinator._session is None

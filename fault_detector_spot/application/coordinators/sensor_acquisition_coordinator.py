@@ -384,7 +384,7 @@ class SensorAcquisitionCoordinator:
         for source in session.sources:
             source.stop()
         try:
-            self.measurements.finalize(
+            finalized = self.measurements.finalize(
                 session.recording,
                 final_state,
                 max(
@@ -392,6 +392,14 @@ class SensorAcquisitionCoordinator:
                     int(self.node.get_clock().now().nanoseconds),
                 ),
             )
+            if (
+                finalized.completion_state is MeasurementCompletionState.FAILED
+                and final_state is not MeasurementCompletionState.FAILED
+            ):
+                detail = (
+                    "Measurement failed: one or more samples could not be saved"
+                )
+            final_state = finalized.completion_state
         except Exception as exception:
             final_state = MeasurementCompletionState.FAILED
             detail = f"Failed to finalize measurement: {exception}"
