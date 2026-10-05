@@ -257,6 +257,7 @@ class RobotCommandResources:
             if executor is None:
                 executor = BaseMovementExecutor(
                     self.get_tf_listener(node),
+                    arm_state_source=self.get_arm_state_source(node),
                     tag_state_source=tag_state_source,
                     robot_name=robot_name,
                     action_client=self.get_action_client(

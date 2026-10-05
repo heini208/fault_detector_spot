@@ -174,6 +174,25 @@ def test_height_change_invalidates_quick_check_even_before_feedback():
     assert not readiness.at_nominal_height(source.sample())
 
 
+@pytest.mark.parametrize("operation", ["relative", "prepare_for_navigation"])
+@pytest.mark.parametrize("needs_reset", [False, True])
+def test_walking_preparation_restores_commanded_offset(operation, needs_reset):
+    executor, clock, source, readiness, client, built = rig()
+    executor._commanded_height_m = 0.15
+    if needs_reset:
+        source.height = 0.65
+    args = (object(),) if operation == "relative" else ()
+    getattr(executor, operation)(*args)
+    if needs_reset:
+        complete_stand(executor, client)
+        source.height = 0.5
+        clock.now += 0.1
+        executor.poll()
+        clock.now += 0.31
+        executor.poll()
+    assert executor._commanded_height_m == 0.0
+
+
 def test_tf_source_uses_namespaced_feet_to_body_and_handles_missing_data():
     transform = TransformStamped()
     transform.header.stamp.sec = 7
@@ -224,5 +243,3 @@ def test_confirmation_restarts_after_measurement_gap_or_height_motion():
     assert not readiness.confirm_reset(clock.now)
     clock.now += 0.31
     assert readiness.confirm_reset(clock.now)
-
-

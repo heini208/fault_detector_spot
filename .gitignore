@@ -178,3 +178,4 @@ cython_debug/
 .pypirc
 /config/spot_ros_example.yaml
 /config/spot_ros_lan.yaml
+/AGENTS.md

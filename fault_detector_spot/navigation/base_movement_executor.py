@@ -5,12 +5,17 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 
-from fault_detector_spot.navigation.body_height import validate_body_height
+from fault_detector_spot.manipulation.arm_state_source import ArmStowState
+from fault_detector_spot.navigation.body_height import (
+    DEPLOYED_ARM_HEIGHT_SPEED_MPS, validate_body_height,
+)
 from fault_detector_spot.navigation.body_height_readiness import (
     BodyHeightReadiness, BodyHeightSource,
 )
 
+from bosdyn.api import trajectory_pb2
 from bosdyn.client.robot_command import RobotCommandBuilder
+from bosdyn.util import seconds_to_duration
 from bosdyn_spot_api_msgs.conversions import convert
 from spot_msgs.action import RobotCommand
 
@@ -89,6 +94,7 @@ class _BaseOperation(Enum):
     MOVEMENT = "movement"
     PREPARE = "prepare"
     STAND = "stand"
+    CHANGE_HEIGHT = "change_height"
     SIT = "sit"
 
 
@@ -149,6 +155,7 @@ class BaseMovementExecutor(MovementExecutor):
         tag_observation_timeout_sec: float = (
             DEFAULT_BASE_TAG_OBSERVATION_TIMEOUT_SEC
         ),
+        arm_state_source=None,
     ):
         super().__init__(
             tf_listener,
@@ -197,6 +204,11 @@ class BaseMovementExecutor(MovementExecutor):
             height_reset_timeout_sec, "Height reset confirmation timeout",
         )
         self.posture_state_source = posture_state_source
+        self.arm_state_source = arm_state_source
+        # Command-space estimate, not measured body height. Startup assumes
+        # nominal height; all subsequent successful stand/walk commands own it.
+        self._commanded_height_m = 0.0
+        self._pending_commanded_height_m = None
         self.ready_state_timeout_sec = self._positive_timeout(
             ready_state_timeout_sec,
             "Base ready state timeout",
@@ -256,7 +268,7 @@ class BaseMovementExecutor(MovementExecutor):
         return self._advance_movement_start()
 
     def stand(self) -> BaseMovementUpdate:
-        """Start Spot's native stand command directly."""
+        """Stand at zero offset and restore the commanded-height estimate."""
         if self.active:
             return self._busy_update()
         self._operation = _BaseOperation.STAND
@@ -269,9 +281,10 @@ class BaseMovementExecutor(MovementExecutor):
             return self._busy_update()
         height = validate_body_height(body_height_m)
         self.height_readiness.require_reset()
-        self._operation = _BaseOperation.STAND
+        self._operation = _BaseOperation.CHANGE_HEIGHT
+        self._pending_commanded_height_m = height
         self._set_phase(_BasePhase.EXECUTING_STAND)
-        return super()._start_goal(lambda: self._build_stand_goal(height))
+        return super()._start_goal(lambda: self._build_height_goal(height))
 
     def sit(self) -> BaseMovementUpdate:
         """Start Spot's native sit command directly."""
@@ -430,6 +443,7 @@ class BaseMovementExecutor(MovementExecutor):
                                   "Waiting for measured walking height to settle")
 
     def _walking_height_ready(self):
+        self._commanded_height_m = 0.0
         if self._operation is _BaseOperation.PREPARE:
             return self._finish(BaseMovementOutcome.SUCCESS, "Walking height ready")
         return self._submit_movement_goal()
@@ -480,9 +494,20 @@ class BaseMovementExecutor(MovementExecutor):
         self._pending_goal_builder = build_goal
         return self._submit_goal(build_goal)
 
+    def _submit_goal(self, goal_builder):
+        if self._operation is not _BaseOperation.CHANGE_HEIGHT:
+            # Stand/reset, sit, and every walk use nominal standing offset.
+            self._pending_commanded_height_m = 0.0
+        return super()._submit_goal(goal_builder)
+
     def _handle_successful_result(self, result):
+        if self._pending_commanded_height_m is not None:
+            self._commanded_height_m = self._pending_commanded_height_m
+            self._pending_commanded_height_m = None
         if self._phase is _BasePhase.EXECUTING_STAND:
-            if self._operation not in {_BaseOperation.MOVEMENT, _BaseOperation.PREPARE}:
+            if self._operation not in {
+                _BaseOperation.MOVEMENT, _BaseOperation.PREPARE,
+            }:
                 return super()._handle_successful_result(result)
 
             self._reset_goal_lifecycle()
@@ -980,7 +1005,18 @@ class BaseMovementExecutor(MovementExecutor):
             else self._monotonic_clock()
         )
 
+    def _finish(self, outcome, detail):
+        if outcome is BaseMovementOutcome.GOAL_REJECTED:
+            # A rejected goal cannot have changed the height.
+            self._pending_commanded_height_m = None
+        return super()._finish(outcome, detail)
+
     def _reset_operation(self) -> None:
+        if (self._pending_commanded_height_m is not None
+                and self._send_goal_future is not None):
+            # Cancellation, timeout, or failure can leave an intermediate pose.
+            self._commanded_height_m = None
+        self._pending_commanded_height_m = None
         super()._reset_operation()
         self.correction_policy.reset()
         self._goal_verifier = None
@@ -996,9 +1032,40 @@ class BaseMovementExecutor(MovementExecutor):
         self._cancellation_complete = False
         self._tag_observation_tracker.reset()
 
-    def _build_stand_goal(self, body_height_m=0.0) -> RobotCommand.Goal:
+    def _build_height_goal(self, body_height_m) -> RobotCommand.Goal:
+        state = (
+            self.arm_state_source.stow_state()
+            if self.arm_state_source is not None else None
+        )
+        # Only a freshly confirmed stowed arm permits the default fast change.
+        if state is ArmStowState.STOWED:
+            return self._build_stand_goal(body_height_m)
+        current_offset = self._commanded_height_m
+        if current_offset is None:
+            raise ValueError(
+                "Height command was interrupted; complete Stand to restore "
+                "the commanded-height reference"
+            )
+        duration_sec = (
+            abs(body_height_m - current_offset) / DEPLOYED_ARM_HEIGHT_SPEED_MPS
+        )
+        return self._build_stand_goal(body_height_m, duration_sec, current_offset)
+
+    def _build_stand_goal(
+        self, body_height_m=0.0, duration_sec=0, start_height_m=None,
+    ) -> RobotCommand.Goal:
+        params = RobotCommandBuilder.mobility_params(body_height=body_height_m)
+        if duration_sec:
+            if start_height_m is None:
+                raise ValueError("Timed body height trajectory requires a starting height")
+            trajectory = params.body_control.base_offset_rt_footprint
+            target = trajectory.points.add()
+            target.CopyFrom(trajectory.points[0])
+            trajectory.points[0].pose.position.z = start_height_m
+            target.time_since_reference.CopyFrom(seconds_to_duration(duration_sec))
+            trajectory.pos_interpolation = trajectory_pb2.POS_INTERP_LINEAR
         command = RobotCommandBuilder.synchro_stand_command(
-            body_height=body_height_m,
+            params=params,
         )
         goal = RobotCommand.Goal()
         convert(command, goal.command)

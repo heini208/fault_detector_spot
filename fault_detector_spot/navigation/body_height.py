@@ -4,6 +4,7 @@ import math
 
 MIN_BODY_HEIGHT_M = -0.20
 MAX_BODY_HEIGHT_M = 0.20
+DEPLOYED_ARM_HEIGHT_SPEED_MPS = 0.025
 
 
 def validate_body_height(value: float) -> float:
