@@ -1,6 +1,8 @@
 """Add server-owned probe finalization to inspection controls."""
 
 import math
+
+from fault_detector_spot.ui.sensor.models import SensorAttachmentViewStatus
 from uuid import uuid4
 
 from PyQt5.QtGui import QPalette
@@ -513,6 +515,15 @@ class FinalizingInspectionControls(InspectionControls):
             self.show_warning(
                 "Add Probe Point",
                 "Select a saved object and routine first.",
+            )
+            return False
+        attachment = getattr(self.ui, "_sensor_attachment_state", None)
+        if attachment is None or attachment.status is not SensorAttachmentViewStatus.ACTIVE:
+            self.show_warning(
+                "Add Probe Point",
+                "Confirm the sensor attachment in the sensor controls before "
+                "adding a probe point. If using the bare hand, select and "
+                "confirm No sensor.",
             )
             return False
         if not state.has_routine_safe_approach_pose:

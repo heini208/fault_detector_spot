@@ -222,9 +222,30 @@ def test_routine_arm_dialog_saves_and_closes_when_selection_changes(application)
     controls.routine_arm_pose_dialog.close()
 
 
-def test_probe_entry_does_not_repeat_attachment_check(application):
+@pytest.mark.parametrize("status", [
+    None, SensorAttachmentViewStatus.NONE, SensorAttachmentViewStatus.PENDING,
+])
+def test_probe_entry_requires_approved_attachment(application, monkeypatch, status):
     ui = FakeUI()
-    ui._sensor_attachment_state = None
+    ui._sensor_attachment_state = (
+        None if status is None else SimpleNamespace(status=status)
+    )
+    controls = FinalizingInspectionControls(ui)
+    controls.apply_setup_state(make_state())
+    warnings = []
+    monkeypatch.setattr(controls, "show_warning", lambda *args: warnings.append(args))
+    assert not controls.handle_start_probe_refinement()
+    assert not controls.refinement_dialog.isVisible()
+    assert "Confirm the sensor attachment" in warnings[-1][1]
+    assert not ui.requests
+
+
+@pytest.mark.parametrize("sensor_id", ["hall_probe", ""])
+def test_probe_entry_accepts_confirmed_sensor_or_bare_hand(application, sensor_id):
+    ui = FakeUI()
+    ui._sensor_attachment_state = SimpleNamespace(
+        status=SensorAttachmentViewStatus.ACTIVE, active_sensor_id=sensor_id,
+    )
     controls = FinalizingInspectionControls(ui)
     controls.apply_setup_state(make_state())
     assert controls.handle_start_probe_refinement()
