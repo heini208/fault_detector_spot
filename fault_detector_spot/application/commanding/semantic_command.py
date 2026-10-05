@@ -134,11 +134,19 @@ class SemanticCommand:
     )
     motion_sensor_id: str = ""
     body_height_m: float = 0.0
+    tag_position_tolerance_m: float = 0.01
     arm_speed_scale: float = 1.0
     walking_profile: str = ""
     pre_approach_offsets: tuple[StampedPose, ...] = ()
+    pre_approach_tolerances_m: tuple[float, ...] = ()
 
     def __post_init__(self):
+        if self.pre_approach_tolerances_m and len(self.pre_approach_tolerances_m) != len(self.pre_approach_offsets):
+            raise ValueError("Each path offset requires its own tolerance")
+        if any(not math.isfinite(value) or value <= 0 for value in self.pre_approach_tolerances_m):
+            raise ValueError("Path tolerances must be positive and finite")
+        if not math.isfinite(self.tag_position_tolerance_m) or self.tag_position_tolerance_m <= 0:
+            raise ValueError("Tag position tolerance must be positive and finite")
         if not math.isfinite(self.arm_speed_scale) or not 0 < self.arm_speed_scale <= 1:
             raise ValueError("Arm speed scale must be in (0, 1]")
         if self.walking_profile not in ("", "normal", "precision"):

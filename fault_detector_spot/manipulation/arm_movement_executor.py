@@ -83,6 +83,9 @@ from fault_detector_spot.manipulation.arm_motion_parameters import (
 )
 
 
+TAG_POSITION_VERIFY_TIMEOUT_SEC = 2.0
+
+
 SURFACE_ORIENTATION_MAX_ERROR_RAD = math.radians(5.0)
 SURFACE_ORIENTATION_TIMEOUT_SEC = 2.0
 SURFACE_ORIENTATION_SENSING_TIMEOUT_SEC = 6.0
@@ -94,6 +97,7 @@ class _ArmOperation:
     READY_WAIT = "ready_wait"
     READY_PREPARE = "ready_prepare"
     GUARDED_MOVEMENT = "guarded_movement"
+    TAG_POSITION_VERIFY = "tag_position_verify"
     SURFACE_ORIENTATION_VERIFY = "surface_orientation_verify"
     PREPARE = "prepare"
     STOW = "stow"
@@ -465,15 +469,94 @@ class ArmMovementExecutor(MovementExecutor):
         speed=None,
         force_threshold_n=None,
     ) -> ArmMovementUpdate:
-        """Resolve a live tag target and execute it through the guard."""
-        return self.guarded_probe(
-            lambda: self.probe_motion_planner.resolve_tag(
-                command,
-                self.tag_state_source,
-            ),
-            speed=speed,
-            force_threshold_n=force_threshold_n,
+        """Move to a tag, then verify and correct the achieved tip position."""
+        with self._execution_lock:
+            if self.active:
+                return self._busy_update()
+            tolerance = float(command.tag_position_tolerance_m)
+            if not math.isfinite(tolerance) or tolerance <= 0:
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.EXECUTION_ERROR,
+                    "Tag position tolerance must be positive and finite",
+                )
+            self._tag_accuracy = {
+                "tolerance": tolerance, "target": None, "corrections": 0,
+                "speed": speed or self.speed_policy.default_speed,
+                "force_threshold": force_threshold_n,
+            }
+            update = self.guarded_probe(
+                lambda: self._resolve_verified_tag_target(command),
+                speed=speed,
+                force_threshold_n=force_threshold_n,
+            )
+            if update.outcome is not ArmMovementOutcome.RUNNING:
+                self._tag_accuracy = None
+            return update
+
+    def _resolve_verified_tag_target(self, command):
+        resolved = self.probe_motion_planner.resolve_tag(command, self.tag_state_source)
+        # Retain the ordinary resolved target without additional TF lookups or
+        # changes to planning. Accuracy work starts only after motion succeeds.
+        self._tag_accuracy["target"] = deepcopy(resolved)
+        return resolved
+
+    @staticmethod
+    def _pose_stamp_ns(pose):
+        return pose.header.stamp.sec * 1000000000 + pose.header.stamp.nanosec
+
+    def _tag_current_pose(self):
+        target = self._tag_accuracy["target"]
+        return self.probe_motion_planner.current_pose(
+            target.target.header.frame_id, sensor_probe_frame(target.sensor_id)
         )
+
+    def _begin_tag_position_verification(self):
+        self._operation = _ArmOperation.TAG_POSITION_VERIFY
+        state = self._tag_accuracy
+        state["deadline"] = self._monotonic_clock() + TAG_POSITION_VERIFY_TIMEOUT_SEC
+        state["stamp"] = None
+        try:
+            state["stamp"] = self._pose_stamp_ns(self._tag_current_pose())
+        except (ValueError, RuntimeError, TransformException):
+            pass
+        return ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING, "Move-to-tag completed; waiting for fresh position feedback"
+        )
+
+    def _poll_tag_position_verification(self):
+        state = self._tag_accuracy
+        if self._monotonic_clock() >= state["deadline"]:
+            return super()._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Move-to-tag accuracy check timed out waiting for fresh position feedback",
+            )
+        try:
+            current = self._tag_current_pose()
+            stamp = self._pose_stamp_ns(current)
+            if state["stamp"] is None:
+                state["stamp"] = stamp
+            if stamp <= state["stamp"]:
+                return ArmMovementUpdate(ArmMovementOutcome.RUNNING, "Waiting for fresh position feedback")
+            error = self.speed_policy._translation_distance(
+                current.pose, state["target"].target.pose
+            )
+        except (ValueError, RuntimeError, TransformException) as exception:
+            return ArmMovementUpdate(ArmMovementOutcome.RUNNING, f"Waiting for position feedback: {exception}")
+        if error <= state["tolerance"]:
+            return super()._finish(
+                ArmMovementOutcome.SUCCESS,
+                f"Move-to-tag position verified: {error:.4f} m error "
+                f"(tolerance {state['tolerance']:.4f} m)",
+            )
+        state["corrections"] += 1
+        baseline = state["speed"]
+        speed = ArmMotionSpeed(baseline.linear_speed_mps * .5, baseline.angular_speed_rad_s * .5)
+        self._guarded_force_threshold_n = state["force_threshold"]
+        self._guarded_cartesian_path = False
+        self._guarded_plan_builder = lambda: self.probe_motion_planner.build_plan(
+            lambda: state["target"], speed
+        )
+        return self._begin_guarded_probe()
 
     def probe_relative(
         self,
@@ -921,6 +1004,9 @@ class ArmMovementExecutor(MovementExecutor):
             ):
                 return self._poll_surface_orientation_verification()
 
+            if self._operation == _ArmOperation.TAG_POSITION_VERIFY:
+                return self._poll_tag_position_verification()
+
             # The guard must consume planning results and retain force monitoring.
             if self._operation == _ArmOperation.GUARDED_MOVEMENT:
                 return self._poll_guarded_probe()
@@ -1172,6 +1258,13 @@ class ArmMovementExecutor(MovementExecutor):
             return update
         if not self.active:
             return update
+        if update.outcome is ArmMovementOutcome.SUCCESS and self._tag_accuracy is not None:
+            if self._tag_accuracy["corrections"]:
+                return super()._finish(
+                    ArmMovementOutcome.SUCCESS,
+                    "Move-to-tag completed with one slow position adjustment",
+                )
+            return self._begin_tag_position_verification()
         if (
             update.outcome is ArmMovementOutcome.SUCCESS
             and self._surface_orientation_sensor_id is not None
@@ -1454,6 +1547,7 @@ class ArmMovementExecutor(MovementExecutor):
                 self.guarded_probe_execution.reset()
 
     def _clear_arm_operation_state(self) -> None:
+        self._tag_accuracy = None
         self._operation = None
         self._operation_speed = None
         self._state_wait_started = None

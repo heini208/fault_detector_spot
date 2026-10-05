@@ -175,10 +175,6 @@ class ProbeRefinementDialog(QDialog):
             self.controls.probe_point_display_name_field,
         )
         definition_layout.addRow(
-            "Position tolerance [m]:",
-            self.controls.probe_position_tolerance_field,
-        )
-        definition_layout.addRow(
             "Orientation tolerance [rad]:",
             self.controls.probe_orientation_tolerance_field,
         )
@@ -359,6 +355,8 @@ class ProbeRefinementDialog(QDialog):
 
     def _make_alignment_page(self):
         distance_row = QHBoxLayout()
+        distance_row.addWidget(QLabel("Final candidate position tolerance [m]:"))
+        distance_row.addWidget(self.controls.probe_position_tolerance_field)
         distance_row.addWidget(QLabel("Absolute surface distance [m]:"))
         distance_row.addWidget(self.aligned_distance_field)
         distance_row.addStretch()

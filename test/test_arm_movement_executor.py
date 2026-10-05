@@ -192,6 +192,7 @@ class FakeTagCommand:
 
     def __init__(self, tag_id, sensor_id, probe_target):
         self.tag_id = tag_id
+        self.tag_position_tolerance_m = 0.01
         self.motion_sensor_id = sensor_id
         self.tag_pose = PoseStamped()
         self.probe_target = probe_target
@@ -453,7 +454,12 @@ def test_tag_probe_forwards_speed_to_probe_motion(monkeypatch):
     assert source.requests == [7]
     assert command.calls == [transformer]
     assert captured["args"][0] == pytest.approx(0.6)
+    assert captured["args"][7] == "body"
     assert captured["args"][8] == pytest.approx(4.0)
+    verification_target = executor._tag_accuracy["target"].target
+    assert verification_target.header.frame_id == "body"
+    assert verification_target.pose.position.x == pytest.approx(0.8)
+    assert verification_target.pose.position.y == pytest.approx(0.0)
 
 
 def test_probe_relative_reuses_current_probe_transform(monkeypatch):
@@ -1176,3 +1182,90 @@ def test_guarded_moveit_failure_releases_without_arm_stop(outcome_name):
     assert executor.arm_stop_service_client.requests == []
     assert client.sent_goals == []
     assert executor.stow().outcome is ArmMovementOutcome.RUNNING
+
+
+def tag_verification_executor(monkeypatch, error=.02):
+    from fault_detector_spot.manipulation.probe_motion_planner import ResolvedProbeTarget
+    frame = executor_module.sensor_probe_frame("sensor_a")
+    feedback = transform("odom", frame, x=error)
+    feedback.header.stamp.sec = 1
+    clock = [0.0]
+    executor, _ = executor_with_client(
+        FakeTransformer({("odom", frame): feedback}),
+        monotonic_clock=lambda: clock[0],
+    )
+    target = PoseStamped()
+    target.header.frame_id = "odom"
+    target.pose.orientation.w = 1.
+    executor._active = True
+    executor._tag_accuracy = {
+        "target": ResolvedProbeTarget(target=target, sensor_id="sensor_a"),
+        "tolerance": .01, "corrections": 0,
+        "speed": ArmMotionSpeed(.1, .5), "force_threshold": 8.,
+    }
+    corrections = []
+    monkeypatch.setattr(executor.probe_motion_planner, "build_plan", lambda builder, speed: (builder(), speed))
+
+    def correct():
+        corrections.append(executor._guarded_plan_builder())
+        return executor_module.ArmMovementUpdate(ArmMovementOutcome.RUNNING, "correcting")
+
+    monkeypatch.setattr(executor, "_begin_guarded_probe", correct)
+    executor._begin_tag_position_verification()
+    return executor, feedback, clock, corrections
+
+
+def test_tag_accuracy_waits_for_fresh_feedback_then_corrects_same_target(monkeypatch):
+    executor, feedback, _, corrections = tag_verification_executor(monkeypatch)
+    target = executor._tag_accuracy["target"]
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert not corrections
+    feedback.header.stamp.sec += 1
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert corrections == [(target, ArmMotionSpeed(.05, .25))]
+    assert executor._guarded_force_threshold_n == 8.
+    # Successful completion of the one correction resolves immediately, even
+    # without another feedback sample or an additional endpoint check.
+    result = executor._finish_guarded_update(
+        executor_module.ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "done")
+    )
+    assert result.outcome is ArmMovementOutcome.SUCCESS
+    assert len(corrections) == 1
+    assert executor._tag_accuracy is None
+    assert not executor.active
+
+
+def test_tag_accuracy_within_tolerance_finishes_without_adjustment(monkeypatch):
+    executor, feedback, _, corrections = tag_verification_executor(monkeypatch, error=.005)
+    feedback.header.stamp.sec += 1
+    assert executor.poll().outcome is ArmMovementOutcome.SUCCESS
+    assert not corrections
+
+
+def test_tag_accuracy_stale_feedback_times_out(monkeypatch):
+    executor, _, clock, corrections = tag_verification_executor(monkeypatch, error=0.)
+    clock[0] = 2.1
+    assert executor.poll().outcome is ArmMovementOutcome.EXECUTION_ERROR
+    assert not corrections
+
+
+def test_tag_accuracy_does_not_retry_guard_failure(monkeypatch):
+    executor, _, _, corrections = tag_verification_executor(monkeypatch)
+    result = executor._finish_guarded_update(
+        executor_module.ArmMovementUpdate(ArmMovementOutcome.MOTION_FAILED, "guard stopped")
+    )
+    assert result.outcome is ArmMovementOutcome.MOTION_FAILED
+    assert not corrections
+    assert executor._tag_accuracy is None
+
+
+def test_tag_accuracy_cancellation_does_not_start_correction(monkeypatch):
+    executor, feedback, _, corrections = tag_verification_executor(monkeypatch)
+    stopped = []
+    monkeypatch.setattr(executor, "_monitor_cancel_stop", lambda: stopped.append(True))
+    executor.cancel()
+    assert stopped
+    assert executor.cancelling
+    feedback.header.stamp.sec += 1
+    executor.poll()
+    assert not corrections

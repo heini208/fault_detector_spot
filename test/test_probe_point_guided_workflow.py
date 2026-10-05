@@ -206,11 +206,15 @@ def test_routine_arm_dialog_saves_and_closes_when_selection_changes(application)
     ui.update_tags_dropdown = lambda dropdown: dropdown.addItem("7")
     controls = FinalizingInspectionControls(ui)
     state = make_state()
+    state.routine_safe_position_tolerance_m = .045
     controls.apply_setup_state(state)
     assert controls.show_routine_arm_pose_dialog()
     assert controls.routine_arm_pose_dialog.isVisible()
     assert controls.routine_arm_movement_controls.offset_fields["X"]
+    assert controls.routine_safe_tolerance_field.text() == "0.045"
+    controls.routine_safe_tolerance_field.setText("0.025")
     controls.save_routine_arm_pose_button.click()
+    assert ui.requests[-1].position_tolerance_m == .025
     assert ui.requests[-1].operation == (
         ProbeSetupIntent.OPERATION_SAVE_ROUTINE_SAFE_APPROACH_POSE
     )

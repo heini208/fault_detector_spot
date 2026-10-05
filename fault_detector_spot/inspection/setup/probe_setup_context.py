@@ -32,6 +32,7 @@ class ProbeSetupDraft:
     setup: Optional[ReferenceProbeSetup] = None
     refinement: Optional[ProbeRefinementSession] = None
     pre_approach_path: list[PreApproachPathPoint] = field(default_factory=list)
+    aligned_position_tolerance_m: Optional[float] = None
     dirty: bool = False
     validation_error: str = ""
 
@@ -41,6 +42,7 @@ class ProbeSetupDraft:
         self.selected_reference_view_id = ""
         self.reference_pixel = None
         self.pre_approach_path.clear()
+        self.aligned_position_tolerance_m = None
         self.geometry = None
         self.setup = None
         self.refinement = None
@@ -50,6 +52,7 @@ class ProbeSetupDraft:
     def clear_geometry(self) -> None:
         self.reference_pixel = None
         self.pre_approach_path.clear()
+        self.aligned_position_tolerance_m = None
         self.geometry = None
         self.setup = None
         self.refinement = None
@@ -82,6 +85,7 @@ class ProbeSetupSnapshot:
     pre_approach_path: Tuple[PreApproachPathPoint, ...] = ()
     has_base_position: bool = False
     has_routine_safe_approach_pose: bool = False
+    routine_safe_position_tolerance_m: float = .1
 
     @classmethod
     def from_draft(
@@ -97,6 +101,7 @@ class ProbeSetupSnapshot:
         probe_point_target_surface_distances_m=(),
         has_base_position=False,
         has_routine_safe_approach_pose=False,
+        routine_safe_position_tolerance_m=.1,
     ) -> "ProbeSetupSnapshot":
         return cls(
             pre_approach_path=tuple(deepcopy(draft.pre_approach_path)),
@@ -114,6 +119,7 @@ class ProbeSetupSnapshot:
             reference_camera_ids=tuple(reference_camera_ids),
             probe_point_ids=tuple(probe_point_ids),
             probe_point_target_surface_distances_m=tuple(probe_point_target_surface_distances_m),
+            routine_safe_position_tolerance_m=routine_safe_position_tolerance_m,
             has_base_position=bool(has_base_position),
             has_routine_safe_approach_pose=bool(has_routine_safe_approach_pose),
             reference_pixel=deepcopy(draft.reference_pixel),

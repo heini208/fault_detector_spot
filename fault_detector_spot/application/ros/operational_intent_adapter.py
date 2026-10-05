@@ -255,6 +255,7 @@ def operational_intent_to_command(
         )
 
     return SemanticCommand(
+        tag_position_tolerance_m=float(intent.tag_position_tolerance_m),
         command_id=command_id,
         tag=tag,
         offset=stamped_pose_from_message(intent.offset),

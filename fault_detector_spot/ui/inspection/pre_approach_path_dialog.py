@@ -1,7 +1,7 @@
 """Present server-owned pre-approach path editing and movement intents."""
 
 from PyQt5.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QVBoxLayout,
+    QDialog, QDoubleSpinBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QVBoxLayout,
 )
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupMotionIntent
 
@@ -36,6 +36,12 @@ class PreApproachPathDialog(QDialog):
         self.name_field = QLineEdit()
         self.name_field.setPlaceholderText("Pathing point name")
         layout.addWidget(self.name_field)
+        layout.addWidget(QLabel("New pathing point position tolerance [m]:"))
+        self.tolerance_field = QDoubleSpinBox()
+        self.tolerance_field.setDecimals(3)
+        self.tolerance_field.setRange(.001, 1.)
+        self.tolerance_field.setValue(.01)
+        layout.addWidget(self.tolerance_field)
         self.name_error_label = QLabel()
         self.name_error_label.setWordWrap(True)
         layout.addWidget(self.name_error_label)
@@ -66,6 +72,9 @@ class PreApproachPathDialog(QDialog):
             self.points.addItems(names)
             self.points.setCurrentRow(min(max(row, 0), len(names) - 1))
             self.points.blockSignals(False)
+        if state is not None:
+            for index, tolerance in enumerate(state.pathing_point_tolerances_m):
+                self.points.item(index).setToolTip(f"Position tolerance: {tolerance:g} m")
         self._update_buttons()
         if state is None or not state.refinement_active:
             self.hide()
@@ -87,11 +96,13 @@ class PreApproachPathDialog(QDialog):
         self.name_error_label.setVisible(duplicate)
         self.add_button.setEnabled(self._enabled and bool(name) and not duplicate)
         self.name_field.setEnabled(self._enabled)
+        self.tolerance_field.setEnabled(self._enabled)
 
     def _add(self):
         intent = ProbeSetupIntent()
         intent.operation = ProbeSetupIntent.OPERATION_ADD_PATHING_POINT
         intent.pathing_point_name = self.name_field.text().strip()
+        intent.position_tolerance_m = self.tolerance_field.value()
         if self.controls._submit_probe_setup(intent):
             self._enabled = False
             self._update_buttons()

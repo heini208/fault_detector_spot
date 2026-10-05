@@ -64,6 +64,8 @@ class ProbeSetupStateAdapter:
         message.probe_point_target_surface_distances_m = list(
             snapshot.probe_point_target_surface_distances_m
         )
+        message.routine_safe_position_tolerance_m = snapshot.routine_safe_position_tolerance_m
+        message.pathing_point_tolerances_m = [point.position_tolerance_m for point in snapshot.pre_approach_path]
         message.pathing_point_names = [point.name for point in snapshot.pre_approach_path]
         message.pathing_point_poses_object = [
             pose_data_to_pose(point.pose_object) for point in snapshot.pre_approach_path

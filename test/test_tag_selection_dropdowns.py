@@ -95,3 +95,14 @@ def test_visible_tag_message_refreshes_both_movement_dropdowns():
 
     assert sorted(ui.visible_tags) == [2, 9]
     assert calls == ["manipulation", "base"]
+
+
+def test_move_to_tag_ui_passes_selected_accuracy_tolerance(monkeypatch):
+    from fault_detector_msgs.msg import OperationalIntent
+    controls = object.__new__(ManipulationControls)
+    controls.ui = _Parent([2])
+    controls._make_tag_input_row()
+    controls.tag_tolerance_input.setValue(.025)
+    monkeypatch.setattr(controls, "add_tag_element_to_intent", lambda intent: intent)
+    monkeypatch.setattr(controls, "add_offset_to_intent", lambda intent: intent)
+    assert controls.add_tag_info_to_intent(OperationalIntent()).tag_position_tolerance_m == .025

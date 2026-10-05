@@ -86,3 +86,44 @@ def test_path_failure_discards_final_and_remaining_points():
     manager.update()
     assert manager.blackboard.command_buffer == []
     assert manager.blackboard.last_command == steps[0]
+
+
+def test_tag_tolerance_survives_recording_transport_and_each_path_leg():
+    from dataclasses import replace
+    command = replace(path_command(), tag_position_tolerance_m=.025, pre_approach_tolerances_m=(.03, .04))
+    message = semantic_command_to_message(command)
+    assert message.tag_position_tolerance_m == .025
+    restored = semantic_command_from_message(message)
+    recorded = serialize_recorded_command(restored)
+    assert deserialize_recorded_command(recorded).tag_position_tolerance_m == .025
+    assert [step.tag_position_tolerance_m for step in executable_path(restored)] == [.03, .04, .025]
+    del recorded["tag_position_tolerance_m"]
+    assert deserialize_recorded_command(recorded).tag_position_tolerance_m == .01
+
+
+@pytest.mark.parametrize("tolerance", [0., -.1, float("nan"), float("inf")])
+def test_invalid_tag_tolerance_is_rejected(tolerance):
+    from dataclasses import replace
+    with pytest.raises(ValueError, match="Tag position tolerance"):
+        replace(path_command(), tag_position_tolerance_m=tolerance)
+
+
+def test_operational_move_to_tag_accepts_position_tolerance():
+    from fault_detector_msgs.msg import OperationalIntent
+    from fault_detector_spot.application.ros.operational_intent_adapter import operational_intent_to_command
+    intent = OperationalIntent()
+    intent.intent = OperationalIntent.INTENT_MOVE_ARM_TO_TAG
+    intent.tag.id = 7
+    intent.tag.pose.header.frame_id = "body"
+    from fault_detector_spot.shared.geometry.movement_frames import OrientationModes
+    intent.orientation_mode = next(iter(OrientationModes)).value
+    intent.offset.header.frame_id = "body"
+    intent.tag_position_tolerance_m = .025
+    assert operational_intent_to_command(intent).tag_position_tolerance_m == .025
+
+
+@pytest.mark.parametrize("tolerances", [(.01,), (.01, 0.), (.01, float("nan"))])
+def test_path_tolerance_count_and_values_are_validated(tolerances):
+    from dataclasses import replace
+    with pytest.raises(ValueError):
+        replace(path_command(), pre_approach_tolerances_m=tolerances)

@@ -209,15 +209,15 @@ class ProbeSetupApi:
         return self.coordinator.delete_pathing_point(context, int(intent.pathing_point_index))
 
     def _add_pathing_point(self, context, intent):
-        return self.coordinator.add_pathing_point(context, intent.pathing_point_name)
+        return self.coordinator.add_pathing_point(context, intent.pathing_point_name, intent.position_tolerance_m)
 
     def _reorder_pathing_point(self, context, intent):
         return self.coordinator.reorder_pathing_point(
             context, int(intent.pathing_point_index), int(intent.pathing_point_direction)
         )
 
-    def _save_routine_safe_approach_pose(self, context, _intent):
-        return self.coordinator.save_routine_safe_approach_pose(context)
+    def _save_routine_safe_approach_pose(self, context, intent):
+        return self.coordinator.save_routine_safe_approach_pose(context, intent.position_tolerance_m)
 
     def _save_base_position(self, context, _intent):
         return self.coordinator.save_base_position(context)
@@ -246,8 +246,8 @@ class ProbeSetupApi:
     def _approve_safe_pose(self, context, _intent):
         return self.coordinator.approve_safe_pose(context)
 
-    def _approve_aligned_pose(self, context, _intent):
-        return self.coordinator.approve_aligned_pose(context)
+    def _approve_aligned_pose(self, context, intent):
+        return self.coordinator.approve_aligned_pose(context, intent.position_tolerance_m)
 
     def _begin_refinement(self, context, _intent):
         return self.coordinator.begin_refinement(context)

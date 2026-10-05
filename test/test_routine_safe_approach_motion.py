@@ -30,6 +30,7 @@ def intent():
 def test_routine_motion_resolves_shared_pose_without_any_probe_points():
     definition = _definition()
     routine = definition.get_routine("scan")
+    routine.safe_approach_position_tolerance_m = .045
     routine.safe_approach_pose_object = PoseData.identity()
     routine.safe_approach_pose_object.position.z = 0.3
     source = Mock()
@@ -39,6 +40,7 @@ def test_routine_motion_resolves_shared_pose_without_any_probe_points():
         Mock(require_motion_attachment=Mock(return_value=sensor())),
         ProbeSetupMotionCommandFactory(),
     )
+    assert command.tag_position_tolerance_m == .045
     assert routine.probe_points == []
     assert command.command_id is CommandID.MOVE_SAFE_APPROACH
     assert command.inspection.object_id == "motor"

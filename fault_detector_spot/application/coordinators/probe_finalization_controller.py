@@ -254,7 +254,8 @@ class ProbeFinalizationController:
                 setup.surface_target.target_surface_distance_m
             ),
             position_tolerance_m=float(
-                position_tolerance_m
+                draft.aligned_position_tolerance_m
+                if draft.aligned_position_tolerance_m is not None else position_tolerance_m
             ),
             orientation_tolerance_rad=float(
                 orientation_tolerance_rad

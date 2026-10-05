@@ -131,6 +131,14 @@ class ManipulationControls(UIControlHelper):
         self.submit_button.clicked.connect(self.handle_tag_selection)
         row.addWidget(self.tag_dropdown)
         row.addWidget(self.submit_button)
+        row.addWidget(QLabel("Position tolerance [m]:"))
+        self.tag_tolerance_input = QDoubleSpinBox()
+        self.tag_tolerance_input.setDecimals(3)
+        self.tag_tolerance_input.setRange(0.001, 0.100)
+        self.tag_tolerance_input.setSingleStep(0.001)
+        self.tag_tolerance_input.setValue(0.01)
+        self.tag_tolerance_input.setToolTip("Check position after movement and make one slow adjustment if needed")
+        row.addWidget(self.tag_tolerance_input)
 
         row.addWidget(QLabel("Wait (s):"))
         self.duration_input = QDoubleSpinBox()
@@ -463,6 +471,7 @@ class ManipulationControls(UIControlHelper):
         return q
 
     def add_tag_info_to_intent(self, intent: OperationalIntent):
+        intent.tag_position_tolerance_m = self.tag_tolerance_input.value()
         intent = self.add_tag_element_to_intent(intent)
         return self.add_offset_to_intent(intent)
 

@@ -184,21 +184,26 @@ class PreApproachPathPoint:
 
     name: str
     pose_object: PoseData
+    position_tolerance_m: float = 0.01
 
     def validate(self) -> None:
         _require_text(self.name, "Pathing point name")
         self.pose_object.validate()
+        if not math.isfinite(self.position_tolerance_m) or self.position_tolerance_m <= 0:
+            raise ValueError("Pathing point tolerance must be positive and finite")
 
     @classmethod
     def from_dict(cls, data):
         data = _require_dict(data, "pre_approach_path_point")
-        point = cls(str(data["name"]), PoseData.from_dict(data["pose_object"]))
+        point = cls(str(data["name"]), PoseData.from_dict(data["pose_object"]),
+                    float(data.get("position_tolerance_m", .01)))
         point.validate()
         return point
 
     def to_dict(self):
         self.validate()
-        return {"name": self.name, "pose_object": self.pose_object.to_dict()}
+        return {"name": self.name, "pose_object": self.pose_object.to_dict(),
+                "position_tolerance_m": self.position_tolerance_m}
 
 
 @dataclass
@@ -355,6 +360,7 @@ class InspectionRoutine:
     base_position: Optional[PoseData] = None
     # Shared probe-tip pose in the object frame, resolved through calibration.
     safe_approach_pose_object: Optional[PoseData] = None
+    safe_approach_position_tolerance_m: float = 0.1
     reference_views: List[ReferenceView] = field(
         default_factory=list
     )
@@ -390,6 +396,7 @@ class InspectionRoutine:
                 if data.get("base_position") is not None
                 else None
             ),
+            safe_approach_position_tolerance_m=float(data.get("safe_approach_position_tolerance_m", .1)),
             safe_approach_pose_object=(
                 PoseData.from_dict(data["safe_approach_pose_object"])
                 if data.get("safe_approach_pose_object") is not None
@@ -412,6 +419,8 @@ class InspectionRoutine:
             "Routine display name",
         )
         self.reference_tag.validate()
+        if not math.isfinite(self.safe_approach_position_tolerance_m) or self.safe_approach_position_tolerance_m <= 0:
+            raise ValueError("Safe approach tolerance must be positive and finite")
         if self.safe_approach_pose_object is not None:
             self.safe_approach_pose_object.validate()
         if self.base_position is not None:
@@ -517,6 +526,7 @@ class InspectionRoutine:
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
+            "safe_approach_position_tolerance_m": self.safe_approach_position_tolerance_m,
             "routine_id": self.routine_id,
             "display_name": self.display_name,
             "reference_tag": self.reference_tag.to_dict(),

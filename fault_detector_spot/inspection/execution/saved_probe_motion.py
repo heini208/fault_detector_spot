@@ -49,11 +49,13 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
         raise RuntimeError("Live robot pose data is unavailable")
     if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH:
         pose = routine.require_safe_approach_pose()
+        tolerance = routine.safe_approach_position_tolerance_m
     elif intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH:
         state_source.validate_aligned_probe_distance(
             attachment.motion_sensor_id, point.aligned_preapproach_distance_m,
         )
         pose = point.aligned_preapproach_pose_object
+        tolerance = point.position_tolerance_m
     else:
         raise ValueError("Unsupported saved probe-point motion")
     tag = state_source.reference_tag(routine.reference_tag.tag_id)
@@ -66,6 +68,11 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
     return replace(
         factory.absolute(pose, tag, attachment.motion_sensor_id),
         pre_approach_offsets=offsets,
+        pre_approach_tolerances_m=(
+            tuple(p.position_tolerance_m for p in point.pre_approach_path)
+            if offsets else ()
+        ),
+        tag_position_tolerance_m=tolerance,
         inspection=selection,
     )
 
@@ -94,6 +101,7 @@ def routine_safe_approach_command(
         factory.absolute(
             pose, tag, attachment.motion_sensor_id, safe_approach=True,
         ),
+        tag_position_tolerance_m=routine.safe_approach_position_tolerance_m,
         inspection=InspectionSelection(
             object_id=intent.object_id, routine_id=intent.routine_id,
         ),

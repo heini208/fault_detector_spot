@@ -265,6 +265,10 @@ class ProbeRefinementController:
             purpose = stage.value
             # The routine safe pose only requires successful command completion.
             verify_achieved_pose = motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH
+        command = replace(command, tag_position_tolerance_m=(
+            self._selected_routine(draft).safe_approach_position_tolerance_m
+            if motion.kind is ProbeMotionKind.MOVE_SAFE_APPROACH else motion.position_tolerance_m
+        ))
         operation = self.setup_coordinator.prepare_command(
             context,
             command,
@@ -318,7 +322,17 @@ class ProbeRefinementController:
             for pose in path
         )
         operation = self.setup_coordinator.prepare_command(
-            context, replace(command, pre_approach_offsets=offsets)
+            context, replace(
+                command, pre_approach_offsets=offsets,
+                pre_approach_tolerances_m=(
+                    tuple(p.position_tolerance_m for p in draft.pre_approach_path)
+                    if final else ()
+                ),
+                tag_position_tolerance_m=(
+                    motion.position_tolerance_m if final
+                    else draft.pre_approach_path[index].position_tolerance_m
+                ),
+            )
         )
         refinement.begin_motion(PendingRefinementMotion(
             request_id=operation.request_id,

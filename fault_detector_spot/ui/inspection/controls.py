@@ -619,6 +619,10 @@ class InspectionControls(UIControlHelper):
         self.probe_point_display_name_field.setPlaceholderText(
             "Display name"
         )
+        self.routine_safe_tolerance_field = QLineEdit("0.1")
+        self.routine_safe_tolerance_field.setValidator(
+            self._distance_validator(self.routine_safe_tolerance_field)
+        )
         self.probe_position_tolerance_field = QLineEdit("0.01")
         self.probe_orientation_tolerance_field = QLineEdit("0.087")
         self.probe_measurement_duration_field = QLineEdit("1.0")
@@ -764,6 +768,8 @@ class InspectionControls(UIControlHelper):
             for row in controls.rows:
                 layout.addLayout(row)
             self.routine_arm_movement_controls = controls
+            layout.addWidget(QLabel("Safe pre-approach position tolerance [m]:"))
+            layout.addWidget(self.routine_safe_tolerance_field)
             self.save_routine_arm_pose_button = QPushButton(
                 "Save Current Pose as Routine Safe Pre-approach"
             )
@@ -781,6 +787,7 @@ class InspectionControls(UIControlHelper):
         self.routine_arm_pose_dialog.setWindowTitle(
             f"Safe Pre-approach Arm Pose — {state.selected_routine_id}"
         )
+        self.routine_safe_tolerance_field.setText(str(state.routine_safe_position_tolerance_m))
         self.routine_arm_movement_controls.update_tags_dropdown()
         self.routine_arm_movement_controls.update_frames_dropdown()
         self.routine_arm_pose_dialog.show()
@@ -796,6 +803,9 @@ class InspectionControls(UIControlHelper):
         intent = ProbeSetupIntent()
         intent.operation = (
             ProbeSetupIntent.OPERATION_SAVE_ROUTINE_SAFE_APPROACH_POSE
+        )
+        intent.position_tolerance_m = self._distance_value(
+            self.routine_safe_tolerance_field, "Safe pre-approach position tolerance",
         )
         if self._submit_probe_setup(intent) is None:
             return False
@@ -2945,6 +2955,9 @@ class InspectionControls(UIControlHelper):
         intent = ProbeSetupIntent()
         intent.operation = (
             ProbeSetupIntent.OPERATION_APPROVE_ALIGNED_POSE
+        )
+        intent.position_tolerance_m = self._distance_value(
+            self.probe_position_tolerance_field, "Final candidate position tolerance",
         )
         return self._submit_probe_setup(intent) is not None
 

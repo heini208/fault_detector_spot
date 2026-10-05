@@ -76,7 +76,10 @@ def test_full_path_visits_each_point_then_final_and_reports_one_result(tmp_path)
     factory.absolute = capture
     statuses = []
     probe.add_motion_status_listener(statuses.append)
-    operation = probe.prepare_motion(state.context, ProbeMotionRequest(ProbeMotionKind.MOVE_PRE_APPROACH_PATH))
+    operation = probe.prepare_motion(state.context, ProbeMotionRequest(
+        ProbeMotionKind.MOVE_PRE_APPROACH_PATH, position_tolerance_m=.025,
+    ))
+    assert operation.request.command.tag_position_tolerance_m == .025
     probe.submit_motion(operation)
     assert [target.position.x for target in targets] == [final.position.x, .9, .75]
     assert len(operation.request.command.pre_approach_offsets) == 2
@@ -217,3 +220,43 @@ def test_delete_rejects_missing_selection_and_active_motion(tmp_path):
         probe.delete_pathing_point(state.context, 0)
     commands.cancel(operation.request_id)
     assert snapshot(probe, state).pre_approach_path == state.pre_approach_path
+
+
+def test_waypoint_tolerances_persist_and_follow_reordered_points(tmp_path):
+    probe, commands = coordinator(tmp_path)
+    state = begin_setup(probe, commands, approved=True)
+    for name, tolerance in (("First", .02), ("Second", .04)):
+        state = probe.add_pathing_point(state.context, name, tolerance)
+    state = probe.reorder_pathing_point(state.context, 1, -1)
+    operation = probe.prepare_motion(state.context, ProbeMotionRequest(
+        ProbeMotionKind.MOVE_PATHING_POINT, pathing_point_index=0,
+        position_tolerance_m=.099,
+    ))
+    assert operation.request.command.tag_position_tolerance_m == .04
+    probe.submit_motion(operation)
+    commands.succeed(operation.request)
+    state = snapshot(probe, state)
+    probe.save_probe_point(state.context, "front", "Front", .03, .1, 1.)
+    point = probe.object_repository.load("motor").get_routine("magnetic_scan").get_probe_point("front")
+    assert [p.position_tolerance_m for p in point.pre_approach_path] == [.04, .02]
+    assert point.position_tolerance_m == .03
+
+
+def test_saved_final_uses_tolerance_from_alignment_approval(tmp_path):
+    probe, commands = coordinator(tmp_path)
+    state = begin_setup(probe, commands, approved=True)
+    state = probe.approve_aligned_pose(state.context, .035)
+    # Reapprove derived probe geometry after alignment approval.
+    state = probe.approve_probe_pose(state.context)
+    probe.save_probe_point(state.context, "front", "Front", .099, .1, 1.)
+    point = probe.object_repository.load("motor").get_routine("magnetic_scan").get_probe_point("front")
+    assert point.position_tolerance_m == .035
+
+
+def test_path_point_tolerance_defaults_for_existing_saved_data():
+    from fault_detector_spot.inspection.model.models import PreApproachPathPoint
+    point = PreApproachPathPoint("Existing", pose(.5), .035)
+    data = point.to_dict()
+    assert PreApproachPathPoint.from_dict(data).position_tolerance_m == .035
+    del data["position_tolerance_m"]
+    assert PreApproachPathPoint.from_dict(data).position_tolerance_m == .01

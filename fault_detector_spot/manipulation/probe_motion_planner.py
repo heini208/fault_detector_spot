@@ -552,6 +552,7 @@ class ProbeMotionPlanner:
     ) -> PoseStamped:
         current = PoseStamped()
         current.header.frame_id = frame_id
+        current.header.stamp = deepcopy(transform.header.stamp)
         current.pose = pose_data_to_pose(
             transform_to_pose_data(transform)
         )

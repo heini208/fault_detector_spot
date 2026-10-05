@@ -3,6 +3,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import wraps
+from math import isfinite
 from threading import RLock
 
 from fault_detector_spot.application.commanding.command_request import (
@@ -253,6 +254,12 @@ class ProbeSetupCoordinator:
                 object_ids,
             )
         )
+        safe_tolerance = .1
+        if draft.selected_object_id in object_ids and draft.selected_routine_id in routine_ids:
+            definition = self.object_repository.load(draft.selected_object_id)
+            routine = definition.get_routine(draft.selected_routine_id)
+            if routine is not None:
+                safe_tolerance = routine.safe_approach_position_tolerance_m
         distances = ()
         if probe_ids:
             definition = self.object_repository.load(draft.selected_object_id)
@@ -273,6 +280,7 @@ class ProbeSetupCoordinator:
             probe_point_target_surface_distances_m=distances,
             has_base_position=has_base_position,
             has_routine_safe_approach_pose=has_routine_safe_approach_pose,
+            routine_safe_position_tolerance_m=safe_tolerance,
         )
 
     @_serialized_transaction
@@ -418,7 +426,7 @@ class ProbeSetupCoordinator:
         return self._advance(draft)
 
     @_serialized_transaction
-    def save_routine_safe_approach_pose(self, context):
+    def save_routine_safe_approach_pose(self, context, position_tolerance_m=.1):
         """Capture the routine's shared, object-referenced probe-tip pose."""
         draft = self._draft(context)
         if not draft.selected_object_id or not draft.selected_routine_id:
@@ -432,7 +440,7 @@ class ProbeSetupCoordinator:
             )
         pose = self.refinement_controller.current_probe_pose(draft)
         self.definition_service.set_routine_safe_approach_pose(
-            draft.selected_object_id, draft.selected_routine_id, pose,
+            draft.selected_object_id, draft.selected_routine_id, pose, position_tolerance_m,
         )
         draft.clear_geometry()
         return self._advance(draft)
@@ -546,13 +554,18 @@ class ProbeSetupCoordinator:
     def approve_aligned_pose(
         self,
         context: SetupContextSnapshot,
+        position_tolerance_m=None,
     ) -> ProbeSetupSnapshot:
         """Approve one achieved surface-aligned pre-approach pose."""
+        if position_tolerance_m is not None:
+            if not isfinite(position_tolerance_m) or position_tolerance_m <= 0:
+                raise ValueError("Aligned position tolerance must be positive and finite")
         draft = self._selected_draft(context)
         self.refinement_controller.approve(
             draft,
             RefinementStage.ALIGNMENT,
         )
+        draft.aligned_position_tolerance_m = position_tolerance_m
         return self._advance(draft)
 
     @_serialized_transaction
@@ -755,7 +768,7 @@ class ProbeSetupCoordinator:
             return self._advance(draft)
 
     @_serialized_transaction
-    def add_pathing_point(self, context, name):
+    def add_pathing_point(self, context, name, position_tolerance_m=.01):
         """Capture a full tag-relative tip pose without changing final alignment."""
         draft = self._selected_draft(context)
         self.refinement_controller.require_refinement(draft)
@@ -767,7 +780,7 @@ class ProbeSetupCoordinator:
                for point in draft.pre_approach_path):
             raise ValueError("A pathing point with this name already exists")
         point = PreApproachPathPoint(
-            name, self.refinement_controller.current_probe_pose(draft)
+            name, self.refinement_controller.current_probe_pose(draft), position_tolerance_m
         )
         point.validate()
         draft.pre_approach_path.append(deepcopy(point))

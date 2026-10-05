@@ -39,9 +39,11 @@ def test_popup_captures_names_reorders_and_emits_selected_move(application):
     assert motions[-1].pathing_point_index == 0
     controls.apply_setup_state(state)
     popup.name_field.setText("Third point")
+    popup.tolerance_field.setValue(.035)
     popup.add_button.click()
     assert ui.requests[-1].operation == ProbeSetupIntent.OPERATION_ADD_PATHING_POINT
     assert ui.requests[-1].pathing_point_name == "Third point"
+    assert ui.requests[-1].position_tolerance_m == .035
     controls.apply_setup_state(state)
     dialog.move_path_button.click()
     assert motions[-1].operation == ProbeSetupMotionIntent.OPERATION_MOVE_PRE_APPROACH_PATH
@@ -95,4 +97,22 @@ def test_delete_selection_and_duplicate_name_feedback(application):
     assert popup.add_button.isEnabled()
     assert not popup.delete_button.isEnabled()
     assert not popup.name_error_label.text()
+    dialog.hide()
+
+
+def test_final_tolerance_is_only_shown_in_alignment_and_sent_on_save(application):
+    controls = FinalizingInspectionControls(FakeUI())
+    state = safe_state()
+    state.safe_approach_motion_state = state.MOTION_REACHED
+    state.alignment_motion_state = state.MOTION_REACHED
+    controls.apply_setup_state(state)
+    dialog = controls.refinement_dialog
+    dialog.show()
+    dialog.workflow_stack.setCurrentIndex(dialog.REFERENCE_PAGE)
+    assert not controls.probe_position_tolerance_field.isVisible()
+    dialog.show_stage(RefinementStage.ALIGNMENT)
+    assert controls.probe_position_tolerance_field.isVisible()
+    controls.probe_position_tolerance_field.setText("0.035")
+    controls.handle_use_current_alignment()
+    assert controls.ui.requests[-1].position_tolerance_m == .035
     dialog.hide()

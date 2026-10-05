@@ -55,10 +55,12 @@ def test_capture_is_routine_scoped_and_needs_no_reference_pixel(tmp_path):
     probe, commands = coordinator(tmp_path)
     state = create_selected_routine(probe, probe.open_context("probe-ui").context)
     probe.motion_state_source.pose = pose(x=0.9)
-    state = probe.save_routine_safe_approach_pose(state.context)
+    state = probe.save_routine_safe_approach_pose(state.context, .045)
+    assert state.routine_safe_position_tolerance_m == .045
     assert state.has_routine_safe_approach_pose
     assert state.reference_pixel is None
     routine = probe.object_repository.load("motor").get_routine("magnetic_scan")
+    assert routine.safe_approach_position_tolerance_m == .045
     assert routine.require_safe_approach_pose() == pose(x=0.9)
     assert commands.submitted == []
     commands.active = "busy"

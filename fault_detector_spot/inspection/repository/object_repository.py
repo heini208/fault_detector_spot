@@ -193,6 +193,7 @@ class ObjectRepository:
         object_id: str,
         routine_id: str,
         safe_approach_pose_object: PoseData,
+        position_tolerance_m: float = .1,
     ) -> InspectionObject:
         """Replace one routine's saved tag-relative safe pre-approach pose."""
         validate_storage_name(object_id, "object ID")
@@ -206,7 +207,8 @@ class ObjectRepository:
                 "Inspection routine does not exist: "
                 f"{object_id}/{routine_id}"
             )
-        stored_routine = replace(routine, safe_approach_pose_object=safe_approach_pose_object)
+        stored_routine = replace(routine, safe_approach_pose_object=safe_approach_pose_object,
+                                 safe_approach_position_tolerance_m=position_tolerance_m)
         stored_routine.validate()
         stored_definition = replace(
             definition,

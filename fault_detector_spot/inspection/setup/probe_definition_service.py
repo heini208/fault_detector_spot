@@ -112,13 +112,14 @@ class ProbeDefinitionService:
         object_id: str,
         routine_id: str,
         safe_approach_pose_object: PoseData,
+        position_tolerance_m: float = .1,
     ) -> tuple[str, str]:
         object_name = self._name(object_id, "object ID")
         routine_name = self._name(routine_id, "routine ID")
         self.object_repository.set_routine_safe_approach_pose(
             object_name,
             routine_name,
-            safe_approach_pose_object,
+            safe_approach_pose_object, position_tolerance_m,
         )
         return object_name, routine_name
 
