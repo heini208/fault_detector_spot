@@ -134,3 +134,34 @@ def test_final_step_returns_to_previous_aligned_candidate(application):
     dialog.move_safe_pose_button.click()
     assert motions[-1].operation == ProbeSetupMotionIntent.OPERATION_MOVE_SAFE_APPROACH
     dialog.hide()
+
+
+def test_custom_alignment_reuses_full_arm_controls_and_closes_on_navigation(application):
+    from unittest.mock import Mock
+    from fault_detector_msgs.msg import OperationalIntent
+    ui = FakeUI()
+    ui.update_tags_dropdown = lambda dropdown: None
+    ui.update_frames_dropdown = lambda dropdown: dropdown.addItem("body")
+    ui.execute_operation = Mock(return_value="operation")
+    controls = FinalizingInspectionControls(ui)
+    state = safe_state()
+    state.fully_custom = True
+    state.safe_approach_motion_state = state.MOTION_REACHED
+    controls.apply_setup_state(state)
+    dialog = controls.refinement_dialog
+    dialog.show_stage(RefinementStage.ALIGNMENT)
+    assert dialog.full_control_button.isVisible()
+    assert dialog.full_control_button.isEnabled()
+    dialog.full_control_button.click()
+    popup = dialog.full_control_dialog
+    assert popup.isVisible()
+    # The reused movement widget retains the existing operational command route.
+    from PyQt5.QtWidgets import QPushButton
+    move = next(button for button in popup.findChildren(QPushButton)
+                if button.text() == "Move Arm by Offset")
+    move.click()
+    assert ui.execute_operation.call_args.args[0].intent == OperationalIntent.INTENT_MOVE_ARM_RELATIVE
+    dialog.show_stage(RefinementStage.PROBE)
+    assert dialog.full_control_dialog is None
+    assert not dialog.full_control_button.isVisible()
+    dialog.hide()

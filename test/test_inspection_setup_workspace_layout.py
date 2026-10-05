@@ -216,7 +216,7 @@ def test_refinement_dialog_uses_stage_safe_controls(application, tmp_path):
     controls = FinalizingInspectionControls(FakeUI(tmp_path))
 
     assert not controls.refinement_dialog.isModal()
-    assert controls.refinement_dialog.stage_stack.count() == 5
+    assert controls.refinement_dialog.stage_stack.count() == 6
     assert controls.move_aligned_pose_button.text() == "Move to Final Candidate"
     assert controls.use_current_alignment_button.text() == (
         "Save Final Aligned Pre-approach Pose"

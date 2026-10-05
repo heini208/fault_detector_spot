@@ -4,11 +4,13 @@ from fault_detector_msgs.msg import ProbeSetupMotionIntent
 from .pre_approach_path_dialog import PreApproachPathDialog
 from .fine_adjustment_dialog import FineAdjustmentDialog
 from .speed_slider import SpeedSlider
+from ..manipulation.controls import ManipulationControls
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QDialog,
+    QDialogButtonBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -48,6 +50,7 @@ class ProbeRefinementDialog(QDialog):
         super().__init__(parent)
         self.controls = controls
         self.fully_custom = False
+        self.full_control_dialog = None
         self._force_close = False
         self._workflow_controls_attached = False
         self._reference_selection_enabled = False
@@ -411,6 +414,11 @@ class ProbeRefinementDialog(QDialog):
         for button in (self.add_pathing_point_button, self.move_path_button, self.move_safe_pose_button):
             path_actions.addWidget(button)
         content_layout.addLayout(path_actions)
+        self.full_control_button = QPushButton("Open Full Arm Controls")
+        self.full_control_button.setAutoDefault(False)
+        self.full_control_button.clicked.connect(self.open_full_arm_controls)
+        self.full_control_button.hide()
+        content_layout.addWidget(self.full_control_button)
         content_layout.addWidget(distance_widget)
 
         clearance_group = QGroupBox("Camera clearance recovery")
@@ -462,7 +470,49 @@ class ProbeRefinementDialog(QDialog):
             content,
         )
 
+    def open_full_arm_controls(self):
+        if not self.full_control_button.isEnabled() or not (
+            self.fully_custom
+            and self.controls._path_stage() == "alignment"
+            and self.controls._refinement_presentation is not None
+            and self.controls._refinement_presentation.active_stage is RefinementStage.ALIGNMENT
+        ):
+            return False
+        if self.full_control_dialog is None:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Full Arm Controls — Custom Pre-approach")
+            dialog.setAttribute(Qt.WA_DeleteOnClose)
+            dialog.setModal(False)
+            layout = QVBoxLayout(dialog)
+            hint = QLabel(
+                "Position the arm, then close this window and use Save Current "
+                "Pose as Candidate in the pre-approach setup."
+            )
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+            movement_controls = ManipulationControls(self.controls.ui)
+            for row in movement_controls.rows:
+                layout.addLayout(row)
+            close = QDialogButtonBox(QDialogButtonBox.Close)
+            close.rejected.connect(dialog.close)
+            layout.addWidget(close)
+            dialog.finished.connect(movement_controls.destroy)
+            dialog.finished.connect(self._full_controls_closed)
+            self.full_control_dialog = dialog
+        self.full_control_dialog.show()
+        self.full_control_dialog.raise_()
+        self.full_control_dialog.activateWindow()
+        return True
+
+    def _full_controls_closed(self, *_):
+        self.full_control_dialog = None
+
+    def _close_full_controls(self):
+        if self.full_control_dialog is not None:
+            self.full_control_dialog.close()
+
     def hideEvent(self, event):
+        self._close_full_controls()
         self.fine_adjustment_dialog.hide()
         self.path_dialog.hide()
         super().hideEvent(event)
@@ -472,6 +522,9 @@ class ProbeRefinementDialog(QDialog):
         final = self.controls._path_stage() == "probe"
         count = len(state.final_pathing_point_names if final else state.pathing_point_names) if state is not None else 0
         self.candidate_speed_field.setEnabled(enabled)
+        self.full_control_button.setEnabled(enabled)
+        if self.full_control_dialog is not None:
+            self.full_control_dialog.setEnabled(enabled)
         self.pathing_point_count_label.setText(f"Pathing points: {count}")
         for button in (self.add_pathing_point_button, self.move_path_button, self.move_safe_pose_button):
             button.setEnabled(enabled)
@@ -897,6 +950,8 @@ class ProbeRefinementDialog(QDialog):
         )
 
     def show_stage(self, stage):
+        self._close_full_controls()
+        self.full_control_button.setVisible(self.fully_custom and stage is RefinementStage.ALIGNMENT)
         index = self.STAGES.index(stage)
         self.workflow_stack.setCurrentIndex(self.ALIGNMENT_PAGE if self.fully_custom and stage is RefinementStage.PROBE else index + 1)
         self.aligned_distance_field.setVisible(not self.fully_custom)
