@@ -282,3 +282,102 @@ def test_cancel_monitor_finishes_without_further_bt_ticks():
         timer.callback()
     assert not executor.active
     timer.cancel.assert_called_once()
+
+
+def attach_monitor(executor):
+    timer = SimpleNamespace(cancel=Mock(), reset=Mock())
+
+    def create_timer(_period, callback, **options):
+        from rclpy.clock import ClockType
+        assert options["clock"].clock_type is ClockType.STEADY_TIME
+        timer.callback = callback
+        return timer
+
+    executor._node = SimpleNamespace(create_timer=create_timer, destroy_timer=Mock())
+    return timer
+
+
+@pytest.mark.parametrize("state", [ArmStowState.DEPLOYED, ArmStowState.UNKNOWN, None])
+@pytest.mark.parametrize("accepted", [False, True])
+def test_stow_guard_cancels_without_bt_ticks_and_preserves_failure(state, accepted):
+    executor, arm, base, client, send, clock, pose, events = rig()
+    timer = attach_monitor(executor)
+    prepare(executor, arm, base, pose)
+    result = ManualFuture()
+    handle = FakeGoalHandle(result)
+    if accepted:
+        send.set_result(handle)
+        executor.poll()
+    arm.state = state
+    timer.callback()
+    assert executor.cancelling
+    if not accepted:
+        send.set_result(handle)
+    assert handle.cancel_calls == 1
+    assert executor.active
+    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    timer.callback()
+    for value in (0.1, 0.7):
+        clock.now = value
+        timer.callback()
+    assert not executor.active
+    assert executor.poll().outcome is Outcome.FAILURE
+    assert "Stowed-arm feedback lost" in executor.poll().detail
+    timer.cancel.assert_called_once()
+    # A new request must not inherit the preceding terminal failure.
+    arm.state = ArmStowState.STOWED
+    client.send_goal_async.side_effect = lambda _goal: ManualFuture()
+    assert executor.navigate(pose).outcome is Outcome.RUNNING
+    assert executor.poll().outcome is Outcome.RUNNING
+
+
+def test_goal_response_watchdog_runs_without_bt_ticks():
+    executor, arm, base, client, send, clock, pose, events = rig()
+    timer = attach_monitor(executor)
+    prepare(executor, arm, base, pose)
+    timer.callback()
+    assert not executor.cancelling
+    clock.now = 2.1
+    timer.callback()
+    assert executor.cancelling
+    handle = FakeGoalHandle(ManualFuture())
+    send.set_result(handle)
+    assert handle.cancel_calls == 1
+
+
+def test_navigation_monitor_stops_on_success_and_shutdown():
+    executor, arm, base, client, send, clock, pose, events = rig()
+    timer = attach_monitor(executor)
+    prepare(executor, arm, base, pose)
+    result = ManualFuture()
+    handle = FakeGoalHandle(result)
+    send.set_result(handle)
+    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
+    assert executor.poll().outcome is Outcome.SUCCESS
+    timer.cancel.assert_called_once()
+    arm.state = ArmStowState.DEPLOYED
+    timer.callback()
+    assert handle.cancel_calls == 0
+    executor.shutdown()
+    executor._node.destroy_timer.assert_called_once_with(timer)
+    timer.callback()
+    assert executor.navigate(pose).outcome is Outcome.FAILURE
+
+
+def test_guard_error_cancels_and_shutdown_disables_queued_monitor_callback():
+    executor, arm, base, client, send, clock, pose, events = rig()
+    timer = attach_monitor(executor)
+    prepare(executor, arm, base, pose)
+    handle = FakeGoalHandle(ManualFuture())
+    send.set_result(handle)
+    arm.arm_state_source.stow_state = Mock(side_effect=RuntimeError("feedback unavailable"))
+    timer.callback()
+    assert executor.cancelling
+    assert handle.cancel_calls == 1
+    assert executor.poll().outcome is Outcome.RUNNING
+    assert "feedback unavailable" in executor.poll().detail
+    executor.shutdown()
+    executor._node.destroy_timer.assert_called_once_with(timer)
+    timer.callback()
+    assert handle.cancel_calls == 1
+    assert executor._monitor_timer is None

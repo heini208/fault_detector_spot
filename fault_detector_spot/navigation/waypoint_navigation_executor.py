@@ -50,7 +50,9 @@ class WaypointNavigationExecutor:
             raise ValueError("Nav2 goal response timeout must be positive and finite")
         self._node = node
         self._lock = RLock()
-        self._cancel_timer = None
+        self._monitor_timer = None
+        self._closed = False
+        self._terminal_update = None
         self._cancel_terminal = False
         self._stop_verifier = None
         self._cancel_detail = ""
@@ -77,9 +79,13 @@ class WaypointNavigationExecutor:
             return self._navigate(goal_pose)
 
     def _navigate(self, goal_pose):
+        if self._closed:
+            return WaypointNavigationUpdate(WaypointNavigationOutcome.FAILURE,
+                                            "Navigation executor is shut down")
         if self.active or self.arm_executor.active or self.base_executor.active:
             return WaypointNavigationUpdate(WaypointNavigationOutcome.BUSY,
                                             "Waypoint or robot movement is already active")
+        self._terminal_update = None
         if not isinstance(goal_pose, PoseStamped) or goal_pose.header.frame_id != "map":
             return self._failure("Waypoint requires a map-frame PoseStamped")
         self._goal_pose = deepcopy(goal_pose)
@@ -135,6 +141,7 @@ class WaypointNavigationExecutor:
             return self._failure("Nav2 returned no goal response future")
         self._sent_at = self._clock()
         self._phase = _Phase.WAITING_FOR_GOAL
+        self._start_monitor()
         return self._running("Prepared arm and height; waiting for Nav2 goal acceptance")
 
     def poll(self):
@@ -142,6 +149,8 @@ class WaypointNavigationExecutor:
             return self._poll()
 
     def _poll(self):
+        if self._terminal_update is not None:
+            return self._terminal_update
         if not self.active:
             return WaypointNavigationUpdate(WaypointNavigationOutcome.FAILURE,
                                             "No waypoint navigation is active")
@@ -150,12 +159,11 @@ class WaypointNavigationExecutor:
         try:
             if self._phase in {_Phase.STOWING, _Phase.PREPARING_BASE}:
                 return self._preparation_update(self._owned_preparation.poll())
-            if not self._arm_is_stowed():
-                return self._failure("Stowed-arm feedback lost during navigation")
+            failure = self._navigation_guard_failure()
+            if failure is not None:
+                return self._failure(failure)
             if self._phase is _Phase.WAITING_FOR_GOAL:
                 if not self._send_future.done():
-                    if self._clock() - self._sent_at >= self.goal_response_timeout_sec:
-                        return self._failure("Nav2 goal response timed out")
                     return self._running("Waiting for Nav2 goal acceptance")
                 self._goal_handle = self._send_future.result()
                 if self._goal_handle is None or not self._goal_handle.accepted:
@@ -185,20 +193,55 @@ class WaypointNavigationExecutor:
                 return
             self._phase = _Phase.CANCELLING
             self._cancel_detail = "Waiting for Nav2 cancellation"
-            if self._node is not None and self._cancel_timer is None:
-                self._cancel_timer = self._node.create_timer(
-                    0.05, self._poll_cancellation,
-                    clock=Clock(clock_type=ClockType.STEADY_TIME),
-                    callback_group=MutuallyExclusiveCallbackGroup(),
-                )
-            elif self._cancel_timer is not None:
-                self._cancel_timer.reset()
+            self._start_monitor()
             if self._owned_preparation is not None:
                 self._owned_preparation.cancel()
             if self._send_future is None:
                 self._cancel_terminal = True
                 return
             self._send_future.add_done_callback(self._cancel_accepted)
+
+    def _navigation_guard_failure(self):
+        if not self._arm_is_stowed():
+            return "Stowed-arm feedback lost during navigation"
+        if (self._phase is _Phase.WAITING_FOR_GOAL
+                and not self._send_future.done()
+                and self._clock() - self._sent_at >= self.goal_response_timeout_sec):
+            return "Nav2 goal response timed out"
+        return None
+
+    def _start_monitor(self):
+        if self._closed or self._node is None:
+            return
+        if self._monitor_timer is None:
+            self._monitor_timer = self._node.create_timer(
+                0.05, self._monitor_navigation,
+                clock=Clock(clock_type=ClockType.STEADY_TIME),
+                callback_group=MutuallyExclusiveCallbackGroup(),
+            )
+        else:
+            self._monitor_timer.reset()
+
+    def _monitor_navigation(self):
+        """Check runtime guards and stopping even when the tree is not ticking."""
+        with self._lock:
+            if self._closed or not self.active:
+                return
+            if self.cancelling:
+                update = self._poll_cancellation()
+            elif self._phase in {_Phase.WAITING_FOR_GOAL, _Phase.NAVIGATING}:
+                try:
+                    failure = self._navigation_guard_failure()
+                except Exception as exception:
+                    failure = f"Navigation guard failed: {exception}"
+                if failure is None:
+                    return
+                update = self._failure(failure)
+            else:
+                return
+            if update.outcome is not WaypointNavigationOutcome.RUNNING:
+                # Preserve failures completed between behavior-tree ticks.
+                self._terminal_update = update
 
     def _cancel_accepted(self, future):
         with self._lock:
@@ -259,15 +302,17 @@ class WaypointNavigationExecutor:
                 return self._running(self._cancel_detail)
 
     def shutdown(self):
-        self.cancel()
-        if self._cancel_timer is not None:
-            self._node.destroy_timer(self._cancel_timer)
-            self._cancel_timer = None
-        self.action_client.destroy()
+        with self._lock:
+            self.cancel()
+            self._closed = True
+            if self._monitor_timer is not None:
+                self._node.destroy_timer(self._monitor_timer)
+                self._monitor_timer = None
+            self.action_client.destroy()
 
     def _clear(self):
-        if self._cancel_timer is not None:
-            self._cancel_timer.cancel()
+        if self._monitor_timer is not None:
+            self._monitor_timer.cancel()
         self._cancel_terminal = False
         self._stop_verifier = None
         self._phase = None
