@@ -24,6 +24,7 @@ def test_recording_confirmation_controls_submission(application, monkeypatch, re
     parent = QWidget()
     parent.node = Mock()
     controls = RecordingControls(parent)
+    controls.update_recording_state(False)
     controls.record_name_field.setText("existing")
     controls.recordings_dropdown.clear()
     controls.recordings_dropdown.addItem("existing")
@@ -75,3 +76,48 @@ def test_movement_callers_use_boolean_confirmation(monkeypatch, reply, handler):
         execute.assert_called_once_with(intent)
     else:
         execute.assert_not_called()
+
+
+def test_recording_button_waits_for_backend_state(application):
+    from std_msgs.msg import Bool
+
+    parent = QWidget()
+    parent.node = Mock()
+    controls = RecordingControls(parent)
+    callbacks = {
+        call.args[1]: call.args[2]
+        for call in parent.node.create_subscription.call_args_list
+    }
+    acknowledge = callbacks["fault_detector/recording_state"]
+    assert not controls.record_button.isEnabled()
+    controls.toggle_recording()
+    controls.record_control_pub.publish.assert_not_called()
+
+    acknowledge(Bool(data=False))
+    application.processEvents()
+    controls.record_name_field.setText("run")
+    controls.toggle_recording()
+    assert controls.record_control_pub.publish.call_args.args[0].mode == "start"
+    assert controls.record_button.text() == "Start Recording"
+    assert controls.record_button.styleSheet() == ""
+
+    # Rejected start leaves the backend and button idle.
+    acknowledge(Bool(data=False))
+    application.processEvents()
+    assert controls.record_button.text() == "Start Recording"
+    # A successful start, including one from another client, updates the button.
+    acknowledge(Bool(data=True))
+    application.processEvents()
+    assert controls.record_button.text() == "Stop Recording"
+    assert not controls.record_name_field.isEnabled()
+    controls.toggle_recording()
+    assert controls.record_control_pub.publish.call_args.args[0].mode == "stop"
+    assert controls.record_button.text() == "Stop Recording"
+    acknowledge(Bool(data=True))  # Saving failed: recording remains active.
+    application.processEvents()
+    assert controls.record_button.text() == "Stop Recording"
+    acknowledge(Bool(data=False))
+    application.processEvents()
+    assert controls.record_button.text() == "Start Recording"
+    assert controls.record_name_field.isEnabled()
+    parent.close()

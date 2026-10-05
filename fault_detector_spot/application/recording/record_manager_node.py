@@ -65,6 +65,11 @@ class RecordManager(Node):
             "fault_detector/recordings_list",
             LATCHED_QOS,
         )
+        self.recording_state_pub = self.create_publisher(
+            Bool,
+            "fault_detector/recording_state",
+            LATCHED_QOS,
+        )
         self.playback_state_pub = self.create_publisher(
             Bool,
             "fault_detector/playback_state",
@@ -95,6 +100,7 @@ class RecordManager(Node):
             10,
         )
         self.publish_recordings_list()
+        self.publish_recording_state()
 
     def handle_control(self, message: CommandRecordControl):
         mode = message.mode.lower()
@@ -110,8 +116,18 @@ class RecordManager(Node):
                 self.delete_recording(name)
         except (OSError, TypeError, ValueError) as exception:
             self.get_logger().error(f"Recording {mode} request failed: {exception}")
+        finally:
+            if mode in {"start", "stop"}:
+                self.publish_recording_state()
+
+    def publish_recording_state(self):
+        """Publish actual state, including after a rejected start or failed save."""
+        self.recording_state_pub.publish(Bool(data=self.recording))
 
     def start_recording(self, name: str):
+        if self.recording:
+            self.get_logger().warning("Recording is already active.")
+            return
         if not name:
             self.get_logger().warning("Recording name is empty, ignoring.")
             return

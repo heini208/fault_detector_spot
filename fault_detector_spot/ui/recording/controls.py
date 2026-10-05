@@ -1,3 +1,5 @@
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
+from std_msgs.msg import Bool
 from PyQt5.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QComboBox
 
 from fault_detector_msgs.msg import CommandRecordControl
@@ -6,13 +8,26 @@ from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 from ..shared.control_helper import UIControlHelper
 
 
+class _RecordingSignals(QObject):
+    state_changed = pyqtSignal(bool)
+    list_changed = pyqtSignal(object)
+
+
 class RecordingControls(UIControlHelper):
     def __init__(self, parent_ui):
+        self._recording = None
+        self._signals = _RecordingSignals(parent_ui)
+        self._signals.state_changed.connect(self.update_recording_state, Qt.QueuedConnection)
+        self._signals.list_changed.connect(self.update_recordings_dropdown, Qt.QueuedConnection)
         super().__init__(parent_ui)
 
     def init_ros_communication(self):
         self.recordings_list_sub = self.node.create_subscription(
-            StringArray, "fault_detector/recordings_list", self.update_recordings_dropdown, LATCHED_QOS
+            StringArray, "fault_detector/recordings_list", self._signals.list_changed.emit, LATCHED_QOS
+        )
+        self.recording_state_sub = self.node.create_subscription(
+            Bool, "fault_detector/recording_state",
+            lambda message: self._signals.state_changed.emit(message.data), LATCHED_QOS,
         )
         self.record_control_pub = self.node.create_publisher(
             CommandRecordControl, "fault_detector/record_control", 10
@@ -32,7 +47,8 @@ class RecordingControls(UIControlHelper):
         self.record_name_field.setFixedWidth(250)
         row.addWidget(self.record_name_field)
 
-        self.record_button = QPushButton("Start Recording")
+        self.record_button = QPushButton("Waiting for recording state")
+        self.record_button.setEnabled(False)
         self.record_button.clicked.connect(self.toggle_recording)
         row.addWidget(self.record_button)
 
@@ -51,15 +67,17 @@ class RecordingControls(UIControlHelper):
         return row
 
     def toggle_recording(self):
+        if self._recording is None:
+            return
         name = self.record_name_field.text().strip()
 
         # Prevent starting without a name
-        if self.record_button.text() == "Start Recording" and not name:
+        if not self._recording and not name:
             self.show_warning("Missing name", "Please enter a recording name before starting.")
             return
 
         # Check for overwrite if starting
-        if self.record_button.text() == "Start Recording":
+        if not self._recording:
             # Compare against dropdown list of existing recordings
             existing_names = [self.recordings_dropdown.itemText(i)
                               for i in range(self.recordings_dropdown.count())]
@@ -73,16 +91,17 @@ class RecordingControls(UIControlHelper):
         msg = CommandRecordControl()
         msg.name = name
 
-        if self.record_button.text() == "Start Recording":
-            msg.mode = "start"
-            self.record_button.setText("Stop Recording")
-            self.record_button.setStyleSheet("background-color: red; color: white; font-weight: bold;")
-        else:
-            msg.mode = "stop"
-            self.record_button.setText("Start Recording")
-            self.record_button.setStyleSheet("")  # Reset to default
-
+        msg.mode = "stop" if self._recording else "start"
         self.record_control_pub.publish(msg)
+
+    def update_recording_state(self, recording):
+        self._recording = recording
+        self.record_button.setEnabled(True)
+        self.record_button.setText("Stop Recording" if recording else "Start Recording")
+        self.record_button.setStyleSheet(
+            "background-color: red; color: white; font-weight: bold;" if recording else ""
+        )
+        self.record_name_field.setEnabled(not recording)
 
     def play_selected_recording(self):
         msg = CommandRecordControl()

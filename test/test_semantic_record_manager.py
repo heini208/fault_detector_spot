@@ -293,6 +293,7 @@ def test_playback_stops_and_discards_remaining_commands_on_failure():
 
 
 class RecordingStorageHarness(RecordManagerHarness):
+    publish_recording_state = RecordManager.publish_recording_state
     handle_control = RecordManager.handle_control
     start_recording = RecordManager.start_recording
     stop_recording = RecordManager.stop_recording
@@ -306,6 +307,7 @@ class RecordingStorageHarness(RecordManagerHarness):
         self.recordings_dir = str(root)
         self.current_name = None
         self.list_pub = FakePublisher()
+        self.recording_state_pub = FakePublisher()
 
     def control(self, mode, name=""):
         from fault_detector_msgs.msg import CommandRecordControl
@@ -380,3 +382,27 @@ def test_valid_recording_storage_lifecycle(tmp_path):
     assert not (tmp_path / "inspection run-1.json").exists()
     assert manager.list_pub.messages[-1].names == []
     assert not manager.logger.error_messages
+
+
+def test_recording_state_reports_actual_start_stop_and_failures(tmp_path, monkeypatch):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.publish_recording_state()
+    manager.control("start", "../invalid")
+    manager.control("start", "valid")
+    manager.temp_data.append({"pending": True})
+    manager.control("start", "duplicate")
+    assert manager.current_name == "valid"
+    assert manager.temp_data == [{"pending": True}]
+
+    def fail_open(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("builtins.open", fail_open)
+        manager.control("stop")
+    assert manager.recording
+    assert manager.temp_data == [{"pending": True}]
+    manager.control("stop")
+    assert [message.data for message in manager.recording_state_pub.messages] == [
+        False, False, True, True, True, False,
+    ]
