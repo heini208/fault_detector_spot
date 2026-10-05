@@ -356,3 +356,29 @@ def test_idle_map_selection_does_not_launch_processes(runtime):
     assert launches == []
     assert manager.bb.active_map_name == "plant"
     assert manager.get_running_mode() == manager.MODE_NONE
+
+
+def test_runtime_status_reports_unexpected_exit_and_partial_localization(runtime):
+    from diagnostic_msgs.msg import DiagnosticStatus
+
+    manager, _, _ = runtime
+    manager.start_mapping("plant")
+    manager._publish_runtime_status()
+    status = manager._status_pub.publish.call_args.args[0]
+    assert status.level == DiagnosticStatus.OK
+    assert {item.key: item.value for item in status.values}["mode"] == "mapping"
+    manager.set_mode_localization()
+    manager._publish_runtime_status()
+    status = manager._status_pub.publish.call_args.args[0]
+    assert status.level == DiagnosticStatus.ERROR
+    assert "Nav2 is not running" in status.message
+    assert {item.key: item.value for item in status.values}["mode"] == "localization"
+    manager.process.alive = False
+    manager._publish_runtime_status()
+    status = manager._status_pub.publish.call_args.args[0]
+    assert status.level == DiagnosticStatus.ERROR
+    assert "exited unexpectedly" in status.message
+    assert {item.key: item.value for item in status.values}["mode"] == "none"
+    timer = manager._status_timer
+    manager.close()
+    manager.node.destroy_timer.assert_called_once_with(timer)

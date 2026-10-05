@@ -90,6 +90,7 @@ def activate_mapping(navigation, boundary, context, map_name):
         command_id=CommandID.START_SLAM,
         map_name=map_name,
     )
+    navigation.observe_runtime(MODE_MAPPING, "plant")
     boundary.emit(
         operation.request,
         CommandControllerState.SUCCEEDED,
@@ -158,6 +159,7 @@ def test_runtime_operation_uses_semantic_nonrecordable_command(tmp_path):
     assert operation.request.command.command_id is CommandID.START_SLAM
     assert operation.request.command.map_name == "plant"
 
+    navigation.observe_runtime(MODE_MAPPING, "plant")
     boundary.emit(
         operation.request,
         CommandControllerState.SUCCEEDED,
@@ -473,3 +475,37 @@ def test_coordinator_shutdown_releases_deferred_contexts(tmp_path):
     navigation.close()
     assert boundary.cancelled == [operation.request_id]
     assert navigation.setup_coordinator.contexts == ()
+
+
+def test_runtime_observation_is_authoritative_over_command_success(tmp_path):
+    navigation, boundary = coordinator(tmp_path)
+    owner = navigation.open_context("owner").context
+    owner = navigation.create_and_select_map(owner, "plant").context
+    statuses = []
+    navigation.add_status_listener(statuses.append)
+    operation = navigation.submit_runtime_operation(owner, 1, CommandID.START_SLAM, "plant")
+    navigation.observe_runtime("none", "plant", "RTAB-Map process exited unexpectedly")
+    boundary.emit(operation.request, CommandControllerState.SUCCEEDED)
+    assert statuses[-1].snapshot.mode == "none"
+    assert "exited" in statuses[-1].snapshot.runtime_error
+    navigation.observe_runtime("localization", "plant", "Nav2 is not running")
+    assert statuses[-1].state is CommandControllerState.FAILED
+    assert statuses[-1].snapshot.mode == "localization"
+    current = statuses[-1].snapshot.context
+    navigation.observe_runtime(None, "", "Runtime status unavailable")
+    current = statuses[-1].snapshot.context
+    assert statuses[-1].snapshot.mode == "localization"
+    with pytest.raises(RuntimeError, match="unavailable"):
+        navigation.select_map(current, "plant")
+    navigation.observe_runtime("none", "plant")
+    assert navigation.select_map(statuses[-1].snapshot.context, "plant").mode == "none"
+
+
+def test_stopped_runtime_heartbeat_does_not_replace_selected_map(tmp_path):
+    navigation, _ = coordinator(tmp_path)
+    context = navigation.open_context("owner").context
+    context = navigation.create_and_select_map(context, "plant").context
+    context = navigation.create_and_select_map(context, "other").context
+    navigation.observe_runtime("none", "plant")
+    current = navigation.context(context.context_id, context.client_id)
+    assert navigation.snapshot(current).active_map == "other"

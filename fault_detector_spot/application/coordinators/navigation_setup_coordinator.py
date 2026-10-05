@@ -58,6 +58,7 @@ class NavigationSetupSnapshot:
     map_names: tuple
     waypoint_names: tuple
     landmark_names: tuple
+    runtime_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,8 @@ class NavigationSetupCoordinator:
         self._closing_contexts = set()
         self._active_map = ""
         self._mode = MODE_NONE
+        self._runtime_observation = None
+        self._runtime_error = ""
 
     def open_context(self, client_id: str) -> NavigationSetupSnapshot:
         """Open one navigation setup context for a remote client."""
@@ -162,9 +165,39 @@ class NavigationSetupCoordinator:
         self.setup_coordinator.close_context(current)
 
     def observe_active_map(self, map_name: str) -> None:
-        """Update the runtime active-map observation."""
+        """Accept the legacy map observation until runtime status is available."""
         with self._lock:
-            self._active_map = map_name.strip()
+            if self._runtime_observation is None:
+                self._active_map = map_name.strip()
+
+    def observe_runtime(self, mode, map_name: str, error: str = "") -> None:
+        """Reconcile process observations without treating commands as state."""
+        if mode not in {None, MODE_NONE, MODE_MAPPING, MODE_LOCALIZATION}:
+            raise ValueError(f"Unknown runtime mode: {mode}")
+        updates = []
+        with self._lock:
+            observation = (mode, map_name, error)
+            if observation == self._runtime_observation:
+                return
+            self._runtime_observation = observation
+            self._runtime_error = error
+            if mode is not None:
+                self._mode = mode
+            # A stopped runtime retains its old map; preserve the user's selection.
+            if mode in {MODE_MAPPING, MODE_LOCALIZATION}:
+                self._active_map = map_name
+            for context in self.setup_coordinator.contexts_for(CommandOrigin.NAVIGATION_SETUP):
+                if self._operations.has_context(context):
+                    continue
+                updates.append(NavigationSetupStatus(
+                    operation_code=0, request_id="",
+                    state=(CommandControllerState.FAILED if error
+                           else CommandControllerState.SUCCEEDED),
+                    detail=error or f"Runtime mode: {self._mode}",
+                    snapshot=self._advance(context),
+                ))
+        for update in updates:
+            self._operations.emit(update)
 
     def snapshot(
         self,
@@ -175,6 +208,7 @@ class NavigationSetupCoordinator:
         with self._lock:
             active_map = self._active_map
             mode = self._mode
+            runtime_error = self._runtime_error
         map_names = tuple(self.map_repository.list_map_ids())
         waypoint_names = ()
         landmark_names = ()
@@ -194,6 +228,7 @@ class NavigationSetupCoordinator:
             map_names=map_names,
             waypoint_names=waypoint_names,
             landmark_names=landmark_names,
+            runtime_error=runtime_error,
         )
 
     def create_map_definition(
@@ -478,12 +513,6 @@ class NavigationSetupCoordinator:
         with self._lock:
             if command_id == CommandID.SWAP_MAP:
                 self._active_map = map_name
-            elif command_id == CommandID.START_SLAM:
-                self._mode = MODE_MAPPING
-            elif command_id == CommandID.START_LOCALIZATION:
-                self._mode = MODE_LOCALIZATION
-            elif command_id == CommandID.STOP_MAPPING:
-                self._mode = MODE_NONE
 
     def _advance(
         self,
@@ -515,6 +544,8 @@ class NavigationSetupCoordinator:
     def _require_authoring_mode(self) -> None:
         with self._lock:
             mode = self._mode
+            if self._runtime_error:
+                raise RuntimeError(self._runtime_error)
         if mode not in {MODE_MAPPING, MODE_LOCALIZATION}:
             raise RuntimeError(
                 "Mapping or localization must be active before saving poses"
@@ -523,6 +554,8 @@ class NavigationSetupCoordinator:
     def _require_runtime_stopped(self, operation: str) -> None:
         with self._lock:
             mode = self._mode
+            if self._runtime_error:
+                raise RuntimeError(self._runtime_error)
         if mode != MODE_NONE:
             raise RuntimeError(
                 f"Stop mapping or localization before {operation}"

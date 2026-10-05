@@ -3,6 +3,10 @@
 from dataclasses import dataclass, field
 from threading import Event, RLock
 from uuid import uuid4
+import time
+
+from diagnostic_msgs.msg import DiagnosticStatus
+from rclpy.clock import Clock, ClockType
 
 from fault_detector_msgs.action import ExecuteNavigationSetup
 from fault_detector_msgs.msg import (
@@ -27,7 +31,7 @@ from fault_detector_spot.application.coordinators.navigation_setup_coordinator i
     NavigationSetupSnapshot,
     NavigationSetupStatus,
 )
-from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
+from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS, LATCHED_QOS
 
 
 _RUNTIME_OPERATIONS = {
@@ -101,6 +105,32 @@ class NavigationSetupApi:
             callback_group=self._callback_group,
         )
         coordinator.add_status_listener(self._receive_status)
+        self._runtime_received_at = None
+        self._runtime_subscription = node.create_subscription(
+            DiagnosticStatus, "fault_detector/navigation_runtime",
+            self._receive_runtime, LATCHED_QOS,
+        )
+        self._runtime_timer = node.create_timer(
+            0.5, self._check_runtime_status,
+            clock=Clock(clock_type=ClockType.STEADY_TIME),
+        )
+        coordinator.observe_runtime(None, "", "Runtime status unavailable")
+
+    def _receive_runtime(self, message):
+        values = {item.key: item.value for item in message.values}
+        mode = values.get("mode")
+        if mode not in {"none", "mapping", "localization"}:
+            return
+        self._runtime_received_at = time.monotonic()
+        self.coordinator.observe_runtime(
+            mode, values.get("active_map", ""),
+            message.message if message.level != DiagnosticStatus.OK else "",
+        )
+
+    def _check_runtime_status(self):
+        if (self._runtime_received_at is None
+                or time.monotonic() - self._runtime_received_at > 2.0):
+            self.coordinator.observe_runtime(None, "", "Runtime status unavailable")
 
     def _accept(self, goal_request):
         if self._shutdown.is_set():
@@ -311,6 +341,8 @@ class NavigationSetupApi:
             status.request_id,
         )
         self._state_publisher.publish(state)
+        if not status.request_id:
+            return
         self.node.get_logger().info(
             "Navigation setup request "
             f"{status.request_id}: {status.state.value}: "
@@ -397,7 +429,9 @@ class NavigationSetupApi:
         message.revision = snapshot.context.revision
         message.operation = int(operation_code)
         message.state = int(state_code)
-        message.detail = detail
+        message.detail = (
+            f"{detail}; {snapshot.runtime_error}" if snapshot.runtime_error else detail
+        )
         message.active_map = snapshot.active_map
         message.mode = self._mode_code(snapshot.mode)
         message.map_names = list(snapshot.map_names)
@@ -476,6 +510,8 @@ class NavigationSetupApi:
     def close(self) -> None:
         """Detach transport resources from the coordinator."""
         self.coordinator.remove_status_listener(self._receive_status)
+        self.node.destroy_timer(self._runtime_timer)
+        self.node.destroy_subscription(self._runtime_subscription)
         self._action_server.destroy()
 
 

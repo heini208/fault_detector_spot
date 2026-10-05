@@ -49,6 +49,7 @@ def test_idle_runtime_close_is_immediate_and_idempotent():
     helper._closing = False
     helper._executor_closed = False
     helper._closed = False
+    helper._status_timer = None
 
     assert helper.close()
     assert helper.close()

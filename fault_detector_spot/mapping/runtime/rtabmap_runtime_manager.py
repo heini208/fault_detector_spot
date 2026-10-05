@@ -4,6 +4,8 @@ from pathlib import Path
 
 import py_trees
 from std_msgs.msg import String
+from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
+from rclpy.clock import Clock, ClockType
 
 from fault_detector_spot.navigation.runtime.nav2_runtime_manager import Nav2RuntimeManager
 from fault_detector_spot.shared.persistence.runtime_paths import (
@@ -48,6 +50,47 @@ class RtabmapRuntimeManager(RuntimeManager):
             launch_file=nav2_launch_file,
             params_file=nav2_params_file,
         )
+        self._status_pub = node.create_publisher(
+            DiagnosticStatus, "fault_detector/navigation_runtime", LATCHED_QOS,
+        )
+        self._status_timer = node.create_timer(
+            0.5, self._publish_runtime_status,
+            clock=Clock(clock_type=ClockType.STEADY_TIME),
+        )
+        self._publish_runtime_status()
+
+    def _publish_runtime_status(self):
+        errors = []
+        try:
+            mode = self.get_running_mode()
+        except RuntimeError as exception:
+            mode = self.MODE_NONE
+            errors.append(str(exception))
+        nav2_running = self.nav2_runtime.is_running()
+        if self.process is not None and mode == self.MODE_NONE:
+            errors.append("RTAB-Map process exited unexpectedly")
+        if mode == self.MODE_LOCALIZATION and not nav2_running:
+            errors.append("Nav2 is not running")
+        if mode == self.MODE_NONE and nav2_running:
+            errors.append("Nav2 is running without RTAB-Map")
+        status = DiagnosticStatus(
+            name="navigation_runtime",
+            level=DiagnosticStatus.ERROR if errors else DiagnosticStatus.OK,
+            message="; ".join(errors) or f"Runtime mode: {mode}",
+            values=[
+                KeyValue(key="mode", value=mode),
+                KeyValue(key="active_map", value=self.bb.active_map_name or ""),
+            ],
+        )
+        self._status_pub.publish(status)
+
+    def close(self):
+        result = super().close()
+        if self._status_timer is not None:
+            self._publish_runtime_status()
+            self.node.destroy_timer(self._status_timer)
+            self._status_timer = None
+        return result
 
     def _init_blackboard_keys(self):
         self.bb.register_key(

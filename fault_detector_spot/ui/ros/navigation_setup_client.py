@@ -21,24 +21,6 @@ _RUNTIME_OPERATIONS = frozenset({
     NavigationSetupIntent.OPERATION_STOP_MAPPING,
 })
 
-_TRANSITION_TARGET_MODES = {
-    NavigationSetupIntent.OPERATION_START_MAPPING: (
-        NavigationSetupState.MODE_MAPPING
-    ),
-    NavigationSetupIntent.OPERATION_START_LOCALIZATION: (
-        NavigationSetupState.MODE_LOCALIZATION
-    ),
-    NavigationSetupIntent.OPERATION_STOP_MAPPING: (
-        NavigationSetupState.MODE_NONE
-    ),
-}
-
-_INFLIGHT_STATES = frozenset({
-    NavigationSetupState.STATE_QUEUED,
-    NavigationSetupState.STATE_RUNNING,
-})
-
-
 class NavigationSetupClient(QObject):
     """Submit navigation setup intent and expose immutable state."""
 
@@ -54,7 +36,6 @@ class NavigationSetupClient(QObject):
         self._last_state_fingerprint = None
         self._state_order = SetupStateOrder()
         self._last_map_names = []
-        self._last_display_mode = NavigationSetupState.MODE_NONE
         self._goal_handles = {}
         self._action_client = ActionClient(
             node,
@@ -166,15 +147,6 @@ class NavigationSetupClient(QObject):
             self.context_id = state.context_id
 
         operation = int(state.operation)
-        display_mode = self._display_mode(
-            state,
-            self._last_display_mode,
-        )
-        self._last_display_mode = display_mode
-        if int(state.mode) != display_mode:
-            state = deepcopy(state)
-            state.mode = display_mode
-
         if state.map_names:
             self._last_map_names = list(state.map_names)
         elif operation in _RUNTIME_OPERATIONS and self._last_map_names:
@@ -201,28 +173,6 @@ class NavigationSetupClient(QObject):
         self.state_changed.emit(state)
         return True
 
-    @staticmethod
-    def _display_mode(state, previous_mode=None) -> int:
-        operation = int(state.operation)
-        state_code = int(state.state)
-        target_mode = _TRANSITION_TARGET_MODES.get(operation)
-
-        if state_code in _INFLIGHT_STATES and target_mode is not None:
-            return target_mode
-
-        if (
-            state_code in {
-                NavigationSetupState.STATE_FAILED,
-                NavigationSetupState.STATE_CANCELLED,
-            }
-            and target_mode is not None
-            and previous_mode is not None
-            and int(target_mode) != int(previous_mode)
-        ):
-            return int(previous_mode)
-
-        return int(state.mode)
-
     def _receive_state(self, state):
         self._emit_state(state)
 
@@ -237,7 +187,6 @@ class NavigationSetupClient(QObject):
             self._last_state_fingerprint = None
             self.context_id = ""
             self._last_map_names = []
-            self._last_display_mode = NavigationSetupState.MODE_NONE
         self.close_finished.emit(response.closed, response.detail)
 
     def destroy(self):
