@@ -11,7 +11,10 @@ from fault_detector_msgs.srv import (
     ExecuteProbeSetup,
     GetProbeReferencePreview,
 )
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import (
+    MutuallyExclusiveCallbackGroup,
+    ReentrantCallbackGroup,
+)
 
 from fault_detector_spot.application.commanding.client_identity import (
     required_client_id,
@@ -42,6 +45,9 @@ class ProbeSetupApi:
         self.state_adapter = state_adapter
         self.preview_source = preview_source
         self._callback_group = ReentrantCallbackGroup()
+        # Bulk image requests must not fill every executor worker and starve
+        # the live tag, camera, TF, and runtime-heartbeat subscriptions.
+        self._preview_callback_group = MutuallyExclusiveCallbackGroup()
         self._handlers = self._transaction_handlers()
         self._execute_service = node.create_service(
             ExecuteProbeSetup,
@@ -59,7 +65,7 @@ class ProbeSetupApi:
             GetProbeReferencePreview,
             "fault_detector/application/get_probe_reference_preview",
             self._preview,
-            callback_group=self._callback_group,
+            callback_group=self._preview_callback_group,
         )
     def _transaction_handlers(self):
         return {
@@ -331,4 +337,3 @@ class ProbeSetupApi:
 
 
 __all__ = ["ProbeSetupApi"]
-

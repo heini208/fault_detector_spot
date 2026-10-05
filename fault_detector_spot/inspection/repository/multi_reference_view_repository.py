@@ -192,8 +192,10 @@ class MultiReferenceViewRepository:
         self,
         object_id: str,
         routine_id: str,
+        *,
+        reference_view_id: Optional[str] = None,
     ) -> List[CapturedReferenceView]:
-        """Load all views directly from the authoritative object model."""
+        """Load all views, or one requested dataset, from the object model."""
         validate_storage_name(object_id, "object ID")
         validate_storage_name(routine_id, "routine ID")
         definition = self.object_repository.load(object_id)
@@ -206,6 +208,11 @@ class MultiReferenceViewRepository:
             routine.reference_views,
             key=lambda view: view.slot_index,
         ):
+            if (
+                reference_view_id is not None
+                and reference_view.view_id != reference_view_id
+            ):
+                continue
             if reference_view.camera_id not in REFERENCE_CAMERA_BY_ID:
                 raise ValueError(
                     "Reference view contains an unknown camera ID: "

@@ -2642,7 +2642,7 @@ class InspectionControls(UIControlHelper):
         widget.blockSignals(True)
         widget.set_ros_image(
             response.image,
-            valid_region=region,
+            source_region=region,
         )
         widget.blockSignals(False)
         self._reference_slot_view_ids[slot_index] = (

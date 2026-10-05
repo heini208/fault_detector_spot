@@ -112,23 +112,40 @@ class ReferenceViewWidget(QLabel):
         self,
         image: Image,
         valid_region: Optional[ImageRegion] = None,
+        *,
+        source_region: Optional[ImageRegion] = None,
     ) -> None:
         """Convert and display a ROS image message."""
         self.set_qimage(
             ros_image_to_qimage(image),
             valid_region=valid_region,
+            source_region=source_region,
         )
 
     def set_qimage(
         self,
         image: QImage,
         valid_region: Optional[ImageRegion] = None,
+        *,
+        source_region: Optional[ImageRegion] = None,
     ) -> None:
-        """Display an independently owned Qt image and clear selection."""
+        """Display an independently owned Qt image and clear selection.
+
+        valid_region crops a full image locally; source_region describes an
+        already cropped native-resolution image in original RGB coordinates.
+        """
         if image.isNull():
             raise ValueError("Reference image must not be null")
         source = image
         offset = ImagePoint(u=0, v=0)
+        if source_region is not None:
+            source_region.validate()
+            if valid_region is not None or (
+                source_region.width != image.width()
+                or source_region.height != image.height()
+            ):
+                raise ValueError("Cropped preview must match its source region")
+            offset = ImagePoint(u=source_region.x, v=source_region.y)
         if valid_region is not None:
             valid_region.validate()
             if (

@@ -692,6 +692,10 @@ class ProbeRefinementDialog(QDialog):
     def update_reference_availability(self, has_existing):
         if self.workflow_stack.currentIndex() != self.REFERENCE_PAGE:
             return
+        capture_idle = not self.controls._reference_capture_in_progress
+        self.use_existing_reference_button.setEnabled(capture_idle)
+        self.capture_reference_button.setEnabled(capture_idle)
+        self.retake_reference_button.setEnabled(capture_idle)
         if has_existing:
             self.reference_choice_status.setText(
                 "Saved reference views are available for this routine."

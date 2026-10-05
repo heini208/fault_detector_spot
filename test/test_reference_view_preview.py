@@ -98,15 +98,21 @@ def test_state_requests_preview_from_application_service(application):
     assert ui.requests == []
 
 
-def test_preview_preserves_authoritative_source_pixel(application):
+@pytest.mark.parametrize("offset", [(0, 0), (103, 57)])
+def test_preview_preserves_authoritative_source_pixel(application, offset):
     controls = FinalizingInspectionControls(FakeUI())
-    controls.apply_setup_state(setup_state())
+    state = setup_state()
+    state.reference_pixel_u += offset[0]
+    state.reference_pixel_v += offset[1]
+    controls.apply_setup_state(state)
+    response = preview()
+    response.selectable_x, response.selectable_y = offset
 
-    assert controls.apply_reference_preview(preview()) is True
+    assert controls.apply_reference_preview(response) is True
 
     widget = controls.reference_view_widgets[0]
-    assert widget.selected_image_point.u == 2
-    assert widget.selected_image_point.v == 1
+    assert widget.selected_image_point.u == 2 + offset[0]
+    assert widget.selected_image_point.v == 1 + offset[1]
     assert controls._reference_slot_view_ids[0] == "slot1_hand"
 
 

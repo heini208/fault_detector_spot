@@ -26,6 +26,16 @@ from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 from fault_detector_spot.ui.ros.setup_state_order import SetupStateOrder
 
 
+def preloaded_reference_view_ids(state):
+    """Prioritize the hand and front cameras; other previews load on demand."""
+    views = dict(zip(state.reference_camera_ids, state.reference_view_ids))
+    return tuple(
+        views[camera_id]
+        for camera_id in ("hand", "frontleft", "frontright")
+        if views.get(camera_id)
+    )
+
+
 class ProbeSetupClient(QObject):
     """Submit probe authoring intent and expose immutable state."""
 
@@ -312,7 +322,7 @@ class ProbeSetupClient(QObject):
             self._send_preview_request(view_id, generation)
 
     def _refresh_reference_previews(self, state):
-        for view_id in state.reference_view_ids:
+        for view_id in preloaded_reference_view_ids(state):
             self.request_preview(view_id)
 
     def _send(self, intent, context_id):
@@ -497,7 +507,10 @@ class ProbeSetupClient(QObject):
         except Exception as exception:
             self.request_rejected.emit(str(exception))
             return
-        if self._emit_state(result.state):
+        if (
+            self._emit_state(result.state)
+            and result.state.state == ProbeSetupState.STATE_SUCCEEDED
+        ):
             self._refresh_reference_previews(result.state)
 
     def destroy(self):

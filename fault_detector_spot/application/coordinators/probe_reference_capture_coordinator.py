@@ -87,6 +87,7 @@ class ProbeReferenceCaptureCoordinator:
         self._validate_configuration()
         self._lock = RLock()
         self._active_request_id = ""
+        self._synchronizers = {}
         self._shutdown = Event()
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(
@@ -111,6 +112,7 @@ class ProbeReferenceCaptureCoordinator:
             raise TypeError("State listener must be callable")
 
         with self._lock:
+            self._check_cancel(cancel_requested)
             if self._active_request_id:
                 raise RuntimeError("Reference capture is already in progress")
             self._active_request_id = request_id
@@ -245,7 +247,7 @@ class ProbeReferenceCaptureCoordinator:
                 f"{self.capture_max_attempts} attempts: {last_error}"
             )
         finally:
-            self._release_synchronizers(synchronizers)
+            self._release_synchronizers(self._synchronizers)
             with self._lock:
                 if self._active_request_id == request_id:
                     self._active_request_id = ""
@@ -253,6 +255,11 @@ class ProbeReferenceCaptureCoordinator:
     def _create_synchronizers(self, selected):
         values = {}
         for _, camera_id in selected:
+            if camera_id in self._synchronizers:
+                synchronizer = self._synchronizers[camera_id]
+                synchronizer.resume()
+                values[camera_id] = synchronizer
+                continue
             camera = REFERENCE_CAMERA_BY_ID[camera_id]
             values[camera_id] = ReferenceViewInputSynchronizer(
                 node=self.node,
@@ -266,6 +273,7 @@ class ProbeReferenceCaptureCoordinator:
                 ),
                 collection_duration_sec=self.collection_duration_sec,
             )
+            self._synchronizers[camera_id] = values[camera_id]
         return values
 
     def _wait_settled(self, cancel_requested):
@@ -453,8 +461,15 @@ class ProbeReferenceCaptureCoordinator:
             synchronizer.cancel_collection()
 
     def _release_synchronizers(self, synchronizers):
+        # A Humble executor can already have queued a subscription take.
+        # Retain handles until executor shutdown; only release buffered data.
         for synchronizer in synchronizers.values():
-            synchronizer.cancel_collection()
+            synchronizer.suspend()
+
+    def _destroy_synchronizers(self):
+        """Destroy retained subscriptions after the executor has drained."""
+        self._release_synchronizers(self._synchronizers)
+        for synchronizer in self._synchronizers.values():
             for attribute in (
                 "rgb_subscription",
                 "depth_subscription",
@@ -468,6 +483,7 @@ class ProbeReferenceCaptureCoordinator:
                 )
                 if subscription is not None:
                     self.node.destroy_subscription(subscription)
+        self._synchronizers.clear()
 
     def _validate_configuration(self):
         if self.queue_size < 1:
@@ -506,11 +522,13 @@ class ProbeReferenceCaptureCoordinator:
         self._shutdown.set()
 
     def close(self):
-        """Stop active waits and detach capture TF observation."""
+        """Release ROS resources after application executor shutdown."""
         self.request_shutdown()
+        self._destroy_synchronizers()
         listener = self.tf_listener
         if listener is not None and hasattr(listener, "unregister"):
             listener.unregister()
+        self.tf_listener = None
 
 
 __all__ = [

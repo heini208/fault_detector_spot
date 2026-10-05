@@ -34,6 +34,9 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
 
 
 from .controls import InspectionControls
+from fault_detector_spot.ui.ros.probe_setup_client import (
+    preloaded_reference_view_ids,
+)
 
 
 class FinalizingInspectionControls(InspectionControls):
@@ -735,10 +738,19 @@ class FinalizingInspectionControls(InspectionControls):
             ):
                 self._reference_capture_in_progress = False
                 self.refinement_dialog.reference_views_ready()
-            elif state.state == ProbeSetupState.STATE_FAILED:
+            elif state.state in (
+                ProbeSetupState.STATE_FAILED,
+                ProbeSetupState.STATE_CANCELLED,
+            ):
                 self._reference_capture_in_progress = False
+                self.refinement_dialog.update_reference_availability(
+                    bool(state.reference_view_ids)
+                )
+                detail = state.detail or "Reference capture failed."
+                if state.reference_view_ids:
+                    detail += "\nSaved reference views remain visible."
                 self.refinement_dialog.set_reference_status(
-                    state.detail or "Reference capture failed."
+                    detail
                 )
 
         return result
@@ -822,7 +834,7 @@ class FinalizingInspectionControls(InspectionControls):
         widget.blockSignals(True)
         widget.set_ros_image(
             response.image,
-            valid_region=region,
+            source_region=region,
         )
         widget.blockSignals(False)
         self._reference_slot_view_ids[0] = response.reference_view_id
@@ -935,6 +947,7 @@ class FinalizingInspectionControls(InspectionControls):
             if not camera_id or not view_id:
                 continue
             self._reference_view_id_by_camera[camera_id] = view_id
+        for view_id in preloaded_reference_view_ids(state):
             client.request_preview(view_id)
 
         self.refinement_dialog.update_reference_availability(True)

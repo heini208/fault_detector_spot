@@ -246,8 +246,14 @@ def rgb_depth_selectable_region(
     depth_image: Image,
     rgb_camera_info: CameraInfo,
     depth_camera_info: CameraInfo,
+    *,
+    include_sparse_support: bool = False,
 ) -> ImageRegion:
-    """Return the RGB region backed by calibrated, non-empty depth."""
+    """Return depth-backed RGB bounds, optionally retaining isolated samples.
+
+    The default preserves the support rule used in saved dataset metadata.
+    Previews include sparse support to avoid hiding valid edge samples.
+    """
     rgb_width, rgb_height = _validate_image_size(
         rgb_size,
         "RGB image size",
@@ -271,7 +277,9 @@ def rgb_depth_selectable_region(
         depth_image,
         depth_camera_info,
     )
-    depth_support = _depth_valid_support_region(point_cloud)
+    depth_support = _depth_valid_support_region(
+        point_cloud, include_sparse_support=include_sparse_support,
+    )
     valid_u = [
         u
         for u in range(rgb_width)
@@ -401,16 +409,18 @@ def _continuous_coordinate_in_region(
 
 def _depth_valid_support_region(
     point_cloud: OrganizedDepthPointCloud,
+    *,
+    include_sparse_support: bool = False,
 ) -> ImageRegion:
     row_counts = np.count_nonzero(point_cloud.valid_mask, axis=1)
     column_counts = np.count_nonzero(point_cloud.valid_mask, axis=0)
-    minimum_column_count = max(
-        1,
-        int(math.ceil(point_cloud.height * 0.01)),
+    minimum_column_count = (
+        1 if include_sparse_support
+        else max(1, int(math.ceil(point_cloud.height * 0.01)))
     )
-    minimum_row_count = max(
-        1,
-        int(math.ceil(point_cloud.width * 0.01)),
+    minimum_row_count = (
+        1 if include_sparse_support
+        else max(1, int(math.ceil(point_cloud.width * 0.01)))
     )
     supported_columns = np.flatnonzero(
         column_counts >= minimum_column_count

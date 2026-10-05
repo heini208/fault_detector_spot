@@ -46,6 +46,7 @@ class ProbeReferencePreviewSource:
         captures = self.repository.load_reference_views(
             snapshot.selected_object_id,
             snapshot.selected_routine_id,
+            reference_view_id=view_id,
         )
         capture = next(
             (
@@ -62,14 +63,47 @@ class ProbeReferencePreviewSource:
             capture.depth_image,
             capture.rgb_camera_info,
             capture.depth_camera_info,
+            include_sparse_support=True,
         )
         return ProbeReferencePreview(
             reference_view_id=view_id,
             camera_id=capture.camera_id,
             slot_index=capture.slot_index,
-            image=deepcopy(capture.rgb_image),
+            image=_crop_preview(capture.rgb_image, region),
             selectable_region=region,
         )
+
+
+def _crop_preview(image: Image, region: ImageRegion) -> Image:
+    """Copy native RGB pixels without resampling or changing capture data."""
+    region.validate()
+    bytes_per_pixel = {"rgb8": 3, "bgr8": 3, "mono8": 1}.get(
+        image.encoding.strip().lower()
+    )
+    if bytes_per_pixel is None:
+        raise ValueError(f"Unsupported image encoding: {image.encoding}")
+    if (
+        region.x + region.width > image.width
+        or region.y + region.height > image.height
+        or image.step < image.width * bytes_per_pixel
+        or len(image.data) < image.step * image.height
+    ):
+        raise ValueError("Invalid reference image crop or image buffer")
+    result = Image()
+    result.header = deepcopy(image.header)
+    result.encoding = image.encoding
+    result.is_bigendian = image.is_bigendian
+    result.width = region.width
+    result.height = region.height
+    result.step = region.width * bytes_per_pixel
+    source = memoryview(image.data)
+    offset = region.x * bytes_per_pixel
+    result.data = b"".join(
+        source[row * image.step + offset:
+               row * image.step + offset + result.step]
+        for row in range(region.y, region.y + region.height)
+    )
+    return result
 
 
 __all__ = ["ProbeReferencePreview", "ProbeReferencePreviewSource"]

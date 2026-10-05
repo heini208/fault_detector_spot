@@ -319,3 +319,21 @@ def test_save_allows_camera_specific_tag_observations(
         capture.reference_tag.pose.header.stamp.nanosec
         for capture in loaded
     ] == [50, 51]
+
+
+def test_selected_view_load_does_not_read_other_datasets(tmp_path):
+    repository = MultiReferenceViewRepository(tmp_path)
+    repository.object_repository.create(make_object())
+    definition = repository.save_reference_views(
+        "motor_a", "magnetic_scan",
+        [make_capture(0, "hand", 100), make_capture(1, "back", 200)],
+    )
+    views = definition.get_routine("magnetic_scan").reference_views
+    other_metadata = tmp_path / "motor_a" / views[1].reference_dataset_path / "metadata.json"
+    other_metadata.write_text("invalid JSON", encoding="utf-8")
+    loaded = repository.load_reference_views(
+        "motor_a", "magnetic_scan", reference_view_id=views[0].view_id,
+    )
+    assert [capture.reference_view.view_id for capture in loaded] == [views[0].view_id]
+    with pytest.raises(json.JSONDecodeError):
+        repository.load_reference_views("motor_a", "magnetic_scan")

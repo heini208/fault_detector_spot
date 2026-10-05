@@ -17,8 +17,8 @@ class FakeRepository:
         self.capture = capture
         self.requests = []
 
-    def load_reference_views(self, object_id, routine_id):
-        self.requests.append((object_id, routine_id))
+    def load_reference_views(self, object_id, routine_id, *, reference_view_id=None):
+        self.requests.append((object_id, routine_id, reference_view_id))
         return [self.capture]
 
 
@@ -83,7 +83,7 @@ def test_preview_source_returns_only_rgb_and_selectable_region():
         "slot1_hand",
     )
 
-    assert repository.requests == [("motor", "scan")]
+    assert repository.requests == [("motor", "scan", "slot1_hand")]
     assert preview.reference_view_id == "slot1_hand"
     assert preview.camera_id == "hand"
     assert preview.slot_index == 0

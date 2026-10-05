@@ -65,6 +65,7 @@ class ReferenceViewInputSynchronizer:
         )
 
         self._lock = Lock()
+        self._accept_inputs = True
         self._rgb_camera_info: Optional[CameraInfo] = None
         self._depth_camera_info: Optional[CameraInfo] = None
         self._input_sequence = 0
@@ -319,6 +320,21 @@ class ReferenceViewInputSynchronizer:
         with self._lock:
             self._collection = None
 
+    def suspend(self) -> None:
+        """Release captured data without destroying live executor handles."""
+        with self._lock:
+            self._accept_inputs = False
+            self._collection = None
+            self._rgb_history.clear()
+            self._depth_history.clear()
+            self._rgb_camera_info = None
+            self._depth_camera_info = None
+
+    def resume(self) -> None:
+        """Accept fresh input for another capture on the same subscriptions."""
+        with self._lock:
+            self._accept_inputs = True
+
     @property
     def input_sequence(self) -> int:
         """Return the number of raw image messages received."""
@@ -349,6 +365,8 @@ class ReferenceViewInputSynchronizer:
         camera_info: CameraInfo,
     ) -> None:
         with self._lock:
+            if not self._accept_inputs:
+                return
             self._rgb_camera_info = deepcopy(camera_info)
 
     def _depth_camera_info_callback(
@@ -356,6 +374,8 @@ class ReferenceViewInputSynchronizer:
         camera_info: CameraInfo,
     ) -> None:
         with self._lock:
+            if not self._accept_inputs:
+                return
             self._depth_camera_info = deepcopy(camera_info)
 
     def _rgb_callback(self, image: Image) -> None:
@@ -367,6 +387,8 @@ class ReferenceViewInputSynchronizer:
     def _append_image(self, image: Image, is_rgb: bool) -> None:
         now_nanoseconds = time.monotonic_ns()
         with self._lock:
+            if not self._accept_inputs:
+                return
             self._input_sequence += 1
             sample = (self._input_sequence, image)
             history = (

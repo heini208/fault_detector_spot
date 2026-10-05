@@ -99,19 +99,16 @@ def make_preview(view_id, camera_id):
     )
 
 
-def test_preloads_all_six_reference_previews(application):
+def test_preloads_hand_and_front_reference_previews(application):
     ui = FakeUI()
     controls = FinalizingInspectionControls(ui)
 
     controls.apply_setup_state(make_state())
 
     assert ui.probe_setup_client.preview_requests == [
+        "slot6_hand",
         "slot1_frontleft",
         "slot2_frontright",
-        "slot3_left",
-        "slot4_right",
-        "slot5_back",
-        "slot6_hand",
     ]
 
 
@@ -142,3 +139,73 @@ def test_only_one_reference_viewer_is_left_visible(application):
     assert controls.reference_view_widgets[2].isHidden()
     assert controls.reference_camera_dropdowns[1].isHidden()
     assert controls.reference_camera_dropdowns[2].isHidden()
+
+
+@pytest.mark.parametrize("saved_views", [False, True])
+def test_capture_failure_distinguishes_saved_previews(application, saved_views):
+    controls = FinalizingInspectionControls(FakeUI())
+    state = make_state()
+    if not saved_views:
+        state.reference_view_ids = []
+        state.reference_camera_ids = []
+    controls.apply_setup_state(state)
+    controls._reference_capture_in_progress = True
+    messages = []
+    controls.refinement_dialog.set_reference_status = messages.append
+    state.state = ProbeSetupState.STATE_FAILED
+    state.detail = "No base-tag observations for tag 2"
+
+    controls.apply_setup_state(state)
+
+    assert not controls._reference_capture_in_progress
+    assert messages[-1].startswith(state.detail)
+    assert ("Saved reference views remain visible." in messages[-1]) == saved_views
+
+
+@pytest.mark.parametrize("terminal_state", [
+    ProbeSetupState.STATE_FAILED, ProbeSetupState.STATE_CANCELLED,
+])
+@pytest.mark.parametrize("saved_views", [False, True])
+def test_capture_can_be_retried_after_terminal_error(application, terminal_state, saved_views):
+    ui = FakeUI()
+    controls = FinalizingInspectionControls(ui)
+    state = make_state()
+    if not saved_views:
+        state.reference_view_ids = []
+        state.reference_camera_ids = []
+    controls.apply_setup_state(state)
+    dialog = controls.refinement_dialog
+    dialog.workflow_stack.setCurrentIndex(dialog.REFERENCE_PAGE)
+    assert controls.handle_capture_reference_view()
+    assert not dialog.capture_reference_button.isEnabled()
+    assert not dialog.retake_reference_button.isEnabled()
+    state.state = terminal_state
+    state.detail = 'Capture could not complete'
+    controls.apply_setup_state(state)
+    assert dialog.capture_reference_button.isEnabled()
+    assert dialog.retake_reference_button.isEnabled()
+    assert dialog.use_existing_reference_button.isEnabled()
+    assert not dialog.approve_reference_button.isEnabled()
+    assert controls.handle_capture_reference_view()
+    assert len(ui.capture_calls) == 2
+    assert not dialog.capture_reference_button.isEnabled()
+
+
+@pytest.mark.parametrize("camera_id,view_id", [
+    ("left", "slot3_left"), ("right", "slot4_right"), ("back", "slot5_back"),
+])
+def test_side_and_back_previews_load_on_demand_then_use_cache(application, camera_id, view_id):
+    ui = FakeUI()
+    controls = FinalizingInspectionControls(ui)
+    controls.apply_setup_state(make_state())
+    assert view_id not in ui.probe_setup_client.preview_requests
+    ui.probe_setup_client.preview_requests.clear()
+    dropdown = controls.reference_camera_dropdowns[0]
+    dropdown.setCurrentIndex(dropdown.findData(camera_id))
+    assert ui.probe_setup_client.preview_requests == [view_id]
+    controls.apply_reference_preview(make_preview(view_id, camera_id))
+    controls.apply_reference_preview(make_preview("slot6_hand", "hand"))
+    ui.probe_setup_client.preview_requests.clear()
+    dropdown.setCurrentIndex(dropdown.findData("hand"))
+    dropdown.setCurrentIndex(dropdown.findData(camera_id))
+    assert ui.probe_setup_client.preview_requests == []
