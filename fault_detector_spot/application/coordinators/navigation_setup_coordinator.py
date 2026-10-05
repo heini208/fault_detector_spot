@@ -93,6 +93,7 @@ class NavigationSetupCoordinator:
         )
         self._lock = RLock()
         self._operations = SetupOperationRegistry()
+        self._closing_contexts = set()
         self._active_map = ""
         self._mode = MODE_NONE
 
@@ -135,16 +136,21 @@ class NavigationSetupCoordinator:
 
     def close_context(self, context: SetupContextSnapshot) -> None:
         """Close one navigation setup context."""
-        self.setup_coordinator.require_current(context)
-        request_ids = self._operations.request_ids_for(context)
+        with self._lock:
+            self.setup_coordinator.require_current(context)
+            self._closing_contexts.add(context.context_id)
+            request_ids = self._operations.request_ids_for(context)
         for request_id in request_ids:
             try:
-                self.setup_coordinator.cancel_operation(
-                    context,
-                    request_id,
-                )
+                self.setup_coordinator.cancel_operation(context, request_id)
             except LookupError:
                 pass
+        with self._lock:
+            if not self._operations.has_context(context):
+                self._finish_context_close(context)
+
+    def _finish_context_close(self, context):
+        self._closing_contexts.discard(context.context_id)
         try:
             current = self.setup_coordinator.resolve_context(
                 context.context_id,
@@ -152,11 +158,8 @@ class NavigationSetupCoordinator:
                 CommandOrigin.NAVIGATION_SETUP,
             )
         except LookupError:
-            self._operations.discard_context(context)
             return
-        self._operations.discard_context(current)
-        if self.setup_coordinator.is_current(current):
-            self.setup_coordinator.close_context(current)
+        self.setup_coordinator.close_context(current)
 
     def observe_active_map(self, map_name: str) -> None:
         """Update the runtime active-map observation."""
@@ -199,11 +202,12 @@ class NavigationSetupCoordinator:
         map_name: str,
     ) -> NavigationSetupSnapshot:
         """Create one empty map metadata definition."""
-        self.setup_coordinator.require_current(context)
-        self._require_idle(context)
-        map_id = self._map_id(map_name)
-        self.map_repository.create_empty(map_id)
-        return self._advance(context)
+        with self._lock:
+            self.setup_coordinator.require_current(context)
+            self._require_idle(context)
+            map_id = self._map_id(map_name)
+            self.map_repository.create_empty(map_id)
+            return self._advance(context)
 
     def create_and_select_map(
         self,
@@ -211,9 +215,10 @@ class NavigationSetupCoordinator:
         map_name: str,
     ) -> NavigationSetupSnapshot:
         """Create one map definition and select it for later runtime use."""
-        self._require_runtime_stopped("creating a map")
-        created = self.create_map_definition(context, map_name)
-        return self.select_map(created.context, map_name)
+        with self._lock:
+            self._require_runtime_stopped("creating a map")
+            created = self.create_map_definition(context, map_name)
+            return self.select_map(created.context, map_name)
 
     def select_map(
         self,
@@ -221,15 +226,15 @@ class NavigationSetupCoordinator:
         map_name: str,
     ) -> NavigationSetupSnapshot:
         """Select persisted map metadata while runtime navigation is stopped."""
-        self.setup_coordinator.require_current(context)
-        self._require_idle(context)
-        self._require_runtime_stopped("selecting a map")
-        map_id = self._map_id(map_name)
-        if not self.map_repository.exists(map_id):
-            raise FileNotFoundError(f"Unknown map: {map_id}")
         with self._lock:
+            self.setup_coordinator.require_current(context)
+            self._require_idle(context)
+            self._require_runtime_stopped("selecting a map")
+            map_id = self._map_id(map_name)
+            if not self.map_repository.exists(map_id):
+                raise FileNotFoundError(f"Unknown map: {map_id}")
             self._active_map = map_id
-        return self._advance(context)
+            return self._advance(context)
 
     def delete_map(
         self,
@@ -237,14 +242,14 @@ class NavigationSetupCoordinator:
         map_name: str,
     ) -> NavigationSetupSnapshot:
         """Delete an inactive map's metadata and database artifacts."""
-        self.setup_coordinator.require_current(context)
-        self._require_idle(context)
-        map_id = self._map_id(map_name)
         with self._lock:
+            self.setup_coordinator.require_current(context)
+            self._require_idle(context)
+            map_id = self._map_id(map_name)
             if map_id == self._active_map:
                 raise ValueError("The active map cannot be deleted")
-        self.map_artifacts.delete(map_id)
-        return self._advance(context)
+            self.map_artifacts.delete(map_id)
+            return self._advance(context)
 
     def add_current_waypoint(
         self,
@@ -253,21 +258,22 @@ class NavigationSetupCoordinator:
         waypoint_name: str,
     ) -> NavigationSetupSnapshot:
         """Persist the current localized robot pose as a waypoint."""
-        self.setup_coordinator.require_current(context)
-        self._require_idle(context)
-        map_id = self._require_active_map(map_name)
-        self._require_authoring_mode()
-        waypoint_id = self._name(waypoint_name, "waypoint ID")
-        pose = self._map_pose(self.current_pose(), "localization pose")
-        self.map_repository.add_waypoint(
-            map_id,
-            Waypoint(
-                waypoint_id=waypoint_id,
-                display_name=waypoint_id,
-                pose_map=pose_to_pose_data(pose),
-            ),
-        )
-        return self._advance(context)
+        with self._lock:
+            self.setup_coordinator.require_current(context)
+            self._require_idle(context)
+            map_id = self._require_active_map(map_name)
+            self._require_authoring_mode()
+            waypoint_id = self._name(waypoint_name, "waypoint ID")
+            pose = self._map_pose(self.current_pose(), "localization pose")
+            self.map_repository.add_waypoint(
+                map_id,
+                Waypoint(
+                    waypoint_id=waypoint_id,
+                    display_name=waypoint_id,
+                    pose_map=pose_to_pose_data(pose),
+                ),
+            )
+            return self._advance(context)
 
     def add_visible_tag_landmark(
         self,
@@ -276,32 +282,33 @@ class NavigationSetupCoordinator:
         tag_id: int,
     ) -> NavigationSetupSnapshot:
         """Persist one currently visible AprilTag pose as a landmark."""
-        self.setup_coordinator.require_current(context)
-        self._require_idle(context)
-        map_id = self._require_active_map(map_name)
-        self._require_authoring_mode()
-        if isinstance(tag_id, bool) or not isinstance(tag_id, int):
-            raise TypeError("Tag ID must be an integer")
-        if tag_id < 0:
-            raise ValueError("Tag ID must not be negative")
-        pose = self._map_pose(
-            self.visible_tag_pose(tag_id),
-            f"visible tag {tag_id}",
-        )
-        landmark_id = f"Tag_{tag_id}"
-        self.map_repository.add_landmark(
-            map_id,
-            LocalizationLandmark(
-                landmark_id=landmark_id,
-                display_name=landmark_id,
-                reference_tag=ReferenceTag(
-                    tag_id=tag_id,
-                    tag_family="36h11",
+        with self._lock:
+            self.setup_coordinator.require_current(context)
+            self._require_idle(context)
+            map_id = self._require_active_map(map_name)
+            self._require_authoring_mode()
+            if isinstance(tag_id, bool) or not isinstance(tag_id, int):
+                raise TypeError("Tag ID must be an integer")
+            if tag_id < 0:
+                raise ValueError("Tag ID must not be negative")
+            pose = self._map_pose(
+                self.visible_tag_pose(tag_id),
+                f"visible tag {tag_id}",
+            )
+            landmark_id = f"Tag_{tag_id}"
+            self.map_repository.add_landmark(
+                map_id,
+                LocalizationLandmark(
+                    landmark_id=landmark_id,
+                    display_name=landmark_id,
+                    reference_tag=ReferenceTag(
+                        tag_id=tag_id,
+                        tag_family="36h11",
+                    ),
+                    pose_map=pose_to_pose_data(pose),
                 ),
-                pose_map=pose_to_pose_data(pose),
-            ),
-        )
-        return self._advance(context)
+            )
+            return self._advance(context)
 
     def delete_waypoint(
         self,
@@ -310,12 +317,13 @@ class NavigationSetupCoordinator:
         waypoint_name: str,
     ) -> NavigationSetupSnapshot:
         """Delete one waypoint through the map repository."""
-        self.setup_coordinator.require_current(context)
-        self._require_idle(context)
-        map_id = self._map_id(map_name)
-        waypoint_id = self._name(waypoint_name, "waypoint ID")
-        self.map_repository.delete_waypoint(map_id, waypoint_id)
-        return self._advance(context)
+        with self._lock:
+            self.setup_coordinator.require_current(context)
+            self._require_idle(context)
+            map_id = self._map_id(map_name)
+            waypoint_id = self._name(waypoint_name, "waypoint ID")
+            self.map_repository.delete_waypoint(map_id, waypoint_id)
+            return self._advance(context)
 
     def delete_landmark(
         self,
@@ -324,12 +332,13 @@ class NavigationSetupCoordinator:
         landmark_name: str,
     ) -> NavigationSetupSnapshot:
         """Delete one landmark through the map repository."""
-        self.setup_coordinator.require_current(context)
-        self._require_idle(context)
-        map_id = self._map_id(map_name)
-        landmark_id = self._name(landmark_name, "landmark ID")
-        self.map_repository.delete_landmark(map_id, landmark_id)
-        return self._advance(context)
+        with self._lock:
+            self.setup_coordinator.require_current(context)
+            self._require_idle(context)
+            map_id = self._map_id(map_name)
+            landmark_id = self._name(landmark_name, "landmark ID")
+            self.map_repository.delete_landmark(map_id, landmark_id)
+            return self._advance(context)
 
     def submit_runtime_operation(
         self,
@@ -339,21 +348,39 @@ class NavigationSetupCoordinator:
         map_name: str = "",
     ) -> SetupOperation:
         """Delegate one asynchronous runtime operation to the shared lane."""
-        self.setup_coordinator.require_current(context)
-        self._require_idle(context)
-        command_id, normalized_map = self._runtime_command(
-            command_id,
-            map_name,
-        )
-        command = self.command_factory.create(command_id, normalized_map)
-        operation = self.setup_coordinator.prepare_command(context, command)
-        self._register_pending_operation(
-            operation,
-            operation_code,
-            context,
-            command_id,
-            normalized_map,
-        )
+        with self._lock:
+            self.setup_coordinator.require_current(context)
+            self._require_idle(context)
+            command_id, normalized_map = self._runtime_command(
+                command_id, map_name,
+            )
+            command = self.command_factory.create(command_id, normalized_map)
+            operation = self.setup_coordinator.prepare_command(context, command)
+            self._operations.register(
+                operation.request_id,
+                context,
+                (int(operation_code), command_id, normalized_map),
+            )
+        # Command status callbacks can enter this coordinator synchronously.
+        # Reserve the shared runtime first, but do not hold its lock at dispatch.
+        try:
+            self.setup_coordinator.submit(operation)
+        except Exception:
+            with self._lock:
+                self._operations.pop(operation.request_id)
+                if context.context_id in self._closing_contexts:
+                    self._finish_context_close(context)
+            raise
+        with self._lock:
+            closing = (
+                context.context_id in self._closing_contexts
+                and self._operations.get(operation.request_id) is not None
+            )
+        if closing:
+            try:
+                self.setup_coordinator.cancel_operation(context, operation.request_id)
+            except LookupError:
+                pass
         return operation
 
     def _runtime_command(self, command_id, map_name):
@@ -370,29 +397,6 @@ class NavigationSetupCoordinator:
                 raise FileNotFoundError(f"Unknown map: {map_id}")
             normalized_map = map_id
         return command_id, normalized_map
-
-    def _register_pending_operation(
-        self,
-        operation,
-        operation_code,
-        context,
-        command_id,
-        map_name,
-    ):
-        self._operations.register(
-            operation.request_id,
-            context,
-            (
-                int(operation_code),
-                command_id,
-                map_name,
-            ),
-        )
-        try:
-            self.setup_coordinator.submit(operation)
-        except Exception:
-            self._operations.pop(operation.request_id)
-            raise
 
     def add_status_listener(self, listener) -> None:
         """Register one navigation setup status listener."""
@@ -427,26 +431,35 @@ class NavigationSetupCoordinator:
         for context in contexts:
             if self.setup_coordinator.is_current(context):
                 self.close_context(context)
-        self._operations.clear()
+        with self._lock:
+            # Full coordinator shutdown releases contexts after requesting stops.
+            for context in self.setup_coordinator.contexts_for(
+                CommandOrigin.NAVIGATION_SETUP
+            ):
+                self._finish_context_close(context)
+            self._operations.clear()
 
     def _handle_operation_status(self, status: SetupOperationStatus) -> None:
-        tracked = self._operations.get(status.operation.request_id)
-        if tracked is None:
-            return
-        context = tracked.context
-        operation_code, command_id, map_name = tracked.payload
-        terminal = status.state in {
-            CommandControllerState.SUCCEEDED,
-            CommandControllerState.FAILED,
-            CommandControllerState.CANCELLED,
-        }
-        if terminal:
-            self._operations.pop(status.operation.request_id)
-            if status.state == CommandControllerState.SUCCEEDED:
-                self._apply_runtime_success(command_id, map_name)
-            current = self._advance(context)
-        else:
-            current = self.snapshot(context)
+        with self._lock:
+            tracked = self._operations.get(status.operation.request_id)
+            if tracked is None:
+                return
+            context = tracked.context
+            operation_code, command_id, map_name = tracked.payload
+            terminal = status.state in {
+                CommandControllerState.SUCCEEDED,
+                CommandControllerState.FAILED,
+                CommandControllerState.CANCELLED,
+            }
+            if terminal:
+                self._operations.pop(status.operation.request_id)
+                if status.state == CommandControllerState.SUCCEEDED:
+                    self._apply_runtime_success(command_id, map_name)
+                current = self._advance(context)
+            else:
+                current = self.snapshot(context)
+            if terminal and context.context_id in self._closing_contexts:
+                self._finish_context_close(current.context)
         self._operations.emit(
             NavigationSetupStatus(
                 operation_code=operation_code,
@@ -494,9 +507,9 @@ class NavigationSetupCoordinator:
         return map_id
 
     def _require_idle(self, context: SetupContextSnapshot) -> None:
-        if self._operations.has_context(context):
+        if self._operations.has_operations():
             raise RuntimeError(
-                "Navigation setup context already has an active operation"
+                "Navigation setup already has an active operation"
             )
 
     def _require_authoring_mode(self) -> None:

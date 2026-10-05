@@ -328,3 +328,148 @@ def test_close_survives_synchronous_queued_cancellation_status(tmp_path):
     navigation.close_context(context)
 
     assert navigation.setup_coordinator.contexts == ()
+
+
+def pending_swap(tmp_path):
+    navigation, boundary = coordinator(tmp_path)
+    owner = navigation.open_context("owner").context
+    owner = navigation.create_and_select_map(owner, "plant").context
+    owner = navigation.create_map_definition(owner, "other").context
+    other = navigation.open_context("other-client").context
+    operation = navigation.submit_runtime_operation(
+        owner, operation_code=1, command_id=CommandID.SWAP_MAP,
+        map_name="other",
+    )
+    return navigation, boundary, owner, other, operation
+
+
+@pytest.mark.parametrize("action", ["select", "delete", "create_select", "runtime"])
+def test_pending_runtime_blocks_other_contexts(tmp_path, action):
+    navigation, boundary, owner, other, operation = pending_swap(tmp_path)
+    actions = {
+        "select": lambda: navigation.select_map(other, "other"),
+        "delete": lambda: navigation.delete_map(other, "other"),
+        "create_select": lambda: navigation.create_and_select_map(other, "new"),
+        "runtime": lambda: navigation.submit_runtime_operation(
+            other, 2, CommandID.START_SLAM, "plant",
+        ),
+    }
+    with pytest.raises(RuntimeError, match="active operation"):
+        actions[action]()
+    assert navigation.snapshot(other).active_map == "plant"
+    assert navigation.map_repository.exists("other")
+    assert not navigation.map_repository.exists("new")
+    assert boundary.submitted == [operation.request]
+
+
+@pytest.mark.parametrize("state", [
+    CommandControllerState.SUCCEEDED,
+    CommandControllerState.FAILED,
+    CommandControllerState.CANCELLED,
+])
+def test_shared_runtime_released_only_at_terminal_status(tmp_path, state):
+    navigation, boundary, owner, other, operation = pending_swap(tmp_path)
+    navigation.cancel(owner, operation.request_id)
+    with pytest.raises(RuntimeError, match="active operation"):
+        navigation.select_map(other, "plant")
+    boundary.emit(operation.request, state)
+    result = navigation.select_map(other, "plant")
+    assert result.active_map == "plant"
+
+
+def test_closing_owner_keeps_shared_runtime_reserved_until_cancel_finishes(tmp_path):
+    navigation, boundary, owner, other, operation = pending_swap(tmp_path)
+    navigation.close_context(owner)
+    with pytest.raises(RuntimeError, match="active operation"):
+        navigation.delete_map(other, "other")
+    boundary.emit(operation.request, CommandControllerState.CANCELLED)
+    with pytest.raises(LookupError):
+        navigation.context(owner.context_id, owner.client_id)
+    result = navigation.delete_map(other, "other")
+    assert result.map_names == ("plant",)
+
+
+def test_dispatch_failure_releases_shared_runtime(tmp_path, monkeypatch):
+    navigation, boundary = coordinator(tmp_path)
+    owner = navigation.open_context("owner").context
+    owner = navigation.create_and_select_map(owner, "plant").context
+    other = navigation.open_context("other").context
+
+    def fail_submit(_request):
+        raise RuntimeError("dispatch failed")
+
+    monkeypatch.setattr(boundary, "submit", fail_submit)
+    with pytest.raises(RuntimeError, match="dispatch failed"):
+        navigation.submit_runtime_operation(owner, 1, CommandID.START_SLAM, "plant")
+    assert navigation.select_map(other, "plant").active_map == "plant"
+
+
+def test_concurrent_request_cannot_enter_between_validation_and_registration(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    navigation, boundary = coordinator(tmp_path)
+    owner = navigation.open_context("owner").context
+    owner = navigation.create_and_select_map(owner, "plant").context
+    other = navigation.open_context("other").context
+    entered = Event()
+    release = Event()
+    original = navigation.command_factory.create
+
+    def create(*args):
+        entered.set()
+        assert release.wait(5)
+        return original(*args)
+
+    monkeypatch.setattr(navigation.command_factory, "create", create)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(navigation.submit_runtime_operation,
+                            owner, 1, CommandID.START_SLAM, "plant")
+        assert entered.wait(5)
+        second = pool.submit(navigation.select_map, other, "plant")
+        release.set()
+        operation = first.result(timeout=5)
+        with pytest.raises(RuntimeError, match="active operation"):
+            second.result(timeout=5)
+    assert boundary.submitted == [operation.request]
+
+
+def test_close_during_dispatch_keeps_reservation_and_cancels_after_submit(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    navigation, boundary = coordinator(tmp_path)
+    owner = navigation.open_context("owner").context
+    owner = navigation.create_and_select_map(owner, "plant").context
+    other = navigation.open_context("other").context
+    entered = Event()
+    release = Event()
+    original = navigation.setup_coordinator.submit
+
+    def submit(operation):
+        entered.set()
+        assert release.wait(5)
+        return original(operation)
+
+    monkeypatch.setattr(navigation.setup_coordinator, "submit", submit)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(navigation.submit_runtime_operation,
+                              owner, 1, CommandID.START_SLAM, "plant")
+        assert entered.wait(5)
+        try:
+            navigation.close_context(owner)
+            with pytest.raises(RuntimeError, match="active operation"):
+                navigation.select_map(other, "plant")
+        finally:
+            release.set()
+        operation = pending.result(timeout=5)
+    assert boundary.cancelled == [operation.request_id]
+    boundary.emit(operation.request, CommandControllerState.CANCELLED)
+    assert navigation.select_map(other, "plant").active_map == "plant"
+
+
+def test_coordinator_shutdown_releases_deferred_contexts(tmp_path):
+    navigation, boundary, owner, other, operation = pending_swap(tmp_path)
+    navigation.close()
+    assert boundary.cancelled == [operation.request_id]
+    assert navigation.setup_coordinator.contexts == ()

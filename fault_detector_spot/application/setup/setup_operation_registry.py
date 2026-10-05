@@ -81,6 +81,11 @@ class SetupOperationRegistry(Generic[PayloadT]):
                 if tracked.context.context_id == context.context_id
             )
 
+    def has_operations(self) -> bool:
+        """Return whether any context owns a tracked operation."""
+        with self._lock:
+            return bool(self._operations)
+
     def has_context(
         self,
         context: SetupContextSnapshot,
