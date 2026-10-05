@@ -20,7 +20,10 @@ from fault_detector_spot.application.controllers.command_controller import (
 from fault_detector_spot.application.setup.setup_context import (
     SetupContextSnapshot,
 )
-from fault_detector_spot.inspection.model.models import ImagePoint, PreApproachPathPoint
+from fault_detector_spot.inspection.model.models import (
+    ImagePoint, PreApproachPathPoint, validate_arm_speed_scale,
+)
+from fault_detector_spot.inspection.setup.reference_probe_setup import ReferenceProbeSetup
 from fault_detector_spot.application.coordinators.probe_finalization_controller import (
     ProbeFinalizationController,
 )
@@ -278,6 +281,7 @@ class ProbeSetupCoordinator:
             selected_reference_tag_family=reference_tag_family,
             probe_point_ids=probe_ids,
             probe_point_target_surface_distances_m=distances,
+            probe_point_fully_custom=tuple(routine.get_probe_point(p).fully_custom for p in probe_ids) if probe_ids else (),
             has_base_position=has_base_position,
             has_routine_safe_approach_pose=has_routine_safe_approach_pose,
             routine_safe_position_tolerance_m=safe_tolerance,
@@ -555,39 +559,62 @@ class ProbeSetupCoordinator:
         self,
         context: SetupContextSnapshot,
         position_tolerance_m=None,
+        arm_speed_scale=1.0,
     ) -> ProbeSetupSnapshot:
         """Approve one achieved surface-aligned pre-approach pose."""
         if position_tolerance_m is not None:
             if not isfinite(position_tolerance_m) or position_tolerance_m <= 0:
                 raise ValueError("Aligned position tolerance must be positive and finite")
+        validate_arm_speed_scale(arm_speed_scale)
         draft = self._selected_draft(context)
         self.refinement_controller.approve(
             draft,
             RefinementStage.ALIGNMENT,
         )
         draft.aligned_position_tolerance_m = position_tolerance_m
+        draft.pre_approach_speed_scale = arm_speed_scale
         return self._advance(draft)
 
     @_serialized_transaction
     def approve_probe_pose(
         self,
         context: SetupContextSnapshot,
+        position_tolerance_m=.01,
+        arm_speed_scale=.2,
     ) -> ProbeSetupSnapshot:
         """Approve one achieved final probe pose."""
+        validate_arm_speed_scale(arm_speed_scale)
+        if not isfinite(position_tolerance_m) or position_tolerance_m <= 0:
+            raise ValueError("Final position tolerance must be positive and finite")
         draft = self._selected_draft(context)
         self.refinement_controller.approve(
             draft,
             RefinementStage.PROBE,
         )
+        draft.final_probe_speed_scale = arm_speed_scale
+        draft.final_position_tolerance_m = position_tolerance_m
         return self._advance(draft)
 
     @_serialized_transaction
     def begin_refinement(
         self,
         context: SetupContextSnapshot,
+        fully_custom=False,
     ) -> ProbeSetupSnapshot:
         """Start one server-owned supervised refinement session."""
         draft = self._selected_draft(context)
+        if draft.refinement is not None:
+            raise RuntimeError("Probe refinement is already active")
+        if fully_custom:
+            routine = self.refinement_controller._selected_routine(draft)
+            safe = deepcopy(routine.require_safe_approach_pose())
+            draft.clear_geometry()
+            draft.selected_reference_view_id = ""
+            draft.setup = ReferenceProbeSetup(
+                surface_target=None, safe_approach_pose_object=safe,
+                aligned_preapproach_pose_object=None, probe_pose_object=None,
+                safe_approach_approved=True, fully_custom=True,
+            )
         self.refinement_controller.begin(draft)
         return self._advance(draft)
 
@@ -619,6 +646,9 @@ class ProbeSetupCoordinator:
         self.refinement_controller.discard_context(context)
         self.refinement_controller.abort(draft)
         draft.pre_approach_path.clear()
+        draft.final_probe_path.clear()
+        draft.pre_approach_speed_scale = 1.0
+        draft.final_probe_speed_scale = .2
         draft.setup = (
             deepcopy(draft.geometry.probe_setup)
             if draft.geometry is not None
@@ -768,56 +798,81 @@ class ProbeSetupCoordinator:
             return self._advance(draft)
 
     @_serialized_transaction
-    def add_pathing_point(self, context, name, position_tolerance_m=.01):
+    def add_pathing_point(self, context, name, position_tolerance_m=.01,
+                          arm_speed_scale=1.0, path_stage="alignment"):
         """Capture a full tag-relative tip pose without changing final alignment."""
         draft = self._selected_draft(context)
         self.refinement_controller.require_refinement(draft)
+        path = self._path_for_stage(draft, path_stage)
         self.refinement_controller.require_physical_lane_idle()
         name = name.strip()
         if not name:
             raise ValueError("Pathing point name must not be empty")
         if any(point.name.strip().casefold() == name.casefold()
-               for point in draft.pre_approach_path):
+               for point in path):
             raise ValueError("A pathing point with this name already exists")
         point = PreApproachPathPoint(
-            name, self.refinement_controller.current_probe_pose(draft), position_tolerance_m
+            name, self.refinement_controller.current_probe_pose(draft), position_tolerance_m, arm_speed_scale
         )
         point.validate()
-        draft.pre_approach_path.append(deepcopy(point))
+        path.append(deepcopy(point))
         # Capturing a waypoint does not approve it as the final alignment.
         refinement = draft.refinement
         refinement.alignment_candidate_reached = False
-        for stage in (RefinementStage.ALIGNMENT, RefinementStage.PROBE):
+        for stage in ((RefinementStage.PROBE,) if path_stage == "probe"
+                      else (RefinementStage.ALIGNMENT, RefinementStage.PROBE)):
             refinement.motion_states[stage] = RefinementMotionState.NOT_TESTED
         draft.dirty = True
         return self._advance(draft)
 
     @_serialized_transaction
-    def delete_pathing_point(self, context, index):
+    def delete_pathing_point(self, context, index, path_stage="alignment"):
         """Remove the selected waypoint without changing the final pose."""
         draft = self._selected_draft(context)
         self.refinement_controller.require_refinement(draft)
-        if not 0 <= index < len(draft.pre_approach_path):
+        path = self._path_for_stage(draft, path_stage)
+        if not 0 <= index < len(path):
             raise ValueError("Select an existing pathing point")
-        del draft.pre_approach_path[index]
+        del path[index]
         draft.dirty = True
         return self._advance(draft)
 
     @_serialized_transaction
-    def reorder_pathing_point(self, context, index, direction):
+    def reorder_pathing_point(self, context, index, direction, path_stage="alignment"):
         draft = self._selected_draft(context)
         self.refinement_controller.require_refinement(draft)
+        path = self._path_for_stage(draft, path_stage)
         if direction not in (-1, 1):
             raise ValueError("Pathing point direction must be -1 or 1")
         destination = index + direction
-        if not (0 <= index < len(draft.pre_approach_path)
-                and 0 <= destination < len(draft.pre_approach_path)):
+        if not (0 <= index < len(path)
+                and 0 <= destination < len(path)):
             raise ValueError("Pathing point reorder is outside the path")
-        draft.pre_approach_path[index], draft.pre_approach_path[destination] = (
-            draft.pre_approach_path[destination], draft.pre_approach_path[index]
+        path[index], path[destination] = (
+            path[destination], path[index]
         )
         draft.dirty = True
         return self._advance(draft)
+
+    @_serialized_transaction
+    def set_pathing_point_speed(self, context, index, arm_speed_scale, path_stage="alignment"):
+        validate_arm_speed_scale(arm_speed_scale)
+        draft = self._selected_draft(context)
+        self.refinement_controller.require_refinement(draft)
+        path = self._path_for_stage(draft, path_stage)
+        if not 0 <= index < len(path):
+            raise ValueError("Select an existing pathing point")
+        path[index].arm_speed_scale = arm_speed_scale
+        draft.dirty = True
+        return self._advance(draft)
+
+    @staticmethod
+    def _path_for_stage(draft, path_stage):
+        if path_stage == "alignment":
+            return draft.pre_approach_path
+        if path_stage == "probe" and draft.setup and draft.setup.fully_custom:
+            return draft.final_probe_path
+        raise ValueError("Final paths require fully custom mode")
 
     def prepare_motion(
         self,

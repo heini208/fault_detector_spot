@@ -1,9 +1,11 @@
 """One shared arm adjustment window for probe setup and path authoring."""
 
 from PyQt5.QtWidgets import (
-    QDialog, QDoubleSpinBox, QFormLayout, QGridLayout, QLabel,
+    QDialog, QFormLayout, QGridLayout, QLabel,
     QPushButton, QVBoxLayout,
 )
+
+from .speed_slider import SpeedSlider
 
 
 class FineAdjustmentDialog(QDialog):
@@ -21,12 +23,14 @@ class FineAdjustmentDialog(QDialog):
         settings = QFormLayout()
         settings.addRow("Translation step [m]", controls.refine_translation_step_field)
         settings.addRow("Rotation step [deg]", controls.refine_rotation_step_field)
-        self.speed_field = QDoubleSpinBox()
-        self.speed_field.setRange(1.0, 100.0)
+        self.speed_field = SpeedSlider()
         self.speed_field.setValue(100.0)
-        self.speed_field.setSuffix(" %")
         self.speed_field.setToolTip("Percentage of configured linear and angular arm speed")
         settings.addRow("Speed", self.speed_field)
+        self._final_stage = False
+        self._stage_settings = {
+            True: ("0.001", "1.0", 10.0),
+        }
         settings.addRow("Adjustment frame", controls.refine_frame_dropdown)
         layout.addLayout(settings)
         grid = QGridLayout()
@@ -43,11 +47,27 @@ class FineAdjustmentDialog(QDialog):
         close.clicked.connect(self.hide)
         layout.addWidget(close)
 
+    def set_stage(self, final):
+        """Keep fine adjustments independent of saved candidate move speed."""
+        if final == self._final_stage:
+            return
+        self._stage_settings[self._final_stage] = (
+            self.controls.refine_translation_step_field.text(),
+            self.controls.refine_rotation_step_field.text(),
+            self.speed_field.value(),
+        )
+        translation, rotation, speed = self._stage_settings[final]
+        self.controls.refine_translation_step_field.setText(translation)
+        self.controls.refine_rotation_step_field.setText(rotation)
+        self.speed_field.setValue(speed)
+        self._final_stage = final
+
     def open_for(self, pathing=False):
         self.pathing = pathing
+        final = self.controls._path_stage() == "probe"
         self.context_label.setText(
             "Adjust the arm, then capture it as a pathing point. The final aligned pose is preserved."
-            if pathing else "Adjust the final pre-approach candidate."
+            if pathing else ("Adjust the final probe candidate." if final else "Adjust the final pre-approach candidate.")
         )
         self.controls._refresh_refinement_dialog()
         self.show()

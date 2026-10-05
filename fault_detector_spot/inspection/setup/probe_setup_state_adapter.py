@@ -61,9 +61,20 @@ class ProbeSetupStateAdapter:
         message.reference_view_ids = list(snapshot.reference_view_ids)
         message.reference_camera_ids = list(snapshot.reference_camera_ids)
         message.probe_point_ids = list(snapshot.probe_point_ids)
+        message.probe_point_fully_custom = list(snapshot.probe_point_fully_custom)
         message.probe_point_target_surface_distances_m = list(
             snapshot.probe_point_target_surface_distances_m
         )
+        message.fully_custom = bool(snapshot.setup and snapshot.setup.fully_custom)
+        message.aligned_position_tolerance_m = snapshot.aligned_position_tolerance_m
+        message.final_position_tolerance_m = snapshot.final_position_tolerance_m
+        message.pre_approach_speed_scale = snapshot.pre_approach_speed_scale
+        message.final_probe_speed_scale = snapshot.final_probe_speed_scale
+        message.pathing_point_speed_scales = [p.arm_speed_scale for p in snapshot.pre_approach_path]
+        message.final_pathing_point_names = [p.name for p in snapshot.final_probe_path]
+        message.final_pathing_point_tolerances_m = [p.position_tolerance_m for p in snapshot.final_probe_path]
+        message.final_pathing_point_speed_scales = [p.arm_speed_scale for p in snapshot.final_probe_path]
+        message.final_pathing_point_poses_object = [pose_data_to_pose(p.pose_object) for p in snapshot.final_probe_path]
         message.routine_safe_position_tolerance_m = snapshot.routine_safe_position_tolerance_m
         message.pathing_point_tolerances_m = [point.position_tolerance_m for point in snapshot.pre_approach_path]
         message.pathing_point_names = [point.name for point in snapshot.pre_approach_path]
@@ -93,14 +104,14 @@ class ProbeSetupStateAdapter:
         message.safe_approach_candidate_pose_object = pose_data_to_pose(
             refinement.candidate_pose(RefinementStage.SAFE_APPROACH)
         )
-        message.aligned_preapproach_candidate_pose_object = (
-            pose_data_to_pose(
-                refinement.candidate_pose(RefinementStage.ALIGNMENT)
-            )
-        )
-        message.probe_candidate_pose_object = pose_data_to_pose(
-            refinement.candidate_pose(RefinementStage.PROBE)
-        )
+        aligned = refinement.candidate_pose(RefinementStage.ALIGNMENT)
+        final = refinement.candidate_pose(RefinementStage.PROBE)
+        message.has_alignment_candidate = aligned is not None
+        message.has_final_probe_candidate = final is not None
+        if aligned is not None:
+            message.aligned_preapproach_candidate_pose_object = pose_data_to_pose(aligned)
+        if final is not None:
+            message.probe_candidate_pose_object = pose_data_to_pose(final)
         states = {
             RefinementMotionState.NOT_TESTED: (
                 ProbeSetupState.MOTION_NOT_TESTED
@@ -121,6 +132,9 @@ class ProbeSetupStateAdapter:
         message.probe_motion_state = states[
             refinement.motion_states[RefinementStage.PROBE]
         ]
+        if message.fully_custom:
+            message.surface_alignment_approved = refinement.stage_is_approved(RefinementStage.ALIGNMENT)
+            message.probe_pose_approved = refinement.stage_is_approved(RefinementStage.PROBE)
         message.refinement_recovery_required = refinement.recovery_required
         message.refinement_recovery_message = refinement.recovery_message
         pending = refinement.pending_motion
@@ -182,6 +196,10 @@ class ProbeSetupStateAdapter:
         if setup is None:
             return
         message.has_probe_setup = True
+        if setup.fully_custom:
+            message.calculated_safe_approach_pose_object = pose_data_to_pose(setup.safe_approach_pose_object)
+            cls._write_approved_poses(message, setup)
+            return
         target = setup.surface_target
         cls._write_surface_target(message, target)
         calculated = snapshot.geometry.probe_setup
@@ -224,12 +242,10 @@ class ProbeSetupStateAdapter:
         message.safe_approach_pose_object = pose_data_to_pose(
             setup.safe_approach_pose_object
         )
-        message.aligned_preapproach_pose_object = pose_data_to_pose(
-            setup.aligned_preapproach_pose_object
-        )
-        message.probe_pose_object = pose_data_to_pose(
-            setup.probe_pose_object
-        )
+        if setup.aligned_preapproach_pose_object is not None:
+            message.aligned_preapproach_pose_object = pose_data_to_pose(setup.aligned_preapproach_pose_object)
+        if setup.probe_pose_object is not None:
+            message.probe_pose_object = pose_data_to_pose(setup.probe_pose_object)
         message.safe_approach_approved = setup.safe_approach_approved
         message.surface_alignment_approved = (
             setup.surface_alignment_approved

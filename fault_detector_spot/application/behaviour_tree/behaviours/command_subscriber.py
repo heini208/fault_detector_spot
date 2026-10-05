@@ -447,12 +447,16 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 command.orientation_mode,
                 motion_sensor_id=command.motion_sensor_id,
                 tag_position_tolerance_m=tolerance,
+                arm_speed_scale=speed_scale,
             )
-            for offset, tolerance in zip(
+            for offset, tolerance, speed_scale in zip(
                 (*command.pre_approach_offsets, command.offset),
                 (*(command.pre_approach_tolerances_m or
                    (command.tag_position_tolerance_m,) * len(command.pre_approach_offsets)),
                  command.tag_position_tolerance_m),
+                (*(command.pre_approach_speed_scales or
+                   (command.arm_speed_scale,) * len(command.pre_approach_offsets)),
+                 command.arm_speed_scale),
             )
         ]
 

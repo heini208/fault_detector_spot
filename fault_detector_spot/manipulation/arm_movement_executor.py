@@ -470,6 +470,12 @@ class ArmMovementExecutor(MovementExecutor):
         force_threshold_n=None,
     ) -> ArmMovementUpdate:
         """Move to a tag, then verify and correct the achieved tip position."""
+        scale = float(getattr(command, "arm_speed_scale", 1.0))
+        if not math.isfinite(scale) or not 0 < scale <= 1:
+            raise ValueError("Arm speed scale must be in (0, 1]")
+        baseline = speed or self.speed_policy.default_speed
+        speed = ArmMotionSpeed(baseline.linear_speed_mps * scale,
+                               baseline.angular_speed_rad_s * scale)
         with self._execution_lock:
             if self.active:
                 return self._busy_update()

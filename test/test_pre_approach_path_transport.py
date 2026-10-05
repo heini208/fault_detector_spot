@@ -127,3 +127,12 @@ def test_path_tolerance_count_and_values_are_validated(tolerances):
     from dataclasses import replace
     with pytest.raises(ValueError):
         replace(path_command(), pre_approach_tolerances_m=tolerances)
+
+
+def test_saved_speeds_survive_transport_recording_and_bt_expansion():
+    from dataclasses import replace
+    command = replace(path_command(), arm_speed_scale=.4, pre_approach_speed_scales=(.7, .2))
+    restored = semantic_command_from_message(semantic_command_to_message(command))
+    restored = deserialize_recorded_command(serialize_recorded_command(restored))
+    restored = replace(restored, motion_sensor_id=command.motion_sensor_id)
+    assert [step.arm_speed_scale for step in executable_path(restored)] == [.7, .2, .4]

@@ -28,6 +28,7 @@ def deserialize_recorded_command(data: dict) -> SemanticCommand:
     data.setdefault("body_height_m", 0.0)
     data.setdefault("tag_position_tolerance_m", 0.01)
     data.setdefault("pre_approach_tolerances_m", [])
+    data.setdefault("pre_approach_speed_scales", [])
     return _deserialize_dataclass(SemanticCommand, data)
 
 

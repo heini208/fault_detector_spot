@@ -8,7 +8,7 @@ from fault_detector_spot.application.commanding.request_identity import (
 )
 from fault_detector_spot.inspection.model.models import ProbePoint
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
-    RefinementStage,
+    RefinementStage, RefinementMotionState,
 )
 from fault_detector_spot.inspection.setup.reference_probe_setup import (
     approve_surface_alignment_pose,
@@ -56,6 +56,10 @@ class ProbeFinalizationController:
                 raise ValueError(
                     f"Approve the {label} before finalization"
                 )
+        if save_requested and draft.setup.fully_custom:
+            if (not refinement.stage_is_approved(RefinementStage.PROBE)
+                    or refinement.motion_states[RefinementStage.PROBE] is not RefinementMotionState.REACHED):
+                raise ValueError("Reach and save the custom final candidate before finalization")
         with self.state_lock:
             self._active[context.context_id] = normalized
 
@@ -73,6 +77,10 @@ class ProbeFinalizationController:
         setup = draft.setup
         if setup is None:
             raise ValueError("No calculated probe setup is available")
+        if setup.fully_custom:
+            if not refinement.stage_is_approved(RefinementStage.PROBE):
+                raise ValueError("Save the custom final probe candidate before finalization")
+            return
         execution_setup = approve_surface_alignment_pose(
             setup,
             setup.aligned_preapproach_pose_object,
@@ -239,6 +247,12 @@ class ProbeFinalizationController:
         setup = draft.setup
         point = ProbePoint(
             pre_approach_path=deepcopy(draft.pre_approach_path),
+            fully_custom=setup.fully_custom,
+            final_probe_pose_object=deepcopy(setup.probe_pose_object) if setup.fully_custom else None,
+            final_probe_path=deepcopy(draft.final_probe_path),
+            pre_approach_speed_scale=draft.pre_approach_speed_scale,
+            final_probe_speed_scale=draft.final_probe_speed_scale,
+            final_position_tolerance_m=draft.final_position_tolerance_m,
             probe_point_id=self._name(
                 probe_point_id,
                 "probe point ID",
@@ -251,7 +265,7 @@ class ProbeFinalizationController:
                 setup.aligned_preapproach_pose_object
             ),
             target_surface_distance_m=(
-                setup.surface_target.target_surface_distance_m
+                0.0 if setup.fully_custom else setup.surface_target.target_surface_distance_m
             ),
             position_tolerance_m=float(
                 draft.aligned_position_tolerance_m
@@ -264,13 +278,13 @@ class ProbeFinalizationController:
                 measurement_duration_sec
             ),
             aligned_preapproach_distance_m=(
-                setup.surface_target.aligned_preapproach_distance_m
+                0.0 if setup.fully_custom else setup.surface_target.aligned_preapproach_distance_m
             ),
             reference_pixel=deepcopy(
                 draft.reference_pixel
             ),
             reference_view_id=(
-                draft.selected_reference_view_id
+                draft.selected_reference_view_id or None
             ),
         )
         point.validate()

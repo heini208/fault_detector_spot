@@ -32,7 +32,7 @@ from fault_detector_spot.inspection.model.sensor_models import (
 from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
 
 
-MAX_REFINEMENT_TRANSLATION_M = 0.05
+MAX_REFINEMENT_TRANSLATION_M = 0.2
 MAX_REFINEMENT_ROTATION_RAD = math.radians(15.0)
 
 
@@ -73,6 +73,8 @@ class ProbeMotionRequest:
     orientation_tolerance_rad: float = math.radians(5.0)
     pathing_point_index: int = 0
     arm_speed_scale: float = 1.0
+    path_stage: str = "alignment"
+    retract_path: bool = False
 
     def validate(self) -> None:
         if not isinstance(self.kind, ProbeMotionKind):
@@ -81,6 +83,8 @@ class ProbeMotionRequest:
             raise TypeError("Probe motion frame is invalid")
         if not math.isfinite(self.arm_speed_scale) or not 0 < self.arm_speed_scale <= 1:
             raise ValueError("Arm speed scale must be in (0, 1]")
+        if self.path_stage not in ("alignment", "probe"):
+            raise ValueError("Invalid path stage")
         self.translation.validate()
         for value, label in (
             (self.pitch_rad, "Pitch adjustment"),
@@ -90,15 +94,16 @@ class ProbeMotionRequest:
         ):
             if not math.isfinite(float(value)):
                 raise ValueError(f"{label} must be finite")
+        limit = .05 if self.kind is ProbeMotionKind.ADJUST_SAFE_APPROACH else MAX_REFINEMENT_TRANSLATION_M
         if any(
-            abs(value) > MAX_REFINEMENT_TRANSLATION_M
+            abs(value) > limit
             for value in (
                 self.translation.x,
                 self.translation.y,
                 self.translation.z,
             )
         ):
-            raise ValueError("Refinement translation exceeds 0.05 m")
+            raise ValueError(f"Refinement translation exceeds {limit:g} m")
         if abs(self.pitch_rad) > MAX_REFINEMENT_ROTATION_RAD:
             raise ValueError("Pitch adjustment exceeds 15 degrees")
         if abs(self.yaw_rad) > MAX_REFINEMENT_ROTATION_RAD:

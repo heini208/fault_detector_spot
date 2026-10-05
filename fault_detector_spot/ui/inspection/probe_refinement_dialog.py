@@ -3,6 +3,7 @@
 from fault_detector_msgs.msg import ProbeSetupMotionIntent
 from .pre_approach_path_dialog import PreApproachPathDialog
 from .fine_adjustment_dialog import FineAdjustmentDialog
+from .speed_slider import SpeedSlider
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -40,11 +41,13 @@ class ProbeRefinementDialog(QDialog):
     ALIGNMENT_PAGE = 2
     PROBE_PAGE = 3
     SUMMARY_PAGE = 4
+    MODE_PAGE = 5
 
     def __init__(self, controls):
         parent = controls.ui if isinstance(controls.ui, QWidget) else None
         super().__init__(parent)
         self.controls = controls
+        self.fully_custom = False
         self._force_close = False
         self._workflow_controls_attached = False
         self._reference_selection_enabled = False
@@ -93,6 +96,17 @@ class ProbeRefinementDialog(QDialog):
         self.workflow_stack.addWidget(self._make_alignment_page())
         self.workflow_stack.addWidget(self._make_probe_page())
         self.workflow_stack.addWidget(self._make_summary_page())
+        mode_page = QWidget()
+        mode_layout = QVBoxLayout(mode_page)
+        mode_layout.addWidget(QLabel("Choose how to define the probe point:"))
+        self.surface_mode_button = QPushButton("Object Surface Relative Probe Point")
+        self.custom_mode_button = QPushButton("Fully Custom Probe Point")
+        self.surface_mode_button.clicked.connect(lambda: controls.handle_probe_mode_selected(False))
+        self.custom_mode_button.clicked.connect(lambda: controls.handle_probe_mode_selected(True))
+        mode_layout.addWidget(self.surface_mode_button)
+        mode_layout.addWidget(self.custom_mode_button)
+        mode_layout.addStretch()
+        self.workflow_stack.addWidget(mode_page)
         layout.addWidget(self.workflow_stack, 1)
 
         footer = QHBoxLayout()
@@ -139,6 +153,16 @@ class ProbeRefinementDialog(QDialog):
         self.emergency_stop_button.hide()
         self.back_button.hide()
         self.next_button.hide()
+
+    def open_mode_selection(self):
+        self.workflow_stack.setCurrentIndex(self.MODE_PAGE)
+        self.progress_label.setText("Add Probe Point — Setup Mode")
+        self.next_button.hide()
+        self.back_button.hide()
+        self.emergency_stop_button.hide()
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def attach_workflow_controls(self):
         """Move existing controls into their new workflow-owned pages."""
@@ -357,8 +381,14 @@ class ProbeRefinementDialog(QDialog):
         distance_row = QHBoxLayout()
         distance_row.addWidget(QLabel("Final candidate position tolerance [m]:"))
         distance_row.addWidget(self.controls.probe_position_tolerance_field)
-        distance_row.addWidget(QLabel("Absolute surface distance [m]:"))
+        self.aligned_distance_label = QLabel("Absolute surface distance [m]:")
+        distance_row.addWidget(self.aligned_distance_label)
         distance_row.addWidget(self.aligned_distance_field)
+        self.candidate_speed_field = SpeedSlider()
+        self.candidate_speed_field.setValue(100)
+        self.candidate_speed_field.setToolTip("Saved speed as a percentage of configured arm speed")
+        distance_row.addWidget(QLabel("Candidate speed:"))
+        distance_row.addWidget(self.candidate_speed_field)
         distance_row.addStretch()
         distance_widget = QWidget()
         distance_widget.setLayout(distance_row)
@@ -376,7 +406,7 @@ class ProbeRefinementDialog(QDialog):
             ProbeSetupMotionIntent.OPERATION_MOVE_PRE_APPROACH_PATH
         ))
         self.move_safe_pose_button = QPushButton("Move to Safe Pre-approach Pose")
-        self.move_safe_pose_button.clicked.connect(self.controls.handle_move_to_approach_pose)
+        self.move_safe_pose_button.clicked.connect(self.controls.handle_return_to_pre_approach)
         path_actions = QHBoxLayout()
         for button in (self.add_pathing_point_button, self.move_path_button, self.move_safe_pose_button):
             path_actions.addWidget(button)
@@ -384,6 +414,7 @@ class ProbeRefinementDialog(QDialog):
         content_layout.addWidget(distance_widget)
 
         clearance_group = QGroupBox("Camera clearance recovery")
+        self.clearance_group = clearance_group
         clearance_layout = QVBoxLayout(clearance_group)
         clearance_hint = QLabel(
             "If lateral or rotational refinement moves the hand camera too "
@@ -438,7 +469,9 @@ class ProbeRefinementDialog(QDialog):
 
     def refresh_path_controls(self, enabled):
         state = self.controls._probe_setup_state
-        count = len(state.pathing_point_names) if state is not None else 0
+        final = self.controls._path_stage() == "probe"
+        count = len(state.final_pathing_point_names if final else state.pathing_point_names) if state is not None else 0
+        self.candidate_speed_field.setEnabled(enabled)
         self.pathing_point_count_label.setText(f"Pathing points: {count}")
         for button in (self.add_pathing_point_button, self.move_path_button, self.move_safe_pose_button):
             button.setEnabled(enabled)
@@ -526,9 +559,15 @@ class ProbeRefinementDialog(QDialog):
             "Aligned pre-approach pose:",
             self.summary_aligned_pose_label,
         )
+        self.summary_final_pose_label = QLabel("Not set")
+        self.summary_final_pose_label.setWordWrap(True)
+        pose_layout.addRow("Final probe pose:", self.summary_final_pose_label)
+        self.summary_speeds_label = QLabel()
+        pose_layout.addRow("Saved speeds:", self.summary_speeds_label)
         self.summary_layout.addWidget(pose_group)
 
         reference_group = QGroupBox("Reference point")
+        self.summary_reference_group = reference_group
         reference_layout = QFormLayout(reference_group)
         self.summary_reference_camera_label = QLabel("Not set")
         self.summary_reference_pixel_label = QLabel("Not set")
@@ -565,6 +604,8 @@ class ProbeRefinementDialog(QDialog):
         page = QWidget()
         page_layout = QVBoxLayout(page)
         heading = QLabel(title)
+        if stage is RefinementStage.ALIGNMENT:
+            self.path_heading = heading
         heading_font = heading.font()
         heading_font.setPointSize(heading_font.pointSize() + 2)
         heading_font.setBold(True)
@@ -572,6 +613,8 @@ class ProbeRefinementDialog(QDialog):
         page_layout.addWidget(heading)
 
         description_label = QLabel(description)
+        if stage is RefinementStage.ALIGNMENT:
+            self.path_description = description_label
         description_label.setWordWrap(True)
         page_layout.addWidget(description_label)
 
@@ -855,11 +898,33 @@ class ProbeRefinementDialog(QDialog):
 
     def show_stage(self, stage):
         index = self.STAGES.index(stage)
-        self.workflow_stack.setCurrentIndex(index + 1)
+        self.workflow_stack.setCurrentIndex(self.ALIGNMENT_PAGE if self.fully_custom and stage is RefinementStage.PROBE else index + 1)
+        self.aligned_distance_field.setVisible(not self.fully_custom)
+        self.aligned_distance_label.setVisible(not self.fully_custom)
+        self.clearance_group.setVisible(not self.fully_custom)
+        self.controls.orient_to_surface_button.parentWidget().setVisible(not self.fully_custom)
+        state = self.controls._probe_setup_state
+        final = self.fully_custom and stage is RefinementStage.PROBE
+        self.move_safe_pose_button.setText(
+            "Move to Saved Aligned Pre-approach" if final
+            else "Move to Safe Pre-approach Pose"
+        )
+        self.candidate_speed_field.setValue(100 * (state.final_probe_speed_scale if final else state.pre_approach_speed_scale) if state else (20 if final else 100))
+        self.fine_adjustment_dialog.set_stage(final)
+        if state is not None:
+            self.controls.probe_position_tolerance_field.setText(f"{state.final_position_tolerance_m if final else state.aligned_position_tolerance_m:g}")
+        self.controls.refine_translation_step_field.setValidator(self.controls._bounded_number_validator(
+            self.controls.refine_translation_step_field, .001, .2 if self.fully_custom else .05, 3))
+        self.path_dialog.speed_field.setValue(20 if final else 100)
+        self.path_dialog.hide()
+        self.path_heading.setText("Final Probe Point" if final else "Pre-approach Path")
+        self.path_description.setText("Add optional path points, adjust the arm, then save the current pose as the candidate." if self.fully_custom else "Add optional pathing points, then refine the final lateral position and orientation at the absolute pre-approach distance.")
         self.progress_label.setText(
             f"Step {index + 2} of 5 — "
             f"{self._stage_title(stage)}"
         )
+        if self.fully_custom:
+            self.progress_label.setText(f"Step {index + 1} of 4 — " + ("Final Probe Point" if final else self._stage_title(stage)))
         self.fine_adjustment_dialog.hide()
         self.emergency_stop_button.show()
         self.back_button.show()
@@ -881,7 +946,7 @@ class ProbeRefinementDialog(QDialog):
 
     def show_summary(self):
         self.workflow_stack.setCurrentIndex(self.SUMMARY_PAGE)
-        self.progress_label.setText("Step 5 of 5 — Probe Point Summary")
+        self.progress_label.setText("Step 4 of 4 — Probe Point Summary" if self.fully_custom else "Step 5 of 5 — Probe Point Summary")
         self.fine_adjustment_dialog.hide()
         self.emergency_stop_button.show()
         self.back_button.show()
@@ -913,6 +978,9 @@ class ProbeRefinementDialog(QDialog):
         )
 
         state = self.controls._probe_setup_state
+        self.summary_reference_group.setVisible(not self.fully_custom)
+        self.summary_final_pose_label.setText(self.controls._pose_summary(presentation.approved_pose(RefinementStage.PROBE)))
+        self.summary_speeds_label.setText(f"Pre-approach: {100 * state.pre_approach_speed_scale:g}%; final: {100 * state.final_probe_speed_scale:g}%" if state and self.fully_custom else (f"Pre-approach: {100 * state.pre_approach_speed_scale:g}%" if state else ""))
         if state is None or not state.has_reference_pixel:
             self.summary_reference_camera_label.setText("Not set")
             self.summary_reference_pixel_label.setText("Not set")

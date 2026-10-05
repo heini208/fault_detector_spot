@@ -404,7 +404,8 @@ def test_probe_pose_uses_probe_current_to_goal_for_speed(monkeypatch):
     assert captured["args"][8] == pytest.approx(2.0)
 
 
-def test_tag_probe_forwards_speed_to_probe_motion(monkeypatch):
+@pytest.mark.parametrize("speed_scale", [1.0, .25])
+def test_tag_probe_forwards_speed_to_probe_motion(monkeypatch, speed_scale):
     tag_pose = PoseStamped()
     tag_pose.header.frame_id = "body"
     tag_pose.pose.orientation.w = 1.0
@@ -437,6 +438,7 @@ def test_tag_probe_forwards_speed_to_probe_motion(monkeypatch):
         "hall_probe",
         probe_target,
     )
+    command.arm_speed_scale = speed_scale
     captured = capture_builder(monkeypatch)
     executor, _ = executor_with_client(
         transformer,
@@ -455,12 +457,14 @@ def test_tag_probe_forwards_speed_to_probe_motion(monkeypatch):
     assert command.calls == [transformer]
     assert captured["args"][0] == pytest.approx(0.6)
     assert captured["args"][7] == "body"
-    assert captured["args"][8] == pytest.approx(4.0)
+    assert captured["args"][8] == pytest.approx(4.0 / speed_scale)
     verification_target = executor._tag_accuracy["target"].target
     assert verification_target.header.frame_id == "body"
     assert verification_target.pose.position.x == pytest.approx(0.8)
     assert verification_target.pose.position.y == pytest.approx(0.0)
 
+
+    assert executor._tag_accuracy["speed"].linear_speed_mps == pytest.approx(.05 * speed_scale)
 
 def test_probe_relative_reuses_current_probe_transform(monkeypatch):
     probe_frame = "hall_probe_probe"

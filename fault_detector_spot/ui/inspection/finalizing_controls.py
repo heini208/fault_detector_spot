@@ -9,6 +9,7 @@ from PyQt5.QtGui import QPalette
 from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QPushButton,
@@ -143,7 +144,6 @@ class FinalizingInspectionControls(InspectionControls):
         )
         layout.addWidget(self.delete_saved_probe_point_button)
 
-        layout.addWidget(QLabel("Target distance from wall [m]:"))
         self.saved_probe_distance = QDoubleSpinBox()
         self.saved_probe_distance.setDecimals(3)
         self.saved_probe_distance.setRange(0.0, 10.0)
@@ -152,7 +152,6 @@ class FinalizingInspectionControls(InspectionControls):
         self.saved_probe_distance.setToolTip(
             "Defaults to the selected point’s saved value. Changes apply only to this movement."
         )
-        layout.addWidget(self.saved_probe_distance)
         self.saved_probe_action_buttons = {}
         for label, operation in (
             ("Move Along Saved Pre-approach Path", OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH),
@@ -164,7 +163,23 @@ class FinalizingInspectionControls(InspectionControls):
                 lambda _checked=False, operation=operation: self.handle_saved_probe_motion(operation)
             )
             self.saved_probe_action_buttons[operation] = button
-            layout.addWidget(button)
+            if operation == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE:
+                wall_row = QHBoxLayout()
+                wall_row.addWidget(button, 1)
+                wall_row.addWidget(QLabel("Target distance from wall [m]:"))
+                wall_row.addWidget(self.saved_probe_distance)
+                layout.addLayout(wall_row)
+            else:
+                layout.addWidget(button)
+        self.saved_custom_probe_button = QPushButton("Move to Custom Probe Point")
+        self.saved_custom_probe_button.setEnabled(False)
+        self.saved_custom_probe_button.clicked.connect(
+            lambda: self.handle_saved_probe_motion(
+                OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE,
+                custom=True,
+            )
+        )
+        layout.addWidget(self.saved_custom_probe_button)
         self.saved_probe_motion_status = QLabel("Select a saved probe point.")
         self.saved_probe_motion_status.setWordWrap(True)
         layout.addWidget(self.saved_probe_motion_status)
@@ -223,11 +238,19 @@ class FinalizingInspectionControls(InspectionControls):
             and not self._delete_probe_point_pending
         )
         row = self.saved_probe_points_list.currentRow()
+        custom = bool(state and 0 <= row < len(state.probe_point_fully_custom) and state.probe_point_fully_custom[row])
         self.saved_probe_distance.setEnabled(
-            enabled and 0 <= row < len(state.probe_point_target_surface_distances_m)
+            enabled and not custom and 0 <= row < len(state.probe_point_target_surface_distances_m)
         )
         for button in self.saved_probe_action_buttons.values():
             button.setEnabled(enabled)
+        surface_button = self.saved_probe_action_buttons[
+            OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
+        ]
+        surface_button.setEnabled(enabled and not custom)
+        self.saved_custom_probe_button.setEnabled(enabled and custom)
+        surface_button.setToolTip("Available for surface-relative probe points.")
+        self.saved_custom_probe_button.setToolTip("Available for fully custom probe points; follows the saved final path.")
         self.delete_saved_probe_point_button.setEnabled(enabled)
         self.saved_probe_points_list.setEnabled(
             not bool(
@@ -448,9 +471,10 @@ class FinalizingInspectionControls(InspectionControls):
             if self._probe_setup_state is not None:
                 self._apply_base_position_state(self._probe_setup_state)
 
-    def handle_saved_probe_motion(self, operation):
+    def handle_saved_probe_motion(self, operation, custom=False):
         self._refresh_saved_probe_actions()
-        button = self.saved_probe_action_buttons.get(operation)
+        button = (self.saved_custom_probe_button if custom
+                  else self.saved_probe_action_buttons.get(operation))
         if button is None or not button.isEnabled():
             return False
         state = self._probe_setup_state
@@ -533,10 +557,19 @@ class FinalizingInspectionControls(InspectionControls):
                 "pose before adding a probe point.",
             )
             return False
+        self.refinement_dialog.open_mode_selection()
+        return True
+
+    def handle_probe_mode_selected(self, fully_custom):
+        state = self._probe_setup_state
+        self.refinement_dialog.fully_custom = fully_custom
         self._reference_start_pending = False
         self._reference_start_error = ""
         self._begin_refinement_after_reference_commit = False
         self.inspection_workspace_splitter.setEnabled(False)
+        if self.refinement_dialog.fully_custom:
+            self.refinement_dialog.show()
+            return self._start_refinement_after_reference()
         self.refinement_dialog.open_reference_selection(
             has_existing=bool(state.reference_view_ids)
         )
@@ -620,6 +653,7 @@ class FinalizingInspectionControls(InspectionControls):
         self.refinement_dialog.show_stage(RefinementStage.SAFE_APPROACH)
         intent = ProbeSetupIntent()
         intent.operation = ProbeSetupIntent.OPERATION_BEGIN_REFINEMENT
+        intent.fully_custom = self.refinement_dialog.fully_custom
         self._reference_start_error = ""
         self._reference_start_pending = True
         self.refinement_dialog.refresh_reference_selection()
@@ -1244,6 +1278,10 @@ class FinalizingInspectionControls(InspectionControls):
         return None
 
     def _surface_result_current(self):
+        if self._custom_probe_mode():
+            presentation = self._refinement_presentation
+            return bool(presentation and presentation.stage_is_approved(RefinementStage.PROBE)
+                        and presentation.motion_states[RefinementStage.PROBE] is RefinementMotionState.REACHED)
         presentation = self._refinement_presentation
         if (
             not self._surface_move_succeeded
@@ -1307,7 +1345,7 @@ class FinalizingInspectionControls(InspectionControls):
                 status = "Saving probe point and retracting."
         elif state is None or not state.selected_routine_id:
             status = "Select a saved object and routine."
-        elif not state.has_reference_pixel:
+        elif not state.has_reference_pixel and not state.fully_custom:
             status = "Select a point in a captured reference view."
         elif not point_id or not display_name:
             status = "Enter a probe point ID and display name."
@@ -1316,7 +1354,9 @@ class FinalizingInspectionControls(InspectionControls):
         elif not numeric_ready:
             status = "Enter positive tolerances and measurement duration."
         elif not self._surface_result_current():
-            status = "Run Move Close to Surface successfully before saving."
+            status = ("Reach and save the final probe candidate before saving."
+                      if state.fully_custom else
+                      "Run Move Close to Surface successfully before saving.")
         elif state.motion_pending:
             status = "Wait for the active probe movement to finish."
         else:
@@ -1326,6 +1366,8 @@ class FinalizingInspectionControls(InspectionControls):
         self.save_probe_point_status_label.setText(status)
 
     def _refresh_alignment_depth_status(self):
+        if self._custom_probe_mode():
+            return
         presentation = self._refinement_presentation
         state = self._probe_setup_state
         if presentation is None or state is None:
@@ -1402,6 +1444,9 @@ class FinalizingInspectionControls(InspectionControls):
 
     def _refresh_refinement_dialog(self):
         super()._refresh_refinement_dialog()
+        if self._custom_probe_mode():
+            self._update_save_probe_point_state()
+            return
         self._refresh_alignment_depth_status()
         presentation = self._refinement_presentation
         if presentation is None:

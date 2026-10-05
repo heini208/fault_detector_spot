@@ -1,6 +1,6 @@
 """Convert probe setup transport state into immutable view models."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Mapping, Optional
 
@@ -217,7 +217,7 @@ def _approach_direction(state, projected, normal):
 
 
 def _surface_target(state):
-    if not state.has_probe_setup:
+    if not state.has_probe_setup or state.fully_custom:
         return None
     return ReferenceSurfaceTarget(
         surface_point_object=_vector(state.surface_point_object),
@@ -241,10 +241,11 @@ def _surface_target(state):
 
 
 def _probe_setups(state, target):
-    if target is None:
+    if target is None and not (state.has_probe_setup and state.fully_custom):
         return None, None
     calculated = ReferenceProbeSetup(
         surface_target=target,
+        fully_custom=state.fully_custom,
         safe_approach_pose_object=pose_to_pose_data(
             state.calculated_safe_approach_pose_object
         ),
@@ -257,6 +258,7 @@ def _probe_setups(state, target):
     )
     setup = ReferenceProbeSetup(
         surface_target=target,
+        fully_custom=state.fully_custom,
         safe_approach_pose_object=pose_to_pose_data(
             state.safe_approach_pose_object
         ),
@@ -268,6 +270,11 @@ def _probe_setups(state, target):
         surface_alignment_approved=state.surface_alignment_approved,
         probe_pose_approved=state.probe_pose_approved,
     )
+    if state.fully_custom:
+        calculated = replace(calculated, aligned_preapproach_pose_object=None, probe_pose_object=None)
+        setup = replace(setup,
+                        aligned_preapproach_pose_object=setup.aligned_preapproach_pose_object if state.surface_alignment_approved else None,
+                        probe_pose_object=setup.probe_pose_object if state.probe_pose_approved else None)
     return calculated, setup
 
 
@@ -301,10 +308,10 @@ def _refinement(state, calculated, setup):
             ),
             RefinementStage.ALIGNMENT: pose_to_pose_data(
                 state.aligned_preapproach_candidate_pose_object
-            ),
+            ) if not state.fully_custom or state.has_alignment_candidate else None,
             RefinementStage.PROBE: pose_to_pose_data(
                 state.probe_candidate_pose_object
-            ),
+            ) if not state.fully_custom or state.has_final_probe_candidate else None,
         }
     )
     approved_poses = MappingProxyType(

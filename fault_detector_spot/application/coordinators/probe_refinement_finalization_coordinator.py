@@ -280,6 +280,7 @@ class ProbeRefinementFinalizationCoordinator:
             context,
             ProbeMotionRequest(
                 kind=kind,
+                retract_path=True,
                 position_tolerance_m=position_tolerance_m,
                 orientation_tolerance_rad=orientation_tolerance_rad,
             ),

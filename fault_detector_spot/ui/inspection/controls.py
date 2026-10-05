@@ -1544,6 +1544,10 @@ class InspectionControls(UIControlHelper):
         if self._probe_setup is None:
             self._clear_selected_surface_target()
             return
+        if self._probe_setup.fully_custom:
+            self._set_setup_status(status, "Fully custom object-relative probe point")
+            self._set_probe_setup_buttons_enabled(True)
+            return
         target = self._probe_setup.probe_pose_object
         aligned = self._probe_setup.aligned_preapproach_pose_object
         self.reference_target_x_value_label.setText(
@@ -1688,6 +1692,8 @@ class InspectionControls(UIControlHelper):
         return True
 
     def handle_refinement_next(self):
+        if self._custom_probe_mode() and self._refinement_presentation.active_stage is RefinementStage.PROBE:
+            return self.handle_open_probe_summary()
         presentation = self._require_refinement_presentation()
         stage = presentation.active_stage
         if (
@@ -1718,6 +1724,9 @@ class InspectionControls(UIControlHelper):
     def _refresh_refinement_dialog(self):
         presentation = self._refinement_presentation
         if presentation is None or not hasattr(self, "refinement_dialog"):
+            return
+        if self._custom_probe_mode():
+            self._refresh_custom_refinement()
             return
         for stage in RefinementStage:
             labels = self.refinement_dialog.pose_comparison_labels[stage]
@@ -1909,6 +1918,8 @@ class InspectionControls(UIControlHelper):
 
     @staticmethod
     def _pose_summary(pose):
+        if pose is None:
+            return "Not set"
         roll, pitch, yaw = quaternion_to_rpy(pose.orientation)
         return (
             f"p=({pose.position.x:.4f}, {pose.position.y:.4f}, "
@@ -1945,6 +1956,8 @@ class InspectionControls(UIControlHelper):
 
     @staticmethod
     def _poses_equivalent(first, second):
+        if first is None or second is None:
+            return first is second
         position_error = math.sqrt(
             (first.position.x - second.position.x) ** 2
             + (first.position.y - second.position.y) ** 2
@@ -1978,6 +1991,11 @@ class InspectionControls(UIControlHelper):
             ),
         )
 
+    def handle_return_to_pre_approach(self):
+        if self._path_stage() == "probe":
+            return self._send_alignment_motion(path_stage="alignment")
+        return self.handle_move_to_approach_pose()
+
     def handle_move_to_aligned_pose(self):
         self._require_refinement_presentation()
         return self._send_alignment_motion()
@@ -2006,6 +2024,7 @@ class InspectionControls(UIControlHelper):
             return False
         intent = ProbeSetupMotionIntent()
         intent.operation = operation
+        intent.path_stage = self._path_stage()
         intent.frame = ProbeSetupMotionIntent.FRAME_SENSOR
         self._write_motion_tolerances(intent)
         return self._submit_probe_motion(intent, label)
@@ -2020,23 +2039,79 @@ class InspectionControls(UIControlHelper):
         )
         return False
 
+    def _custom_probe_mode(self):
+        state = self._probe_setup_state
+        return bool(state is not None and state.fully_custom)
+
+    def _path_stage(self):
+        presentation = self._refinement_presentation
+        return "probe" if self._custom_probe_mode() and presentation and presentation.active_stage is RefinementStage.PROBE else "alignment"
+
+    def _translation_limit(self):
+        return .2 if self._custom_probe_mode() else MAX_REFINEMENT_TRANSLATION_M
+
+    def _refresh_custom_refinement(self):
+        presentation = self._refinement_presentation
+        dialog = self.refinement_dialog
+        dialog.fully_custom = True
+        stage = presentation.active_stage
+        safe_page = stage is RefinementStage.SAFE_APPROACH
+        pending = presentation.pending_motion is not None
+        enabled = not pending and not presentation.recovery_required and not self._retraction_failed
+        predecessor = RefinementStage.SAFE_APPROACH if stage is RefinementStage.ALIGNMENT else RefinementStage.ALIGNMENT
+        editable = enabled and not safe_page and presentation.motion_states[predecessor] is RefinementMotionState.REACHED
+        candidate = presentation.candidate_pose(stage)
+        labels = dialog.pose_comparison_labels[RefinementStage.SAFE_APPROACH if safe_page else RefinementStage.ALIGNMENT]
+        for key, value in (("calculated", None), ("candidate", candidate), ("approved", presentation.approved_pose(stage))):
+            labels[key].setText(self._pose_summary(value) if value is not None else "Not set")
+        labels["difference"].setText("Independent object-relative pose")
+        labels["status"].setText("Saved" if presentation.stage_is_approved(stage) else "Not saved")
+        self.approach_step_status_label.setText(presentation.motion_states[RefinementStage.SAFE_APPROACH].value)
+        self.alignment_step_status_label.setText(presentation.motion_states[stage].value)
+        self.move_calculated_approach_button.setEnabled(enabled and safe_page)
+        self.move_aligned_pose_button.setEnabled(editable and candidate is not None)
+        self.move_aligned_pose_button.setText("Move to Saved Candidate")
+        self.use_current_alignment_button.setEnabled(editable)
+        self.use_current_alignment_button.setText("Save Current Pose as Candidate")
+        self.open_fine_adjustment_button.setEnabled(editable)
+        dialog.refresh_path_controls(editable)
+        if stage is RefinementStage.PROBE:
+            dialog.move_safe_pose_button.setEnabled(
+                enabled and presentation.stage_is_approved(RefinementStage.ALIGNMENT)
+                and presentation.motion_states[RefinementStage.SAFE_APPROACH]
+                is RefinementMotionState.REACHED
+            )
+        dialog.move_path_button.setEnabled(editable and candidate is not None)
+        dialog.fine_adjustment_dialog.refresh(editable, editable)
+        dialog.next_button.setVisible(not dialog.is_summary_page())
+        dialog.next_button.setText("Next")
+        dialog.next_button.setEnabled(enabled and presentation.stage_is_approved(stage)
+                                      and presentation.motion_states[stage] is RefinementMotionState.REACHED)
+        dialog.back_button.setEnabled(enabled and not safe_page)
+        dialog.close_button.setEnabled(not pending)
+        if presentation.recovery_required:
+            self.refinement_recovery_status_label.setText(presentation.recovery_message)
+        self._update_save_probe_point_state()
+
     def handle_fine_adjustment(self, action):
         dialog = self.refinement_dialog.fine_adjustment_dialog
-        if not dialog.pathing:
+        if not dialog.pathing and not self._custom_probe_mode():
             submitted = self.handle_refine_pose("alignment", action)
             if submitted:
                 dialog.refresh(False, False)
             return submitted
         try:
             translation_step = self._bounded_positive_value(
-                self.refine_translation_step_field, "Translation step", MAX_REFINEMENT_TRANSLATION_M
+                self.refine_translation_step_field, "Translation step", self._translation_limit()
             )
             rotation_step = math.radians(self._bounded_positive_value(
                 self.refine_rotation_step_field, "Rotation step", MAX_REFINEMENT_ROTATION_DEG
             ))
             translation, pitch, yaw = self._refinement_delta(action, translation_step, rotation_step)
             intent = ProbeSetupMotionIntent()
-            intent.operation = ProbeSetupMotionIntent.OPERATION_ADJUST_PATHING_POSE
+            intent.operation = (ProbeSetupMotionIntent.OPERATION_ADJUST_PATHING_POSE if dialog.pathing
+                                else ProbeSetupMotionIntent.OPERATION_ADJUST_ALIGNED_PREAPPROACH)
+            intent.path_stage = self._path_stage()
             intent.frame = self._selected_refinement_frame_code()
             intent.translation.x, intent.translation.y, intent.translation.z = (
                 translation.x, translation.y, translation.z
@@ -2165,6 +2240,7 @@ class InspectionControls(UIControlHelper):
         intent = ProbeSetupMotionIntent()
         intent.operation = operation
         intent.pathing_point_index = index
+        intent.path_stage = self._path_stage()
         intent.frame = ProbeSetupMotionIntent.FRAME_SENSOR
         self._write_motion_tolerances(intent)
         submitted = self._submit_probe_motion(intent, "pre-approach path")
@@ -2172,8 +2248,9 @@ class InspectionControls(UIControlHelper):
             self.refinement_dialog.refresh_path_controls(False)
         return submitted
 
-    def _send_alignment_motion(self):
+    def _send_alignment_motion(self, path_stage=None):
         intent = ProbeSetupMotionIntent()
+        intent.path_stage = path_stage or self._path_stage()
         intent.operation = (
             ProbeSetupMotionIntent.OPERATION_MOVE_ALIGNED_PREAPPROACH
         )
@@ -2206,6 +2283,7 @@ class InspectionControls(UIControlHelper):
             )
         intent = ProbeSetupMotionIntent()
         intent.operation = operation
+        intent.path_stage = self._path_stage()
         intent.frame = ProbeSetupMotionIntent.FRAME_SENSOR
         self._write_motion_tolerances(intent)
         return self._submit_probe_motion(intent, label)
@@ -2571,6 +2649,9 @@ class InspectionControls(UIControlHelper):
         if view.setup is None:
             self._clear_selected_surface_target()
             return
+        if state.fully_custom:
+            self._display_probe_setup("Authoritative")
+            return
         self.reference_target_distance_field.setText(
             f"{state.target_surface_distance_m:.3f}"
         )
@@ -2588,6 +2669,7 @@ class InspectionControls(UIControlHelper):
         if previous is not None:
             presentation.active_stage = previous.active_stage
         self._refinement_presentation = presentation
+        self.refinement_dialog.fully_custom = self._custom_probe_mode()
         self._distance_failure_requires_retraction = (
             presentation.recovery_required
         )
@@ -2954,8 +3036,10 @@ class InspectionControls(UIControlHelper):
     def handle_use_current_alignment(self):
         intent = ProbeSetupIntent()
         intent.operation = (
-            ProbeSetupIntent.OPERATION_APPROVE_ALIGNED_POSE
+            ProbeSetupIntent.OPERATION_APPROVE_CUSTOM_PROBE if self._path_stage() == "probe"
+            else ProbeSetupIntent.OPERATION_APPROVE_ALIGNED_POSE
         )
+        intent.arm_speed_scale = self.refinement_dialog.candidate_speed_field.value() / 100.0
         intent.position_tolerance_m = self._distance_value(
             self.probe_position_tolerance_field, "Final candidate position tolerance",
         )

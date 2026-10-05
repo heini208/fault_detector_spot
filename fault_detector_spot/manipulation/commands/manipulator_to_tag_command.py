@@ -40,6 +40,7 @@ class ManipulatorToTagCommand(MoveToTagCommand):
         target_frame: str = "body",
         motion_sensor_id: str = "",
         tag_position_tolerance_m: float = 0.01,
+        arm_speed_scale: float = 1.0,
     ):
         super().__init__(
             command_id,
@@ -49,6 +50,7 @@ class ManipulatorToTagCommand(MoveToTagCommand):
             offset,
             target_frame=target_frame,
         )
+        self.arm_speed_scale = arm_speed_scale
         self.tag_position_tolerance_m = tag_position_tolerance_m
         self.orientation_mode = orientation_mode
         self.motion_sensor_id = motion_sensor_id.strip()

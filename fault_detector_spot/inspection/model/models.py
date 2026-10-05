@@ -185,9 +185,11 @@ class PreApproachPathPoint:
     name: str
     pose_object: PoseData
     position_tolerance_m: float = 0.01
+    arm_speed_scale: float = 1.0
 
     def validate(self) -> None:
         _require_text(self.name, "Pathing point name")
+        validate_arm_speed_scale(self.arm_speed_scale)
         self.pose_object.validate()
         if not math.isfinite(self.position_tolerance_m) or self.position_tolerance_m <= 0:
             raise ValueError("Pathing point tolerance must be positive and finite")
@@ -196,14 +198,16 @@ class PreApproachPathPoint:
     def from_dict(cls, data):
         data = _require_dict(data, "pre_approach_path_point")
         point = cls(str(data["name"]), PoseData.from_dict(data["pose_object"]),
-                    float(data.get("position_tolerance_m", .01)))
+                    float(data.get("position_tolerance_m", .01)),
+                    float(data.get("arm_speed_scale", 1.0)))
         point.validate()
         return point
 
     def to_dict(self):
         self.validate()
         return {"name": self.name, "pose_object": self.pose_object.to_dict(),
-                "position_tolerance_m": self.position_tolerance_m}
+                "position_tolerance_m": self.position_tolerance_m,
+                "arm_speed_scale": self.arm_speed_scale}
 
 
 @dataclass
@@ -221,6 +225,12 @@ class ProbePoint:
     reference_pixel: Optional[ImagePoint] = None
     reference_view_id: Optional[str] = None
     pre_approach_path: List[PreApproachPathPoint] = field(default_factory=list)
+    fully_custom: bool = False
+    final_probe_pose_object: Optional[PoseData] = None
+    final_probe_path: List[PreApproachPathPoint] = field(default_factory=list)
+    pre_approach_speed_scale: float = 1.0
+    final_probe_speed_scale: float = .2
+    final_position_tolerance_m: float = .01
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProbePoint":
@@ -228,6 +238,13 @@ class ProbePoint:
         pixel = data.get("reference_pixel")
         reference_view_id = data.get("reference_view_id")
         return cls(
+            fully_custom=data.get("fully_custom", False),
+            final_probe_pose_object=(PoseData.from_dict(data["final_probe_pose_object"])
+                                     if data.get("final_probe_pose_object") is not None else None),
+            final_probe_path=[PreApproachPathPoint.from_dict(p) for p in data.get("final_probe_path", [])],
+            pre_approach_speed_scale=float(data.get("pre_approach_speed_scale", 1.0)),
+            final_probe_speed_scale=float(data.get("final_probe_speed_scale", .2)),
+            final_position_tolerance_m=float(data.get("final_position_tolerance_m", .01)),
             pre_approach_path=[
                 PreApproachPathPoint.from_dict(point)
                 for point in _require_list(
@@ -272,7 +289,17 @@ class ProbePoint:
             self.display_name,
             "Probe point display name",
         )
-        for point in self.pre_approach_path:
+        if not isinstance(self.fully_custom, bool):
+            raise ValueError("Fully custom mode must be a boolean")
+        validate_arm_speed_scale(self.pre_approach_speed_scale)
+        validate_arm_speed_scale(self.final_probe_speed_scale)
+        if not math.isfinite(self.final_position_tolerance_m) or self.final_position_tolerance_m <= 0:
+            raise ValueError("Final pose tolerance must be positive and finite")
+        if self.fully_custom:
+            if self.final_probe_pose_object is None:
+                raise ValueError("Custom probe point requires an explicit final pose")
+            self.final_probe_pose_object.validate()
+        for point in (*self.pre_approach_path, *self.final_probe_path):
             point.validate()
         self.aligned_preapproach_pose_object.validate()
         numeric_values = (
@@ -301,10 +328,11 @@ class ProbePoint:
             raise ValueError(
                 "Measurement duration must be positive"
             )
-        validate_surface_distance_pair(
-            self.target_surface_distance_m,
-            self.aligned_preapproach_distance_m,
-        )
+        if not self.fully_custom:
+            validate_surface_distance_pair(
+                self.target_surface_distance_m,
+                self.aligned_preapproach_distance_m,
+            )
         if self.reference_pixel is not None:
             self.reference_pixel.validate()
             if self.reference_view_id is None:
@@ -319,6 +347,12 @@ class ProbePoint:
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
+            "fully_custom": self.fully_custom,
+            "final_probe_pose_object": self.final_probe_pose_object.to_dict() if self.final_probe_pose_object else None,
+            "final_probe_path": [point.to_dict() for point in self.final_probe_path],
+            "pre_approach_speed_scale": self.pre_approach_speed_scale,
+            "final_probe_speed_scale": self.final_probe_speed_scale,
+            "final_position_tolerance_m": self.final_position_tolerance_m,
             "pre_approach_path": [point.to_dict() for point in self.pre_approach_path],
             "probe_point_id": self.probe_point_id,
             "display_name": self.display_name,
@@ -621,3 +655,9 @@ class InspectionObject:
                 for routine in self.routines
             ],
         }
+
+
+def validate_arm_speed_scale(value):
+    """Limit authored motion speed to the configured arm speed."""
+    if isinstance(value, bool) or not math.isfinite(value) or not 0 < value <= 1:
+        raise ValueError("Arm speed must be greater than 0% and at most 100%")

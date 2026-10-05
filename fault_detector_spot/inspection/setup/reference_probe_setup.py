@@ -32,13 +32,14 @@ from .reference_view_surface_target import ReferenceSurfaceTarget
 class ReferenceProbeSetup:
     """User-adjustable transient poses for one selected surface point."""
 
-    surface_target: ReferenceSurfaceTarget
+    surface_target: ReferenceSurfaceTarget | None
     safe_approach_pose_object: PoseData
-    aligned_preapproach_pose_object: PoseData
-    probe_pose_object: PoseData
+    aligned_preapproach_pose_object: PoseData | None
+    probe_pose_object: PoseData | None
     safe_approach_approved: bool = False
     surface_alignment_approved: bool = False
     probe_pose_approved: bool = False
+    fully_custom: bool = False
 
 
 def initialize_reference_probe_setup(

@@ -33,7 +33,8 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
         routine_id=intent.routine_id,
         probe_point_id=intent.probe_point_id,
     )
-    if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE:
+    custom_final = point.fully_custom and intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
+    if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE and not point.fully_custom:
         target = (intent.target_surface_distance_m
                   if intent.override_target_surface_distance
                   else point.target_surface_distance_m)
@@ -47,29 +48,37 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
         )
     if state_source is None:
         raise RuntimeError("Live robot pose data is unavailable")
-    if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH:
+    if custom_final:
+        pose = point.final_probe_pose_object
+        tolerance = point.final_position_tolerance_m
+    elif intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH:
         pose = routine.require_safe_approach_pose()
         tolerance = routine.safe_approach_position_tolerance_m
     elif intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH:
-        state_source.validate_aligned_probe_distance(
-            attachment.motion_sensor_id, point.aligned_preapproach_distance_m,
-        )
+        if not point.fully_custom:
+            state_source.validate_aligned_probe_distance(
+                attachment.motion_sensor_id, point.aligned_preapproach_distance_m,
+            )
         pose = point.aligned_preapproach_pose_object
         tolerance = point.position_tolerance_m
     else:
         raise ValueError("Unsupported saved probe-point motion")
     tag = state_source.reference_tag(routine.reference_tag.tag_id)
     offsets = ()
-    if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH:
+    path = point.final_probe_path if custom_final else point.pre_approach_path
+    if custom_final or intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH:
         offsets = tuple(
             factory.absolute(waypoint.pose_object, tag, attachment.motion_sensor_id).offset
-            for waypoint in point.pre_approach_path
+            for waypoint in path
         )
     return replace(
         factory.absolute(pose, tag, attachment.motion_sensor_id),
         pre_approach_offsets=offsets,
+        pre_approach_speed_scales=tuple(p.arm_speed_scale for p in path) if offsets else (),
+        arm_speed_scale=(point.final_probe_speed_scale if custom_final else
+                         point.pre_approach_speed_scale if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH else 1.0),
         pre_approach_tolerances_m=(
-            tuple(p.position_tolerance_m for p in point.pre_approach_path)
+            tuple(p.position_tolerance_m for p in path)
             if offsets else ()
         ),
         tag_position_tolerance_m=tolerance,

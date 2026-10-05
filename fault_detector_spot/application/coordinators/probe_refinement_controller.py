@@ -72,7 +72,7 @@ class ProbeRefinementController:
 
     def begin(self, draft) -> None:
         self.require_physical_lane_idle()
-        if draft.geometry is None or draft.setup is None:
+        if draft.setup is None or (draft.geometry is None and not draft.setup.fully_custom):
             raise ValueError("No calculated probe setup is available")
         if draft.refinement is not None:
             raise RuntimeError("Probe refinement is already active")
@@ -84,7 +84,7 @@ class ProbeRefinementController:
                 attachment,
             )
             refinement = ProbeRefinementSession.create(
-                draft.geometry.probe_setup,
+                draft.setup if draft.setup.fully_custom else draft.geometry.probe_setup,
                 draft.setup,
             )
             if not draft.setup.safe_approach_approved:
@@ -125,7 +125,14 @@ class ProbeRefinementController:
                 attachment,
             )
         refinement = self.require_refinement(draft)
-        if stage is RefinementStage.ALIGNMENT:
+        if draft.setup.fully_custom:
+            predecessor = (RefinementStage.SAFE_APPROACH if stage is RefinementStage.ALIGNMENT
+                           else RefinementStage.ALIGNMENT)
+            if refinement.motion_states[predecessor] is not RefinementMotionState.REACHED:
+                raise RuntimeError("Reach the preceding stage before capturing this pose")
+            if not refinement.stage_is_approved(predecessor):
+                raise RuntimeError("Approve the preceding stage first")
+        elif stage is RefinementStage.ALIGNMENT:
             if refinement.motion_states[stage] not in {
                 RefinementMotionState.REACHED,
                 RefinementMotionState.FAILED,
@@ -156,7 +163,16 @@ class ProbeRefinementController:
         if stage is RefinementStage.ALIGNMENT:
             refinement.motion_states[stage] = RefinementMotionState.REACHED
         operation = self._approval_operation(stage)
-        setup = operation(draft.setup, deepcopy(pose_object))
+        if draft.setup.fully_custom:
+            refinement.active_stage = stage
+            fields = ({"aligned_preapproach_pose_object": deepcopy(pose_object),
+                       "surface_alignment_approved": True}
+                      if stage is RefinementStage.ALIGNMENT else
+                      {"probe_pose_object": deepcopy(pose_object), "probe_pose_approved": True})
+            setup = replace(draft.setup, **fields)
+            refinement.motion_states[stage] = RefinementMotionState.REACHED
+        else:
+            setup = operation(draft.setup, deepcopy(pose_object))
         with self.state_lock:
             draft.setup = setup
             draft.dirty = True
@@ -165,15 +181,28 @@ class ProbeRefinementController:
     def prepare_motion(self, context, draft, motion):
         self.require_physical_lane_idle()
         motion.validate()
+        custom = bool(draft.setup and draft.setup.fully_custom)
+        if motion.path_stage == "probe" and not custom:
+            raise ValueError("Final pose paths require custom mode")
+        if not custom and any(abs(v) > .05 for v in (motion.translation.x, motion.translation.y, motion.translation.z)):
+            raise ValueError("Surface refinement translation exceeds 0.05 m")
+        if custom and motion.kind in _ORIENTATION_MOTION_KINDS:
+            raise ValueError("Surface orientation is unavailable in custom mode")
         if motion.kind is ProbeMotionKind.ADJUST_SAFE_APPROACH:
             raise ValueError("Change the shared safe pose in routine setup")
+        if custom and not motion.relative and motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH:
+            motion = replace(motion, position_tolerance_m=(
+                draft.final_position_tolerance_m if motion.path_stage == "probe"
+                else draft.aligned_position_tolerance_m or motion.position_tolerance_m))
         attachment = self._active_attachment(draft)
         if motion.kind in {
             ProbeMotionKind.MOVE_PATHING_POINT,
             ProbeMotionKind.MOVE_PRE_APPROACH_PATH,
         }:
             return self._prepare_path_motion(context, draft, motion, attachment)
-        stage = self.motion_stage(motion.kind)
+        stage = (RefinementStage.PROBE if motion.path_stage == "probe"
+                 and motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH
+                 else self.motion_stage(motion.kind))
         if (stage is RefinementStage.ALIGNMENT
                 and motion.kind is not ProbeMotionKind.ADJUST_PATHING_POSE):
             self._ensure_minimum_camera_clearance_geometry(
@@ -245,9 +274,12 @@ class ProbeRefinementController:
             verify_achieved_pose = False
         else:
             target = refinement.candidate_pose(stage)
+            if target is None:
+                raise ValueError("Save a candidate pose before moving to it")
             updates_candidate = False
             if (
                 motion.kind is ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH
+                and not custom
                 and not refinement.alignment_orientation_established
             ):
                 current = self.current_probe_pose(
@@ -265,6 +297,25 @@ class ProbeRefinementController:
             purpose = stage.value
             # The routine safe pose only requires successful command completion.
             verify_achieved_pose = motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH
+        if not motion.relative and motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH:
+            command = replace(command, arm_speed_scale=(
+                draft.final_probe_speed_scale if stage is RefinementStage.PROBE
+                else draft.pre_approach_speed_scale))
+        if custom and motion.retract_path:
+            command = replace(command, arm_speed_scale=(
+                draft.final_probe_speed_scale if stage is RefinementStage.ALIGNMENT
+                else draft.pre_approach_speed_scale))
+            points = (draft.final_probe_path if stage is RefinementStage.ALIGNMENT else draft.pre_approach_path)
+            if points:
+                command = self._absolute_motion_command(draft, target, attachment, ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH)
+                command = replace(command,
+                    pre_approach_offsets=tuple(self._absolute_motion_command(
+                        draft, point.pose_object, attachment, ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH
+                    ).offset for point in reversed(points)),
+                    pre_approach_tolerances_m=tuple(p.position_tolerance_m for p in reversed(points)),
+                    pre_approach_speed_scales=tuple(p.arm_speed_scale for p in reversed(points)),
+                    arm_speed_scale=draft.final_probe_speed_scale if stage is RefinementStage.ALIGNMENT else draft.pre_approach_speed_scale,
+                )
         command = replace(command, tag_position_tolerance_m=(
             self._selected_routine(draft).safe_approach_position_tolerance_m
             if motion.kind is ProbeMotionKind.MOVE_SAFE_APPROACH else motion.position_tolerance_m
@@ -295,18 +346,22 @@ class ProbeRefinementController:
         return operation
 
     def _prepare_path_motion(self, context, draft, motion, attachment):
+        stage = RefinementStage(motion.path_stage)
+        points = draft.final_probe_path if stage is RefinementStage.PROBE else draft.pre_approach_path
         final = motion.kind is ProbeMotionKind.MOVE_PRE_APPROACH_PATH
         if final:
             self._ensure_minimum_camera_clearance_geometry(draft, attachment)
         refinement = self.require_refinement(draft)
         if final:
-            target = refinement.candidate_pose(RefinementStage.ALIGNMENT)
-            path = [point.pose_object for point in draft.pre_approach_path]
+            target = refinement.candidate_pose(stage)
+            if target is None:
+                raise ValueError("Save a candidate pose before moving along its path")
+            path = [point.pose_object for point in points]
         else:
             index = motion.pathing_point_index
-            if not 0 <= index < len(draft.pre_approach_path):
+            if not 0 <= index < len(points):
                 raise ValueError("Select an existing pathing point")
-            target = draft.pre_approach_path[index].pose_object
+            target = points[index].pose_object
             path = []
         routine = self._selected_routine(draft)
         tag = self._motion_state_source().reference_tag(
@@ -324,30 +379,34 @@ class ProbeRefinementController:
         operation = self.setup_coordinator.prepare_command(
             context, replace(
                 command, pre_approach_offsets=offsets,
+                arm_speed_scale=((draft.final_probe_speed_scale if stage is RefinementStage.PROBE
+                                  else draft.pre_approach_speed_scale) if final
+                                 else points[index].arm_speed_scale),
+                pre_approach_speed_scales=tuple(p.arm_speed_scale for p in points) if final else (),
                 pre_approach_tolerances_m=(
-                    tuple(p.position_tolerance_m for p in draft.pre_approach_path)
+                    tuple(p.position_tolerance_m for p in points)
                     if final else ()
                 ),
                 tag_position_tolerance_m=(
                     motion.position_tolerance_m if final
-                    else draft.pre_approach_path[index].position_tolerance_m
+                    else points[index].position_tolerance_m
                 ),
             )
         )
         refinement.begin_motion(PendingRefinementMotion(
             request_id=operation.request_id,
-            stage=RefinementStage.ALIGNMENT,
+            stage=stage,
             purpose="pre-approach path" if final else "pathing point",
             target_pose_object=deepcopy(target),
             updates_candidate=False,
             verify_achieved_pose=final,
         ))
-        refinement.active_stage = RefinementStage.ALIGNMENT
+        refinement.active_stage = stage
         self._invalidate_downstream_motion_state(
-            refinement, RefinementStage.ALIGNMENT
+            refinement, stage
         )
         self._operations.register(
-            operation.request_id, context, (motion, RefinementStage.ALIGNMENT)
+            operation.request_id, context, (motion, stage)
         )
         return operation
 

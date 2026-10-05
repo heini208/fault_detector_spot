@@ -139,8 +139,13 @@ class SemanticCommand:
     walking_profile: str = ""
     pre_approach_offsets: tuple[StampedPose, ...] = ()
     pre_approach_tolerances_m: tuple[float, ...] = ()
+    pre_approach_speed_scales: tuple[float, ...] = ()
 
     def __post_init__(self):
+        if self.pre_approach_speed_scales and len(self.pre_approach_speed_scales) != len(self.pre_approach_offsets):
+            raise ValueError("Path speeds must match path offsets")
+        if any(not math.isfinite(v) or not 0 < v <= 1 for v in self.pre_approach_speed_scales):
+            raise ValueError("Path speed scales must be in (0, 1]")
         if self.pre_approach_tolerances_m and len(self.pre_approach_tolerances_m) != len(self.pre_approach_offsets):
             raise ValueError("Each path offset requires its own tolerance")
         if any(not math.isfinite(value) or value <= 0 for value in self.pre_approach_tolerances_m):

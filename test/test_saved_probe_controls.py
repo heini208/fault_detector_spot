@@ -253,3 +253,31 @@ def test_close_is_blocked_while_save_finalization_is_running(controls):
     assert "mandatory retraction" in (
         controls.refinement_recovery_status_label.text()
     )
+
+
+def test_selected_point_enables_only_matching_final_move(controls):
+    state = make_state(with_references=False)
+    state.probe_point_ids = ["surface", "custom"]
+    state.probe_point_fully_custom = [False, True]
+    state.probe_point_target_surface_distances_m = [.03, 0.0]
+    controls.apply_setup_state(state)
+    surface = controls.saved_probe_action_buttons[26]
+    custom = controls.saved_custom_probe_button
+    assert not surface.isEnabled() and not custom.isEnabled()
+    controls.saved_probe_points_list.setCurrentRow(0)
+    assert surface.isEnabled() and not custom.isEnabled()
+    assert controls.saved_probe_distance.isEnabled()
+    assert not controls.handle_saved_probe_motion(26, custom=True)
+    controls.saved_probe_points_list.setCurrentRow(1)
+    assert custom.isEnabled() and not surface.isEnabled()
+    assert not controls.saved_probe_distance.isEnabled()
+    assert not controls.handle_saved_probe_motion(26)
+    custom.click()
+    intent = controls.ui.execute_operation.call_args.args[0]
+    assert intent.probe_point_id == "custom"
+    assert not intent.override_target_surface_distance
+    assert not surface.isEnabled() and not custom.isEnabled()
+    controls.handle_saved_probe_rejected("Offline test")
+    assert custom.isEnabled() and not surface.isEnabled()
+    controls.saved_probe_points_list.setCurrentRow(-1)
+    assert not surface.isEnabled() and not custom.isEnabled()

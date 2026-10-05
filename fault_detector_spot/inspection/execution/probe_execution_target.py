@@ -8,7 +8,7 @@ from fault_detector_spot.inspection.geometry.pose import (
 )
 from fault_detector_spot.shared.geometry.rotation import rotate_vector
 from fault_detector_spot.inspection.model.models import (
-    InspectionObject,
+    InspectionObject, validate_arm_speed_scale,
 )
 from fault_detector_spot.shared.geometry.models import (
     PoseData,
@@ -46,6 +46,18 @@ class ProbeExecutionTarget:
     orientation_tolerance_rad: float
     measurement_duration_sec: float
     aligned_preapproach_distance_m: float
+    fully_custom: bool = False
+    final_probe_pose_execution: PoseData = None
+    final_probe_hand_pose_execution: PoseData = None
+    final_probe_path_probe_poses_execution: tuple = ()
+    final_probe_path_hand_poses_execution: tuple = ()
+    pre_approach_speed_scale: float = 1.0
+    final_probe_speed_scale: float = .2
+    pre_approach_path_speed_scales: tuple = ()
+    final_probe_path_speed_scales: tuple = ()
+    pre_approach_path_tolerances_m: tuple = ()
+    final_probe_path_tolerances_m: tuple = ()
+    final_position_tolerance_m: float = .01
     pre_approach_path_probe_poses_execution: tuple = ()
     pre_approach_path_hand_poses_execution: tuple = ()
 
@@ -81,6 +93,16 @@ def resolve_probe_execution_target(
         )
 
     return resolve_probe_execution_geometry(
+        fully_custom=probe_point.fully_custom,
+        final_probe_pose_object=probe_point.final_probe_pose_object,
+        final_probe_path=tuple(p.pose_object for p in probe_point.final_probe_path),
+        pre_approach_speed_scale=probe_point.pre_approach_speed_scale,
+        final_probe_speed_scale=probe_point.final_probe_speed_scale,
+        pre_approach_path_speed_scales=tuple(p.arm_speed_scale for p in probe_point.pre_approach_path),
+        final_probe_path_speed_scales=tuple(p.arm_speed_scale for p in probe_point.final_probe_path),
+        pre_approach_path_tolerances_m=tuple(p.position_tolerance_m for p in probe_point.pre_approach_path),
+        final_probe_path_tolerances_m=tuple(p.position_tolerance_m for p in probe_point.final_probe_path),
+        final_position_tolerance_m=probe_point.final_position_tolerance_m,
         pre_approach_path=tuple(point.pose_object for point in probe_point.pre_approach_path),
         object_id=inspection_object.object_id,
         routine_id=routine.routine_id,
@@ -121,6 +143,16 @@ def resolve_probe_execution_geometry(
     execution_frame: str = "odom",
     attachment_revision: int = 0,
     pre_approach_path: tuple = (),
+    fully_custom: bool = False,
+    final_probe_pose_object: PoseData = None,
+    final_probe_path: tuple = (),
+    pre_approach_speed_scale: float = 1.0,
+    final_probe_speed_scale: float = .2,
+    pre_approach_path_speed_scales: tuple = (),
+    final_probe_path_speed_scales: tuple = (),
+    pre_approach_path_tolerances_m: tuple = (),
+    final_probe_path_tolerances_m: tuple = (),
+    final_position_tolerance_m: float = .01,
 ) -> ProbeExecutionTarget:
     for value, label in (
         (object_id, "Object ID"),
@@ -142,10 +174,14 @@ def resolve_probe_execution_geometry(
     aligned_preapproach_pose_object.validate()
     hand_to_probe.validate()
     object_pose_execution.validate()
-    validate_surface_distance_pair(
-        target_surface_distance_m,
-        aligned_preapproach_distance_m,
-    )
+    if fully_custom:
+        if final_probe_pose_object is None:
+            raise ValueError("Custom probe geometry requires a final pose")
+        final_probe_pose_object.validate()
+    else:
+        validate_surface_distance_pair(target_surface_distance_m, aligned_preapproach_distance_m)
+    for speed in (pre_approach_speed_scale, final_probe_speed_scale, *pre_approach_path_speed_scales, *final_probe_path_speed_scales):
+        validate_arm_speed_scale(speed)
     for value, label in (
         (position_tolerance_m, "Position tolerance"),
         (orientation_tolerance_rad, "Orientation tolerance"),
@@ -176,7 +212,21 @@ def resolve_probe_execution_geometry(
     motion_sensor_id = sensor_id or BARE_HAND_MOTION_ID
 
     path_poses = tuple(compose_poses(object_pose_execution, pose) for pose in pre_approach_path)
+    final_pose = compose_poses(object_pose_execution, final_probe_pose_object) if fully_custom else None
+    final_path = tuple(compose_poses(object_pose_execution, p) for p in final_probe_path)
     return ProbeExecutionTarget(
+        fully_custom=fully_custom,
+        final_probe_pose_execution=final_pose,
+        final_probe_hand_pose_execution=probe_pose_to_hand_pose(final_pose, hand_to_probe) if final_pose else None,
+        final_probe_path_probe_poses_execution=final_path,
+        final_probe_path_hand_poses_execution=tuple(probe_pose_to_hand_pose(p, hand_to_probe) for p in final_path),
+        pre_approach_speed_scale=pre_approach_speed_scale,
+        final_probe_speed_scale=final_probe_speed_scale,
+        pre_approach_path_speed_scales=pre_approach_path_speed_scales,
+        final_probe_path_speed_scales=final_probe_path_speed_scales,
+        pre_approach_path_tolerances_m=pre_approach_path_tolerances_m,
+        final_probe_path_tolerances_m=final_probe_path_tolerances_m,
+        final_position_tolerance_m=final_position_tolerance_m,
         pre_approach_path_probe_poses_execution=path_poses,
         pre_approach_path_hand_poses_execution=tuple(
             probe_pose_to_hand_pose(pose, hand_to_probe) for pose in path_poses

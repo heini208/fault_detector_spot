@@ -98,12 +98,15 @@ def test_main_workspace_is_reduced_to_add_probe_point(application):
     assert controls.inspection_workspace_splitter.widget(1) is controls._probe_point_entry_panel
 
 
-def test_add_probe_point_opens_reference_step_before_refinement(application):
+def test_add_probe_point_offers_mode_before_reference_refinement(application):
     ui = FakeUI()
     controls = FinalizingInspectionControls(ui)
     controls._probe_setup_state = make_state(with_references=True)
 
     assert controls.handle_start_probe_refinement() is True
+    assert controls.refinement_dialog.workflow_stack.currentIndex() == controls.refinement_dialog.MODE_PAGE
+    assert controls.refinement_dialog.custom_mode_button.isVisible()
+    controls.refinement_dialog.surface_mode_button.click()
 
     assert (
         controls.refinement_dialog.workflow_stack.currentIndex()
@@ -120,7 +123,7 @@ def test_workflow_contains_reference_three_motion_stages_and_summary(
     ui = FakeUI()
     controls = FinalizingInspectionControls(ui)
 
-    assert controls.refinement_dialog.workflow_stack.count() == 5
+    assert controls.refinement_dialog.workflow_stack.count() == 6
     assert controls.refinement_dialog.SAFE_APPROACH_PAGE == 1
     assert controls.refinement_dialog.ALIGNMENT_PAGE == 2
     assert controls.refinement_dialog.PROBE_PAGE == 3
@@ -137,6 +140,7 @@ def test_reference_page_offers_capture_when_no_saved_views(application):
     controls._probe_setup_state = make_state(with_references=False)
 
     controls.handle_start_probe_refinement()
+    controls.refinement_dialog.surface_mode_button.click()
 
     assert controls.refinement_dialog.capture_reference_button.isVisible()
     assert not controls.refinement_dialog.use_existing_reference_button.isVisible()

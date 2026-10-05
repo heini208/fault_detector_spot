@@ -48,7 +48,7 @@ class PendingRefinementMotion:
     request_id: str
     stage: RefinementStage
     purpose: str
-    target_pose_object: PoseData
+    target_pose_object: Optional[PoseData]
     updates_candidate: bool = True
     command_id: str = "move_to_tag"
     verify_achieved_pose: bool = True
@@ -185,7 +185,7 @@ class ProbeRefinementSession:
         """Update draft geometry from a verified achieved tip pose."""
         achieved_pose_object.validate()
         self.saved = False
-        if stage == RefinementStage.SAFE_APPROACH:
+        if self.calculated_setup.fully_custom or stage == RefinementStage.SAFE_APPROACH:
             self.candidate_poses[stage] = deepcopy(achieved_pose_object)
             self.draft_approved[stage] = False
             return
@@ -306,7 +306,10 @@ class ProbeRefinementSession:
         if self.pending_motion is not None:
             raise RuntimeError("A refinement movement is already active")
         validate_request_id(motion.request_id)
-        motion.target_pose_object.validate()
+        if motion.target_pose_object is not None:
+            motion.target_pose_object.validate()
+        elif not self.calculated_setup.fully_custom or motion.verify_achieved_pose:
+            raise ValueError("This movement requires an explicit target pose")
         if (
             motion.stage == RefinementStage.ALIGNMENT
             and self.motion_states[RefinementStage.SAFE_APPROACH]
@@ -452,11 +455,15 @@ class ProbeRefinementSession:
     @property
     def target_surface_distance_m(self) -> float:
         """Return the desired absolute probe-tip surface distance."""
+        if self.calculated_setup.fully_custom:
+            raise ValueError("Custom probe points have no surface distance")
         return self.calculated_setup.surface_target.target_surface_distance_m
 
     @property
     def aligned_preapproach_distance_m(self) -> float:
         """Return the absolute aligned pre-approach distance."""
+        if self.calculated_setup.fully_custom:
+            raise ValueError("Custom probe points have no surface distance")
         return (
             self.calculated_setup.surface_target
             .aligned_preapproach_distance_m

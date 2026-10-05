@@ -240,6 +240,7 @@ class ProbeSetupMotionApi:
             ) from exception
         request = ProbeMotionRequest(
             kind=kind,
+            path_stage=intent.path_stage,
             arm_speed_scale=float(intent.arm_speed_scale),
             pathing_point_index=int(intent.pathing_point_index),
             frame=frame,

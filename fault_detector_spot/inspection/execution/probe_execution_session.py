@@ -139,6 +139,16 @@ class ProbeExecutionConfiguration:
     measurement_duration_sec: float
     aligned_preapproach_distance_m: float
     pre_approach_path: Tuple[FrozenPoseData, ...] = ()
+    fully_custom: bool = False
+    final_probe_pose_object: Optional[FrozenPoseData] = None
+    final_probe_path: Tuple[FrozenPoseData, ...] = ()
+    pre_approach_speed_scale: float = 1.0
+    final_probe_speed_scale: float = .2
+    pre_approach_path_speed_scales: tuple = ()
+    final_probe_path_speed_scales: tuple = ()
+    pre_approach_path_tolerances_m: tuple = ()
+    final_probe_path_tolerances_m: tuple = ()
+    final_position_tolerance_m: float = .01
 
     @classmethod
     def load(
@@ -167,6 +177,16 @@ class ProbeExecutionConfiguration:
                 f"{object_id}/{routine_id}/{probe_point_id}"
             )
         return cls(
+            fully_custom=probe_point.fully_custom,
+            final_probe_pose_object=FrozenPoseData.from_pose(probe_point.final_probe_pose_object) if probe_point.fully_custom else None,
+            final_probe_path=tuple(FrozenPoseData.from_pose(p.pose_object) for p in probe_point.final_probe_path),
+            pre_approach_speed_scale=probe_point.pre_approach_speed_scale,
+            final_probe_speed_scale=probe_point.final_probe_speed_scale,
+            pre_approach_path_speed_scales=tuple(p.arm_speed_scale for p in probe_point.pre_approach_path),
+            final_probe_path_speed_scales=tuple(p.arm_speed_scale for p in probe_point.final_probe_path),
+            pre_approach_path_tolerances_m=tuple(p.position_tolerance_m for p in probe_point.pre_approach_path),
+            final_probe_path_tolerances_m=tuple(p.position_tolerance_m for p in probe_point.final_probe_path),
+            final_position_tolerance_m=probe_point.final_position_tolerance_m,
             pre_approach_path=tuple(FrozenPoseData.from_pose(point.pose_object)
                                     for point in probe_point.pre_approach_path),
             object_id=inspection_object.object_id,
@@ -209,6 +229,16 @@ class ProbeExecutionConfiguration:
     ) -> ProbeExecutionTarget:
         """Resolve frozen geometry against the current live object pose."""
         return resolve_probe_execution_geometry(
+            fully_custom=self.fully_custom,
+            final_probe_pose_object=self.final_probe_pose_object.to_pose() if self.final_probe_pose_object else None,
+            final_probe_path=tuple(p.to_pose() for p in self.final_probe_path),
+            pre_approach_speed_scale=self.pre_approach_speed_scale,
+            final_probe_speed_scale=self.final_probe_speed_scale,
+            pre_approach_path_speed_scales=self.pre_approach_path_speed_scales,
+            final_probe_path_speed_scales=self.final_probe_path_speed_scales,
+            pre_approach_path_tolerances_m=self.pre_approach_path_tolerances_m,
+            final_probe_path_tolerances_m=self.final_probe_path_tolerances_m,
+            final_position_tolerance_m=self.final_position_tolerance_m,
             pre_approach_path=tuple(point.to_pose() for point in self.pre_approach_path),
             object_id=self.object_id,
             routine_id=self.routine_id,
