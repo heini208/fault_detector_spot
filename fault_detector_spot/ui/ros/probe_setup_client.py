@@ -23,6 +23,7 @@ from fault_detector_msgs.srv import (
 from rclpy.action import ActionClient
 
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
+from fault_detector_spot.ui.ros.setup_state_order import SetupStateOrder
 
 
 class ProbeSetupClient(QObject):
@@ -40,6 +41,7 @@ class ProbeSetupClient(QObject):
         self.client_id = client_id
         self.context_id = ""
         self._last_state_fingerprint = None
+        self._state_order = SetupStateOrder()
         self._pending_request_id = ""
         self._motion_goal_handles = {}
         self._finalization_goal_handles = {}
@@ -353,6 +355,8 @@ class ProbeSetupClient(QObject):
             return
         if self.context_id and state.context_id != self.context_id:
             return
+        if not self._state_order.accept(state):
+            return False
         if state.context_id:
             self.context_id = state.context_id
         fingerprint = (
@@ -364,9 +368,10 @@ class ProbeSetupClient(QObject):
             state.refinement_recovery_message,
         )
         if fingerprint == self._last_state_fingerprint:
-            return
+            return True
         self._last_state_fingerprint = fingerprint
         self.state_changed.emit(state)
+        return True
 
     def _receive_close(self, future):
         try:
@@ -375,6 +380,8 @@ class ProbeSetupClient(QObject):
             self.close_finished.emit(False, str(exception))
             return
         if response.closed:
+            self._state_order.close_context(self.context_id)
+            self._last_state_fingerprint = None
             self.context_id = ""
             self._pending_preview_requests.clear()
             self._preview_generations.clear()
@@ -490,8 +497,8 @@ class ProbeSetupClient(QObject):
         except Exception as exception:
             self.request_rejected.emit(str(exception))
             return
-        self._emit_state(result.state)
-        self._refresh_reference_previews(result.state)
+        if self._emit_state(result.state):
+            self._refresh_reference_previews(result.state)
 
     def destroy(self):
         """Destroy client-side ROS resources owned by this adapter."""

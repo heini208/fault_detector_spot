@@ -12,6 +12,7 @@ from fault_detector_msgs.srv import CloseSetup
 from rclpy.action import ActionClient
 
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
+from fault_detector_spot.ui.ros.setup_state_order import SetupStateOrder
 
 
 _RUNTIME_OPERATIONS = frozenset({
@@ -51,6 +52,7 @@ class NavigationSetupClient(QObject):
         self.client_id = client_id
         self.context_id = ""
         self._last_state_fingerprint = None
+        self._state_order = SetupStateOrder()
         self._last_map_names = []
         self._last_display_mode = NavigationSetupState.MODE_NONE
         self._goal_handles = {}
@@ -158,6 +160,8 @@ class NavigationSetupClient(QObject):
             return
         if self.context_id and state.context_id != self.context_id:
             return
+        if not self._state_order.accept(state):
+            return False
         if state.context_id:
             self.context_id = state.context_id
 
@@ -192,9 +196,10 @@ class NavigationSetupClient(QObject):
             tuple(state.landmark_names),
         )
         if fingerprint == self._last_state_fingerprint:
-            return
+            return True
         self._last_state_fingerprint = fingerprint
         self.state_changed.emit(state)
+        return True
 
     @staticmethod
     def _display_mode(state, previous_mode=None) -> int:
@@ -228,6 +233,8 @@ class NavigationSetupClient(QObject):
             self.close_finished.emit(False, str(exception))
             return
         if response.closed:
+            self._state_order.close_context(self.context_id)
+            self._last_state_fingerprint = None
             self.context_id = ""
             self._last_map_names = []
             self._last_display_mode = NavigationSetupState.MODE_NONE
