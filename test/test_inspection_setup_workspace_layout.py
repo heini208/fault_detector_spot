@@ -76,7 +76,7 @@ def test_workspace_uses_entry_panel_and_single_dialog_preview(
     assert controls.base_position_status_label.text() == "Base position: not configured"
     assert not controls.set_base_position_button.isEnabled()
     assert not controls.move_to_base_position_button.isEnabled()
-    assert "#C62828" in controls.move_to_base_position_button.styleSheet()
+    assert controls.move_to_base_position_button.styleSheet() == ""
     assert controls.inspection_workspace_splitter.widget(1) is (
         controls._probe_point_entry_panel
     )

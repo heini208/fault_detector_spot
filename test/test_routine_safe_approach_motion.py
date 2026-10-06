@@ -96,8 +96,7 @@ def test_routine_row_move_works_without_point_selection_and_tracks_result(applic
     assert controls.saved_probe_points_list.count() == 0
     assert OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH not in controls.saved_probe_action_buttons
     assert button.styleSheet() == controls.move_to_base_position_button.styleSheet()
-    assert "#C62828" in button.styleSheet()
-    assert "QPushButton:enabled { background-color: #2E7D32; }" in button.styleSheet()
+    assert button.styleSheet() == ""
     assert button.isEnabled()
     assert controls.handle_move_to_routine_arm_pose()
     args, kwargs = ui.execute_operation.call_args

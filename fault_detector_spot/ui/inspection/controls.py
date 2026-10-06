@@ -408,7 +408,7 @@ class InspectionControls(UIControlHelper):
         self.reference_target_distance_field.setValidator(
             self._distance_validator(self.reference_target_distance_field)
         )
-        self.reference_preapproach_distance_field = QLineEdit("0.2")
+        self.reference_preapproach_distance_field = QLineEdit("2.5")
         self.reference_preapproach_distance_field.setFixedWidth(90)
         self.reference_preapproach_distance_field.setValidator(
             self._distance_validator(
@@ -598,11 +598,6 @@ class InspectionControls(UIControlHelper):
             "Move to Base Position"
         )
         self.move_to_base_position_button.setEnabled(False)
-        self.move_to_base_position_button.setStyleSheet(
-            "QPushButton { background-color: #C62828; color: white; "
-            "font-weight: bold; }"
-            "QPushButton:enabled { background-color: #2E7D32; }"
-        )
         self.base_position_status_label = QLabel(
             "Base position: not configured"
         )
@@ -721,9 +716,6 @@ class InspectionControls(UIControlHelper):
             "Move to Safe Pre-approach Pose"
         )
         self.move_to_routine_arm_pose_button.setEnabled(False)
-        self.move_to_routine_arm_pose_button.setStyleSheet(
-            self.move_to_base_position_button.styleSheet()
-        )
         arm_buttons = QHBoxLayout()
         arm_buttons.addWidget(self.set_routine_arm_pose_button)
         arm_buttons.addWidget(self.move_to_routine_arm_pose_button)
