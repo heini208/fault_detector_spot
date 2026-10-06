@@ -166,7 +166,7 @@ class ProbeSurfaceSource(RuntimeSource):
         window_radius_px: int = SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
         receipt_not_before: float = 0.0,
     ) -> SurfaceNormalEstimate:
-        """Return a live local surface-normal estimate at image center."""
+        """Return a live local surface normal from the lower-middle image patch."""
         if (
             isinstance(window_radius_px, bool)
             or not isinstance(window_radius_px, int)
@@ -186,9 +186,16 @@ class ProbeSurfaceSource(RuntimeSource):
         point_cloud = create_organized_depth_point_cloud(
             depth_image, camera_info,
         )
+        # Approximate the surface near the probe below the camera. This
+        # assumes the visible patch continues toward the hidden contact region.
+        # Keep the fit window above the bottom edge; small images stay centered.
+        height = int(depth_image.height)
+        fit_radius = max(
+            window_radius_px, SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
+        )
         center = ImagePoint(
             u=int(depth_image.width) // 2,
-            v=int(depth_image.height) // 2,
+            v=max(height // 2, min(3 * height // 4, height - 1 - fit_radius)),
         )
         # Choose the dominant local depth rather than trusting one possibly
         # isolated foreground/outlier pixel as the depth gate for the plane.
@@ -202,7 +209,7 @@ class ProbeSurfaceSource(RuntimeSource):
             median_depth = float(np.median(depths))
             supported = np.abs(depths - median_depth) <= 0.05
             if np.count_nonzero(supported) < 0.60 * len(depths):
-                raise ValueError("Ambiguous center depth: no dominant surface")
+                raise ValueError("Ambiguous lower-middle depth: no dominant surface")
             candidates = np.flatnonzero(supported)
             nearest = candidates[np.argmin(
                 (columns[candidates] - center.u) ** 2
@@ -225,7 +232,7 @@ class ProbeSurfaceSource(RuntimeSource):
             if "No valid depth within" not in str(exception):
                 raise
             raise ValueError(
-                "No valid registered hand depth was found in the center "
+                "No valid registered hand depth was found in the lower-middle "
                 f"{window_radius_px} px window. The surface may be too "
                 "close or too far from the gripper depth camera."
             ) from exception

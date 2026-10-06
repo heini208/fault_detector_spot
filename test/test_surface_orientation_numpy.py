@@ -165,7 +165,7 @@ def test_stale_depth_is_rejected_with_stream_diagnostics(monkeypatch, publishers
 def test_surface_source_ignores_five_isolated_center_outliers():
     camera = make_camera_info(81, 81, 300.0)
     values = np.full((81, 81), 0.6)
-    for v, u in ((40, 40), (39, 40), (41, 40), (40, 39), (40, 41)):
+    for v, u in ((48, 40), (47, 40), (49, 40), (48, 39), (48, 41)):
         values[v, u] = 0.8
     depth = make_32fc1(values.ravel(), 81, 81)
     depth.header.stamp.sec = 12
@@ -223,3 +223,30 @@ def test_depth_edge_and_missing_center_preserve_selection():
     )
     assert result.normal_camera.z == pytest.approx(-1, abs=1e-6)
     assert result.plane_rmse_m < 1e-7
+
+
+@pytest.mark.parametrize("lower_patch_valid", [True, False])
+def test_surface_source_uses_lower_middle_without_falling_back_to_center(lower_patch_valid):
+    width = height = 161
+    camera = make_camera_info(width, height, 300.0)
+    expected = (0.2, -0.1, -math.sqrt(0.95))
+    values = np.array(plane_depth_values(width, height, camera, expected, 0.6))
+    values = values.reshape(height, width)
+    if lower_patch_valid:
+        values[:88, :] = np.nan
+    else:
+        values[88:, :] = np.nan
+    depth = make_32fc1(values.ravel(), width, height)
+    source = SimpleNamespace(latest_hand_depth=lambda _age: (depth, camera))
+
+    if not lower_patch_valid:
+        with pytest.raises(ValueError, match="lower-middle"):
+            ProbeSurfaceSource.surface_normal(source)
+        return
+
+    result = ProbeSurfaceSource.surface_normal(source)
+    assert result.projected_point.requested_pixel == ImagePoint(u=80, v=120)
+    np.testing.assert_allclose(
+        [result.normal_camera.x, result.normal_camera.y, result.normal_camera.z],
+        expected, atol=1e-5,
+    )
