@@ -67,6 +67,15 @@ class ProbeSetupApi:
             self._preview,
             callback_group=self._preview_callback_group,
         )
+        coordinator.add_state_listener(self._publish_external_motion_state)
+
+    def _publish_external_motion_state(self, snapshot):
+        self.state_publisher.publish(self.state_adapter.message(
+            snapshot, ProbeSetupIntent.OPERATION_UNSPECIFIED,
+            ProbeSetupState.STATE_READY,
+            "Arm moved outside refinement. Move to the saved candidate or save the current pose before continuing.",
+        ))
+
     def _transaction_handlers(self):
         return {
             ProbeSetupIntent.OPERATION_SET_PATHING_POINT_SPEED: self._set_pathing_point_speed,
@@ -341,6 +350,7 @@ class ProbeSetupApi:
 
     def close(self) -> None:
         """Destroy transport resources owned by this API."""
+        self.coordinator.remove_state_listener(self._publish_external_motion_state)
         self.node.destroy_service(self._execute_service)
         self.node.destroy_service(self._close_service)
         self.node.destroy_service(self._preview_service)

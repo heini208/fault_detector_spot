@@ -162,3 +162,61 @@ def test_saved_custom_final_command_uses_final_path_without_surface_validation()
     assert command.pre_approach_speed_scales == (.15,)
     assert command.arm_speed_scale == .2
     source.validate_aligned_probe_distance.assert_not_called()
+
+
+@pytest.mark.parametrize("terminal", ["succeeded", "failed", "cancelled"])
+@pytest.mark.parametrize("intent_name", ["INTENT_MOVE_ARM_RELATIVE", "INTENT_STOW_ARM", "INTENT_SIT_DOWN"])
+def test_external_arm_motion_invalidates_reached_state_but_preserves_candidate(tmp_path, terminal, intent_name):
+    from fault_detector_msgs.msg import OperationalIntent
+    from fault_detector_spot.application.controllers.application_controller import ApplicationController
+    from fault_detector_spot.application.controllers.command_controller import CommandControllerState, CommandControllerStatus
+
+    probe, commands, state = begin_custom(tmp_path)
+    state, _ = move(probe, commands, state, ProbeMotionKind.MOVE_SAFE_APPROACH)
+    probe.motion_state_source.pose = pose(.8)
+    state = probe.approve_aligned_pose(state.context)
+    approved = deepcopy(state.setup)
+    updates = []
+    probe.add_state_listener(updates.append)
+    app = ApplicationController(commands)
+    intent = OperationalIntent()
+    intent.intent = getattr(OperationalIntent, intent_name)
+    intent.offset.header.frame_id = "body"
+    intent.offset.pose.position.x = .1
+    intent.offset.pose.orientation.w = 1.
+    operation = app.prepare_operation(intent, "probe-ui")
+    app.submit(operation)
+    for listener in tuple(commands.listeners):
+        listener(CommandControllerStatus(operation.request, CommandControllerState.DISPATCHED))
+    state = latest(probe, state)
+    assert state.refinement.motion_states[RefinementStage.ALIGNMENT] is RefinementMotionState.NOT_TESTED
+    assert state.refinement.motion_states[RefinementStage.PROBE] is RefinementMotionState.NOT_TESTED
+    assert not state.refinement.alignment_candidate_reached
+    assert state.refinement.stage_is_approved(RefinementStage.ALIGNMENT)
+    assert state.setup == approved
+    assert len(updates) == 1
+    probe.motion_state_source.pose = pose(.9)
+    for listener in tuple(commands.listeners):
+        listener(CommandControllerStatus(operation.request, CommandControllerState(terminal)))
+    assert len(updates) == 1
+    # Capture after manual positioning remains possible without revisiting safe.
+    state = probe.approve_aligned_pose(state.context)
+    assert state.setup.aligned_preapproach_pose_object.position.x == .9
+    assert state.refinement.motion_states[RefinementStage.ALIGNMENT] is RefinementMotionState.REACHED
+
+
+def test_unrelated_command_does_not_invalidate_reached_candidate(tmp_path):
+    from fault_detector_spot.application.commanding.command_ids import CommandID
+    from fault_detector_spot.application.commanding.semantic_command import SemanticCommand
+    from fault_detector_spot.application.commanding.command_request import CommandRequest, CommandOrigin, RecordingPolicy
+    from fault_detector_spot.application.controllers.command_controller import CommandControllerState, CommandControllerStatus
+
+    probe, commands, state = begin_custom(tmp_path)
+    state, _ = move(probe, commands, state, ProbeMotionKind.MOVE_SAFE_APPROACH)
+    state = probe.approve_aligned_pose(state.context)
+    request = CommandRequest.create(command=SemanticCommand(command_id=CommandID.WAIT_TIME),
+                                    client_id="probe-ui", origin=CommandOrigin.OPERATIONAL,
+                                    recording_policy=RecordingPolicy.EXCLUDE)
+    for listener in tuple(commands.listeners):
+        listener(CommandControllerStatus(request, CommandControllerState.DISPATCHED))
+    assert latest(probe, state).refinement.motion_states[RefinementStage.ALIGNMENT] is RefinementMotionState.REACHED

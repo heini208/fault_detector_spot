@@ -72,6 +72,29 @@ class ProbeRefinementController:
         self._operations = SetupOperationRegistry()
         self._attachment_reservations = {}
 
+    def invalidate_external_motion(self, draft, status) -> bool:
+        """Invalidate live pose evidence after movement outside this workflow."""
+        # Invalidate on dispatch, before motion can leave a saved candidate.
+        # Terminal feedback is also sufficient evidence that motion was attempted.
+        if status.state not in {
+            CommandControllerState.DISPATCHED, CommandControllerState.RUNNING,
+            CommandControllerState.SUCCEEDED, CommandControllerState.FAILED,
+            CommandControllerState.CANCELLED,
+        }:
+            return False
+        if status.request.command.command_id not in {
+            CommandID.READY_ARM, CommandID.STOW_ARM,
+            CommandID.STAND_UP, CommandID.SIT_DOWN, CommandID.ESTOP_STATE,
+            CommandID.CHANGE_BODY_HEIGHT,
+            CommandID.MOVE_ARM_RELATIVE, CommandID.MOVE_ARM_TO_TAG,
+            CommandID.MOVE_ARM_TO_TAG_AND_WAIT, CommandID.FOLLOW_MOVE_TO_TAG_PATH,
+            CommandID.MOVE_SAFE_APPROACH, CommandID.ADJUST_SAFE_APPROACH,
+            CommandID.READY_SAFE_APPROACH, CommandID.MOVE_CLOSE_TO_SURFACE,
+            CommandID.ORIENT_TO_TAG, CommandID.ORIENT_TO_SURFACE,
+        }:
+            return False
+        return draft.refinement.invalidate_external_arm_motion()
+
     def begin(self, draft) -> None:
         self.require_physical_lane_idle()
         if draft.setup is None or (draft.geometry is None and not draft.setup.fully_custom):

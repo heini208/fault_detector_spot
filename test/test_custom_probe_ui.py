@@ -165,3 +165,48 @@ def test_custom_alignment_reuses_full_arm_controls_and_closes_on_navigation(appl
     assert dialog.full_control_dialog is None
     assert not dialog.full_control_button.isVisible()
     dialog.hide()
+
+
+def test_external_motion_update_disables_next_but_keeps_saved_candidate(application, tmp_path):
+    from unittest.mock import Mock
+    from fault_detector_spot.application.api.probe_setup_api import ProbeSetupApi
+    from fault_detector_spot.inspection.setup.probe_setup_state_adapter import ProbeSetupStateAdapter
+    from fault_detector_spot.inspection.setup.probe_setup_motion import ProbeMotionKind
+    from test_custom_probe_workflow import begin_custom, move, latest
+    from test_command_request_correlation import FakeClock
+    from fault_detector_spot.application.commanding.command_ids import CommandID
+    from fault_detector_spot.application.commanding.semantic_command import SemanticCommand
+    from fault_detector_spot.application.commanding.command_request import CommandRequest, CommandOrigin, RecordingPolicy
+    from fault_detector_spot.application.controllers.command_controller import CommandControllerState, CommandControllerStatus
+
+    probe, commands, state = begin_custom(tmp_path)
+    state, _ = move(probe, commands, state, ProbeMotionKind.MOVE_SAFE_APPROACH)
+    state = probe.approve_aligned_pose(state.context)
+    api = ProbeSetupApi.__new__(ProbeSetupApi)
+    api.state_adapter = ProbeSetupStateAdapter(FakeClock())
+    api.state_publisher = Mock()
+    probe.add_state_listener(api._publish_external_motion_state)
+    controls = FinalizingInspectionControls(FakeUI())
+    controls.apply_setup_state(api.state_adapter.message(state, 0, ProbeSetupState.STATE_READY, "Ready"))
+    dialog = controls.refinement_dialog
+    dialog.show_stage(RefinementStage.ALIGNMENT)
+    assert dialog.next_button.isEnabled()
+    request = CommandRequest.create(command=SemanticCommand(command_id=CommandID.MOVE_ARM_RELATIVE),
+                                    client_id="probe-ui", origin=CommandOrigin.OPERATIONAL,
+                                    recording_policy=RecordingPolicy.EXCLUDE)
+    for listener in tuple(commands.listeners):
+        listener(CommandControllerStatus(request, CommandControllerState.DISPATCHED))
+    message = api.state_publisher.publish.call_args.args[0]
+    assert message.surface_alignment_approved
+    assert message.alignment_motion_state == message.MOTION_NOT_TESTED
+    controls.apply_setup_state(message)
+    assert not dialog.next_button.isEnabled()
+    assert not controls.handle_refinement_next()
+    assert controls.move_aligned_pose_button.isEnabled()
+    assert controls.use_current_alignment_button.isEnabled()
+    state = latest(probe, state)
+    state, _ = move(probe, commands, state, ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+                    achieved=state.setup.aligned_preapproach_pose_object)
+    controls.apply_setup_state(api.state_adapter.message(state, 0, ProbeSetupState.STATE_READY, "Reached"))
+    assert dialog.next_button.isEnabled()
+    dialog.hide()

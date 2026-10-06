@@ -260,6 +260,13 @@ class SetupCoordinator:
             raise
         return operation.request_id
 
+    def add_command_status_listener(self, listener) -> None:
+        """Observe shared command activity, including motion outside setup."""
+        self._command_controller.add_status_listener(listener)
+
+    def remove_command_status_listener(self, listener) -> None:
+        self._command_controller.remove_status_listener(listener)
+
     def require_command_lane_idle(
         self,
         detail: str,

@@ -123,6 +123,43 @@ class ProbeSetupCoordinator:
         )
         self._drafts = {}
         self._context_locks = {}
+        self._state_listeners = []
+        setup_coordinator.add_command_status_listener(self._handle_external_command_status)
+
+    def add_state_listener(self, listener) -> None:
+        with self._lock:
+            if listener not in self._state_listeners:
+                self._state_listeners.append(listener)
+
+    def remove_state_listener(self, listener) -> None:
+        with self._lock:
+            if listener in self._state_listeners:
+                self._state_listeners.remove(listener)
+
+    def _handle_external_command_status(self, status) -> None:
+        with self._lock:
+            contexts = tuple(draft.context for draft in self._drafts.values())
+        for context in contexts:
+            if status.request.context_id == context.context_id:
+                continue
+            try:
+                lock = self._context_lock(context)
+            except LookupError:
+                continue
+            with lock:
+                with self._lock:
+                    draft = self._drafts.get(context.context_id)
+                if draft is None or draft.refinement is None:
+                    continue
+                if draft.refinement.pending_motion is not None:
+                    continue
+                if not self.refinement_controller.invalidate_external_motion(draft, status):
+                    continue
+                snapshot = self._advance(draft)
+                with self._lock:
+                    listeners = tuple(self._state_listeners)
+                for listener in listeners:
+                    listener(snapshot)
 
     def saved_probe_command(self, intent):
         """Resolve a saved point on the server without changing setup drafts."""
@@ -964,6 +1001,8 @@ class ProbeSetupCoordinator:
         for context in contexts:
             if self.setup_coordinator.is_current(context):
                 self.close_context(context)
+        self.setup_coordinator.remove_command_status_listener(self._handle_external_command_status)
+        self._state_listeners.clear()
         self.refinement_controller.clear()
         self.finalization_controller.clear()
 

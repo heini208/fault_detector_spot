@@ -45,7 +45,12 @@ def test_six_previews_do_not_starve_live_input_callbacks():
             with guard:
                 active -= 1
 
-    coordinator = SimpleNamespace(context=lambda *_: object(), snapshot=lambda _: object())
+    state_listeners = []
+    coordinator = SimpleNamespace(
+        context=lambda *_: object(), snapshot=lambda _: object(),
+        add_state_listener=state_listeners.append,
+        remove_state_listener=state_listeners.remove,
+    )
     api = ProbeSetupApi(server, coordinator, None, None, SimpleNamespace(load=load))
     timer = server.create_timer(0.02, heartbeat.set)
     client = client_node.create_client(

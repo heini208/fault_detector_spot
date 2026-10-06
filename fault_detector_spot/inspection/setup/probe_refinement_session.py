@@ -435,6 +435,21 @@ class ProbeRefinementSession:
             RefinementMotionState.NOT_TESTED
         )
 
+    def invalidate_external_arm_motion(self) -> bool:
+        """Forget reached refinement poses while retaining saved geometry.
+
+        Safe approach is a prerequisite already completed in this workflow;
+        keeping that checkpoint allows capturing a manually positioned candidate.
+        """
+        stages = (RefinementStage.ALIGNMENT, RefinementStage.PROBE)
+        changed = self.alignment_candidate_reached or self.alignment_orientation_established
+        for stage in stages:
+            changed = changed or self.motion_states[stage] is not RefinementMotionState.NOT_TESTED
+            self.motion_states[stage] = RefinementMotionState.NOT_TESTED
+        self.alignment_candidate_reached = False
+        self.alignment_orientation_established = False
+        return changed
+
     def discard_unapproved_candidates(self) -> None:
         """Restore approved or calculated poses without changing storage."""
         if self.recovery_required:
