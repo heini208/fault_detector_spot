@@ -161,7 +161,7 @@ def test_offline_head_skips_without_creating_files(tmp_path):
     assert state.status is SensorAcquisitionStatus.IDLE
     assert "offline" in state.detail
     assert not tuple(tmp_path.rglob("metadata.json"))
-    node.destroy_client.assert_called_once()
+    node.destroy_client.assert_not_called()
 
 
 def test_sample_write_failure_is_preserved_through_source_and_stop(tmp_path, monkeypatch):
@@ -199,3 +199,132 @@ def test_sample_write_failure_is_preserved_through_source_and_stop(tmp_path, mon
     assert saved.sample_counts["magnetic_field"] == 2
     assert not repository.is_open(active)
     assert coordinator._session is None
+
+
+def test_failed_attempt_is_finalized_and_retry_creates_separate_recording(tmp_path):
+    coordinator, repository, node, client, started, stopped = make_coordinator(tmp_path)
+    assert coordinator.recording_stopped
+    coordinator.start(request())
+    complete(started)
+    first_sample = coordinator._session.sources[0]._on_first_sample
+    coordinator._session.sources[0]._receive_message(MagneticField())
+    assert coordinator.snapshot().status is SensorAcquisitionStatus.RECORDING
+    assert not coordinator.recording_stopped
+    coordinator.abort_recording()
+    assert not coordinator.recording_stopped
+    complete(stopped)
+    assert coordinator.recording_stopped
+    assert coordinator.snapshot().status is SensorAcquisitionStatus.FAILED
+    failed = repository.load(object_id="motor_01", routine_id="magnetic_scan",
+                             probe_point_id="bearing_front", sensor_id="bmm150_probe",
+                             started_at_ns=START_NS)
+    assert failed.completion_state is MeasurementCompletionState.FAILED
+    next_started, next_stopped = MagicMock(), MagicMock()
+    client.call_async.side_effect = [next_started, next_stopped]
+    coordinator.start(request())
+    complete(next_started)
+    first_sample("magnetic_field", START_NS)  # Late callback from the failed attempt.
+    assert coordinator.snapshot().status is SensorAcquisitionStatus.STARTING
+    coordinator._session.sources[0]._receive_message(MagneticField())
+    assert coordinator.snapshot().status is SensorAcquisitionStatus.RECORDING
+    assert coordinator._session.recording.started_at_ns == START_NS + 1
+    coordinator.stop()
+    complete(next_stopped)
+    assert coordinator.recording_stopped
+    assert repository.load(object_id="motor_01", routine_id="magnetic_scan",
+                           probe_point_id="bearing_front", sensor_id="bmm150_probe",
+                           started_at_ns=START_NS + 1).completion_state is MeasurementCompletionState.COMPLETE
+    assert repository.load(object_id="motor_01", routine_id="magnetic_scan",
+                           probe_point_id="bearing_front", sensor_id="bmm150_probe",
+                           started_at_ns=START_NS).completion_state is MeasurementCompletionState.FAILED
+
+
+def test_failed_sensor_stop_cannot_be_cleared_to_allow_a_retry(tmp_path):
+    import pytest
+    coordinator, _, _, _, started, stopped = make_coordinator(tmp_path)
+    coordinator.start(request())
+    complete(started)
+    coordinator.abort_recording()
+    complete(stopped, success=False)
+    assert not coordinator.recording_stopped
+    assert coordinator.stop().status is SensorAcquisitionStatus.FAILED
+    with pytest.raises(RuntimeError, match="stop is unconfirmed"):
+        coordinator.start(request())
+
+
+def test_timeout_timer_survives_finish_and_is_reused(tmp_path):
+    coordinator, repository, node, client, started, stopped = make_coordinator(tmp_path)
+    timer = node.create_timer.return_value
+    callback = node.create_timer.call_args.args[1]
+    coordinator.start(request())
+    complete(started)
+    coordinator.stop()
+    complete(stopped)
+    timer.cancel.assert_called()
+    node.destroy_timer.assert_not_called()
+    callback()  # Executor may already have taken a callback before cancellation.
+    assert coordinator.snapshot().status is SensorAcquisitionStatus.IDLE
+    client.call_async.side_effect = None
+    coordinator.start(request())
+    assert node.create_timer.call_count == 1
+    assert timer.reset.call_count == 2
+    coordinator.close()
+    callback()
+    node.destroy_timer.assert_not_called()
+
+
+def test_recording_resources_reused_and_idle_messages_ignored(tmp_path):
+    coordinator, repository, node, client, started, stopped = make_coordinator(tmp_path)
+    for attempt in range(3):
+        started, stopped = MagicMock(), MagicMock()
+        client.call_async.side_effect = [started, stopped]
+        coordinator.start(request())
+        complete(started)
+        receive = node.create_subscription.call_args_list[0].args[2]
+        receive(MagneticField())
+        recording = coordinator._session.recording
+        assert coordinator.snapshot().status is SensorAcquisitionStatus.RECORDING
+        coordinator.stop()
+        complete(stopped)
+        receive(MagneticField())  # Already queued when finalization stopped the source.
+        saved = repository.load(
+            object_id=recording.object_id, routine_id=recording.routine_id,
+            probe_point_id=recording.probe_point_id, sensor_id=recording.sensor_id,
+            started_at_ns=recording.started_at_ns,
+        )
+        assert saved.sample_counts['magnetic_field'] == 1
+    assert node.create_subscription.call_count == 2
+    assert node.create_client.call_count == 1
+    node.destroy_subscription.assert_not_called()
+    node.destroy_client.assert_not_called()
+
+
+def test_geometry_tf_listener_survives_recording_finalization(tmp_path, monkeypatch):
+    from fault_detector_spot.inspection.model.sensor_models import SensorChannelSource
+    coordinator, _, node, client, _, _ = make_coordinator(tmp_path)
+    definition_with_geometry = definition()
+    from dataclasses import replace
+    coordinator.sensors.load.return_value = replace(
+        definition_with_geometry,
+        channels=definition_with_geometry.channels + (SensorChannel(
+            channel_id='geometry', topic='', message_type='',
+            source_kind=SensorChannelSource.SPOT_GEOMETRY,
+        ),),
+    )
+    listener = MagicMock()
+    buffer_factory = MagicMock()
+    listener_factory = MagicMock(return_value=listener)
+    module = 'fault_detector_spot.application.coordinators.sensor_acquisition_coordinator.tf2_ros'
+    monkeypatch.setattr(module + '.Buffer', buffer_factory)
+    monkeypatch.setattr(module + '.TransformListener', listener_factory)
+    for _ in range(2):
+        started, stopped = MagicMock(), MagicMock()
+        client.call_async.side_effect = [started, stopped]
+        coordinator.start(request())
+        complete(started)
+        coordinator.stop()
+        complete(stopped)
+    listener_factory.assert_called_once()
+    buffer_factory.assert_called_once()
+    listener.unregister.assert_not_called()
+    node.destroy_subscription.assert_not_called()

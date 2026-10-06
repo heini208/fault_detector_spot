@@ -1,5 +1,6 @@
 """Focused tests for recording-only ROS and Spot geometry sources."""
 
+import pytest
 import json
 
 from fault_detector_spot.inspection.measurement import (
@@ -165,7 +166,8 @@ def test_ros_topic_source_subscribes_only_while_recording(tmp_path):
     assert node.destroyed == [node.subscription]
 
 
-def test_geometry_source_records_poses_and_deduplicates_tf_errors(tmp_path):
+@pytest.mark.parametrize("externally_sampled", [False, True])
+def test_geometry_source_records_poses_and_deduplicates_tf_errors(tmp_path, externally_sampled):
     channel = SensorChannel(
         channel_id="spot_geometry",
         topic="",
@@ -210,12 +212,18 @@ def test_geometry_source_records_poses_and_deduplicates_tf_errors(tmp_path):
             (channel_id, str(exception))
         ),
         pose_lookup=lookup,
+        externally_sampled=externally_sampled,
     )
     source.start()
-    assert node.timer[0] == 0.1
-    node.timer_callback()
-    node.timer_callback()
-    node.timer_callback()
+    if externally_sampled:
+        assert source._timer is None
+        sample = source.sample
+    else:
+        assert node.timer[0] == 0.1
+        sample = node.timer_callback
+    sample()
+    sample()
+    sample()
     source.stop()
     finalized = repository.finalize(
         recording,
@@ -243,4 +251,6 @@ def test_geometry_source_records_poses_and_deduplicates_tf_errors(tmp_path):
     assert errors == [("spot_geometry", "TF is warming up")]
     assert first_samples == [("spot_geometry", 8_000_000_019)]
     assert finalized.sample_counts == {"spot_geometry": 1}
-    assert node.destroyed == [node.timer]
+    assert node.destroyed == ([] if externally_sampled else [node.timer])
+    sample()  # A queued callback after stop must not append another sample.
+    assert errors == [("spot_geometry", "TF is warming up")]

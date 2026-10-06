@@ -8,6 +8,7 @@ import time
 from bosdyn.client.frame_helpers import (
     GRAV_ALIGNED_BODY_FRAME_NAME,
     HAND_FRAME_NAME,
+    ODOM_FRAME_NAME,
 )
 from geometry_msgs.msg import PoseStamped
 from rclpy.time import Time
@@ -66,6 +67,7 @@ from fault_detector_spot.manipulation.moveit_arm_planner import (
 from fault_detector_spot.manipulation.probe_motion_planner import (
     CartesianMotionPlan,
     ProbeMotionPlanner,
+    ResolvedProbeTarget,
 )
 from fault_detector_spot.shared.geometry.movement_geometry import (
     MovementGeometryUnavailable,
@@ -84,6 +86,7 @@ from fault_detector_spot.manipulation.arm_motion_parameters import (
 
 
 TAG_POSITION_VERIFY_TIMEOUT_SEC = 2.0
+CHECKPOINT_POSITION_TOLERANCE_M = 0.020
 
 
 SURFACE_ORIENTATION_MAX_ERROR_RAD = math.radians(5.0)
@@ -464,6 +467,42 @@ class ArmMovementExecutor(MovementExecutor):
             force_threshold_n=force_threshold_n,
         )
 
+    def capture_probe_checkpoint(self, sensor_id: str) -> ResolvedProbeTarget:
+        """Snapshot an achieved probe pose in odom for path backtracking."""
+        with self._execution_lock:
+            if self.active:
+                raise RuntimeError("Cannot capture a checkpoint while arm movement is active")
+            if not str(sensor_id).strip():
+                raise ValueError("Probe checkpoint requires attachment geometry")
+            pose = self.probe_motion_planner.current_pose(
+                ODOM_FRAME_NAME, sensor_probe_frame(sensor_id),
+            )
+            pose_to_pose_data(pose.pose).validate()
+            return ResolvedProbeTarget(deepcopy(pose), sensor_id)
+
+    def restore_probe_checkpoint(self, checkpoint: ResolvedProbeTarget) -> ArmMovementUpdate:
+        """Guard and verify a return to a previously reached probe pose."""
+        if not isinstance(checkpoint, ResolvedProbeTarget):
+            raise TypeError("Expected a resolved probe checkpoint")
+        if checkpoint.target.header.frame_id != ODOM_FRAME_NAME:
+            raise ValueError("Probe checkpoint must be expressed in odom")
+        pose_to_pose_data(checkpoint.target.pose).validate()
+        with self._execution_lock:
+            if self.active:
+                return self._busy_update()
+            target = ResolvedProbeTarget(deepcopy(checkpoint.target), checkpoint.sensor_id)
+            self._tag_accuracy = {
+                "tolerance": CHECKPOINT_POSITION_TOLERANCE_M,
+                "orientation_tolerance": math.radians(5.0),
+                "verify_checkpoint": True,
+                "target": target, "corrections": 0,
+                "speed": self.safe_approach_speed, "force_threshold": None,
+            }
+            update = self.guarded_probe(lambda: target, speed=self.safe_approach_speed)
+            if update.outcome is not ArmMovementOutcome.RUNNING:
+                self._tag_accuracy = None
+            return update
+
     def tag_probe(
         self,
         command,
@@ -549,11 +588,24 @@ class ArmMovementExecutor(MovementExecutor):
             )
         except (ValueError, RuntimeError, TransformException) as exception:
             return ArmMovementUpdate(ArmMovementOutcome.RUNNING, f"Waiting for position feedback: {exception}")
-        if error <= state["tolerance"]:
+        orientation_tolerance = state.get("orientation_tolerance")
+        orientation_error = self.speed_policy._rotation_angle(
+            current.pose, state["target"].target.pose,
+        ) if orientation_tolerance is not None else 0.0
+        orientation_ok = orientation_tolerance is None or orientation_error <= orientation_tolerance
+        if error <= state["tolerance"] and orientation_ok:
             return super()._finish(
                 ArmMovementOutcome.SUCCESS,
                 f"Move-to-tag position verified: {error:.4f} m error "
                 f"(tolerance {state['tolerance']:.4f} m)",
+            )
+        if state.get("verify_checkpoint") and state["corrections"]:
+            return super()._finish(
+                ArmMovementOutcome.CHECKPOINT_TOLERANCE_FAILED,
+                "Checkpoint was not reached within position/orientation tolerance: "
+                f"position {error:.4f} m (limit {state['tolerance']:.4f} m), "
+                f"orientation {math.degrees(orientation_error):.2f} deg "
+                f"(limit {math.degrees(orientation_tolerance):.2f} deg)",
             )
         state["corrections"] += 1
         baseline = state["speed"]
@@ -1296,7 +1348,7 @@ class ArmMovementExecutor(MovementExecutor):
         if not self.active:
             return update
         if update.outcome is ArmMovementOutcome.SUCCESS and self._tag_accuracy is not None:
-            if self._tag_accuracy["corrections"]:
+            if self._tag_accuracy["corrections"] and not self._tag_accuracy.get("verify_checkpoint"):
                 return super()._finish(
                     ArmMovementOutcome.SUCCESS,
                     "Move-to-tag completed with one slow position adjustment",

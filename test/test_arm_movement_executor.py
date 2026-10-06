@@ -1288,3 +1288,61 @@ def test_explicit_stop_confirmation_requires_stationary_feedback():
     update = confirm_physical_stop(executor, clock, 0.1)
     assert update.outcome is ArmMovementOutcome.SUCCESS
     assert not executor.active
+
+
+def test_capture_probe_checkpoint_freezes_probe_tip_in_odom():
+    frame = executor_module.sensor_probe_frame("sensor_a")
+    feedback = transform("odom", frame, x=.37)
+    executor, _ = executor_with_client(FakeTransformer({("odom", frame): feedback}))
+    checkpoint = executor.capture_probe_checkpoint("sensor_a")
+    feedback.transform.translation.x = .99
+    assert checkpoint.sensor_id == "sensor_a"
+    assert checkpoint.target.header.frame_id == "odom"
+    assert checkpoint.target.pose.position.x == .37
+    executor._active = True
+    with pytest.raises(RuntimeError, match="movement is active"):
+        executor.capture_probe_checkpoint("sensor_a")
+
+
+def test_restore_checkpoint_uses_guard_and_verifies_orientation(monkeypatch):
+    from fault_detector_spot.manipulation.probe_motion_planner import ResolvedProbeTarget
+    executor, feedback, _, corrections = tag_verification_executor(monkeypatch, error=0.)
+    checkpoint = executor._tag_accuracy["target"]
+    executor._active = False
+    calls = []
+    def guarded(builder, **kwargs):
+        calls.append((builder(), kwargs))
+        executor._active = True
+        return executor_module.ArmMovementUpdate(ArmMovementOutcome.RUNNING, "guarded")
+    monkeypatch.setattr(executor, "guarded_probe", guarded)
+    assert executor.restore_probe_checkpoint(checkpoint).outcome is ArmMovementOutcome.RUNNING
+    assert isinstance(calls[0][0], ResolvedProbeTarget)
+    assert calls[0][0].target == checkpoint.target
+    executor._begin_tag_position_verification()
+    feedback.header.stamp.sec += 1
+    feedback.transform.rotation.z = 1.
+    feedback.transform.rotation.w = 0.
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert len(corrections) == 1  # Correct orientation even at the right position.
+    assert executor._finish_guarded_update(
+        executor_module.ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "corrected")
+    ).outcome is ArmMovementOutcome.RUNNING
+    feedback.header.stamp.sec += 1
+    assert executor.poll().outcome is ArmMovementOutcome.CHECKPOINT_TOLERANCE_FAILED
+    assert len(corrections) == 1  # No unbounded correction loop.
+
+
+@pytest.mark.parametrize("error, expected", [(.0102, ArmMovementOutcome.SUCCESS),
+                                            (.021, ArmMovementOutcome.RUNNING)])
+def test_checkpoint_return_uses_twenty_mm_position_tolerance(monkeypatch, error, expected):
+    executor, feedback, _, corrections = tag_verification_executor(monkeypatch, error=error)
+    checkpoint = executor._tag_accuracy["target"]
+    executor._active = False
+    monkeypatch.setattr(executor, "guarded_probe", lambda *args, **kwargs:
+                        executor_module.ArmMovementUpdate(ArmMovementOutcome.RUNNING, "guarded"))
+    executor.restore_probe_checkpoint(checkpoint)
+    executor._active = True
+    executor._begin_tag_position_verification()
+    feedback.header.stamp.sec += 1
+    assert executor.poll().outcome is expected
+    assert len(corrections) == (0 if expected is ArmMovementOutcome.SUCCESS else 1)

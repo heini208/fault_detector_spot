@@ -16,6 +16,7 @@ class ArmMovementOutcome(Enum):
     PLANNING_FAILED = "planning_failed"
     RESULT_TIMEOUT = "result_timeout"
     MOTION_FAILED = "motion_failed"
+    CHECKPOINT_TOLERANCE_FAILED = "checkpoint_tolerance_failed"
     TRAJECTORY_STALLED = "trajectory_stalled"
     TRAJECTORY_CANCELLED = "trajectory_cancelled"
     ARM_STATE_UNAVAILABLE = "arm_state_unavailable"

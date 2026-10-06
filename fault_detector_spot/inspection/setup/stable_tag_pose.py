@@ -13,6 +13,10 @@ from fault_detector_spot.shared.geometry.models import (
 )
 
 
+class TagObservationUnavailable(ValueError):
+    """Fresh observations have not yet accumulated for a stable tag pose."""
+
+
 @dataclass(frozen=True)
 class TagPoseSample:
     """One timestamped base-camera tag pose."""
@@ -65,19 +69,19 @@ def stabilize_tag_pose(
         <= stabilization_window_sec
     ]
     if not candidates:
-        raise ValueError(
+        raise TagObservationUnavailable(
             "No base-tag observations are available within the "
             f"{stabilization_window_sec:.3f} s stabilization window; "
             + _diagnostics((), now_seconds)
         )
     newest_age = now_seconds - candidates[-1].stamp_seconds
     if newest_age > maximum_age_sec:
-        raise ValueError(
+        raise TagObservationUnavailable(
             "Newest base-tag observation is stale; "
             + _diagnostics(candidates, now_seconds)
         )
     if len(candidates) < minimum_samples:
-        raise ValueError(
+        raise TagObservationUnavailable(
             f"Need at least {minimum_samples} distinct base-tag "
             "observations; "
             + _diagnostics(candidates, now_seconds)
@@ -92,7 +96,7 @@ def stabilize_tag_pose(
         raise ValueError("Stable base-tag samples must share one frame")
     span = selected[-1].stamp_seconds - selected[0].stamp_seconds
     if span + 1e-9 < minimum_span_sec:
-        raise ValueError(
+        raise TagObservationUnavailable(
             "Base-tag observations do not span the minimum interval; "
             + _diagnostics(selected, now_seconds)
         )

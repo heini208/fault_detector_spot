@@ -61,6 +61,7 @@ class RosTopicRecordingSource:
         message_type_resolver=get_message,
         message_converter=message_to_ordereddict,
         callback_group=None,
+        externally_subscribed: bool = False,
     ):
         """Configure a source without subscribing until :meth:`start`."""
         if channel.source_kind != SensorChannelSource.ROS_TOPIC:
@@ -79,6 +80,7 @@ class RosTopicRecordingSource:
         self._message_type_resolver = message_type_resolver
         self._message_converter = message_converter
         self._callback_group = callback_group
+        self._externally_subscribed = externally_subscribed
         self._subscription = None
         self._active = False
         self._first_sample_received = False
@@ -103,13 +105,13 @@ class RosTopicRecordingSource:
                 raise RuntimeError("ROS topic recording source is active")
             if not self._repository.is_open(self._recording):
                 raise RuntimeError("Measurement recording is not open")
-            message_type = self._message_type_resolver(
-                self._channel.message_type
-            )
             self._first_sample_received = False
             self._last_error_text = None
             self._active = True
+            if self._externally_subscribed:
+                return
             try:
+                message_type = self._message_type_resolver(self._channel.message_type)
                 subscription_options = {}
                 if self._callback_group is not None:
                     subscription_options["callback_group"] = (
@@ -135,6 +137,10 @@ class RosTopicRecordingSource:
             self._subscription = None
         if subscription is not None:
             self._node.destroy_subscription(subscription)
+
+    def receive_message(self, message: Any) -> None:
+        """Accept a message routed by a persistent acquisition subscription."""
+        self._receive_message(message)
 
     def _receive_message(self, message: Any) -> None:
         first_sample_callback = None

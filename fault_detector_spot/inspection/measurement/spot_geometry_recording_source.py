@@ -50,6 +50,7 @@ class SpotGeometryRecordingSource:
         on_error: Optional[SourceErrorCallback] = None,
         pose_lookup=lookup_pose_data,
         callback_group=None,
+        externally_sampled: bool = False,
     ):
         """Configure an internal timer source without starting its timer."""
         if channel.source_kind != SensorChannelSource.SPOT_GEOMETRY:
@@ -94,6 +95,7 @@ class SpotGeometryRecordingSource:
         self._on_error = on_error
         self._pose_lookup = pose_lookup
         self._callback_group = callback_group
+        self._externally_sampled = externally_sampled
         self._timer = None
         self._active = False
         self._first_sample_received = False
@@ -121,6 +123,8 @@ class SpotGeometryRecordingSource:
             self._first_sample_received = False
             self._last_error_text = None
             self._active = True
+            if self._externally_sampled:
+                return
             try:
                 timer_options = {}
                 if self._callback_group is not None:
@@ -143,6 +147,10 @@ class SpotGeometryRecordingSource:
             self._timer = None
         if timer is not None:
             self._node.destroy_timer(timer)
+
+    def sample(self) -> None:
+        """Sample from the coordinator timer when externally scheduled."""
+        self._sample_geometry()
 
     def _sample_geometry(self) -> None:
         first_sample_callback = None

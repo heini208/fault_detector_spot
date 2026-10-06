@@ -18,11 +18,15 @@ from fault_detector_spot.manipulation.move_close_to_surface_execution import (
 class ExecuteProbePoint(ArmMovementBehaviour):
     """Own stage ordering and bounded retries; executors own physical safety."""
 
-    STAGES = ("Safe approach", "Aligned preapproach", "Measurement pose",
-              "Return to aligned preapproach", "Return to safe approach")
-    RETRYABLE = frozenset({ArmMovementOutcome.PLANNING_FAILED,
-                          ArmMovementOutcome.GOAL_REJECTED,
-                          ArmMovementOutcome.ACTION_SERVER_UNAVAILABLE})
+    TAG_REACQUIRE_TIMEOUT_SEC = 5.0
+
+    STAGES = ("Safe approach", "Aligned preapproach", "Measurement pose")
+    # These outcomes prohibit autonomous recovery, regardless of retry budget.
+    UNSAFE_TO_RECOVER = frozenset({
+        ArmMovementOutcome.STOP_UNCONFIRMED, ArmMovementOutcome.RETREAT_FAILED,
+        ArmMovementOutcome.RECOVERY_FAILED, ArmMovementOutcome.UNSTABLE_ARM,
+        ArmMovementOutcome.BUSY, ArmMovementOutcome.TRAJECTORY_CANCELLED,
+    })
 
     def setup(self, **kwargs):
         super().setup(**kwargs)
@@ -39,6 +43,7 @@ class ExecuteProbePoint(ArmMovementBehaviour):
 
     def initialise(self):
         super().initialise()
+        self._tag_wait_started = None
         self._phase = "plan"
         self._future = None
         self._rpc_started = time.monotonic()
@@ -46,12 +51,17 @@ class ExecuteProbePoint(ArmMovementBehaviour):
         self._stage = 0
         self._index = 0
         self._steps = None
-        self._recovery = []
+        self._sensor_id = ""
+        self._history = []
         self._failure = ""
+        self._terminal_failure = ""
+        self._resume_phase = "motion"
         self._retry_pending = False
         self._stop_started = False
         self._stop_deadline = None
         self._record_started = False
+        self._abort_started = False
+        self._abort_deadline = None
 
     def _rpc(self, operation):
         if self._future is None:
@@ -71,14 +81,16 @@ class ExecuteProbePoint(ArmMovementBehaviour):
         response = self._future.result()
         self._future = None
         self._rpc_started = time.monotonic()
-        if not response.success:
-            raise RuntimeError(response.detail)
         return response
 
     def update(self):
         try:
             return self._advance()
         except Exception as exception:
+            if self._phase == "motion" and self._history:
+                return self._begin_failure(str(exception), "motion")
+            # Unknown recording/transport state or a failed recovery must not
+            # lead to a second recording or a shortcut through the return path.
             return self._fail(str(exception))
 
     def _advance(self):
@@ -86,110 +98,212 @@ class ExecuteProbePoint(ArmMovementBehaviour):
             response = self._rpc(ProbePointExecutionStep.Request.PLAN)
             if response is None:
                 return Status.RUNNING
-            if len(response.plan) != 5:
-                raise ValueError("Probe execution requires five motion stages")
-            self._steps = [self._builder.fire_command_sequence(semantic_command_from_message(p))
-                           for p in response.plan]
+            if response.recording_state == "waiting_tag":
+                return self._wait_for_tag(response.detail, "plan")
+            self._tag_wait_started = None
+            if not response.success:
+                return self._fail(response.detail)
+            if len(response.plan) != 3:
+                raise ValueError("Probe execution requires three forward motion stages")
+            plan = [semantic_command_from_message(p) for p in response.plan]
+            self._sensor_id = plan[0].motion_sensor_id
+            if not self._sensor_id or any(p.motion_sensor_id != self._sensor_id for p in plan):
+                raise ValueError("Probe execution plan has inconsistent attachment geometry")
+            self._steps = [self._builder.fire_command_sequence(p) for p in plan]
+            # Capture before any movement, including automatic arm deployment.
+            self._history = [self.executor.capture_probe_checkpoint(self._sensor_id)]
             self._phase = "motion"
 
         if self._phase == "record":
-            response = self._rpc(ProbePointExecutionStep.Request.POLL if self._record_started
-                                 else ProbePointExecutionStep.Request.RECORD)
-            if response is None:
-                return Status.RUNNING
-            self._record_started = True
-            self.feedback_message = response.detail
-            if response.recording_state == "failed":
-                return self._fail("Probe recording failed: " + response.detail)
-            if response.recording_state != "complete":
-                return Status.RUNNING
-            self._stage, self._index = 3, 0
-            self._phase = "motion"
-
+            return self._record()
+        if self._phase == "abort_record":
+            return self._abort_record()
         if self._phase == "stop":
-            # A cancellation remains active until the executor confirms its stop.
-            if not self._stop_started and self.executor.active:
-                self.executor.poll()
-                if time.monotonic() >= self._stop_deadline:
-                    return self._fail("Stop unconfirmed; probe retry prohibited")
-                return Status.RUNNING
-            update = self.executor.poll() if self._stop_started else self.executor.confirm_stop()
-            self._stop_started = True
-            if update.outcome is ArmMovementOutcome.RUNNING:
-                return Status.RUNNING
-            if update.outcome is not ArmMovementOutcome.SUCCESS:
-                return self._fail("Stop unconfirmed; probe retry prohibited: " + update.detail)
-            self._phase = "recovery"
-            self._index = 0
+            return self._confirm_stop()
+        if self._phase == "checkpoint":
+            return self._recover_checkpoint()
+        if self._phase == "return":
+            return self._backtrack()
+        return self._move_forward()
 
-        if self._phase == "recovery":
-            if self._index >= len(self._recovery):
-                if not self._retry_pending:
-                    return self._fail(self._failure + "; recovered to safe approach; retries exhausted")
-                self._attempt += 1
-                self._stage, self._index = 0, 0
-                self._phase = "motion"
-            else:
-                update = (self.executor.poll() if self._started
-                          else self.executor.tag_probe(self._recovery[self._index],
-                                                       speed=self.executor.safe_approach_speed))
-                self._started = update.outcome is ArmMovementOutcome.RUNNING
-                self.feedback_message = "Recovering before retry: " + update.detail
-                if self._started:
-                    return Status.RUNNING
-                if update.outcome is not ArmMovementOutcome.SUCCESS:
-                    return self._fail("Probe recovery failed; retry prohibited: " + update.detail)
-                self._index += 1
-                return Status.RUNNING
-
-        if self._stage == 5:
-            self.feedback_message = "Probe measurement recorded and arm returned to safe approach"
-            return Status.SUCCESS
+    def _move_forward(self):
         step = self._steps[self._stage][self._index]
+        if not self._started and hasattr(step, "tag_id"):
+            if self.executor.tag_state_source.usable_tag(step.tag_id) is None:
+                return self._wait_for_tag(f"Tag {step.tag_id} is not currently usable", "motion")
+            self._tag_wait_started = None
         surface = step.command_id is CommandID.MOVE_CLOSE_TO_SURFACE
         if surface:
             outcome = self._surface.poll() if self._started else self._surface.start(step)
             self._started = outcome is MoveCloseToSurfaceOutcome.RUNNING
             success = outcome is MoveCloseToSurfaceOutcome.SUCCESS
             detail = self._surface.feedback_message
-            retryable = self._surface.retry_eligible
+            failure_outcome = self._surface.failure_outcome
         else:
             update = (self.executor.poll() if self._started else self.executor.tag_probe(
-                step, speed=self.executor.safe_approach_speed if self._stage in (0, 4) else None,
+                step, speed=self.executor.safe_approach_speed if self._stage == 0 else None,
             ))
             self._started = update.outcome is ArmMovementOutcome.RUNNING
             success = update.outcome is ArmMovementOutcome.SUCCESS
             detail = update.detail
-            retryable = update.outcome in self.RETRYABLE
-        self.feedback_message = f"Attempt {self._attempt + 1}: {self.STAGES[self._stage]}: {detail}"
+            failure_outcome = update.outcome
+        self.feedback_message = f"{self.STAGES[self._stage]} (retries used: {self._attempt}): {detail}"
         if self._started:
             return Status.RUNNING
         if not success:
-            retries = self._last_command().retries
-            if not retryable or self._stage >= 3:
+            if failure_outcome in self.UNSAFE_TO_RECOVER:
                 return self._fail(self.feedback_message)
-            self._retry_pending = self._attempt < retries
-            self._failure = self.feedback_message
-            # Retrace only reached waypoints, never unvisited forward waypoints.
-            self._recovery = list(reversed(self._steps[self._stage][:self._index])) if not surface else []
-            if self._stage == 2:
-                self._recovery += [self._steps[1][-1]]
-                self._recovery += self._steps[4]
-            elif self._stage <= 1:
-                self._recovery += self._steps[0]
-            self._phase = "stop"
-            self._stop_started = False
-            self._stop_deadline = time.monotonic() + 10
-            if self.executor.active:
-                self.executor.cancel()
-            return Status.RUNNING
+            return self._begin_failure(self.feedback_message, "motion")
+        self._history.append(self.executor.capture_probe_checkpoint(self._sensor_id))
         self._index += 1
         if self._index >= len(self._steps[self._stage]):
-            if self._stage == 2:
-                self._phase = "record"
-            else:
-                self._stage += 1
+            self._stage += 1
             self._index = 0
+            if self._stage == len(self._steps):
+                self._phase = "record"
+        return Status.RUNNING
+
+    def _record(self):
+        response = self._rpc(ProbePointExecutionStep.Request.POLL if self._record_started
+                             else ProbePointExecutionStep.Request.RECORD)
+        if response is None:
+            return Status.RUNNING
+        if response.recording_state == "waiting_tag":
+            return self._wait_for_tag(response.detail, "record")
+        self._tag_wait_started = None
+        self._record_started = True
+        self.feedback_message = response.detail
+        if not response.success or response.recording_state == "failed":
+            self._failure = "Probe recording failed: " + response.detail
+            self._phase = "abort_record"
+            self._abort_started = False
+            self._abort_deadline = time.monotonic() + 10.0
+            return Status.RUNNING
+        if response.recording_state == "complete":
+            if not response.recording_stopped:
+                return self._fail("Sensor stop unconfirmed; backtracking prohibited")
+            self._phase = "return"
+        return Status.RUNNING
+
+    def _abort_record(self):
+        response = self._rpc(ProbePointExecutionStep.Request.POLL if self._abort_started
+                             else ProbePointExecutionStep.Request.ABORT_RECORDING)
+        if response is None:
+            return Status.RUNNING
+        self._abort_started = True
+        if not response.success:
+            return self._fail("Cannot confirm failed recording stopped: " + response.detail)
+        if response.recording_stopped:
+            return self._begin_failure(self._failure, "record")
+        if response.recording_state == "failed" or time.monotonic() >= self._abort_deadline:
+            return self._fail("Sensor stop unconfirmed; retry and backtracking prohibited")
+        return Status.RUNNING
+
+    def _wait_for_tag(self, detail, resume_phase):
+        now = time.monotonic()
+        if self._tag_wait_started is None:
+            self._tag_wait_started = now
+        self.feedback_message = "Waiting for tag reacquisition: " + detail
+        if now - self._tag_wait_started < self.TAG_REACQUIRE_TIMEOUT_SEC:
+            return Status.RUNNING
+        self._tag_wait_started = None
+        detail = "Tag reacquisition timed out: " + detail
+        if resume_phase == "plan":
+            # No motion has started and there is no checkpoint to recover yet.
+            if self._attempt < self._last_command().retries:
+                self._attempt += 1
+                return Status.RUNNING
+            return self._fail(detail)
+        return self._begin_failure(detail, resume_phase)
+
+    def _begin_failure(self, detail, resume_phase):
+        self._failure = detail
+        self._resume_phase = resume_phase
+        self._retry_pending = self._attempt < self._last_command().retries
+        if self._retry_pending:
+            self._attempt += 1
+        self._started = False
+        self._stop_started = False
+        self._stop_deadline = time.monotonic() + 10.0
+        self._phase = "stop"
+        if self._surface.active:
+            self._surface.cancel()
+        if self.executor.active:
+            self.executor.cancel()
+        return Status.RUNNING
+
+    def _confirm_stop(self):
+        if not self._stop_started and self.executor.active:
+            self.executor.poll()
+            if time.monotonic() >= self._stop_deadline:
+                return self._fail("Stop unconfirmed; recovery prohibited")
+            return Status.RUNNING
+        update = self.executor.poll() if self._stop_started else self.executor.confirm_stop()
+        self._stop_started = True
+        if update.outcome is ArmMovementOutcome.RUNNING:
+            return Status.RUNNING
+        if update.outcome is not ArmMovementOutcome.SUCCESS:
+            return self._fail("Stop unconfirmed; recovery prohibited: " + update.detail)
+        self._phase = "checkpoint"
+        return Status.RUNNING
+
+    def _recover_checkpoint(self):
+        update = (self.executor.poll() if self._started
+                  else self.executor.restore_probe_checkpoint(self._history[-1]))
+        self._started = update.outcome is ArmMovementOutcome.RUNNING
+        self.feedback_message = "Returning to last successful goal: " + update.detail
+        if self._started:
+            return Status.RUNNING
+        if update.outcome is not ArmMovementOutcome.SUCCESS:
+            if (update.outcome is ArmMovementOutcome.CHECKPOINT_TOLERANCE_FAILED
+                    and self._attempt < self._last_command().retries):
+                # Retry this same recovery target only after another confirmed stop.
+                # Keep the original failed step and its reserved retry unchanged.
+                self._attempt += 1
+                self._stop_started = False
+                self._stop_deadline = time.monotonic() + 10.0
+                self._phase = "stop"
+                self.feedback_message = (
+                    f"Retrying checkpoint recovery (retries used: {self._attempt}): "
+                    + update.detail
+                )
+                return Status.RUNNING
+            detail = "Checkpoint recovery failed; further motion prohibited: " + update.detail
+            if update.outcome is ArmMovementOutcome.CHECKPOINT_TOLERANCE_FAILED:
+                detail += f"; retry budget exhausted ({self._attempt}/{self._last_command().retries})"
+            return self._fail(detail)
+        if self._retry_pending:
+            self._phase = self._resume_phase
+            self._record_started = False
+        elif self._resume_phase == "return":
+            return self._fail(self._failure + "; return blocked; stopped at last successful goal")
+        else:
+            self._terminal_failure = self._failure
+            self._phase = "return"
+        return Status.RUNNING
+
+    def _backtrack(self):
+        # The pre-command pose is only a recovery target before safe approach
+        # succeeds. Normal backtracking ends at the first reached checkpoint.
+        if len(self._history) <= 2:
+            destination = "safe approach" if len(self._history) == 2 else "initial pose"
+            if self._terminal_failure:
+                return self._fail(self._terminal_failure + f"; retries exhausted; returned to {destination}")
+            self.feedback_message = "Probe measurement recorded; returned to safe approach"
+            return Status.SUCCESS
+        # Pop only after the preceding checkpoint was successfully reached.
+        # A failed return therefore recovers to the last reached checkpoint.
+        update = (self.executor.poll() if self._started
+                  else self.executor.restore_probe_checkpoint(self._history[-2]))
+        self._started = update.outcome is ArmMovementOutcome.RUNNING
+        self.feedback_message = "Backtracking to safe approach: " + update.detail
+        if self._started:
+            return Status.RUNNING
+        if update.outcome is not ArmMovementOutcome.SUCCESS:
+            if update.outcome in self.UNSAFE_TO_RECOVER:
+                return self._fail(self.feedback_message)
+            return self._begin_failure(self.feedback_message, "return")
+        self._history.pop()
         return Status.RUNNING
 
     def _fail(self, detail):

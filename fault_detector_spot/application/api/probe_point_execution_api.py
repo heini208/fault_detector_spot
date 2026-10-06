@@ -2,6 +2,8 @@
 
 import time
 
+from fault_detector_spot.inspection.setup.stable_tag_pose import TagObservationUnavailable
+
 from fault_detector_msgs.srv import ProbePointExecutionStep
 from rclpy.clock import Clock, ClockType
 
@@ -51,7 +53,7 @@ class ProbePointExecutionApi:
                   and status.state in {CommandControllerState.SUCCEEDED,
                                        CommandControllerState.FAILED, CommandControllerState.CANCELLED}):
                 self._timer.cancel()
-                if self._recording_state in {"starting", "recording", "stopping"}:
+                if self._recording_state in {"starting", "recording", "stopping", "aborting"}:
                     self.acquisition.stop(cancelled=True)
                 self._request = None
                 self._plan = None
@@ -75,23 +77,42 @@ class ProbePointExecutionApi:
                         )
                     response.plan = [semantic_command_to_message(step) for step in self._plan]
                 elif request.operation == request.RECORD:
-                    if self._plan is None or self._recording_state != "idle":
+                    if self._plan is None or self._recording_state not in {"idle", "failed"}:
                         raise RuntimeError("Recording cannot start in the current probe execution state")
+                    if not self.acquisition.recording_stopped:
+                        raise RuntimeError("Previous acquisition has not confirmed stopping")
+                    recording_request = self.recording_request(command)
+                    self._deadline = None
                     self._recording_state = "starting"
                     self._detail = "Starting probe-point recording"
-                    self.acquisition.start(self.recording_request(command))
+                    self.acquisition.start(recording_request)
                     # Skipped acquisition is a failed measurement, not a successful run.
                     if self.acquisition.snapshot().status is SensorAcquisitionStatus.IDLE:
                         self._recording_state = "failed"
                         self._detail = "Sensor acquisition was skipped; no measurement recorded"
-                    if self._recording_state in {"starting", "recording", "stopping"}:
+                    if self._recording_state in {"starting", "recording", "stopping", "aborting"}:
                         self._timer.reset()
+                elif request.operation == request.ABORT_RECORDING:
+                    self._timer.cancel()
+                    self._recording_state = "aborting"
+                    self.acquisition.abort_recording()
+                    if self.acquisition.recording_stopped:
+                        self._recording_state = "failed"
+                    elif self.acquisition.snapshot().status is SensorAcquisitionStatus.FAILED:
+                        self._recording_state = "failed"
                 elif request.operation != request.POLL:
                     raise ValueError("Unknown probe execution operation")
                 response.success = True
+            except TagObservationUnavailable as exception:
+                response.success = True
+                response.recording_state = "waiting_tag"
+                response.recording_stopped = self.acquisition.recording_stopped
+                response.detail = str(exception)
+                return response
             except Exception as exception:
                 response.success = False
                 self._detail = str(exception)
+            response.recording_stopped = self.acquisition.recording_stopped
             response.recording_state = self._recording_state
             response.detail = self._detail
         return response
@@ -110,7 +131,7 @@ class ProbePointExecutionApi:
 
     def _acquisition_state(self, state):
         with self._lock:
-            if self._request is None or self._recording_state not in {"starting", "recording", "stopping"}:
+            if self._request is None or self._recording_state not in {"starting", "recording", "stopping", "aborting"}:
                 return
             self._detail = state.detail
             if state.status is SensorAcquisitionStatus.RECORDING:

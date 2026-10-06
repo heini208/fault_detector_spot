@@ -59,11 +59,9 @@ def test_surface_plan_preserves_context_and_returns_via_saved_alignment():
                             Mock(load=Mock(return_value=inspection_object())), source,
                             Mock(require_motion_attachment=Mock(return_value=attachment)),
                             ProbeSetupMotionCommandFactory())
-    assert len(plan) == 5
+    assert len(plan) == 3
     assert plan[2].command_id is CommandID.MOVE_CLOSE_TO_SURFACE
     assert plan[2].target_surface_distance_m == 0.03
-    assert plan[3].offset == plan[1].offset
-    assert plan[4].offset == plan[0].offset
     assert all(step.inspection == command().inspection for step in plan)
     source.reference_tag.assert_called_once_with(2)
 
@@ -72,23 +70,44 @@ def step(name):
     return SimpleNamespace(name=name, command_id=CommandID.MOVE_ARM_TO_TAG)
 
 
+def response(state="complete", stopped=True):
+    return SimpleNamespace(success=True, recording_state=state,
+                           recording_stopped=stopped, detail=state)
+
+
 def action(retries=0):
     value = ExecuteProbePoint("Test probe execution")
     value.initialise()
     value._phase = "motion"
+    value._sensor_id = "probe"
+    value._history = ["initial"]
     value._last_command = lambda: SimpleNamespace(retries=retries)
     value._steps = [[step("safe")], [step("a"), step("b"), step("aligned")],
-                    [step("m"), step("measure")], [step("m"), step("aligned")],
-                    [step("b"), step("a"), step("safe")]]
+                    [step("m"), step("measure")]]
     value.executor = Mock(active=False, safe_approach_speed=object())
-    value.executor.tag_probe.return_value = ArmMovementUpdate(Outcome.SUCCESS, "arrived")
-    value.executor.confirm_stop.return_value = ArmMovementUpdate(Outcome.SUCCESS, "stopped")
-    value._surface = Mock(active=False)
-    value._fail = lambda detail: Status.FAILURE
+    value.events = []
+    value.position = "initial"
+    value.failures = {}
+
+    def move(kind, target):
+        value.events.append((kind, target))
+        failures = value.failures.get((kind, target), [])
+        outcome = failures.pop(0) if failures else Outcome.SUCCESS
+        value.position = target if outcome is Outcome.SUCCESS else "partial:" + target
+        return ArmMovementUpdate(outcome, outcome.value)
+
+    value.executor.tag_probe.side_effect = lambda target, **kw: move("move", target.name)
+    value.executor.restore_probe_checkpoint.side_effect = lambda target: move("restore", target)
+    value.executor.capture_probe_checkpoint.side_effect = lambda sensor: value.position
+    value.executor.confirm_stop.side_effect = lambda: (
+        value.events.append(("stop", None)) or ArmMovementUpdate(Outcome.SUCCESS, "stopped"))
+    value._surface = Mock(active=False, failure_outcome=None)
+    value._fail = Mock(return_value=Status.FAILURE)
+    value._rpc = Mock(return_value=response())
     return value
 
 
-def run(value, limit=80):
+def run(value, limit=120):
     for _ in range(limit):
         result = value.update()
         if result is not Status.RUNNING:
@@ -96,67 +115,148 @@ def run(value, limit=80):
     pytest.fail("Execution did not terminate")
 
 
-def test_success_waits_for_recording_finalization_before_retraction():
+def test_success_waits_for_finalization_then_reverses_reached_path_to_initial_pose():
     value = action()
     responses = iter(["starting", "recording", "stopping", "complete"])
     calls = []
     def rpc(operation):
         calls.append(operation)
-        assert [c.args[0].name for c in value.executor.tag_probe.call_args_list] == [
-            "safe", "a", "b", "aligned", "m", "measure"]
-        return SimpleNamespace(recording_state=next(responses), detail="recording")
+        assert all(kind == "move" for kind, _ in value.events)
+        return response(next(responses))
     value._rpc = rpc
     assert run(value) is Status.SUCCESS
     assert calls == [ProbePointExecutionStep.Request.RECORD] + [ProbePointExecutionStep.Request.POLL] * 3
-    assert [c.args[0].name for c in value.executor.tag_probe.call_args_list][-5:] == ["m", "aligned", "b", "a", "safe"]
+    assert value.events == [("move", name) for name in ("safe", "a", "b", "aligned", "m", "measure")] + [
+        ("restore", name) for name in ("m", "aligned", "b", "a", "safe")]
+    assert value.position == "safe"
 
 
-def test_retry_confirms_stop_then_retraces_only_reached_waypoints():
+@pytest.mark.parametrize("failure", [Outcome.CONTACT, Outcome.PLANNING_FAILED,
+                                      Outcome.MOTION_FAILED, Outcome.FORCE_STALE,
+                                      Outcome.EXECUTION_ERROR])
+def test_failed_path_step_recovers_previous_checkpoint_and_resumes_same_step(failure):
     value = action(retries=1)
-    failed = [False]
-    events = []
-    def move(target, **kwargs):
-        events.append(target.name)
-        if target.name == "b" and not failed[0]:
-            failed[0] = True
-            return ArmMovementUpdate(Outcome.PLANNING_FAILED, "planning failed")
-        return ArmMovementUpdate(Outcome.SUCCESS, "arrived")
-    value.executor.tag_probe.side_effect = move
-    value.executor.confirm_stop.side_effect = lambda: (events.append("stop") or ArmMovementUpdate(Outcome.SUCCESS, "stopped"))
-    value._rpc = lambda op: SimpleNamespace(recording_state="complete", detail="saved")
+    value.failures[("move", "b")] = [failure]
     assert run(value) is Status.SUCCESS
-    assert events[:8] == ["safe", "a", "b", "stop", "a", "safe", "safe", "a"]
+    assert value.events[:7] == [("move", "safe"), ("move", "a"), ("move", "b"),
+                                ("stop", None), ("restore", "a"), ("move", "b"), ("move", "aligned")]
     assert value._attempt == 1
+    assert value.events[-1] == ("restore", "safe")
 
 
-@pytest.mark.parametrize("outcome", [Outcome.STOP_UNCONFIRMED, Outcome.RETREAT_FAILED,
-                                      Outcome.FORCE_STALE, Outcome.EXECUTION_ERROR])
-def test_safety_failures_never_retry(outcome):
-    value = action(retries=3)
-    value.executor.tag_probe.return_value = ArmMovementUpdate(outcome, "failure")
+def test_exhausted_forward_failure_backtracks_only_reached_goals():
+    value = action(retries=1)
+    value.failures[("move", "b")] = [Outcome.CONTACT, Outcome.CONTACT]
     assert run(value) is Status.FAILURE
-    assert value.executor.tag_probe.call_count == 1
-    value.executor.confirm_stop.assert_not_called()
+    assert value.events[-4:] == [("move", "b"), ("stop", None), ("restore", "a"),
+                                 ("restore", "safe")]
+    assert not any(target in ("aligned", "m", "measure") for _, target in value.events)
+    assert value.position == "safe"
+    assert "returned to safe approach" in value._fail.call_args.args[0]
 
 
-@pytest.mark.parametrize("stop_outcome", [Outcome.STOP_UNCONFIRMED, Outcome.SUCCESS])
-def test_stop_or_recovery_failure_prevents_retry(stop_outcome):
+def test_first_goal_failure_uses_initial_pose_as_checkpoint():
+    value = action(retries=1)
+    value.failures[("move", "safe")] = [Outcome.CONTACT]
+    assert run(value) is Status.SUCCESS
+    assert value.events[:4] == [("move", "safe"), ("stop", None),
+                                ("restore", "initial"), ("move", "safe")]
+
+
+@pytest.mark.parametrize("outcome", list(ExecuteProbePoint.UNSAFE_TO_RECOVER))
+def test_unsafe_outcomes_never_recover_or_retry(outcome):
     value = action(retries=3)
-    value.executor.tag_probe.side_effect = [ArmMovementUpdate(Outcome.PLANNING_FAILED, "failed"),
-                                           ArmMovementUpdate(Outcome.MOTION_FAILED, "recovery failed")]
-    value.executor.confirm_stop.return_value = ArmMovementUpdate(stop_outcome, "stop")
+    value.failures[("move", "safe")] = [outcome]
     assert run(value) is Status.FAILURE
-    assert value._attempt == 0
-    assert value.executor.tag_probe.call_count == (1 if stop_outcome is Outcome.STOP_UNCONFIRMED else 2)
+    assert value.events == [("move", "safe")]
 
 
-def test_retry_count_means_additional_attempts():
+def test_unconfirmed_stop_prevents_recovery():
+    value = action(retries=3)
+    value.failures[("move", "safe")] = [Outcome.CONTACT]
+    value.executor.confirm_stop.side_effect = None
+    value.executor.confirm_stop.return_value = ArmMovementUpdate(Outcome.STOP_UNCONFIRMED, "no stop")
+    assert run(value) is Status.FAILURE
+    value.executor.restore_probe_checkpoint.assert_not_called()
+
+
+def test_failed_checkpoint_recovery_never_skips_to_earlier_goal():
+    value = action(retries=3)
+    value.failures[("move", "b")] = [Outcome.CONTACT]
+    value.failures[("restore", "a")] = [Outcome.CONTACT]
+    assert run(value) is Status.FAILURE
+    assert value.events[-1] == ("restore", "a")
+    assert value._attempt == 1
+    assert "Checkpoint recovery failed" in value._fail.call_args.args[0]
+
+
+def test_retry_budget_is_shared_across_failed_steps():
     value = action(retries=2)
-    def move(target, **kwargs):
-        return ArmMovementUpdate(Outcome.PLANNING_FAILED if value._phase == "motion" else Outcome.SUCCESS, "result")
-    value.executor.tag_probe.side_effect = move
+    for name in ("a", "b", "m"):
+        value.failures[("move", name)] = [Outcome.CONTACT]
     assert run(value) is Status.FAILURE
     assert value._attempt == 2
+    assert value.events.count(("move", "a")) == 2
+    assert value.events.count(("move", "b")) == 2
+    assert value.events.count(("move", "m")) == 1
+    assert value.position == "safe"
+
+
+def test_return_failure_recovers_last_successful_return_goal_then_retries():
+    value = action(retries=1)
+    value.failures[("restore", "b")] = [Outcome.CONTACT]
+    assert run(value) is Status.SUCCESS
+    i = value.events.index(("restore", "b"))
+    assert value.events[i:i+4] == [("restore", "b"), ("stop", None),
+                                   ("restore", "aligned"), ("restore", "b")]
+    assert value.position == "safe"
+
+
+def test_exhausted_return_failure_stops_at_last_checkpoint_without_shortcut():
+    value = action(retries=0)
+    value.failures[("restore", "b")] = [Outcome.CONTACT]
+    assert run(value) is Status.FAILURE
+    assert value.events[-3:] == [("restore", "b"), ("stop", None), ("restore", "aligned")]
+    assert "return blocked" in value._fail.call_args.args[0]
+
+
+def test_record_failure_aborts_before_checkpoint_recovery_and_new_recording():
+    value = action(retries=1)
+    operations = []
+    def rpc(operation):
+        operations.append(operation)
+        if operations == [ProbePointExecutionStep.Request.RECORD]:
+            return response("failed", False)
+        if operation == ProbePointExecutionStep.Request.ABORT_RECORDING:
+            assert all(kind == "move" for kind, _ in value.events)
+            return response("aborting", False)
+        if operations[-2:] == [ProbePointExecutionStep.Request.ABORT_RECORDING, ProbePointExecutionStep.Request.POLL]:
+            return response("failed", True)
+        assert value.events[-1] == ("restore", "measure")
+        return response()
+    value._rpc = rpc
+    assert run(value) is Status.SUCCESS
+    assert operations == [ProbePointExecutionStep.Request.RECORD, ProbePointExecutionStep.Request.ABORT_RECORDING,
+                          ProbePointExecutionStep.Request.POLL, ProbePointExecutionStep.Request.RECORD]
+    assert value._attempt == 1
+    assert value.events.count(("move", "measure")) == 1
+
+
+def test_exhausted_recording_failure_backtracks_after_confirmed_acquisition_stop():
+    value = action(retries=0)
+    value._rpc.side_effect = [response("failed", False), response("failed", True)]
+    assert run(value) is Status.FAILURE
+    assert value.position == "safe"
+    assert value.events[-6:] == [("restore", name) for name in
+                                ("measure", "m", "aligned", "b", "a", "safe")]
+
+
+def test_unconfirmed_sensor_stop_prohibits_retry_and_return():
+    value = action(retries=2)
+    value._rpc.return_value = response("failed", False)
+    assert run(value) is Status.FAILURE
+    value.executor.restore_probe_checkpoint.assert_not_called()
+    value.executor.confirm_stop.assert_not_called()
 
 
 def test_cancellation_stops_active_execution_without_retry():
@@ -175,7 +275,7 @@ def api():
     value._request = SimpleNamespace(request_id="current", command=command())
     value.controller = SimpleNamespace(active_request_id="current")
     value._timer = Mock()
-    value.acquisition = Mock()
+    value.acquisition = Mock(recording_stopped=True)
     value._recording_state = "starting"
     value._deadline = None
     value._detail = ""
@@ -212,7 +312,7 @@ def test_failed_sensor_stop_is_not_complete():
     assert value._recording_state == "failed"
 
 
-def test_custom_plan_reverses_both_paths_and_preserves_waypoint_limits():
+def test_custom_plan_preserves_forward_waypoint_limits_for_checkpoint_execution():
     from fault_detector_spot.inspection.model.models import PreApproachPathPoint
     from test_probe_execution_target import pose
     definition = inspection_object()
@@ -232,12 +332,11 @@ def test_custom_plan_reverses_both_paths_and_preserves_waypoint_limits():
                             Mock(require_motion_attachment=Mock(return_value=attachment)),
                             ProbeSetupMotionCommandFactory())
     assert plan[2].command_id is CommandID.FOLLOW_MOVE_TO_TAG_PATH
-    assert [p.position.x for p in plan[3].pre_approach_offsets] == [.02, .05]
-    assert [p.position.x for p in plan[4].pre_approach_offsets] == [.20, .25]
-    assert plan[3].pre_approach_tolerances_m == (.001, .002)
-    assert plan[3].pre_approach_speed_scales == (.1, .2)
-    assert plan[4].pre_approach_tolerances_m == (.003, .004)
-    assert plan[4].pre_approach_speed_scales == (.3, .4)
+    assert len(plan) == 3
+    assert [p.position.x for p in plan[1].pre_approach_offsets] == [.25, .20]
+    assert [p.position.x for p in plan[2].pre_approach_offsets] == [.05, .02]
+    assert plan[2].pre_approach_tolerances_m == (.002, .001)
+    assert plan[2].pre_approach_speed_scales == (.2, .1)
 
 
 def test_parent_cancellation_stops_recording_as_cancelled():
@@ -297,8 +396,8 @@ def test_surface_measurement_uses_surface_executor_and_records_only_after_succes
     value._surface.start.return_value = MoveCloseToSurfaceOutcome.RUNNING
     value._surface.poll.return_value = MoveCloseToSurfaceOutcome.SUCCESS
     value._surface.feedback_message = "distance verified"
-    value._surface.retry_eligible = False
-    value._rpc = Mock(return_value=SimpleNamespace(recording_state="complete", detail="saved"))
+    value._surface.failure_outcome = None
+    value._rpc = Mock(return_value=response())
     assert run(value) is Status.SUCCESS
     value._surface.start.assert_called_once_with(surface_step)
     value._surface.poll.assert_called_once()
@@ -323,3 +422,196 @@ def test_geometry_reference_uses_observation_time():
     args, kwargs = source._lookup_pose.call_args
     assert args == ("odom", "body")
     assert kwargs["lookup_time"].nanoseconds == 12000000000
+
+
+def test_failed_recording_can_restart_only_after_confirmed_stop_with_new_deadline():
+    value = api()
+    value._recording_state = "failed"
+    value._deadline = 2.5
+    value._plan = (object(),)
+    value.recording_request = Mock(return_value=object())
+    value.acquisition.snapshot.return_value = SimpleNamespace(status=Acquisition.STARTING)
+    request = ProbePointExecutionStep.Request(request_id="current", operation=ProbePointExecutionStep.Request.RECORD)
+    result = value._handle(request, ProbePointExecutionStep.Response())
+    assert result.success
+    assert value._deadline is None
+    value._acquisition_state(SimpleNamespace(status=Acquisition.RECORDING, detail="new samples"))
+    assert value._deadline == 12.5
+    value._recording_state = "failed"
+    value.acquisition.recording_stopped = False
+    result = value._handle(request, ProbePointExecutionStep.Response())
+    assert not result.success
+    assert value.acquisition.start.call_count == 1
+
+
+def test_abort_recording_service_exposes_stop_confirmation():
+    value = api()
+    value.acquisition.recording_stopped = False
+    value.acquisition.snapshot.return_value = SimpleNamespace(status=Acquisition.STOPPING)
+    request = ProbePointExecutionStep.Request(request_id="current", operation=ProbePointExecutionStep.Request.ABORT_RECORDING)
+    result = value._handle(request, ProbePointExecutionStep.Response())
+    assert result.success
+    assert not result.recording_stopped
+    assert result.recording_state == "aborting"
+    value.acquisition.abort_recording.assert_called_once()
+    value.acquisition.recording_stopped = True
+    value._acquisition_state(SimpleNamespace(status=Acquisition.FAILED, detail="partial attempt failed"))
+    request.operation = request.POLL
+    result = value._handle(request, ProbePointExecutionStep.Response())
+    assert result.recording_stopped
+    assert result.recording_state == "failed"
+
+
+def test_initial_pose_is_captured_before_the_first_forward_goal():
+    value = action()
+    value._phase = "plan"
+    value._history = []
+    wire_plan = [semantic_command_to_message(SemanticCommand(
+        CommandID.MOVE_ARM_TO_TAG, motion_sensor_id="probe")) for _ in range(3)]
+    value._rpc.return_value = SimpleNamespace(success=True, plan=wire_plan, recording_state="idle")
+    value._builder = Mock()
+    value._builder.fire_command_sequence.side_effect = [[step("safe")], [step("aligned")], [step("measure")]]
+    assert value.update() is Status.RUNNING
+    assert value._history == ["initial", "safe"]
+    assert value.events == [("move", "safe")]
+
+
+def test_surface_recovery_failure_blocks_combined_retry():
+    from fault_detector_spot.manipulation.move_close_to_surface_execution import MoveCloseToSurfaceOutcome
+    value = action(retries=3)
+    value._stage = 2
+    value._history = ["initial", "safe", "aligned"]
+    value._steps[2] = [SimpleNamespace(command_id=CommandID.MOVE_CLOSE_TO_SURFACE)]
+    value._surface.start.return_value = MoveCloseToSurfaceOutcome.FAILURE
+    value._surface.failure_outcome = Outcome.RECOVERY_FAILED
+    value._surface.feedback_message = "local recovery failed"
+    assert value.update() is Status.FAILURE
+    value.executor.confirm_stop.assert_not_called()
+    value.executor.restore_probe_checkpoint.assert_not_called()
+
+
+def test_missing_tag_waits_then_continues_without_spending_retry(monkeypatch):
+    value = action(retries=1)
+    value._steps[0][0].tag_id = 42
+    value.executor.tag_state_source.usable_tag.return_value = None
+    monkeypatch.setattr('fault_detector_spot.inspection.behaviours.execute_probe_point.time.monotonic', lambda: 10.0)
+    assert value.update() is Status.RUNNING
+    assert value.events == []
+    assert value._attempt == 0
+    value.executor.tag_state_source.usable_tag.return_value = object()
+    assert value.update() is Status.RUNNING
+    assert value.events == [('move', 'safe')]
+
+
+def test_missing_tag_timeout_recovers_checkpoint_before_retry(monkeypatch):
+    value = action(retries=1)
+    value._steps[0][0].tag_id = 42
+    value.executor.tag_state_source.usable_tag.return_value = None
+    now = [10.0]
+    monkeypatch.setattr('fault_detector_spot.inspection.behaviours.execute_probe_point.time.monotonic', lambda: now[0])
+    value.update()
+    now[0] = 15.1
+    value.update()
+    assert value._phase == 'stop'
+    value.update()
+    value.update()
+    assert value._attempt == 1
+    assert value.events == [('stop', None), ('restore', 'initial')]
+    value.update()
+    assert value._phase == 'motion'
+    assert value._tag_wait_started == 15.1
+
+
+def test_record_context_wait_does_not_switch_to_poll():
+    value = action()
+    value._phase = 'record'
+    value._rpc.return_value = response('waiting_tag')
+    assert value.update() is Status.RUNNING
+    assert not value._record_started
+    assert value.events == []
+
+
+def test_api_waits_for_record_context_before_starting_acquisition():
+    from fault_detector_spot.inspection.setup.stable_tag_pose import TagObservationUnavailable
+    value = api()
+    value._plan = (object(),)
+    value._recording_state = 'idle'
+    value.recording_request = Mock(side_effect=TagObservationUnavailable('No fresh tag'))
+    request = ProbePointExecutionStep.Request()
+    request.request_id = 'current'
+    request.operation = request.RECORD
+    result = value._handle(request, ProbePointExecutionStep.Response())
+    assert result.success
+    assert result.recording_state == 'waiting_tag'
+    assert value._recording_state == 'idle'
+    value.acquisition.start.assert_not_called()
+
+
+def test_plan_tag_wait_exhausts_shared_retry_budget(monkeypatch):
+    value = action(retries=1)
+    value._phase = 'plan'
+    value._history = []
+    value._rpc.return_value = response('waiting_tag')
+    now = [0.0]
+    monkeypatch.setattr('fault_detector_spot.inspection.behaviours.execute_probe_point.time.monotonic', lambda: now[0])
+    value.update()
+    now[0] = 6.0
+    value.update()
+    assert value._attempt == 1
+    value.update()
+    now[0] = 12.0
+    assert value.update() is Status.FAILURE
+    assert value.events == []
+
+
+@pytest.mark.parametrize("misses, expected", [(1, Status.SUCCESS), (2, Status.SUCCESS), (3, Status.FAILURE)])
+def test_return_recovery_tolerance_misses_use_shared_budget(misses, expected):
+    value = action(retries=3)
+    value._phase = "return"
+    value._history = ["initial", "safe", "aligned"]
+    value.position = "aligned"
+    value.failures[("restore", "safe")] = [Outcome.CHECKPOINT_TOLERANCE_FAILED]
+    value.failures[("restore", "aligned")] = [Outcome.CHECKPOINT_TOLERANCE_FAILED] * misses
+    assert run(value) is expected
+    index = value.events.index(("restore", "safe"))
+    recovery_events = value.events[index + 1:]
+    for attempt in range(min(misses + 1, 3)):
+        assert recovery_events[attempt * 2:attempt * 2 + 2] == [
+            ("stop", None), ("restore", "aligned")]
+    assert value._attempt <= 3
+    if expected is Status.SUCCESS:
+        assert value.position == "safe"
+        assert value.events[-1] == ("restore", "safe")
+    else:
+        assert value.events.count(("restore", "safe")) == 1
+        assert "retry budget exhausted (3/3)" in value._fail.call_args.args[0]
+
+
+def test_recovery_tolerance_retry_requires_confirmed_stop():
+    value = action(retries=3)
+    value.failures[("move", "safe")] = [Outcome.CONTACT]
+    value.failures[("restore", "initial")] = [Outcome.CHECKPOINT_TOLERANCE_FAILED]
+    value.executor.confirm_stop.side_effect = [
+        ArmMovementUpdate(Outcome.SUCCESS, "stopped"),
+        ArmMovementUpdate(Outcome.STOP_UNCONFIRMED, "unknown"),
+    ]
+    assert run(value) is Status.FAILURE
+    assert value.events.count(("restore", "initial")) == 1
+    assert "Stop unconfirmed" in value._fail.call_args.args[0]
+
+
+def test_first_safe_approach_exhaustion_recovers_initial_pose_only():
+    value = action(retries=0)
+    value.failures[("move", "safe")] = [Outcome.CONTACT]
+    assert run(value) is Status.FAILURE
+    assert value.events == [("move", "safe"), ("stop", None), ("restore", "initial")]
+    assert value.position == "initial"
+
+
+def test_backtracking_at_safe_approach_does_not_restore_precommand_pose():
+    value = action()
+    value._phase = "return"
+    value._history = ["initial", "safe"]
+    value.position = "safe"
+    assert value.update() is Status.SUCCESS
+    assert value.events == []

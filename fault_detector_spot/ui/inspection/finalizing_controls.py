@@ -187,7 +187,7 @@ class FinalizingInspectionControls(InspectionControls):
         self.probe_record_duration.setSuffix(" s")
         self.probe_record_retries = QSpinBox()
         self.probe_record_retries.setRange(0, 100)
-        self.probe_record_retries.setToolTip("Additional attempts after confirmed stopping and successful recovery.")
+        self.probe_record_retries.setToolTip("Shared retry budget: return to the last successful goal and retry the failed step.")
         recording_row.addWidget(QLabel("Recording duration:"))
         recording_row.addWidget(self.probe_record_duration)
         recording_row.addWidget(QLabel("Retries:"))

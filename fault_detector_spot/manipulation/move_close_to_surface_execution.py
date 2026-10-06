@@ -399,7 +399,6 @@ class MoveCloseToSurfaceExecution:
             )
 
         if now - self._phase_started >= self.config.sample_timeout_sec:
-            self.retry_eligible = self._approach_steps == 0
             return self._fail_workflow(
                 "Unable to establish stable surface distance: "
                 f"{detail}"
@@ -488,11 +487,14 @@ class MoveCloseToSurfaceExecution:
         if update.outcome in (
             ArmMovementOutcome.STOP_UNCONFIRMED,
             ArmMovementOutcome.RETREAT_FAILED,
+            ArmMovementOutcome.RECOVERY_FAILED,
+            ArmMovementOutcome.UNSTABLE_ARM,
         ):
             return self._fail_workflow(
                 "Surface approach could not complete its local stop/retreat: "
                 f"{update.outcome.value}: {update.detail}; "
-                "no return to the pre-approach pose was commanded"
+                "no return to the pre-approach pose was commanded",
+                update.outcome,
             )
         # An incomplete Cartesian plan has not been executed. Shorten its
         # endpoint and replan; the eventual successful path executes once.
@@ -588,7 +590,10 @@ class MoveCloseToSurfaceExecution:
             self.executor.poll()
             if self.executor.active:
                 if self._clock() >= self._recovery_stop_deadline:
-                    return self._fail_workflow("Surface recovery prohibited: stop unconfirmed")
+                    return self._fail_workflow(
+                        "Surface recovery prohibited: stop unconfirmed",
+                        ArmMovementOutcome.STOP_UNCONFIRMED,
+                    )
                 return MoveCloseToSurfaceOutcome.RUNNING
         current = self._current_hand_pose()
         remaining = self._translation_between(
@@ -606,16 +611,17 @@ class MoveCloseToSurfaceExecution:
                 return self._fail_workflow(
                     "Surface recovery reached the start position with an "
                     "excessive orientation error of "
-                    f"{math.degrees(orientation_error):.2f} deg"
+                    f"{math.degrees(orientation_error):.2f} deg",
+                    ArmMovementOutcome.RECOVERY_FAILED,
                 )
-            self.retry_eligible = True
             return self._fail_workflow(self._recovery_detail)
 
         if self._recovery_started:
             return self._fail_workflow(
                 "Surface recovery did not reach the original pre-approach "
                 f"pose ({distance:.4f} m remaining). "
-                f"Original failure: {self._recovery_detail}"
+                f"Original failure: {self._recovery_detail}",
+                ArmMovementOutcome.RECOVERY_FAILED,
             )
 
         self._recovery_started = True
@@ -639,7 +645,8 @@ class MoveCloseToSurfaceExecution:
         return self._fail_workflow(
             "Surface recovery movement failed: "
             f"{update.outcome.value}: {update.detail}. Original failure: "
-            f"{self._recovery_detail}"
+            f"{self._recovery_detail}",
+            ArmMovementOutcome.RECOVERY_FAILED,
         )
 
     def _current_probe_pose(self) -> PoseData:
@@ -794,15 +801,18 @@ class MoveCloseToSurfaceExecution:
         self._started = False
         return MoveCloseToSurfaceOutcome.SUCCESS
 
-    def _fail_workflow(self, detail: str) -> MoveCloseToSurfaceOutcome:
+    def _fail_workflow(
+        self, detail: str, outcome=ArmMovementOutcome.EXECUTION_ERROR,
+    ) -> MoveCloseToSurfaceOutcome:
         if self.executor.active:
             self.executor.cancel()
+        self.failure_outcome = outcome
         self.feedback_message = str(detail).strip() or "Movement failed"
         self._started = False
         return MoveCloseToSurfaceOutcome.FAILURE
 
     def _clear_runtime(self) -> None:
-        self.retry_eligible = False
+        self.failure_outcome = None
         self._started = False
         self._command = None
         self._phase = "idle"

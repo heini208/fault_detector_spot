@@ -8,6 +8,8 @@ from threading import RLock
 import tf2_ros
 from fault_detector_msgs.srv import SetSensorAcquisition
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.qos import qos_profile_sensor_data
+from rosidl_runtime_py.utilities import get_message
 
 from fault_detector_spot.inspection.measurement import (
     MeasurementCompletionState,
@@ -73,8 +75,6 @@ class _Session:
     required_channels: frozenset = frozenset()
     physical_channels: frozenset = frozenset()
     client: object = None
-    timer: object = None
-    tf_listener: object = None
     head_started: bool = False
     deadline: float = 0.0
     final_state: MeasurementCompletionState = (
@@ -108,13 +108,32 @@ class SensorAcquisitionCoordinator:
         self._lock = RLock()
         self._listeners = []
         self._session = None
+        # ROS entities live until node destruction, after executor shutdown.
+        self._subscriptions = {}
+        self._clients = {}
+        self._tf_buffer = None
+        self._tf_listener = None
         self._last_start_ns = -1
+        self._stop_confirmed = True
         self._state = SensorAcquisitionState(SensorAcquisitionStatus.IDLE)
+        # Keep the handle alive while the executor can have a timer take queued.
+        self._timer = node.create_timer(
+            1.0 / self.GEOMETRY_RATE_HZ,
+            self._tick,
+            callback_group=self.callback_group,
+        )
+        self._timer.cancel()
 
     @property
     def execution_lock(self):
         """Serialize compound acquisition operations with sensor callbacks."""
         return self._lock
+
+    @property
+    def recording_stopped(self):
+        """Whether acquisition ended with confirmed sensor-head shutdown."""
+        with self._lock:
+            return self._session is None and self._stop_confirmed
 
     def snapshot(self):
         with self._lock:
@@ -138,6 +157,8 @@ class SensorAcquisitionCoordinator:
         with self._lock:
             if self._session is not None:
                 raise RuntimeError("Sensor acquisition is already active")
+            if not self._stop_confirmed:
+                raise RuntimeError("Previous sensor acquisition stop is unconfirmed")
             client = None
             try:
                 attachment = self.attachments.require_motion_attachment()
@@ -193,25 +214,17 @@ class SensorAcquisitionCoordinator:
                 for source in session.sources:
                     source.start()
                 session.deadline = time.monotonic() + self.START_TIMEOUT_SEC
-                session.timer = self.node.create_timer(
-                    0.1,
-                    self._check_timeout,
-                    callback_group=self.callback_group,
-                )
+                self._timer.reset()
                 if physical:
+                    self._stop_confirmed = False
                     self._call_head(session, True, self._head_started)
                 else:
                     session.head_started = True
             except Exception as exception:
                 if self._session is not None:
-                    self._finish(
-                        self._session,
-                        MeasurementCompletionState.FAILED,
-                        str(exception),
-                    )
+                    finish = self._finish if self._stop_confirmed else self._begin_stop
+                    finish(self._session, MeasurementCompletionState.FAILED, str(exception))
                 else:
-                    if client is not None:
-                        self.node.destroy_client(client)
                     self._set_state(
                         SensorAcquisitionStatus.FAILED,
                         detail=str(exception),
@@ -222,7 +235,7 @@ class SensorAcquisitionCoordinator:
         """Stop acquisition and wait for the sensor-head acknowledgement."""
         with self._lock:
             if self._session is None:
-                if self._state.status is SensorAcquisitionStatus.FAILED:
+                if self._state.status is SensorAcquisitionStatus.FAILED and self._stop_confirmed:
                     return self._set_state(SensorAcquisitionStatus.IDLE)
                 return self._state
             final_state = (
@@ -231,6 +244,20 @@ class SensorAcquisitionCoordinator:
                 else MeasurementCompletionState.CANCELLED
             )
             self._begin_stop(self._session, final_state, "Recording stopped")
+            return self._state
+
+    def abort_recording(self):
+        """Finalize a failed attempt only after stopping its acquisition."""
+        with self._lock:
+            if self._session is None:
+                return self._state
+            session = self._session
+            if self._state.status is SensorAcquisitionStatus.STOPPING:
+                session.final_state = MeasurementCompletionState.FAILED
+                session.final_detail = "Recording attempt failed"
+            else:
+                self._begin_stop(session, MeasurementCompletionState.FAILED,
+                                 "Recording attempt failed")
             return self._state
 
     def close(self):
@@ -252,6 +279,7 @@ class SensorAcquisitionCoordinator:
                     "Application shutdown cancelled acquisition",
                 )
             self._listeners.clear()
+            self._timer.cancel()
 
     def _create_sources(self, session, definition, request):
         geometry = any(
@@ -264,24 +292,25 @@ class SensorAcquisitionCoordinator:
                 raise RuntimeError(
                     "Live inspection object pose is unavailable"
                 )
-            tf_buffer = tf2_ros.Buffer()
-            session.tf_listener = tf2_ros.TransformListener(
-                tf_buffer,
-                self.node,
-                spin_thread=False,
-            )
+            if self._tf_buffer is None:
+                self._tf_buffer = tf2_ros.Buffer()
+                self._tf_listener = tf2_ros.TransformListener(
+                    self._tf_buffer, self.node, spin_thread=False,
+                )
+            tf_buffer = self._tf_buffer
         for channel in definition.channels:
             options = dict(
                 node=self.node,
                 repository=self.measurements,
                 recording=session.recording,
                 channel=channel,
-                on_first_sample=self._sample_received,
+                on_first_sample=lambda channel_id, stamp: self._sample_received(session, channel_id, stamp),
                 on_error=self._source_error,
                 callback_group=self.callback_group,
             )
             if channel.source_kind is SensorChannelSource.ROS_TOPIC:
-                source = RosTopicRecordingSource(**options)
+                self._ensure_subscription(channel)
+                source = RosTopicRecordingSource(**options, externally_subscribed=True)
             else:
                 source = SpotGeometryRecordingSource(
                     **options,
@@ -290,13 +319,13 @@ class SensorAcquisitionCoordinator:
                     probe_frame=definition.probe_frame,
                     execution_frame=request.execution_frame,
                     sample_rate_hz=self.GEOMETRY_RATE_HZ,
+                    externally_sampled=True,
                 )
             session.sources.append(source)
 
-    def _sample_received(self, channel_id, _timestamp_ns):
+    def _sample_received(self, session, channel_id, _timestamp_ns):
         with self._lock:
-            session = self._session
-            if session is None:
+            if self._session is not session:
                 return
             session.ready_channels.add(channel_id)
             self._update_start(session)
@@ -358,6 +387,7 @@ class SensorAcquisitionCoordinator:
             if self._session is not session:
                 return
             success, detail = self._response(future)
+            self._stop_confirmed = success
             final_state = session.final_state
             if not success:
                 final_state = MeasurementCompletionState.FAILED
@@ -366,6 +396,16 @@ class SensorAcquisitionCoordinator:
                 final_state,
                 session.final_detail if success else detail,
             )
+
+    def _tick(self):
+        with self._lock:
+            session = self._session
+            if session is None:
+                return
+            for source in session.sources:
+                if isinstance(source, SpotGeometryRecordingSource):
+                    source.sample()
+            self._check_timeout()
 
     def _check_timeout(self):
         with self._lock:
@@ -410,12 +450,7 @@ class SensorAcquisitionCoordinator:
         except Exception as exception:
             final_state = MeasurementCompletionState.FAILED
             detail = f"Failed to finalize measurement: {exception}"
-        if session.timer is not None:
-            self.node.destroy_timer(session.timer)
-        if session.tf_listener is not None:
-            session.tf_listener.unregister()
-        if session.client is not None:
-            self.node.destroy_client(session.client)
+        self._timer.cancel()
         self._session = None
         status = (
             SensorAcquisitionStatus.FAILED
@@ -427,15 +462,34 @@ class SensorAcquisitionCoordinator:
     def _sensor_client(self, sensor_id, physical_channels):
         if not physical_channels:
             return None
-        client = self.node.create_client(
-            SetSensorAcquisition,
-            f"/fault_detector/sensors/{sensor_id}/set_acquisition",
-            callback_group=self.callback_group,
-        )
-        if client.service_is_ready():
-            return client
-        self.node.destroy_client(client)
-        return None
+        client = self._clients.get(sensor_id)
+        if client is None:
+            client = self.node.create_client(
+                SetSensorAcquisition,
+                f"/fault_detector/sensors/{sensor_id}/set_acquisition",
+                callback_group=self.callback_group,
+            )
+            self._clients[sensor_id] = client
+        return client if client.service_is_ready() else None
+
+    def _ensure_subscription(self, channel):
+        key = (channel.topic, channel.message_type)
+        if key not in self._subscriptions:
+            self._subscriptions[key] = self.node.create_subscription(
+                get_message(channel.message_type), channel.topic,
+                lambda message: self._receive_topic(key, message),
+                qos_profile_sensor_data, callback_group=self.callback_group,
+            )
+
+    def _receive_topic(self, key, message):
+        # A callback already waiting on finalization must not enter a new session.
+        session = self._session
+        with self._lock:
+            if session is None or self._session is not session:
+                return
+            for channel, source in zip(session.recording.configured_channels, session.sources):
+                if (channel.topic, channel.message_type) == key:
+                    source.receive_message(message)
 
     def _call_head(self, session, enabled, callback):
         future = session.client.call_async(self._request(enabled))

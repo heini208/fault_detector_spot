@@ -385,7 +385,7 @@ def test_stop_failure_never_returns_to_start_in_either_mode(outcome, target):
     assert result is MoveCloseToSurfaceOutcome.FAILURE
     assert executor.probe_calls == []
     assert "no return" in action.feedback_message
-    assert not action.retry_eligible
+    assert action.failure_outcome in {None, ArmMovementOutcome.STOP_UNCONFIRMED, ArmMovementOutcome.RETREAT_FAILED}
 
 
 def test_contact_search_settings_are_independent_of_standoff_settings():
@@ -418,7 +418,7 @@ def test_recovery_waits_for_cancelled_motion_to_stop_before_moving():
     action._recovery_hand_pose = pose()
     assert action._begin_recovery("planning failed") is MoveCloseToSurfaceOutcome.RUNNING
     assert not executor.probe_calls
-    assert not action.retry_eligible
+    assert action.failure_outcome in {None, ArmMovementOutcome.STOP_UNCONFIRMED, ArmMovementOutcome.RETREAT_FAILED}
     executor.active = False  # Executor releases ownership only after confirmed stop.
     assert action._update_recovery_prepare() is MoveCloseToSurfaceOutcome.RUNNING
     assert len(executor.probe_calls) == 1

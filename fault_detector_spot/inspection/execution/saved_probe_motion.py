@@ -125,7 +125,7 @@ def routine_safe_approach_command(
 
 
 def probe_point_plan(command, repository, state_source, attachments, factory):
-    """Snapshot saved forward and reverse paths for one complete measurement."""
+    """Snapshot saved forward paths; execution backtracks reached checkpoints."""
     selection = command.inspection
     definition = repository.load(selection.object_id)
     definition.validate()
@@ -164,15 +164,4 @@ def probe_point_plan(command, repository, state_source, attachments, factory):
         else OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
     )
 
-    def reverse_path(forward, destination):
-        return replace(
-            destination,
-            command_id=CommandID.FOLLOW_MOVE_TO_TAG_PATH,
-            pre_approach_offsets=tuple(reversed(forward.pre_approach_offsets)),
-            pre_approach_tolerances_m=tuple(reversed(forward.pre_approach_tolerances_m)),
-            pre_approach_speed_scales=tuple(reversed(forward.pre_approach_speed_scales)),
-        )
-
-    retract_aligned = reverse_path(measurement, aligned)
-    retract_safe = reverse_path(aligned, safe)
-    return safe, aligned, measurement, retract_aligned, retract_safe
+    return safe, aligned, measurement

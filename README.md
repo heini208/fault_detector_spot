@@ -422,15 +422,40 @@ pre-approach path to its aligned pose. Surface-relative points use their saved
 wall distance; fully custom points follow their saved final probe path.
 Recording starts with the selected object/routine/point context. The duration
 begins when acquisition reports ready. Recording must stop and finalize before
-the arm retraces the final path to alignment and the pre-approach path to safety.
+the arm visits the reached waypoints in reverse and returns to the probe pose
+captured before the first movement. These checkpoints use achieved poses in
+odom; return motion does not depend on seeing the tag again. Motion between
+checkpoints is guarded and planned normally, not a replay of joint trajectories.
 
-Retries count additional attempts (zero means one attempt). Eligible planning,
-goal-rejection, server-availability, and recoverable surface-approach failures
-require a confirmed physical stop and recovery through reached waypoints before
-another attempt. An exhausted eligible failure still recovers to safe approach.
-Unconfirmed stops, failed retreats/recovery, recording failures, and return-path
-failures terminate without retry. Cancellation stops motion and cancels any
-active measurement; it does not initiate a new recovery movement.
+Missing or stale tag observations get a five-second reacquisition window before
+planning, each tag-relative motion step, and recording-context capture. No new
+motion or recording starts during this wait. On timeout the command uses its
+retry budget and checkpoint recovery, then waits for fresh observations again;
+this does not perform an active camera search.
+
+Retries are one shared budget across the combined command (zero means no retries).
+If a movement fails, including collision/contact after a confirmed stop and local
+retreat, the arm returns to its last successful checkpoint and retries only the
+failed step. For example, failure on A → B → C recovers to B and retries C without
+repeating A. The initial pose is the checkpoint if the first goal fails.
+Return-path steps use the same retry policy and budget. Recording failures must
+confirm acquisition shutdown, finalize partial data as failed, and begin a fresh
+recording attempt; each attempt gets its full duration after acquisition is ready.
+
+Success or exhausted forward/recording retries backtracks only reached checkpoints
+to the safe approach pose, without returning to the pre-command arm pose.
+The initial pose is used only to recover a failed first safe-approach move.
+Checkpoint recovery and backtracking accept 20 mm position
+error and 5 degrees orientation error; forward and measurement tolerances remain
+independent. Unconfirmed stopping, failed local retreat, or failed
+checkpoint recovery normally prohibits further motion. A verified checkpoint
+position/orientation tolerance miss can retry that same recovery target after
+confirmed stopping, consuming the shared retry budget. Collision or unsafe
+failures during recovery remain terminal. If the return itself cannot be
+completed within the remaining budget, execution stops at the last recoverable
+checkpoint and reports failure; it never skips a blocked waypoint to go home.
+Cancellation stops motion and acquisition without starting autonomous recovery.
+Standalone move-to-tag path commands retain their existing behavior.
 
 This uses `INTENT_EXECUTE_PROBE_POINT` with `duration_sec`, `retries`, `object_id`,
 `routine_id`, and `probe_point_id`. Rebuild `fault_detector_msgs` together with
