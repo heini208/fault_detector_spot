@@ -124,6 +124,7 @@ class SemanticCommand:
     offset: StampedPose = field(default_factory=StampedPose)
     orientation_mode: str = ""
     wait_time: float = 0.0
+    retries: int = 0
     target_surface_distance_m: float = 0.0
     surface_tolerance_m: float = 0.0
     aligned_preapproach_distance_m: float = 0.0
@@ -142,6 +143,13 @@ class SemanticCommand:
     pre_approach_speed_scales: tuple[float, ...] = ()
 
     def __post_init__(self):
+        if isinstance(self.retries, bool) or not isinstance(self.retries, int) or not 0 <= self.retries <= 100:
+            raise ValueError("Retries must be an integer between 0 and 100")
+        if self.command_id == CommandID.EXECUTE_PROBE_POINT:
+            if not math.isfinite(self.wait_time) or self.wait_time <= 0:
+                raise ValueError("Recording duration must be positive and finite")
+            if not all((self.inspection.object_id, self.inspection.routine_id, self.inspection.probe_point_id)):
+                raise ValueError("Probe execution requires object, routine and probe point IDs")
         if self.pre_approach_speed_scales and len(self.pre_approach_speed_scales) != len(self.pre_approach_offsets):
             raise ValueError("Path speeds must match path offsets")
         if any(not math.isfinite(v) or not 0 < v <= 1 for v in self.pre_approach_speed_scales):

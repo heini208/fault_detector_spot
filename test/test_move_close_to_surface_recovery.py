@@ -313,6 +313,7 @@ def test_completed_recovery_never_starts_another_move(remaining):
     action._recovery_detail = "Unexpected contact"
     action._update_recovery_prepare()
     executor.probe_motion_planner.hand_pose = pose(x=remaining)
+    executor.active = False  # A terminal successful movement releases the executor.
     action._handle_recovery_update(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "completed")
     )
@@ -372,7 +373,7 @@ def test_endpoint_validation_rejects_excessive_settled_lateral_error():
     ArmMovementOutcome.STOP_UNCONFIRMED, ArmMovementOutcome.RETREAT_FAILED,
 ])
 @pytest.mark.parametrize("target", [0.0, 0.03])
-def test_contact_stop_failure_never_returns_to_start_in_zero_mode(outcome, target):
+def test_stop_failure_never_returns_to_start_in_either_mode(outcome, target):
     executor = FakeExecutor(hand_pose=pose(x=0.06))
     action = execution(executor=executor)
     action._command = SimpleNamespace(target_surface_distance_m=target)
@@ -381,13 +382,10 @@ def test_contact_stop_failure_never_returns_to_start_in_zero_mode(outcome, targe
     result = action._handle_approach_update(ArmMovementUpdate(
         outcome, "Contact detected; stop or retreat failed",
     ))
-    if target == 0.0:
-        assert result is MoveCloseToSurfaceOutcome.FAILURE
-        assert executor.probe_calls == []
-        assert "no return" in action.feedback_message
-    else:
-        assert result is MoveCloseToSurfaceOutcome.RUNNING
-        assert len(executor.probe_calls) == 1
+    assert result is MoveCloseToSurfaceOutcome.FAILURE
+    assert executor.probe_calls == []
+    assert "no return" in action.feedback_message
+    assert not action.retry_eligible
 
 
 def test_contact_search_settings_are_independent_of_standoff_settings():
@@ -408,3 +406,19 @@ def test_contact_search_settings_are_independent_of_standoff_settings():
     assert options["force_threshold_n"] == pytest.approx(2.0)
 
     assert options["retreat_distance_m"] == pytest.approx(0.003)
+
+
+def test_recovery_waits_for_cancelled_motion_to_stop_before_moving():
+    executor = FakeExecutor(hand_pose=pose(x=0.06))
+    executor.active = True
+    executor.cancel = lambda: None  # Stop remains pending.
+    executor.poll = lambda: ArmMovementUpdate(ArmMovementOutcome.RUNNING, "stopping")
+    action = execution(executor=executor)
+    action._approach_steps = 1
+    action._recovery_hand_pose = pose()
+    assert action._begin_recovery("planning failed") is MoveCloseToSurfaceOutcome.RUNNING
+    assert not executor.probe_calls
+    assert not action.retry_eligible
+    executor.active = False  # Executor releases ownership only after confirmed stop.
+    assert action._update_recovery_prepare() is MoveCloseToSurfaceOutcome.RUNNING
+    assert len(executor.probe_calls) == 1

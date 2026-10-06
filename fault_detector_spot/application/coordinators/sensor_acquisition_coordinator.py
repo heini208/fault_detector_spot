@@ -111,6 +111,11 @@ class SensorAcquisitionCoordinator:
         self._last_start_ns = -1
         self._state = SensorAcquisitionState(SensorAcquisitionStatus.IDLE)
 
+    @property
+    def execution_lock(self):
+        """Serialize compound acquisition operations with sensor callbacks."""
+        return self._lock
+
     def snapshot(self):
         with self._lock:
             return self._state
@@ -213,7 +218,7 @@ class SensorAcquisitionCoordinator:
                     )
             return self._state
 
-    def stop(self):
+    def stop(self, *, cancelled=False):
         """Stop acquisition and wait for the sensor-head acknowledgement."""
         with self._lock:
             if self._session is None:
@@ -222,7 +227,7 @@ class SensorAcquisitionCoordinator:
                 return self._state
             final_state = (
                 MeasurementCompletionState.COMPLETE
-                if self._state.status is SensorAcquisitionStatus.RECORDING
+                if self._state.status is SensorAcquisitionStatus.RECORDING and not cancelled
                 else MeasurementCompletionState.CANCELLED
             )
             self._begin_stop(self._session, final_state, "Recording stopped")

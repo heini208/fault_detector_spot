@@ -88,6 +88,7 @@ _INTENT_COMMAND_IDS = {
         CommandID.MOVE_TO_WAYPOINT
     ),
     OperationalIntent.INTENT_WAIT: CommandID.WAIT_TIME,
+    OperationalIntent.INTENT_EXECUTE_PROBE_POINT: CommandID.EXECUTE_PROBE_POINT,
     OperationalIntent.INTENT_START_SENSOR_RECORDING: (
         CommandID.START_SENSOR_RECORDING
     ),
@@ -240,7 +241,8 @@ def operational_intent_to_command(
     ):
         _required_text(intent.object_id, "Object ID")
         _required_text(intent.routine_id, "Routine ID")
-    if intent.intent == OperationalIntent.INTENT_START_SENSOR_RECORDING:
+    if intent.intent in (OperationalIntent.INTENT_START_SENSOR_RECORDING,
+                         OperationalIntent.INTENT_EXECUTE_PROBE_POINT):
         validate_measurement_context(
             intent.object_id,
             intent.routine_id,
@@ -263,6 +265,7 @@ def operational_intent_to_command(
         offset=stamped_pose_from_message(intent.offset),
         orientation_mode=intent.orientation_mode,
         wait_time=float(intent.duration_sec),
+        retries=int(intent.retries),
         target_surface_distance_m=float(
             intent.target_surface_distance_m
         ),

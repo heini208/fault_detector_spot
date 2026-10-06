@@ -89,6 +89,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.ESTOP_STATE: self._return_to_estop_state,
         }
         self._single_command_builders = {
+            CommandID.EXECUTE_PROBE_POINT: self._probe_point_command,
             CommandID.STOW_ARM: self._simple_command,
             CommandID.READY_ARM: self._simple_command,
             CommandID.READY_SAFE_APPROACH: self._simple_command,
@@ -259,6 +260,11 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             commands = [builder(command)]
         self.logger.info(f"Received {command_id.value} command")
         return commands
+
+    def _probe_point_command(self, command):
+        execution = self._simple_command(command)
+        execution.retries = command.retries
+        return execution
 
     def _change_body_height(self, command: SemanticCommand):
         return ChangeBodyHeightCommand(

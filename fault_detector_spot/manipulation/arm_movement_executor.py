@@ -102,6 +102,7 @@ class _ArmOperation:
     PREPARE = "prepare"
     STOW = "stow"
     GRIPPER = "gripper"
+    CONFIRM_STOP = "confirm_stop"
 
 
 class ArmMovementExecutor(MovementExecutor):
@@ -991,6 +992,32 @@ class ArmMovementExecutor(MovementExecutor):
         self._operation = _ArmOperation.STOW
         return self._advance_stow_start()
 
+    def confirm_stop(self) -> ArmMovementUpdate:
+        """Issue a stop and require fresh stationary feedback before recovery."""
+        with self._execution_lock:
+            if self.active:
+                return self._busy_update()
+            if self.guarded_probe_execution is None:
+                return ArmMovementUpdate(ArmMovementOutcome.STOP_UNCONFIRMED,
+                                         "Stop confirmation monitor is unavailable")
+            self._active = True
+            self._operation = _ArmOperation.CONFIRM_STOP
+            self.guarded_probe_execution.reset()
+            if self._guarded_probe_monitor is not None:
+                self._guarded_probe_monitor.cancel(None)
+                update = self._guarded_probe_monitor.poll()
+            else:
+                update = self.guarded_probe_execution.cancel()
+            return self._finish_stop_confirmation(update)
+
+    def _finish_stop_confirmation(self, update):
+        if update.outcome is ArmMovementOutcome.RUNNING:
+            return update
+        outcome = (ArmMovementOutcome.SUCCESS
+                   if update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED
+                   else ArmMovementOutcome.STOP_UNCONFIRMED)
+        return super()._finish(outcome, update.detail)
+
     def poll(self) -> ArmMovementUpdate:
         """Advance the active arm operation without blocking."""
         with self._execution_lock:
@@ -1003,6 +1030,10 @@ class ArmMovementExecutor(MovementExecutor):
                     ArmMovementOutcome.EXECUTION_ERROR,
                     "No arm movement is active",
                 )
+
+            if self._operation == _ArmOperation.CONFIRM_STOP:
+                owner = self._guarded_probe_monitor or self.guarded_probe_execution
+                return self._finish_stop_confirmation(owner.poll())
 
             if (
                 self._operation

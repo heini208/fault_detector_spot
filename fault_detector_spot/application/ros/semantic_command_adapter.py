@@ -81,6 +81,7 @@ def semantic_command_from_message(
         offset=stamped_pose_from_message(message.offset),
         orientation_mode=message.orientation_mode,
         wait_time=message.wait_time,
+        retries=int(message.retries),
         target_surface_distance_m=message.target_surface_distance_m,
         surface_tolerance_m=message.surface_tolerance_m,
         aligned_preapproach_distance_m=(
@@ -121,6 +122,7 @@ def semantic_command_to_message(
     message.offset = stamped_pose_to_message(command.offset)
     message.orientation_mode = command.orientation_mode
     message.wait_time = float(command.wait_time)
+    message.retries = command.retries
     message.target_surface_distance_m = float(
         command.target_surface_distance_m
     )

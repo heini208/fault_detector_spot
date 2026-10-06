@@ -1,5 +1,7 @@
 """Expose the application command boundary as typed ROS interfaces."""
 
+from fault_detector_spot.application.api.probe_point_execution_api import ProbePointExecutionApi
+
 from dataclasses import dataclass, field
 import os
 from threading import RLock
@@ -251,6 +253,10 @@ class ApplicationApiNode(Node):
         )
         self.application_controller.attach_probe_setup(
             self.probe_setup_coordinator
+        )
+        self.probe_point_execution_api = ProbePointExecutionApi(
+            self, self.command_controller, self.probe_setup_coordinator,
+            self.sensor_acquisition_coordinator,
         )
         self.probe_setup_state_publisher = self.create_publisher(
             ProbeSetupState,
@@ -539,6 +545,7 @@ class ApplicationApiNode(Node):
         self.probe_setup_motion_api.close()
         self.probe_setup_api.close()
         self.navigation_setup_api.close()
+        self.probe_point_execution_api.close()
         self.sensor_acquisition_command_handler.close()
         self.sensor_acquisition_api.close()
         self.sensor_acquisition_coordinator.close()

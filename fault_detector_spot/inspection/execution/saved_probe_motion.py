@@ -122,3 +122,57 @@ def routine_safe_approach_command(
             object_id=intent.object_id, routine_id=intent.routine_id,
         ),
     )
+
+
+def probe_point_plan(command, repository, state_source, attachments, factory):
+    """Snapshot saved forward and reverse paths for one complete measurement."""
+    selection = command.inspection
+    definition = repository.load(selection.object_id)
+    definition.validate()
+    routine = definition.get_routine(selection.routine_id)
+    point = routine.get_probe_point(selection.probe_point_id) if routine else None
+    if point is None:
+        raise ValueError("The selected probe point does not exist")
+    attachment = attachments.require_motion_attachment()
+    if not attachment.has_sensor or attachment.motion_sensor_id != command.motion_sensor_id:
+        raise ValueError("Probe execution requires the bound physical sensor")
+
+    # Resolve all stages against one immutable definition and tag observation.
+    from types import SimpleNamespace
+    tag = state_source.reference_tag(routine.reference_tag.tag_id)
+    frozen_state = SimpleNamespace(
+        reference_tag=lambda _id: tag,
+        validate_aligned_probe_distance=state_source.validate_aligned_probe_distance,
+    )
+    frozen_repository = SimpleNamespace(load=lambda _id: definition)
+    frozen_attachments = SimpleNamespace(require_motion_attachment=lambda: attachment)
+
+    def resolve(operation):
+        intent = OperationalIntent()
+        intent.intent = operation
+        intent.object_id = selection.object_id
+        intent.routine_id = selection.routine_id
+        intent.probe_point_id = selection.probe_point_id
+        return saved_probe_command(
+            intent, frozen_repository, frozen_state, frozen_attachments, factory,
+        )
+
+    safe = resolve(OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH)
+    aligned = resolve(OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH)
+    measurement = resolve(
+        OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH if point.fully_custom
+        else OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
+    )
+
+    def reverse_path(forward, destination):
+        return replace(
+            destination,
+            command_id=CommandID.FOLLOW_MOVE_TO_TAG_PATH,
+            pre_approach_offsets=tuple(reversed(forward.pre_approach_offsets)),
+            pre_approach_tolerances_m=tuple(reversed(forward.pre_approach_tolerances_m)),
+            pre_approach_speed_scales=tuple(reversed(forward.pre_approach_speed_scales)),
+        )
+
+    retract_aligned = reverse_path(measurement, aligned)
+    retract_safe = reverse_path(aligned, safe)
+    return safe, aligned, measurement, retract_aligned, retract_safe

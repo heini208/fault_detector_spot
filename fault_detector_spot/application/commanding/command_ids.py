@@ -2,6 +2,7 @@ from enum import Enum
 
 
 class CommandID(str, Enum):
+    EXECUTE_PROBE_POINT = "execute_probe_point"
     STOW_ARM = "stow_arm"
     READY_ARM = "ready_arm"
     READY_SAFE_APPROACH = "probe_setup_ready_safe_approach"

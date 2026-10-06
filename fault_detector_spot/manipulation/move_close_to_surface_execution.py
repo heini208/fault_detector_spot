@@ -399,6 +399,7 @@ class MoveCloseToSurfaceExecution:
             )
 
         if now - self._phase_started >= self.config.sample_timeout_sec:
+            self.retry_eligible = self._approach_steps == 0
             return self._fail_workflow(
                 "Unable to establish stable surface distance: "
                 f"{detail}"
@@ -484,12 +485,12 @@ class MoveCloseToSurfaceExecution:
         return self._handle_approach_update(update)
 
     def _handle_approach_update(self, update) -> MoveCloseToSurfaceOutcome:
-        if self.contact_mode and update.outcome in (
+        if update.outcome in (
             ArmMovementOutcome.STOP_UNCONFIRMED,
             ArmMovementOutcome.RETREAT_FAILED,
         ):
             return self._fail_workflow(
-                "Contact search could not complete its local stop/retreat: "
+                "Surface approach could not complete its local stop/retreat: "
                 f"{update.outcome.value}: {update.detail}; "
                 "no return to the pre-approach pose was commanded"
             )
@@ -569,6 +570,7 @@ class MoveCloseToSurfaceExecution:
 
     def _begin_recovery(self, detail: str) -> MoveCloseToSurfaceOutcome:
         self._recovery_detail = str(detail).strip()
+        self._recovery_stop_deadline = self._clock() + 10.0
         if self.executor is not None and self.executor.active:
             self.executor.cancel()
         if self._recovery_hand_pose is None or self._approach_steps == 0:
@@ -582,6 +584,12 @@ class MoveCloseToSurfaceExecution:
         return self._update_recovery_prepare()
 
     def _update_recovery_prepare(self) -> MoveCloseToSurfaceOutcome:
+        if self.executor.active:
+            self.executor.poll()
+            if self.executor.active:
+                if self._clock() >= self._recovery_stop_deadline:
+                    return self._fail_workflow("Surface recovery prohibited: stop unconfirmed")
+                return MoveCloseToSurfaceOutcome.RUNNING
         current = self._current_hand_pose()
         remaining = self._translation_between(
             current,
@@ -600,6 +608,7 @@ class MoveCloseToSurfaceExecution:
                     "excessive orientation error of "
                     f"{math.degrees(orientation_error):.2f} deg"
                 )
+            self.retry_eligible = True
             return self._fail_workflow(self._recovery_detail)
 
         if self._recovery_started:
@@ -793,6 +802,7 @@ class MoveCloseToSurfaceExecution:
         return MoveCloseToSurfaceOutcome.FAILURE
 
     def _clear_runtime(self) -> None:
+        self.retry_eligible = False
         self._started = False
         self._command = None
         self._phase = "idle"

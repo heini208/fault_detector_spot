@@ -100,6 +100,7 @@ from fault_detector_spot.sensing.behaviours.tag_state_subscriber import (
 from fault_detector_spot.sensing.behaviours.visible_tag_to_map import (
     VisibleTagToMap,
 )
+from fault_detector_spot.inspection.behaviours.execute_probe_point import ExecuteProbePoint
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.navigation.behaviours.last_localization_pose import (
     LastLocalizationPose,
@@ -270,6 +271,10 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     robot_command_resources = helper.robot_command_resources
     tag_state_source = helper.tag_state_source
     specs = [
+        (CommandID.EXECUTE_PROBE_POINT, lambda n: ExecuteProbePoint(
+            name="ExecuteProbePoint", tag_state_source=tag_state_source,
+            robot_command_resources=robot_command_resources,
+        )),
         (
             CommandID.STOW_ARM,
             lambda n: StowArmBehaviour(

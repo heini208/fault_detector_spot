@@ -186,6 +186,19 @@ class ProbeSetupMotionStateSource:
             )
         )
 
+    def object_pose_execution(self, reference_tag_id: int, execution_frame: str = ODOM_FRAME_NAME) -> PoseData:
+        """Resolve the selected tag-defined object at its observation time."""
+        tag = self.reference_tag(reference_tag_id)
+        source_frame = tag.pose.header.frame_id.strip()
+        source_to_object = pose_to_pose_data(tag.pose.pose)
+        if source_frame == execution_frame:
+            return source_to_object
+        execution_to_source = self._lookup_pose(
+            execution_frame, source_frame,
+            lookup_time=Time.from_msg(tag.pose.header.stamp),
+        )
+        return compose_poses(execution_to_source, source_to_object)
+
     def gravity_aligned_object_pose(self, reference_tag_id: int) -> PoseData:
         """Return the tag-defined object pose in Spot's gravity frame."""
         tag = self.reference_tag(reference_tag_id)

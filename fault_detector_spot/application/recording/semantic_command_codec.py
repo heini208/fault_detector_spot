@@ -28,6 +28,7 @@ def deserialize_recorded_command(data: dict) -> SemanticCommand:
     if data.get("command_id") == CommandID.MOVE_ARM_TO_TAG.value and data.get("pre_approach_offsets"):
         data["command_id"] = CommandID.FOLLOW_MOVE_TO_TAG_PATH.value
     # Recordings predating per-command profiles retain configured defaults.
+    data.setdefault("retries", 0)
     data.setdefault("walking_profile", "")
     data.setdefault("body_height_m", 0.0)
     data.setdefault("tag_position_tolerance_m", 0.01)

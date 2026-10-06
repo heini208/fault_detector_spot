@@ -1273,3 +1273,18 @@ def test_tag_accuracy_cancellation_does_not_start_correction(monkeypatch):
     feedback.header.stamp.sec += 1
     executor.poll()
     assert not corrections
+
+
+def test_explicit_stop_confirmation_requires_stationary_feedback():
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
+    executor, _ = executor_with_client(FakeTransformer({}), monotonic_clock=clock,
+                                       arm_stop_service_client=stop_client)
+    update = executor.confirm_stop()
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert executor.active
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    update = confirm_physical_stop(executor, clock, 0.1)
+    assert update.outcome is ArmMovementOutcome.SUCCESS
+    assert not executor.active

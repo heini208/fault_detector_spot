@@ -412,3 +412,26 @@ behavior-tree callers. Slow process termination does not hold the polling lock.
 The old helper modules/classes and unused path/pose aliases, standalone save
 wrapper, configuration setters, and process-only `wait_until_active()` were
 removed. Internal imports and callers use the new runtime-manager names.
+
+## Execute a saved probe point and record
+
+In the saved probe-point controls, select the object, routine and point, set
+**Recording duration** and **Retries**, then choose **Execute Probe Point and Record**.
+The command moves through the routine's safe approach and the point's saved
+pre-approach path to its aligned pose. Surface-relative points use their saved
+wall distance; fully custom points follow their saved final probe path.
+Recording starts with the selected object/routine/point context. The duration
+begins when acquisition reports ready. Recording must stop and finalize before
+the arm retraces the final path to alignment and the pre-approach path to safety.
+
+Retries count additional attempts (zero means one attempt). Eligible planning,
+goal-rejection, server-availability, and recoverable surface-approach failures
+require a confirmed physical stop and recovery through reached waypoints before
+another attempt. An exhausted eligible failure still recovers to safe approach.
+Unconfirmed stops, failed retreats/recovery, recording failures, and return-path
+failures terminate without retry. Cancellation stops motion and cancels any
+active measurement; it does not initiate a new recovery movement.
+
+This uses `INTENT_EXECUTE_PROBE_POINT` with `duration_sec`, `retries`, `object_id`,
+`routine_id`, and `probe_point_id`. Rebuild `fault_detector_msgs` together with
+`fault_detector_spot` before using the updated UI and application/BT processes.

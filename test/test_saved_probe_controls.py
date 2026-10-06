@@ -297,3 +297,14 @@ def test_saved_final_move_rejects_wrong_probe_mode(custom, operation):
             Mock(require_motion_attachment=Mock(return_value=sensor())),
             ProbeSetupMotionCommandFactory(),
         )
+
+
+def test_execute_and_record_sends_selected_point_duration_and_retries(controls):
+    controls.saved_probe_points_list.setCurrentRow(1)
+    controls.probe_record_duration.setValue(3.5)
+    controls.probe_record_retries.setValue(2)
+    assert controls.handle_saved_probe_motion(OperationalIntent.INTENT_EXECUTE_PROBE_POINT)
+    intent = controls.ui.execute_operation.call_args.args[0]
+    assert (intent.object_id, intent.routine_id, intent.probe_point_id) == ("motor", "scan", "two")
+    assert intent.duration_sec == 3.5
+    assert intent.retries == 2

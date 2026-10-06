@@ -8,6 +8,7 @@ from uuid import uuid4
 from PyQt5.QtGui import QPalette
 from PyQt5.QtWidgets import (
     QDoubleSpinBox,
+    QSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -179,6 +180,26 @@ class FinalizingInspectionControls(InspectionControls):
             )
         )
         layout.addWidget(self.saved_custom_probe_button)
+        recording_row = QHBoxLayout()
+        self.probe_record_duration = QDoubleSpinBox()
+        self.probe_record_duration.setRange(0.1, 3600.0)
+        self.probe_record_duration.setValue(5.0)
+        self.probe_record_duration.setSuffix(" s")
+        self.probe_record_retries = QSpinBox()
+        self.probe_record_retries.setRange(0, 100)
+        self.probe_record_retries.setToolTip("Additional attempts after confirmed stopping and successful recovery.")
+        recording_row.addWidget(QLabel("Recording duration:"))
+        recording_row.addWidget(self.probe_record_duration)
+        recording_row.addWidget(QLabel("Retries:"))
+        recording_row.addWidget(self.probe_record_retries)
+        layout.addLayout(recording_row)
+        execute_button = QPushButton("Execute Probe Point and Record")
+        execute_button.setEnabled(False)
+        execute_button.clicked.connect(lambda: self.handle_saved_probe_motion(
+            OperationalIntent.INTENT_EXECUTE_PROBE_POINT,
+        ))
+        self.saved_probe_action_buttons[OperationalIntent.INTENT_EXECUTE_PROBE_POINT] = execute_button
+        layout.addWidget(execute_button)
         self.saved_probe_motion_status = QLabel("Select a saved probe point.")
         self.saved_probe_motion_status.setWordWrap(True)
         layout.addWidget(self.saved_probe_motion_status)
@@ -241,6 +262,8 @@ class FinalizingInspectionControls(InspectionControls):
         self.saved_probe_distance.setEnabled(
             enabled and not custom and 0 <= row < len(state.probe_point_target_surface_distances_m)
         )
+        self.probe_record_duration.setEnabled(enabled)
+        self.probe_record_retries.setEnabled(enabled)
         for button in self.saved_probe_action_buttons.values():
             button.setEnabled(enabled)
         surface_button = self.saved_probe_action_buttons[
@@ -486,6 +509,9 @@ class FinalizingInspectionControls(InspectionControls):
         intent.object_id = state.selected_object_id
         intent.routine_id = state.selected_routine_id
         intent.probe_point_id = point_id
+        if operation == OperationalIntent.INTENT_EXECUTE_PROBE_POINT:
+            intent.duration_sec = self.probe_record_duration.value()
+            intent.retries = self.probe_record_retries.value()
         if (operation == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
                 and self.saved_probe_distance.isEnabled()):
             intent.override_target_surface_distance = True
