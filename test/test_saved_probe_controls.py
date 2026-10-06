@@ -100,7 +100,7 @@ def test_saved_pose_uses_repository_geometry_and_live_tag(operation, field):
                                   ProbeSetupMotionCommandFactory())
     routine = definition.get_routine(intent.routine_id)
     pose = getattr(routine if operation == 24 else routine.probe_points[0], field)
-    assert command.command_id == CommandID.MOVE_ARM_TO_TAG
+    assert command.command_id == (CommandID.MOVE_ARM_TO_TAG if operation == 24 else CommandID.FOLLOW_MOVE_TO_TAG_PATH)
     assert command.offset.position.x == pose.position.x
     assert command.offset.orientation.w == pose.orientation.w
     assert command.inspection.probe_point_id == "point_1"
@@ -267,7 +267,7 @@ def test_selected_point_enables_only_matching_final_move(controls):
     controls.saved_probe_points_list.setCurrentRow(0)
     assert surface.isEnabled() and not custom.isEnabled()
     assert controls.saved_probe_distance.isEnabled()
-    assert not controls.handle_saved_probe_motion(26, custom=True)
+    assert not controls.handle_saved_probe_motion(OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH)
     controls.saved_probe_points_list.setCurrentRow(1)
     assert custom.isEnabled() and not surface.isEnabled()
     assert not controls.saved_probe_distance.isEnabled()
@@ -275,9 +275,25 @@ def test_selected_point_enables_only_matching_final_move(controls):
     custom.click()
     intent = controls.ui.execute_operation.call_args.args[0]
     assert intent.probe_point_id == "custom"
+    assert intent.intent == OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH
     assert not intent.override_target_surface_distance
     assert not surface.isEnabled() and not custom.isEnabled()
     controls.handle_saved_probe_rejected("Offline test")
     assert custom.isEnabled() and not surface.isEnabled()
     controls.saved_probe_points_list.setCurrentRow(-1)
     assert not surface.isEnabled() and not custom.isEnabled()
+
+
+@pytest.mark.parametrize("custom, operation", [(True, 26), (False, 30)])
+def test_saved_final_move_rejects_wrong_probe_mode(custom, operation):
+    definition = inspection_object()
+    point = definition.routines[0].probe_points[0]
+    point.fully_custom = custom
+    if custom:
+        point.final_probe_pose_object = point.aligned_preapproach_pose_object
+    with pytest.raises(ValueError, match="requires? a|require a"):
+        saved_probe_command(
+            saved_intent(operation), Mock(load=Mock(return_value=definition)), Mock(),
+            Mock(require_motion_attachment=Mock(return_value=sensor())),
+            ProbeSetupMotionCommandFactory(),
+        )

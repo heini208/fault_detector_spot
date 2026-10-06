@@ -3,6 +3,7 @@ from dataclasses import fields, is_dataclass
 from enum import Enum
 from typing import Any, List, Literal, Union, get_args, get_origin, get_type_hints
 
+from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
 )
@@ -23,6 +24,9 @@ def serialize_recorded_command(command: SemanticCommand) -> dict:
 
 def deserialize_recorded_command(data: dict) -> SemanticCommand:
     data = dict(_object(data, "Recorded command"))
+    # Saved path recordings used the single-pose command before paths had an ID.
+    if data.get("command_id") == CommandID.MOVE_ARM_TO_TAG.value and data.get("pre_approach_offsets"):
+        data["command_id"] = CommandID.FOLLOW_MOVE_TO_TAG_PATH.value
     # Recordings predating per-command profiles retain configured defaults.
     data.setdefault("walking_profile", "")
     data.setdefault("body_height_m", 0.0)

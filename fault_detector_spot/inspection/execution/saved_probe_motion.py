@@ -33,8 +33,12 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
         routine_id=intent.routine_id,
         probe_point_id=intent.probe_point_id,
     )
-    custom_final = point.fully_custom and intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
-    if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE and not point.fully_custom:
+    custom_final = intent.intent == OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH
+    if custom_final and not point.fully_custom:
+        raise ValueError("Custom probe paths require a fully custom probe point")
+    if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE:
+        if point.fully_custom:
+            raise ValueError("Surface approach requires a surface-relative probe point")
         target = (intent.target_surface_distance_m
                   if intent.override_target_surface_distance
                   else point.target_surface_distance_m)
@@ -73,6 +77,9 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
         )
     return replace(
         factory.absolute(pose, tag, attachment.motion_sensor_id),
+        command_id=(CommandID.FOLLOW_MOVE_TO_TAG_PATH
+                    if custom_final or intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH
+                    else CommandID.MOVE_ARM_TO_TAG),
         pre_approach_offsets=offsets,
         pre_approach_speed_scales=tuple(p.arm_speed_scale for p in path) if offsets else (),
         arm_speed_scale=(point.final_probe_speed_scale if custom_final else

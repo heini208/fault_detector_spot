@@ -25,6 +25,7 @@ from fault_detector_spot.inspection.repository.sensor_attachment_state_store imp
 
 _AUTOMATIC_SENSOR_COMMANDS = frozenset({
     CommandID.MOVE_ARM_TO_TAG,
+    CommandID.FOLLOW_MOVE_TO_TAG_PATH,
     CommandID.MOVE_ARM_TO_TAG_AND_WAIT,
     CommandID.ORIENT_TO_SURFACE,
     CommandID.ORIENT_TO_TAG,

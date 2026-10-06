@@ -83,7 +83,7 @@ def test_full_path_visits_each_point_then_final_and_reports_one_result(tmp_path)
     probe.submit_motion(operation)
     assert [target.position.x for target in targets] == [final.position.x, .9, .75]
     assert len(operation.request.command.pre_approach_offsets) == 2
-    assert operation.request.command.command_id is CommandID.MOVE_ARM_TO_TAG
+    assert operation.request.command.command_id is CommandID.FOLLOW_MOVE_TO_TAG_PATH
     with pytest.raises(RuntimeError, match="active motion"):
         probe.add_pathing_point(state.context, "Blocked")
     probe.motion_state_source.pose = deepcopy(final)

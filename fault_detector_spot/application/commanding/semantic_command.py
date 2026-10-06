@@ -166,8 +166,8 @@ class SemanticCommand:
             not isinstance(pose, StampedPose) for pose in self.pre_approach_offsets
         ):
             raise TypeError("Pre-approach offsets must be a tuple of stamped poses")
-        if self.pre_approach_offsets and command_id is not CommandID.MOVE_ARM_TO_TAG:
-            raise ValueError("Pre-approach paths require a move-to-tag command")
+        if self.pre_approach_offsets and command_id is not CommandID.FOLLOW_MOVE_TO_TAG_PATH:
+            raise ValueError("Paths require a follow-move-to-tag-path command")
         if self.tag is not None and not isinstance(
             self.tag, SemanticTag
         ):

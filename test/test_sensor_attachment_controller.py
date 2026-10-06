@@ -362,7 +362,8 @@ def test_confirmed_geometry_snapshot_is_independent(tmp_path):
     assert refreshed.hand_to_probe_position[0] == pytest.approx(0.2)
 
 
-def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path):
+@pytest.mark.parametrize("command_id", [CommandID.MOVE_ARM_TO_TAG, CommandID.FOLLOW_MOVE_TO_TAG_PATH])
+def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path, command_id):
     controller, repository, _, command_controller = build_controller(
         tmp_path
     )
@@ -376,7 +377,7 @@ def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path):
     accepted = []
     command_controller.add_accepted_listener(accepted.append)
     request = CommandRequest.create(
-        command=SemanticCommand(command_id=CommandID.MOVE_ARM_TO_TAG),
+        command=SemanticCommand(command_id=command_id),
         client_id="test",
         origin=CommandOrigin.SYSTEM,
         recording_policy=RecordingPolicy.EXCLUDE,
@@ -387,13 +388,14 @@ def test_move_to_tag_request_is_bound_to_confirmed_sensor(tmp_path):
     assert accepted[0].command.motion_sensor_id == "bmm150_01"
 
 
-def test_move_to_tag_requires_then_uses_confirmed_bare_hand(tmp_path):
+@pytest.mark.parametrize("command_id", [CommandID.MOVE_ARM_TO_TAG, CommandID.FOLLOW_MOVE_TO_TAG_PATH])
+def test_move_to_tag_requires_then_uses_confirmed_bare_hand(tmp_path, command_id):
     controller, _, _, command_controller = build_controller(tmp_path)
     command_controller.add_request_preparer(controller.prepare_request)
     accepted = []
     command_controller.add_accepted_listener(accepted.append)
     request = CommandRequest.create(
-        command=SemanticCommand(command_id=CommandID.MOVE_ARM_TO_TAG),
+        command=SemanticCommand(command_id=command_id),
         client_id="test",
         origin=CommandOrigin.SYSTEM,
         recording_policy=RecordingPolicy.EXCLUDE,

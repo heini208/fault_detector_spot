@@ -153,7 +153,7 @@ def test_saved_custom_final_command_uses_final_path_without_surface_validation()
     tag.pose.pose.orientation.w = 1.
     source = Mock(reference_tag=Mock(return_value=tag))
     command = saved_probe_command(
-        saved_intent(OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE),
+        saved_intent(OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH),
         Mock(load=Mock(return_value=definition)), source,
         Mock(require_motion_attachment=Mock(return_value=sensor())), ProbeSetupMotionCommandFactory(),
     )

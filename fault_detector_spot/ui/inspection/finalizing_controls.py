@@ -175,8 +175,7 @@ class FinalizingInspectionControls(InspectionControls):
         self.saved_custom_probe_button.setEnabled(False)
         self.saved_custom_probe_button.clicked.connect(
             lambda: self.handle_saved_probe_motion(
-                OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE,
-                custom=True,
+                OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH,
             )
         )
         layout.addWidget(self.saved_custom_probe_button)
@@ -471,9 +470,9 @@ class FinalizingInspectionControls(InspectionControls):
             if self._probe_setup_state is not None:
                 self._apply_base_position_state(self._probe_setup_state)
 
-    def handle_saved_probe_motion(self, operation, custom=False):
+    def handle_saved_probe_motion(self, operation):
         self._refresh_saved_probe_actions()
-        button = (self.saved_custom_probe_button if custom
+        button = (self.saved_custom_probe_button if operation == OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH
                   else self.saved_probe_action_buttons.get(operation))
         if button is None or not button.isEnabled():
             return False

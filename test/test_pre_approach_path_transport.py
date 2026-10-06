@@ -1,6 +1,7 @@
 """Saved paths survive transport/recording and expand into ordered tag moves."""
 
 from types import SimpleNamespace
+from fault_detector_spot.application.commanding.command_ids import CommandID
 import pytest
 from unittest.mock import Mock
 
@@ -72,7 +73,8 @@ def test_path_roundtrip_and_bt_order_preserve_full_poses():
     assert steps[0].offset.pose.orientation.z == .6
     assert steps[0].offset.pose.orientation.w == .8
     assert len({step.request_id for step in steps}) == 1
-    assert all(step.command_id == command.command_id for step in steps)
+    assert command.command_id == CommandID.FOLLOW_MOVE_TO_TAG_PATH
+    assert all(step.command_id == CommandID.MOVE_ARM_TO_TAG for step in steps)
     assert all(step.motion_sensor_id == command.motion_sensor_id for step in steps)
 
 
@@ -136,3 +138,31 @@ def test_saved_speeds_survive_transport_recording_and_bt_expansion():
     restored = deserialize_recorded_command(serialize_recorded_command(restored))
     restored = replace(restored, motion_sensor_id=command.motion_sensor_id)
     assert [step.arm_speed_scale for step in executable_path(restored)] == [.7, .2, .4]
+
+
+def test_single_pose_path_uses_existing_tag_execution():
+    from dataclasses import replace
+
+    command = replace(path_command(), pre_approach_offsets=(),
+                      pre_approach_tolerances_m=(), pre_approach_speed_scales=())
+    steps = executable_path(command)
+    assert len(steps) == 1
+    assert steps[0].command_id == CommandID.MOVE_ARM_TO_TAG
+    assert steps[0].offset.pose.position.x == command.offset.position.x
+
+
+def test_single_tag_move_cannot_silently_include_a_path():
+    from dataclasses import replace
+
+    with pytest.raises(ValueError, match="follow-move-to-tag-path"):
+        replace(path_command(), command_id=CommandID.MOVE_ARM_TO_TAG)
+
+
+def test_existing_recorded_tag_paths_load_as_explicit_path_commands():
+    command = path_command()
+    recorded = serialize_recorded_command(command)
+    recorded["command_id"] = CommandID.MOVE_ARM_TO_TAG.value
+    restored = deserialize_recorded_command(recorded)
+    assert restored.command_id == CommandID.FOLLOW_MOVE_TO_TAG_PATH
+    assert restored.pre_approach_offsets == command.pre_approach_offsets
+    assert recorded["command_id"] == CommandID.MOVE_ARM_TO_TAG.value

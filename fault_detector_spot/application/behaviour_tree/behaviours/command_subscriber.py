@@ -77,6 +77,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard = None
         self._combination_command_builders = {
             CommandID.MOVE_ARM_TO_TAG: self._move_to_tag,
+            CommandID.FOLLOW_MOVE_TO_TAG_PATH: self._move_to_tag,
             CommandID.MOVE_SAFE_APPROACH: self._move_to_tag,
             CommandID.ADJUST_SAFE_APPROACH: (
                 self._move_arm_command_with_offset
@@ -439,7 +440,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             )
         return [
             ManipulatorToTagCommand(
-                command.command_id,
+                (CommandID.MOVE_ARM_TO_TAG
+                 if command.command_id is CommandID.FOLLOW_MOVE_TO_TAG_PATH
+                 else command.command_id),
                 self._create_command_stamp(),
                 stamped_pose_to_message(tag.pose),
                 tag.id,

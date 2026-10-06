@@ -7,6 +7,7 @@ class CommandID(str, Enum):
     READY_SAFE_APPROACH = "probe_setup_ready_safe_approach"
     MOVE_SAFE_APPROACH = "probe_setup_move_safe_approach"
     ADJUST_SAFE_APPROACH = "probe_setup_adjust_safe_approach"
+    FOLLOW_MOVE_TO_TAG_PATH = "follow_move_to_tag_path"
     MOVE_ARM_TO_TAG = "move_to_tag"
     MOVE_ARM_TO_TAG_AND_WAIT = "move_tag_and_wait"
     MOVE_ARM_RELATIVE = "move_arm_relative"

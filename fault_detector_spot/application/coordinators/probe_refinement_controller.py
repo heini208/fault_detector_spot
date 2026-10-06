@@ -4,6 +4,8 @@ import math
 from copy import deepcopy
 from dataclasses import replace
 
+from fault_detector_spot.application.commanding.command_ids import CommandID
+
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
 )
@@ -309,6 +311,7 @@ class ProbeRefinementController:
             if points:
                 command = self._absolute_motion_command(draft, target, attachment, ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH)
                 command = replace(command,
+                    command_id=CommandID.FOLLOW_MOVE_TO_TAG_PATH,
                     pre_approach_offsets=tuple(self._absolute_motion_command(
                         draft, point.pose_object, attachment, ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH
                     ).offset for point in reversed(points)),
@@ -378,7 +381,9 @@ class ProbeRefinementController:
         )
         operation = self.setup_coordinator.prepare_command(
             context, replace(
-                command, pre_approach_offsets=offsets,
+                command,
+                command_id=CommandID.FOLLOW_MOVE_TO_TAG_PATH if final else CommandID.MOVE_ARM_TO_TAG,
+                pre_approach_offsets=offsets,
                 arm_speed_scale=((draft.final_probe_speed_scale if stage is RefinementStage.PROBE
                                   else draft.pre_approach_speed_scale) if final
                                  else points[index].arm_speed_scale),
