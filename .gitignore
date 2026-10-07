@@ -179,3 +179,4 @@ cython_debug/
 /config/spot_ros_example.yaml
 /config/spot_ros_lan.yaml
 /AGENTS.md
+/config/spot_ros_giga.yaml
