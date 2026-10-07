@@ -130,6 +130,158 @@ region around the arm, or substantial mapping reconstruction. Keep the previous
 branch available as the alternative. Do not build both approaches into the new
 branch merely to postpone this decision.
 
+### Step 1 implementation and testing
+
+The first implementation adds `scripts/check_rtabmap_moveit.py` and the small
+`manipulation/rtabmap_octomap.py` converter. Normal application commands do not
+use them yet. The diagnostic performs exactly one import or clear, reads the scene
+back, reports whole-robot and arm collision validity, and optionally asks the
+existing `MoveItArmPlanner` for one plan. It has no trajectory execution client.
+Direct dependencies are `octomap_msgs`, `std_srvs`, and `rcl_interfaces`.
+
+The installed RTAB-Map 0.23.8 binary writer was tested against the installed
+OctoMap reader using occupied, free, unknown, and pruned cells at 0.04 m and 0.1 m.
+The converter validates binary record structure before native decoding and keeps
+the complete rigid placement. This proves binary compatibility, not live map
+alignment, coverage, or planning usefulness. Those remain the feasibility gate.
+
+Run the offline checks from the repository root in a terminal with the ROS and
+workspace environments sourced:
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/marcel/Projects/spot/spot_ws/install/setup.bash
+export PYTHONPATH="$PWD:$PYTHONPATH"
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q \
+  test/test_octomap_binary_compatibility.py \
+  test/test_rtabmap_octomap.py test/test_rtabmap_moveit_diagnostic.py \
+  test/test_moveit_arm_planner.py test/test_arm_joint_state_source.py \
+  test/test_arm_motion_parameters.py test/test_tf_transform_helpers.py
+python3 scripts/check_rtabmap_moveit.py --help
+```
+
+These checks start no ROS nodes. The C++ compatibility check compiles into a test
+temporary directory and explicitly skips if its development libraries are absent;
+a skip is not proof of compatibility. Plugin autoload is disabled to avoid an
+unrelated pytest plugin that opens sockets in this environment.
+
+For an **explicitly approved live diagnostic session**, use the normal driver,
+mapping, and MoveIt setup. Keep the base and arm stationary, preserve the active
+map session, and leave application motion and RViz planning idle. No other map
+publisher or scene writer may run. The diagnostic checks the MoveIt `sensors`
+parameter, but that alone cannot detect external scene writers. Do not source the
+previous collision branch's temporary overlay. A separate local build for this
+step is available under `/tmp/spot_map_collision_step1/install`.
+
+1. Source that overlay after the workspace and keep the checkout first on
+   `PYTHONPATH` as above. Confirm the map service using
+   `ros2 service list -t`; override `--map-service` if its name differs.
+2. Run `python3 scripts/check_rtabmap_moveit.py import`. Record printed snapshot
+   metadata, service timings, and collision contacts. In RViz's MoveIt planning
+   scene, inspect occupancy alignment around the arm, nearby objects, ground,
+   and feet. A current snapshot timestamp does not establish fresh observations.
+3. Add an independent box through RViz's planning-scene object controls, away
+   from the current robot. Apply it, then leave RViz scene editing idle. Run
+   `python3 scripts/check_rtabmap_moveit.py clear`. Confirm the box ID is printed
+   and still visible, while map occupancy disappears. The diagnostic compares
+   explicit object geometry, attachments, and collision rules before/after.
+4. Select a previously reachable **hand** pose in `body`, in metres, with its
+   existing quaternion orientation. Keep that identical target and measured
+   start for all three commands below; replace the capitalized placeholders
+   with numbers. Choose a clear endpoint whose straight approach crosses a
+   mapped surface. Do not choose a probe-tip pose or guess a new orientation.
+
+   ```bash
+   python3 scripts/check_rtabmap_moveit.py import --cartesian --target X Y Z QX QY QZ QW
+   python3 scripts/check_rtabmap_moveit.py clear --cartesian --target X Y Z QX QY QZ QW
+   python3 scripts/check_rtabmap_moveit.py import --cartesian --target X Y Z QX QY QZ QW
+   ```
+
+   Run each separately and inspect its result before continuing. Expect blocked,
+   success, blocked. A failure alone may be IK or another planning restriction;
+   the clear-map success is necessary evidence. Omit `--cartesian` to try ordinary
+   planning around the obstacle. No returned trajectory is executed.
+5. After completed requests, run `python3 scripts/check_rtabmap_moveit.py clear`
+   before returning to ordinary application arm use. Remove the diagnostic box
+   through RViz after verifying preservation. Map occupancy persists in the shared
+   MoveIt scene when the script exits; this branch has no application bypass yet.
+
+Exit code 0 means the requested checks/plan passed, 2 means an invalid arm start
+or an unsuccessful optional plan, and 1 means the diagnostic stopped on an error.
+The script requires fresh, complete arm position/velocity/effort telemetry and
+compares arm positions with MoveIt's state within 0.02 rad. Its TF age limit is
+1.5 s; translation/rotation changes above 0.02 m/0.03 rad reject the result. These
+are diagnostic thresholds, not validated production policies. Full-body validity
+is reported separately so ground/feet contacts remain visible; the arm-group
+result gates the optional arm plan. Only arm telemetry is independently checked;
+the whole-body readout uses MoveIt's monitored leg state. Validate all unexplained
+contacts before passing the feasibility gate.
+
+After a timeout or interrupted request, **stop the sequence**. A local client
+shutdown does not cancel server work. Confirm completion or re-establish the
+MoveIt session before another import, clear, or plan. The diagnostic does not
+retry or automatically clear after an uncertain result. Its readback checks
+metadata and placement; [MoveIt 2.5.9 serializes readback as a full tree](https://github.com/moveit/moveit2/blob/2.5.9/moveit_core/planning_scene/src/planning_scene.cpp#L686),
+so comparing the returned bytes with RTAB-Map's binary payload would be incorrect.
+
+### Live feasibility result on 2026 October 7
+
+**Status: import and clearing work, but the feasibility gate has not passed.**
+The authorized session used the running Spot driver, MoveIt, and RTAB-Map mapping.
+No physical movement was commanded. The original scene had no map, explicit
+objects, or attachments; it was restored to that state after the checks, with
+the original collision rules preserved. No mapping settings were changed.
+
+| Check | Observed result |
+| --- | --- |
+| RTAB-Map export | Binary ColorOcTree in `map`, 0.05 m resolution, 211,550 bytes |
+| Native occupancy decode | 9,448 occupied leaves; occupied/free encoding accepted |
+| Snapshot fetch | 1.563–2.149 s in two requests |
+| MoveIt import | Accepted in 0.265 s; readback metadata and full placement matched |
+| Readback | 0.258 s after import |
+| Arm collision validity | Valid both with occupancy and after clearing |
+| Whole-body collision validity | Body/upper-leg contacts both before and after clearing; not an imported-map effect |
+| Clear occupancy | Acknowledged in 0.011 s; temporary independent box, attachments, and ACM preserved |
+| Cleanup | Temporary box removed; readback confirmed empty occupancy and original scene contents/rules |
+| Clear-map Cartesian baseline | A 5 cm forward hand target with unchanged orientation returned fraction 0.0 |
+
+The decisive problem is the existing map's vertical placement. Native occupied
+voxel centres span map Z = -0.625 to +1.475 m, while TF puts the robot body at about
+Z = 4.072 m and the hand at 4.327 m. The closest occupied centre is 3.84 m from the
+hand. RTAB-Map's own `/cloud_map` has the same low height range, whereas the current
+filtered lidar points begin near Z = 3.45 m in a frame coincident with `odom`.
+Thus the mismatch exists before MoveIt import. A valid arm collision result in
+this scene does not establish useful avoidance.
+
+Runtime confirmed `Reg/Force3DoF=true` and `RGBD/ForceOdom3DoF=true`, with
+`map <- odom` translation Z = 0 and `odom <- body` Z approximately 4.07 m.
+The installed RTAB-Map source uses the former parameter for planar optimization,
+and the latter projects incoming odometry to XY/yaw before storing poses
+(`rtabmap/corelib/src/Rtabmap.cpp`, `Optimizer.cpp`, and `Transform.cpp`). This
+explains the lost height in mapped geometry while the external TF chain retains
+the robot's altitude. The OctoMap itself is still 3D.
+
+The arm was near its stowed joint configuration during the baseline plan. Its
+measured `arm_sh1` was -3.12046 rad, below the existing -3.10669 rad trajectory
+safety floor. The Cartesian service did not identify its rejection cause; do not
+attribute fraction 0.0 exclusively to this limit or relax the guard to get a pass.
+A later comparison needs a normal ready arm pose established through the existing
+movement controls, followed by a successful clear-map baseline.
+
+**Next:** resolve the mapping pose/height policy in Step 2 and validate it with a
+fresh test map before continuing command integration. Evaluate preserving full
+odometry height alongside the existing planar navigation constraints, together
+with appropriate height filtering. Merely changing `RGBD/ForceOdom3DoF` while
+retaining map-frame height projection and the 1.5 m cutoff could discard surfaces
+at the robot's current altitude. Do not add an arbitrary vertical offset in the
+MoveIt adapter or rewrite existing saved maps to mask the discrepancy.
+
+Diagnostic captures for this session are under `/tmp/spot_map_collision_live`
+(`import.log`, `geometry.log`, `clear_check.log`, metadata and serialized snapshots).
+Visual alignment, blocked/clear/reimport planning, and relocation checks remain
+unverified. The evidence currently supports the import mechanism, not enabling
+the feature for ordinary arm commands.
+
 ## Step 2 Resolve only mapping issues demonstrated by the test
 
 The current mapping configuration already enables 3D occupancy and ray tracing.
