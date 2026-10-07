@@ -365,8 +365,12 @@ Without a map or when manually disabled, ordinary planning first clears imported
 occupancy. There is no startup switch. The existing runtime supplies an
 immutable mapping-session token (process, map, generation, ROS start time). The
 planner sequences map fetch → validated scene application → original plan, or
-acknowledged occupancy clear → original plan for bypass. Each service phase has
-the existing 7 s response timeout. Current TF must postdate the session and be
+acknowledged occupancy clear → original plan for bypass. Map fetches have a
+20 s response timeout; other phases retain the existing 7 s timeout. Binary
+snapshot validation/conversion runs in one worker outside the arm execution
+lock so force observations and the watchdog continue during preparation. The
+worker only builds a scene message; the planner revalidates policy and placement
+before applying it. Current TF must postdate the session and be
 within -0.1 to 1.5 s of the ROS clock. Body position in map coordinates must stay
 within 2 cm and orientation within 0.03 rad of the preparation reference; using
 the inverse placement avoids magnifying small body sway at distant map origins.
@@ -374,11 +378,20 @@ The executor rechecks placement inside the deferred trajectory-goal builder.
 
 Scene/plan cancellation retains the real service future until completion; an
 exceptional or missing response requires re-establishing the application/MoveIt
-session. A discarded read-only map fetch is never imported and cannot block an
-explicit bypass after mapping stops. No sensors-parameter polling or competing
-occupancy writer is introduced; the existing no-updater MoveIt launch and
+session. A discarded read-only map fetch or conversion is never imported and
+cannot block an explicit bypass after mapping stops. No sensors-parameter polling
+or competing occupancy writer is introduced; the existing no-updater MoveIt launch and
 exclusive scene ownership remain prerequisites. Saved-map localization stays
 disabled for this feature until separately validated.
+
+The October 7 live diagnosis found a healthy 50 Hz force stream, but conversion
+of a 509,246-byte map took about 1.35 s under the original shared execution lock.
+This delayed force handling beyond its unchanged 0.25 s limit. The same map
+fetch took 11.24 s, motivating the separate bounded map-service timeout.
+A subsequent read-only observer ran three conversions alongside 533 live force
+samples: the longest force gap was 64 ms and there were no stale-force checks
+during conversion. No planning scenes or robot commands were sent by that check;
+the updated application still needs a real movement retest after relaunch.
 
 For each checked plan, capture the runtime session/map and a placement reference,
 request its current binary

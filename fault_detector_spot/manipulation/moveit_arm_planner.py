@@ -33,6 +33,7 @@ DEFAULT_END_EFFECTOR_LINK = "hand"
 DEFAULT_PLANNER_ID = "RRTConnectkConfigDefault"
 DEFAULT_ALLOWED_PLANNING_TIME_SEC = 5.0
 DEFAULT_RESPONSE_TIMEOUT_SEC = 7.0
+DEFAULT_MAP_RESPONSE_TIMEOUT_SEC = 20.0
 DEFAULT_POSITION_TOLERANCE_M = 0.005
 DEFAULT_ORIENTATION_TOLERANCE_RAD = 0.01
 DEFAULT_VELOCITY_SCALING = 0.5
@@ -86,6 +87,7 @@ class MoveItArmPlanner:
         min_arm_sh1_rad: float = MIN_ARM_SH1_RAD,
         monotonic_clock=time.monotonic,
         collision_scene=None,
+        map_response_timeout_sec: float = DEFAULT_MAP_RESPONSE_TIMEOUT_SEC,
     ):
         if node is None:
             raise ValueError("MoveItArmPlanner requires a ROS node")
@@ -106,6 +108,10 @@ class MoveItArmPlanner:
         self.response_timeout_sec = self._positive(
             response_timeout_sec,
             "MoveIt response timeout",
+        )
+        self.map_response_timeout_sec = self._positive(
+            map_response_timeout_sec,
+            "RTAB-Map response timeout",
         )
         self.position_tolerance_m = self._positive(
             position_tolerance_m,
@@ -264,16 +270,21 @@ class MoveItArmPlanner:
             )
 
         if not future.done():
+            timeout = (
+                self.map_response_timeout_sec
+                if self._planning_mode == "map"
+                else self.response_timeout_sec
+            )
             if (
                 self._monotonic_clock() - self._started_at
-                >= self.response_timeout_sec
+                >= timeout
             ):
                 mode = self._planning_mode
                 self.cancel()
                 return MoveItPlanUpdate(
                     MoveItPlanOutcome.TIMEOUT,
                     f"MoveIt {mode} timed out after "
-                    f"{self.response_timeout_sec:.1f} s",
+                    f"{timeout:.1f} s",
                 )
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.RUNNING,
@@ -287,7 +298,8 @@ class MoveItArmPlanner:
             self._block_uncertain_request(mode)
             self._reset()
             return MoveItPlanUpdate(
-                MoveItPlanOutcome.ERROR,
+                (MoveItPlanOutcome.FAILURE if mode == "prepare_map"
+                 else MoveItPlanOutcome.ERROR),
                 f"MoveIt {mode} response failed: {exception}",
             )
 
@@ -303,9 +315,15 @@ class MoveItArmPlanner:
                 ),
             )
 
-        if mode in ("map", "apply", "clear"):
+        if mode in ("map", "prepare_map", "apply", "clear"):
             try:
                 if mode == "map":
+                    conversion = self._collision_scene.start_import(response)
+                    return self._begin_future(
+                        conversion, "prepare_map", "Preparing MoveIt map snapshot",
+                        "Map conversion returned no future",
+                    )
+                if mode == "prepare_map":
                     phase, client, request = self._collision_scene.import_request(response)
                     return self._submit(phase, client, request)
                 if mode == "apply" and not response.success:
@@ -330,20 +348,23 @@ class MoveItArmPlanner:
         phase = self._planning_mode
         self._reset()
         if future is not None:
-            if self._collision_scene is not None and phase != "map":
+            if (self._collision_scene is not None
+                    and phase not in ("map", "prepare_map")):
                 # ROS services cannot cancel server work. Even a completed
                 # exceptional response must be inspected before another request.
                 self._discarded_future = future
-            elif self._collision_scene is None and not future.done():
+            elif (not future.done()
+                    and (phase == "prepare_map" or self._collision_scene is None)):
                 try:
                     future.cancel()
                 except Exception:
                     pass
-            # A discarded map fetch is read-only. Its late response is never
-            # imported, so it cannot prevent explicit bypass when mapping stops.
+            # Map fetching/conversion are read-only. Late results are never
+            # imported, so they cannot prevent bypass when mapping stops.
 
     def _block_uncertain_request(self, phase):
-        if self._collision_scene is not None and phase != "map":
+        if (self._collision_scene is not None
+                and phase not in ("map", "prepare_map")):
             self._blocked_reason = (
                 f"MoveIt {phase} server completion is unknown; "
                 "restart the application and MoveIt before further arm plans"

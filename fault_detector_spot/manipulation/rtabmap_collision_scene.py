@@ -1,5 +1,6 @@
 """Map service conversion and placement checks; the planner owns sequencing."""
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import math
 
@@ -39,6 +40,9 @@ class RtabmapCollisionScene:
         self._session = None
         self._reference = None
         self._policy = None
+        self._conversion_worker = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="map_collision_conversion",
+        )
 
     def prepare(self, ignore_environment_collisions):
         """Return the first service request; bypass needs neither mapping nor TF."""
@@ -58,10 +62,20 @@ class RtabmapCollisionScene:
         self._reference = self._placement()
         return "map", self.map_client, GetOctomap.Request()
 
-    def import_request(self, response):
-        """Validate the snapshot and place it using current body <- map TF."""
+    def start_import(self, response):
+        """Convert occupancy outside the arm execution/force-monitor lock.
+
+        The worker only builds a message; it cannot apply a scene or plan a
+        motion. Cancellation can therefore discard its result safely.
+        """
         self.validate()
-        scene = snapshot_scene_diff(response.map, self._placement())
+        return self._conversion_worker.submit(
+            snapshot_scene_diff, response.map, self._placement(),
+        )
+
+    def import_request(self, scene):
+        """Recheck policy and placement before admitting the prepared scene."""
+        self.validate()
         return "apply", self.apply_client, ApplyPlanningScene.Request(scene=scene)
 
     def validate(self):
@@ -108,5 +122,6 @@ class RtabmapCollisionScene:
         return deepcopy(transform)
 
     def destroy(self):
+        self._conversion_worker.shutdown(wait=False, cancel_futures=True)
         for client in (self.map_client, self.apply_client, self.clear_client):
             self.node.destroy_client(client)

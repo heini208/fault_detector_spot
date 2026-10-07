@@ -1,9 +1,11 @@
 """Exercise real planner sequencing/conversion without ROS nodes or robot commands."""
 
 from array import array
+from concurrent.futures import wait
 from copy import deepcopy
 from dataclasses import dataclass
 import math
+from threading import Event, Thread
 from types import SimpleNamespace
 
 from geometry_msgs.msg import PoseStamped, TransformStamped
@@ -17,6 +19,7 @@ import pytest
 from fault_detector_spot.manipulation.moveit_arm_planner import (
     ARM_JOINT_NAMES, MoveItArmPlanner, MoveItPlanOutcome,
 )
+from fault_detector_spot.manipulation import rtabmap_collision_scene
 from fault_detector_spot.manipulation.rtabmap_collision_scene import RtabmapCollisionScene
 from trajectory_msgs.msg import JointTrajectoryPoint
 
@@ -106,16 +109,25 @@ class Rig:
 
     def reply(self, name, response):
         self.node.clients[name].future.set_result(response)
-        return self.planner.poll()
+        update = self.planner.poll()
+        if self.planner._planning_mode == "prepare_map":
+            done, _ = wait([self.planner._future], timeout=2.0)
+            assert done, "Local map conversion did not finish"
+            update = self.planner.poll()
+        return update
 
-    def map_reply(self):
+    @staticmethod
+    def map_response():
         snapshot = Octomap()
         snapshot.header.frame_id = "map"
         snapshot.binary = True
         snapshot.id = "ColorOcTree"
         snapshot.resolution = 0.05
         snapshot.data = array("b", [2, 0])  # Occupied root child.
-        return self.reply("/rtabmap/octomap_binary", SimpleNamespace(map=snapshot))
+        return SimpleNamespace(map=snapshot)
+
+    def map_reply(self):
+        return self.reply("/rtabmap/octomap_binary", self.map_response())
 
     def applied(self, success=True):
         return self.reply("/apply_planning_scene", ApplyPlanningScene.Response(success=success))
@@ -129,6 +141,35 @@ class Rig:
         point.time_from_start.sec = 1
         trajectory.points = [point]
         return self.reply("/plan_kinematic_path", response)
+
+
+@pytest.fixture
+def converting_map(monkeypatch):
+    rig = Rig()
+    entered, release = Event(), Event()
+    convert = rtabmap_collision_scene.snapshot_scene_diff
+    future = None
+
+    def blocked_conversion(*args):
+        entered.set()
+        assert release.wait(5.0), "Test did not release map conversion"
+        return convert(*args)
+
+    monkeypatch.setattr(rtabmap_collision_scene, "snapshot_scene_diff", blocked_conversion)
+    try:
+        rig.planner.start(rig.target)
+        rig.planner._future.set_result(rig.map_response())
+        assert rig.planner.poll().outcome is MoveItPlanOutcome.RUNNING
+        future = rig.planner._future
+        assert entered.wait(2.0)
+        assert rig.planner._planning_mode == "prepare_map"
+        yield SimpleNamespace(rig=rig, release=release, future=future)
+    finally:
+        release.set()
+        if future is not None:
+            wait([future], timeout=2.0)
+        if rig.node.clients:
+            rig.planner.destroy()
 
 
 def test_checked_bypass_checked_orders_scene_ack_before_original_plan():
@@ -253,7 +294,9 @@ def test_timeout_or_cancel_waits_for_actual_server_response_before_next_policy(p
         rig.planner.cancel()
     else:
         rig.clock = 8.0
-        assert rig.planner.poll().outcome is MoveItPlanOutcome.TIMEOUT
+        update = rig.planner.poll()
+        assert update.outcome is MoveItPlanOutcome.TIMEOUT
+        assert "7.0 s" in update.detail
     assert not future.cancelled()
     assert not rig.planner.active
     update = rig.planner.start(rig.target, ignore_environment_collisions=True)
@@ -305,6 +348,9 @@ def test_malformed_snapshot_never_reaches_moveit():
     update = rig.reply("/rtabmap/octomap_binary", SimpleNamespace(map=snapshot))
     assert update.outcome is MoveItPlanOutcome.FAILURE
     assert rig.node.events == ["/rtabmap/octomap_binary"]
+    assert rig.planner.start(rig.target, ignore_environment_collisions=True).outcome is MoveItPlanOutcome.RUNNING
+    rig.reply("/clear_octomap", Empty.Response())
+    assert rig.planned().outcome is MoveItPlanOutcome.SUCCESS
 
 
 @pytest.mark.parametrize("cancel", [False, True])
@@ -316,13 +362,87 @@ def test_abandoned_map_read_cannot_block_bypass_or_import_its_late_response(canc
     if cancel:
         rig.planner.cancel()
     else:
-        rig.clock = 8.0
+        rig.clock = 21.0
         assert rig.planner.poll().outcome is MoveItPlanOutcome.TIMEOUT
     assert rig.planner.start(rig.target, ignore_environment_collisions=True).outcome is MoveItPlanOutcome.RUNNING
     old_future.set_result(SimpleNamespace(map=Octomap()))
     rig.reply("/clear_octomap", Empty.Response())
     assert rig.planned().outcome is MoveItPlanOutcome.SUCCESS
     assert "/apply_planning_scene" not in rig.node.events
+
+
+def test_map_read_can_take_eleven_seconds_without_extending_other_phase_timeouts():
+    rig = Rig()
+    rig.planner.start(rig.target)
+    rig.clock = 11.0
+    assert rig.planner.poll().outcome is MoveItPlanOutcome.RUNNING
+    rig.map_reply()
+    rig.applied()
+    assert rig.planned().outcome is MoveItPlanOutcome.SUCCESS
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_abandoned_conversion_cannot_block_bypass_or_apply_its_late_result(converting_map, cancel):
+    rig = converting_map.rig
+    assert converting_map.future.running()
+    if cancel:
+        rig.planner.cancel()
+    else:
+        rig.clock = 8.0
+        assert rig.planner.poll().outcome is MoveItPlanOutcome.TIMEOUT
+    assert rig.planner.start(rig.target, ignore_environment_collisions=True).outcome is MoveItPlanOutcome.RUNNING
+    rig.reply("/clear_octomap", Empty.Response())
+    assert rig.planned().outcome is MoveItPlanOutcome.SUCCESS
+    assert not converting_map.future.done()
+    converting_map.release.set()
+    converting_map.future.result(timeout=2.0)
+    assert not rig.planner.active
+    assert rig.node.events == [
+        "/rtabmap/octomap_binary", "/clear_octomap", "/plan_kinematic_path",
+    ]
+
+
+@pytest.mark.parametrize("change", ["policy", "session", "placement", "stale_tf"])
+def test_conversion_revalidates_before_applying_its_result(converting_map, change):
+    rig = converting_map.rig
+    if change == "policy":
+        rig.policy_enabled = False
+        rig.policy_revision += 1
+    elif change == "session":
+        rig.session = Session(generation=2)
+    elif change == "placement":
+        rig.tf.transform.translation.z += 0.021
+    else:
+        rig.node.now_ns += 2_000_000_000
+    assert rig.planner.poll().outcome is MoveItPlanOutcome.RUNNING
+    converting_map.release.set()
+    converting_map.future.result(timeout=2.0)
+    assert rig.planner.poll().outcome is MoveItPlanOutcome.FAILURE
+    assert rig.node.events == ["/rtabmap/octomap_binary"]
+
+
+def test_destroy_does_not_wait_for_conversion_or_apply_its_result(converting_map):
+    rig = converting_map.rig
+    destroyed = Event()
+
+    def destroy():
+        try:
+            rig.planner.destroy()
+        finally:
+            destroyed.set()
+
+    worker = Thread(target=destroy)
+    worker.start()
+    try:
+        assert destroyed.wait(1.0), "Destroy waited for read-only map conversion"
+        assert not converting_map.future.done()
+        assert not rig.node.clients
+    finally:
+        converting_map.release.set()
+        worker.join(timeout=2.0)
+    converting_map.future.result(timeout=2.0)
+    assert not rig.planner.active
+    assert rig.node.events == ["/rtabmap/octomap_binary"]
 
 
 @pytest.mark.parametrize("response_error", [False, True])
