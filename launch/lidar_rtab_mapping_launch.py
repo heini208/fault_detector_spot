@@ -52,6 +52,8 @@ def make_rtabmap_node(incremental_memory, condition):
             "RGBD/AngularUpdate": "0.05",
             "RGBD/LinearUpdate": "0.05",
             "RGBD/CreateOccupancyGrid": "true",
+            # Keep measured height/tilt consistent with TF even with planar ICP.
+            "RGBD/ForceOdom3DoF": "false",
             "Reg/Strategy": "1",
             "Reg/Force3DoF": "true",
             "Icp/Strategy": "1",
@@ -70,7 +72,8 @@ def make_rtabmap_node(incremental_memory, condition):
             "Grid/Sensor": "0",
             "Grid/3D": "true",
             "Grid/RayTracing": "true",
-            "Grid/MapFrameProjection": "true",
+            # Apply height limits relative to the robot, not odom's altitude.
+            "Grid/MapFrameProjection": "false",
             "Grid/NormalsSegmentation": "false",
             "Grid/MinGroundHeight": "0.0",
             "Grid/MaxGroundHeight": "0.12",
