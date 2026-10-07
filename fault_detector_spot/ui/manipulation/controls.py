@@ -1,7 +1,7 @@
 import math
 
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QCheckBox
 
 from fault_detector_msgs.msg import OperationalIntent, TagElement
 from fault_detector_spot.shared.geometry.movement_frames import (
@@ -38,6 +38,7 @@ class ManipulationControls(UIControlHelper):
         self.arm_state_source = None
         self.arm_state_button = None
         self.arm_state_timer = None
+        self.ignore_environment_collisions_checkbox = None
         super().__init__(parent_ui)
 
     def init_ros_communication(self):
@@ -60,6 +61,7 @@ class ManipulationControls(UIControlHelper):
             control_group("Tag actions", tag_row),
             control_group(
                 "Arm offset", offsets,
+                self._make_environment_collision_row(),
                 self._make_reset_fields_and_move_relative_row(),
             ),
             control_group("Surface actions", self._make_surface_action_row()),
@@ -207,6 +209,28 @@ class ManipulationControls(UIControlHelper):
 
         return row
 
+    def _make_environment_collision_row(self):
+        row = QHBoxLayout()
+        self.ignore_environment_collisions_checkbox = QCheckBox(
+            "Ignore mapped obstacles for next basic arm movement"
+        )
+        self.ignore_environment_collisions_checkbox.setToolTip(
+            "When map collision checking is enabled, applies once to a basic "
+            "tag, offset, or surface movement. "
+            "Self-collision checks and the contact guard remain active. "
+            "Saved workflows, posture, and gripper actions do not consume it."
+        )
+        row.addWidget(self.ignore_environment_collisions_checkbox)
+        row.addStretch()
+        return row
+
+    def _execute_basic_movement(self, intent):
+        checkbox = self.ignore_environment_collisions_checkbox
+        intent.ignore_environment_collisions = checkbox.isChecked()
+        # Capture once before admission so rejection cannot arm a later request.
+        checkbox.setChecked(False)
+        return self.ui.execute_operation(intent)
+
     def _make_surface_action_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
 
@@ -267,7 +291,7 @@ class ManipulationControls(UIControlHelper):
     def handle_orient_to_surface(self):
         intent = OperationalIntent()
         intent.intent = OperationalIntent.INTENT_ORIENT_TO_SURFACE
-        return self.ui.execute_operation(intent)
+        return self._execute_basic_movement(intent)
 
     def handle_orient_to_tag(self):
         intent = OperationalIntent()
@@ -276,7 +300,7 @@ class ManipulationControls(UIControlHelper):
             intent = self.add_tag_element_to_intent(intent)
         except TagNotFound:
             return None
-        return self.ui.execute_operation(intent)
+        return self._execute_basic_movement(intent)
 
     def handle_move_close_to_surface(self):
         intent = OperationalIntent()
@@ -287,7 +311,7 @@ class ManipulationControls(UIControlHelper):
         intent.surface_tolerance_m = float(
             self.surface_tolerance_input.value()
         )
-        return self.ui.execute_operation(intent)
+        return self._execute_basic_movement(intent)
 
     def _reset_all_zero(self):
         """Set all offset and orientation fields to 0."""
@@ -524,7 +548,9 @@ class ManipulationControls(UIControlHelper):
         if not intent:
             return
         intent.duration_sec = self.duration_input.value()
-        self.ui.execute_operation(intent)
+        if intent_id == OperationalIntent.INTENT_MOVE_ARM_RELATIVE:
+            return self._execute_basic_movement(intent)
+        return self.ui.execute_operation(intent)
 
     def handle_move_and_wait(self):
         try:
@@ -549,7 +575,7 @@ class ManipulationControls(UIControlHelper):
             self.status_label.setText(f"Move & Wait to tag {intent.tag.id} canceled")
             return
 
-        self.ui.execute_operation(intent)
+        self._execute_basic_movement(intent)
 
     def handle_tag_selection(self):
         try:
@@ -571,4 +597,4 @@ class ManipulationControls(UIControlHelper):
             self.status_label.setText(f"Move to tag {intent.tag.id} canceled")
             return
 
-        self.ui.execute_operation(intent)
+        self._execute_basic_movement(intent)

@@ -1,5 +1,6 @@
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import py_trees
@@ -13,6 +14,16 @@ from fault_detector_spot.shared.persistence.runtime_paths import (
 )
 from fault_detector_spot.shared.ros.runtime_manager import RuntimeManager
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
+
+
+@dataclass(frozen=True)
+class CollisionMapSession:
+    """Identity of one owned mapping interval, including its ROS-clock start."""
+
+    process_id: int
+    map_name: str
+    generation: int
+    started_at_ns: int
 
 
 class RtabmapRuntimeManager(RuntimeManager):
@@ -35,6 +46,8 @@ class RtabmapRuntimeManager(RuntimeManager):
         maps_dir=None,
     ):
         super().__init__(node, blackboard)
+        self._collision_map_session = None
+        self._collision_map_generation = 0
         self.launch_file = launch_file
         configured_maps_dir = maps_dir or default_map_root()
         self.maps_dir = os.fspath(
@@ -125,6 +138,7 @@ class RtabmapRuntimeManager(RuntimeManager):
 
     def _stop_rtabmap(self, save):
         """Stop only this manager's process; the caller handles Nav2 separately."""
+        self._collision_map_session = None
         if save and self.is_running() and self.get_running_mode() == self.MODE_MAPPING:
             for service in ("pause", "save_db", "publish_map"):
                 self._call_service(f"/rtabmap/{service}")
@@ -247,11 +261,14 @@ class RtabmapRuntimeManager(RuntimeManager):
             f"rviz:={rviz_str}",
         ]
 
+        started_at_ns = self.node.get_clock().now().nanoseconds
         proc = self._launch(self.launch_file, args)
         self.bb.slam_runtime_mode = (
             self.MODE_MAPPING if extend_map else self.MODE_LOCALIZATION
         )
         self.bb.active_map_name = map_name
+        if extend_map:
+            self._begin_collision_map_session(started_at_ns)
         self._publish_active_map()
 
         self.node.get_logger().info(
@@ -279,6 +296,7 @@ class RtabmapRuntimeManager(RuntimeManager):
         return self.bb.slam_launch_process
 
     def set_mode_localization(self):
+        self._collision_map_session = None
         if not self._call_service("/rtabmap/set_mode_localization"):
             raise RuntimeError(
                 "Could not switch RTAB-Map to localization mode"
@@ -286,11 +304,42 @@ class RtabmapRuntimeManager(RuntimeManager):
         self.bb.slam_runtime_mode = self.MODE_LOCALIZATION
 
     def set_mode_mapping(self):
+        self._collision_map_session = None
+        started_at_ns = self.node.get_clock().now().nanoseconds
         if not self._call_service("/rtabmap/set_mode_mapping"):
             raise RuntimeError(
                 "Could not switch RTAB-Map to mapping mode"
             )
         self.bb.slam_runtime_mode = self.MODE_MAPPING
+        self._begin_collision_map_session(started_at_ns)
+
+    def _begin_collision_map_session(self, started_at_ns):
+        self._collision_map_generation += 1
+        self._collision_map_session = CollisionMapSession(
+            process_id=id(self.process),
+            map_name=self.bb.active_map_name,
+            generation=self._collision_map_generation,
+            started_at_ns=started_at_ns,
+        )
+
+    def current_collision_map_session(self) -> CollisionMapSession | None:
+        """Return the active mapping interval without waiting for runtime work.
+
+        A selected map or a localization process is insufficient. Invalidating
+        before lifecycle changes also rejects snapshots taken during shutdown
+        or an unconfirmed mode switch, without blocking the planning tick.
+        """
+        session = self._collision_map_session
+        if (
+            session is None
+            or self._closing
+            or not self.is_mapping_running()
+            or session.process_id != id(self.process)
+            or session.map_name != self.bb.active_map_name
+            or session != self._collision_map_session
+        ):
+            return None
+        return session
 
     def get_running_mode(self) -> str:
         if not self.is_running():

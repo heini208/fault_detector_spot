@@ -194,7 +194,8 @@ def test_only_probe_moveit_completion_and_native_stow_submit_arm_motion():
         "probe", "_poll_moveit_planning", "_advance_stow_start",
     }
     assert callers["_build_pose_goal"] == {"probe"}
-    assert callers["probe"] == {"_continue_probe"}
+    assert callers["probe"] == {"_continue_probe", "_continue_contact_retreat"}
     assert "start_motion=self._continue_probe" in _source(EXECUTOR)
+    assert "start_retreat=self._continue_contact_retreat" in _source(EXECUTOR)
     assert "self._start_motion(plan)" in _source(GUARD)
-    assert "self._start_motion(retreat_plan)" in _source(GUARD)
+    assert "self._start_retreat(retreat_plan)" in _source(GUARD)

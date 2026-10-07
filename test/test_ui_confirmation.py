@@ -66,6 +66,10 @@ def test_movement_callers_use_boolean_confirmation(monkeypatch, reply, handler):
         tag_dropdown=SimpleNamespace(currentText=lambda: "7"),
         build_move_to_tag_intent=lambda: intent,
         build_move_base_intent=lambda _kind: intent,
+        ignore_environment_collisions_checkbox=Mock(isChecked=Mock(return_value=True)),
+    )
+    controls._execute_basic_movement = lambda intent: (
+        ManipulationControls._execute_basic_movement(controls, intent)
     )
     controls.ask_question = lambda title, message: UIControlHelper.ask_question(
         controls, title, message,
@@ -76,6 +80,14 @@ def test_movement_callers_use_boolean_confirmation(monkeypatch, reply, handler):
         execute.assert_called_once_with(intent)
     else:
         execute.assert_not_called()
+    if reply == QMessageBox.Yes and handler in (
+        ManipulationControls.handle_move_and_wait,
+        ManipulationControls.handle_tag_selection,
+    ):
+        assert intent.ignore_environment_collisions
+        controls.ignore_environment_collisions_checkbox.setChecked.assert_called_once_with(False)
+    else:
+        controls.ignore_environment_collisions_checkbox.setChecked.assert_not_called()
 
 
 def test_recording_button_waits_for_backend_state(application):

@@ -258,6 +258,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                     f"No execution command builder for {command_id.value}"
                 )
             commands = [builder(command)]
+        for execution in commands:
+            execution.ignore_environment_collisions = (
+                command.ignore_environment_collisions
+            )
         self.logger.info(f"Received {command_id.value} command")
         return commands
 

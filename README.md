@@ -238,6 +238,81 @@ Requirements:
 - The `microros_ws` overlay containing `micro_ros_agent` is built and sourced.
 - AprilTag config file (e.g. `config/my_tags.yaml`) matches your tags in the environment.
 
+### Optional mapped-obstacle checks for arm planning
+
+Rebuild **both** `fault_detector_msgs` and `fault_detector_spot`: the command and
+intent messages now carry `ignore_environment_collisions`. Stop the application
+before replacing its installed interfaces, and restart all application clients
+from the same rebuilt workspace. From the workspace root with its normal ROS,
+micro-ROS, and workspace dependencies sourced:
+
+```bash
+colcon build --symlink-install --packages-select fault_detector_msgs fault_detector_spot
+source install/local_setup.bash
+ros2 launch fault_detector_spot fault_detector_launch.py \
+  moveit_environment_collision_enabled:=true
+```
+
+Use a fresh terminal without an older collision experiment's `/tmp` overlay.
+The feature defaults to **off**. Changing this startup option requires restarting
+the application and MoveIt together, so disabled operation starts with no imported
+occupancy. No Spot driver change is required. Use the existing MoveIt launch with
+no sensor updaters or other occupancy writers, and leave RViz planning idle while
+the application owns the scene.
+
+Start mapping through the application's normal controls. This first version
+requires its **active mapping session**; a selected map, standalone mapping
+process, lidar attachment alone, or saved-map localization does not qualify.
+Each checked arm plan fetches RTAB-Map's binary OctoMap and waits for MoveIt to
+accept it before planning. Expect roughly 1–3 seconds of preparation on top of
+planning, based on the feasibility measurements. The base must stay stationary:
+session changes, stale TF (over 1.5 s), or body-placement changes over 2 cm / 0.03
+rad reject the plan before execution. These limits allow small body sway.
+
+The checkbox **Ignore mapped obstacles for next basic arm movement** applies to
+one submitted basic arm action, then clears immediately, including rejected
+submissions. It clears only MoveIt's imported occupancy; self-collision checks,
+explicit collision objects, accuracy thresholds, and the contact guard remain.
+The next ordinary arm action imports the map again. Wait, gripper, posture, and
+saved-workflow actions do not consume the checkbox. Execution code can explicitly
+select the same policy with `ignore_environment_collisions=True`.
+
+Safe and aligned approach travel checks the map. Zero-distance contact approaches,
+saved custom probe paths, and guarded contact retreat bypass mapped obstacles;
+positive stand-off approaches check them unless explicitly overridden. Corrections,
+retries, and checkpoint returns preserve the relevant segment's policy.
+
+To test on Spot after the rebuild:
+
+1. Stand using the usual controls, start a **fresh map**, then ready the arm and
+   keep the base still. Ready Arm's controlled lift also uses MoveIt and needs
+   mapping when this feature is enabled. Ensure the test region appears in RViz.
+2. In clear space, use a familiar small arm offset (for example 2 cm) with the
+   checkbox unchecked. Expect successful motion and imported occupancy in the
+   MoveIt planning scene. Check the usual achieved-position result.
+3. Check the checkbox and make a small return movement through clear space.
+   Expect occupancy to clear, the movement to succeed, and the checkbox to reset.
+4. Make another small checked movement. Occupancy must return. Compare endpoint
+   error and completion with your previous baseline; no acceptance thresholds
+   have been relaxed.
+5. For obstacle rejection, use a well-mapped fixed surface outside the existing
+   arm-exclusion box. A checked goal inside it should fail planning; a clear goal
+   may produce a route around it. Do not use bypass to execute through the surface.
+6. Stop mapping through the usual controls. A checked movement should fail with
+   a mapping-unavailable message; a small explicitly bypassed movement in clear
+   space should still work. Restart mapping and repeat a checked movement.
+
+A cancelled/timed-out scene update or plan must finish remotely before another
+policy-changing plan can start. If completion remains unknown, restart the
+application and MoveIt together. An abandoned read-only map fetch cannot later
+import its response and does not prevent explicit bypass.
+
+This is an optional planning aid for known mapped obstacles. Moved-obstacle
+clearing, lidar ray origins, the fixed arm-exclusion region, and saved-map
+localization remain coverage limits; the existing execution guard still handles
+contact. The offline integration checks pass separately from physical validation;
+the new integrated command path still needs the real-system tests above.
+
 ### 4.2 Simulation / reduced setup
 
 For a simplified, simulation‑oriented setup:

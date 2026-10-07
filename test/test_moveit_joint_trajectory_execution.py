@@ -81,10 +81,12 @@ def capture_joint_move(monkeypatch):
     return captured
 
 
-def test_moveit_success_executes_returned_joint_trajectory(monkeypatch):
+@pytest.mark.parametrize("scene_problem", [None, "Map session changed before dispatch"])
+def test_moveit_success_executes_returned_joint_trajectory(monkeypatch, scene_problem):
     planned = trajectory()
     executor = object.__new__(ArmMovementExecutor)
     executor.moveit_arm_planner = SimpleNamespace(
+        validate_prepared_scene=lambda: None,
         poll=lambda: MoveItPlanUpdate(
             MoveItPlanOutcome.SUCCESS,
             "planned",
@@ -111,6 +113,13 @@ def test_moveit_success_executes_returned_joint_trajectory(monkeypatch):
 
     assert update.outcome is ArmMovementOutcome.RUNNING
     assert executor._moveit_cartesian_plan is None
+    # Deferred dispatch must recheck a scene that became invalid after planning.
+    executor.moveit_arm_planner.validate_prepared_scene = lambda: scene_problem
+    if scene_problem:
+        with pytest.raises(RuntimeError, match=scene_problem):
+            submitted["goal_builder"]()
+        assert not captured
+        return
     submitted["goal_builder"]()
 
     assert captured["joint_positions"] == [

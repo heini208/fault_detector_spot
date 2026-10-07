@@ -90,6 +90,7 @@ def test_custom_capture_paths_save_and_replay_preserve_independent_geometry(tmp_
         ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH, retract_path=True),
         finalization_request_id="9b361339-3d85-4a2e-a5c3-88cf9a6d4872")
     assert operation.request.command.pre_approach_speed_scales == (.15,)
+    assert operation.request.command.ignore_environment_collisions is True
 
 
 @pytest.mark.parametrize("speed", [0, -1, 1.01, float("nan"), float("inf")])
@@ -110,6 +111,7 @@ def test_custom_large_adjustment_still_uses_guarded_command_lane(tmp_path):
     state, command = move(probe, commands, state, ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH,
                           achieved=pose(.2), translation=Vector3Data(.2, 0, 0), arm_speed_scale=.3)
     assert command.arm_speed_scale == .3
+    assert command.ignore_environment_collisions is False
     assert state.refinement.candidate_pose(RefinementStage.ALIGNMENT) == pose(.2)
     assert not state.refinement.stage_is_approved(RefinementStage.ALIGNMENT)
     with pytest.raises(ValueError, match="exceeds"):
@@ -161,6 +163,7 @@ def test_saved_custom_final_command_uses_final_path_without_surface_validation()
     assert command.offset.position.y == .4
     assert command.pre_approach_speed_scales == (.15,)
     assert command.arm_speed_scale == .2
+    assert command.ignore_environment_collisions is True
     source.validate_aligned_probe_distance.assert_not_called()
 
 

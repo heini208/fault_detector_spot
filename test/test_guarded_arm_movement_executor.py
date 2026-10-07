@@ -192,6 +192,7 @@ def execution(
     current_pose,
     force_policy=None,
     contact_evidence_analyzer=None,
+    start_retreat=None,
 ):
     return GuardedProbeExecution(
         arm_state_source=state,
@@ -203,6 +204,7 @@ def execution(
         ),
         contact_evidence_analyzer=contact_evidence_analyzer,
         start_motion=driver.start,
+        start_retreat=start_retreat,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
         start_stop=driver.start_stop,
@@ -230,11 +232,21 @@ def execution(
 
 
 @pytest.mark.parametrize("override,expected", [(None, 0.008), (0.003, 0.003), (0.02, 0.008)])
-def test_contact_cancels_stops_retreats_and_returns_contact(override, expected):
+@pytest.mark.parametrize("separate_retreat", [False, True])
+def test_contact_cancels_stops_retreats_and_returns_contact(override, expected, separate_retreat):
     clock = ManualClock()
     state = FakeArmStateSource()
     driver = GoalDriver()
-    guard = execution(state, driver, clock, pose(0.008))
+    retreats = []
+
+    def start_retreat(plan):
+        retreats.append(plan)
+        return driver.start(plan)
+
+    guard = execution(
+        state, driver, clock, pose(0.008),
+        start_retreat=start_retreat if separate_retreat else None,
+    )
 
     assert guard.start(plan, retreat_distance_m=override).outcome is ArmMovementOutcome.RUNNING
 
@@ -277,6 +289,7 @@ def test_contact_cancels_stops_retreats_and_returns_contact(override, expected):
     assert retreat_goal[0] == "retreat"
     assert retreat_goal[2].pose.position.x == pytest.approx(0.008 - expected)
     assert retreat_goal[3].linear_speed_mps == pytest.approx(0.01)
+    assert len(retreats) == int(separate_retreat)
 
     driver.updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")

@@ -141,8 +141,11 @@ class SemanticCommand:
     pre_approach_offsets: tuple[StampedPose, ...] = ()
     pre_approach_tolerances_m: tuple[float, ...] = ()
     pre_approach_speed_scales: tuple[float, ...] = ()
+    ignore_environment_collisions: bool = False
 
     def __post_init__(self):
+        if not isinstance(self.ignore_environment_collisions, bool):
+            raise TypeError("Ignore environment collisions must be a boolean")
         if isinstance(self.retries, bool) or not isinstance(self.retries, int) or not 0 <= self.retries <= 100:
             raise ValueError("Retries must be an integer between 0 and 100")
         if self.command_id == CommandID.EXECUTE_PROBE_POINT:

@@ -5,9 +5,10 @@ RTAB-Map remains the only environmental map producer. MoveIt receives a snapshot
 before planning; existing arm targets, accuracy settings, trajectory checks,
 contact handling, and execution guards remain unchanged.
 
-The first milestone is a planning-only feasibility test. Continue with application
-integration only if the imported map provides useful arm coverage without false
-robot collisions or excessive delay. This is a best-effort aid for known mapped
+The planning-only feasibility test established map import, bypass, and rejection
+of a mapped goal collision. Application integration is now available behind a
+default-off launch option; real command execution validation remains pending.
+This is a best-effort aid for known mapped
 obstacles, not continuous obstacle detection or a replacement for the collision guard.
 
 ## Baseline and scope
@@ -134,9 +135,9 @@ branch merely to postpone this decision.
 
 The retained production building block is the small
 `manipulation/rtabmap_octomap.py` converter. It validates binary occupancy and
-constructs a scene diff with complete rigid placement. Normal application
-commands do not use it yet; planner integration and command/UI toggles remain
-Steps 3 and 4.
+constructs a scene diff with complete rigid placement. The optional
+`RtabmapCollisionScene` adapter now connects it to the existing planner. Steps 3
+and 4 are implemented for active mapping; Step 5 physical validation remains.
 
 The temporary feasibility CLI and its CLI-specific tests were removed after the
 live tests. Diagnostic scripts and captures remain under `/tmp`; they are not
@@ -171,7 +172,7 @@ RViz planning idle and no competing scene writer or MoveIt sensor updater.
 After a timeout or interrupted request, stop the sequence: destroying a local
 client does not cancel server work. Confirm completion before another scene
 mutation or plan. Clear imported occupancy before returning to ordinary arm use;
-this branch has no application bypass yet.
+the initial feasibility tools had no application bypass.
 
 The feasibility readback checks metadata and placement;
 [MoveIt 2.5.9 serializes readback as a full tree](https://github.com/moveit/moveit2/blob/2.5.9/moveit_core/planning_scene/src/planning_scene.cpp#L686),
@@ -236,7 +237,7 @@ Diagnostic captures for this session are under `/tmp/spot_map_collision_live`
 (`import.log`, `geometry.log`, `clear_check.log`, metadata and serialized snapshots).
 At this stage, visual alignment, blocked/clear/reimport planning, and relocation
 checks remained unverified. Subsequent height and ready-arm results are recorded
-below; application integration is still pending.
+below; application integration was still pending at that stage.
 
 ### Height correction retest on 2026 October 7
 
@@ -358,6 +359,25 @@ small correction, or is explicitly accepted as a limitation of this optional aid
 
 ## Step 3 Integrate snapshot preparation into the existing planner
 
+**Implemented for real-system testing:** enable with
+`moveit_environment_collision_enabled:=true`. The existing runtime supplies an
+immutable mapping-session token (process, map, generation, ROS start time). The
+planner sequences map fetch → validated scene application → original plan, or
+acknowledged occupancy clear → original plan for bypass. Each service phase has
+the existing 7 s response timeout. Current TF must postdate the session and be
+within -0.1 to 1.5 s of the ROS clock. Body position in map coordinates must stay
+within 2 cm and orientation within 0.03 rad of the preparation reference; using
+the inverse placement avoids magnifying small body sway at distant map origins.
+The executor rechecks placement inside the deferred trajectory-goal builder.
+
+Scene/plan cancellation retains the real service future until completion; an
+exceptional or missing response requires re-establishing the application/MoveIt
+session. A discarded read-only map fetch is never imported and cannot block an
+explicit bypass after mapping stops. No sensors-parameter polling or competing
+occupancy writer is introduced; the existing no-updater MoveIt launch and
+exclusive scene ownership remain prerequisites. Saved-map localization stays
+disabled for this feature until separately validated.
+
 For each checked plan, capture the runtime session/map and a placement reference,
 request its current binary
 OctoMap, validate the response, resolve current placement, apply the scene diff,
@@ -402,6 +422,15 @@ trajectory behavior is preserved.
 
 ## Step 4 Add command and UI control
 
+**Implemented:** the boolean is carried through semantic commands, both ROS
+messages, recordings, BT translation, executor planning, corrections, and
+checkpoint returns. The one-shot basic-movement checkbox resets before command
+admission. Positive stand-off approaches remain checked unless explicitly
+overridden; zero-distance contact approaches and custom probe segments bypass.
+The guard's contact retreat selects bypass without changing its contact limits,
+stop confirmation, or execution path. Build both packages after the interface
+change. See the [real-system test steps](../README.md#optional-mapped-obstacle-checks-for-arm-planning).
+
 Selectively reuse `ignore_environment_collisions=False` and its propagation from
 the previous branch. Inspect producers, message definitions, adapters, recording,
 BT translation, executor retries/corrections, and consumers together. Rebuild
@@ -430,6 +459,18 @@ new live global-settings UI.
 ordinary command imports/checks them again.
 
 ## Step 5 Validate behavior and release the optional feature
+
+**Offline integration result:** both packages built successfully in an isolated
+overlay, whose production Python sources match this checkout. The functional
+suite passed 2,088 tests; nine failures were reproduced on the unchanged baseline
+(reference-capture fixtures and an outdated probe-motion enum expectation). One
+additional ROS test failed to open the sandbox's default log directory, then
+passed with `ROS_LOG_DIR` under `/tmp`. Repository-wide flake8 and pep257 checks
+also fail on the baseline. Collision sequencing, cancellation/late replies,
+placement/session checks, transport/UI, contact policy, and deferred dispatch
+regressions pass. No integrated live command or robot movement was tested in
+this implementation step; physical accuracy and coverage still require the
+README's operator tests. No workspace deployment or Git mutation was performed.
 
 Extend relevant existing planner, executor, command-adapter, recording, workflow,
 and mapping-lifecycle tests. Add focused tests for binary compatibility, rigid

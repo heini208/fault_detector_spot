@@ -28,6 +28,7 @@ def runtime(monkeypatch, tmp_path):
     stops = []
     node = Mock()
     node.get_parameter.return_value = SimpleNamespace(value=True)
+    node.get_clock.return_value.now.return_value.nanoseconds = 1_000_000_000
 
     def launch(args, **kwargs):
         assert kwargs == {"start_new_session": True}
@@ -382,3 +383,62 @@ def test_runtime_status_reports_unexpected_exit_and_partial_localization(runtime
     timer = manager._status_timer
     manager.close()
     manager.node.destroy_timer.assert_called_once_with(timer)
+
+
+def test_collision_map_session_requires_owned_mapping_and_renews_on_resume(runtime):
+    manager, _, _ = runtime
+    manager.change_map("plant")
+    assert manager.current_collision_map_session() is None
+    process = manager.start_mapping()
+    first = manager.current_collision_map_session()
+    assert first.map_name == "plant"
+    assert first.process_id == id(process)
+    assert first.started_at_ns == 1_000_000_000
+    assert manager.current_collision_map_session() == first
+
+    manager.set_mode_localization()
+    assert manager.current_collision_map_session() is None
+    manager.set_mode_mapping()
+    resumed = manager.current_collision_map_session()
+    assert resumed.process_id == first.process_id
+    # A paused simulated clock must not make two mapping intervals identical.
+    assert resumed.started_at_ns == first.started_at_ns
+    assert resumed != first
+
+
+def test_collision_map_session_changes_on_map_switch_and_same_map_restart(runtime):
+    manager, _, _ = runtime
+    manager.start_mapping("one")
+    first = manager.current_collision_map_session()
+    manager.node.get_clock.return_value.now.return_value.nanoseconds = 2_000_000_000
+    manager.change_map("two")
+    second = manager.current_collision_map_session()
+    assert second != first
+    assert second.map_name == "two"
+    assert second.started_at_ns == 2_000_000_000
+
+    manager.stop(save=False)
+    assert manager.current_collision_map_session() is None
+    manager.start_mapping("two")
+    assert manager.current_collision_map_session() != second
+    manager.process.alive = False
+    assert manager.current_collision_map_session() is None
+
+
+def test_collision_map_session_invalidates_before_save_and_failed_mode_switch(runtime):
+    manager, _, _ = runtime
+    manager.start_mapping("plant")
+
+    def service(_name):
+        assert manager.current_collision_map_session() is None
+        return True
+
+    manager._call_service.side_effect = service
+    assert manager.stop(save=True)
+    manager.start_mapping("plant")
+    manager._call_service.side_effect = None
+    manager._call_service.return_value = False
+    with pytest.raises(RuntimeError, match="Could not switch"):
+        manager.set_mode_localization()
+    assert manager.get_running_mode() == manager.MODE_MAPPING
+    assert manager.current_collision_map_session() is None

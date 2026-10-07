@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from builtin_interfaces.msg import Time
 
 from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
@@ -38,6 +39,16 @@ def test_simple_semantic_command_becomes_simple_execution_command():
     assert len(translated) == 1
     assert type(translated[0]) is ExecutionCommand
     assert translated[0].command_id is CommandID.STAND_UP
+
+
+@pytest.mark.parametrize("bypass", [False, True])
+def test_arm_execution_command_preserves_collision_policy(bypass):
+    command = SemanticCommand(
+        command_id=CommandID.MOVE_ARM_RELATIVE,
+        ignore_environment_collisions=bypass,
+    )
+    translated = subscriber().fire_command_sequence(command)
+    assert translated[0].ignore_environment_collisions is bypass
 
 
 def test_wait_semantic_command_becomes_timer_command():

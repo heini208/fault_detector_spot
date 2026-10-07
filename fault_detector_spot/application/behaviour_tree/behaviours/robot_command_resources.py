@@ -37,6 +37,9 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
 from fault_detector_spot.manipulation.moveit_arm_planner import (
     MoveItArmPlanner,
 )
+from fault_detector_spot.manipulation.rtabmap_collision_scene import (
+    RtabmapCollisionScene,
+)
 from fault_detector_spot.manipulation.arm_motion_parameters import (
     ArmMotionParameters,
 )
@@ -78,6 +81,7 @@ class RobotCommandResources:
         self._posture_state_source = None
         self._arm_motion_speed_policy = None
         self._moveit_arm_planner = None
+        self._rtabmap_runtime = None
         self._arm_movement_executors = {}
         self._base_movement_executors = {}
         self._waypoint_executor = None
@@ -150,12 +154,35 @@ class RobotCommandResources:
                 self._posture_state_source = PostureStateSource(node)
             return self._posture_state_source
 
+    def bind_rtabmap_runtime(self, runtime):
+        """Use the existing mapping owner as the planner's session provider."""
+        with self._lock:
+            if (
+                self._rtabmap_runtime is not None
+                and self._rtabmap_runtime is not runtime
+            ):
+                raise RuntimeError(
+                    "Robot commands already use another mapping runtime"
+                )
+            self._rtabmap_runtime = runtime
+
     def get_moveit_arm_planner(self, node):
         """Return the shared MoveIt planning client for the Spot arm."""
         with self._lock:
             self._bind_node(node)
             if self._moveit_arm_planner is None:
                 config = ArmMotionParameters(node)
+                collision_options = {}
+                if config.get("motion.moveit_environment_collision_enabled"):
+                    if self._rtabmap_runtime is None:
+                        raise RuntimeError(
+                            "Map collision planning requires the mapping runtime"
+                        )
+                    collision_options["collision_scene"] = RtabmapCollisionScene(
+                        node,
+                        self.get_tf_listener(node).buffer,
+                        self._rtabmap_runtime,
+                    )
                 self._moveit_arm_planner = MoveItArmPlanner(
                     node,
                     velocity_scaling=config.get(
@@ -167,6 +194,7 @@ class RobotCommandResources:
                     min_arm_sh1_rad=config.get(
                         "motion.arm_sh1_safe_min_rad"
                     ),
+                    **collision_options,
                 )
             return self._moveit_arm_planner
 
@@ -336,6 +364,7 @@ class RobotCommandResources:
             self._posture_state_source = None
             self._arm_motion_speed_policy = None
             self._moveit_arm_planner = None
+            self._rtabmap_runtime = None
             self._arm_movement_executors.clear()
             self._base_movement_executors.clear()
             self._clients.clear()

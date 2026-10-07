@@ -63,6 +63,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
         )
 
         self.nav2_runtime = self.rtabmap_runtime.nav2_runtime
+        self.robot_command_resources.bind_rtabmap_runtime(self.rtabmap_runtime)
         return True
 
     def initialise(self):

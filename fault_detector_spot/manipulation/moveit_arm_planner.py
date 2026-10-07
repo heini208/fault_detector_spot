@@ -85,6 +85,7 @@ class MoveItArmPlanner:
         cartesian_min_fraction: float = DEFAULT_CARTESIAN_MIN_FRACTION,
         min_arm_sh1_rad: float = MIN_ARM_SH1_RAD,
         monotonic_clock=time.monotonic,
+        collision_scene=None,
     ):
         if node is None:
             raise ValueError("MoveItArmPlanner requires a ROS node")
@@ -164,64 +165,95 @@ class MoveItArmPlanner:
         self._future = None
         self._started_at = None
         self._planning_mode = None
+        self._collision_scene = collision_scene
+        if collision_scene is not None and self.planning_frame != "body":
+            raise ValueError("Map collision checking requires the body planning frame")
+        self._pending_target = None
+        self._pending_mode = None
+        self._discarded_future = None
+        self._blocked_reason = None
 
     @property
     def active(self) -> bool:
         return self._future is not None
 
-    def start(self, target_hand: PoseStamped) -> MoveItPlanUpdate:
+    def start(self, target_hand: PoseStamped, *,
+              ignore_environment_collisions: bool = False) -> MoveItPlanUpdate:
+        return self._start(target_hand, "motion", ignore_environment_collisions)
+
+    def start_cartesian(self, target_hand: PoseStamped, *,
+                        ignore_environment_collisions: bool = False) -> MoveItPlanUpdate:
+        return self._start(target_hand, "cartesian", ignore_environment_collisions)
+
+    def _start(self, target_hand, mode, ignore_environment_collisions):
         error = self._target_error(target_hand)
         if error is not None:
             return error
-
+        if type(ignore_environment_collisions) is not bool:
+            return MoveItPlanUpdate(MoveItPlanOutcome.ERROR, "Map bypass must be a boolean")
+        self._pending_target = deepcopy(target_hand)
+        self._pending_mode = mode
+        if self._collision_scene is None:
+            return self._submit_plan()
         try:
-            if not self._client.wait_for_service(timeout_sec=0.0):
-                return MoveItPlanUpdate(
-                    MoveItPlanOutcome.SERVICE_UNAVAILABLE,
-                    f"MoveIt planning service '{self.service_name}' "
-                    "is unavailable",
-                )
-            request = self._build_request(target_hand)
-            future = self._client.call_async(request)
-        except Exception as exception:
-            return MoveItPlanUpdate(
-                MoveItPlanOutcome.ERROR,
-                f"MoveIt planning request failed: {exception}",
+            phase, client, request = self._collision_scene.prepare(
+                ignore_environment_collisions
             )
+        except Exception as exception:
+            self._reset()
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.FAILURE, f"Map collision preparation failed: {exception}"
+            )
+        return self._submit(phase, client, request)
 
-        return self._begin_future(
-            future,
-            "motion",
-            "MoveIt arm planning started",
-            "MoveIt planning service returned no future",
-        )
-
-    def start_cartesian(self, target_hand: PoseStamped) -> MoveItPlanUpdate:
-        error = self._target_error(target_hand)
+    def _submit_plan(self):
+        error = self.validate_prepared_scene()
         if error is not None:
-            return error
+            self._reset()
+            return MoveItPlanUpdate(MoveItPlanOutcome.FAILURE, error)
+        mode = self._pending_mode
+        if mode == "cartesian":
+            client = self._cartesian_client
+            request = self._build_cartesian_request(self._pending_target)
+        else:
+            client = self._client
+            request = self._build_request(self._pending_target)
+        return self._submit(mode, client, request)
 
+    def _submit(self, phase, client, request):
         try:
-            if not self._cartesian_client.wait_for_service(timeout_sec=0.0):
+            if not client.wait_for_service(timeout_sec=0.0):
+                self._reset()
                 return MoveItPlanUpdate(
                     MoveItPlanOutcome.SERVICE_UNAVAILABLE,
-                    "MoveIt Cartesian planning service "
-                    f"'{self.cartesian_service_name}' is unavailable",
+                    f"MoveIt {phase} service is unavailable",
                 )
-            request = self._build_cartesian_request(target_hand)
-            future = self._cartesian_client.call_async(request)
+            future = client.call_async(request)
         except Exception as exception:
+            self._block_uncertain_request(phase)
+            self._reset()
             return MoveItPlanUpdate(
-                MoveItPlanOutcome.ERROR,
-                f"MoveIt Cartesian planning request failed: {exception}",
+                MoveItPlanOutcome.ERROR, f"MoveIt {phase} request failed: {exception}"
             )
-
-        return self._begin_future(
-            future,
-            "cartesian",
-            "MoveIt Cartesian path planning started",
-            "MoveIt Cartesian planning service returned no future",
+        if future is None:
+            self._block_uncertain_request(phase)
+            self._reset()
+        update = self._begin_future(
+            future, phase, f"MoveIt {phase} request started",
+            f"MoveIt {phase} service returned no future",
         )
+        if self._collision_scene is not None:
+            self._logger.info(update.detail)
+        return update
+
+    def validate_prepared_scene(self):
+        """Recheck immediately before accepting a plan and dispatching its goal."""
+        if self._collision_scene is not None:
+            try:
+                self._collision_scene.validate()
+            except Exception as exception:
+                return f"Map collision plan invalidated: {exception}"
+        return None
 
     def poll(self) -> MoveItPlanUpdate:
         future = self._future
@@ -238,34 +270,30 @@ class MoveItArmPlanner:
             ):
                 mode = self._planning_mode
                 self.cancel()
-                label = "Cartesian path planning" if mode == "cartesian" else "arm planning"
                 return MoveItPlanUpdate(
                     MoveItPlanOutcome.TIMEOUT,
-                    f"MoveIt {label} timed out after "
+                    f"MoveIt {mode} timed out after "
                     f"{self.response_timeout_sec:.1f} s",
                 )
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.RUNNING,
-                (
-                    "Waiting for MoveIt Cartesian path"
-                    if self._planning_mode == "cartesian"
-                    else "Waiting for MoveIt arm plan"
-                ),
+                f"Waiting for MoveIt {self._planning_mode} response",
             )
 
         mode = self._planning_mode
         try:
             response = future.result()
         except Exception as exception:
+            self._block_uncertain_request(mode)
             self._reset()
-            label = "Cartesian planning" if mode == "cartesian" else "planning"
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
-                f"MoveIt {label} response failed: {exception}",
+                f"MoveIt {mode} response failed: {exception}",
             )
 
-        self._reset()
         if response is None:
+            self._block_uncertain_request(mode)
+            self._reset()
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
                 (
@@ -275,18 +303,51 @@ class MoveItArmPlanner:
                 ),
             )
 
+        if mode in ("map", "apply", "clear"):
+            try:
+                if mode == "map":
+                    phase, client, request = self._collision_scene.import_request(response)
+                    return self._submit(phase, client, request)
+                if mode == "apply" and not response.success:
+                    raise RuntimeError("MoveIt rejected the map scene")
+                return self._submit_plan()
+            except Exception as exception:
+                self._reset()
+                return MoveItPlanUpdate(
+                    MoveItPlanOutcome.FAILURE, f"Map collision preparation failed: {exception}"
+                )
+
+        error = self.validate_prepared_scene()
+        self._reset()
+        if error is not None:
+            return MoveItPlanUpdate(MoveItPlanOutcome.FAILURE, error)
         if mode == "cartesian":
             return self._cartesian_result(response)
         return self._motion_plan_result(response)
 
     def cancel(self) -> None:
         future = self._future
+        phase = self._planning_mode
         self._reset()
-        if future is not None and not future.done():
-            try:
-                future.cancel()
-            except Exception:
-                pass
+        if future is not None:
+            if self._collision_scene is not None and phase != "map":
+                # ROS services cannot cancel server work. Even a completed
+                # exceptional response must be inspected before another request.
+                self._discarded_future = future
+            elif self._collision_scene is None and not future.done():
+                try:
+                    future.cancel()
+                except Exception:
+                    pass
+            # A discarded map fetch is read-only. Its late response is never
+            # imported, so it cannot prevent explicit bypass when mapping stops.
+
+    def _block_uncertain_request(self, phase):
+        if self._collision_scene is not None and phase != "map":
+            self._blocked_reason = (
+                f"MoveIt {phase} server completion is unknown; "
+                "restart the application and MoveIt before further arm plans"
+            )
 
     def destroy(self) -> None:
         self.cancel()
@@ -296,8 +357,25 @@ class MoveItArmPlanner:
         for client in clients:
             if client is not None:
                 self.node.destroy_client(client)
+        if self._collision_scene is not None:
+            self._collision_scene.destroy()
 
     def _target_error(self, target_hand: PoseStamped):
+        if self._discarded_future is not None:
+            if not self._discarded_future.done():
+                return MoveItPlanUpdate(
+                    MoveItPlanOutcome.ERROR,
+                    "Previous MoveIt service is still running after cancellation/timeout; "
+                    "wait for its response before another arm plan",
+                )
+            try:
+                if self._discarded_future.result() is None:
+                    self._block_uncertain_request("previous")
+            except Exception:
+                self._block_uncertain_request("previous")
+            self._discarded_future = None
+        if self._blocked_reason is not None:
+            return MoveItPlanUpdate(MoveItPlanOutcome.ERROR, self._blocked_reason)
         if self.active:
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
@@ -609,6 +687,8 @@ class MoveItArmPlanner:
         self._future = None
         self._started_at = None
         self._planning_mode = None
+        self._pending_target = None
+        self._pending_mode = None
 
     @staticmethod
     def _positive(value, label: str) -> float:

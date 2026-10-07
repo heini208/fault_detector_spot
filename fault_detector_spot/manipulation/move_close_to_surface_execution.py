@@ -295,6 +295,7 @@ class MoveCloseToSurfaceExecution:
             force_threshold_n=threshold,
             retreat_distance_m=self.config.contact_search_retreat_distance_m,
             cartesian_path=True,
+            ignore_environment_collisions=True,
         )
         self.feedback_message = (
             f"Searching for contact along probe +X by {self._requested_step_m:.4f} m "
@@ -473,6 +474,7 @@ class MoveCloseToSurfaceExecution:
             speed=speed,
             force_threshold_n=threshold_n,
             cartesian_path=True,
+            ignore_environment_collisions=self._command.ignore_environment_collisions,
         )
         stage = "approach" if self._approach_steps == 1 else "correction"
         self.feedback_message = (
@@ -630,6 +632,9 @@ class MoveCloseToSurfaceExecution:
             self._pose_stamped(deepcopy(self._recovery_hand_pose)),
             BARE_HAND_MOTION_ID,
             speed=self._speed(self.config.recovery_speed_mps),
+            ignore_environment_collisions=(
+                self.contact_mode or self._command.ignore_environment_collisions
+            ),
         )
         self.feedback_message = (
             "Recovering to original pre-approach pose in one movement"

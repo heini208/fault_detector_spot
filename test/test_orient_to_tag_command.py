@@ -78,7 +78,8 @@ def test_semantic_command_preserves_tag_and_bound_motion_sensor():
     assert translated[0].motion_sensor_id == "hall_probe"
 
 
-def test_behaviour_only_dispatches_to_executor():
+@pytest.mark.parametrize("bypass", [False, True])
+def test_behaviour_only_dispatches_to_executor(bypass):
     behaviour = OrientToTagBehaviour(name="OrientToTagBehaviour")
     command = OrientToTagCommand(
         CommandID.ORIENT_TO_TAG,
@@ -87,11 +88,12 @@ def test_behaviour_only_dispatches_to_executor():
         motion_sensor_id="hall_probe",
     )
     marker = object()
+    command.ignore_environment_collisions = bypass
     behaviour._last_command = lambda: command
     behaviour.executor = SimpleNamespace(
-        orient_to_tag=lambda tag_id, sensor_id: (
+        orient_to_tag=lambda tag_id, sensor_id, *, ignore_environment_collisions: (
             marker
-            if tag_id == 7 and sensor_id == "hall_probe"
+            if tag_id == 7 and sensor_id == "hall_probe" and ignore_environment_collisions is bypass
             else None
         )
     )
@@ -168,16 +170,19 @@ def test_executor_preserves_probe_origin_and_compensates_mount():
     )
 
 
-def test_executor_dispatches_target_builder_through_guard():
+@pytest.mark.parametrize("bypass", [False, True])
+def test_executor_dispatches_target_builder_through_guard(bypass):
     executor, _, _, _ = executor_with_geometry()
     marker = object()
     executor.guarded_probe = Mock(return_value=marker)
     result = executor.orient_to_tag(
         7, "hall_probe", speed=0.1, force_threshold_n=5,
+        ignore_environment_collisions=bypass,
     )
     assert result is marker
     args, kwargs = executor.guarded_probe.call_args
-    assert kwargs == {"speed": 0.1, "force_threshold_n": 5}
+    assert kwargs == {"speed": 0.1, "force_threshold_n": 5,
+                      "ignore_environment_collisions": bypass}
     target, sensor_id = args[0]()
     assert sensor_id == "hall_probe"
     assert target.pose.position.x == 0.4
@@ -240,7 +245,9 @@ def test_runner_passes_tag_source_on_first_orientation(monkeypatch):
     resources.get_arm_movement_executor.assert_called_once_with(
         node, tag_state_source=source, robot_name="",
     )
-    executor.orient_to_tag.assert_called_once_with(7, "hall_probe")
+    executor.orient_to_tag.assert_called_once_with(
+        7, "hall_probe", ignore_environment_collisions=False,
+    )
 
 
 def test_ui_button_dispatches_selected_tag_intent():
@@ -248,6 +255,10 @@ def test_ui_button_dispatches_selected_tag_intent():
     control = SimpleNamespace(
         tag_dropdown=SimpleNamespace(currentText=lambda: "7"),
         ui=SimpleNamespace(visible_tags={7: tag}, execute_operation=Mock()),
+        ignore_environment_collisions_checkbox=Mock(isChecked=Mock(return_value=True)),
+    )
+    control._execute_basic_movement = lambda intent: (
+        ManipulationControls._execute_basic_movement(control, intent)
     )
     control.add_tag_element_to_intent = lambda intent: (
         ManipulationControls.add_tag_element_to_intent(control, intent)
@@ -257,3 +268,5 @@ def test_ui_button_dispatches_selected_tag_intent():
     assert intent.intent == OperationalIntent.INTENT_ORIENT_TO_TAG
     assert intent.tag.id == 7
     assert intent.tag.pose == tag.pose
+    assert intent.ignore_environment_collisions
+    control.ignore_environment_collisions_checkbox.setChecked.assert_called_once_with(False)

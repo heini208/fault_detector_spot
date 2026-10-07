@@ -90,7 +90,9 @@ def execution(executor=None, **changes):
         object(),
         MoveCloseToSurfaceConfig(**changes),
     )
-    action._command = SimpleNamespace(target_surface_distance_m=0.03)
+    action._command = SimpleNamespace(
+        target_surface_distance_m=0.03, ignore_environment_collisions=False,
+    )
     action._phase = "approach"
     action._started = True
     return action
@@ -149,6 +151,7 @@ def test_zero_distance_search_needs_no_reading_and_uses_sensitive_guard(angle):
     assert options["speed"].linear_speed_mps == pytest.approx(0.001)
     assert options["force_threshold_n"] == pytest.approx(2.0)
     assert options["cartesian_path"] is True
+    assert options["ignore_environment_collisions"] is True
     assert action._plan is None
 
     result = action._handle_approach_update(
@@ -180,6 +183,7 @@ def test_contact_search_without_contact_recovers_at_planned_endpoint():
     assert len(executor.guarded_calls) == 1
     assert len(executor.probe_calls) == 1
     assert executor.probe_calls[0][0][0].pose.position.x == pytest.approx(0.0)
+    assert executor.probe_calls[0][1]["ignore_environment_collisions"] is True
 
 
 def test_incomplete_contact_plan_shortens_endpoint_before_single_motion():
