@@ -69,8 +69,7 @@ def test_surface_plan_preserves_context_and_returns_via_saved_alignment(ignore_e
     assert plan[2].target_surface_distance_m == distance
     assert all(step.inspection == command().inspection for step in plan)
     assert [step.ignore_environment_collisions for step in plan] == [
-        ignore_environment_collisions, ignore_environment_collisions,
-        ignore_environment_collisions or distance == 0.0,
+        False, False, True,
     ]
     source.reference_tag.assert_called_once_with(2)
 
@@ -324,7 +323,8 @@ def test_failed_sensor_stop_is_not_complete():
     assert value._recording_state == "failed"
 
 
-def test_custom_plan_preserves_forward_waypoint_limits_for_checkpoint_execution():
+@pytest.mark.parametrize("bypass", [False, True])
+def test_custom_plan_preserves_forward_waypoint_limits_for_checkpoint_execution(bypass):
     from fault_detector_spot.inspection.model.models import PreApproachPathPoint
     from test_probe_execution_target import pose
     definition = inspection_object()
@@ -338,7 +338,8 @@ def test_custom_plan_preserves_forward_waypoint_limits_for_checkpoint_execution(
     tag = TagElement()
     tag.id, tag.pose.header.frame_id, tag.pose.pose.orientation.w = 2, "body", 1.0
     attachment = sensor()
-    plan = probe_point_plan(command(motion_sensor_id=attachment.motion_sensor_id),
+    plan = probe_point_plan(command(motion_sensor_id=attachment.motion_sensor_id,
+                                    ignore_environment_collisions=bypass),
                             Mock(load=Mock(return_value=definition)),
                             Mock(reference_tag=Mock(return_value=tag)),
                             Mock(require_motion_attachment=Mock(return_value=attachment)),
@@ -350,6 +351,13 @@ def test_custom_plan_preserves_forward_waypoint_limits_for_checkpoint_execution(
     assert plan[2].pre_approach_tolerances_m == (.002, .001)
     assert plan[2].pre_approach_speed_scales == (.2, .1)
     assert [step.ignore_environment_collisions for step in plan] == [False, False, True]
+    from test_execution_command_translation import subscriber
+    builder = subscriber()
+    expanded = [builder.fire_command_sequence(stage) for stage in plan]
+    assert [len(stage) for stage in expanded] == [1, 3, 3]
+    assert [[step.ignore_environment_collisions for step in stage] for stage in expanded] == [
+        [False], [False, False, False], [True, True, True],
+    ]
 
 
 def test_parent_cancellation_stops_recording_as_cancelled():
@@ -674,3 +682,21 @@ def test_failed_contact_path_recovery_keeps_bypass_for_same_step_retry():
     recovery = value.executor.restore_probe_checkpoint.call_args_list[0]
     assert recovery.args == ("aligned",)
     assert recovery.kwargs["ignore_environment_collisions"] is True
+
+
+@pytest.mark.parametrize("stage,bypass", [(0, False), (1, False), (2, True)])
+def test_standoff_checkpoint_policy_bypasses_only_surface_edge(stage, bypass):
+    value = action()
+    value._steps = [[step("safe")], [step("aligned")], [SimpleNamespace(
+        command_id=CommandID.MOVE_CLOSE_TO_SURFACE,
+        target_surface_distance_m=0.03,
+        ignore_environment_collisions=False,
+    )]]
+    value._stage, value._index = stage, 0
+    value._resume_phase = "motion"
+    reached = ["initial", "safe", "aligned", "surface"]
+    value._history = reached[:stage + 1]
+    assert value._checkpoint_collision_bypass() is bypass
+
+    value._history = reached[:stage + 2]
+    assert value._checkpoint_collision_bypass(returning=True) is bypass

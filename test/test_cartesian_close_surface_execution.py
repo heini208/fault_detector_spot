@@ -182,9 +182,11 @@ def test_cartesian_move_limits_allow_one_standoff_correction_only():
 
 
 @pytest.mark.parametrize("bypass", [False, True])
-def test_close_surface_requests_guarded_cartesian_execution(monkeypatch, bypass):
+@pytest.mark.parametrize("completed_moves", [0, 1])
+def test_close_surface_and_correction_always_bypass_map(monkeypatch, bypass, completed_moves):
     execution = action(contact=False)
     execution._command.ignore_environment_collisions = bypass
+    execution._approach_steps = completed_moves
     execution._sensor_id = "probe"
     execution._attachment_revision = 1
     execution._plan = FrozenPlan()
@@ -226,5 +228,5 @@ def test_close_surface_requests_guarded_cartesian_execution(monkeypatch, bypass)
     execution._prepare_next_approach_step()
 
     assert captured["cartesian_path"] is True
-    assert captured["ignore_environment_collisions"] is bypass
+    assert captured["ignore_environment_collisions"] is True
     assert execution._requested_step_m == pytest.approx(0.12)

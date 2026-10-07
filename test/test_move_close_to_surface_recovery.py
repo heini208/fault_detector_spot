@@ -291,6 +291,7 @@ def test_nonzero_contact_starts_recovery_to_original_start():
     assert len(executor.probe_calls) == 1
     target = executor.probe_calls[0][0][0]
     assert target.pose.position.x == pytest.approx(0.0)
+    assert executor.probe_calls[0][1]["ignore_environment_collisions"] is True
     assert "original pre-approach" in action.feedback_message
 
 

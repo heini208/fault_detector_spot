@@ -433,8 +433,11 @@ trajectory behavior is preserved.
 **Implemented:** the boolean is carried through semantic commands, both ROS
 messages, recordings, BT translation, executor planning, corrections, and
 checkpoint returns. The one-shot basic-movement checkbox resets before command
-admission. Positive stand-off approaches remain checked unless explicitly
-overridden; zero-distance contact approaches and custom probe segments bypass.
+admission. Every Move Close to Surface / Wall command bypasses mapped occupancy,
+including positive stand-off distances. Final probe-point moves and all final
+path waypoints bypass for both manual actions and Execute Probe Point. Saved safe
+and aligned approach stages always follow the current global toggle; a blanket
+bypass on a complete probe-point command is not propagated into those stages.
 The guard's contact retreat selects bypass without changing its contact limits,
 stop confirmation, or execution path. Build both packages after the interface
 change. See the [real-system test steps](../README.md#optional-mapped-obstacle-checks-for-arm-planning).
@@ -446,9 +449,9 @@ BT translation, executor retries/corrections, and consumers together. Rebuild
 
 | Motion | Map policy when the feature is enabled |
 | --- | --- |
-| Ordinary basic motion and safe approach travel | Import and check mapped obstacles |
+| Ordinary basic motion and safe/aligned approach travel | Import and check mapped obstacles |
 | Basic motion with its one-shot override | Clear imported occupancy before planning |
-| Explicit final contact or custom probe segment | Bypass only where the motion definition requests contact |
+| Any Move Close to Surface / Wall or final probe-point path | Always bypass mapped obstacles, including stand-off targets |
 | Guarded contact backoff | Preserve the deliberate contact-recovery policy |
 | SDK motions outside MoveIt | No new map checking implied |
 

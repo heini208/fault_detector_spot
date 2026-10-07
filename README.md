@@ -288,11 +288,14 @@ enabled. Wait, gripper, posture, and saved-workflow actions do not consume the
 checkbox. Execution code can explicitly
 select the same policy with `ignore_environment_collisions=True`.
 
-While the global control is enabled, safe and aligned approach travel checks the
-map. Zero-distance contact approaches, saved custom probe paths, and guarded
-contact retreat bypass mapped obstacles;
-positive stand-off approaches check them unless explicitly overridden. Corrections,
-retries, and checkpoint returns preserve the relevant segment's policy.
+Safe and aligned pre-approach travel follows the global control at execution time.
+Every **Move Close to Surface / Wall** command bypasses mapped obstacles, including
+positive stand-off distances. Final probe-point moves and their final path
+waypoints also always bypass them, both when selected manually and through
+**Execute Probe Point**. A bypass on the complete probe-point command does not
+disable checking for its safe or aligned approach stages. Corrections, retries,
+contact retreat, and returns along the final segment preserve that segment's
+bypass; self-collision checks and execution guards remain active.
 
 To test on Spot after the rebuild:
 

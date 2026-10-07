@@ -167,6 +167,38 @@ def test_saved_custom_final_command_uses_final_path_without_surface_validation()
     source.validate_aligned_probe_distance.assert_not_called()
 
 
+@pytest.mark.parametrize("operation", [
+    "INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH",
+    "INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH",
+    "INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH",
+])
+def test_saved_approach_travel_follows_global_policy_even_with_parent_bypass(operation):
+    from unittest.mock import Mock
+    from fault_detector_msgs.msg import OperationalIntent, TagElement
+    from fault_detector_spot.inspection.execution.saved_probe_motion import (
+        routine_safe_approach_command, saved_probe_command,
+    )
+    from fault_detector_spot.inspection.setup.probe_setup_motion import ProbeSetupMotionCommandFactory
+    from test_probe_execution_target import inspection_object, sensor
+    from test_saved_probe_controls import saved_intent
+
+    intent = saved_intent(getattr(OperationalIntent, operation))
+    intent.ignore_environment_collisions = True
+    tag = TagElement()
+    tag.id = 2
+    tag.pose.header.frame_id = "body"
+    tag.pose.pose.orientation.w = 1.0
+    resolver = (routine_safe_approach_command if operation == "INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH"
+                else saved_probe_command)
+    command = resolver(
+        intent, Mock(load=Mock(return_value=inspection_object())),
+        Mock(reference_tag=Mock(return_value=tag)),
+        Mock(require_motion_attachment=Mock(return_value=sensor())),
+        ProbeSetupMotionCommandFactory(),
+    )
+    assert command.ignore_environment_collisions is False
+
+
 @pytest.mark.parametrize("terminal", ["succeeded", "failed", "cancelled"])
 @pytest.mark.parametrize("intent_name", ["INTENT_MOVE_ARM_RELATIVE", "INTENT_STOW_ARM", "INTENT_SIT_DOWN"])
 def test_external_arm_motion_invalidates_reached_state_but_preserves_candidate(tmp_path, terminal, intent_name):

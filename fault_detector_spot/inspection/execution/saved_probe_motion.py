@@ -45,9 +45,7 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
         validate_surface_distance_pair(target, point.aligned_preapproach_distance_m)
         return SemanticCommand(
             command_id=CommandID.MOVE_CLOSE_TO_SURFACE,
-            ignore_environment_collisions=(
-                intent.ignore_environment_collisions or target == 0.0
-            ),
+            ignore_environment_collisions=True,
             target_surface_distance_m=target,
             aligned_preapproach_distance_m=point.aligned_preapproach_distance_m,
             motion_sensor_id=attachment.motion_sensor_id,
@@ -80,9 +78,7 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
         )
     return replace(
         factory.absolute(pose, tag, attachment.motion_sensor_id),
-        ignore_environment_collisions=(
-            intent.ignore_environment_collisions or custom_final
-        ),
+        ignore_environment_collisions=custom_final,
         command_id=(CommandID.FOLLOW_MOVE_TO_TAG_PATH
                     if custom_final or intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH
                     else CommandID.MOVE_ARM_TO_TAG),
@@ -124,7 +120,7 @@ def routine_safe_approach_command(
             pose, tag, attachment.motion_sensor_id, safe_approach=True,
         ),
         tag_position_tolerance_m=routine.safe_approach_position_tolerance_m,
-        ignore_environment_collisions=intent.ignore_environment_collisions,
+        ignore_environment_collisions=False,
         inspection=InspectionSelection(
             object_id=intent.object_id, routine_id=intent.routine_id,
         ),
@@ -160,7 +156,7 @@ def probe_point_plan(command, repository, state_source, attachments, factory):
         intent.object_id = selection.object_id
         intent.routine_id = selection.routine_id
         intent.probe_point_id = selection.probe_point_id
-        intent.ignore_environment_collisions = command.ignore_environment_collisions
+        # Each stage owns its policy; a final probe bypass must not cover travel.
         return saved_probe_command(
             intent, frozen_repository, frozen_state, frozen_attachments, factory,
         )

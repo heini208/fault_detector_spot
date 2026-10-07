@@ -320,8 +320,7 @@ class ExecuteProbePoint(ArmMovementBehaviour):
             steps = [step for stage in self._steps for step in stage]
             step = steps[max(0, len(self._history) - 2)]
         return (step.ignore_environment_collisions
-                or (step.command_id is CommandID.MOVE_CLOSE_TO_SURFACE
-                    and step.target_surface_distance_m == 0.0))
+                or step.command_id is CommandID.MOVE_CLOSE_TO_SURFACE)
 
     def _fail(self, detail):
         if self._surface.active:
