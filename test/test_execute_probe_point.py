@@ -615,3 +615,25 @@ def test_backtracking_at_safe_approach_does_not_restore_precommand_pose():
     value.position = "safe"
     assert value.update() is Status.SUCCESS
     assert value.events == []
+
+
+@pytest.mark.parametrize("budget, used", [(0, 0), (3, 3)])
+def test_collision_at_fourth_waypoint_without_remaining_retries_backtracks_taken_path(budget, used):
+    value = action(retries=budget)
+    value._attempt = used
+    value._steps = [[step("safe")],
+                    [step(name) for name in ("p1", "p2", "p3", "p4", "aligned")],
+                    [step("measure")]]
+    value.failures[("move", "p4")] = [Outcome.CONTACT]
+    assert run(value) is Status.FAILURE
+    assert value.events == [
+        ("move", "safe"), ("move", "p1"), ("move", "p2"),
+        ("move", "p3"), ("move", "p4"), ("stop", None),
+        ("restore", "p3"), ("restore", "p2"), ("restore", "p1"),
+        ("restore", "safe"),
+    ]
+    assert value._history == ["initial", "safe"]
+    assert value.position == "safe"
+    assert value._attempt == used
+    value._rpc.assert_not_called()
+    assert "returned to safe approach" in value._fail.call_args.args[0]
