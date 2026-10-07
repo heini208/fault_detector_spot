@@ -130,103 +130,59 @@ region around the arm, or substantial mapping reconstruction. Keep the previous
 branch available as the alternative. Do not build both approaches into the new
 branch merely to postpone this decision.
 
-### Step 1 implementation and testing
+### Retained implementation and offline checks
 
-The first implementation adds `scripts/check_rtabmap_moveit.py` and the small
-`manipulation/rtabmap_octomap.py` converter. Normal application commands do not
-use them yet. The diagnostic performs exactly one import or clear, reads the scene
-back, reports whole-robot and arm collision validity, and optionally asks the
-existing `MoveItArmPlanner` for one plan. It has no trajectory execution client.
-Direct dependencies are `octomap_msgs`, `std_srvs`, and `rcl_interfaces`.
+The retained production building block is the small
+`manipulation/rtabmap_octomap.py` converter. It validates binary occupancy and
+constructs a scene diff with complete rigid placement. Normal application
+commands do not use it yet; planner integration and command/UI toggles remain
+Steps 3 and 4.
 
-The installed RTAB-Map 0.23.8 binary writer was tested against the installed
-OctoMap reader using occupied, free, unknown, and pruned cells at 0.04 m and 0.1 m.
-The converter validates binary record structure before native decoding and keeps
-the complete rigid placement. This proves binary compatibility, not live map
-alignment, coverage, or planning usefulness. Those remain the feasibility gate.
+The temporary feasibility CLI and its CLI-specific tests were removed after the
+live tests. Diagnostic scripts and captures remain under `/tmp`; they are not
+application components. Keep the converter unit tests and native binary
+compatibility regression: the latter
+checks the installed RTAB-Map writer against the installed OctoMap reader with
+occupied, free, unknown, and pruned cells at 0.04 m and 0.1 m. The test compiles
+into pytest's temporary directory, adds no production C++ package, and starts no
+ROS nodes. It explicitly skips if development libraries are absent; a skip is
+not proof of compatibility. Direct message/service dependencies retained for
+this path are `octomap_msgs` and `std_srvs`; existing mapping also uses `std_srvs`.
 
-Run the offline checks from the repository root in a terminal with the ROS and
-workspace environments sourced:
+Run the offline checks from the repository root with the normal ROS and workspace
+environments sourced, without a previous collision experiment's temporary overlay:
 
 ```bash
-source /opt/ros/humble/setup.bash
-source /home/marcel/Projects/spot/spot_ws/install/setup.bash
 export PYTHONPATH="$PWD:$PYTHONPATH"
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q \
-  test/test_octomap_binary_compatibility.py \
-  test/test_rtabmap_octomap.py test/test_rtabmap_moveit_diagnostic.py \
+  test/test_octomap_binary_compatibility.py test/test_rtabmap_octomap.py \
   test/test_moveit_arm_planner.py test/test_arm_joint_state_source.py \
   test/test_arm_motion_parameters.py test/test_tf_transform_helpers.py
-python3 scripts/check_rtabmap_moveit.py --help
 ```
 
-These checks start no ROS nodes. The C++ compatibility check compiles into a test
-temporary directory and explicitly skips if its development libraries are absent;
-a skip is not proof of compatibility. Plugin autoload is disabled to avoid an
-unrelated pytest plugin that opens sockets in this environment.
+Plugin autoload is disabled to avoid an unrelated pytest plugin that opens
+sockets in this environment. The retained tests cover binary compatibility,
+malformed input rejection, frame/pose validation, and preservation of source
+messages and unrelated scene fields. The live evidence below does not replace
+production sequencing, cancellation, session, or command-policy tests.
 
-For an **explicitly approved live diagnostic session**, use the normal driver,
-mapping, and MoveIt setup. Keep the base and arm stationary, preserve the active
-map session, and leave application motion and RViz planning idle. No other map
-publisher or scene writer may run. The diagnostic checks the MoveIt `sensors`
-parameter, but that alone cannot detect external scene writers. Do not source the
-previous collision branch's temporary overlay. A separate local build for this
-step is available under `/tmp/spot_map_collision_step1/install`.
+Live tests require an authorized, stationary session with application motion and
+RViz planning idle and no competing scene writer or MoveIt sensor updater.
+After a timeout or interrupted request, stop the sequence: destroying a local
+client does not cancel server work. Confirm completion before another scene
+mutation or plan. Clear imported occupancy before returning to ordinary arm use;
+this branch has no application bypass yet.
 
-1. Source that overlay after the workspace and keep the checkout first on
-   `PYTHONPATH` as above. Confirm the map service using
-   `ros2 service list -t`; override `--map-service` if its name differs.
-2. Run `python3 scripts/check_rtabmap_moveit.py import`. Record printed snapshot
-   metadata, service timings, and collision contacts. In RViz's MoveIt planning
-   scene, inspect occupancy alignment around the arm, nearby objects, ground,
-   and feet. A current snapshot timestamp does not establish fresh observations.
-3. Add an independent box through RViz's planning-scene object controls, away
-   from the current robot. Apply it, then leave RViz scene editing idle. Run
-   `python3 scripts/check_rtabmap_moveit.py clear`. Confirm the box ID is printed
-   and still visible, while map occupancy disappears. The diagnostic compares
-   explicit object geometry, attachments, and collision rules before/after.
-4. Select a previously reachable **hand** pose in `body`, in metres, with its
-   existing quaternion orientation. Keep that identical target and measured
-   start for all three commands below; replace the capitalized placeholders
-   with numbers. Choose a clear endpoint whose straight approach crosses a
-   mapped surface. Do not choose a probe-tip pose or guess a new orientation.
-
-   ```bash
-   python3 scripts/check_rtabmap_moveit.py import --cartesian --target X Y Z QX QY QZ QW
-   python3 scripts/check_rtabmap_moveit.py clear --cartesian --target X Y Z QX QY QZ QW
-   python3 scripts/check_rtabmap_moveit.py import --cartesian --target X Y Z QX QY QZ QW
-   ```
-
-   Run each separately and inspect its result before continuing. Expect blocked,
-   success, blocked. A failure alone may be IK or another planning restriction;
-   the clear-map success is necessary evidence. Omit `--cartesian` to try ordinary
-   planning around the obstacle. No returned trajectory is executed.
-5. After completed requests, run `python3 scripts/check_rtabmap_moveit.py clear`
-   before returning to ordinary application arm use. Remove the diagnostic box
-   through RViz after verifying preservation. Map occupancy persists in the shared
-   MoveIt scene when the script exits; this branch has no application bypass yet.
-
-Exit code 0 means the requested checks/plan passed, 2 means an invalid arm start
-or an unsuccessful optional plan, and 1 means the diagnostic stopped on an error.
-The script requires fresh, complete arm position/velocity/effort telemetry and
-compares arm positions with MoveIt's state within 0.02 rad. Its TF age limit is
-1.5 s; translation/rotation changes above 0.02 m/0.03 rad reject the result. These
-are diagnostic thresholds, not validated production policies. Full-body validity
-is reported separately so ground/feet contacts remain visible; the arm-group
-result gates the optional arm plan. Only arm telemetry is independently checked;
-the whole-body readout uses MoveIt's monitored leg state. Validate all unexplained
-contacts before passing the feasibility gate.
-
-After a timeout or interrupted request, **stop the sequence**. A local client
-shutdown does not cancel server work. Confirm completion or re-establish the
-MoveIt session before another import, clear, or plan. The diagnostic does not
-retry or automatically clear after an uncertain result. Its readback checks
-metadata and placement; [MoveIt 2.5.9 serializes readback as a full tree](https://github.com/moveit/moveit2/blob/2.5.9/moveit_core/planning_scene/src/planning_scene.cpp#L686),
-so comparing the returned bytes with RTAB-Map's binary payload would be incorrect.
+The feasibility readback checks metadata and placement;
+[MoveIt 2.5.9 serializes readback as a full tree](https://github.com/moveit/moveit2/blob/2.5.9/moveit_core/planning_scene/src/planning_scene.cpp#L686),
+so its bytes cannot be compared directly with RTAB-Map's binary payload.
+Diagnostic telemetry and TF thresholds were test controls, not validated
+production policies. Whole-body validity used MoveIt's monitored leg state;
+only arm telemetry was independently checked.
 
 ### Live feasibility result on 2026 October 7
 
-**Status: import and clearing work, but the feasibility gate has not passed.**
+**Initial result: import and clearing worked, but map placement blocked further validation.**
 The authorized session used the running Spot driver, MoveIt, and RTAB-Map mapping.
 No physical movement was commanded. The original scene had no map, explicit
 objects, or attachments; it was restored to that state after the checks, with
@@ -268,7 +224,7 @@ attribute fraction 0.0 exclusively to this limit or relax the guard to get a pas
 A later comparison needs a normal ready arm pose established through the existing
 movement controls, followed by a successful clear-map baseline.
 
-**Next:** resolve the mapping pose/height policy in Step 2 and validate it with a
+**Follow-up identified by this test:** resolve the mapping pose/height policy in Step 2 and validate it with a
 fresh test map before continuing command integration. Evaluate preserving full
 odometry height alongside the existing planar navigation constraints, together
 with appropriate height filtering. Merely changing `RGBD/ForceOdom3DoF` while
@@ -278,9 +234,103 @@ MoveIt adapter or rewrite existing saved maps to mask the discrepancy.
 
 Diagnostic captures for this session are under `/tmp/spot_map_collision_live`
 (`import.log`, `geometry.log`, `clear_check.log`, metadata and serialized snapshots).
-Visual alignment, blocked/clear/reimport planning, and relocation checks remain
-unverified. The evidence currently supports the import mechanism, not enabling
-the feature for ordinary arm commands.
+At this stage, visual alignment, blocked/clear/reimport planning, and relocation
+checks remained unverified. Subsequent height and ready-arm results are recorded
+below; application integration is still pending.
+
+### Height correction retest on 2026 October 7
+
+**At this retest, the height correction passed; arm-path feasibility remained
+pending.** After clearing the application's inherited temporary-overlay paths and
+relaunching from the workspace, runtime confirmed `RGBD/ForceOdom3DoF=false` and
+`Grid/MapFrameProjection=false`, with `Reg/Force3DoF=true`. The test used a fresh
+map with Spot sitting and its arm folded. No arm paths or movements were requested.
+
+RTAB-Map's cloud now spans map Z = 3.908–5.605 m, in agreement with filtered lidar
+starting near 3.914 m and the robot body at about 4.115 m. The captured binary
+snapshot decoded to 5,218 occupied 5 cm voxels. Their body-relative height range
+is -0.221 to +1.494 m, with 826 occupied centres within 1.5 m of the body. The
+previous roughly 4 m vertical displacement is gone. These measurements establish
+coordinate consistency, not independently surveyed accuracy or complete coverage.
+
+The subsequent import fetched a 143,974-byte snapshot in 1.770 s, applied it in
+0.142 s, and verified its metadata/placement in a 0.160 s scene readback. Clearing
+completed in 0.004 s; readback confirmed empty occupancy and preserved explicit
+objects, attachments, and collision rules. The original scene was empty and was
+restored to that state.
+
+Arm validity reported `arm_link_el1 / arm_link_sh0` contact both with the imported
+map and after clearing. Whole-body validity also reported body/upper-leg contacts
+in the seated posture. These are independent of imported occupancy. A later
+blocked/clear/reimport comparison needs a normal standing, ready arm pose and a
+successful clear-map baseline through the unchanged planner and trajectory checks.
+
+One initial read-only `/move_group/get_parameters` request timed out before any
+scene-changing request was submitted. A retry was initially blocked by automatic
+approval review. Separate read-only checks established service responsiveness and
+empty occupancy; the subsequent approved import and clear both completed. No
+scene mutation timed out or remained outstanding.
+
+The filtered cloud still declares a sensor frame coincident with `odom`; its
+implied ray origin is about 5.8 m from the robot in this capture. Correct occupied
+endpoint heights do not validate free-space ray tracing or removal of moved
+obstacles. Keep this existing sensor-origin issue separate from the now-verified
+height correction. The previous fixed arm-exclusion coverage limitation also
+remains.
+
+Captures are under `/tmp/spot_map_collision_retest_20261007_172215`, including
+`geometry.log`, `preflight.log`, `import_verified_health.log`, `clear.log`, and
+native decoded occupancy. The subsequent ready-arm comparison is recorded below.
+Visual surface alignment, dynamic-obstacle clearing, and localization after an
+odometry reset remain separate validation items.
+
+### Ready-arm planning result on 2026 October 7
+
+**Normal planning responds to imported occupancy, and clearing restores the
+successful baseline.** This is mechanism evidence, not completion of every
+Step 1 gate or validation of executed motion. Spot was standing with its arm
+ready and mapping running. No trajectory was executed. All requests completed,
+and the imported occupancy was cleared afterward.
+
+The captured map contained 195,266 bytes at 0.05 m resolution, decoding to 6,398
+occupied voxels. A 5 cm forward Cartesian plan succeeded with the map present
+(fraction 1.0, 16 trajectory points). A longer diagonal Cartesian candidate at
+hand position `[1.21, 0.20, 0.32]` m in `body` failed even with the map cleared
+(fraction 0.003105); it provides no collision-avoidance evidence. Planner and
+trajectory acceptance checks were unchanged.
+
+For normal `GetMotionPlan`, the hand target stayed at `[1.18, 0.20, 0.32]` m in
+`body`, using the orientation obtained from the current hand forward kinematics:
+
+| Scene occupancy | Same-target planning result |
+| --- | --- |
+| Cleared | Success, 102 trajectory points |
+| Imported | Failure, MoveIt error 99999 |
+| Cleared again | Success, 104 trajectory points |
+| Reimported | Failure, MoveIt error 99999 |
+
+Both imported runs reported a valid arm start state. To distinguish the planner's
+generic failure from a mapped collision, the saved successful goal state was also
+checked directly. Its forward-kinematics hand position was
+`[1.18278534, 0.20013897, 0.31969460]` m. With occupancy present, that state was
+invalid with `<octomap> / arm_link_fngr` and `<octomap> / arm_link_wr1` contacts;
+after the final clear, the same state was valid. This demonstrates rejection of a
+mapped collision at the goal; it does not yet demonstrate routing around a wall
+to a clear goal or the blocked/bypass Cartesian comparison specified above.
+
+Whole-body checks still reported body/upper-leg self-contacts independently of
+the map; the arm group was valid. An initial stale TF was rejected before import.
+The temporary test then waited for fresh TF under the same 1.5 s age limit and
+passed without relaxing that limit. Checked-plan snapshot fetches took
+0.841–1.327 s and application took 0.129–0.181 s. These measured delays must be
+considered when integrating preparation into ordinary commands.
+
+Captures are under `/tmp/spot_arm_map_planning_20261007_173657`. Remaining work
+includes production sequencing and toggles, the Cartesian blocked/bypass case,
+physical endpoint-accuracy regression, visual coverage checks, lidar ray-origin
+and moved-obstacle clearing checks, and saved-map placement after odometry resets.
+No execution accuracy or continuous obstacle response is established by these
+planning-only results.
 
 ## Step 2 Resolve only mapping issues demonstrated by the test
 
@@ -421,7 +471,7 @@ execution guard; this feature does not promise immediate dynamic-obstacle respon
 | Command policy | Existing semantic/execution models, ROS adapters, executor, contact workflow factories |
 | Transport boolean | `fault_detector_msgs/msg/CommandPayload.msg` and `OperationalIntent.msg` |
 | One-shot presentation | `ui/manipulation/controls.py` |
-| Feasibility evidence | One planning-only diagnostic under `scripts/` and focused tests under `test/` |
+| Feasibility evidence | Recorded results here; retained converter and native compatibility tests under `test/`; temporary diagnostic archived under `/tmp` |
 
 Use the existing `octomap_msgs`, `moveit_msgs`, and `std_srvs` interfaces and declare
 direct dependencies where introduced. No driver or `spot_moveit_config` edits are
