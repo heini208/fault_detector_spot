@@ -106,7 +106,7 @@ real nearby objects. Avoid inheriting that broad exclusion into the new arm
 obstacle stream; use MoveIt's robot/attached-body filtering where supported.
 Keep mapping-specific filters owned by mapping.
 
-## 4. Native MoveIt occupancy — wiring implemented, prerequisites pending
+## 4. Native MoveIt occupancy — offline verification complete
 
 The application launch passes `config/moveit_sensors.yaml` and `use_sim_time`
 only to the existing `spot_moveit_config` MoveIt include, using a scoped ROS launch
@@ -121,18 +121,22 @@ occupancy. `/fault_detector/moveit/filtered_lidar` exposes the updater's filtere
 cloud for inspection. Keep the existing lidar adapter separate until physical
 mount calibration is verified. No changes to the Spot driver are needed.
 
-`moveit_ros_perception` is now a declared runtime dependency. Its plugin is absent
-from the current offline environment and must be installed before sensor use;
-the Python package build does not install this system dependency.
+`moveit_ros_perception` is a declared runtime dependency. The configured
+lidar/OMPL path now uses matching MoveIt 2.5.10 libraries and `moveit_msgs` 2.2.3.
+The native, node-free loader check parses the actual YAML, discovers and loads
+the point-cloud plugin, constructs it, and destroys it successfully. The earlier
+2.5.10/2.5.9 library mismatch is resolved. The Python package build does not
+install or repair system dependencies; package discovery alone is not a load test.
 
-**Required model correction:** the current external SRDF has a fixed `body`
-root. MoveIt 2.5.9's planning-scene monitor constructs the occupancy monitor in
+**Model correction implemented:** `spot_moveit_config/config/spot.srdf` now
+declares the floating `odom_joint` from `odom` to `body`. MoveIt 2.5.9's
+planning-scene monitor constructs the occupancy monitor in
 the robot model frame, even when `octomap_frame: odom` is configured. A standard
-floating virtual joint from `odom` to `body` is needed so stored occupancy stays
-fixed while Spot moves. Use existing TF for that joint and keep the arm chain,
-targets and trajectory execution body-relative. This one-line external SRDF edit
-is awaiting approval under the repository-scope rule. Do not use native sensing
-against the old body-rooted model.
+floating joint keeps stored occupancy fixed while Spot moves. Existing TF supplies
+the joint pose; the arm chain, targets and trajectory execution stay body-relative.
+This is the only change made to the external configuration for this step; existing
+collision exemptions and joint-limit edits were preserved. Rebuild that package
+before deployment. Do not use native sensing against the old body-rooted model.
 
 Launch checks for that floating joint and the perception package before adding
 the sensor parameters. A missing prerequisite produces a warning and leaves the
@@ -145,13 +149,34 @@ execution blocked. They verify parameter delivery and isolation, identical
 robot/planner parameters, and both clock modes. Native MoveIt/FCL checks without
 ROS nodes confirm that updated OctoMap geometry respects the existing enabled
 and bypass matrices, while self and explicit-object collisions remain active.
-An in-memory copy of the actual Spot model with the proposed floating joint also
-preserves all six arm variables, limits, gripper configuration and body-relative
-forward kinematics across several poses; arm-only state diffs preserve the root.
+The actual updated Spot model was compared with its pre-change SRDF using native
+MoveIt libraries without ROS initialization. It preserves all six arm variables,
+limits, gripper configuration and body-relative forward kinematics across several
+poses; arm-only state diffs preserve the root. The scene frame is now `odom`.
+The normal workspace installation also passes launch expansion with process
+execution blocked: the corrected topic, sensor parameters and floating-joint
+model reach `move_group`, with native trajectory execution still disabled.
+All 220 targeted offline tests pass. Native YAML parsing verifies the actual
+sensor parameter names, values and types. The collision-policy and Spot-model
+checks also pass after rebuilding against MoveIt 2.5.10 and regenerating their
+serialized messages with `moveit_msgs` 2.2.3. No ROS nodes were started, so plugin
+initialization with TF, cloud ingestion and runtime timing remain unverified.
 These checks do not prove runtime TF synchronization. MoveIt's state monitor can
 retain an old/default root when TF is unavailable, and Cartesian conversion uses
 a separate latest TF lookup. Validate current `odom` to `body` TF, body sway,
 planning latency and endpoint accuracy on hardware before relying on this input.
+
+The consumed ROS interfaces were compared before and after the package update.
+`GetCartesianPath` adds velocity/acceleration scaling fields; their generated
+zero defaults mean 1.0 internally, preserving the existing request behavior.
+The executor still stretches trajectory timing to the requested duration. Use a
+fresh application and MoveIt process for the next authorized session so both
+sides use the new service definition.
+
+A separate dependency scan found that the unused CHOMP planner still requires
+`libchomp_motion_planner.so.2.5.10` while its package is 2.5.9. The configured
+OMPL pipeline and point-cloud plugin resolve successfully and do not use CHOMP.
+That unrelated installation issue was left unchanged.
 
 The map updates independently of movement requests; the motion path still reads
 only the small collision matrix. The 3 m sensing range does not make this a
@@ -197,3 +222,42 @@ owner or mapping lifecycle and does not continuously replan during execution.
 Keep the implementation scoped to this optional planning layer. No planner,
 trajectory timing, endpoint tolerance, force threshold, or command architecture
 changes are required by the sensor transition.
+
+### First hardware session: observe before commanding movement
+
+These steps are for a later authorized hardware session, after verification of
+`config/lidar_mount_calibration.yaml` against the physical
+mount. They have not been executed during offline development.
+
+1. Use the normal driver and application with Spot stationary and the UI setting
+   **Disabled**. Mapping is unnecessary. In a normally sourced terminal, start
+   `ros2 launch fault_detector_spot lidar_frame_adapter_launch.py`. Do not start a
+   second adapter or static-TF publisher if one already provides this frame.
+2. Open the existing MoveIt RViz configuration, without launching another MoveIt
+   server or synthetic joint-state publishers:
+
+   ```bash
+   rviz2 -d "$(ros2 pkg prefix spot_moveit_config)/share/spot_moveit_config/config/moveit.rviz"
+   ```
+
+   Change **Fixed Frame** from `body` to `odom`. Inspect the planning scene topic
+   `/monitored_planning_scene`; add PointCloud2 displays for
+   `/velodyne/points_sensor` and `/fault_detector/moveit/filtered_lidar`, plus TF.
+   Select **Best Effort** reliability for the cloud displays; the updater's
+   filtered publisher requires it. Keep planning and execution controls idle.
+3. Verify that the physical lidar origin is at the rear mount and visible
+   surfaces align with the scene voxels. Check that the body and arm do not
+   leave occupied trails. Move only an external panel within 3 m into a clear
+   line of sight: its new location should appear and rays reaching beyond its
+   old location should clear old observations over subsequent updates. Occluded
+   space is not expected to clear. Record the observed delay rather than assuming
+   that a 5 Hz input means 200 ms clearing.
+4. Toggle the UI setting on and off without submitting movement. Expect backend
+   acknowledgement and continued sensor/scene updates in both states. This checks
+   control acknowledgement only: the requested collision policy is applied when
+   the application prepares a plan. There is no application plan-only action.
+
+Stop this validation stage at passive observation. Base motion, arm avoidance,
+endpoint accuracy, latency and contact-bypass behavior belong to the subsequent
+authorized motion tests. Keep cameras out of the initial test so the rear lidar
+can be evaluated on its own.

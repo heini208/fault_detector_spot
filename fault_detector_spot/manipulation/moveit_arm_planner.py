@@ -518,7 +518,6 @@ class MoveItArmPlanner:
         request.avoid_collisions = True
         # Keep custom joint floors out of Cartesian interpolation. The complete
         # returned trajectory is validated before it is sent to Spot.
-        # Humble's Cartesian service has no velocity/acceleration scaling fields.
         # The executor stretches trajectory timing to the requested duration.
         return request
 

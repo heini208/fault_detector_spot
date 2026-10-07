@@ -260,9 +260,13 @@ box. Sensor integration runs independently of arm requests and adds no map fetch
 to a movement. The range limits each observation, not the accumulated map size.
 
 **Integration prerequisites:** install `moveit_ros_perception` (Humble Debian
-package `ros-humble-moveit-ros-perception`). The current offline machine lacks
-this plugin; installing/building this Python package alone does not supply it.
-The `spot_moveit_config` SRDF also needs the standard floating virtual joint:
+package `ros-humble-moveit-ros-perception`) from the same MoveIt release as its
+libraries. Building this Python package alone does not supply or align those
+dependencies. The configured lidar/OMPL path passes offline checks with MoveIt
+2.5.10 and `moveit_msgs` 2.2.3, including native plugin loading. Keep the installed
+MoveIt libraries consistent before starting sensing; package discovery alone
+does not verify that a plugin can load.
+The updated `spot_moveit_config` SRDF includes the standard floating virtual joint:
 
 ```xml
 <virtual_joint name="odom_joint" type="floating" parent_frame="odom" child_link="body" />
@@ -275,7 +279,8 @@ occupancy; setting `octomap_frame` alone does not override a body-rooted model.
 Against the old body-rooted model, accumulated obstacles would move with Spot.
 The application launch therefore skips sensor configuration with a warning if
 this joint or the perception package is missing, while keeping the existing arm
-planner available. The separate SRDF edit has not been applied in this revision.
+planner available. Rebuild `spot_moveit_config` along with this package so the
+installed model includes the joint.
 
 Enabling the control does not start sensors or certify current obstacle coverage.
 With no received data, the scene is empty. If data stops, stored occupancy stays;
@@ -284,10 +289,16 @@ clear old observations over successive scans; occluded obstacles can remain.
 This is an optional planning aid, not live collision monitoring during execution.
 The existing execution guard stays active.
 
-Offline checks validate launch wiring, collision policy and the proposed model's
+Offline checks validate launch wiring, collision policy and the updated model's
 body-relative geometry. They do not verify root-TF freshness, runtime planning
 latency or endpoint accuracy with the floating root. Those need hardware checks
 before relying on the new occupancy input.
+
+After a MoveIt package update, use a fresh, normally sourced terminal and a normal
+fresh application/MoveIt startup for the next authorized session. Do not reuse
+processes from before the update: `GetCartesianPath` changed in `moveit_msgs`
+2.2.3. Its added scaling fields keep their defaults; the executor continues to
+control the requested movement duration.
 
 Before each arm plan, the planner reads only MoveIt's Allowed Collision Matrix
 and applies the requested occupancy policy. Disabled or explicitly bypassed
@@ -329,11 +340,11 @@ silently changing its collision policy.
 
 The retained command interfaces require `ignore_environment_collisions` in
 `fault_detector_msgs`. When installing this change, stop the application before
-replacing installed interfaces and rebuild both packages from the workspace root,
+replacing installed interfaces and rebuild these packages from the workspace root,
 with the normal ROS, micro-ROS, and workspace dependencies sourced:
 
 ```bash
-colcon build --symlink-install --packages-select fault_detector_msgs fault_detector_spot
+colcon build --symlink-install --packages-select fault_detector_msgs spot_moveit_config fault_detector_spot
 source install/local_setup.bash
 ros2 launch fault_detector_spot fault_detector_launch.py
 ```
@@ -400,7 +411,7 @@ odometry reset needs separate validation before relying on that case.
 See Section **10.5 Implementation Overview** and **10.6 Map lifecycle and process control** in [`System_Design.md`](System_Design.md) for the full flow.
 
 The standalone **lidar frame adapter** prepares a corrected sensor-origin cloud
-for the next MoveIt perception step. It is not started by the application or
+for MoveIt's native updater. It is not started by the application or
 mapping launches. It converts `/velodyne/points` to `/velodyne/points_sensor` in
 the physical `lidar_sensor` frame, preserving each acquisition timestamp. It
 uses TF at that timestamp and the standard `tf2_sensor_msgs` transformation;
