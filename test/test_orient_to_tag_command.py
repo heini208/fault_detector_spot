@@ -89,9 +89,9 @@ def test_behaviour_only_dispatches_to_executor():
     marker = object()
     behaviour._last_command = lambda: command
     behaviour.executor = SimpleNamespace(
-        orient_to_tag=lambda tag_id, sensor_id: (
+        orient_to_tag=lambda tag_id, sensor_id, *, ignore_environment_collisions: (
             marker
-            if tag_id == 7 and sensor_id == "hall_probe"
+            if tag_id == 7 and sensor_id == "hall_probe" and not ignore_environment_collisions
             else None
         )
     )
@@ -177,7 +177,11 @@ def test_executor_dispatches_target_builder_through_guard():
     )
     assert result is marker
     args, kwargs = executor.guarded_probe.call_args
-    assert kwargs == {"speed": 0.1, "force_threshold_n": 5}
+    assert kwargs == {
+        "speed": 0.1,
+        "force_threshold_n": 5,
+        "ignore_environment_collisions": False,
+    }
     target, sensor_id = args[0]()
     assert sensor_id == "hall_probe"
     assert target.pose.position.x == 0.4
@@ -240,7 +244,9 @@ def test_runner_passes_tag_source_on_first_orientation(monkeypatch):
     resources.get_arm_movement_executor.assert_called_once_with(
         node, tag_state_source=source, robot_name="",
     )
-    executor.orient_to_tag.assert_called_once_with(7, "hall_probe")
+    executor.orient_to_tag.assert_called_once_with(
+        7, "hall_probe", ignore_environment_collisions=False,
+    )
 
 
 def test_ui_button_dispatches_selected_tag_intent():
@@ -252,6 +258,7 @@ def test_ui_button_dispatches_selected_tag_intent():
     control.add_tag_element_to_intent = lambda intent: (
         ManipulationControls.add_tag_element_to_intent(control, intent)
     )
+    control.execute_basic_operation = control.ui.execute_operation
     ManipulationControls.handle_orient_to_tag(control)
     intent = control.ui.execute_operation.call_args.args[0]
     assert intent.intent == OperationalIntent.INTENT_ORIENT_TO_TAG

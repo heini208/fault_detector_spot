@@ -511,7 +511,8 @@ def test_alignment_candidate_move_is_allowed_before_orientation(tmp_path):
     )
 
 
-def test_reached_alignment_can_be_reused_for_finalization_retraction(tmp_path):
+@pytest.mark.parametrize("retract_path", [False, True])
+def test_reached_alignment_can_be_reused_for_finalization_retraction(tmp_path, retract_path):
     probe, _ = coordinator(tmp_path)
     state = create_selected_routine(
         probe,
@@ -537,10 +538,11 @@ def test_reached_alignment_can_be_reused_for_finalization_retraction(tmp_path):
 
     operation = probe.prepare_motion(
         state.context,
-        ProbeMotionRequest(kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH),
+        ProbeMotionRequest(kind=ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH, retract_path=retract_path),
     )
 
     assert operation.request.command.command_id is CommandID.MOVE_ARM_TO_TAG
+    assert operation.request.command.ignore_environment_collisions is retract_path
 
 
 def test_tag_orientation_uses_existing_command_and_enables_candidate(tmp_path):

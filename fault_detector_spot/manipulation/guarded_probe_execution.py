@@ -66,6 +66,7 @@ class GuardedProbeExecution:
         contact_telemetry=None,
         monotonic_clock=time.monotonic,
         execution_lock=None,
+        start_retreat=None,
     ):
         required = (
             (arm_state_source, "arm state source"),
@@ -91,6 +92,8 @@ class GuardedProbeExecution:
                 raise TypeError(
                     f"GuardedProbeExecution {label} callback must be callable"
                 )
+        if start_retreat is not None and not callable(start_retreat):
+            raise TypeError("GuardedProbeExecution start retreat callback must be callable")
         if not callable(monotonic_clock):
             raise TypeError("Monotonic clock must be callable")
 
@@ -98,6 +101,7 @@ class GuardedProbeExecution:
         self.force_baseline_sampler = force_baseline_sampler
         self.force_contact_policy = force_contact_policy
         self._start_motion = start_motion
+        self._start_retreat = start_motion if start_retreat is None else start_retreat
         self._poll_goal = poll_goal
         self._cancel_goal = cancel_goal
         self._start_stop = start_stop
@@ -1060,7 +1064,7 @@ class GuardedProbeExecution:
             )
 
         self._phase = _Phase.RETREATING
-        update = self._start_motion(retreat_plan)
+        update = self._start_retreat(retreat_plan)
         if update.outcome is ArmMovementOutcome.RUNNING:
             return update
         return self._terminal(

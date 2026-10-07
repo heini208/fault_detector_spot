@@ -142,6 +142,7 @@ def test_recording_round_trip_preserves_full_semantic_command():
         offset=pose,
         orientation_mode="relative_to_tag",
         wait_time=1.25,
+        ignore_environment_collisions=True,
         target_surface_distance_m=0.12,
         surface_tolerance_m=0.008,
         aligned_preapproach_distance_m=0.23,
@@ -161,6 +162,24 @@ def test_recording_round_trip_preserves_full_semantic_command():
     assert data["tag"]["id"] == 4
     assert "request_id" not in data
     assert restored == command
+
+
+def test_existing_recordings_without_collision_option_default_to_checking():
+    data = serialize_recorded_command(SemanticCommand(CommandID.MOVE_ARM_RELATIVE))
+    del data["ignore_environment_collisions"]
+
+    assert deserialize_recorded_command(data).ignore_environment_collisions is False
+
+
+@pytest.mark.parametrize("invalid", [None, 0, 1, "false", "true"])
+def test_collision_option_requires_a_boolean_in_commands_and_recordings(invalid):
+    with pytest.raises(TypeError, match="boolean"):
+        SemanticCommand(CommandID.MOVE_ARM_RELATIVE, ignore_environment_collisions=invalid)
+    data = serialize_recorded_command(SemanticCommand(CommandID.MOVE_ARM_RELATIVE))
+    data["ignore_environment_collisions"] = invalid
+
+    with pytest.raises(TypeError, match="boolean"):
+        deserialize_recorded_command(data)
 
 
 def test_close_surface_recording_preserves_motion_parameters():

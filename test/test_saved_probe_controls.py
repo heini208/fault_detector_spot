@@ -81,7 +81,8 @@ def test_transport_rejection_allows_retry(controls):
 @pytest.mark.parametrize("operation, field", [
     (24, "safe_approach_pose_object"), (25, "aligned_preapproach_pose_object"),
 ])
-def test_saved_pose_uses_repository_geometry_and_live_tag(operation, field):
+@pytest.mark.parametrize("ignore_environment_collisions", [False, True])
+def test_saved_pose_uses_repository_geometry_and_live_tag(operation, field, ignore_environment_collisions):
     definition = inspection_object()
     other_routine = deepcopy(definition.routines[0])
     other_routine.routine_id = "other"
@@ -95,6 +96,7 @@ def test_saved_pose_uses_repository_geometry_and_live_tag(operation, field):
     source = Mock()
     source.reference_tag.return_value = tag
     intent = saved_intent(operation)
+    intent.ignore_environment_collisions = ignore_environment_collisions
     command = saved_probe_command(intent, Mock(load=Mock(return_value=definition)), source,
                                   Mock(require_motion_attachment=Mock(return_value=sensor())),
                                   ProbeSetupMotionCommandFactory())
@@ -104,6 +106,7 @@ def test_saved_pose_uses_repository_geometry_and_live_tag(operation, field):
     assert command.offset.position.x == pose.position.x
     assert command.offset.orientation.w == pose.orientation.w
     assert command.inspection.probe_point_id == "point_1"
+    assert command.ignore_environment_collisions is ignore_environment_collisions
     source.reference_tag.assert_called_once_with(2)
     assert source.validate_aligned_probe_distance.call_count == (operation == 25)
 
@@ -123,6 +126,7 @@ def test_close_surface_uses_saved_distance_not_ui_values():
     command = saved_probe_command(intent, Mock(load=Mock(return_value=inspection_object())), None,
                                   Mock(require_motion_attachment=Mock(return_value=sensor())), None)
     assert command.command_id == CommandID.MOVE_CLOSE_TO_SURFACE
+    assert command.ignore_environment_collisions is True
     assert command.target_surface_distance_m == 0.03
     assert command.aligned_preapproach_distance_m == 0.10
 

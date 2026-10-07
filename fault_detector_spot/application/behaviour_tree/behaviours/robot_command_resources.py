@@ -37,6 +37,9 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
 from fault_detector_spot.manipulation.moveit_arm_planner import (
     MoveItArmPlanner,
 )
+from fault_detector_spot.manipulation.moveit_environment_source import (
+    MoveItEnvironmentSource,
+)
 from fault_detector_spot.manipulation.arm_motion_parameters import (
     ArmMotionParameters,
 )
@@ -156,6 +159,7 @@ class RobotCommandResources:
             self._bind_node(node)
             if self._moveit_arm_planner is None:
                 config = ArmMotionParameters(node)
+                environment_enabled = config.get("environment.enabled")
                 self._moveit_arm_planner = MoveItArmPlanner(
                     node,
                     velocity_scaling=config.get(
@@ -166,6 +170,11 @@ class RobotCommandResources:
                     ),
                     min_arm_sh1_rad=config.get(
                         "motion.arm_sh1_safe_min_rad"
+                    ),
+                    environment_collision_policy_enabled=environment_enabled,
+                    environment_source=(
+                        MoveItEnvironmentSource(node, config)
+                        if environment_enabled else None
                     ),
                 )
             return self._moveit_arm_planner

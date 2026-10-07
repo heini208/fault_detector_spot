@@ -66,6 +66,7 @@ def test_movement_callers_use_boolean_confirmation(monkeypatch, reply, handler):
         tag_dropdown=SimpleNamespace(currentText=lambda: "7"),
         build_move_to_tag_intent=lambda: intent,
         build_move_base_intent=lambda _kind: intent,
+        execute_basic_operation=execute,
     )
     controls.ask_question = lambda title, message: UIControlHelper.ask_question(
         controls, title, message,

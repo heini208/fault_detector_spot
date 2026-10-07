@@ -24,6 +24,7 @@ class ExecutionCommand:
         self.command_id = command_id
         self.stamp = stamp
         self.request_id = request_id_or_new(request_id)
+        self.ignore_environment_collisions = False
 
     def __repr__(self):
         ts = f"{self.stamp.sec}.{self.stamp.nanosec:09d}"

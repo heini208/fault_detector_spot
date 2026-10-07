@@ -55,6 +55,25 @@ def test_preserves_tag_motion_payload():
     assert command.wait_time == 3.5
 
 
+@pytest.mark.parametrize("ignore_environment_collisions", [False, True])
+def test_relative_arm_intent_preserves_collision_option(ignore_environment_collisions):
+    intent = OperationalIntent()
+    intent.intent = intent.INTENT_MOVE_ARM_RELATIVE
+    intent.offset.header.frame_id = "body"
+    intent.ignore_environment_collisions = ignore_environment_collisions
+
+    command = operational_intent_to_command(intent)
+
+    assert command.ignore_environment_collisions is ignore_environment_collisions
+
+
+def test_close_surface_intent_explicitly_ignores_occupancy():
+    intent = OperationalIntent()
+    intent.intent = intent.INTENT_MOVE_CLOSE_TO_SURFACE
+
+    assert operational_intent_to_command(intent).ignore_environment_collisions is True
+
+
 def test_requires_frame_for_relative_motion():
     intent = OperationalIntent()
     intent.intent = OperationalIntent.INTENT_MOVE_BASE_RELATIVE

@@ -303,6 +303,7 @@ def test_diagonal_recovery_targets_full_original_pose():
     target = executor.probe_calls[0][0][0]
     assert target.pose == pose_data_to_pose(original)
     assert executor.probe_calls[0][1]["speed"].linear_speed_mps == 0.020
+    assert executor.probe_calls[0][1]["ignore_environment_collisions"] is True
 
 
 @pytest.mark.parametrize("remaining", [0.0, 0.02])

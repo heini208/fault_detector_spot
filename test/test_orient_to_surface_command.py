@@ -305,8 +305,10 @@ def test_behaviour_only_dispatches_to_executor():
     marker = object()
     behaviour._last_command = lambda: command
     behaviour.executor = SimpleNamespace(
-        orient_to_surface=lambda sensor_id: (
-            marker if sensor_id == "hall_probe" else None
+        orient_to_surface=lambda sensor_id, *, ignore_environment_collisions: (
+            marker
+            if sensor_id == "hall_probe" and not ignore_environment_collisions
+            else None
         )
     )
 
@@ -352,7 +354,7 @@ def test_ui_button_dispatches_orient_to_surface_intent():
     )
 
     assert "INTENT_ORIENT_TO_SURFACE" in source
-    assert "execute_operation(intent)" in source
+    assert "execute_basic_operation(intent)" in source
     assert "show_setup_unavailable" not in source
 
 

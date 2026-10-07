@@ -1,6 +1,9 @@
 """Tests for the ROS command request adapter."""
 
+from dataclasses import replace
+
 import pytest
+from rclpy.serialization import deserialize_message, serialize_message
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
@@ -43,6 +46,21 @@ def test_adapter_round_trip_preserves_request_metadata():
     assert restored.recording_policy is RecordingPolicy.EXCLUDE
     assert isinstance(restored.command, SemanticCommand)
     assert restored.command.command_id is CommandID.MOVE_ARM_RELATIVE
+
+
+@pytest.mark.parametrize("ignore_environment_collisions", [False, True])
+def test_adapter_round_trip_preserves_collision_option(ignore_environment_collisions):
+    request = make_request()
+    request = replace(request, command=replace(
+        request.command,
+        ignore_environment_collisions=ignore_environment_collisions,
+    ))
+
+    message = command_request_to_message(request)
+    message = deserialize_message(serialize_message(message), type(message))
+
+    assert message.payload.ignore_environment_collisions is ignore_environment_collisions
+    assert command_request_from_message(message) == request
 
 
 def test_wire_payload_does_not_duplicate_request_identity():

@@ -6,6 +6,137 @@ Keep the current motion generator, endpoint tolerances, calibration, speed setti
 
 This simplified plan supersedes the earlier custom-capability, private-snapshot, and new-action proposal. It reflects the clarified requirements of 7 October 2026.
 
+## Current pilot
+
+Steps 1, 2, and 4 are implemented, together with a single-camera version of
+Step 3. The feature defaults to disabled. The initial source is
+`/depth_registered/frontleft/points`; lidar and additional cameras are deferred
+until their origins and useful coverage are verified. No change to the sibling
+`spot_moveit_config` package is required.
+
+Initial pilot validation: 444 relevant offline tests passed across 25 modules.
+After simplifying checkbox consumption, 81 focused UI tests passed and the
+copied application overlay was rebuilt. Both project
+packages build in the isolated overlay; launch parameters normalize successfully,
+and the matching perception plugin loads. No live updater, application restart,
+or robot motion was started during implementation. Hardware validation remains
+pending.
+
+Launch-time `environment_collision_avoidance:=true` loads the standard occupancy
+updater into MoveIt and enables the planner's observation gate. Checked requests
+wait for fresh stationary odometry, clear the map, require a usable filtered
+cloud acquired after clear acknowledgment, and confirm a nonempty map in `body`
+before applying collision policy and planning. Every checked segment refreshes
+the map; this first pilot has no reuse cache. Movement or stale observations
+during planning discard the result. The base must also remain stationary during
+execution; this feature does not add continuous obstacle replanning.
+
+The one-shot checkbox is in the basic arm controls. Explicit bypass skips map
+refresh and sensor availability checks while still applying the occupancy-only
+collision exception. Contact/custom-final motions and contact backoff receive
+their appropriate bypass explicitly. Self-collision checks and existing guards
+remain active. The launch option is a session setting, not a live parameter
+switch; disabling it requires a fresh application/MoveIt launch so an old
+occupancy map cannot remain in a server used by the original planning path.
+The checkbox clears immediately when submitting a basic arm movement, including
+when the server later rejects it or is unavailable. Check it again manually to
+bypass another submission. Server feedback cannot re-arm or change this UI choice.
+
+The new ROS boolean requires rebuilding **both `fault_detector_msgs` and
+`fault_detector_spot`**, then running all application processes from the same
+overlay. Do not mix old generated interfaces with the updated Python code.
+The standard `moveit_ros_perception` point-cloud plugin is also required when
+enabling the pilot; the originally inspected Humble installation lacks it.
+For this development session, an isolated build of the official 2.5.9 point-cloud
+plugin and isolated builds of both project packages are available under `/tmp`.
+No system package or shared workspace installation was changed. The perception
+build disables unused OpenGL components; source algorithms are unchanged.
+
+The prepared environment can be loaded in a fresh terminal with:
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/marcel/Projects/spot/spot_ws/install/setup.bash
+source /tmp/spot_collision_build/install/setup.bash
+source /tmp/spot_collision_perception/install/moveit_ros_perception/share/moveit_ros_perception/local_setup.bash
+```
+
+Those temporary overlays are test artifacts for this session, not a permanent
+deployment. Their build notes are in `/tmp/spot_collision_perception/BUILD_NOTES.md`.
+
+For the next hardware session, load the environment above in each terminal:
+
+1. Keep the driver running and close any previous fault-detector/MoveIt instance.
+   Start the updated application with:
+
+   ```bash
+   ros2 launch fault_detector_spot fault_detector_launch.py environment_collision_avoidance:=true
+   ```
+
+   Use the normal preparation workflow to put the arm in its working posture
+   with clear space around it. The planning diagnostic does not ready the arm.
+   Then keep the base stationary and application arm commands idle.
+
+2. Inspect the map using the existing RViz configuration:
+
+   ```bash
+   rviz2 -d /home/marcel/Projects/spot/spot_ws/src/spot_moveit_config/config/moveit.rviz
+   ```
+
+   Its fixed frame is `body` and planning scene topic is
+   `/monitored_planning_scene`. Use RViz only to view the scene during these
+   diagnostic runs. A test object in the front-left depth camera's view should
+   appear at the correct position, and the robot should be filtered. The sensor
+   mount/probe geometry is not modeled yet. Resolve obvious misalignment or
+   self-occupancy before testing movement; one camera also leaves blind spots.
+
+3. Choose a previously reachable nearby **hand pose in body**, including its
+   quaternion. Do not use probe-tip coordinates or assume identity orientation.
+   Use the same target throughout the comparison. This command is a template:
+   replace `X Y Z QX QY QZ QW` with the chosen pose.
+
+   ```bash
+   cd /home/marcel/Projects/spot/spot_ws/src/fault_detector_spot
+   goal=(--target X Y Z --quaternion QX QY QZ QW)
+   python3 scripts/check_moveit_environment.py "${goal[@]}" --cartesian
+   ```
+
+   The clear-workspace baseline must report `success` with trajectory points.
+   The script plans only and sends no robot execution command. Missing/stale
+   observations or an invalid start/goal are prerequisite failures, not evidence
+   of collision avoidance. Do not continue the comparison until the baseline works.
+
+4. Place a visible obstacle across that straight planned path, away from the
+   stationary robot, and confirm it appears in the map. Run these sequentially:
+
+   ```bash
+   python3 scripts/check_moveit_environment.py "${goal[@]}" --cartesian
+   python3 scripts/check_moveit_environment.py "${goal[@]}" --cartesian --ignore-environment-collisions
+   python3 scripts/check_moveit_environment.py "${goal[@]}" --cartesian
+   ```
+
+   Expected: blocked/incomplete, success, then blocked/incomplete again, with
+   a fresh map for each checked attempt. The identical target must pass with
+   bypass for this to demonstrate the occupancy toggle. The script changes the
+   shared map/ACM and leaves its final policy in place, so keep UI/RViz planning
+   idle. After a timeout or interruption, establish that server work finished
+   before another request. These commands never execute the blocked trajectory.
+   Normal planning can be compared by omitting `--cartesian`; it may route around
+   the obstacle instead of failing. Output reports status and point count, not a
+   saved or automatically animated trajectory.
+
+5. Remove the obstacle. After the planning checks pass, use a familiar small basic
+   movement in a clear workspace to test the UI checkbox. It must clear immediately
+   on submission, and the following unchecked command must use checking again.
+   Check it again manually after any rejected submission. Unrelated base, gripper,
+   wait, and saved-workflow commands must not consume the checkbox.
+
+6. Test absent-source handling separately afterward. Missing/stale input must
+   prevent checked planning; explicit bypass can still request an ordinary plan.
+   Contact workflow and endpoint accuracy checks follow these initial checks.
+
+These are pending hardware checks, not claims of demonstrated avoidance.
+
 ## Keep the existing architecture
 
 The command path stays:
@@ -110,8 +241,9 @@ implemented. Construct `MoveItArmPlanner` with
 `environment_collision_policy_enabled=True` to prepare the shared ACM before
 each request; `start` and `start_cartesian` accept
 `ignore_environment_collisions=True` for occupancy bypass. Existing construction
-keeps the direct planning path and original cancellation behavior. Command/UI
-wiring and sensor ingestion are not connected yet. Offline tests cover effective
+keeps the direct planning path and original cancellation behavior when disabled.
+Command/UI wiring and the initial camera source are now connected as described
+in Current pilot. Offline tests cover effective
 ACM rules, unchanged planning requests, response handling, and cancellation;
 actual avoidance of synthetic geometry through running MoveIt services remains
 an integration check requiring separate approval. Use one serialized client and
@@ -155,9 +287,17 @@ Keep defaults in the existing parameter system. No new policy enum, command queu
 
 **Done when:** the option reaches both planning modes and current contact/custom probe workflows remain usable.
 
+Implemented through semantic commands, ROS messages/adapters, recording,
+workflow factories, Behavior Tree expansion, and executor continuations. Offline
+tests cover policy preservation through corrections, retries, and backtracking.
+
 ### Step 3 Connect one sensor and local map refresh
 
-Configure the standard point-cloud occupancy updater in the existing MoveIt launch. Start with the lidar's **/velodyne/points** candidate topic. Branch before the mapping arm-box filter, which can also remove actual objects near the arm. Keep the mapping branch unchanged; use MoveIt's robot self-filter for planning.
+Configure the standard point-cloud occupancy updater in the existing MoveIt launch.
+The pilot uses the front-left depth cloud because the live lidar review found an
+acquisition-origin issue. When adding **/velodyne/points**, branch before the mapping
+arm-box filter, which can also remove actual objects near the arm. Keep the mapping
+branch unchanged; use MoveIt's robot self-filter for planning.
 
 Mapping need not run, but the lidar driver must supply usable data. Verify topic, frame, timestamps, QoS, and self-filter behavior. Do not start mapping just to obtain a planning cloud.
 
@@ -179,15 +319,19 @@ Do not change target tolerances or movement speeds to compensate for noisy occup
 
 ### Step 4 Add the one-shot basic movement UI option
 
-Add the checkbox to the basic arm controls and include its value in the submitted intent. Reserve it for that submission so a double-click cannot apply it twice. Consume it after confirmed command admission using existing request correlation.
-
-A known pre-admission rejection leaves the choice available. An uncertain submission must not automatically reuse it. An accepted command consumes it even if movement subsequently fails.
+Add the checkbox to the basic arm controls and include its value in the submitted
+intent. Clear it before sending so a second click cannot reuse it. A rejected or
+failed submission leaves it cleared; the user checks it again for another override.
 
 Unrelated base, gripper, wait-only, or saved-workflow commands do not consume it. Display whether the active command is checking environmental obstacles. Avoid confirmation dialogs or a separate global UI state machine.
 
 Changing the checkbox while a movement is active applies to a future command, not the current trajectory.
 
 **Done when:** exactly the intended next basic movement receives the override and later movements use their own settings.
+
+Implemented as a local checkbox read and clear at submission. Admission signals,
+pending override records, and revision tracking were removed. The command's
+captured boolean still travels through the normal application command path.
 
 ### Step 5 Add cameras where they improve coverage
 
@@ -236,7 +380,9 @@ The first useful version is Steps 1–4 with one useful sensor. Step 5 expands c
 
 Expected changes are limited to the existing planner/executor, command models and adapters, inspection factories, recording codec, basic UI, sensor configuration, and relevant tests. ROS fields stay in fault_detector_msgs; Python behavior stays in fault_detector_spot.
 
-Loading sensor parameters into spot_moveit_config may require a small launch/config edit. That sibling package is outside the current AGENTS.md edit boundary and needs scope authorization when implementing. No new package is proposed.
+Sensor parameters are supplied by a scoped parameter file around the existing
+MoveIt launch include in fault_detector_spot. No sibling package edits or new
+production package are needed.
 
 Leave out custom planning actions, private scene cloning, per-plan scene epochs, new C++ capabilities, floating-base model changes, alternate planners, automatic replanning, continuous execution monitoring, formal coverage certification, and GPU mapping. Revisit an individual item only if a concrete limitation requires it.
 

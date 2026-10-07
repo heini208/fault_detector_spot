@@ -2,11 +2,12 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetParametersFromFile
+from launch_ros.parameter_descriptions import ParameterValue
 
 from fault_detector_spot.shared.persistence.runtime_paths import (
     default_map_root,
@@ -49,6 +50,7 @@ def generate_launch_description():
     )
 
     use_sim_time = LaunchConfiguration("use_sim_time")
+    environment_collisions = LaunchConfiguration("environment_collision_avoidance")
     navigation_map_root = LaunchConfiguration("navigation_map_root")
     recording_root = LaunchConfiguration("recording_root")
     measurement_root = LaunchConfiguration("measurement_root")
@@ -63,6 +65,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            "environment_collision_avoidance",
+            default_value="false",
+            description="Enable experimental stationary camera-based arm obstacle planning",
+        ),
         DeclareLaunchArgument(
             "use_sim_time",
             default_value="false",
@@ -110,15 +117,17 @@ def generate_launch_description():
             default_value="4",
             description="micro-ROS Agent log verbosity (0-6)",
         ),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(
-                    moveit_pkg,
-                    "launch",
-                    "move_group.launch.py",
+        GroupAction([
+            SetParametersFromFile(
+                os.path.join(pkg, "config", "moveit_environment.yaml"),
+                condition=IfCondition(environment_collisions),
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(moveit_pkg, "launch", "move_group.launch.py")
                 )
-            )
-        ),
+            ),
+        ]),
         Node(
             package="micro_ros_agent",
             executable="micro_ros_agent",
@@ -180,6 +189,9 @@ def generate_launch_description():
                 base_motion_config,
                 {
                     "use_sim_time": use_sim_time,
+                    "arm.environment.enabled": ParameterValue(
+                        environment_collisions, value_type=bool,
+                    ),
                     "navigation.map_root": navigation_map_root,
                 },
             ],

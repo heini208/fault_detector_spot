@@ -9,6 +9,7 @@ from geometry_msgs.msg import PoseStamped
 from moveit_msgs.msg import AllowedCollisionEntry, AllowedCollisionMatrix, MoveItErrorCodes
 from moveit_msgs.srv import ApplyPlanningScene, GetCartesianPath, GetMotionPlan, GetPlanningScene
 from trajectory_msgs.msg import JointTrajectoryPoint
+from std_srvs.srv import Empty
 
 from fault_detector_spot.manipulation.moveit_arm_planner import (
     ARM_JOINT_NAMES, MoveItArmPlanner, MoveItPlanOutcome,
@@ -328,3 +329,132 @@ def test_missing_required_service_does_not_submit_work(rig, service):
     clients[service].available = False
     assert planner.start(target).outcome is MoveItPlanOutcome.SERVICE_UNAVAILABLE
     assert all(not client.requests for client in clients.values())
+
+
+@pytest.fixture
+def observed_rig():
+    node = Node()
+    clock = [0.0]
+    source = SimpleNamespace(fresh=False, problem="", cleared=False)
+    source.begin_refresh = lambda: source.problem
+    source.motion_problem = lambda: source.problem
+    source.map_cleared = lambda: setattr(source, "cleared", True)
+    source.has_fresh_cloud = lambda: source.fresh
+    source.destroy = lambda: None
+    planner = MoveItArmPlanner(
+        node, environment_collision_policy_enabled=True, environment_source=source,
+        monotonic_clock=lambda: clock[0],
+    )
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+    return planner, node.clients, target, clock, source
+
+
+def test_checked_sensor_plan_requires_clear_fresh_cloud_and_populated_scene(observed_rig):
+    planner, clients, target, _, source = observed_rig
+    planner.start(target)
+    assert clients[Empty].requests and not clients[GetPlanningScene].requests
+    clients[Empty].futures[-1].set_result(Empty.Response())
+    assert planner.poll().outcome is MoveItPlanOutcome.RUNNING
+    assert source.cleared and planner.active
+    planner.poll()
+    assert not clients[GetPlanningScene].requests
+    source.fresh = True
+    planner.poll()
+    response = GetPlanningScene.Response()
+    response.scene.world.octomap.header.frame_id = "body"
+    response.scene.world.octomap.octomap.data = [1]
+    clients[GetPlanningScene].futures[-1].set_result(response)
+    planner.poll()
+    assert clients[ApplyPlanningScene].requests and not clients[GetMotionPlan].requests
+    apply_scene(clients)
+    planner.poll()
+    clients[GetMotionPlan].futures[-1].set_result(plan_response("motion"))
+    assert planner.poll().outcome is MoveItPlanOutcome.SUCCESS
+
+
+def test_bypass_needs_neither_fresh_sensor_data_nor_clear_service(observed_rig):
+    planner, clients, target, _, source = observed_rig
+    source.problem = "base moving"
+    clients[Empty].available = False
+    assert planner.start(target, ignore_environment_collisions=True).outcome is MoveItPlanOutcome.RUNNING
+    assert not clients[Empty].requests
+    read_scene(clients)
+    planner.poll()
+    apply_scene(clients)
+    planner.poll()
+    assert clients[GetMotionPlan].requests
+
+
+@pytest.mark.parametrize("failure", ["timeout", "moving", "empty", "wrong_frame"])
+def test_environment_failure_does_not_submit_a_plan(observed_rig, failure):
+    planner, clients, target, clock, source = observed_rig
+    planner.start(target)
+    clients[Empty].futures[-1].set_result(Empty.Response())
+    planner.poll()
+    if failure == "timeout":
+        clock[0] = planner.response_timeout_sec + 1
+    elif failure == "moving":
+        source.problem = "base moved"
+    else:
+        source.fresh = True
+        planner.poll()
+        response = GetPlanningScene.Response()
+        if failure == "wrong_frame":
+            response.scene.world.octomap.header.frame_id = "odom"
+            response.scene.world.octomap.octomap.data = [1]
+        clients[GetPlanningScene].futures[-1].set_result(response)
+    assert planner.poll().outcome is not MoveItPlanOutcome.RUNNING
+    assert not clients[GetMotionPlan].requests
+    assert not clients[ApplyPlanningScene].requests
+    assert not planner.active
+
+
+def test_cancel_during_clear_retains_outstanding_request(observed_rig):
+    planner, clients, target, _, _ = observed_rig
+    planner.start(target)
+    future = clients[Empty].futures[-1]
+    planner.cancel()
+    assert not future.cancelled() and planner.active
+    assert planner.start(target).outcome is MoveItPlanOutcome.ERROR
+    future.set_result(Empty.Response())
+    assert not planner.active
+    assert not clients[GetPlanningScene].requests
+
+
+def test_first_command_waits_for_observation_subscription_warmup(observed_rig):
+    planner, clients, target, _, source = observed_rig
+    source.problem = "No odometry yet"
+    assert planner.start(target).outcome is MoveItPlanOutcome.RUNNING
+    assert planner.active and not clients[Empty].requests
+    source.problem = ""
+    assert planner.poll().outcome is MoveItPlanOutcome.RUNNING
+    assert clients[Empty].requests
+
+
+@pytest.mark.parametrize("failure", ["stale", "moved"])
+def test_invalidated_environment_discards_inflight_planning_result(observed_rig, failure):
+    planner, clients, target, _, source = observed_rig
+    planner.start(target)
+    clients[Empty].futures[-1].set_result(Empty.Response())
+    planner.poll()
+    source.fresh = True
+    planner.poll()
+    response = GetPlanningScene.Response()
+    response.scene.world.octomap.header.frame_id = "body"
+    response.scene.world.octomap.octomap.data = [1]
+    clients[GetPlanningScene].futures[-1].set_result(response)
+    planner.poll()
+    apply_scene(clients)
+    planner.poll()
+    future = clients[GetMotionPlan].futures[-1]
+    if failure == "stale":
+        source.fresh = False
+    else:
+        source.problem = "Base moved"
+    assert planner.poll().outcome is MoveItPlanOutcome.FAILURE
+    assert not future.cancelled() and planner.active
+    future.set_result(plan_response("motion"))
+    assert planner.poll().trajectory is None
+    assert not planner.active

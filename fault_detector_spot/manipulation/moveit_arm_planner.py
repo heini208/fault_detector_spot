@@ -21,6 +21,7 @@ from moveit_msgs.srv import (
     GetPlanningScene,
 )
 from shape_msgs.msg import SolidPrimitive
+from std_srvs.srv import Empty
 
 from fault_detector_spot.manipulation.moveit_collision_policy import (
     occupancy_collision_matrix,
@@ -102,6 +103,8 @@ class MoveItArmPlanner:
         environment_collision_policy_enabled: bool = False,
         get_scene_service_name: str = "/get_planning_scene",
         apply_scene_service_name: str = "/apply_planning_scene",
+        environment_source=None,
+        clear_octomap_service_name: str = "/clear_octomap",
     ):
         if node is None:
             raise ValueError("MoveItArmPlanner requires a ROS node")
@@ -110,6 +113,9 @@ class MoveItArmPlanner:
         if not isinstance(environment_collision_policy_enabled, bool):
             raise TypeError("Environmental collision policy enabled must be a boolean")
         self.environment_collision_policy_enabled = environment_collision_policy_enabled
+        if environment_source is not None and not environment_collision_policy_enabled:
+            raise ValueError("Environment observations require collision policy handling")
+        self._environment_source = environment_source
         self.get_scene_service_name = str(get_scene_service_name).strip()
         self.apply_scene_service_name = str(apply_scene_service_name).strip()
         if not self.get_scene_service_name or not self.apply_scene_service_name:
@@ -187,6 +193,7 @@ class MoveItArmPlanner:
         )
         self._get_scene_client = None
         self._apply_scene_client = None
+        self._clear_octomap_client = None
         if self.environment_collision_policy_enabled:
             self._get_scene_client = node.create_client(
                 GetPlanningScene, self.get_scene_service_name,
@@ -194,6 +201,10 @@ class MoveItArmPlanner:
             self._apply_scene_client = node.create_client(
                 ApplyPlanningScene, self.apply_scene_service_name,
             )
+            if environment_source is not None:
+                self._clear_octomap_client = node.create_client(
+                    Empty, clear_octomap_service_name,
+                )
         self._future = None
         self._started_at = None
         self._planning_mode = None
@@ -206,7 +217,8 @@ class MoveItArmPlanner:
     @property
     def active(self) -> bool:
         self._release_discarded_request()
-        return self._future is not None or bool(self._service_fault)
+        return (self._future is not None or self._pending_request is not None
+                or bool(self._service_fault))
 
     def start(
         self, target_hand: PoseStamped, *, ignore_environment_collisions=False,
@@ -238,6 +250,8 @@ class MoveItArmPlanner:
             clients = [client]
             if self.environment_collision_policy_enabled:
                 clients.extend([self._get_scene_client, self._apply_scene_client])
+            if self._environment_source is not None and not ignore_environment_collisions:
+                clients.append(self._clear_octomap_client)
             if any(not item.wait_for_service(timeout_sec=0.0) for item in clients):
                 return MoveItPlanUpdate(
                     MoveItPlanOutcome.SERVICE_UNAVAILABLE,
@@ -250,11 +264,21 @@ class MoveItArmPlanner:
             self._planning_mode = mode
             self._ignore_environment_collisions = ignore_environment_collisions
             if self.environment_collision_policy_enabled:
-                request = GetPlanningScene.Request()
-                request.components.components = PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
-                return self._begin_future(
-                    self._get_scene_client.call_async(request), "read_scene",
-                )
+                if self._environment_source is not None and not ignore_environment_collisions:
+                    problem = self._environment_source.begin_refresh()
+                    if problem:
+                        # The shared source may have been created for this first
+                        # command. Let its subscriptions receive data before failing.
+                        self._stage = "prepare_map"
+                        self._started_at = self._monotonic_clock()
+                        return MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, problem)
+                    try:
+                        return self._begin_future(
+                            self._clear_octomap_client.call_async(Empty.Request()), "clear_map",
+                        )
+                    except Exception as exception:
+                        return self._request_error(exception)
+                return self._read_scene()
             return self._submit_plan()
         except Exception as exception:
             return self._request_error(exception, uncertain=False)
@@ -262,6 +286,13 @@ class MoveItArmPlanner:
     def _submit_plan(self):
         client = self._cartesian_client if self._planning_mode == "cartesian" else self._client
         return self._begin_future(client.call_async(self._pending_request), "plan")
+
+    def _read_scene(self):
+        request = GetPlanningScene.Request()
+        request.components.components = PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
+        if self._environment_source is not None and not self._ignore_environment_collisions:
+            request.components.components |= PlanningSceneComponents.OCTOMAP
+        return self._begin_future(self._get_scene_client.call_async(request), "read_scene")
 
     def _begin_future(self, future, stage):
         if future is None:
@@ -272,14 +303,26 @@ class MoveItArmPlanner:
         return MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, self._waiting_detail())
 
     def _waiting_detail(self):
+        if self._stage == "prepare_map":
+            return "Waiting for fresh stationary base observations"
+        if self._stage == "clear_map":
+            return "Clearing the previous local obstacle map"
+        if self._stage == "observe":
+            return "Waiting for fresh filtered depth and an occupied local map"
         if self._stage == "read_scene":
             return "Reading MoveIt collision rules"
         if self._stage == "apply_scene":
             return "Applying MoveIt environmental collision policy"
-        return (
+        detail = (
             "Waiting for MoveIt Cartesian path"
             if self._planning_mode == "cartesian" else "Waiting for MoveIt arm plan"
         )
+        if self.environment_collision_policy_enabled:
+            detail += (
+                " (sensor obstacles ignored)" if self._ignore_environment_collisions
+                else " (sensor obstacles checked)"
+            )
+        return detail
 
     def poll(self) -> MoveItPlanUpdate:
         if self._discard_result:
@@ -288,6 +331,49 @@ class MoveItArmPlanner:
                 MoveItPlanOutcome.ERROR,
                 "MoveIt request was cancelled or timed out; its result is discarded",
             )
+        if self._stage == "prepare_map":
+            problem = self._environment_source.begin_refresh()
+            if self._monotonic_clock() - self._started_at >= self.response_timeout_sec:
+                self.cancel()
+                return MoveItPlanUpdate(
+                    MoveItPlanOutcome.TIMEOUT, problem or "Environment preparation timed out",
+                )
+            if problem:
+                return MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, problem)
+            try:
+                return self._begin_future(
+                    self._clear_octomap_client.call_async(Empty.Request()), "clear_map",
+                )
+            except Exception as exception:
+                return self._request_error(exception)
+        checked_environment = (
+            self._environment_source is not None and self._pending_request is not None
+            and not self._ignore_environment_collisions
+        )
+        if checked_environment:
+            problem = self._environment_source.motion_problem()
+            if problem:
+                self.cancel()
+                return MoveItPlanUpdate(MoveItPlanOutcome.FAILURE, problem)
+        if self._stage == "observe":
+            if self._monotonic_clock() - self._started_at >= self.response_timeout_sec:
+                self.cancel()
+                return MoveItPlanUpdate(
+                    MoveItPlanOutcome.TIMEOUT,
+                    "No fresh usable environment map; checking remains unavailable",
+                )
+            if self._environment_source.has_fresh_cloud():
+                try:
+                    return self._read_scene()
+                except Exception as exception:
+                    return self._request_error(exception, uncertain=False)
+            return MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, self._waiting_detail())
+        if checked_environment and self._stage in ("apply_scene", "plan"):
+            if not self._environment_source.has_fresh_cloud():
+                self.cancel()
+                return MoveItPlanUpdate(
+                    MoveItPlanOutcome.FAILURE, "Environment observations became stale during planning",
+                )
         future = self._future
         if future is None:
             return MoveItPlanUpdate(
@@ -311,7 +397,27 @@ class MoveItArmPlanner:
         except Exception as exception:
             return self._request_error(exception, uncertain=self._stage != "read_scene")
 
+        if self._stage == "clear_map":
+            self._environment_source.map_cleared()
+            self._future = None
+            self._stage = "observe"
+            self._started_at = self._monotonic_clock()
+            return MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, self._waiting_detail())
+
         if self._stage == "read_scene":
+            if checked_environment and not response.scene.world.octomap.octomap.data:
+                # A filtered cloud alone cannot establish that move_group has
+                # a populated scene. Refuse an empty tree, without fallback.
+                self._reset()
+                return MoveItPlanUpdate(
+                    MoveItPlanOutcome.SERVICE_UNAVAILABLE,
+                    "MoveIt has no occupied environment map yet; retry after depth updates",
+                )
+            if checked_environment and response.scene.world.octomap.header.frame_id != self.planning_frame:
+                self._reset()
+                return MoveItPlanUpdate(
+                    MoveItPlanOutcome.ERROR, "Local obstacle map is not in the arm planning frame",
+                )
             try:
                 request = ApplyPlanningScene.Request()
                 request.scene.is_diff = True
@@ -376,6 +482,8 @@ class MoveItArmPlanner:
             self._discard_result = True
             self._pending_request = None
             self._release_discarded_request()
+        else:
+            self._reset()
 
     def _release_discarded_request(self):
         if self._discard_result and self._future is not None and self._future.done():
@@ -392,13 +500,17 @@ class MoveItArmPlanner:
         clients = (
             self._client, self._cartesian_client,
             self._get_scene_client, self._apply_scene_client,
+            self._clear_octomap_client,
         )
         self._client = self._cartesian_client = None
         self._get_scene_client = self._apply_scene_client = None
+        self._clear_octomap_client = None
         self._service_fault = "MoveIt planner has been destroyed"
         for client in clients:
             if client is not None:
                 self.node.destroy_client(client)
+        if self._environment_source is not None:
+            self._environment_source.destroy()
 
     def _target_error(self, target_hand: PoseStamped):
         busy = self.active

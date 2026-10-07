@@ -68,13 +68,14 @@ class ApplicationClient(QObject):
         goal.context_id = context_id.strip()
         goal.intent = deepcopy(intent)
         local_id = uuid4().hex
-        future = self._operation_client.send_goal_async(
-            goal,
-            feedback_callback=partial(
-                self._receive_feedback,
-                local_id,
-            ),
-        )
+        try:
+            future = self._operation_client.send_goal_async(
+                goal,
+                feedback_callback=partial(self._receive_feedback, local_id),
+            )
+        except Exception as exception:
+            self.request_rejected.emit(str(exception))
+            return None
         future.add_done_callback(
             partial(self._receive_goal_response, local_id)
         )
@@ -118,7 +119,12 @@ class ApplicationClient(QObject):
             self.request_rejected.emit("Operational request was rejected")
             return
         self._goal_handles[local_id] = goal_handle
-        result_future = goal_handle.get_result_async()
+        try:
+            result_future = goal_handle.get_result_async()
+        except Exception as exception:
+            self._goal_handles.pop(local_id, None)
+            self.request_rejected.emit(str(exception))
+            return
         result_future.add_done_callback(
             partial(self._receive_result, local_id)
         )

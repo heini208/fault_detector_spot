@@ -50,12 +50,14 @@ def test_invalid_execution_options_are_rejected(updates):
         replace(command(), **updates)
 
 
-def test_surface_plan_preserves_context_and_returns_via_saved_alignment():
+@pytest.mark.parametrize("ignore_environment_collisions", [False, True])
+def test_surface_plan_preserves_context_and_returns_via_saved_alignment(ignore_environment_collisions):
     tag = TagElement()
     tag.id, tag.pose.header.frame_id, tag.pose.pose.orientation.w = 2, "body", 1.0
     source = Mock(reference_tag=Mock(return_value=tag))
     attachment = sensor()
-    plan = probe_point_plan(command(motion_sensor_id=attachment.motion_sensor_id),
+    plan = probe_point_plan(command(motion_sensor_id=attachment.motion_sensor_id,
+                                    ignore_environment_collisions=ignore_environment_collisions),
                             Mock(load=Mock(return_value=inspection_object())), source,
                             Mock(require_motion_attachment=Mock(return_value=attachment)),
                             ProbeSetupMotionCommandFactory())
@@ -63,11 +65,17 @@ def test_surface_plan_preserves_context_and_returns_via_saved_alignment():
     assert plan[2].command_id is CommandID.MOVE_CLOSE_TO_SURFACE
     assert plan[2].target_surface_distance_m == 0.03
     assert all(step.inspection == command().inspection for step in plan)
+    assert [step.ignore_environment_collisions for step in plan] == [
+        ignore_environment_collisions, ignore_environment_collisions, True,
+    ]
     source.reference_tag.assert_called_once_with(2)
 
 
 def step(name):
-    return SimpleNamespace(name=name, command_id=CommandID.MOVE_ARM_TO_TAG)
+    return SimpleNamespace(
+        name=name, command_id=CommandID.MOVE_ARM_TO_TAG,
+        ignore_environment_collisions=False,
+    )
 
 
 def response(state="complete", stopped=True):
@@ -97,7 +105,7 @@ def action(retries=0):
         return ArmMovementUpdate(outcome, outcome.value)
 
     value.executor.tag_probe.side_effect = lambda target, **kw: move("move", target.name)
-    value.executor.restore_probe_checkpoint.side_effect = lambda target: move("restore", target)
+    value.executor.restore_probe_checkpoint.side_effect = lambda target, **kwargs: move("restore", target)
     value.executor.capture_probe_checkpoint.side_effect = lambda sensor: value.position
     value.executor.confirm_stop.side_effect = lambda: (
         value.events.append(("stop", None)) or ArmMovementUpdate(Outcome.SUCCESS, "stopped"))
@@ -337,6 +345,7 @@ def test_custom_plan_preserves_forward_waypoint_limits_for_checkpoint_execution(
     assert [p.position.x for p in plan[2].pre_approach_offsets] == [.05, .02]
     assert plan[2].pre_approach_tolerances_m == (.002, .001)
     assert plan[2].pre_approach_speed_scales == (.2, .1)
+    assert [step.ignore_environment_collisions for step in plan] == [False, False, True]
 
 
 def test_parent_cancellation_stops_recording_as_cancelled():
@@ -391,7 +400,10 @@ def test_recording_context_resolves_selected_routine_tag_without_global_selectio
 def test_surface_measurement_uses_surface_executor_and_records_only_after_success():
     from fault_detector_spot.manipulation.move_close_to_surface_execution import MoveCloseToSurfaceOutcome
     value = action()
-    surface_step = SimpleNamespace(command_id=CommandID.MOVE_CLOSE_TO_SURFACE)
+    surface_step = SimpleNamespace(
+        command_id=CommandID.MOVE_CLOSE_TO_SURFACE,
+        ignore_environment_collisions=True,
+    )
     value._steps[2] = [surface_step]
     value._surface.start.return_value = MoveCloseToSurfaceOutcome.RUNNING
     value._surface.poll.return_value = MoveCloseToSurfaceOutcome.SUCCESS
@@ -637,3 +649,24 @@ def test_collision_at_fourth_waypoint_without_remaining_retries_backtracks_taken
     assert value._attempt == used
     value._rpc.assert_not_called()
     assert "returned to safe approach" in value._fail.call_args.args[0]
+
+
+def test_checkpoint_backtracking_preserves_each_forward_collision_policy():
+    value = action()
+    for motion in value._steps[2]:
+        motion.ignore_environment_collisions = True
+    assert run(value) is Status.SUCCESS
+    returned = value.executor.restore_probe_checkpoint.call_args_list
+    assert [call.kwargs["ignore_environment_collisions"] for call in returned] == [
+        True, True, False, False, False,
+    ]
+
+
+def test_failed_contact_path_recovery_keeps_bypass_for_same_step_retry():
+    value = action(retries=1)
+    value._steps[2][0].ignore_environment_collisions = True
+    value.failures[("move", "m")] = [Outcome.PLANNING_FAILED]
+    assert run(value) is Status.SUCCESS
+    recovery = value.executor.restore_probe_checkpoint.call_args_list[0]
+    assert recovery.args == ("aligned",)
+    assert recovery.kwargs["ignore_environment_collisions"] is True

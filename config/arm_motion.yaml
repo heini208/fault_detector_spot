@@ -15,6 +15,18 @@
     arm.motion.arm_sh1_safe_min_rad: -3.106686
     arm.motion.moveit_result_timeout_margin_sec: 15.0
 
+    # Optional local obstacle planning. Normally set by the launch argument.
+    arm.environment.enabled: false
+    arm.environment.filtered_cloud_topic: /moveit_environment/filtered_cloud
+    arm.environment.max_cloud_age_sec: 1.5
+    arm.environment.max_state_age_sec: 0.5
+    # Provisional stationary-map limits; validate with normal body sway.
+    arm.environment.stationary_linear_mps: 0.03
+    arm.environment.stationary_angular_rad_s: 0.10
+    arm.environment.settle_time_sec: 0.3
+    arm.environment.max_body_translation_m: 0.03
+    arm.environment.max_body_rotation_rad: 0.10
+
     # Probe setup safe-approach speed
     arm.safe_approach_linear_speed_mps: 0.20
     arm.safe_approach_angular_speed_rad_s: 1.00

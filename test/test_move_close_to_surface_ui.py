@@ -17,5 +17,5 @@ def test_manipulation_ui_submits_distance_and_tolerance():
     assert "surface_tolerance_input.value()" in handler
     assert "target_surface_distance_m" in handler
     assert "surface_tolerance_m" in handler
-    assert "execute_operation(intent)" in handler
+    assert "execute_basic_operation(intent)" in handler
     assert "show_setup_unavailable" not in handler

@@ -38,6 +38,7 @@ def pose(x=0.0, y=0.0, z=0.0):
 
 class FakeMoveItPlanner:
     planning_frame = "body"
+    environment_collision_policy_enabled = False
 
     def __init__(self):
         self.normal_targets = []
@@ -99,6 +100,7 @@ def test_executor_keeps_normal_moveit_for_other_probe_paths():
 
 def test_cartesian_selection_is_consumed_by_primary_motion_only():
     executor = object.__new__(ArmMovementExecutor)
+    executor._ignore_environment_collisions = False
     executor._next_probe_cartesian_path = True
     executor._probe_continuation = object()
     captured = []
@@ -207,4 +209,5 @@ def test_close_surface_requests_guarded_cartesian_execution(monkeypatch):
     execution._prepare_next_approach_step()
 
     assert captured["cartesian_path"] is True
+    assert captured["ignore_environment_collisions"] is True
     assert execution._requested_step_m == pytest.approx(0.12)

@@ -21,6 +21,7 @@ class OrientToTagBehaviour(ArmMovementBehaviour):
         return self.executor.orient_to_tag(
             command.tag_id,
             command.motion_sensor_id,
+            ignore_environment_collisions=command.ignore_environment_collisions,
         )
 
 

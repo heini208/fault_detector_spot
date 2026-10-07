@@ -40,6 +40,7 @@ def planner_shell():
     planner._discard_result = False
     planner._service_fault = ""
     planner.environment_collision_policy_enabled = False
+    planner._environment_source = None
     planner._logger = SimpleNamespace(info=lambda *_args, **_kwargs: None)
     return planner
 
