@@ -361,6 +361,46 @@ odometry reset needs separate validation before relying on that case.
 
 See Section **10.5 Implementation Overview** and **10.6 Map lifecycle and process control** in [`System_Design.md`](System_Design.md) for the full flow.
 
+The standalone **lidar frame adapter** prepares a corrected sensor-origin cloud
+for the next MoveIt perception step. It is not started by the application or
+mapping launches. It converts `/velodyne/points` to `/velodyne/points_sensor` in
+the physical `lidar_sensor` frame, preserving each acquisition timestamp. It
+uses TF at that timestamp and the standard `tf2_sensor_msgs` transformation;
+it does not estimate a mount from the cloud or change the Spot driver.
+
+When hardware is available, first verify
+[`config/lidar_mount_calibration.yaml`](config/lidar_mount_calibration.yaml)
+against the current mount. Those values were captured previously from this
+robot's SDK and have only been checked offline in this implementation. Then the
+standalone launch is:
+
+```bash
+ros2 launch fault_detector_spot lidar_frame_adapter_launch.py
+```
+
+This starts only the adapter and the standard static-TF component. If a verified
+physical lidar TF already exists, set `publish_mount_tf:=false` and
+`sensor_frame:=` its actual frame name. `calibration_file`, `input_topic`,
+`output_topic`, and `use_sim_time` are also launch arguments. Run only one
+publisher for the chosen physical sensor frame.
+
+The adapter uses queues of depth one, limits conversion attempts to 10 Hz and
+100,000 points, and drops clouds older than 0.5 s or more than 50 ms in the
+future. Missing timestamped TF drops that scan immediately; there is no wait,
+latest-transform substitution, or stored scan to replay later. Malformed clouds
+are rejected and warnings are throttled. Backward ROS clock jumps and clock-source
+changes clear dynamic TF history.
+Only the current driver's unorganized, packed little-endian XYZ32 format is
+supported. The age, point-count and rate limits are read-only startup ROS
+parameters on the adapter.
+
+After physical alignment and moved-obstacle clearing have been verified, mapping
+can select this output through its existing
+`raw_lidar_topic:=/velodyne/points_sensor` argument. Its arm-exclusion filter stays
+downstream. MoveIt can consume the corrected source separately without that
+mapping filter. Neither consumer is switched by this change, and the native
+MoveIt updater is still a separate implementation step.
+
 ### 4.4 Navigation (Nav2)
 
 Nav2 is brought up isolated with [`nav2_spot_launch.py`](nav2_spot_launch.py). This:

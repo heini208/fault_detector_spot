@@ -41,6 +41,7 @@ setup(
             'sensor_head_connection = '
             'fault_detector_spot.sensing.sensor_head_connection_node:main',
             'lidar_self_filter = fault_detector_spot.mapping.ros.lidar_self_filter:main',
+            'lidar_frame_adapter = fault_detector_spot.sensing.lidar_frame_adapter:main',
         ],
     },
 )

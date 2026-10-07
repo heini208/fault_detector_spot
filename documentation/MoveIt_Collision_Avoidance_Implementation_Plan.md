@@ -58,15 +58,40 @@ No new native sensor updater is configured in this revision. Enabling the settin
 checks whatever occupancy already exists in MoveIt; an empty scene does not
 provide environmental avoidance.
 
-## 3. Validate one sensor source — next
+## 3. Physical lidar frame adapter — offline implementation complete
 
-Start with one sensor and correct its geometry before combining inputs. For the
+`sensing/lidar_frame_adapter.py` reuses Humble's vectorized
+`tf2_sensor_msgs.do_transform_cloud`. Its standalone launch publishes
+`/velodyne/points_sensor`, expressed in the physical `lidar_sensor` frame, using
+the original acquisition timestamp and its corresponding TF. It adds no mapping
+or arm-executor dependency. Existing application and mapping launches are
+unchanged; native MoveIt sensor consumption remains Step 4.
+
+The launch can publish the previously captured SDK mount calibration through
+the standard static-TF component, or reuse an existing verified physical frame
+with `publish_mount_tf:=false`. The calibration is in
+`config/lidar_mount_calibration.yaml`; verify it against the actual mount before
+using it. No hardware or live TF validation was performed for this change.
+
+Processing is bounded by depth-one queues, a 10 Hz attempt limit, a 100,000-point
+limit and a 0.5 s age limit checked both before and after conversion. Clouds more
+than 50 ms in the future, missing timestamps, unsupported layouts and invalid
+transforms are rejected. TF lookup never waits or substitutes the latest pose.
+Backward ROS clock jumps and clock-source changes clear dynamic TF history. The
+separate adapter process owns no robot commands, planning requests or guard timers.
+
+Offline tests cover real library transforms, moving-body TF, unchanged source
+data and acquisition time, malformed/stale input, missing TF and recovery, rate
+and size limits, QoS, clock resets and launch/calibration wiring. Physical mount
+alignment, actual sensor latency and obstacle clearing remain to be checked.
+
+With hardware available, validate one sensor before combining inputs. For the
 rear lidar, verify the declared frame, physical optical/ray origin, point
 coordinates, timestamps, and TF chain. Transform both coordinates and frame
 consistently; changing only the frame name is insufficient. Reuse calibration
-and standard ROS point-cloud transforms. Investigate the existing driver output
-first; an application-side adapter may avoid a driver change if calibration and
-the necessary transforms are available.
+and standard ROS point-cloud transforms. The adapter uses the existing driver
+output and needs valid mount calibration and timestamped robot TF; it cannot
+infer the physical sensor origin from the point coordinates alone.
 
 Previous live diagnosis found a filtered cloud frame coincident with `odom`,
 placing its implied ray origin about 5.8 m from the robot in that capture. Correct
