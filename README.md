@@ -256,9 +256,9 @@ You are expected to provide simulated topics for the UI and BT (e.g. via Gazebo 
 
 ### 4.3 Mapping and Localization (RTAB‑Map)
 
-RTAB‑Map is launched isolated via [`rtab_mapping_launch.py`](rtab_mapping_launch.py). This launch file:
+RTAB‑Map is launched isolated via [`lidar_rtab_mapping_launch.py`](launch/lidar_rtab_mapping_launch.py). This launch file:
 
-- Synchronizes multiple RGB‑D streams using `rtabmap_sync/rgbd_sync`
+- Uses the lidar cloud after the existing arm exclusion filter
 - Starts `rtabmap_slam/rtabmap` in:
 
   - **mapping mode** (extend map) or
@@ -269,11 +269,24 @@ RTAB‑Map is launched isolated via [`rtab_mapping_launch.py`](rtab_mapping_laun
 Example:
 
 ```bash
-ros2 launch fault_detector_spot rtab_mapping_launch.py \
+ros2 launch fault_detector_spot lidar_rtab_mapping_launch.py \
   db_path:=/path/to/your_map.db \
   delete_db:=false \
   extend_map:=true
 ```
+
+The lidar configuration preserves measured odometry height and tilt with
+`RGBD/ForceOdom3DoF=false`, while keeping planar registration through
+`Reg/Force3DoF=true`. Its existing height limits apply relative to the
+gravity-aligned robot frame (`Grid/MapFrameProjection=false`), so a nonzero
+odometry altitude does not move obstacles below the robot or filter them out.
+
+After updating this launch, rebuild `fault_detector_spot` and restart mapping
+through the usual controls to load the settings. **Create a fresh map under a new
+name or unused database path** for validation. These settings do not repair poses
+or grids already stored with height removed; extending an old map would mix the
+two conventions. Keep existing maps intact. Saved-map localization across an
+odometry reset needs separate validation before relying on that case.
 
 See Section **10.5 Implementation Overview** and **10.6 Map lifecycle and process control** in [`System_Design.md`](System_Design.md) for the full flow.
 
