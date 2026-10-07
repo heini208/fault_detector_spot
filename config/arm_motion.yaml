@@ -18,6 +18,8 @@
     # Optional local obstacle planning. Normally set by the launch argument.
     arm.environment.enabled: false
     arm.environment.filtered_cloud_topic: /moveit_environment/filtered_cloud
+    arm.environment.lidar_enabled: false
+    arm.environment.lidar_filtered_cloud_topic: /moveit_environment/lidar/filtered_cloud
     arm.environment.max_cloud_age_sec: 1.5
     arm.environment.max_state_age_sec: 0.5
     # Provisional stationary-map limits; validate with normal body sway.

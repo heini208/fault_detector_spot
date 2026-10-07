@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2, PointField
 
@@ -10,14 +11,24 @@ from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionPara
 from fault_detector_spot.manipulation.moveit_environment_source import MoveItEnvironmentSource
 
 
-def source_rig():
+def source_rig(*, lidar=False, lidar_topic="/moveit_environment/lidar/filtered_cloud"):
     clock = [10.0]
+    parameters = {}
+    overrides = {
+        "arm.environment.lidar_enabled": lidar,
+        "arm.environment.lidar_filtered_cloud_topic": lidar_topic,
+    }
+    subscriptions = {}
     node = SimpleNamespace(
         get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=int(clock[0] * 1e9))),
-        create_subscription=lambda *args: object(),
+        has_parameter=lambda name: name in parameters,
+        declare_parameter=lambda name, default: parameters.setdefault(name, overrides.get(name, default)),
+        get_parameter=lambda name: SimpleNamespace(value=parameters[name]),
+        create_subscription=lambda message_type, topic, callback, qos: subscriptions.setdefault(topic, callback),
         destroy_subscription=lambda subscription: None,
+        subscriptions=subscriptions,
     )
-    source = MoveItEnvironmentSource(node, ArmMotionParameters(), lambda: clock[0])
+    source = MoveItEnvironmentSource(node, ArmMotionParameters(node), lambda: clock[0])
     return source, clock
 
 
@@ -81,3 +92,60 @@ def test_motion_and_missing_or_stale_odometry_invalidate_the_observation_interva
     assert not source.begin_refresh()
     clock[0] = 11.1
     assert source.motion_problem()
+
+
+def test_lidar_selection_requires_both_updaters_after_the_same_clear():
+    source, clock = source_rig(lidar=True)
+    receive_camera = source.node.subscriptions["/moveit_environment/filtered_cloud"]
+    receive_lidar = source.node.subscriptions["/moveit_environment/lidar/filtered_cloud"]
+    source._receive_odometry(odometry(10))
+    assert not source.begin_refresh()
+    receive_lidar(cloud(10))
+    clock[0] = 10.2
+    source.map_cleared()
+    receive_camera(cloud(10.2))
+    assert not source.has_fresh_cloud()
+    receive_lidar(cloud(10.1))  # delayed pre-clear acquisition cannot satisfy lidar
+    assert not source.has_fresh_cloud()
+    receive_lidar(cloud(10.2, float("nan")))
+    assert not source.has_fresh_cloud()
+    receive_lidar(cloud(10.2))
+    assert source.has_fresh_cloud()
+    clock[0] = 10.3
+    source.map_cleared()
+    receive_lidar(cloud(10.3))
+    assert not source.has_fresh_cloud()  # camera must also pass the new fence
+    receive_camera(cloud(10.3))
+    assert source.has_fresh_cloud()
+
+
+@pytest.mark.parametrize("fresh_topic", [
+    "/moveit_environment/filtered_cloud",
+    "/moveit_environment/lidar/filtered_cloud",
+])
+def test_either_selected_sensor_becoming_stale_invalidates_readiness(fresh_topic):
+    source, clock = source_rig(lidar=True)
+    source._receive_odometry(odometry(10))
+    assert not source.begin_refresh()
+    source.map_cleared()
+    source.node.subscriptions["/moveit_environment/filtered_cloud"](cloud(10))
+    source.node.subscriptions["/moveit_environment/lidar/filtered_cloud"](cloud(10))
+    assert source.has_fresh_cloud()
+    clock[0] = 12
+    source.node.subscriptions[fresh_topic](cloud(12))
+    assert not source.has_fresh_cloud()
+
+
+def test_disabled_lidar_does_not_subscribe_or_block_camera_readiness():
+    source, _ = source_rig()
+    assert "/moveit_environment/lidar/filtered_cloud" not in source.node.subscriptions
+    source._receive_odometry(odometry(10))
+    assert not source.begin_refresh()
+    source.map_cleared()
+    source.node.subscriptions["/moveit_environment/filtered_cloud"](cloud(10))
+    assert source.has_fresh_cloud()
+
+
+def test_selected_sensors_cannot_share_a_filtered_topic():
+    with pytest.raises(ValueError, match="distinct filtered cloud topics"):
+        source_rig(lidar=True, lidar_topic="/moveit_environment/filtered_cloud")

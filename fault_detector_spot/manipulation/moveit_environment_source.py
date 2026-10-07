@@ -1,5 +1,6 @@
-"""Observe fresh filtered depth and stationary base state for local planning."""
+"""Observe fresh filtered sensors and stationary base state for local planning."""
 
+from functools import partial
 import math
 from threading import RLock
 import time
@@ -13,7 +14,7 @@ from fault_detector_spot.shared.runtime_source import RuntimeSource
 
 
 class MoveItEnvironmentSource(RuntimeSource):
-    """Observe one updater's output; never change the scene or move the robot."""
+    """Observe every selected updater; never change the scene or move the robot."""
 
     def __init__(self, node, config, monotonic_clock=time.monotonic):
         self.node = node
@@ -33,8 +34,12 @@ class MoveItEnvironmentSource(RuntimeSource):
                 raise ValueError("Environment observation limits must be positive")
         self._odometry = None
         self._state_received = None
-        self._cloud_stamp = None
-        self._cloud_received = None
+        cloud_topics = {"camera": config.get("environment.filtered_cloud_topic")}
+        if config.get("environment.lidar_enabled"):
+            cloud_topics["lidar"] = config.get("environment.lidar_filtered_cloud_topic")
+        if len(set(cloud_topics.values())) != len(cloud_topics):
+            raise ValueError("Environmental sensors require distinct filtered cloud topics")
+        self._cloud_observations = dict.fromkeys(cloud_topics)
         self._last_motion = -math.inf
         self._began_at = None
         self._cloud_after_ros = None
@@ -44,11 +49,14 @@ class MoveItEnvironmentSource(RuntimeSource):
                 Odometry, "/odometry", self._receive_odometry,
                 qos_profile_sensor_data,
             ),
-            node.create_subscription(
-                PointCloud2, config.get("environment.filtered_cloud_topic"),
-                self._receive_cloud, qos_profile_sensor_data,
-            ),
         ]
+        self._subscriptions.extend(
+            node.create_subscription(
+                PointCloud2, topic, partial(self._receive_cloud, source=source),
+                qos_profile_sensor_data,
+            )
+            for source, topic in cloud_topics.items()
+        )
 
     def _ros_now(self):
         return self.node.get_clock().now().nanoseconds
@@ -69,7 +77,7 @@ class MoveItEnvironmentSource(RuntimeSource):
                     or math.hypot(*angular) > self._angular_limit):
                 self._last_motion = self._state_received
 
-    def _receive_cloud(self, message):
+    def _receive_cloud(self, message, *, source="camera"):
         # The updater publishes only points outside its robot mask. A nonempty
         # message alone is insufficient: organized clouds may contain only NaNs.
         fields = {field.name: field for field in message.fields}
@@ -98,8 +106,7 @@ class MoveItEnvironmentSource(RuntimeSource):
         except (TypeError, ValueError):
             return
         with self._lock:
-            self._cloud_stamp = self._stamp(message)
-            self._cloud_received = self._clock()
+            self._cloud_observations[source] = (self._stamp(message), self._clock())
 
     def begin_refresh(self):
         """Establish an observation interval for one stationary planning request."""
@@ -146,12 +153,17 @@ class MoveItEnvironmentSource(RuntimeSource):
 
     def has_fresh_cloud(self):
         with self._lock:
+            now_ros, now_received = self._ros_now(), self._clock()
             return (
-                self._cloud_after_ros is not None and self._cloud_stamp is not None
-                and self._cloud_stamp >= self._cloud_after_ros
-                and self._cloud_received >= self._began_at
-                and 0 <= (self._ros_now() - self._cloud_stamp) / 1e9 <= self._max_cloud_age
-                and self._clock() - self._cloud_received <= self._max_cloud_age
+                self._cloud_after_ros is not None
+                and all(
+                    observation is not None
+                    and observation[0] >= self._cloud_after_ros
+                    and observation[1] >= self._began_at
+                    and 0 <= (now_ros - observation[0]) / 1e9 <= self._max_cloud_age
+                    and now_received - observation[1] <= self._max_cloud_age
+                    for observation in self._cloud_observations.values()
+                )
             )
 
     def destroy(self):

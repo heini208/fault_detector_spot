@@ -1,4 +1,4 @@
-# Initial single-camera pilot. Lidar needs a calibrated physical ray origin.
+# The launch argument adds lidar when its cloud has a physical sensor origin.
 /move_group:
   ros__parameters:
     octomap_frame: body
@@ -13,3 +13,12 @@
       padding_scale: 1.0
       max_update_rate: 3.0
       filtered_cloud_topic: /moveit_environment/filtered_cloud
+    lidar:
+      sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+      point_cloud_topic: /moveit_environment/lidar/points
+      max_range: 2.0
+      point_subsample: 1
+      padding_offset: 0.005
+      padding_scale: 1.0
+      max_update_rate: 3.0
+      filtered_cloud_topic: /moveit_environment/lidar/filtered_cloud

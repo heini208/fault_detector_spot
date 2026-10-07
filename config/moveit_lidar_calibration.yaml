@@ -1,0 +1,13 @@
+# Captured from this robot's SDK body-to-sensor calibration.
+# Refresh after changing the lidar mount or using another robot.
+/moveit_lidar_mount:
+  ros__parameters:
+    frame_id: body
+    child_frame_id: moveit_lidar_sensor
+    translation.x: -0.18778000000000006
+    translation.y: -4.440892098500626e-16
+    translation.z: 0.14213000000000076
+    rotation.x: -1.5699247457590104e-16
+    rotation.y: 3.0964814046186007e-16
+    rotation.z: 0.30901699437494723
+    rotation.w: 0.9510565162951541

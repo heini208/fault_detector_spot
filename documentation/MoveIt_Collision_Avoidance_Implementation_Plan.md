@@ -8,11 +8,12 @@ This simplified plan supersedes the earlier custom-capability, private-snapshot,
 
 ## Current pilot
 
-Steps 1, 2, and 4 are implemented, together with a single-camera version of
-Step 3. The feature defaults to disabled. The initial source is
-`/depth_registered/frontleft/points`; lidar and additional cameras are deferred
-until their origins and useful coverage are verified. No change to the sibling
-`spot_moveit_config` package is required.
+Steps 1, 2, and 4 are implemented, together with the sensor integration in
+Step 3. The feature defaults to disabled. The default source remains
+`/depth_registered/frontleft/points`; `environment_collision_lidar:=true`
+also selects the rear lidar. Additional cameras remain deferred.
+The lidar integration uses existing ROS components and saved SDK calibration;
+it requires no change to the Spot driver or sibling `spot_moveit_config` package.
 
 Initial pilot validation: 444 relevant offline tests passed across 25 modules.
 After simplifying checkbox consumption, 81 focused UI tests passed and the
@@ -20,12 +21,16 @@ copied application overlay was rebuilt. Both project
 packages build in the isolated overlay; launch parameters normalize successfully,
 and the matching perception plugin loads. No live updater, application restart,
 or robot motion was started during implementation. Hardware validation remains
-pending.
+pending. The subsequent lidar change passed 78 focused offline tests, including
+SDK calibration extraction, actual Humble component parameter loading, selected
+sensor freshness, and collision-policy/planner checks. Read-only SDK inspection
+verified the physical mount transform on the attached robot. The new lidar
+components have not been started or validated live.
 
 Launch-time `environment_collision_avoidance:=true` loads the standard occupancy
 updater into MoveIt and enables the planner's observation gate. Checked requests
 wait for fresh stationary odometry, clear the map, require a usable filtered
-cloud acquired after clear acknowledgment, and confirm a nonempty map in `body`
+cloud from each selected updater acquired after clear acknowledgment, and confirm a nonempty map in `body`
 before applying collision policy and planning. Every checked segment refreshes
 the map; this first pilot has no reuse cache. Movement or stale observations
 during planning discard the result. The base must also remain stationary during
@@ -136,6 +141,62 @@ For the next hardware session, load the environment above in each terminal:
    Contact workflow and endpoint accuracy checks follow these initial checks.
 
 These are pending hardware checks, not claims of demonstrated avoidance.
+
+### Optional lidar input without a driver change
+
+The existing `/velodyne/points` stream stays unchanged. Its coordinates are at
+the odometry origin; the driver's ROS output omits the physical sensor transform
+that is present in the SDK response. `config/moveit_lidar_calibration.yaml`
+contains the attached robot's SDK `body → sensor` calibration captured on
+7 October 2026. Refresh this file when the lidar mount changes or using another
+robot; it is not a universal Spot mounting pose.
+
+The application launch starts one optional component container containing the
+standard `tf2_ros::StaticTransformBroadcasterNode` and
+`rtabmap_util::PointCloudAssembler`. The latter uses `max_clouds=1` to transform
+each existing cloud into `moveit_lidar_sensor` at its acquisition timestamp,
+without accumulating scans. It publishes `/moveit_environment/lidar/points`.
+MoveIt's second standard updater consumes this topic and publishes
+`/moveit_environment/lidar/filtered_cloud`. Mapping's arm-box filter is not used
+on this branch; MoveIt uses its robot model for self-filtering.
+
+After building and sourcing the application overlay, keep the existing driver
+running and launch the application with:
+
+```bash
+ros2 launch fault_detector_spot fault_detector_launch.py environment_collision_avoidance:=true environment_collision_lidar:=true
+```
+
+In RViz with fixed frame `body`, compare `/velodyne/points` and
+`/moveit_environment/lidar/points`: the surfaces must overlap even though their
+coordinate frames differ. Check that `moveit_lidar_sensor` is at the physical
+lidar, then inspect the filtered lidar cloud and planning scene. Place an object
+within two metres of the lidar on a side outside the front-left camera's view;
+confirm useful additional coverage and check for robot self-occupancy before
+testing movement. Run the planning-only comparisons above with `--lidar` added
+to **every** diagnostic command, so both selected sensors are required.
+
+Lidar is opt-in: leave the new launch argument false when it is absent.
+If selected but unavailable, checked planning waits and fails rather than
+silently proceeding with camera-only coverage. Explicit obstacle bypass retains
+its existing behavior. No front-right or hand camera is added in this step.
+
+To refresh calibration directly from the SDK, using your existing connection
+configuration and no driver access:
+
+```bash
+python3 scripts/read_spot_lidar_calibration.py --robot-config config/spot_ros_lan.yaml --output /tmp/spot_lidar_calibration.yaml
+```
+
+Pass `environment_lidar_calibration:=/tmp/spot_lidar_calibration.yaml` at launch
+to use that export. This setup command only authenticates and reads metadata;
+it takes no lease and sends no movement commands. The running cloud components
+use ROS data and the saved calibration, with no additional SDK polling.
+
+Adding lidar improves coverage; it does not introduce immediate occupancy decay.
+Old obstacles in an idle RViz view still depend on OctoMap free-space evidence.
+Each checked planning request clears and rebuilds the local map as described
+above. The reported moving-wall delay has not yet been measured conclusively.
 
 ## Keep the existing architecture
 
@@ -294,8 +355,8 @@ tests cover policy preservation through corrections, retries, and backtracking.
 ### Step 3 Connect one sensor and local map refresh
 
 Configure the standard point-cloud occupancy updater in the existing MoveIt launch.
-The pilot uses the front-left depth cloud because the live lidar review found an
-acquisition-origin issue. When adding **/velodyne/points**, branch before the mapping
+The pilot uses the front-left depth cloud and optional lidar with the
+SDK-calibrated origin described above. For **/velodyne/points**, branch before the mapping
 arm-box filter, which can also remove actual objects near the arm. Keep the mapping
 branch unchanged; use MoveIt's robot self-filter for planning.
 
@@ -306,9 +367,9 @@ updater uses the cloud frame origin for free-space rays, so a valid TF alone is
 insufficient. Before using this topic, obtain the actual calibrated acquisition
 origin and transform the point coordinates into that sensor frame at the cloud
 timestamp; changing only `frame_id` is incorrect. Reuse existing TF/calibration
-and leave the mapping stream unchanged. If the physical origin is unavailable,
-start with one camera cloud after verifying useful coverage instead of assuming
-the lidar topic is immediately suitable. See the
+and leave the mapping stream unchanged. The SDK metadata export and standard
+ROS components now provide this conversion without a driver change. If the
+physical origin is unavailable, use the camera-only option. See the
 [versioned updater implementation](https://github.com/moveit/moveit2/blob/2.5.9/moveit_ros/perception/pointcloud_octomap_updater/src/pointcloud_octomap_updater.cpp).
 
 Implement the bounded refresh described above. Choose a modest local range and voxel resolution for avoiding obvious obstacles. Tune for useful coverage and low overhead rather than millimetre surface reconstruction. Do not increase self-filter padding until nearby real obstacles disappear.

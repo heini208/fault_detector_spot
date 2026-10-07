@@ -6,7 +6,8 @@ from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDesc
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import Node, SetParametersFromFile
+from launch_ros.actions import ComposableNodeContainer, Node, SetParameter, SetParametersFromFile
+from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
 
 from fault_detector_spot.shared.persistence.runtime_paths import (
@@ -51,6 +52,7 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration("use_sim_time")
     environment_collisions = LaunchConfiguration("environment_collision_avoidance")
+    environment_lidar = LaunchConfiguration("environment_collision_lidar")
     navigation_map_root = LaunchConfiguration("navigation_map_root")
     recording_root = LaunchConfiguration("recording_root")
     measurement_root = LaunchConfiguration("measurement_root")
@@ -68,7 +70,17 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "environment_collision_avoidance",
             default_value="false",
-            description="Enable experimental stationary camera-based arm obstacle planning",
+            description="Enable experimental stationary sensor-based arm obstacle planning",
+        ),
+        DeclareLaunchArgument(
+            "environment_collision_lidar",
+            default_value="false",
+            description="Also require lidar observations for environmental arm planning",
+        ),
+        DeclareLaunchArgument(
+            "environment_lidar_calibration",
+            default_value=os.path.join(pkg, "config", "moveit_lidar_calibration.yaml"),
+            description="Lidar mount calibration exported from the SDK for this robot",
         ),
         DeclareLaunchArgument(
             "use_sim_time",
@@ -118,16 +130,63 @@ def generate_launch_description():
             description="micro-ROS Agent log verbosity (0-6)",
         ),
         GroupAction([
-            SetParametersFromFile(
-                os.path.join(pkg, "config", "moveit_environment.yaml"),
-                condition=IfCondition(environment_collisions),
-            ),
+            GroupAction([
+                SetParametersFromFile(
+                    os.path.join(pkg, "config", "moveit_environment.yaml"),
+                ),
+                SetParameter(
+                    name="sensors",
+                    value=["frontleft_depth", "lidar"],
+                    condition=IfCondition(environment_lidar),
+                ),
+            ], scoped=False, condition=IfCondition(environment_collisions)),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(moveit_pkg, "launch", "move_group.launch.py")
                 )
             ),
         ]),
+        GroupAction([
+            ComposableNodeContainer(
+                package="rclcpp_components",
+                executable="component_container",
+                name="moveit_lidar_input",
+                namespace="",
+                output="screen",
+                composable_node_descriptions=[
+                    ComposableNode(
+                        package="tf2_ros",
+                        plugin="tf2_ros::StaticTransformBroadcasterNode",
+                        name="moveit_lidar_mount",
+                        parameters=[
+                            LaunchConfiguration("environment_lidar_calibration"),
+                            {"use_sim_time": use_sim_time},
+                        ],
+                    ),
+                    ComposableNode(
+                        package="rtabmap_util",
+                        plugin="rtabmap_util::PointCloudAssembler",
+                        name="moveit_lidar_cloud",
+                        parameters=[{
+                            "use_sim_time": use_sim_time,
+                            "fixed_frame_id": "odom",
+                            "frame_id": "moveit_lidar_sensor",
+                            # Reframe each scan; do not accumulate a second map.
+                            "max_clouds": 1,
+                            "circular_buffer": False,
+                            "skip_clouds": 0,
+                            "topic_queue_size": 1,
+                            "wait_for_transform": 0.1,
+                        }],
+                        remappings=[
+                            ("cloud", "/velodyne/points"),
+                            ("assembled_cloud", "/moveit_environment/lidar/points"),
+                        ],
+                    ),
+                ],
+                condition=IfCondition(environment_lidar),
+            ),
+        ], condition=IfCondition(environment_collisions)),
         Node(
             package="micro_ros_agent",
             executable="micro_ros_agent",
@@ -191,6 +250,9 @@ def generate_launch_description():
                     "use_sim_time": use_sim_time,
                     "arm.environment.enabled": ParameterValue(
                         environment_collisions, value_type=bool,
+                    ),
+                    "arm.environment.lidar_enabled": ParameterValue(
+                        environment_lidar, value_type=bool,
                     ),
                     "navigation.map_root": navigation_map_root,
                 },

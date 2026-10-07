@@ -23,6 +23,8 @@ def arguments():
                         metavar=("QX", "QY", "QZ", "QW"),
                         help="Unit hand orientation in body; default identity")
     parser.add_argument("--cartesian", action="store_true", help="Request a straight Cartesian path")
+    parser.add_argument("--lidar", action="store_true",
+                        help="Require fresh lidar as well as camera observations; match the launch setting")
     parser.add_argument("--ignore-environment-collisions", action="store_true",
                         help="Ignore sensor occupancy, retaining robot and explicit-object rules")
     args = parser.parse_args()
@@ -46,7 +48,12 @@ def main():
     from fault_detector_spot.manipulation.moveit_environment_source import MoveItEnvironmentSource
 
     rclpy.init(args=[])
-    node = rclpy.create_node("check_moveit_environment")
+    node = rclpy.create_node(
+        "check_moveit_environment",
+        parameter_overrides=[
+            rclpy.Parameter("arm.environment.lidar_enabled", value=args.lidar),
+        ],
+    )
     planner = None
     try:
         config = ArmMotionParameters(node)
