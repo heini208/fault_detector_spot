@@ -249,7 +249,10 @@ class ExecuteProbePoint(ArmMovementBehaviour):
 
     def _recover_checkpoint(self):
         update = (self.executor.poll() if self._started
-                  else self.executor.restore_probe_checkpoint(self._history[-1]))
+                  else self.executor.restore_probe_checkpoint(
+                      self._history[-1],
+                      ignore_environment_collisions=self._checkpoint_collision_bypass(),
+                  ))
         self._started = update.outcome is ArmMovementOutcome.RUNNING
         self.feedback_message = "Returning to last successful goal: " + update.detail
         if self._started:
@@ -294,7 +297,10 @@ class ExecuteProbePoint(ArmMovementBehaviour):
         # Pop only after the preceding checkpoint was successfully reached.
         # A failed return therefore recovers to the last reached checkpoint.
         update = (self.executor.poll() if self._started
-                  else self.executor.restore_probe_checkpoint(self._history[-2]))
+                  else self.executor.restore_probe_checkpoint(
+                      self._history[-2],
+                      ignore_environment_collisions=self._checkpoint_collision_bypass(returning=True),
+                  ))
         self._started = update.outcome is ArmMovementOutcome.RUNNING
         self.feedback_message = "Backtracking to safe approach: " + update.detail
         if self._started:
@@ -305,6 +311,16 @@ class ExecuteProbePoint(ArmMovementBehaviour):
             return self._begin_failure(self.feedback_message, "return")
         self._history.pop()
         return Status.RUNNING
+
+    def _checkpoint_collision_bypass(self, returning=False):
+        if not returning and self._resume_phase == "motion":
+            step = self._steps[self._stage][self._index]
+        else:
+            # Reverse the same edge with the policy used on its forward leg.
+            steps = [step for stage in self._steps for step in stage]
+            step = steps[max(0, len(self._history) - 2)]
+        return (step.ignore_environment_collisions
+                or step.command_id is CommandID.MOVE_CLOSE_TO_SURFACE)
 
     def _fail(self, detail):
         if self._surface.active:

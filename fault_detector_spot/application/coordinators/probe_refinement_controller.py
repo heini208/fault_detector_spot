@@ -342,7 +342,10 @@ class ProbeRefinementController:
                     pre_approach_speed_scales=tuple(p.arm_speed_scale for p in reversed(points)),
                     arm_speed_scale=draft.final_probe_speed_scale if stage is RefinementStage.ALIGNMENT else draft.pre_approach_speed_scale,
                 )
-        command = replace(command, tag_position_tolerance_m=(
+        command = replace(command, ignore_environment_collisions=(
+            custom and (stage is RefinementStage.PROBE
+                        or (motion.retract_path and stage is RefinementStage.ALIGNMENT))
+        ), tag_position_tolerance_m=(
             self._selected_routine(draft).safe_approach_position_tolerance_m
             if motion.kind is ProbeMotionKind.MOVE_SAFE_APPROACH else motion.position_tolerance_m
         ))
@@ -406,6 +409,7 @@ class ProbeRefinementController:
             context, replace(
                 command,
                 command_id=CommandID.FOLLOW_MOVE_TO_TAG_PATH if final else CommandID.MOVE_ARM_TO_TAG,
+                ignore_environment_collisions=stage is RefinementStage.PROBE,
                 pre_approach_offsets=offsets,
                 arm_speed_scale=((draft.final_probe_speed_scale if stage is RefinementStage.PROBE
                                   else draft.pre_approach_speed_scale) if final

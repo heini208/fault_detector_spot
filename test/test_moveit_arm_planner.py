@@ -34,6 +34,9 @@ def planner_shell():
     planner._started_at = 0.0
     planner._planning_mode = None
     planner._future = None
+    planner._collision_scene = None
+    planner._discarded_future = None
+    planner._blocked_reason = None
     planner._logger = SimpleNamespace(info=lambda *_args, **_kwargs: None)
     return planner
 

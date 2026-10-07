@@ -18,7 +18,10 @@ class OrientToSurfaceBehaviour(ArmMovementBehaviour):
                 "Expected OrientToSurfaceCommand, got "
                 f"{type(command).__name__}"
             )
-        return self.executor.orient_to_surface(command.motion_sensor_id)
+        return self.executor.orient_to_surface(
+            command.motion_sensor_id,
+            ignore_environment_collisions=command.ignore_environment_collisions,
+        )
 
 
 __all__ = ["OrientToSurfaceBehaviour"]

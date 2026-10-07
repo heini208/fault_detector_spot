@@ -37,6 +37,10 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
 from fault_detector_spot.manipulation.moveit_arm_planner import (
     MoveItArmPlanner,
 )
+from fault_detector_spot.manipulation.moveit_collision_scene import (
+    MoveItCollisionScene,
+)
+from fault_detector_spot.manipulation.arm_collision_control import ArmCollisionControl
 from fault_detector_spot.manipulation.arm_motion_parameters import (
     ArmMotionParameters,
 )
@@ -78,6 +82,7 @@ class RobotCommandResources:
         self._posture_state_source = None
         self._arm_motion_speed_policy = None
         self._moveit_arm_planner = None
+        self._arm_collision_control = None
         self._arm_movement_executors = {}
         self._base_movement_executors = {}
         self._waypoint_executor = None
@@ -150,12 +155,23 @@ class RobotCommandResources:
                 self._posture_state_source = PostureStateSource(node)
             return self._posture_state_source
 
+    def get_arm_collision_control(self, node):
+        """Share the default-off preference independently of mapping or planning."""
+        with self._lock:
+            self._bind_node(node)
+            if self._arm_collision_control is None:
+                self._arm_collision_control = ArmCollisionControl(node)
+            return self._arm_collision_control
+
     def get_moveit_arm_planner(self, node):
         """Return the shared MoveIt planning client for the Spot arm."""
         with self._lock:
             self._bind_node(node)
             if self._moveit_arm_planner is None:
                 config = ArmMotionParameters(node)
+                collision_scene = MoveItCollisionScene(
+                    node, self.get_arm_collision_control(node),
+                )
                 self._moveit_arm_planner = MoveItArmPlanner(
                     node,
                     velocity_scaling=config.get(
@@ -167,6 +183,7 @@ class RobotCommandResources:
                     min_arm_sh1_rad=config.get(
                         "motion.arm_sh1_safe_min_rad"
                     ),
+                    collision_scene=collision_scene,
                 )
             return self._moveit_arm_planner
 
@@ -319,6 +336,7 @@ class RobotCommandResources:
             probe_surface_source = self._probe_surface_source
             posture_state_source = self._posture_state_source
             moveit_arm_planner = self._moveit_arm_planner
+            arm_collision_control = self._arm_collision_control
             arm_executors = tuple(
                 self._arm_movement_executors.values()
             )
@@ -336,6 +354,7 @@ class RobotCommandResources:
             self._posture_state_source = None
             self._arm_motion_speed_policy = None
             self._moveit_arm_planner = None
+            self._arm_collision_control = None
             self._arm_movement_executors.clear()
             self._base_movement_executors.clear()
             self._clients.clear()
@@ -356,6 +375,8 @@ class RobotCommandResources:
             resources.append(
                 ("MoveIt arm planner", moveit_arm_planner.destroy)
             )
+        if arm_collision_control is not None:
+            resources.append(("arm collision control", arm_collision_control.destroy))
         if probe_surface_source is not None:
             resources.append(
                 ("probe surface source", probe_surface_source.destroy)

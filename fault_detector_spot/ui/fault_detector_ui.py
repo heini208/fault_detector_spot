@@ -1145,6 +1145,7 @@ class Fault_Detector_UI(QWidget):
         return False
 
     def closeEvent(self, event):
+        self.manipulation_controls.destroy()
         routine_arm_controls = self.inspection_controls.routine_arm_movement_controls
         if routine_arm_controls is not None:
             routine_arm_controls.destroy()

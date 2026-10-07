@@ -42,13 +42,16 @@ class FakeMoveItPlanner:
     def __init__(self):
         self.normal_targets = []
         self.cartesian_targets = []
+        self.collision_options = []
 
-    def start(self, target):
+    def start(self, target, *, ignore_environment_collisions=False):
         self.normal_targets.append(target)
+        self.collision_options.append(ignore_environment_collisions)
         return MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, "normal")
 
-    def start_cartesian(self, target):
+    def start_cartesian(self, target, *, ignore_environment_collisions=False):
         self.cartesian_targets.append(target)
+        self.collision_options.append(ignore_environment_collisions)
         return MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, "cartesian")
 
 
@@ -70,12 +73,15 @@ def executor_for_planning(cartesian):
     )
     executor._pending_moveit_plan_builder = lambda: plan
     executor._pending_moveit_cartesian_path = cartesian
+    executor._ignore_environment_collisions = False
     executor._moveit_cartesian_plan = None
     return executor, planner, plan
 
 
-def test_executor_selects_cartesian_moveit_for_requested_probe_path():
+@pytest.mark.parametrize("bypass", [False, True])
+def test_executor_selects_cartesian_moveit_for_requested_probe_path(bypass):
     executor, planner, plan = executor_for_planning(True)
+    executor._ignore_environment_collisions = bypass
 
     update = executor._advance_moveit_planning_start()
 
@@ -84,10 +90,13 @@ def test_executor_selects_cartesian_moveit_for_requested_probe_path():
     assert planner.normal_targets == []
     assert executor._moveit_cartesian_plan is plan
     assert not executor._pending_moveit_cartesian_path
+    assert planner.collision_options == [bypass]
 
 
-def test_executor_keeps_normal_moveit_for_other_probe_paths():
+@pytest.mark.parametrize("bypass", [False, True])
+def test_executor_keeps_normal_moveit_for_other_probe_paths(bypass):
     executor, planner, plan = executor_for_planning(False)
+    executor._ignore_environment_collisions = bypass
 
     update = executor._advance_moveit_planning_start()
 
@@ -95,11 +104,14 @@ def test_executor_keeps_normal_moveit_for_other_probe_paths():
     assert len(planner.normal_targets) == 1
     assert planner.cartesian_targets == []
     assert executor._moveit_cartesian_plan is plan
+    assert planner.collision_options == [bypass]
 
 
-def test_cartesian_selection_is_consumed_by_primary_motion_only():
+@pytest.mark.parametrize("bypass", [False, True])
+def test_cartesian_selection_is_consumed_by_primary_motion_only(bypass):
     executor = object.__new__(ArmMovementExecutor)
     executor._next_probe_cartesian_path = True
+    executor._ignore_environment_collisions = bypass
     executor._probe_continuation = object()
     captured = []
 
@@ -111,16 +123,21 @@ def test_cartesian_selection_is_consumed_by_primary_motion_only():
 
     executor._continue_probe(PoseStamped(), "sensor")
     executor._continue_probe(PoseStamped(), "sensor")
+    executor._continue_contact_retreat(PoseStamped())
 
     assert captured[0]["_cartesian_path"] is True
     assert captured[1]["_cartesian_path"] is False
+    assert [options["ignore_environment_collisions"] for options in captured] == [
+        bypass, bypass, True,
+    ]
 
 
 def action(contact=False):
     result = object.__new__(MoveCloseToSurfaceExecution)
     result.config = MoveCloseToSurfaceConfig()
     result._command = SimpleNamespace(
-        target_surface_distance_m=0.0 if contact else 0.03
+        target_surface_distance_m=0.0 if contact else 0.03,
+        ignore_environment_collisions=False,
     )
     result._approach_steps = 0
     return result
@@ -164,8 +181,12 @@ def test_cartesian_move_limits_allow_one_standoff_correction_only():
     assert contact._cartesian_movement_limit() == MAX_CARTESIAN_CONTACT_MOVES
 
 
-def test_close_surface_requests_guarded_cartesian_execution(monkeypatch):
+@pytest.mark.parametrize("bypass", [False, True])
+@pytest.mark.parametrize("completed_moves", [0, 1])
+def test_close_surface_and_correction_always_bypass_map(monkeypatch, bypass, completed_moves):
     execution = action(contact=False)
+    execution._command.ignore_environment_collisions = bypass
+    execution._approach_steps = completed_moves
     execution._sensor_id = "probe"
     execution._attachment_revision = 1
     execution._plan = FrozenPlan()
@@ -207,4 +228,5 @@ def test_close_surface_requests_guarded_cartesian_execution(monkeypatch):
     execution._prepare_next_approach_step()
 
     assert captured["cartesian_path"] is True
+    assert captured["ignore_environment_collisions"] is True
     assert execution._requested_step_m == pytest.approx(0.12)

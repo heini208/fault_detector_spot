@@ -295,7 +295,8 @@ def test_orient_to_surface_requires_bound_motion_sensor():
         subscriber().fire_command_sequence(command)
 
 
-def test_behaviour_only_dispatches_to_executor():
+@pytest.mark.parametrize("bypass", [False, True])
+def test_behaviour_only_dispatches_to_executor(bypass):
     behaviour = OrientToSurfaceBehaviour(name="OrientToSurfaceBehaviour")
     command = OrientToSurfaceCommand(
         CommandID.ORIENT_TO_SURFACE,
@@ -303,10 +304,11 @@ def test_behaviour_only_dispatches_to_executor():
         "hall_probe",
     )
     marker = object()
+    command.ignore_environment_collisions = bypass
     behaviour._last_command = lambda: command
     behaviour.executor = SimpleNamespace(
-        orient_to_surface=lambda sensor_id: (
-            marker if sensor_id == "hall_probe" else None
+        orient_to_surface=lambda sensor_id, *, ignore_environment_collisions: (
+            marker if sensor_id == "hall_probe" and ignore_environment_collisions is bypass else None
         )
     )
 
@@ -352,7 +354,7 @@ def test_ui_button_dispatches_orient_to_surface_intent():
     )
 
     assert "INTENT_ORIENT_TO_SURFACE" in source
-    assert "execute_operation(intent)" in source
+    assert "_execute_basic_movement(intent)" in source
     assert "show_setup_unavailable" not in source
 
 

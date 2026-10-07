@@ -63,6 +63,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
         )
 
         self.nav2_runtime = self.rtabmap_runtime.nav2_runtime
+        self.robot_command_resources.get_arm_collision_control(self.node)
         return True
 
     def initialise(self):

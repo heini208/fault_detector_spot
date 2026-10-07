@@ -159,6 +159,7 @@ class FakeTransformer:
 
 
 class FakeRelativeCommand:
+    ignore_environment_collisions = False
 
     def __init__(self, target):
         self.target = target
@@ -189,6 +190,7 @@ class FakeTagStateSource:
 
 
 class FakeTagCommand:
+    ignore_environment_collisions = False
 
     def __init__(self, tag_id, sensor_id, probe_target):
         self.tag_id = tag_id
@@ -1219,8 +1221,10 @@ def tag_verification_executor(monkeypatch, error=.02):
     return executor, feedback, clock, corrections
 
 
-def test_tag_accuracy_waits_for_fresh_feedback_then_corrects_same_target(monkeypatch):
+@pytest.mark.parametrize("ignore", [False, True])
+def test_tag_accuracy_waits_for_fresh_feedback_then_corrects_same_target(monkeypatch, ignore):
     executor, feedback, _, corrections = tag_verification_executor(monkeypatch)
+    executor._ignore_environment_collisions = ignore
     target = executor._tag_accuracy["target"]
     assert executor.poll().outcome is ArmMovementOutcome.RUNNING
     assert not corrections
@@ -1228,6 +1232,7 @@ def test_tag_accuracy_waits_for_fresh_feedback_then_corrects_same_target(monkeyp
     assert executor.poll().outcome is ArmMovementOutcome.RUNNING
     assert corrections == [(target, ArmMotionSpeed(.05, .25))]
     assert executor._guarded_force_threshold_n == 8.
+    assert executor._ignore_environment_collisions is ignore
     # Successful completion of the one correction resolves immediately, even
     # without another feedback sample or an additional endpoint check.
     result = executor._finish_guarded_update(
@@ -1237,6 +1242,7 @@ def test_tag_accuracy_waits_for_fresh_feedback_then_corrects_same_target(monkeyp
     assert len(corrections) == 1
     assert executor._tag_accuracy is None
     assert not executor.active
+    assert executor._ignore_environment_collisions is False
 
 
 def test_tag_accuracy_within_tolerance_finishes_without_adjustment(monkeypatch):

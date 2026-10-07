@@ -238,6 +238,77 @@ Requirements:
 - The `microros_ws` overlay containing `micro_ros_agent` is built and sourced.
 - AprilTag config file (e.g. `config/my_tags.yaml`) matches your tags in the environment.
 
+### Optional environmental collision checks for arm planning
+
+The **Environment collision checking** control starts **Disabled** on every
+application startup. It can be switched on or off whenever the command backend
+is available, independently of mapping, localization, or lidar attachment.
+Starting or stopping mapping does not change the setting.
+
+The setting controls occupancy collision checks in MoveIt's current planning
+scene. **This revision does not configure a live obstacle source.** Enabling the
+control does not start sensors or prove that environmental obstacles are present
+or current. Native MoveIt sensor input is the next implementation step; RTAB-Map
+is no longer queried or imported for arm planning.
+
+Before each arm plan, the planner reads only MoveIt's Allowed Collision Matrix
+and applies the requested occupancy policy. Disabled or explicitly bypassed
+movements ignore the `<octomap>` object; enabled movements check it. Occupancy
+itself is neither cleared nor replaced. Self-collision rules, explicit collision
+objects, attached geometry, target tolerances, trajectory validation, and the
+contact guard are unchanged. Cartesian requests retain `avoid_collisions=True`.
+The policy preparation uses two asynchronous MoveIt service calls; it no longer
+fetches or converts a map.
+
+The checkbox **Ignore environmental obstacles for next basic arm movement**
+applies to one submitted basic arm action, then clears immediately, including
+rejected submissions. Wait, gripper, posture, and saved-workflow actions do not
+consume it. Execution code can select the same bypass with
+`ignore_environment_collisions=True`.
+
+Safe and aligned pre-approach travel follows the global control at execution
+time. Every **Move Close to Surface / Wall** command bypasses occupancy,
+including positive stand-off distances. Final probe-point moves and their final
+path waypoints always bypass it, both manually and through **Execute Probe
+Point**. A bypass on the complete probe-point command does not disable checking
+for its safe or aligned approach stages. Corrections, retries, contact retreat,
+and returns along the final segment preserve that segment's bypass.
+
+A toggle change affects subsequent planning and does not interrupt an executing
+movement. Changing the setting during ordinary plan preparation invalidates that
+pending movement; submit it again with the desired setting. Explicit bypass
+movements are independent of the global setting. The UI confirms the backend's
+setting and disables its toggle if status becomes stale or a change is pending.
+Control availability describes the setting service, not sensor readiness.
+
+MoveIt's collision matrix is shared. The application serializes policy updates
+and plans; keep independent planning clients and collision-matrix writers idle
+while it owns arm planning. A cancelled or timed-out policy update or plan must
+finish remotely before another can start. If completion remains unknown, restart
+the application and MoveIt together. An abandoned read-only scene request cannot
+later apply its result. A policy-service failure rejects the movement rather than
+silently changing its collision policy.
+
+The retained command interfaces require `ignore_environment_collisions` in
+`fault_detector_msgs`. When installing this change, stop the application before
+replacing installed interfaces and rebuild both packages from the workspace root,
+with the normal ROS, micro-ROS, and workspace dependencies sourced:
+
+```bash
+colcon build --symlink-install --packages-select fault_detector_msgs fault_detector_spot
+source install/local_setup.bash
+ros2 launch fault_detector_spot fault_detector_launch.py
+```
+
+Use a fresh terminal without an older collision experiment's `/tmp` overlay.
+After restarting, verify **Disabled** without mapping, toggle on and off, and
+confirm starting/stopping mapping leaves the selected setting unchanged. Ordinary
+clear-space arm movements, the one-shot checkbox, and wall/probe bypasses can then
+be checked in an authorized robot test. Environmental avoidance requires a
+configured obstacle source and a separate planning-only validation first.
+The implementation steps and retained sensor findings are in the
+[collision avoidance plan](documentation/MoveIt_Collision_Avoidance_Implementation_Plan.md).
+
 ### 4.2 Simulation / reduced setup
 
 For a simplified, simulation‑oriented setup:

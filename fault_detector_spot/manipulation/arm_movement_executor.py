@@ -372,6 +372,7 @@ class ArmMovementExecutor(MovementExecutor):
                 force_contact_policy=force_contact_policy,
                 contact_evidence_analyzer=self.contact_evidence_analyzer,
                 start_motion=self._continue_probe,
+                start_retreat=self._continue_contact_retreat,
                 poll_goal=self._guard_poll_goal,
                 cancel_goal=self._guard_cancel_goal,
                 start_stop=self._guard_start_arm_stop,
@@ -433,6 +434,7 @@ class ArmMovementExecutor(MovementExecutor):
             lambda: self.probe_motion_planner.resolve_relative(command),
             speed=speed,
             force_threshold_n=force_threshold_n,
+            ignore_environment_collisions=command.ignore_environment_collisions,
         )
 
     def pose(
@@ -441,6 +443,7 @@ class ArmMovementExecutor(MovementExecutor):
         execution_frame: str = "",
         speed=None,
         force_threshold_n=None,
+        ignore_environment_collisions: bool = False,
     ) -> ArmMovementUpdate:
         """Execute an absolute bare-hand target through the guard."""
         return self.guarded_probe(
@@ -450,6 +453,7 @@ class ArmMovementExecutor(MovementExecutor):
             ),
             speed=speed,
             force_threshold_n=force_threshold_n,
+            ignore_environment_collisions=ignore_environment_collisions,
         )
 
     def probe_pose(
@@ -458,6 +462,7 @@ class ArmMovementExecutor(MovementExecutor):
         motion_sensor_id: str,
         speed=None,
         force_threshold_n=None,
+        ignore_environment_collisions: bool = False,
     ) -> ArmMovementUpdate:
         """Compatibility entry for guarded absolute probe motion."""
         return self.guarded_probe(
@@ -465,6 +470,7 @@ class ArmMovementExecutor(MovementExecutor):
             motion_sensor_id,
             speed,
             force_threshold_n=force_threshold_n,
+            ignore_environment_collisions=ignore_environment_collisions,
         )
 
     def capture_probe_checkpoint(self, sensor_id: str) -> ResolvedProbeTarget:
@@ -480,7 +486,12 @@ class ArmMovementExecutor(MovementExecutor):
             pose_to_pose_data(pose.pose).validate()
             return ResolvedProbeTarget(deepcopy(pose), sensor_id)
 
-    def restore_probe_checkpoint(self, checkpoint: ResolvedProbeTarget) -> ArmMovementUpdate:
+    def restore_probe_checkpoint(
+        self,
+        checkpoint: ResolvedProbeTarget,
+        *,
+        ignore_environment_collisions: bool = False,
+    ) -> ArmMovementUpdate:
         """Guard and verify a return to a previously reached probe pose."""
         if not isinstance(checkpoint, ResolvedProbeTarget):
             raise TypeError("Expected a resolved probe checkpoint")
@@ -498,7 +509,11 @@ class ArmMovementExecutor(MovementExecutor):
                 "target": target, "corrections": 0,
                 "speed": self.safe_approach_speed, "force_threshold": None,
             }
-            update = self.guarded_probe(lambda: target, speed=self.safe_approach_speed)
+            update = self.guarded_probe(
+                lambda: target,
+                speed=self.safe_approach_speed,
+                ignore_environment_collisions=ignore_environment_collisions,
+            )
             if update.outcome is not ArmMovementOutcome.RUNNING:
                 self._tag_accuracy = None
             return update
@@ -534,6 +549,7 @@ class ArmMovementExecutor(MovementExecutor):
                 lambda: self._resolve_verified_tag_target(command),
                 speed=speed,
                 force_threshold_n=force_threshold_n,
+                ignore_environment_collisions=command.ignore_environment_collisions,
             )
             if update.outcome is not ArmMovementOutcome.RUNNING:
                 self._tag_accuracy = None
@@ -623,6 +639,7 @@ class ArmMovementExecutor(MovementExecutor):
         motion_sensor_id: str,
         speed=None,
         force_threshold_n=None,
+        ignore_environment_collisions: bool = False,
     ) -> ArmMovementUpdate:
         """Resolve a probe-relative target and execute it through the guard."""
         if self.probe_motion_planner.pose_offset_is_noop(offset):
@@ -637,6 +654,7 @@ class ArmMovementExecutor(MovementExecutor):
             ),
             speed=speed,
             force_threshold_n=force_threshold_n,
+            ignore_environment_collisions=ignore_environment_collisions,
         )
 
     def orient_to_surface(
@@ -644,6 +662,7 @@ class ArmMovementExecutor(MovementExecutor):
         motion_sensor_id: str,
         speed=None,
         force_threshold_n=None,
+        ignore_environment_collisions: bool = False,
     ) -> ArmMovementUpdate:
         """Orient the active probe and verify the achieved surface alignment."""
         sensor_id = str(motion_sensor_id).strip()
@@ -672,6 +691,7 @@ class ArmMovementExecutor(MovementExecutor):
             ),
             speed=speed,
             force_threshold_n=force_threshold_n,
+            ignore_environment_collisions=ignore_environment_collisions,
         )
         if (
             isinstance(update, ArmMovementUpdate)
@@ -702,6 +722,7 @@ class ArmMovementExecutor(MovementExecutor):
         motion_sensor_id: str,
         speed=None,
         force_threshold_n=None,
+        ignore_environment_collisions: bool = False,
     ) -> ArmMovementUpdate:
         """Orient the active probe to a currently usable tag."""
         sensor_id = str(motion_sensor_id).strip()
@@ -722,6 +743,7 @@ class ArmMovementExecutor(MovementExecutor):
             ),
             speed=speed,
             force_threshold_n=force_threshold_n,
+            ignore_environment_collisions=ignore_environment_collisions,
         )
 
     def guarded_probe(
@@ -732,6 +754,7 @@ class ArmMovementExecutor(MovementExecutor):
         force_threshold_n=None,
         cartesian_path: bool = False,
         retreat_distance_m=None,
+        ignore_environment_collisions: bool = False,
     ) -> ArmMovementUpdate:
         """Execute a force-guarded probe movement.
 
@@ -741,6 +764,8 @@ class ArmMovementExecutor(MovementExecutor):
         with self._execution_lock:
             if self.active:
                 return self._busy_update()
+            if type(ignore_environment_collisions) is not bool:
+                raise TypeError("Environment collision bypass must be a boolean")
             error = self._guarded_probe_precondition_error(cartesian_path)
             if error is not None:
                 return error
@@ -749,6 +774,7 @@ class ArmMovementExecutor(MovementExecutor):
             self._guarded_retreat_distance_m = retreat_distance_m
             self._guarded_force_threshold_n = force_threshold_n
             self._guarded_cartesian_path = bool(cartesian_path)
+            self._ignore_environment_collisions = ignore_environment_collisions
             self._guarded_plan_builder = lambda: (
                 self.probe_motion_planner.build_plan(
                     target_builder,
@@ -813,6 +839,7 @@ class ArmMovementExecutor(MovementExecutor):
         motion_sensor_id: str = "",
         speed=None,
         *,
+        ignore_environment_collisions: bool = False,
         _continuation=None,
         _cartesian_path: bool = False,
     ) -> ArmMovementUpdate:
@@ -823,6 +850,8 @@ class ArmMovementExecutor(MovementExecutor):
         public calls still require an idle executor. Trajectory planning and
         Spot command translation belong at this boundary.
         """
+        if type(ignore_environment_collisions) is not bool:
+            raise TypeError("Environment collision bypass must be a boolean")
         continuing = _continuation is self._probe_continuation
         if self.active:
             if not continuing or any((
@@ -840,6 +869,7 @@ class ArmMovementExecutor(MovementExecutor):
             self._active = True
             self._operation = _ArmOperation.MOVEMENT
 
+        self._ignore_environment_collisions = ignore_environment_collisions
         target = deepcopy(probe_target)
 
         def build_plan():
@@ -905,10 +935,11 @@ class ArmMovementExecutor(MovementExecutor):
                 f"MoveIt target preparation failed: {exception}",
             )
 
-        if self._pending_moveit_cartesian_path:
-            update = planner.start_cartesian(target_hand)
-        else:
-            update = planner.start(target_hand)
+        start = planner.start_cartesian if self._pending_moveit_cartesian_path else planner.start
+        update = start(
+            target_hand,
+            ignore_environment_collisions=self._ignore_environment_collisions,
+        )
         return self._handle_moveit_planning_start(update, plan)
 
     def _handle_moveit_planning_start(self, update, plan):
@@ -957,6 +988,9 @@ class ArmMovementExecutor(MovementExecutor):
             )
 
         def build_goal():
+            error = planner.validate_prepared_scene()
+            if error:
+                raise RuntimeError(error)
             return self._build_moveit_joint_goal(
                 trajectory,
                 minimum_duration_sec=plan.duration_sec,
@@ -990,8 +1024,17 @@ class ArmMovementExecutor(MovementExecutor):
             probe_target,
             motion_sensor_id,
             speed,
+            ignore_environment_collisions=self._ignore_environment_collisions,
             _continuation=self._probe_continuation,
             _cartesian_path=cartesian_path,
+        )
+
+    def _continue_contact_retreat(self, plan) -> ArmMovementUpdate:
+        # Occupancy must not prevent the guard's existing contact backoff.
+        return self.probe(
+            plan,
+            ignore_environment_collisions=True,
+            _continuation=self._probe_continuation,
         )
 
     def prepare(
@@ -1648,6 +1691,7 @@ class ArmMovementExecutor(MovementExecutor):
         self._guarded_force_threshold_n = None
         self._guarded_cartesian_path = False
         self._next_probe_cartesian_path = False
+        self._ignore_environment_collisions = False
 
     def _clear_surface_orientation_state(self) -> None:
         self._surface_orientation_sensor_id = None

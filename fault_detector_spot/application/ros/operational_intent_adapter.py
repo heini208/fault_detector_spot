@@ -266,6 +266,7 @@ def operational_intent_to_command(
         orientation_mode=intent.orientation_mode,
         wait_time=float(intent.duration_sec),
         retries=int(intent.retries),
+        ignore_environment_collisions=intent.ignore_environment_collisions,
         target_surface_distance_m=float(
             intent.target_surface_distance_m
         ),

@@ -1,7 +1,7 @@
 import math
 
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QCheckBox
 
 from fault_detector_msgs.msg import OperationalIntent, TagElement
 from fault_detector_spot.shared.geometry.movement_frames import (
@@ -12,6 +12,7 @@ from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
 from ..shared.posture_toggle import PostureToggle
 from ..shared.movement_layout import control_group
+from ..ros.arm_collision_client import ArmCollisionClient
 
 
 class TagNotFound(Exception):
@@ -38,14 +39,21 @@ class ManipulationControls(UIControlHelper):
         self.arm_state_source = None
         self.arm_state_button = None
         self.arm_state_timer = None
+        self.arm_collision_client = None
+        self.arm_collision_toggle = None
+        self.ignore_environment_collisions_checkbox = None
         super().__init__(parent_ui)
 
     def init_ros_communication(self):
         if self.node is None:
             return
         self.arm_state_source = ArmStateSource(self.node)
+        self.arm_collision_client = ArmCollisionClient(self.node)
+        self.arm_collision_client.state_changed.connect(self.refresh_arm_collision_state)
+        self.arm_collision_client.request_finished.connect(self._arm_collision_request_finished)
         self.arm_state_timer = QTimer(self.ui)
         self.arm_state_timer.timeout.connect(self.refresh_arm_state)
+        self.arm_state_timer.timeout.connect(self.refresh_arm_collision_state)
         self.arm_state_timer.start(250)
 
     def make_rows(self) -> list:
@@ -60,6 +68,8 @@ class ManipulationControls(UIControlHelper):
             control_group("Tag actions", tag_row),
             control_group(
                 "Arm offset", offsets,
+                self._make_arm_collision_row(),
+                self._make_environment_collision_row(),
                 self._make_reset_fields_and_move_relative_row(),
             ),
             control_group("Surface actions", self._make_surface_action_row()),
@@ -119,6 +129,9 @@ class ManipulationControls(UIControlHelper):
         if self.arm_state_source is not None:
             self.arm_state_source.destroy()
             self.arm_state_source = None
+        if self.arm_collision_client is not None:
+            self.arm_collision_client.destroy()
+            self.arm_collision_client = None
 
     def _make_tag_input_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -207,6 +220,91 @@ class ManipulationControls(UIControlHelper):
 
         return row
 
+    def _make_environment_collision_row(self):
+        row = QHBoxLayout()
+        self.ignore_environment_collisions_checkbox = QCheckBox(
+            "Ignore environmental obstacles for next basic arm movement"
+        )
+        self.ignore_environment_collisions_checkbox.setToolTip(
+            "When environment collision checking is enabled, applies once to a basic "
+            "tag, offset, or surface movement. "
+            "Self-collision checks and the contact guard remain active. "
+            "Saved workflows, posture, and gripper actions do not consume it."
+        )
+        row.addWidget(self.ignore_environment_collisions_checkbox)
+        row.addStretch()
+        return row
+
+    def _make_arm_collision_row(self):
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Environment collision checking:"))
+        self.arm_collision_toggle = QPushButton("Disabled")
+        self.arm_collision_toggle.setCheckable(True)
+        self.arm_collision_toggle.clicked.connect(self._set_arm_collision_enabled)
+        row.addWidget(self.arm_collision_toggle)
+        row.addStretch()
+        self.refresh_arm_collision_state()
+        return row
+
+    def refresh_arm_collision_state(self, _state=None):
+        button = self.arm_collision_toggle
+        if button is None:
+            return
+        client = self.arm_collision_client
+        state = client.last_state if client is not None else None
+        checked = False
+        interactive = False
+        detail = "Collision control is unavailable."
+        if client is None:
+            text = "Disabled"
+        elif state is None:
+            text = "Waiting for collision status"
+            detail = "Waiting for the collision control backend to report its setting."
+        elif client.is_stale():
+            text = "Status unavailable"
+            detail = "Collision control status updates stopped."
+        elif not state.available:
+            text = "Control unavailable"
+        else:
+            checked = state.enabled
+            interactive = not client.pending
+            text = "Change pending…" if client.pending else ("Enabled" if checked else "Disabled")
+            detail = (
+                "Controls environmental occupancy in the current MoveIt planning scene. "
+                "Environmental obstacles require a configured sensor input; this toggle does not start one. "
+                "The setting applies to subsequent plans; an executing movement is not interrupted. "
+                "Self-collision checks and the contact guard remain active."
+            )
+            if client.pending_timed_out:
+                text = "Change outcome unknown"
+                detail = (
+                    "No reply to the setting request. The checkmark reflects the latest control status; "
+                    "further setting requests wait for the outstanding reply."
+                )
+        button.blockSignals(True)
+        button.setChecked(checked)
+        button.blockSignals(False)
+        button.setText(text)
+        button.setEnabled(interactive)
+        button.setToolTip(detail)
+
+    def _set_arm_collision_enabled(self, enabled):
+        if self.arm_collision_client is not None:
+            self.arm_collision_client.set_enabled(bool(enabled))
+        self.refresh_arm_collision_state()
+
+    def _arm_collision_request_finished(self, _success, detail):
+        self.refresh_arm_collision_state()
+        if self.status_label is not None:
+            self.status_label.setText(detail)
+
+    def _execute_basic_movement(self, intent):
+        checkbox = self.ignore_environment_collisions_checkbox
+        intent.ignore_environment_collisions = checkbox.isChecked()
+        # Capture once before admission so rejection cannot arm a later request.
+        checkbox.setChecked(False)
+        return self.ui.execute_operation(intent)
+
     def _make_surface_action_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
 
@@ -267,7 +365,7 @@ class ManipulationControls(UIControlHelper):
     def handle_orient_to_surface(self):
         intent = OperationalIntent()
         intent.intent = OperationalIntent.INTENT_ORIENT_TO_SURFACE
-        return self.ui.execute_operation(intent)
+        return self._execute_basic_movement(intent)
 
     def handle_orient_to_tag(self):
         intent = OperationalIntent()
@@ -276,7 +374,7 @@ class ManipulationControls(UIControlHelper):
             intent = self.add_tag_element_to_intent(intent)
         except TagNotFound:
             return None
-        return self.ui.execute_operation(intent)
+        return self._execute_basic_movement(intent)
 
     def handle_move_close_to_surface(self):
         intent = OperationalIntent()
@@ -287,7 +385,7 @@ class ManipulationControls(UIControlHelper):
         intent.surface_tolerance_m = float(
             self.surface_tolerance_input.value()
         )
-        return self.ui.execute_operation(intent)
+        return self._execute_basic_movement(intent)
 
     def _reset_all_zero(self):
         """Set all offset and orientation fields to 0."""
@@ -524,7 +622,9 @@ class ManipulationControls(UIControlHelper):
         if not intent:
             return
         intent.duration_sec = self.duration_input.value()
-        self.ui.execute_operation(intent)
+        if intent_id == OperationalIntent.INTENT_MOVE_ARM_RELATIVE:
+            return self._execute_basic_movement(intent)
+        return self.ui.execute_operation(intent)
 
     def handle_move_and_wait(self):
         try:
@@ -549,7 +649,7 @@ class ManipulationControls(UIControlHelper):
             self.status_label.setText(f"Move & Wait to tag {intent.tag.id} canceled")
             return
 
-        self.ui.execute_operation(intent)
+        self._execute_basic_movement(intent)
 
     def handle_tag_selection(self):
         try:
@@ -571,4 +671,4 @@ class ManipulationControls(UIControlHelper):
             self.status_label.setText(f"Move to tag {intent.tag.id} canceled")
             return
 
-        self.ui.execute_operation(intent)
+        self._execute_basic_movement(intent)
