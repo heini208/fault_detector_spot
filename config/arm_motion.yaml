@@ -14,8 +14,6 @@
     arm.motion.moveit_acceleration_scaling: 0.40
     arm.motion.arm_sh1_safe_min_rad: -3.106686
     arm.motion.moveit_result_timeout_margin_sec: 15.0
-    # Optional RTAB-Map snapshots for arm planning; requires active mapping.
-    arm.motion.moveit_environment_collision_enabled: false
 
     # Probe setup safe-approach speed
     arm.safe_approach_linear_speed_mps: 0.20

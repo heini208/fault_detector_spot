@@ -172,17 +172,15 @@ class RobotCommandResources:
             self._bind_node(node)
             if self._moveit_arm_planner is None:
                 config = ArmMotionParameters(node)
-                collision_options = {}
-                if config.get("motion.moveit_environment_collision_enabled"):
-                    if self._rtabmap_runtime is None:
-                        raise RuntimeError(
-                            "Map collision planning requires the mapping runtime"
-                        )
-                    collision_options["collision_scene"] = RtabmapCollisionScene(
-                        node,
-                        self.get_tf_listener(node).buffer,
-                        self._rtabmap_runtime,
+                if self._rtabmap_runtime is None:
+                    raise RuntimeError(
+                        "Map collision planning requires the mapping runtime"
                     )
+                collision_scene = RtabmapCollisionScene(
+                    node,
+                    self.get_tf_listener(node).buffer,
+                    self._rtabmap_runtime,
+                )
                 self._moveit_arm_planner = MoveItArmPlanner(
                     node,
                     velocity_scaling=config.get(
@@ -194,7 +192,7 @@ class RobotCommandResources:
                     min_arm_sh1_rad=config.get(
                         "motion.arm_sh1_safe_min_rad"
                     ),
-                    **collision_options,
+                    collision_scene=collision_scene,
                 )
             return self._moveit_arm_planner
 

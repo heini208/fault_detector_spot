@@ -6,8 +6,8 @@ before planning; existing arm targets, accuracy settings, trajectory checks,
 contact handling, and execution guards remain unchanged.
 
 The planning-only feasibility test established map import, bypass, and rejection
-of a mapped goal collision. Application integration is now available behind a
-default-off launch option; real command execution validation remains pending.
+of a mapped goal collision. Application integration now follows mapping availability
+and the runtime UI control; real command execution validation remains pending.
 This is a best-effort aid for known mapped
 obstacles, not continuous obstacle detection or a replacement for the collision guard.
 
@@ -26,7 +26,7 @@ and UI work, not the implementation to restore wholesale.
   `GetCartesianPath`, with `avoid_collisions=True`.
 - Preserve the executor option and one-shot basic-movement UI override requested
   previously. Explicit contact motions can bypass mapped obstacles.
-- Default the feature to disabled until validation is complete.
+- Show disabled with no map; automatically enable each new mapping session and allow manual on/off through the UI.
 - Add no raw sensor fusion, MoveIt perception plugins, second map generator,
   background map refresh, or new planning action server.
 - Make no Spot driver changes. Sensor-head collision geometry remains a later task.
@@ -359,8 +359,10 @@ small correction, or is explicitly accepted as a limitation of this optional aid
 
 ## Step 3 Integrate snapshot preparation into the existing planner
 
-**Implemented for real-system testing:** enable with
-`moveit_environment_collision_enabled:=true`. The existing runtime supplies an
+**Implemented for real-system testing:** the mapping runtime automatically enables
+checking when a mapping session starts and owns the UI's manual on/off choice.
+Without a map or when manually disabled, ordinary planning first clears imported
+occupancy. There is no startup switch. The existing runtime supplies an
 immutable mapping-session token (process, map, generation, ROS start time). The
 planner sequences map fetch → validated scene application → original plan, or
 acknowledged occupancy clear → original plan for bypass. Each service phase has
@@ -383,7 +385,9 @@ request its current binary
 OctoMap, validate the response, resolve current placement, apply the scene diff,
 and await completion before calling the existing planning service. Request a map
 for every checked planning segment initially; add caching or spatial cropping only
-if measured costs justify them. Missing maps must never silently select bypass.
+if measured costs justify them. Failed snapshot/TF preparation while checking is
+enabled never silently selects bypass. No-map state disables checking before a
+new request; loss of mapping during a checked request invalidates that request.
 
 Historical cell age is acceptable for this feature. RTAB-Map's snapshot service
 stamps its response at request time even when cells are old; this is not evidence
@@ -411,10 +415,14 @@ work has completed or the planning session has been explicitly re-established.
 This applies to map application, clearing, and planning. Use bounded timeouts and
 existing failure feedback; add no automatic retry loop or second execution owner.
 
-When the feature is disabled for the session, retain the original planning path
-and use a clean MoveIt instance without imported occupancy. Session configuration
-changes require a matching application/MoveIt restart. Per-command bypass remains
-available without restarting and requires no RTAB-Map service or localization.
+When checking is disabled or mapping is unavailable, acknowledge occupancy clearing
+before using the original planning request. The global UI setting takes effect
+without restart and does not interrupt an executing trajectory. Preparation and
+deferred dispatch reject a changed global policy; an explicit per-command bypass
+remains independent of global changes. A new mapping session automatically enables
+checking, while repeated start requests within a session preserve manual off.
+The existing runtime owns the state and publishes it in navigation diagnostics;
+a SetBool service changes only that policy, without planning or scene mutation.
 
 **Done when:** import/clear failures, stale sessions, cancellation, and late replies
 cannot lead to a plan under the wrong obstacle policy, while existing target and
@@ -453,12 +461,20 @@ The basic-movement checkbox captures the option on submission and immediately
 clears, including when the request is rejected. Unrelated base, gripper, and saved
 workflow actions do not consume it. Reuse ordinary command feedback for map
 unavailability. Add no confirmation flow, admission-tracking state machine, or
-new live global-settings UI.
+additional motion-dispatch path. The UI also exposes the runtime
+control: Disabled — no map, Enabled, or Disabled. The one-shot override stays
+separate from that session-wide setting.
 
 **Done when:** the selected command alone bypasses imported obstacles and the next
-ordinary command imports/checks them again.
+ordinary command imports/checks them again while the global control is enabled.
 
 ## Step 5 Validate behavior and release the optional feature
+
+**Runtime UI revision:** 204 focused tests pass, including automatic enablement,
+manual off/on, no-map ordinary planning, pending-policy invalidation, status
+transport, and UI teardown. The isolated application build passes and its
+production sources match the checkout. This revision has not been deployed or
+validated on the running robot.
 
 **Offline integration result:** both packages built successfully in an isolated
 overlay, whose production Python sources match this checkout. The functional
@@ -482,7 +498,9 @@ and one-shot option consumption. Avoid tests that simply copy implementation.
 | Feature disabled | Original requests, target tolerances, trajectory validation, and guards |
 | Known blocking obstacle | Checked path fails or routes around it; bypass restores the clear-map baseline |
 | Checked then bypass then checked | Import, clear, and reimport take effect in the correct order |
-| Map missing, stopped, switched, or restarted | Checked request fails clearly; explicit bypass remains available |
+| Map missing or stopped | UI says Disabled — no map; new ordinary requests clear occupancy and plan normally |
+| New mapping session | Checking automatically enables; stale in-progress plans are rejected |
+| Manual UI toggle | Choice persists within this session; preparation rejects a changed policy |
 | Base moved or map placement changed | Previous prepared trajectory is rejected; next request uses current placement |
 | Independent world object and self-collision | Still checked during map bypass |
 | Cancel, timeout, late map/clear/plan response | No movement and no overlap with a new policy-changing request |
@@ -507,7 +525,7 @@ execution guard; this feature does not promise immediate dynamic-obstacle respon
 | Snapshot preparation and service sequencing | `manipulation/moveit_arm_planner.py` and one small map snapshot adapter |
 | Authoritative map/session view | `mapping/runtime/rtabmap_runtime_manager.py` |
 | Dependency wiring and shared TF | `application/behaviour_tree/behaviours/helper_initializer.py` and `robot_command_resources.py` |
-| Settings and launch opt-in | `config/arm_motion.yaml` and `launch/fault_detector_launch.py` |
+| Runtime policy and UI transport | Existing `RtabmapRuntimeManager`, `std_srvs/SetBool`, navigation diagnostics, and `ui/ros/arm_collision_client.py` |
 | Demonstrated map filter corrections | `launch/lidar_rtab_mapping_launch.py` and existing mapping filter owner |
 | Command policy | Existing semantic/execution models, ROS adapters, executor, contact workflow factories |
 | Transport boolean | `fault_detector_msgs/msg/CommandPayload.msg` and `OperationalIntent.msg` |

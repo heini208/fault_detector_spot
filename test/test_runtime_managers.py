@@ -201,6 +201,8 @@ def test_slow_process_stop_does_not_block_operation_poll(runtime, monkeypatch):
             future = polling.submit(manager.poll_runtime_operation, "stop")
             try:
                 assert future.result(timeout=0.5) is None
+                state = polling.submit(manager.collision_checking_state).result(timeout=0.5)
+                assert not state.available and not state.enabled
             finally:
                 release.set()
     finally:
@@ -442,3 +444,92 @@ def test_collision_map_session_invalidates_before_save_and_failed_mode_switch(ru
         manager.set_mode_localization()
     assert manager.get_running_mode() == manager.MODE_MAPPING
     assert manager.current_collision_map_session() is None
+
+
+def test_collision_policy_unavailable_until_owned_mapping_starts(runtime):
+    manager, _, _ = runtime
+    state = manager.collision_checking_state()
+    assert not state.available and not state.enabled
+    assert state.session is None and state.revision == 0
+    with pytest.raises(ValueError, match="active mapping session"):
+        manager.set_collision_checking_enabled(True)
+    with pytest.raises(TypeError, match="boolean"):
+        manager.set_collision_checking_enabled("true")
+    manager.change_map("plant")
+    assert not manager.collision_checking_state().available
+    manager.start_mapping()
+    started = manager.collision_checking_state()
+    assert started.available and started.enabled
+    assert started.session.map_name == "plant"
+    assert started.revision == state.revision
+
+
+def test_collision_policy_manual_toggle_retains_session_and_duplicate_start(runtime):
+    manager, _, _ = runtime
+    manager.start_mapping("plant")
+    original = manager.collision_checking_state()
+    disabled = manager.set_collision_checking_enabled(False)
+    assert disabled.available and not disabled.enabled
+    assert disabled.session == original.session
+    assert disabled.revision == original.revision + 1
+    # The previously returned immutable state still represents its own moment.
+    assert original.enabled
+    manager.start_mapping("plant")
+    assert manager.collision_checking_state() == disabled
+    assert manager.set_collision_checking_enabled(False) == disabled
+    enabled = manager.set_collision_checking_enabled(True)
+    assert enabled.enabled and enabled.session == disabled.session
+    assert enabled.revision == disabled.revision + 1
+
+
+def test_collision_policy_auto_enables_new_session_after_stop_or_localization(runtime):
+    manager, _, _ = runtime
+    manager.start_mapping("plant")
+    disabled = manager.set_collision_checking_enabled(False)
+    manager.stop(save=False)
+    stopped = manager.collision_checking_state()
+    assert not stopped.available and not stopped.enabled
+    manager.start_mapping("plant")
+    restarted = manager.collision_checking_state()
+    assert restarted.available and restarted.enabled
+    assert restarted.session != disabled.session
+    assert restarted.revision == disabled.revision
+    manager.set_mode_localization()
+    localized = manager.collision_checking_state()
+    assert not localized.available and not localized.enabled
+    manager.set_mode_mapping()
+    resumed = manager.collision_checking_state()
+    assert resumed.enabled and resumed.session != restarted.session
+    manager.process.alive = False
+    assert not manager.collision_checking_state().available
+    assert not manager.collision_checking_state().enabled
+
+
+def test_collision_policy_service_reports_status_without_motion_or_map_calls(runtime):
+    from std_srvs.srv import SetBool
+
+    manager, launches, stops = runtime
+    service_name = manager.node.create_service.call_args.args[1]
+    assert service_name == "fault_detector/set_arm_collision_checking"
+    callback = manager.node.create_service.call_args.args[2]
+    response = callback(SetBool.Request(data=True), SetBool.Response())
+    assert not response.success and "active mapping session" in response.message
+    manager.start_mapping("plant")
+    manager._status_pub.publish.reset_mock()
+    manager._call_service.reset_mock()
+    launches_before, stops_before = list(launches), list(stops)
+    response = callback(SetBool.Request(data=False), SetBool.Response())
+    assert response.success and response.message == "Arm collision checking disabled"
+    manager._status_pub.publish.assert_called_once()
+    status = manager._status_pub.publish.call_args.args[0]
+    values = {item.key: item.value for item in status.values}
+    assert values["arm_collision_available"] == "true"
+    assert values["arm_collision_enabled"] == "false"
+    manager._call_service.assert_not_called()
+    assert launches == launches_before and stops == stops_before
+    response = callback(SetBool.Request(data=True), SetBool.Response())
+    assert response.success and manager.collision_checking_state().enabled
+    service = manager._collision_checking_service
+    manager.close()
+    manager.close()
+    manager.node.destroy_service.assert_called_once_with(service)

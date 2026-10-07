@@ -72,6 +72,8 @@ class Rig:
     def __init__(self, enabled=True):
         self.node = Node()
         self.session = Session()
+        self.policy_enabled = True
+        self.policy_revision = 0
         self.tf = TransformStamped()
         self.tf.header.frame_id = "body"
         self.tf.child_frame_id = "map"
@@ -80,7 +82,14 @@ class Rig:
         self.tf.transform.translation.x = 0.4
         self.tf_reads = 0
         self.clock = 0.0
-        runtime = SimpleNamespace(current_collision_map_session=lambda: self.session)
+        runtime = SimpleNamespace(
+            current_collision_map_session=lambda: self.session,
+            collision_checking_state=lambda: SimpleNamespace(
+                session=self.session,
+                enabled=self.policy_enabled and self.session is not None,
+                revision=self.policy_revision,
+            ),
+        )
         self.scene = RtabmapCollisionScene(self.node, self, runtime) if enabled else None
         self.planner = MoveItArmPlanner(
             self.node, collision_scene=self.scene, monotonic_clock=lambda: self.clock,
@@ -158,7 +167,7 @@ def test_checked_bypass_checked_orders_scene_ack_before_original_plan():
     ]
 
 
-def test_disabled_mode_uses_only_existing_planning_clients_and_same_request():
+def test_planner_without_scene_adapter_keeps_original_request():
     rig = Rig(enabled=False)
     assert set(rig.node.clients) == {"/plan_kinematic_path", "/compute_cartesian_path"}
     expected = rig.planner._build_request(rig.target)
@@ -208,12 +217,10 @@ def test_changed_map_or_placement_cannot_produce_or_dispatch_a_plan(change, stag
         assert update.trajectory is None
 
 
-@pytest.mark.parametrize("problem", ["missing", "pre_session_tf", "stale_tf", "future_tf"])
+@pytest.mark.parametrize("problem", ["pre_session_tf", "stale_tf", "future_tf"])
 def test_unavailable_placement_fails_before_mutation(problem):
     rig = Rig()
-    if problem == "missing":
-        rig.session = None
-    elif problem == "pre_session_tf":
+    if problem == "pre_session_tf":
         rig.session = Session(started_at_ns=10_000_000_001)
     elif problem == "stale_tf":
         rig.tf.header.stamp.sec = 8
@@ -331,3 +338,118 @@ def test_cancel_inspects_already_done_uncertain_response_before_allowing_new_req
     assert update.outcome is MoveItPlanOutcome.ERROR
     assert "completion is unknown" in update.detail
     assert rig.node.events == ["/clear_octomap"]
+
+
+def test_no_map_plans_normally_after_acknowledged_clear_without_tf():
+    rig = Rig()
+    rig.session = None
+    rig.tf.header.stamp.sec = 0
+    expected = rig.planner._build_request(rig.target)
+    assert rig.planner.start(rig.target).outcome is MoveItPlanOutcome.RUNNING
+    assert rig.node.events == ["/clear_octomap"]
+    rig.reply("/clear_octomap", Empty.Response())
+    assert rig.node.clients["/plan_kinematic_path"].requests[-1] == expected
+    assert rig.planned().outcome is MoveItPlanOutcome.SUCCESS
+    assert rig.tf_reads == 0
+
+
+def test_mapping_auto_enable_manual_off_on_and_stop_select_correct_requests():
+    rig = Rig()
+    rig.session = None
+    rig.planner.start(rig.target)
+    rig.reply("/clear_octomap", Empty.Response())
+    rig.planned()
+    rig.session = Session()
+    rig.planner.start(rig.target)
+    rig.map_reply()
+    rig.applied()
+    rig.planned()
+    rig.policy_enabled = False
+    rig.policy_revision += 1
+    # Global manual-off is persistent across ordinary commands.
+    for _ in range(2):
+        rig.planner.start(rig.target)
+        rig.reply("/clear_octomap", Empty.Response())
+        assert rig.planned().outcome is MoveItPlanOutcome.SUCCESS
+    rig.policy_enabled = True
+    rig.policy_revision += 1
+    rig.planner.start(rig.target)
+    rig.map_reply()
+    rig.applied()
+    rig.planned()
+    rig.session = None
+    rig.planner.start(rig.target)
+    rig.reply("/clear_octomap", Empty.Response())
+    assert rig.planned().outcome is MoveItPlanOutcome.SUCCESS
+    assert rig.node.events == [
+        "/clear_octomap", "/plan_kinematic_path",
+        "/rtabmap/octomap_binary", "/apply_planning_scene", "/plan_kinematic_path",
+        "/clear_octomap", "/plan_kinematic_path",
+        "/clear_octomap", "/plan_kinematic_path",
+        "/rtabmap/octomap_binary", "/apply_planning_scene", "/plan_kinematic_path",
+        "/clear_octomap", "/plan_kinematic_path",
+    ]
+
+
+@pytest.mark.parametrize("stage", ["map", "apply", "plan", "dispatch"])
+def test_global_disable_invalidates_checked_work_before_dispatch(stage):
+    rig = Rig()
+    rig.planner.start(rig.target)
+    if stage in ("apply", "plan", "dispatch"):
+        rig.map_reply()
+    if stage in ("plan", "dispatch"):
+        rig.applied()
+    if stage == "dispatch":
+        assert rig.planned().outcome is MoveItPlanOutcome.SUCCESS
+    rig.policy_enabled = False
+    rig.policy_revision += 1
+    if stage == "dispatch":
+        assert "setting changed" in rig.planner.validate_prepared_scene()
+    else:
+        update = {"map": rig.map_reply, "apply": rig.applied, "plan": rig.planned}[stage]()
+        assert update.outcome is MoveItPlanOutcome.FAILURE
+        assert update.trajectory is None
+
+
+@pytest.mark.parametrize("change", ["map_started", "manual_on", "off_on_off"])
+def test_new_checking_policy_invalidates_previously_unchecked_preparation(change):
+    rig = Rig()
+    rig.policy_enabled = change == "map_started"
+    if change == "map_started":
+        rig.session = None
+    rig.planner.start(rig.target)
+    if change == "map_started":
+        rig.session = Session()
+    elif change == "manual_on":
+        rig.policy_enabled = True
+        rig.policy_revision += 1
+    else:
+        rig.policy_revision += 2
+    update = rig.reply("/clear_octomap", Empty.Response())
+    assert update.outcome is MoveItPlanOutcome.FAILURE
+    assert not rig.node.clients["/plan_kinematic_path"].requests
+
+
+def test_explicit_command_bypass_is_independent_of_global_policy_changes():
+    rig = Rig()
+    rig.planner.start(rig.target, ignore_environment_collisions=True)
+    rig.policy_enabled = False
+    rig.policy_revision += 1
+    rig.reply("/clear_octomap", Empty.Response())
+    assert rig.planned().outcome is MoveItPlanOutcome.SUCCESS
+    assert rig.tf_reads == 0
+
+
+def test_global_off_still_waits_for_previous_uncertain_scene_mutation():
+    rig = Rig()
+    rig.planner.start(rig.target)
+    rig.map_reply()
+    old_apply = rig.planner._future
+    rig.clock = 8.0
+    assert rig.planner.poll().outcome is MoveItPlanOutcome.TIMEOUT
+    rig.policy_enabled = False
+    rig.policy_revision += 1
+    assert rig.planner.start(rig.target).outcome is MoveItPlanOutcome.ERROR
+    old_apply.set_result(ApplyPlanningScene.Response(success=True))
+    assert rig.planner.start(rig.target).outcome is MoveItPlanOutcome.RUNNING
+    assert rig.node.events[-1] == "/clear_octomap"

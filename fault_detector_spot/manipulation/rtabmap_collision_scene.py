@@ -38,18 +38,22 @@ class RtabmapCollisionScene:
         self.clear_client = node.create_client(Empty, "/clear_octomap")
         self._session = None
         self._reference = None
+        self._policy = None
 
     def prepare(self, ignore_environment_collisions):
         """Return the first service request; bypass needs neither mapping nor TF."""
         self._session = None
         self._reference = None
+        self._policy = None
         if ignore_environment_collisions:
             return "clear", self.clear_client, Empty.Request()
-        self._session = self.runtime.current_collision_map_session()
+        self._policy = self.runtime.collision_checking_state()
+        if not self._policy.enabled:
+            return "clear", self.clear_client, Empty.Request()
+        self._session = self._policy.session
         if self._session is None:
             raise RuntimeError(
-                "Map collision checking requires an active mapping session; "
-                "start mapping or explicitly bypass mapped obstacles"
+                "Map collision checking lost its active mapping session"
             )
         self._reference = self._placement()
         return "map", self.map_client, GetOctomap.Request()
@@ -62,10 +66,15 @@ class RtabmapCollisionScene:
 
     def validate(self):
         """Reject a checked plan if its session or body-relative placement changed."""
+        if self._policy is not None:
+            current_policy = self.runtime.collision_checking_state()
+            if (current_policy.enabled != self._policy.enabled
+                    or current_policy.revision != self._policy.revision):
+                raise RuntimeError("Map collision setting changed during arm planning; retry the movement")
+            if self._session is not None and current_policy.session != self._session:
+                raise RuntimeError("Mapping stopped, switched, or restarted during arm planning")
         if self._session is None:
             return
-        if self.runtime.current_collision_map_session() != self._session:
-            raise RuntimeError("Mapping stopped, switched, or restarted during arm planning")
         # Compare the body's position in map coordinates. Comparing body<-map
         # translations magnifies harmless rotation about a distant map origin.
         current = self._body_pose(self._placement())

@@ -7,7 +7,6 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 
 from fault_detector_spot.shared.persistence.runtime_paths import (
     default_map_root,
@@ -50,9 +49,6 @@ def generate_launch_description():
     )
 
     use_sim_time = LaunchConfiguration("use_sim_time")
-    moveit_environment_collision_enabled = LaunchConfiguration(
-        "moveit_environment_collision_enabled"
-    )
     navigation_map_root = LaunchConfiguration("navigation_map_root")
     recording_root = LaunchConfiguration("recording_root")
     measurement_root = LaunchConfiguration("measurement_root")
@@ -76,11 +72,6 @@ def generate_launch_description():
             "navigation_map_root",
             default_value=str(default_map_root()),
             description="Persistent map metadata and RTAB database directory",
-        ),
-        DeclareLaunchArgument(
-            "moveit_environment_collision_enabled",
-            default_value="false",
-            description="Use active RTAB-Map obstacles for arm planning",
         ),
         DeclareLaunchArgument(
             "recording_root",
@@ -189,9 +180,6 @@ def generate_launch_description():
                 base_motion_config,
                 {
                     "use_sim_time": use_sim_time,
-                    "arm.motion.moveit_environment_collision_enabled": ParameterValue(
-                        moveit_environment_collision_enabled, value_type=bool,
-                    ),
                     "navigation.map_root": navigation_map_root,
                 },
             ],

@@ -12,6 +12,7 @@ from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
 from ..shared.posture_toggle import PostureToggle
 from ..shared.movement_layout import control_group
+from ..ros.arm_collision_client import ArmCollisionClient
 
 
 class TagNotFound(Exception):
@@ -38,6 +39,8 @@ class ManipulationControls(UIControlHelper):
         self.arm_state_source = None
         self.arm_state_button = None
         self.arm_state_timer = None
+        self.arm_collision_client = None
+        self.arm_collision_toggle = None
         self.ignore_environment_collisions_checkbox = None
         super().__init__(parent_ui)
 
@@ -45,8 +48,12 @@ class ManipulationControls(UIControlHelper):
         if self.node is None:
             return
         self.arm_state_source = ArmStateSource(self.node)
+        self.arm_collision_client = ArmCollisionClient(self.node)
+        self.arm_collision_client.state_changed.connect(self.refresh_arm_collision_state)
+        self.arm_collision_client.request_finished.connect(self._arm_collision_request_finished)
         self.arm_state_timer = QTimer(self.ui)
         self.arm_state_timer.timeout.connect(self.refresh_arm_state)
+        self.arm_state_timer.timeout.connect(self.refresh_arm_collision_state)
         self.arm_state_timer.start(250)
 
     def make_rows(self) -> list:
@@ -61,6 +68,7 @@ class ManipulationControls(UIControlHelper):
             control_group("Tag actions", tag_row),
             control_group(
                 "Arm offset", offsets,
+                self._make_arm_collision_row(),
                 self._make_environment_collision_row(),
                 self._make_reset_fields_and_move_relative_row(),
             ),
@@ -121,6 +129,9 @@ class ManipulationControls(UIControlHelper):
         if self.arm_state_source is not None:
             self.arm_state_source.destroy()
             self.arm_state_source = None
+        if self.arm_collision_client is not None:
+            self.arm_collision_client.destroy()
+            self.arm_collision_client = None
 
     def _make_tag_input_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -223,6 +234,69 @@ class ManipulationControls(UIControlHelper):
         row.addWidget(self.ignore_environment_collisions_checkbox)
         row.addStretch()
         return row
+
+    def _make_arm_collision_row(self):
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Map collision checking:"))
+        self.arm_collision_toggle = QPushButton("Disabled — no map")
+        self.arm_collision_toggle.setCheckable(True)
+        self.arm_collision_toggle.clicked.connect(self._set_arm_collision_enabled)
+        row.addWidget(self.arm_collision_toggle)
+        row.addStretch()
+        self.refresh_arm_collision_state()
+        return row
+
+    def refresh_arm_collision_state(self, _state=None):
+        button = self.arm_collision_toggle
+        if button is None:
+            return
+        client = self.arm_collision_client
+        state = client.last_state if client is not None else None
+        checked = False
+        interactive = False
+        detail = "Start mapping to enable arm collision checking."
+        if client is None:
+            text = "Disabled — no map"
+        elif state is None:
+            text = "Waiting for map status"
+            detail = "Waiting for the mapping runtime to report its collision setting."
+        elif client.is_stale():
+            text = "Status unavailable"
+            detail = "Mapping runtime status updates stopped."
+        elif not state.available:
+            text = "Disabled — no map"
+        else:
+            checked = state.enabled
+            interactive = not client.pending
+            text = "Change pending…" if client.pending else ("Enabled" if checked else "Disabled")
+            detail = (
+                "Checking mapped obstacles is automatically enabled for each new mapping session. "
+                "The setting applies to subsequent plans; an executing movement is not interrupted. "
+                "Disabling clears mapped obstacles before the next plan. "
+                "Self-collision checks and the contact guard remain active."
+            )
+            if client.pending_timed_out:
+                text = "Change outcome unknown"
+                detail = (
+                    "No reply to the setting request. The checkmark reflects the latest runtime status; "
+                    "further setting requests wait for the outstanding reply."
+                )
+        button.blockSignals(True)
+        button.setChecked(checked)
+        button.blockSignals(False)
+        button.setText(text)
+        button.setEnabled(interactive)
+        button.setToolTip(detail)
+
+    def _set_arm_collision_enabled(self, enabled):
+        if self.arm_collision_client is not None:
+            self.arm_collision_client.set_enabled(bool(enabled))
+        self.refresh_arm_collision_state()
+
+    def _arm_collision_request_finished(self, _success, detail):
+        self.refresh_arm_collision_state()
+        if self.status_label is not None:
+            self.status_label.setText(detail)
 
     def _execute_basic_movement(self, intent):
         checkbox = self.ignore_environment_collisions_checkbox

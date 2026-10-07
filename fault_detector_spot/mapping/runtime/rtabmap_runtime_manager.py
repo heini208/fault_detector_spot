@@ -5,6 +5,7 @@ from pathlib import Path
 
 import py_trees
 from std_msgs.msg import String
+from std_srvs.srv import SetBool
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
 from rclpy.clock import Clock, ClockType
 
@@ -24,6 +25,19 @@ class CollisionMapSession:
     map_name: str
     generation: int
     started_at_ns: int
+
+
+@dataclass(frozen=True)
+class CollisionCheckingState:
+    """Authoritative map availability and the user's current session policy."""
+
+    session: CollisionMapSession | None
+    enabled: bool
+    revision: int
+
+    @property
+    def available(self):
+        return self.session is not None
 
 
 class RtabmapRuntimeManager(RuntimeManager):
@@ -48,6 +62,8 @@ class RtabmapRuntimeManager(RuntimeManager):
         super().__init__(node, blackboard)
         self._collision_map_session = None
         self._collision_map_generation = 0
+        self._collision_checking_enabled = False
+        self._collision_checking_revision = 0
         self.launch_file = launch_file
         configured_maps_dir = maps_dir or default_map_root()
         self.maps_dir = os.fspath(
@@ -65,6 +81,11 @@ class RtabmapRuntimeManager(RuntimeManager):
         )
         self._status_pub = node.create_publisher(
             DiagnosticStatus, "fault_detector/navigation_runtime", LATCHED_QOS,
+        )
+        self._collision_checking_service = node.create_service(
+            SetBool,
+            "fault_detector/set_arm_collision_checking",
+            self._set_collision_checking_service,
         )
         self._status_timer = node.create_timer(
             0.5, self._publish_runtime_status,
@@ -86,6 +107,7 @@ class RtabmapRuntimeManager(RuntimeManager):
             errors.append("Nav2 is not running")
         if mode == self.MODE_NONE and nav2_running:
             errors.append("Nav2 is running without RTAB-Map")
+        collision_state = self.collision_checking_state()
         status = DiagnosticStatus(
             name="navigation_runtime",
             level=DiagnosticStatus.ERROR if errors else DiagnosticStatus.OK,
@@ -93,6 +115,14 @@ class RtabmapRuntimeManager(RuntimeManager):
             values=[
                 KeyValue(key="mode", value=mode),
                 KeyValue(key="active_map", value=self.bb.active_map_name or ""),
+                KeyValue(
+                    key="arm_collision_available",
+                    value=str(collision_state.available).lower(),
+                ),
+                KeyValue(
+                    key="arm_collision_enabled",
+                    value=str(collision_state.enabled).lower(),
+                ),
             ],
         )
         self._status_pub.publish(status)
@@ -103,6 +133,9 @@ class RtabmapRuntimeManager(RuntimeManager):
             self._publish_runtime_status()
             self.node.destroy_timer(self._status_timer)
             self._status_timer = None
+        if self._collision_checking_service is not None:
+            self.node.destroy_service(self._collision_checking_service)
+            self._collision_checking_service = None
         return result
 
     def _init_blackboard_keys(self):
@@ -138,7 +171,7 @@ class RtabmapRuntimeManager(RuntimeManager):
 
     def _stop_rtabmap(self, save):
         """Stop only this manager's process; the caller handles Nav2 separately."""
-        self._collision_map_session = None
+        self._invalidate_collision_map_session()
         if save and self.is_running() and self.get_running_mode() == self.MODE_MAPPING:
             for service in ("pause", "save_db", "publish_map"):
                 self._call_service(f"/rtabmap/{service}")
@@ -296,7 +329,7 @@ class RtabmapRuntimeManager(RuntimeManager):
         return self.bb.slam_launch_process
 
     def set_mode_localization(self):
-        self._collision_map_session = None
+        self._invalidate_collision_map_session()
         if not self._call_service("/rtabmap/set_mode_localization"):
             raise RuntimeError(
                 "Could not switch RTAB-Map to localization mode"
@@ -304,7 +337,10 @@ class RtabmapRuntimeManager(RuntimeManager):
         self.bb.slam_runtime_mode = self.MODE_LOCALIZATION
 
     def set_mode_mapping(self):
-        self._collision_map_session = None
+        # Repeated requests to an already active session retain its UI policy.
+        if self.current_collision_map_session() is not None:
+            return
+        self._invalidate_collision_map_session()
         started_at_ns = self.node.get_clock().now().nanoseconds
         if not self._call_service("/rtabmap/set_mode_mapping"):
             raise RuntimeError(
@@ -314,13 +350,21 @@ class RtabmapRuntimeManager(RuntimeManager):
         self._begin_collision_map_session(started_at_ns)
 
     def _begin_collision_map_session(self, started_at_ns):
-        self._collision_map_generation += 1
-        self._collision_map_session = CollisionMapSession(
-            process_id=id(self.process),
-            map_name=self.bb.active_map_name,
-            generation=self._collision_map_generation,
-            started_at_ns=started_at_ns,
-        )
+        with self._runtime_lock:
+            self._collision_map_generation += 1
+            self._collision_map_session = CollisionMapSession(
+                process_id=id(self.process),
+                map_name=self.bb.active_map_name,
+                generation=self._collision_map_generation,
+                started_at_ns=started_at_ns,
+            )
+            self._collision_checking_enabled = True
+        self._publish_runtime_status()
+
+    def _invalidate_collision_map_session(self):
+        with self._runtime_lock:
+            self._collision_map_session = None
+            self._collision_checking_enabled = False
 
     def current_collision_map_session(self) -> CollisionMapSession | None:
         """Return the active mapping interval without waiting for runtime work.
@@ -329,17 +373,56 @@ class RtabmapRuntimeManager(RuntimeManager):
         before lifecycle changes also rejects snapshots taken during shutdown
         or an unconfirmed mode switch, without blocking the planning tick.
         """
-        session = self._collision_map_session
-        if (
-            session is None
-            or self._closing
-            or not self.is_mapping_running()
-            or session.process_id != id(self.process)
-            or session.map_name != self.bb.active_map_name
-            or session != self._collision_map_session
-        ):
-            return None
-        return session
+        with self._runtime_lock:
+            session = self._collision_map_session
+            if (
+                session is None
+                or self._closing
+                or self.bb.slam_runtime_mode != self.MODE_MAPPING
+                or not self.is_running()
+                or session.process_id != id(self.process)
+                or session.map_name != self.bb.active_map_name
+            ):
+                return None
+            return session
+
+    def collision_checking_state(self) -> CollisionCheckingState:
+        with self._runtime_lock:
+            session = self.current_collision_map_session()
+            return CollisionCheckingState(
+                session=session,
+                enabled=session is not None and self._collision_checking_enabled,
+                revision=self._collision_checking_revision,
+            )
+
+    def set_collision_checking_enabled(self, enabled: bool) -> CollisionCheckingState:
+        """Change planning policy only; never mutate MoveIt or command motion."""
+        if type(enabled) is not bool:
+            raise TypeError("Arm collision checking must be a boolean")
+        with self._runtime_lock:
+            state = self.collision_checking_state()
+            if enabled and not state.available:
+                raise ValueError("Arm collision checking requires an active mapping session")
+            if self._collision_checking_enabled != enabled:
+                self._collision_checking_enabled = enabled
+                self._collision_checking_revision += 1
+            state = self.collision_checking_state()
+        self._publish_runtime_status()
+        return state
+
+    def _set_collision_checking_service(self, request, response):
+        try:
+            state = self.set_collision_checking_enabled(request.data)
+        except (TypeError, ValueError) as exception:
+            response.success = False
+            response.message = str(exception)
+        else:
+            response.success = True
+            response.message = (
+                "Arm collision checking enabled" if state.enabled
+                else "Arm collision checking disabled"
+            )
+        return response
 
     def get_running_mode(self) -> str:
         if not self.is_running():

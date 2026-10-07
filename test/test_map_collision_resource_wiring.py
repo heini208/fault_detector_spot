@@ -1,4 +1,4 @@
-"""Offline checks for opt-in scene ownership and shared runtime/TF wiring."""
+"""Offline checks for always-wired scene ownership and shared runtime/TF."""
 
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -33,20 +33,10 @@ def factories(monkeypatch):
     return planner, scene, listener
 
 
-def test_default_off_retains_original_planner_and_creates_no_scene(factories):
+def test_scene_uses_existing_runtime_and_shared_tf_once(factories):
     planner, scene, listener = factories
     resources = resources_module.RobotCommandResources()
     node = Node()
-    assert resources.get_moveit_arm_planner(node) is planner.return_value
-    assert "collision_scene" not in planner.call_args.kwargs
-    scene.assert_not_called()
-    listener.assert_not_called()
-
-
-def test_enabled_scene_uses_existing_runtime_and_shared_tf_once(factories):
-    planner, scene, listener = factories
-    resources = resources_module.RobotCommandResources()
-    node = Node(**{"arm.motion.moveit_environment_collision_enabled": True})
     runtime = object()
     resources.bind_rtabmap_runtime(runtime)
     tf_listener = resources.get_tf_listener(node)
@@ -59,13 +49,11 @@ def test_enabled_scene_uses_existing_runtime_and_shared_tf_once(factories):
         resources.bind_rtabmap_runtime(object())
 
 
-def test_enabled_planning_requires_runtime_and_rejects_nonboolean_override(factories):
+def test_planning_requires_authoritative_runtime(factories):
     planner, scene, listener = factories
-    for value, error in ((True, RuntimeError), ("true", ValueError)):
-        resources = resources_module.RobotCommandResources()
-        node = Node(**{"arm.motion.moveit_environment_collision_enabled": value})
-        with pytest.raises(error):
-            resources.get_moveit_arm_planner(node)
+    resources = resources_module.RobotCommandResources()
+    with pytest.raises(RuntimeError, match="requires the mapping runtime"):
+        resources.get_moveit_arm_planner(Node())
     planner.assert_not_called()
     scene.assert_not_called()
     listener.assert_not_called()
