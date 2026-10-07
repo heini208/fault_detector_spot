@@ -54,7 +54,7 @@ class LidarFrameAdapter:
         self.max_points = node.declare_parameter(
             "max_points", 100000, descriptor).value
         max_rate_hz = node.declare_parameter(
-            "max_rate_hz", 10.0, descriptor).value
+            "max_rate_hz", 5.0, descriptor).value
         if (not self.sensor_frame or self.sensor_frame != self.sensor_frame.strip()
                 or self.sensor_frame.startswith("/")):
             raise ValueError("sensor_frame must be a nonempty TF frame without a leading slash")

@@ -73,7 +73,7 @@ with `publish_mount_tf:=false`. The calibration is in
 `config/lidar_mount_calibration.yaml`; verify it against the actual mount before
 using it. No hardware or live TF validation was performed for this change.
 
-Processing is bounded by depth-one queues, a 10 Hz attempt limit, a 100,000-point
+Processing is bounded by depth-one queues, a 5 Hz attempt limit, a 100,000-point
 limit and a 0.5 s age limit checked both before and after conversion. Clouds more
 than 50 ms in the future, missing timestamps, unsupported layouts and invalid
 transforms are rejected. TF lookup never waits or substitutes the latest pose.
@@ -114,8 +114,10 @@ parameter group. Robot, kinematics, joint limits and planner configuration remai
 owned by that package. There is no duplicated MoveIt launch or custom map updater.
 
 Configure `occupancy_map_monitor/PointCloudOctomapUpdater` with corrected
-`/velodyne/points_sensor`, 5 cm voxels, 3 m range, 5 Hz maximum update rate, and
-3 cm robot-mask padding. The mask padding excludes robot returns rather than
+`/velodyne/points_sensor`, 5 cm voxels, 3 m range and 3 cm robot-mask padding.
+The adapter's monotonic rate limit caps input at 5 Hz. Disable the native ROS-time
+throttle (`max_update_rate: 0.0`) to prevent stalled updates after backward clock
+jumps during recording replay. The mask padding excludes robot returns rather than
 inflating obstacles. Native ray integration and robot/attached-body filtering own
 occupancy. `/fault_detector/moveit/filtered_lidar` exposes the updater's filtered
 cloud for inspection. Keep the existing lidar adapter separate until physical

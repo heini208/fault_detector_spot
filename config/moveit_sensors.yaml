@@ -13,5 +13,7 @@
       point_subsample: 1
       padding_offset: 0.03
       padding_scale: 1.0
-      max_update_rate: 5.0
+      # The adapter caps input at 5 Hz using monotonic time. MoveIt's ROS-time
+      # throttle stalls after backward clock jumps during recording replay.
+      max_update_rate: 0.0
       filtered_cloud_topic: /fault_detector/moveit/filtered_lidar

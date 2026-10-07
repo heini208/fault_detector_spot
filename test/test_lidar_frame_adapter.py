@@ -412,15 +412,16 @@ def test_malformed_cloud_does_not_poison_subsequent_scan(rig):
     assert len(value.node.published) == 1
 
 
-def test_rate_cap_skips_work_and_resumes_using_monotonic_time(rig):
-    value = rig({"max_rate_hz": 2.0})
+def test_default_rate_cap_skips_work_and_resumes_after_ros_clock_rewind(rig):
+    value = rig()
     value.adapter.receive_cloud(cloud())
-    value.now += 0.49
-    value.adapter.receive_cloud(cloud())
+    value.node.now = 5.0
+    value.now += 0.19
+    value.adapter.receive_cloud(cloud(stamp=5.0))
     assert len(value.buffer.calls) == len(value.node.published) == 1
 
     value.now += 0.02
-    value.adapter.receive_cloud(cloud())
+    value.adapter.receive_cloud(cloud(stamp=5.0))
     assert len(value.buffer.calls) == len(value.node.published) == 2
 
 

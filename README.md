@@ -252,8 +252,10 @@ scene. The application launch configures MoveIt's native point-cloud updater for
 started separately after verifying its mount calibration (see below). RTAB-Map
 is not queried or imported for arm planning.
 
-The updater uses 5 cm voxels, a 3 m sensing range and at most 5 updates per second,
-with MoveIt's robot/attached-body self-filter and free-space rays. The 3 cm filter
+The updater uses 5 cm voxels, a 3 m sensing range and input capped at 5 Hz by the
+adapter's monotonic clock. MoveIt's own ROS-time throttle is disabled so backward
+clock jumps during recording replay do not stall updates. MoveIt's robot/attached-body
+self-filter and free-space rays process this input. The 3 cm filter
 padding excludes returns close to robot geometry; it is not obstacle inflation.
 It consumes the corrected lidar directly, without mapping's broad arm-exclusion
 box. Sensor integration runs independently of arm requests and adds no map fetch
@@ -438,7 +440,7 @@ physical lidar TF already exists, set `publish_mount_tf:=false` and
 `output_topic`, and `use_sim_time` are also launch arguments. Run only one
 publisher for the chosen physical sensor frame.
 
-The adapter uses queues of depth one, limits conversion attempts to 10 Hz and
+The adapter uses queues of depth one, limits conversion attempts to 5 Hz and
 100,000 points, and drops clouds older than 0.5 s or more than 50 ms in the
 future. Missing timestamped TF drops that scan immediately; there is no wait,
 latest-transform substitution, or stored scan to replay later. Malformed clouds
