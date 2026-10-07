@@ -246,10 +246,48 @@ is available, independently of mapping, localization, or lidar attachment.
 Starting or stopping mapping does not change the setting.
 
 The setting controls occupancy collision checks in MoveIt's current planning
-scene. **This revision does not configure a live obstacle source.** Enabling the
-control does not start sensors or prove that environmental obstacles are present
-or current. Native MoveIt sensor input is the next implementation step; RTAB-Map
-is no longer queried or imported for arm planning.
+scene. The application launch configures MoveIt's native point-cloud updater for
+`/velodyne/points_sensor`, using
+[`config/moveit_sensors.yaml`](config/moveit_sensors.yaml). The lidar adapter is
+started separately after verifying its mount calibration (see below). RTAB-Map
+is not queried or imported for arm planning.
+
+The updater uses 5 cm voxels, a 3 m sensing range and at most 5 updates per second,
+with MoveIt's robot/attached-body self-filter and free-space rays. The 3 cm filter
+padding excludes returns close to robot geometry; it is not obstacle inflation.
+It consumes the corrected lidar directly, without mapping's broad arm-exclusion
+box. Sensor integration runs independently of arm requests and adds no map fetch
+to a movement. The range limits each observation, not the accumulated map size.
+
+**Integration prerequisites:** install `moveit_ros_perception` (Humble Debian
+package `ros-humble-moveit-ros-perception`). The current offline machine lacks
+this plugin; installing/building this Python package alone does not supply it.
+The `spot_moveit_config` SRDF also needs the standard floating virtual joint:
+
+```xml
+<virtual_joint name="odom_joint" type="floating" parent_frame="odom" child_link="body" />
+```
+
+That makes the scene frame `odom`, with the base pose supplied by existing
+`odom` to `body` TF. The arm chain and targets remain relative to `body`.
+MoveIt 2.5.9's planning-scene monitor chooses the robot model frame for native
+occupancy; setting `octomap_frame` alone does not override a body-rooted model.
+Against the old body-rooted model, accumulated obstacles would move with Spot.
+The application launch therefore skips sensor configuration with a warning if
+this joint or the perception package is missing, while keeping the existing arm
+planner available. The separate SRDF edit has not been applied in this revision.
+
+Enabling the control does not start sensors or certify current obstacle coverage.
+With no received data, the scene is empty. If data stops, stored occupancy stays;
+there is no automatic expiry or fallback to disabled. Visible free-space rays
+clear old observations over successive scans; occluded obstacles can remain.
+This is an optional planning aid, not live collision monitoring during execution.
+The existing execution guard stays active.
+
+Offline checks validate launch wiring, collision policy and the proposed model's
+body-relative geometry. They do not verify root-TF freshness, runtime planning
+latency or endpoint accuracy with the floating root. Those need hardware checks
+before relying on the new occupancy input.
 
 Before each arm plan, the planner reads only MoveIt's Allowed Collision Matrix
 and applies the requested occupancy policy. Disabled or explicitly bypassed
@@ -397,9 +435,14 @@ parameters on the adapter.
 After physical alignment and moved-obstacle clearing have been verified, mapping
 can select this output through its existing
 `raw_lidar_topic:=/velodyne/points_sensor` argument. Its arm-exclusion filter stays
-downstream. MoveIt can consume the corrected source separately without that
-mapping filter. Neither consumer is switched by this change, and the native
-MoveIt updater is still a separate implementation step.
+downstream. MoveIt's configured updater consumes the corrected source separately
+without that mapping filter. Mapping's default source is unchanged. Before
+enabling arm avoidance on hardware, inspect the MoveIt scene in RViz: verify the
+scene frame is `odom`, geometry stays stationary during base motion, robot returns
+are removed, and a moved visible obstacle clears. Then compare enabled and
+bypassed planning-only requests before testing physical movement. Front and hand
+cameras are not configured yet; this first input covers only what the rear lidar
+sees.
 
 ### 4.4 Navigation (Nav2)
 

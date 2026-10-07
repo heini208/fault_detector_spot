@@ -1,0 +1,17 @@
+# Consumed only by move_group; the lidar frame adapter is launched separately.
+# MoveIt's SRDF must have a floating odom -> body virtual joint. Humble's
+# PlanningSceneMonitor uses the robot model frame despite octomap_frame below.
+/move_group:
+  ros__parameters:
+    octomap_frame: odom
+    octomap_resolution: 0.05
+    sensors: [lidar]
+    lidar:
+      sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+      point_cloud_topic: /velodyne/points_sensor
+      max_range: 3.0
+      point_subsample: 1
+      padding_offset: 0.03
+      padding_scale: 1.0
+      max_update_rate: 5.0
+      filtered_cloud_topic: /fault_detector/moveit/filtered_lidar

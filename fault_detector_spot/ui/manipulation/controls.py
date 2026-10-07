@@ -271,7 +271,8 @@ class ManipulationControls(UIControlHelper):
             text = "Change pending…" if client.pending else ("Enabled" if checked else "Disabled")
             detail = (
                 "Controls environmental occupancy in the current MoveIt planning scene. "
-                "Environmental obstacles require a configured sensor input; this toggle does not start one. "
+                "Requires sensor data; this toggle does not start sensors or report their freshness. "
+                "An empty scene provides no obstacle coverage. Stored obstacles remain if data stops. "
                 "The setting applies to subsequent plans; an executing movement is not interrupted. "
                 "Self-collision checks and the contact guard remain active."
             )

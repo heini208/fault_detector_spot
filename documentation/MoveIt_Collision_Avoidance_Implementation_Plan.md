@@ -2,8 +2,9 @@
 
 Provide an optional environmental occupancy layer for arm planning. Preserve the
 existing motion pipeline, endpoint accuracy, trajectory checks, and contact guard.
-The RTAB-Map snapshot approach has been removed; native MoveIt sensor input is the
-next step. This document describes the current foundation and remaining work.
+The RTAB-Map snapshot approach has been removed. Native MoveIt lidar input is
+configured, with the model-frame prerequisite and hardware validation described
+below. This document describes the current foundation and remaining work.
 
 ## 1. Independent control — implemented
 
@@ -54,9 +55,8 @@ independent mapping-height fixes (`RGBD/ForceOdom3DoF=false` and
 
 Offline checks cover default state, UI/service behavior, ownership, matrix rules,
 planning sequence, toggle changes, cancellation, and the unchanged motion guard.
-No new native sensor updater is configured in this revision. Enabling the setting
-checks whatever occupancy already exists in MoveIt; an empty scene does not
-provide environmental avoidance.
+Enabling the setting checks occupancy already present in MoveIt; an empty scene
+does not provide environmental avoidance.
 
 ## 3. Physical lidar frame adapter — offline implementation complete
 
@@ -64,8 +64,8 @@ provide environmental avoidance.
 `tf2_sensor_msgs.do_transform_cloud`. Its standalone launch publishes
 `/velodyne/points_sensor`, expressed in the physical `lidar_sensor` frame, using
 the original acquisition timestamp and its corresponding TF. It adds no mapping
-or arm-executor dependency. Existing application and mapping launches are
-unchanged; native MoveIt sensor consumption remains Step 4.
+or arm-executor dependency. The adapter still starts separately; the application
+launch now configures its MoveIt consumer in Step 4. Mapping is unchanged.
 
 The launch can publish the previously captured SDK mount calibration through
 the standard static-TF component, or reuse an existing verified physical frame
@@ -106,13 +106,57 @@ real nearby objects. Avoid inheriting that broad exclusion into the new arm
 obstacle stream; use MoveIt's robot/attached-body filtering where supported.
 Keep mapping-specific filters owned by mapping.
 
-## 4. Configure native MoveIt occupancy
+## 4. Native MoveIt occupancy — wiring implemented, prerequisites pending
 
-Use the installed MoveIt point-cloud or depth-image updater. Start with the
-verified source, a practical voxel resolution, bounded sensing range, and modest
-update rate. Reuse its robot filtering and free-space ray integration before
-adding custom processing. Inspect the active MoveIt launch/configuration and
-request authorization before editing a repository outside this project's scope.
+The application launch passes `config/moveit_sensors.yaml` and `use_sim_time`
+only to the existing `spot_moveit_config` MoveIt include, using a scoped ROS launch
+parameter group. Robot, kinematics, joint limits and planner configuration remain
+owned by that package. There is no duplicated MoveIt launch or custom map updater.
+
+Configure `occupancy_map_monitor/PointCloudOctomapUpdater` with corrected
+`/velodyne/points_sensor`, 5 cm voxels, 3 m range, 5 Hz maximum update rate, and
+3 cm robot-mask padding. The mask padding excludes robot returns rather than
+inflating obstacles. Native ray integration and robot/attached-body filtering own
+occupancy. `/fault_detector/moveit/filtered_lidar` exposes the updater's filtered
+cloud for inspection. Keep the existing lidar adapter separate until physical
+mount calibration is verified. No changes to the Spot driver are needed.
+
+`moveit_ros_perception` is now a declared runtime dependency. Its plugin is absent
+from the current offline environment and must be installed before sensor use;
+the Python package build does not install this system dependency.
+
+**Required model correction:** the current external SRDF has a fixed `body`
+root. MoveIt 2.5.9's planning-scene monitor constructs the occupancy monitor in
+the robot model frame, even when `octomap_frame: odom` is configured. A standard
+floating virtual joint from `odom` to `body` is needed so stored occupancy stays
+fixed while Spot moves. Use existing TF for that joint and keep the arm chain,
+targets and trajectory execution body-relative. This one-line external SRDF edit
+is awaiting approval under the repository-scope rule. Do not use native sensing
+against the old body-rooted model.
+
+Launch checks for that floating joint and the perception package before adding
+the sensor parameters. A missing prerequisite produces a warning and leaves the
+existing arm planner available without this lidar integration. There is no
+automatic enablement or runtime retry; install/correct prerequisites before the
+next normal application startup.
+
+Offline launch checks expand the actual installed MoveIt include with process
+execution blocked. They verify parameter delivery and isolation, identical
+robot/planner parameters, and both clock modes. Native MoveIt/FCL checks without
+ROS nodes confirm that updated OctoMap geometry respects the existing enabled
+and bypass matrices, while self and explicit-object collisions remain active.
+An in-memory copy of the actual Spot model with the proposed floating joint also
+preserves all six arm variables, limits, gripper configuration and body-relative
+forward kinematics across several poses; arm-only state diffs preserve the root.
+These checks do not prove runtime TF synchronization. MoveIt's state monitor can
+retain an old/default root when TF is unavailable, and Cartesian conversion uses
+a separate latest TF lookup. Validate current `odom` to `body` TF, body sway,
+planning latency and endpoint accuracy on hardware before relying on this input.
+
+The map updates independently of movement requests; the motion path still reads
+only the small collision matrix. The 3 m sensing range does not make this a
+rolling map: stored voxels can accumulate as the base travels. No custom pruning,
+periodic clearing, synchronous map read, or sensor-readiness wait is added.
 
 Verify frame placement while the base and arm move. Correct sensor-origin
 transforms and robot geometry are prerequisites for useful clearing. Do not
@@ -126,11 +170,13 @@ attached-object geometry owner, using calibration/TF and a simple conservative
 shape initially. A separate full URDF per head is not the default solution.
 Coverage near the omitted head remains a known limitation until geometry exists.
 
-Keep readiness separate from user preference: show whether usable sensor data
-exists before presenting this as live obstacle avoidance. Define stale-data
-behavior in this step; do not add a second mapping lifecycle or silently call an
-empty scene protected. This is planning-time avoidance, not continuous replanning
-around moving obstacles during execution.
+The UI shows the user preference and explicitly says it does not report sensor
+freshness. Empty or unobserved space has no environmental coverage. When data
+stops, stored occupancy remains; nothing automatically expires or disables the
+preference. Visible rays can clear past observations over several updates, but
+occluded geometry can persist. Validate coverage through the scene and filtered
+cloud during commissioning. This minimal integration adds no second sensor-state
+owner or mapping lifecycle and does not continuously replan during execution.
 
 ## 5. Validate without changing arm accuracy
 

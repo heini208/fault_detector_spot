@@ -1,18 +1,46 @@
 import os
+import xml.etree.ElementTree as ET
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import Node
+from launch.logging import get_logger
+from launch_ros.actions import Node, SetParameter, SetParametersFromFile
 
 from fault_detector_spot.shared.persistence.runtime_paths import (
     default_map_root,
     default_measurement_root,
     default_recording_root,
 )
+
+
+def _moveit_sensor_parameters(sensor_config, moveit_pkg):
+    unavailable = []
+    try:
+        get_package_share_directory("moveit_ros_perception")
+    except PackageNotFoundError:
+        unavailable.append("moveit_ros_perception is not installed")
+    try:
+        semantic = ET.parse(os.path.join(moveit_pkg, "config", "spot.srdf")).getroot()
+        if not any(
+            joint.get("type") == "floating"
+            and joint.get("parent_frame") == "odom"
+            and joint.get("child_link") == "body"
+            for joint in semantic.findall("virtual_joint")
+        ):
+            unavailable.append("installed SRDF needs a floating odom -> body virtual joint")
+    except (OSError, ET.ParseError) as error:
+        unavailable.append(f"cannot verify installed SRDF: {error}")
+    if unavailable:
+        get_logger("launch.user").warning(
+            "Native lidar occupancy unavailable: " + "; ".join(unavailable)
+            + "; arm planning still starts; collision toggle does not certify obstacle coverage"
+        )
+        return []
+    return [SetParametersFromFile(sensor_config)]
 
 
 def generate_launch_description():
@@ -47,6 +75,7 @@ def generate_launch_description():
         "config",
         "arm_motion.yaml",
     )
+    moveit_sensors_config = os.path.join(pkg, "config", "moveit_sensors.yaml")
 
     use_sim_time = LaunchConfiguration("use_sim_time")
     navigation_map_root = LaunchConfiguration("navigation_map_root")
@@ -110,15 +139,19 @@ def generate_launch_description():
             default_value="4",
             description="micro-ROS Agent log verbosity (0-6)",
         ),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(
-                    moveit_pkg,
-                    "launch",
-                    "move_group.launch.py",
+        GroupAction([
+            *_moveit_sensor_parameters(moveit_sensors_config, moveit_pkg),
+            SetParameter("use_sim_time", use_sim_time),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(
+                        moveit_pkg,
+                        "launch",
+                        "move_group.launch.py",
+                    )
                 )
-            )
-        ),
+            ),
+        ]),
         Node(
             package="micro_ros_agent",
             executable="micro_ros_agent",
