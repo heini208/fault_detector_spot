@@ -179,3 +179,4 @@ cython_debug/
 /config/spot_ros_example.yaml
 /config/spot_ros_lan.yaml
 /AGENTS.md
+/documentation/MoveIt_Collision_Avoidance_Implementation_Plan.md
