@@ -393,6 +393,23 @@ samples: the longest force gap was 64 ms and there were no stale-force checks
 during conversion. No planning scenes or robot commands were sent by that check;
 the updated application still needs a real movement retest after relaunch.
 
+Follow-up movement logs showed 14.5–16.5 s of map fetching/conversion versus
+0.4–0.5 s of motion planning. The installed RTAB-Map defaults to `map_cleanup:
+true`, clearing its assembled OctoMap when no OctoMap topic has subscribers.
+Service-only use therefore repeatedly reconstructs the tree. A read-only live
+comparison kept the tree present via its existing `/octomap_binary` topic:
+subsequent full-map service requests took 0.22 s and 0.16 s. These are fetch-only
+measurements, not complete movement-start latency.
+
+The mapping launch now sets `map_cleanup: false`. Requests still update the tree
+from current optimized poses, preserving existing session, TF, and cancellation
+checks. No application snapshot cache or additional occupancy writer is added.
+The initial assembly and graph corrections can still require a full rebuild;
+retaining generated map caches increases RTAB-Map memory use. Cropping to an arm
+workspace can be considered if transfer/conversion costs become dominant, but
+cropping after a full fetch cannot remove the observed reconstruction cost.
+The setting requires mapping to be relaunched and movement latency to be retested.
+
 For each checked plan, capture the runtime session/map and a placement reference,
 request its current binary
 OctoMap, validate the response, resolve current placement, apply the scene diff,

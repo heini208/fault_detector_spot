@@ -33,6 +33,9 @@ def make_rtabmap_node(incremental_memory, condition):
             "wait_for_transform": 0.5,
             "topic_queue_size": 20,
             "sync_queue_size": 20,
+            # Arm planning uses OctoMap services without a topic subscriber.
+            # Retain assembled maps so each request does not rebuild the tree.
+            "map_cleanup": False,
             "Rtabmap/DetectionRate": "2.0",
             "Mem/NotLinkedNodesKept": "false",
             "Mem/STMSize": "30",

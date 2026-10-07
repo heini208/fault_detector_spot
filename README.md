@@ -273,8 +273,13 @@ immediately change RViz; clearing happens before the next plan. A setting change
 during preparation invalidates that pending plan. While checking is enabled,
 each arm plan fetches RTAB-Map's binary OctoMap and waits for MoveIt to accept it
 before planning. Unavailable or invalid data during checked preparation fails
-that request; it never silently retries without checking. Expect roughly 1–3
-seconds of preparation on top of planning, based on the feasibility measurements.
+that request; it never silently retries without checking. The RTAB-Map launch
+sets `map_cleanup: false` to retain its assembled maps between service requests;
+otherwise the absence of OctoMap topic subscribers causes repeated reconstruction.
+The first request and later graph changes can still require a full rebuild.
+Conversion and scene application also add preparation time before planning.
+This trades additional RTAB-Map memory for avoiding repeated map reconstruction;
+it does not retain an outdated snapshot in the arm planner.
 The base must stay stationary:
 session changes, stale TF (over 1.5 s), or body-placement changes over 2 cm / 0.03
 rad reject the plan before execution. These limits allow small body sway.
