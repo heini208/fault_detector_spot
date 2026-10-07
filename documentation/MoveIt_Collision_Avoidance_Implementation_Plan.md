@@ -105,6 +105,44 @@ Start with offline matrix-transformation and planner-client tests. Node-based se
 
 **Done when:** both current planning modes support the toggle without changing their motion-generation contracts.
 
+Implementation status: the optional planner-client policy and offline tests are
+implemented. Construct `MoveItArmPlanner` with
+`environment_collision_policy_enabled=True` to prepare the shared ACM before
+each request; `start` and `start_cartesian` accept
+`ignore_environment_collisions=True` for occupancy bypass. Existing construction
+keeps the direct planning path and original cancellation behavior. Command/UI
+wiring and sensor ingestion are not connected yet. Offline tests cover effective
+ACM rules, unchanged planning requests, response handling, and cancellation;
+actual avoidance of synthetic geometry through running MoveIt services remains
+an integration check requiring separate approval. Use one serialized client and
+ACM writer, as described above.
+
+Review and passive hardware check, 7 October 2026, on `feature/move_it_collision`
+at `0e4ddbe` plus the Step 1 working changes:
+
+- No Step 1 implementation defect found; 110 relevant offline tests pass.
+  A separate experiment against installed MoveIt validated 3,920 ACM comparisons
+  and native FCL collision checks: occupancy bypass retained self-collision and
+  named-obstacle checks. This did not exercise running planning services.
+- The constructor flag enables policy handling; it is not the future UI switch.
+  Once sensor occupancy is connected, runtime OFF must still prepare the policy,
+  using `ignore_environment_collisions=True`. Skipping policy handling would
+  leave existing occupancy rules active.
+- A roughly 12-second passive sample received lidar at 6.8 Hz and hand/front-left/
+  front-right clouds at 2.6/3.2/3.4 Hz. Median receipt ages were about
+  0.45/0.58/0.33/0.33 seconds. All sampled cloud frames resolved to `body` at their
+  acquisition timestamps. Joint states arrived at about 39.5 Hz.
+- The inspected camera clouds contained about 8.1%/2.8%/3.2% finite nonzero points.
+  This establishes data availability, not sufficient obstacle coverage; check
+  coverage again in the working arm posture. Lidar contained about 25,000 valid
+  points in the inspected cloud.
+- Live TF confirmed `sensor_origin_velodyne-point-cloud` is identical to `odom`,
+  not a physical lidar-origin frame. Resolve the acquisition-origin requirement
+  below before connecting this source to the standard updater.
+- No `move_group` or MoveIt planning/scene services were present in the observed
+  ROS graph. End-to-end avoidance was not validated. Only temporary passive
+  observers ran; no motion, scene changes, or driver restarts were requested.
+
 ### Step 2 Carry the option through existing commands
 
 Add the field to the semantic command and relevant existing ROS intent/payload messages. Update producers, adapters, execution-command translation, Behavior Tree dispatch, and executor calls. Keep request identity and correlation unchanged.
@@ -122,6 +160,16 @@ Keep defaults in the existing parameter system. No new policy enum, command queu
 Configure the standard point-cloud occupancy updater in the existing MoveIt launch. Start with the lidar's **/velodyne/points** candidate topic. Branch before the mapping arm-box filter, which can also remove actual objects near the arm. Keep the mapping branch unchanged; use MoveIt's robot self-filter for planning.
 
 Mapping need not run, but the lidar driver must supply usable data. Verify topic, frame, timestamps, QoS, and self-filter behavior. Do not start mapping just to obtain a planning cloud.
+
+The current lidar cloud is expressed at the odometry origin. MoveIt's standard
+updater uses the cloud frame origin for free-space rays, so a valid TF alone is
+insufficient. Before using this topic, obtain the actual calibrated acquisition
+origin and transform the point coordinates into that sensor frame at the cloud
+timestamp; changing only `frame_id` is incorrect. Reuse existing TF/calibration
+and leave the mapping stream unchanged. If the physical origin is unavailable,
+start with one camera cloud after verifying useful coverage instead of assuming
+the lidar topic is immediately suitable. See the
+[versioned updater implementation](https://github.com/moveit/moveit2/blob/2.5.9/moveit_ros/perception/pointcloud_octomap_updater/src/pointcloud_octomap_updater.cpp).
 
 Implement the bounded refresh described above. Choose a modest local range and voxel resolution for avoiding obvious obstacles. Tune for useful coverage and low overhead rather than millimetre surface reconstruction. Do not increase self-filter padding until nearby real obstacles disappear.
 

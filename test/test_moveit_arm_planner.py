@@ -34,6 +34,12 @@ def planner_shell():
     planner._started_at = 0.0
     planner._planning_mode = None
     planner._future = None
+    planner._stage = "plan"
+    planner._pending_request = None
+    planner._ignore_environment_collisions = False
+    planner._discard_result = False
+    planner._service_fault = ""
+    planner.environment_collision_policy_enabled = False
     planner._logger = SimpleNamespace(info=lambda *_args, **_kwargs: None)
     return planner
 

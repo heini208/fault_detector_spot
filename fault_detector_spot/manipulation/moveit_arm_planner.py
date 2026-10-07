@@ -11,11 +11,20 @@ from moveit_msgs.msg import (
     Constraints,
     MoveItErrorCodes,
     OrientationConstraint,
+    PlanningSceneComponents,
     PositionConstraint,
 )
-from moveit_msgs.srv import GetCartesianPath, GetMotionPlan
+from moveit_msgs.srv import (
+    ApplyPlanningScene,
+    GetCartesianPath,
+    GetMotionPlan,
+    GetPlanningScene,
+)
 from shape_msgs.msg import SolidPrimitive
 
+from fault_detector_spot.manipulation.moveit_collision_policy import (
+    occupancy_collision_matrix,
+)
 
 ARM_JOINT_NAMES = (
     "arm_sh0",
@@ -59,7 +68,12 @@ class MoveItPlanUpdate:
 
 
 class MoveItArmPlanner:
-    """Plan normal and straight Cartesian hand paths without executing them."""
+    """Plan normal and straight Cartesian hand paths without executing them.
+
+    The optional occupancy policy requires one serialized planning client and
+    ACM writer. It changes the shared scene, so independent concurrent planning
+    clients must not use that scene. Existing callers keep the direct path.
+    """
 
     def __init__(
         self,
@@ -85,11 +99,21 @@ class MoveItArmPlanner:
         cartesian_min_fraction: float = DEFAULT_CARTESIAN_MIN_FRACTION,
         min_arm_sh1_rad: float = MIN_ARM_SH1_RAD,
         monotonic_clock=time.monotonic,
+        environment_collision_policy_enabled: bool = False,
+        get_scene_service_name: str = "/get_planning_scene",
+        apply_scene_service_name: str = "/apply_planning_scene",
     ):
         if node is None:
             raise ValueError("MoveItArmPlanner requires a ROS node")
         if not callable(monotonic_clock):
             raise TypeError("Monotonic clock must be callable")
+        if not isinstance(environment_collision_policy_enabled, bool):
+            raise TypeError("Environmental collision policy enabled must be a boolean")
+        self.environment_collision_policy_enabled = environment_collision_policy_enabled
+        self.get_scene_service_name = str(get_scene_service_name).strip()
+        self.apply_scene_service_name = str(apply_scene_service_name).strip()
+        if not self.get_scene_service_name or not self.apply_scene_service_name:
+            raise ValueError("MoveIt scene service names must not be empty")
 
         self.node = node
         self.service_name = str(service_name).strip()
@@ -161,147 +185,229 @@ class MoveItArmPlanner:
             GetCartesianPath,
             self.cartesian_service_name,
         )
+        self._get_scene_client = None
+        self._apply_scene_client = None
+        if self.environment_collision_policy_enabled:
+            self._get_scene_client = node.create_client(
+                GetPlanningScene, self.get_scene_service_name,
+            )
+            self._apply_scene_client = node.create_client(
+                ApplyPlanningScene, self.apply_scene_service_name,
+            )
         self._future = None
         self._started_at = None
         self._planning_mode = None
+        self._stage = "plan"
+        self._pending_request = None
+        self._ignore_environment_collisions = False
+        self._discard_result = False
+        self._service_fault = ""
 
     @property
     def active(self) -> bool:
-        return self._future is not None
+        self._release_discarded_request()
+        return self._future is not None or bool(self._service_fault)
 
-    def start(self, target_hand: PoseStamped) -> MoveItPlanUpdate:
+    def start(
+        self, target_hand: PoseStamped, *, ignore_environment_collisions=False,
+    ) -> MoveItPlanUpdate:
+        return self._start(target_hand, "motion", ignore_environment_collisions)
+
+    def start_cartesian(
+        self, target_hand: PoseStamped, *, ignore_environment_collisions=False,
+    ) -> MoveItPlanUpdate:
+        return self._start(target_hand, "cartesian", ignore_environment_collisions)
+
+    def _start(self, target_hand, mode, ignore_environment_collisions):
         error = self._target_error(target_hand)
         if error is not None:
             return error
-
-        try:
-            if not self._client.wait_for_service(timeout_sec=0.0):
-                return MoveItPlanUpdate(
-                    MoveItPlanOutcome.SERVICE_UNAVAILABLE,
-                    f"MoveIt planning service '{self.service_name}' "
-                    "is unavailable",
-                )
-            request = self._build_request(target_hand)
-            future = self._client.call_async(request)
-        except Exception as exception:
+        if not isinstance(ignore_environment_collisions, bool):
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
-                f"MoveIt planning request failed: {exception}",
+                "Ignore environmental collisions must be a boolean",
             )
-
-        return self._begin_future(
-            future,
-            "motion",
-            "MoveIt arm planning started",
-            "MoveIt planning service returned no future",
-        )
-
-    def start_cartesian(self, target_hand: PoseStamped) -> MoveItPlanUpdate:
-        error = self._target_error(target_hand)
-        if error is not None:
-            return error
-
-        try:
-            if not self._cartesian_client.wait_for_service(timeout_sec=0.0):
-                return MoveItPlanUpdate(
-                    MoveItPlanOutcome.SERVICE_UNAVAILABLE,
-                    "MoveIt Cartesian planning service "
-                    f"'{self.cartesian_service_name}' is unavailable",
-                )
-            request = self._build_cartesian_request(target_hand)
-            future = self._cartesian_client.call_async(request)
-        except Exception as exception:
+        if ignore_environment_collisions and not self.environment_collision_policy_enabled:
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
-                f"MoveIt Cartesian planning request failed: {exception}",
+                "Environmental collision policy is not enabled for this planner",
             )
 
-        return self._begin_future(
-            future,
-            "cartesian",
-            "MoveIt Cartesian path planning started",
-            "MoveIt Cartesian planning service returned no future",
+        try:
+            client = self._cartesian_client if mode == "cartesian" else self._client
+            clients = [client]
+            if self.environment_collision_policy_enabled:
+                clients.extend([self._get_scene_client, self._apply_scene_client])
+            if any(not item.wait_for_service(timeout_sec=0.0) for item in clients):
+                return MoveItPlanUpdate(
+                    MoveItPlanOutcome.SERVICE_UNAVAILABLE,
+                    "Required MoveIt planning or scene service is unavailable",
+                )
+            self._pending_request = (
+                self._build_cartesian_request(target_hand)
+                if mode == "cartesian" else self._build_request(target_hand)
+            )
+            self._planning_mode = mode
+            self._ignore_environment_collisions = ignore_environment_collisions
+            if self.environment_collision_policy_enabled:
+                request = GetPlanningScene.Request()
+                request.components.components = PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
+                return self._begin_future(
+                    self._get_scene_client.call_async(request), "read_scene",
+                )
+            return self._submit_plan()
+        except Exception as exception:
+            return self._request_error(exception, uncertain=False)
+
+    def _submit_plan(self):
+        client = self._cartesian_client if self._planning_mode == "cartesian" else self._client
+        return self._begin_future(client.call_async(self._pending_request), "plan")
+
+    def _begin_future(self, future, stage):
+        if future is None:
+            raise RuntimeError("MoveIt service returned no future")
+        self._future = future
+        self._stage = stage
+        self._started_at = self._monotonic_clock()
+        return MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, self._waiting_detail())
+
+    def _waiting_detail(self):
+        if self._stage == "read_scene":
+            return "Reading MoveIt collision rules"
+        if self._stage == "apply_scene":
+            return "Applying MoveIt environmental collision policy"
+        return (
+            "Waiting for MoveIt Cartesian path"
+            if self._planning_mode == "cartesian" else "Waiting for MoveIt arm plan"
         )
 
     def poll(self) -> MoveItPlanUpdate:
+        if self._discard_result:
+            self._release_discarded_request()
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.ERROR,
+                "MoveIt request was cancelled or timed out; its result is discarded",
+            )
         future = self._future
         if future is None:
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
-                "No MoveIt arm plan is active",
+                self._service_fault or "No MoveIt arm plan is active",
             )
-
         if not future.done():
-            if (
-                self._monotonic_clock() - self._started_at
-                >= self.response_timeout_sec
-            ):
-                mode = self._planning_mode
+            if self._monotonic_clock() - self._started_at >= self.response_timeout_sec:
+                detail = self._waiting_detail()
                 self.cancel()
-                label = "Cartesian path planning" if mode == "cartesian" else "arm planning"
                 return MoveItPlanUpdate(
                     MoveItPlanOutcome.TIMEOUT,
-                    f"MoveIt {label} timed out after "
-                    f"{self.response_timeout_sec:.1f} s",
+                    f"{detail} timed out after {self.response_timeout_sec:.1f} s",
                 )
-            return MoveItPlanUpdate(
-                MoveItPlanOutcome.RUNNING,
-                (
-                    "Waiting for MoveIt Cartesian path"
-                    if self._planning_mode == "cartesian"
-                    else "Waiting for MoveIt arm plan"
-                ),
-            )
+            return MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, self._waiting_detail())
 
-        mode = self._planning_mode
         try:
             response = future.result()
+            if response is None:
+                raise RuntimeError("MoveIt service returned no response")
         except Exception as exception:
-            self._reset()
-            label = "Cartesian planning" if mode == "cartesian" else "planning"
-            return MoveItPlanUpdate(
-                MoveItPlanOutcome.ERROR,
-                f"MoveIt {label} response failed: {exception}",
-            )
+            return self._request_error(exception, uncertain=self._stage != "read_scene")
 
+        if self._stage == "read_scene":
+            try:
+                request = ApplyPlanningScene.Request()
+                request.scene.is_diff = True
+                request.scene.robot_state.is_diff = True
+                request.scene.allowed_collision_matrix = occupancy_collision_matrix(
+                    response.scene.allowed_collision_matrix,
+                    ignore_environment_collisions=self._ignore_environment_collisions,
+                )
+            except Exception as exception:
+                self._reset()
+                return MoveItPlanUpdate(MoveItPlanOutcome.ERROR, str(exception))
+            try:
+                return self._begin_future(
+                    self._apply_scene_client.call_async(request), "apply_scene",
+                )
+            except Exception as exception:
+                return self._request_error(exception)
+
+        if self._stage == "apply_scene":
+            if not response.success:
+                self._reset()
+                return MoveItPlanUpdate(
+                    MoveItPlanOutcome.FAILURE,
+                    "MoveIt rejected the environmental collision policy; no plan submitted",
+                )
+            try:
+                return self._submit_plan()
+            except Exception as exception:
+                return self._request_error(exception)
+
+        mode = self._planning_mode
         self._reset()
-        if response is None:
-            return MoveItPlanUpdate(
-                MoveItPlanOutcome.ERROR,
-                (
-                    "MoveIt Cartesian planning service returned no response"
-                    if mode == "cartesian"
-                    else "MoveIt planning service returned no response"
-                ),
-            )
-
         if mode == "cartesian":
             return self._cartesian_result(response)
         return self._motion_plan_result(response)
 
-    def cancel(self) -> None:
-        future = self._future
+    def _request_error(self, exception, *, uncertain=True):
+        detail = f"MoveIt service request failed: {exception}"
         self._reset()
-        if future is not None and not future.done():
+        if self.environment_collision_policy_enabled and uncertain:
+            # A transport error does not establish that server work has ended.
+            self._service_fault = (
+                detail + "; server state is uncertain; verify MoveIt is idle "
+                "before reinitializing the planner"
+            )
+        return MoveItPlanUpdate(MoveItPlanOutcome.ERROR, self._service_fault or detail)
+
+    def cancel(self) -> None:
+        if not self.environment_collision_policy_enabled:
+            # Preserve existing cancellation when no shared policy is in use.
+            future = self._future
+            self._reset()
+            if future is not None:
+                try:
+                    future.cancel()
+                except Exception:
+                    pass
+            return
+        if self._future is not None:
+            # ROS services cannot cancel server computation. Keep the future
+            # until its reply, but never consume it as a plan or a next stage.
+            self._discard_result = True
+            self._pending_request = None
+            self._release_discarded_request()
+
+    def _release_discarded_request(self):
+        if self._discard_result and self._future is not None and self._future.done():
             try:
-                future.cancel()
-            except Exception:
-                pass
+                if self._future.result() is None:
+                    raise RuntimeError("MoveIt service returned no response")
+            except Exception as exception:
+                self._request_error(exception, uncertain=self._stage != "read_scene")
+            else:
+                self._reset()
 
     def destroy(self) -> None:
         self.cancel()
-        clients = (self._client, self._cartesian_client)
-        self._client = None
-        self._cartesian_client = None
+        clients = (
+            self._client, self._cartesian_client,
+            self._get_scene_client, self._apply_scene_client,
+        )
+        self._client = self._cartesian_client = None
+        self._get_scene_client = self._apply_scene_client = None
+        self._service_fault = "MoveIt planner has been destroyed"
         for client in clients:
             if client is not None:
                 self.node.destroy_client(client)
 
     def _target_error(self, target_hand: PoseStamped):
-        if self.active:
+        busy = self.active
+        if self._service_fault:
+            return MoveItPlanUpdate(MoveItPlanOutcome.SERVICE_UNAVAILABLE, self._service_fault)
+        if busy:
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
-                "Another MoveIt arm plan is already active",
+                "Another MoveIt service request is still outstanding",
             )
         if not isinstance(target_hand, PoseStamped):
             return MoveItPlanUpdate(
@@ -315,26 +421,6 @@ class MoveItArmPlanner:
                 f"'{self.planning_frame}'",
             )
         return None
-
-    def _begin_future(
-        self,
-        future,
-        planning_mode: str,
-        started_detail: str,
-        missing_future_detail: str,
-    ) -> MoveItPlanUpdate:
-        if future is None:
-            return MoveItPlanUpdate(
-                MoveItPlanOutcome.ERROR,
-                missing_future_detail,
-            )
-        self._future = future
-        self._started_at = self._monotonic_clock()
-        self._planning_mode = planning_mode
-        return MoveItPlanUpdate(
-            MoveItPlanOutcome.RUNNING,
-            started_detail,
-        )
 
     def _motion_plan_result(self, response) -> MoveItPlanUpdate:
         result = response.motion_plan_response
@@ -609,6 +695,10 @@ class MoveItArmPlanner:
         self._future = None
         self._started_at = None
         self._planning_mode = None
+        self._stage = "plan"
+        self._pending_request = None
+        self._ignore_environment_collisions = False
+        self._discard_result = False
 
     @staticmethod
     def _positive(value, label: str) -> float:
