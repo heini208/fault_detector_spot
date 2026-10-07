@@ -205,6 +205,17 @@ owner or mapping lifecycle and does not continuously replan during execution.
 
 ## 5. Validate without changing arm accuracy
 
+The lidar-only implementation and offline checks are complete. Two hardware
+validation stages remain: passive sensing first, then controlled arm/base tests
+covering avoidance, bypasses, accuracy and response time. Fixes or calibration
+adjustments depend on those observations; there is no reliable completion-time
+estimate before seeing the real data.
+
+The broader requested coverage is not complete: front-left, front-right and hand
+cameras still need adding and validating individually after the lidar passes.
+Sensor-head collision geometry remains a later extension. The unused CHOMP
+dependency issue does not block the current lidar/OMPL path.
+
 1. Run offline policy, command, UI, planner, trajectory, and guard checks.
 2. With approval for live diagnostics, inspect the MoveIt scene without executing
    movement. Confirm real obstacle positions, robot filtering, and removal when
@@ -228,23 +239,29 @@ changes are required by the sensor transition.
 These steps are for a later authorized hardware session, after verification of
 `config/lidar_mount_calibration.yaml` against the physical
 mount. They have not been executed during offline development.
+Rebuild `fault_detector_spot` after taking the new RViz preset so the installed
+configuration is available to the command below.
 
 1. Use the normal driver and application with Spot stationary and the UI setting
    **Disabled**. Mapping is unnecessary. In a normally sourced terminal, start
    `ros2 launch fault_detector_spot lidar_frame_adapter_launch.py`. Do not start a
    second adapter or static-TF publisher if one already provides this frame.
-2. Open the existing MoveIt RViz configuration, without launching another MoveIt
-   server or synthetic joint-state publishers:
+2. Open the passive collision view from this package, without launching another
+   MoveIt server or synthetic joint-state publishers:
 
    ```bash
-   rviz2 -d "$(ros2 pkg prefix spot_moveit_config)/share/spot_moveit_config/config/moveit.rviz"
+   rviz2 -d "$(ros2 pkg prefix fault_detector_spot)/share/fault_detector_spot/config/arm_collision.rviz"
    ```
 
-   Change **Fixed Frame** from `body` to `odom`. Inspect the planning scene topic
-   `/monitored_planning_scene`; add PointCloud2 displays for
-   `/velodyne/points_sensor` and `/fault_detector/moveit/filtered_lidar`, plus TF.
-   Select **Best Effort** reliability for the cloud displays; the updater's
-   filtered publisher requires it. Keep planning and execution controls idle.
+   The preset uses **Fixed Frame: odom**, the planning scene on
+   `/monitored_planning_scene`, the robot's collision geometry, and corrected
+   lidar points on `/velodyne/points_sensor`. Enable **Filtered lidar** to inspect
+   `/fault_detector/moveit/filtered_lidar`; both clouds use **Best Effort**.
+   Disable cloud displays when inspecting occupied voxels alone. TF shows `body`
+   and `lidar_sensor`; select the actual sensor frame if using a custom name.
+   The display has no planning, execution or navigation controls. It reads the
+   initial scene through `get_planning_scene` and subscribes to subsequent
+   updates; it does not modify MoveIt's scene.
 3. Verify that the physical lidar origin is at the rear mount and visible
    surfaces align with the scene voxels. Check that the body and arm do not
    leave occupied trails. Move only an external panel within 3 m into a clear

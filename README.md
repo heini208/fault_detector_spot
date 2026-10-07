@@ -357,6 +357,11 @@ be checked in an authorized robot test. Environmental avoidance requires a
 configured obstacle source and a separate planning-only validation first.
 The implementation steps and retained sensor findings are in the
 [collision avoidance plan](documentation/MoveIt_Collision_Avoidance_Implementation_Plan.md).
+For the first authorized passive sensor check, the package includes
+[`config/arm_collision.rviz`](config/arm_collision.rviz): an `odom`-fixed view of
+the planning scene, robot collision geometry and corrected lidar, with optional
+filtered points. It has no motion controls. The plan contains the launch command
+and expected observations; this preset has only been checked offline so far.
 
 ### 4.2 Simulation / reduced setup
 

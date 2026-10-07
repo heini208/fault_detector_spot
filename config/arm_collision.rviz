@@ -1,0 +1,103 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ''
+  Global Options:
+    Fixed Frame: odom
+    Background Color: 35; 35; 40
+    Frame Rate: 20
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Value: true
+      Cell Size: 0.5
+    - Class: moveit_rviz_plugin/PlanningScene
+      Name: MoveIt collision scene
+      Enabled: true
+      Value: true
+      Robot Description: robot_description
+      Move Group Namespace: ''
+      Planning Scene Topic: /monitored_planning_scene
+      Scene Geometry:
+        Show Scene Geometry: true
+        Scene Alpha: 0.8
+        Voxel Rendering: Occupied Voxels
+        Voxel Coloring: Z-Axis
+      Scene Robot:
+        Show Robot Visual: false
+        Show Robot Collision: true
+        Robot Alpha: 0.4
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Corrected lidar
+      Enabled: true
+      Value: true
+      Topic:
+        Value: /velodyne/points_sensor
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+        Filter size: 5
+      Position Transformer: XYZ
+      Color Transformer: FlatColor
+      Color: 70; 220; 255
+      Alpha: 0.8
+      Style: Points
+      Size (Pixels): 2
+      Decay Time: 0
+      Use Fixed Frame: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Filtered lidar (enable to inspect)
+      Enabled: false
+      Value: false
+      Topic:
+        Value: /fault_detector/moveit/filtered_lidar
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+        Filter size: 5
+      Position Transformer: XYZ
+      Color Transformer: FlatColor
+      Color: 255; 170; 50
+      Alpha: 0.8
+      Style: Points
+      Size (Pixels): 3
+      Decay Time: 0
+      Use Fixed Frame: true
+    - Class: rviz_default_plugins/TF
+      Name: Body and lidar frames
+      Enabled: true
+      Value: true
+      Frames:
+        All Enabled: false
+        body:
+          Value: true
+        lidar_sensor:
+          Value: true
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Marker Scale: 0.25
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Target Frame: body
+      Distance: 3.0
+      Pitch: 0.5
+      Yaw: 0.7
+      Focal Point:
+        X: 0.5
+        Y: 0
+        Z: 0.2
+Window Geometry:
+  Width: 1280
+  Height: 800
