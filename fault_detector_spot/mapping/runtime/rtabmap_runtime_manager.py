@@ -33,9 +33,11 @@ class RtabmapRuntimeManager(RuntimeManager):
         nav2_params_file="nav2_lidar_params.yaml",
         launch_file="lidar_rtab_mapping_launch.py",
         maps_dir=None,
+        raw_lidar_topic=None,
     ):
         super().__init__(node, blackboard)
         self.launch_file = launch_file
+        self.raw_lidar_topic = raw_lidar_topic
         configured_maps_dir = maps_dir or default_map_root()
         self.maps_dir = os.fspath(
             Path(configured_maps_dir).expanduser()
@@ -246,6 +248,8 @@ class RtabmapRuntimeManager(RuntimeManager):
             f"extend_map:={extend_map_str}",
             f"rviz:={rviz_str}",
         ]
+        if self.raw_lidar_topic is not None:
+            args.append(f"raw_lidar_topic:={self.raw_lidar_topic}")
 
         proc = self._launch(self.launch_file, args)
         self.bb.slam_runtime_mode = (

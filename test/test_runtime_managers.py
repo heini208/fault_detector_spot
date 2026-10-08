@@ -65,6 +65,16 @@ def test_shared_parent_and_launch_configuration(runtime):
     assert manager.is_mapping_running()
 
 
+@pytest.mark.parametrize("mode", ["mapping", "localization"])
+def test_managed_mapping_and_localization_forward_corrected_lidar(runtime, tmp_path, mode):
+    manager, launches, stops = runtime
+    manager.raw_lidar_topic = "/velodyne/points_sensor"
+    (tmp_path / "plant.db").touch()
+    start = manager.start_mapping if mode == "mapping" else manager.start_localization
+    start("plant", rviz=False)
+    assert "raw_lidar_topic:=/velodyne/points_sensor" in launches[0]
+
+
 def test_nav2_duplicate_start_does_not_orphan_process(runtime):
     manager, launches, stops = runtime
     nav2 = manager.nav2_runtime
@@ -170,6 +180,7 @@ def test_background_operation_busy_poll_and_error_propagation(runtime):
     try:
         assert manager.begin_runtime_operation("operation", operation)
         assert entered.wait(1)
+        assert manager.has_pending_operation()
         assert not manager.begin_runtime_operation("other", lambda: True)
         assert manager.poll_runtime_operation("operation") is None
         with pytest.raises(RuntimeError, match="Another"):
@@ -181,6 +192,7 @@ def test_background_operation_busy_poll_and_error_propagation(runtime):
     with pytest.raises(ValueError, match="failure"):
         manager.poll_runtime_operation("operation")
     assert manager._runtime_future is None
+    assert not manager.has_pending_operation()
 
 
 def test_slow_process_stop_does_not_block_operation_poll(runtime, monkeypatch):

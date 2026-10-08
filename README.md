@@ -248,9 +248,10 @@ Starting or stopping mapping does not change the setting.
 The setting controls occupancy collision checks in MoveIt's current planning
 scene. The application launch configures MoveIt's native point-cloud updater for
 `/velodyne/points_sensor`, using
-[`config/moveit_sensors.yaml`](config/moveit_sensors.yaml). The lidar adapter is
-started separately after verifying its mount calibration (see below). RTAB-Map
-is not queried or imported for arm planning.
+[`config/moveit_sensors.yaml`](config/moveit_sensors.yaml). The application starts
+one shared lidar adapter when collision checking or mapping/localization needs
+it, and stops it when neither needs it. Verify its mount calibration before use
+(see below). RTAB-Map is not queried or imported for arm planning.
 
 The updater uses 5 cm voxels, a 3 m sensing range and input capped at 5 Hz by the
 adapter's monotonic clock. MoveIt's own ROS-time throttle is disabled so backward
@@ -291,8 +292,9 @@ this joint or the perception package is missing, while keeping the existing arm
 planner available. Rebuild `spot_moveit_config` along with this package so the
 installed model includes the joint.
 
-Enabling the control does not start sensors or certify current obstacle coverage.
-With no received data, the scene is empty. If data stops, stored occupancy stays;
+Enabling the control requests the adapter asynchronously; it does not start the
+Spot driver or certify current obstacle coverage. Allow startup and inspect the
+scene before planning. With no received data, the scene is empty. If data stops, stored occupancy stays;
 there is no automatic expiry or fallback to disabled. Visible free-space rays
 clear old observations over successive scans; occluded obstacles can remain.
 This is an optional planning aid, not live collision monitoring during execution.
@@ -400,6 +402,11 @@ RTAB‑Map is launched isolated via [`lidar_rtab_mapping_launch.py`](launch/lida
 
 - Launches RViz with `config/mapping.rviz` for visualization
 
+Mapping and localization started through the application now use the corrected
+`/velodyne/points_sensor` source. The existing mapping arm-exclusion filter still
+publishes `/velodyne/points_filtered` for RTAB-Map and lidar navigation. MoveIt
+consumes the corrected source directly, with its own robot filter.
+
 Example:
 
 ```bash
@@ -408,6 +415,10 @@ ros2 launch fault_detector_spot lidar_rtab_mapping_launch.py \
   delete_db:=false \
   extend_map:=true
 ```
+
+This standalone mapping launch keeps its raw-topic default and does not own the
+shared adapter. To use the corrected source outside the application, launch the
+adapter separately and add `raw_lidar_topic:=/velodyne/points_sensor` above.
 
 The lidar configuration preserves measured odometry height and tilt with
 `RGBD/ForceOdom3DoF=false`, while keeping planar registration through
@@ -424,12 +435,41 @@ odometry reset needs separate validation before relying on that case.
 
 See Section **10.5 Implementation Overview** and **10.6 Map lifecycle and process control** in [`System_Design.md`](System_Design.md) for the full flow.
 
-The standalone **lidar frame adapter** prepares a corrected sensor-origin cloud
-for MoveIt's native updater. It is not started by the application or
-mapping launches. It converts `/velodyne/points` to `/velodyne/points_sensor` in
+The **lidar frame adapter** prepares a corrected sensor-origin cloud shared by
+MoveIt's native updater and application-managed mapping/localization. It
+converts `/velodyne/points` to `/velodyne/points_sensor` in
 the physical `lidar_sensor` frame, preserving each acquisition timestamp. It
 uses TF at that timestamp and the standard `tf2_sensor_msgs` transformation;
 it does not estimate a mount from the cloud or change the Spot driver.
+
+The behavior-tree helper owns one adapter runtime, using the existing mapping
+runtime and collision preference as its demand sources:
+
+| Mapping/localization active | Collision checking enabled | Adapter |
+| --- | --- | --- |
+| No | No | Stopped |
+| Yes | No | Running |
+| No | Yes | Running |
+| Yes | Yes | Same single adapter |
+
+Starts and stops run in a background worker. Map switches/save operations keep
+the adapter alive; disabling just one consumer never stops the other's source.
+Lifecycle checks use steady time, including during paused or rewound replay.
+The application allows an initial two-second discovery window and reuses an
+existing corrected-cloud publisher, even if no fresh scans arrive. It never
+starts another adapter just because data is stale. Failed launches retry at most
+every five seconds. Avoid simultaneous manual/application launches: ROS graph
+discovery is not an atomic lock. Multiple publishers are reported as a warning.
+
+An existing default adapter is stopped cooperatively through
+`/fault_detector/lidar_adapter/stop` when both consumers are off. A rosbag or
+unrelated publisher is not stopped. **After updating, stop any old manually
+launched adapter once**; old processes do not offer this service. Subsequently,
+normal application use needs no separate adapter terminal. The adapter launch
+also stops its mount broadcaster when the adapter exits. Application shutdown
+terminates adapter process groups it launched. For a manually started instance,
+turn both consumers off before exiting the application so its shutdown service
+can still be called; the app does not kill an external process group.
 
 When hardware is available, first verify
 [`config/lidar_mount_calibration.yaml`](config/lidar_mount_calibration.yaml)
@@ -460,11 +500,10 @@ Only the current driver's unorganized, packed little-endian XYZ32 format is
 supported. The age, point-count and rate limits are read-only startup ROS
 parameters on the adapter.
 
-After physical alignment and moved-obstacle clearing have been verified, mapping
-can select this output through its existing
-`raw_lidar_topic:=/velodyne/points_sensor` argument. Its arm-exclusion filter stays
-downstream. MoveIt's configured updater consumes the corrected source separately
-without that mapping filter. Mapping's default source is unchanged. Before
+While the application is open, standalone passive adapter tests need mapping/
+localization or collision checking enabled; with both off, the application
+intentionally stops the adapter. This changes sensing only and sends no movement.
+Before
 enabling arm avoidance on hardware, inspect the MoveIt scene in RViz: verify the
 scene frame is `odom`, geometry stays stationary during base motion, robot returns
 are removed, and a moved visible obstacle clears. Then compare enabled and

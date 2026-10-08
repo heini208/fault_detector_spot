@@ -7,14 +7,19 @@ import rclpy
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.clock import JumpThreshold
 from rclpy.duration import Duration
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import PointCloud2, PointField
+from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 
 from fault_detector_spot.shared.ros.tf_transforms import transform_to_pose_data
+
+
+STOP_SERVICE = "/fault_detector/lidar_adapter/stop"
 
 
 def validate_lidar_cloud(cloud, max_points=100000):
@@ -87,6 +92,14 @@ class LidarFrameAdapter:
                 durability=DurabilityPolicy.VOLATILE,
             ),
         )
+        self.stop_requested = False
+        self._stop_service = node.create_service(Trigger, STOP_SERVICE, self.request_stop)
+
+    def request_stop(self, _request, response):
+        self.stop_requested = True
+        response.success = True
+        response.message = "Lidar adapter stopping"
+        return response
 
     def _check_age(self, cloud, stage):
         stamp = Time.from_msg(cloud.header.stamp)
@@ -135,13 +148,18 @@ class LidarFrameAdapter:
 def main(args=None):
     rclpy.init(args=args)
     node = Node("lidar_frame_adapter")
+    executor = SingleThreadedExecutor()
     adapter = None
     try:
         adapter = LidarFrameAdapter(node)
-        rclpy.spin(node)
+        executor.add_node(node)
+        while rclpy.ok() and not adapter.stop_requested:
+            # The service handler sends its response before spin_once returns.
+            executor.spin_once(timeout_sec=0.2)
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         if adapter is not None:
             adapter.destroy()
         node.destroy_node()

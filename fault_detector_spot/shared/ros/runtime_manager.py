@@ -142,6 +142,11 @@ class RuntimeManager:
 
         return future.result()
 
+    def has_pending_operation(self) -> bool:
+        """Observe a launch/stop in progress without waiting for its worker."""
+        with self._runtime_lock:
+            return self._runtime_future is not None and not self._runtime_future.done()
+
     def _reap_completed_runtime_operation(self):
         future = self._runtime_future
         if future is None or not future.done():

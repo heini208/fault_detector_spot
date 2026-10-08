@@ -84,12 +84,14 @@ def test_helper_close_stops_runtimes_and_cleans_ros_resources_even_on_error():
     helper = HelperInitializer.__new__(HelperInitializer)
     helper.rtabmap_runtime = Mock()
     helper.rtabmap_runtime.close.side_effect = RuntimeError("process did not terminate")
+    helper.lidar_adapter_runtime = Mock()
     tags = Mock()
     helper.tag_state_source = tags
     helper.robot_command_resources = Mock()
     with pytest.raises(RuntimeError, match="did not terminate"):
         helper.close()
     helper.rtabmap_runtime.close.assert_called_once_with()
+    helper.lidar_adapter_runtime.close.assert_called_once_with()
     tags.destroy.assert_called_once_with()
     helper.robot_command_resources.close.assert_called_once_with()
     assert helper.tag_state_source is None

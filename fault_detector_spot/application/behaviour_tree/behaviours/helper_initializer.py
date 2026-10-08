@@ -8,6 +8,7 @@ from fault_detector_spot.application.behaviour_tree.behaviours.robot_command_res
     RobotCommandResources,
 )
 from fault_detector_spot.sensing.tag_state_source import TagStateSource
+from fault_detector_spot.sensing.lidar_adapter_runtime import LidarAdapterRuntime
 
 
 class HelperInitializer(py_trees.behaviour.Behaviour):
@@ -18,6 +19,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
         self.node = node
         self.rtabmap_runtime = None
         self.nav2_runtime = None
+        self.lidar_adapter_runtime = None
         self.tag_state_source = None
         self.robot_command_resources = RobotCommandResources()
 
@@ -60,10 +62,14 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
             launch_file="lidar_rtab_mapping_launch.py",
             nav2_launch_file="nav2_lidar_launch.py",
             nav2_params_file="nav2_lidar_params.yaml",
+            raw_lidar_topic=LidarAdapterRuntime.OUTPUT_TOPIC,
         )
 
         self.nav2_runtime = self.rtabmap_runtime.nav2_runtime
-        self.robot_command_resources.get_arm_collision_control(self.node)
+        collision_control = self.robot_command_resources.get_arm_collision_control(self.node)
+        self.lidar_adapter_runtime = LidarAdapterRuntime(
+            self.node, self.bb_client, self.rtabmap_runtime, collision_control,
+        )
         return True
 
     def initialise(self):
@@ -79,8 +85,12 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
                 self.rtabmap_runtime.close()
         finally:
             try:
-                if self.tag_state_source is not None:
-                    self.tag_state_source.destroy()
-                    self.tag_state_source = None
+                if self.lidar_adapter_runtime is not None:
+                    self.lidar_adapter_runtime.close()
             finally:
-                self.robot_command_resources.close()
+                try:
+                    if self.tag_state_source is not None:
+                        self.tag_state_source.destroy()
+                        self.tag_state_source = None
+                finally:
+                    self.robot_command_resources.close()

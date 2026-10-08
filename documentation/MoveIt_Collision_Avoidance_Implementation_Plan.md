@@ -64,8 +64,25 @@ does not provide environmental avoidance.
 `tf2_sensor_msgs.do_transform_cloud`. Its standalone launch publishes
 `/velodyne/points_sensor`, expressed in the physical `lidar_sensor` frame, using
 the original acquisition timestamp and its corresponding TF. It adds no mapping
-or arm-executor dependency. The adapter still starts separately; the application
-launch now configures its MoveIt consumer in Step 4. Mapping is unchanged.
+or arm-executor dependency to cloud conversion. One `LidarAdapterRuntime`, owned
+by `HelperInitializer`, now starts/stops the launch asynchronously based on the
+existing collision preference and mapping/localization process owners. Both
+application-managed consumers use this corrected source; mapping keeps its
+existing downstream arm-exclusion filter. Standalone mapping retains its raw
+default unless `raw_lidar_topic` is explicitly overridden.
+
+Neither consumer active means the adapter stops; either or both active mean one
+adapter. Nav2 and pending mapping operations retain the source. A steady-time
+timer schedules reconciliation on the existing runtime worker, so process waits
+never block ROS callbacks or BT ticks. Existing publishers are reused without
+waiting for fresh scans. The default adapter exposes a standard Trigger shutdown
+service for cooperative release of a manually started instance. Older processes
+need one manual stop after rebuilding. Owned process groups are cleaned up on
+application shutdown; manually started instances should be released by disabling
+both consumers before exit, while service transport is still available.
+The standalone launch shuts down its mount component when the adapter exits.
+DDS discovery cannot guarantee uniqueness during simultaneous manual launches;
+duplicate publishers are reported, not supplemented with another adapter.
 
 The launch can publish the previously captured SDK mount calibration through
 the standard static-TF component, or reuse an existing verified physical frame
@@ -122,8 +139,8 @@ throttle (`max_update_rate: 0.0`) to prevent stalled updates after backward cloc
 jumps during recording replay. The mask padding excludes robot returns rather than
 inflating obstacles. Native ray integration and robot/attached-body filtering own
 occupancy. `/fault_detector/moveit/filtered_lidar` exposes the updater's filtered
-cloud for inspection. Keep the existing lidar adapter separate until physical
-mount calibration is verified. No changes to the Spot driver are needed.
+cloud for inspection. Verify mount calibration before enabling either consumer.
+No changes to the Spot driver are needed.
 
 A live capture on 2026-10-08 reproduced wrist collisions despite correct point
 masking: with the previous 3 cm padding, retained points generated 5 cm cells
@@ -257,10 +274,11 @@ mount. They have not been executed during offline development.
 Rebuild `fault_detector_spot` after taking the new RViz preset so the installed
 configuration is available to the command below.
 
-1. Use the normal driver and application with Spot stationary and the UI setting
-   **Disabled**. Mapping is unnecessary. In a normally sourced terminal, start
-   `ros2 launch fault_detector_spot lidar_frame_adapter_launch.py`. Do not start a
-   second adapter or static-TF publisher if one already provides this frame.
+1. Use the normal driver and application with Spot stationary. Enable the UI
+   collision setting without submitting movement; this starts the adapter
+   automatically. Mapping is unnecessary. After updating, stop any older manual
+   adapter once so the application can own its replacement. Do not launch a
+   second adapter or static-TF publisher.
 2. Open the passive collision view from this package, without launching another
    MoveIt server or synthetic joint-state publishers:
 
@@ -284,10 +302,15 @@ configuration is available to the command below.
    old location should clear old observations over subsequent updates. Occluded
    space is not expected to clear. Record the observed delay rather than assuming
    that a 5 Hz input means 200 ms clearing.
-4. Toggle the UI setting on and off without submitting movement. Expect backend
-   acknowledgement and continued sensor/scene updates in both states. This checks
-   control acknowledgement only: the requested collision policy is applied when
-   the application prepares a plan. There is no application plan-only action.
+4. Toggle the UI setting off without submitting movement. With mapping and
+   localization also stopped, expect the adapter and mount container to exit;
+   stored occupancy remains. Re-enable and expect one adapter to return. With
+   mapping/localization running, toggling collision checking off must leave the
+   same adapter running. With collision checking on, stopping mapping must also
+   retain it. Stopping the last consumer must stop it. Check corrected-topic
+   publisher count as well as RViz; the toggle reports intent, not sensor readiness.
+   The requested collision policy is applied when the application prepares a
+   plan. There is no application plan-only action.
 
 Stop this validation stage at passive observation. Base motion, arm avoidance,
 endpoint accuracy, latency and contact-bypass behavior belong to the subsequent

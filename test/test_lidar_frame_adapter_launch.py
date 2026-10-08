@@ -6,6 +6,7 @@ from pathlib import Path
 
 from launch import LaunchContext
 from launch.actions import DeclareLaunchArgument
+from launch.events import Shutdown
 from launch.utilities import perform_substitutions
 import pytest
 import yaml
@@ -71,6 +72,19 @@ def test_default_launch_only_starts_adapter_and_calibrated_mount(launch_file):
     assert [(source, target.perform(context)) for source, target in adapter["remappings"]] == [
         ("input", "/velodyne/points"), ("output", "/velodyne/points_sensor"),
     ]
+
+
+def test_adapter_exit_shuts_down_the_standalone_mount_container(launch_file, monkeypatch):
+    context, nodes = defaults(launch_file)
+    _mount, adapter = nodes
+    events = []
+    monkeypatch.setattr(context, "emit_event_sync", events.append)
+
+    for action in adapter["on_exit"]:
+        action.execute(context)
+
+    event, = events
+    assert isinstance(event, Shutdown)
 
 
 @pytest.mark.parametrize("publish_mount_tf", ["true", "false"])

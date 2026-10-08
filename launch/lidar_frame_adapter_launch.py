@@ -4,7 +4,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, Shutdown
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
@@ -41,6 +41,7 @@ def make_adapter_node():
         executable="lidar_frame_adapter",
         name="lidar_frame_adapter",
         output="screen",
+        on_exit=[Shutdown(reason="Lidar adapter exited")],
         parameters=[{
             "sensor_frame": LaunchConfiguration("sensor_frame"),
             "use_sim_time": LaunchConfiguration("use_sim_time"),

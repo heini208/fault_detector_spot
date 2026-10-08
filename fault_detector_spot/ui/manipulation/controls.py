@@ -271,7 +271,8 @@ class ManipulationControls(UIControlHelper):
             text = "Change pending…" if client.pending else ("Enabled" if checked else "Disabled")
             detail = (
                 "Controls environmental occupancy in the current MoveIt planning scene. "
-                "Requires sensor data; this toggle does not start sensors or report their freshness. "
+                "Enabling starts lidar processing; the Spot driver must already be running. "
+                "This setting does not report sensor freshness. "
                 "An empty scene provides no obstacle coverage. Stored obstacles remain if data stops. "
                 "The setting applies to subsequent plans; an executing movement is not interrupted. "
                 "Self-collision checks and the contact guard remain active."

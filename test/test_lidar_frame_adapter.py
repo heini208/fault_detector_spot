@@ -1,6 +1,7 @@
 """Offline contracts for converting Spot's world cloud into its lidar frame."""
 
 from copy import deepcopy
+import asyncio
 import math
 from types import SimpleNamespace
 
@@ -8,10 +9,12 @@ import numpy as np
 import pytest
 from geometry_msgs.msg import TransformStamped
 from rclpy.clock import ROSClock
+from rclpy.executors import Executor
 from rclpy.qos import DurabilityPolicy, ReliabilityPolicy
 from rclpy.time import Time
 from rclpy.time_source import TimeSource
 from sensor_msgs.msg import PointCloud2, PointField
+from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException
 
 from fault_detector_spot.sensing import lidar_frame_adapter as adapter_module
@@ -195,6 +198,7 @@ class FakeNode:
         self.warnings = []
         self.publishers = []
         self.subscriptions = []
+        self.services = []
         self.jump_unregister_count = 0
         self.clock = SimpleNamespace(
             now=lambda: Time(seconds=self.now),
@@ -233,6 +237,11 @@ class FakeNode:
     def create_subscription(self, message_type, topic, callback, qos):
         self.subscriptions.append((message_type, topic, callback, qos))
         return SimpleNamespace()
+
+    def create_service(self, service_type, name, callback):
+        service = SimpleNamespace(srv_type=service_type, name=name, callback=callback)
+        self.services.append(service)
+        return service
 
 
 class FakeBuffer:
@@ -305,6 +314,57 @@ def test_adapter_uses_explicit_acquisition_time_and_bounded_volatile_qos(rig):
     value.adapter.destroy()
     assert value.unregister_count == 1
     assert value.node.jump_unregister_count == 1
+
+
+def test_stop_acknowledgement_is_sent_before_executor_and_node_shutdown(rig, monkeypatch):
+    value = rig()
+    service, = value.node.services
+    assert service.srv_type is Trigger
+    assert service.name == "/fault_detector/lidar_adapter/stop"
+    events = []
+
+    def send_response(response, _header):
+        assert response.success
+        assert response.message == "Lidar adapter stopping"
+        assert value.adapter.stop_requested
+        assert value.unregister_count == 0
+        assert value.node.jump_unregister_count == 0
+        events.append("response sent")
+
+    service.send_response = send_response
+
+    class FakeExecutor:
+        def add_node(self, node):
+            assert node is value.node
+
+        def spin_once(self, timeout_sec):
+            assert 0 < timeout_sec <= 0.2
+            assert events == []
+            # Real rclpy service execution, without initialization or ROS traffic.
+            asyncio.run(Executor._execute_service(
+                self, service, (Trigger.Request(), object()),
+            ))
+            assert events == ["response sent"]
+
+        def shutdown(self):
+            events.append("executor shutdown")
+
+    monkeypatch.setattr(adapter_module.rclpy, "init", lambda **kwargs: None)
+    monkeypatch.setattr(adapter_module.rclpy, "ok", lambda: True)
+    monkeypatch.setattr(
+        adapter_module.rclpy, "try_shutdown", lambda: events.append("context shutdown"),
+    )
+    monkeypatch.setattr(adapter_module, "Node", lambda _name: value.node)
+    monkeypatch.setattr(adapter_module, "LidarFrameAdapter", lambda _node: value.adapter)
+    monkeypatch.setattr(adapter_module, "SingleThreadedExecutor", FakeExecutor)
+    value.node.destroy_node = lambda: events.append("node destroyed")
+
+    adapter_module.main()
+
+    assert events == [
+        "response sent", "executor shutdown", "node destroyed", "context shutdown",
+    ]
+    assert value.unregister_count == value.node.jump_unregister_count == 1
 
 
 @pytest.mark.parametrize("clock_event", ["rewind", "source_change"])
