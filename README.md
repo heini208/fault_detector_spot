@@ -255,8 +255,15 @@ is not queried or imported for arm planning.
 The updater uses 5 cm voxels, a 3 m sensing range and input capped at 5 Hz by the
 adapter's monotonic clock. MoveIt's own ROS-time throttle is disabled so backward
 clock jumps during recording replay do not stall updates. MoveIt's robot/attached-body
-self-filter and free-space rays process this input. The 3 cm filter
+self-filter and free-space rays process this input. The 5 cm filter
 padding excludes returns close to robot geometry; it is not obstacle inflation.
+With a captured live cloud, the previous 3 cm padding correctly excluded robot
+points but left occupied 5 cm voxels intersecting the wrist. The 5 cm padding
+removed those intersections in offline native-library checks. Other poses and
+unmodelled sensor heads still need validation. Restart MoveIt to load a changed
+padding setting and reconstruct the scene from fresh observations. Clearing
+the map alone does not reload this startup configuration; existing occupied
+cells do not expire automatically.
 It consumes the corrected lidar directly, without mapping's broad arm-exclusion
 box. Sensor integration runs independently of arm requests and adds no map fetch
 to a movement. The range limits each observation, not the accumulated map size.

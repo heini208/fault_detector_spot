@@ -116,7 +116,7 @@ parameter group. Robot, kinematics, joint limits and planner configuration remai
 owned by that package. There is no duplicated MoveIt launch or custom map updater.
 
 Configure `occupancy_map_monitor/PointCloudOctomapUpdater` with corrected
-`/velodyne/points_sensor`, 5 cm voxels, 3 m range and 3 cm robot-mask padding.
+`/velodyne/points_sensor`, 5 cm voxels, 3 m range and 5 cm robot-mask padding.
 The adapter's monotonic rate limit caps input at 5 Hz. Disable the native ROS-time
 throttle (`max_update_rate: 0.0`) to prevent stalled updates after backward clock
 jumps during recording replay. The mask padding excludes robot returns rather than
@@ -124,6 +124,17 @@ inflating obstacles. Native ray integration and robot/attached-body filtering ow
 occupancy. `/fault_detector/moveit/filtered_lidar` exposes the updater's filtered
 cloud for inspection. Keep the existing lidar adapter separate until physical
 mount calibration is verified. No changes to the Spot driver are needed.
+
+A live capture on 2026-10-08 reproduced wrist collisions despite correct point
+masking: with the previous 3 cm padding, retained points generated 5 cm cells
+intersecting wrist geometry. Offline checks with the installed ShapeMask,
+OctoMap and FCL libraries, all 31 robot collision shapes and acquisition-time
+TF removed those intersections at 5 cm padding, excluding 60 additional points
+from the same capture. This is a bounded correction, not proof for every pose.
+It also excludes nearby external returns within the padded robot shapes.
+After loading the new configuration, reconstruct the scene from fresh data;
+old occupied cells may persist until cleared. Custom sensor-head geometry is
+still absent and cannot be supplied by publishing a probe TF alone.
 
 `moveit_ros_perception` is a declared runtime dependency. The configured
 lidar/OMPL path now uses matching MoveIt 2.5.10 libraries and `moveit_msgs` 2.2.3.

@@ -11,7 +11,8 @@
       point_cloud_topic: /velodyne/points_sensor
       max_range: 3.0
       point_subsample: 1
-      padding_offset: 0.03
+      # Point masking precedes voxelization; allow for cells overlapping the arm.
+      padding_offset: 0.05
       padding_scale: 1.0
       # The adapter caps input at 5 Hz using monotonic time. MoveIt's ROS-time
       # throttle stalls after backward clock jumps during recording replay.
