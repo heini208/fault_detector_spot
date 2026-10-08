@@ -256,18 +256,22 @@ it, and stops it when neither needs it. Verify its mount calibration before use
 The updater uses 5 cm voxels, a 3 m sensing range and input capped at 5 Hz by the
 adapter's monotonic clock. MoveIt's own ROS-time throttle is disabled so backward
 clock jumps during recording replay do not stall updates. MoveIt's robot/attached-body
-self-filter and free-space rays process this input. The 10 cm filter
-padding excludes returns close to robot geometry; it is not obstacle inflation.
-MoveIt masks points before voxelizing them, and native mesh padding expands
-vertices radially rather than adding a uniform shell. The previous 5 cm padding
-left arm-overlapping cells in 20 of 125 grid alignments tested with an extended-arm
-capture. At 10 cm padding, neither that capture nor a folded-arm capture produced
-robot-overlapping cells across their 125 alignments each, excluding only 19 and
-10 additional points respectively. This checks two captured poses, not every
-pose or accumulated map. The larger mask also excludes some nearby environmental
-returns. Other poses and unmodelled sensor heads still need validation.
-Restart MoveIt to load a changed
-padding setting and reconstruct the scene from fresh observations. Clearing
+self-filter and free-space rays process this input. The sensing mask uses
+`padding_offset: 0.20` and `padding_scale: 1.1` to exclude more returns around
+the robot as its joints move. These settings apply to the whole robot model,
+including legs; they do not enlarge the planning collision geometry or alter
+motion targets. Native mesh padding expands vertices radially, so this is not
+a uniform 20 cm shell. Nearby real obstacle returns can also be excluded.
+
+Offline native-library checks used two captured poses and deliberately offset
+their mask geometry by up to 5 cm. The larger mask removed robot/voxel overlaps
+in all 416 tested combinations of offset and voxel-grid alignment; the previous
+10 cm/1.0 mask had 16 arm-contact cases. This is a tolerance test, not evidence
+that the live TF is wrong by 5 cm or proof for every moving-arm pose. Other poses
+and unmodelled sensor heads still need validation.
+The mask filters incoming scans; it does not erase the whole volume around the
+arm or unobserved historical trails. Restart MoveIt to load changed settings
+and reconstruct the scene from fresh observations. Clearing
 the map alone does not reload this startup configuration; existing occupied
 cells do not expire automatically.
 It consumes the corrected lidar directly, without mapping's broad arm-exclusion
@@ -304,6 +308,15 @@ there is no automatic expiry or fallback to disabled. Visible free-space rays
 clear old observations over successive scans; occluded obstacles can remain.
 This is an optional planning aid, not live collision monitoring during execution.
 The existing execution guard stays active.
+
+The application launch throttles one known console message: MoveIt's repeated
+past-extrapolation warning for a stale hand-camera `tag36h11:<id>` frame relative
+to `odom`. The first occurrence is shown, then at most one every 30 seconds.
+Other warnings and errors remain visible, and native MoveIt file logs and
+`/rosout` retain the full messages. This is console filtering, not a change to tag
+timestamps, TF, collision checks or sensor freshness. MoveIt attempts to resolve
+every known nonrobot TF frame on map updates; an unseen tag can outlive the
+robot-transform history and cause this warning even when lidar TF is healthy.
 
 Offline checks validate launch wiring, collision policy and the updated model's
 body-relative geometry. They do not verify root-TF freshness, runtime planning

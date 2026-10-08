@@ -133,7 +133,10 @@ parameter group. Robot, kinematics, joint limits and planner configuration remai
 owned by that package. There is no duplicated MoveIt launch or custom map updater.
 
 Configure `occupancy_map_monitor/PointCloudOctomapUpdater` with corrected
-`/velodyne/points_sensor`, 5 cm voxels, 3 m range and 10 cm robot-mask padding.
+`/velodyne/points_sensor`, 5 cm voxels, 3 m range, 20 cm robot-mask padding and
+1.1 mask scale. These affect the sensing mask for all robot links, not the
+collision model used for planning. Mesh padding is radial rather than a uniform
+20 cm offset surface, and nearby real obstacles can fall inside the expanded mask.
 The adapter's monotonic rate limit caps input at 5 Hz. Disable the native ROS-time
 throttle (`max_update_rate: 0.0`) to prevent stalled updates after backward clock
 jumps during recording replay. The mask padding excludes robot returns rather than
@@ -159,7 +162,7 @@ capture had none. The fresh folded capture matched the live filter exactly and
 MoveIt reported its current start state valid. That observation does not recreate
 the earlier failed movement.
 
-At 10 cm padding and the same 5 cm resolution, both captures had zero contacts
+At 10 cm padding/1.0 scale and the same 5 cm resolution, both captures had zero contacts
 with any robot link over their 125 alignments each. Only 19/17,406 and 10/16,868
 additional surviving points were excluded (about 0.11% and 0.06%). Retaining
 5 cm padding and using 2.5 cm voxels also passed the earlier capture, but roughly
@@ -168,12 +171,35 @@ map resolution and processing rate. It does exclude additional real returns
 close to the robot. These finite captures are regression evidence, not a
 guarantee for all poses, timing errors or accumulated occupancy.
 
+The current 20 cm/1.1 mask adds tolerance for possible point/model mismatch.
+A second offline experiment offset only the mask geometry by ±2 cm and ±5 cm
+along each axis, for either arm-only or whole-robot geometry. The actual cloud
+and collision geometry remained fixed. Across both captures and eight grid
+offsets (416 combinations including aligned controls), 10 cm/1.0 produced 16
+arm-contact cases and 56 cases involving any robot link. At 15 cm/1.1 the arm
+cases disappeared but nine body/leg cases remained; at 20 cm/1.1 there were none.
+Both larger settings excluded only one additional point from each aligned
+capture, which does not bound coverage loss in other environments. These are
+synthetic tolerance tests, not measured TF errors or successful motion trials.
+Acquisition-time TF remains required; sensor transport delay alone is not a
+reason to treat an otherwise correct transform as spatially wrong.
+
 Restart MoveIt with the updated configuration and reconstruct occupancy from
 fresh observations before repeating the failed-pose check. Clearing occupancy
 alone does not reload padding. Do not automatically clear the map or ignore
 collisions to force a plan through: old occluded voxels and unmodelled geometry
 remain separate possible causes. Custom sensor-head geometry is still absent
 and cannot be supplied by publishing a probe TF alone.
+
+Console spam is handled separately, in the application launch's screen handler.
+Only the exact PlanningSceneMonitor warning about past extrapolation from a
+`tag36h11:<id>` frame to `odom` is throttled (first occurrence, then at most once
+per 30 seconds using monotonic time). Other warnings/errors and full native
+MoveIt file logs and `/rosout` are preserved. The filter is removed on launch
+shutdown. No tag frames are restamped or reparented and no TF relay is added.
+The underlying MoveIt routine enumerates every nonrobot frame on occupancy
+updates, skips failed tag lookups, and continues. This warning alone does not
+indicate a collision object or a failed lidar update.
 
 `moveit_ros_perception` is a declared runtime dependency. The configured
 lidar/OMPL path now uses matching MoveIt 2.5.10 libraries and `moveit_msgs` 2.2.3.

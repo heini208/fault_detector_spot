@@ -3,7 +3,9 @@ import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, OpaqueFunction,
+)
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -15,6 +17,7 @@ from fault_detector_spot.shared.persistence.runtime_paths import (
     default_measurement_root,
     default_recording_root,
 )
+from fault_detector_spot.shared.ros.moveit_console import install_moveit_console_throttle
 
 
 def _moveit_sensor_parameters(sensor_config, moveit_pkg):
@@ -139,6 +142,7 @@ def generate_launch_description():
             default_value="4",
             description="micro-ROS Agent log verbosity (0-6)",
         ),
+        OpaqueFunction(function=install_moveit_console_throttle),
         GroupAction([
             *_moveit_sensor_parameters(moveit_sensors_config, moveit_pkg),
             SetParameter("use_sim_time", use_sim_time),
