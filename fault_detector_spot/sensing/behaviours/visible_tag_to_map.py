@@ -8,10 +8,11 @@ from rclpy.duration import Duration
 
 
 class VisibleTagToMap(py_trees.behaviour.Behaviour):
-    def __init__(self, rtabmap_runtime, name="VisibleTagToMap"):
+    def __init__(self, rtabmap_runtime, tf_buffer, name="VisibleTagToMap"):
         super().__init__(name)
         self.rtabmap_runtime = rtabmap_runtime
         self.node = None
+        self.tf_buffer = tf_buffer
         self.blackboard = self.attach_blackboard_client()
         self.tags_in_map = set()
         self.last_published_pose = None
@@ -23,9 +24,6 @@ class VisibleTagToMap(py_trees.behaviour.Behaviour):
 
         # Initialize empty dict to avoid KeyError
         self.blackboard.visible_tags_map_frame = {}
-
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self.node)
 
     def update(self):
         if not self.rtabmap_runtime.is_running():

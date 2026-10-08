@@ -40,6 +40,7 @@ class ResolveLiveInspectionObject(
         self,
         object_id: str,
         routine_id: str,
+        tf_buffer: tf2_ros.Buffer,
         execution_frame: str = "odom",
         maximum_age_sec: float = 1.5,
         object_root: Optional[Union[str, Path]] = None,
@@ -53,10 +54,7 @@ class ResolveLiveInspectionObject(
         self.maximum_age_sec = maximum_age_sec
         self.object_root = object_root
         self.node: Optional[Node] = None
-        self.tf_buffer: Optional[tf2_ros.Buffer] = None
-        self.tf_listener: Optional[
-            tf2_ros.TransformListener
-        ] = None
+        self.tf_buffer = tf_buffer
         self.inspection_object: Optional[
             InspectionObject
         ] = None
@@ -71,18 +69,13 @@ class ResolveLiveInspectionObject(
         self.blackboard = self.attach_blackboard_client()
 
     def setup(self, **kwargs: Any) -> None:
-        """Create TF resources and load the selected routine."""
+        """Use the shared TF buffer and load the selected routine."""
         self.node = kwargs.get("node")
         if self.node is None:
             raise RuntimeError(
                 f"{self.name}: no ROS node provided"
             )
 
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(
-            self.tf_buffer,
-            self.node,
-        )
         self.blackboard.register_key(
             "base_tag_observations",
             access=py_trees.common.Access.READ,

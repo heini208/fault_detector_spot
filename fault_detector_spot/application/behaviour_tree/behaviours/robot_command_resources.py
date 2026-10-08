@@ -104,7 +104,7 @@ class RobotCommandResources:
             return client
 
     def get_tf_listener(self, node):
-        """Return the single TF listener used to prepare move commands."""
+        """Own one TF listener; all BT consumers borrow its buffer."""
         with self._lock:
             self._bind_node(node)
             if self._tf_listener is None:
@@ -144,7 +144,9 @@ class RobotCommandResources:
         with self._lock:
             self._bind_node(node)
             if self._probe_surface_source is None:
-                self._probe_surface_source = ProbeSurfaceSource(node)
+                self._probe_surface_source = ProbeSurfaceSource(
+                    node, self.get_tf_listener(node).buffer,
+                )
             return self._probe_surface_source
 
     def get_posture_state_source(self, node):

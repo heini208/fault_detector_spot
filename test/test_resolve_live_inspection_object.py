@@ -118,9 +118,9 @@ def make_behavior(tf_available=True):
     behavior = ResolveLiveInspectionObject(
         object_id="panel",
         routine_id="phase3",
+        tf_buffer=FakeTfBuffer(tf_available),
     )
     behavior.node = FakeNode()
-    behavior.tf_buffer = FakeTfBuffer(tf_available)
     behavior.inspection_object = make_object()
     behavior.inspection_routine = (
         behavior.inspection_object.get_routine("phase3")
@@ -236,6 +236,7 @@ def test_configuration_loads_selected_routine(tmp_path):
     behavior = ResolveLiveInspectionObject(
         object_id="panel",
         routine_id="phase3",
+        tf_buffer=FakeTfBuffer(),
         object_root=tmp_path,
     )
 
@@ -252,6 +253,7 @@ def test_unknown_routine_rejects_configuration(tmp_path):
     behavior = ResolveLiveInspectionObject(
         object_id="panel",
         routine_id="missing",
+        tf_buffer=FakeTfBuffer(),
         object_root=tmp_path,
     )
 

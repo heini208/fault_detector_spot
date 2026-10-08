@@ -13,7 +13,6 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
-import tf2_ros
 
 from fault_detector_spot.inspection.geometry.surface_normal import (
     SurfaceNormalEstimate,
@@ -58,7 +57,7 @@ SENSOR_ATTACHMENT_TOPIC = "fault_detector/application/sensor_attachment_state"
 class ProbeSurfaceSource(RuntimeSource):
     """Cache hand depth and active attachment for surface measurement."""
 
-    def __init__(self, node):
+    def __init__(self, node, tf_buffer):
         if node is None:
             raise RuntimeError("ProbeSurfaceSource requires a ROS node")
         self.node = node
@@ -69,11 +68,7 @@ class ProbeSurfaceSource(RuntimeSource):
         )
         self._hand_depth_camera_info = None
         self._attachment_state = None
-        self._tf_buffer = tf2_ros.Buffer()
-        self._tf_listener = tf2_ros.TransformListener(
-            self._tf_buffer,
-            node,
-        )
+        self._tf_buffer = tf_buffer
         self._hand_depth_subscription = node.create_subscription(
             Image,
             "/depth_registered/hand/image",
@@ -409,9 +404,6 @@ class ProbeSurfaceSource(RuntimeSource):
             if subscription is not None:
                 self.node.destroy_subscription(subscription)
                 setattr(self, attribute, None)
-        if self._tf_listener is not None:
-            self._tf_listener.unregister()
-            self._tf_listener = None
         with self._lock:
             self._hand_depth_history.clear()
             self._hand_depth_camera_info = None

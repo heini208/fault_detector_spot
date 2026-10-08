@@ -194,9 +194,12 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         name="TagStateSubscriber",
         state_timeout_sec=tag_state_timeout_sec,
     )
+    helpers = get_helper_container(node)
+    tf_buffer = helpers.robot_command_resources.get_tf_listener(node).buffer
     live_object_resolver = ResolveLiveInspectionObject(
         object_id=active_object_id,
         routine_id=active_routine_id,
+        tf_buffer=tf_buffer,
         execution_frame=inspection_execution_frame,
         maximum_age_sec=probe_max_age_sec,
         object_root=inspection_object_root or None,
@@ -205,9 +208,9 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     live_object_publisher = PublishLiveInspectionObject(
         name="PublishLiveInspectionObject",
     )
-    rtabmap_runtime = get_helper_container(node).rtabmap_runtime
     world_frame_transformer = VisibleTagToMap(
-        rtabmap_runtime=rtabmap_runtime,
+        rtabmap_runtime=helpers.rtabmap_runtime,
+        tf_buffer=tf_buffer,
         name="VisibleTagToMap",
     )
     tag_scan_sequence.add_children([
@@ -510,8 +513,10 @@ def build_publisher_tree(
     node: rclpy.node.Node,
 ) -> py_trees.behaviour.Behaviour:
     cmd_pub = BufferStatusPublisher(name="CommandStatusPublisher")
+    helpers = get_helper_container(node)
     init_pose_pub = LandmarkRelocalizer(
-        get_helper_container(node).rtabmap_runtime,
+        helpers.rtabmap_runtime,
+        tf_buffer=helpers.robot_command_resources.get_tf_listener(node).buffer,
         name="InitPosePublisher",
     )
     publisher_tree = py_trees.composites.Parallel(

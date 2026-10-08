@@ -24,6 +24,7 @@ def test_landmark_relocalizer_uses_its_repository_dependency():
     repository = FakeRepository()
     relocalizer = LandmarkRelocalizer(
         FakeSlamHelper(),
+        tf_buffer=object(),
         map_repository=repository,
     )
 
@@ -43,6 +44,7 @@ def test_landmark_relocalizer_does_not_require_repository_on_rtabmap_runtime_man
 
     relocalizer = LandmarkRelocalizer(
         helper,
+        tf_buffer=object(),
         map_repository=repository,
     )
 

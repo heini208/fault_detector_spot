@@ -23,6 +23,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
     def __init__(
         self,
         rtabmap_runtime: RtabmapRuntimeManager,
+        tf_buffer,
         map_repository=None,
         node=None,
         base_frame: str = "base_link",
@@ -36,6 +37,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             else MapRepository(self.rtabmap_runtime.maps_dir)
         )
         self.node = node
+        self.tf_buffer = tf_buffer
         self.blackboard = self.attach_blackboard_client()
 
         self.landmark_map: typing.Dict[int, PoseStamped] = {}
@@ -78,12 +80,6 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             PoseWithCovarianceStamped,
             "/initialpose",
             10,
-        )
-
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(
-            self.tf_buffer,
-            self.node,
         )
 
     def _quat_to_yaw(self, qx, qy, qz, qw):
