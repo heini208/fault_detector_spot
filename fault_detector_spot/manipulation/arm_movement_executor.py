@@ -1885,14 +1885,20 @@ class ArmMovementExecutor(MovementExecutor):
 
     def _build_moveit_joint_goal(self, trajectory, minimum_duration_sec=None):
         goal, duration = build_moveit_joint_goal(trajectory, minimum_duration_sec)
-        self.result_timeout_sec = max(
-            self._base_result_timeout_sec,
-            duration + self.moveit_result_timeout_margin_sec,
-        )
+        self._set_motion_result_timeout(duration)
         return goal
 
     def _build_pose_goal(self, target: PoseStamped, duration_sec: float):
-        return build_pose_goal(target, duration_sec, self.robot_name)
+        goal = build_pose_goal(target, duration_sec, self.robot_name)
+        self._set_motion_result_timeout(duration_sec)
+        return goal
+
+    def _set_motion_result_timeout(self, duration_sec):
+        """Give each submitted motion its full duration plus completion margin."""
+        self.result_timeout_sec = max(
+            self._base_result_timeout_sec,
+            float(duration_sec) + self.moveit_result_timeout_margin_sec,
+        )
 
 
 __all__ = [

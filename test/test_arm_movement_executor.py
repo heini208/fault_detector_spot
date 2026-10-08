@@ -668,6 +668,72 @@ def test_goal_response_timeout_cancels_goal_if_accepted_late(
     assert handle.cancel_count == 1
 
 
+@pytest.mark.parametrize("duration_sec", [30.0, 50.0])
+@pytest.mark.parametrize("complete", [True, False])
+def test_slow_cartesian_motion_uses_duration_then_completion_margin(
+    monkeypatch, duration_sec, complete,
+):
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.position.x = duration_sec * 0.005
+    target.pose.orientation.w = 1.0
+    transformer = FakeTransformer({
+        ("body", "hand"): transform("body", "hand"),
+    })
+    captured = capture_builder(monkeypatch)
+    clock = ManualClock()
+    handle = FakeGoalHandle()
+    client = FakeActionClient()
+    stop_client = FakeArmStopServiceClient()
+    executor, _ = executor_with_client(
+        transformer,
+        action_client=client,
+        arm_stop_service_client=stop_client,
+        monotonic_clock=clock,
+    )
+
+    started = executor.pose(target, speed=ArmMotionSpeed(0.005, 0.5))
+    assert started.outcome is ArmMovementOutcome.RUNNING
+    assert captured["args"][-1] == pytest.approx(duration_sec)
+    assert executor.result_timeout_sec == pytest.approx(duration_sec + 15.0)
+    client.send_future.set_result(handle)
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+
+    def poll_at(seconds):
+        clock.now = seconds
+        # Deliver fresh force evidence just as the live guard monitor does.
+        executor.guarded_probe_execution.observe_force_sample(
+            executor.arm_state_source.hand_force_sample()
+        )
+        return executor.poll()
+
+    assert poll_at(30.0).outcome is ArmMovementOutcome.RUNNING
+    assert poll_at(duration_sec + 0.5).outcome is ArmMovementOutcome.RUNNING
+    assert handle.cancel_count == 0
+    assert stop_client.requests == []
+
+    if complete:
+        handle.result_future.set_result(SimpleNamespace(
+            result=SimpleNamespace(success=True)
+        ))
+        assert executor.poll().outcome is ArmMovementOutcome.SUCCESS
+        assert handle.cancel_count == 0
+        assert stop_client.requests == []
+    else:
+        assert poll_at(duration_sec + 14.9).outcome is ArmMovementOutcome.RUNNING
+        assert handle.cancel_count == 0
+        assert poll_at(duration_sec + 15.0).outcome is ArmMovementOutcome.RUNNING
+        assert handle.cancel_count == 1
+        assert len(stop_client.requests) == 1
+        stop_client.future.set_result(SimpleNamespace(success=True))
+        assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+        stopped = confirm_physical_stop(executor, clock, duration_sec + 15.1)
+        assert stopped.outcome is ArmMovementOutcome.RESULT_TIMEOUT
+
+    assert not executor.active
+    assert executor.result_timeout_sec == 30.0
+
+
 def test_result_timeout_requests_goal_cancellation(monkeypatch):
     target = PoseStamped()
     target.header.frame_id = "body"
@@ -689,6 +755,7 @@ def test_result_timeout_requests_goal_cancellation(monkeypatch):
         arm_stop_service_client=stop_client,
         monotonic_clock=clock,
         result_timeout_sec=3.0,
+        moveit_result_timeout_margin_sec=1.0,
     )
 
     executor.pose(target)

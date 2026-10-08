@@ -588,6 +588,14 @@ changes. The file is loaded once per process; edits apply on the next start.
 ROS launch/parameter overrides still take precedence over the YAML defaults.
 Explicit constructor arguments take precedence over both (useful in tests).
 
+Arm movement result deadlines follow the submitted trajectory duration, with
+`arm.motion.moveit_result_timeout_margin_sec` (15 seconds by default) added for
+completion feedback and a minimum deadline of 30 seconds. This applies to both
+MoveIt trajectories and direct Cartesian arm commands: a 50-second motion gets
+at least 65 seconds to complete. Each motion has its own deadline; planning and
+earlier workflow steps do not consume it. Cancellation, force freshness, contact
+stops, and planning-response timeouts remain active.
+
 To add a setting, add its `arm.*` key under `/**: ros__parameters` in the YAML,
 then read it in the code that uses it:
 

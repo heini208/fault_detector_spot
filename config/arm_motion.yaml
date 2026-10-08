@@ -13,6 +13,8 @@
     arm.motion.moveit_velocity_scaling: 0.50
     arm.motion.moveit_acceleration_scaling: 0.40
     arm.motion.arm_sh1_safe_min_rad: -3.106686
+    # Completion margin after the commanded duration for both MoveIt and
+    # direct Cartesian arm motions; retain the existing parameter name.
     arm.motion.moveit_result_timeout_margin_sec: 15.0
 
     # Probe setup safe-approach speed
