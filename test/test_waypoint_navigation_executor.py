@@ -27,6 +27,7 @@ class Preparation:
         self.name = name
         self.active = False
         self.next = outcomes.RUNNING
+        self.finish_outcome = outcomes.RUNNING
         self.cancel_calls = 0
         self.state = ArmStowState.STOWED
         self.arm_state_source = SimpleNamespace(stow_state=lambda: self.state)
@@ -41,6 +42,11 @@ class Preparation:
 
     def prepare_for_navigation(self):
         self.events.append("height")
+        return self._update()
+
+    def finish_walking(self):
+        self.events.append("finish_walking")
+        self.next = self.finish_outcome
         return self._update()
 
     def poll(self):
@@ -174,12 +180,85 @@ def test_nav2_result_is_propagated(success):
     send.set_result(handle)
     assert executor.poll().outcome is Outcome.RUNNING
     result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED if success else GoalStatus.STATUS_ABORTED))
-    assert executor.poll().outcome is (Outcome.SUCCESS if success else Outcome.RUNNING)
-    if not success:
+    assert executor.poll().outcome is Outcome.RUNNING
+    if success:
+        assert executor.active and base.active
+        assert events[-1] == "finish_walking"
+        assert executor.poll().outcome is Outcome.RUNNING
+        assert executor.navigate(pose).outcome is Outcome.BUSY
+        base.next = BaseOutcome.SUCCESS
+        assert executor.poll().outcome is Outcome.SUCCESS
+        assert events.count("finish_walking") == 1
+        client.send_goal_async.assert_called_once()
+    else:
         settle_cancel(executor, clock)
+        assert "finish_walking" not in events
     assert not executor.active
     if success:
         assert handle.cancel_calls == 0
+
+
+@pytest.mark.parametrize("immediate", [False, True])
+def test_walking_completion_failure_never_reports_navigation_success(immediate):
+    executor, arm, base, client, send, clock, pose, events = rig()
+    prepare(executor, arm, base, pose)
+    result = ManualFuture()
+    handle = FakeGoalHandle(result)
+    send.set_result(handle)
+    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
+    if immediate:
+        base.finish_outcome = BaseOutcome.MOTION_FAILED
+    assert executor.poll().outcome is Outcome.RUNNING
+    if not immediate:
+        base.next = BaseOutcome.MOTION_FAILED
+        assert executor.poll().outcome is Outcome.RUNNING
+    assert executor.cancelling
+    assert "Walking completion failed" in executor._cancel_detail
+    settle_cancel(executor, clock)
+    assert not executor.active
+    assert handle.cancel_calls == 0
+    assert events.count("finish_walking") == 1
+    client.send_goal_async.assert_called_once()
+
+
+def test_cancel_during_walking_completion_retains_owner_until_stopped():
+    executor, arm, base, client, send, clock, pose, events = rig()
+    prepare(executor, arm, base, pose)
+    result = ManualFuture()
+    handle = FakeGoalHandle(result)
+    send.set_result(handle)
+    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
+    assert executor.poll().outcome is Outcome.RUNNING
+    # Model the base action retaining ownership until its cancellation completes.
+    base.cancel = Mock()
+    executor.cancel()
+    base.cancel.assert_called_once()
+    assert executor.poll().outcome is Outcome.RUNNING
+    assert executor.active and base.active
+    assert executor.navigate(pose).outcome is Outcome.BUSY
+    base.next = BaseOutcome.MOTION_FAILED
+    assert executor.poll().outcome is Outcome.RUNNING
+    settle_cancel(executor, clock)
+    assert not executor.active
+    assert handle.cancel_calls == 0
+    assert events.count("finish_walking") == 1
+
+
+def test_stowed_arm_guard_remains_active_during_walking_completion():
+    executor, arm, base, client, send, clock, pose, events = rig()
+    timer = attach_monitor(executor)
+    prepare(executor, arm, base, pose)
+    result = ManualFuture()
+    handle = FakeGoalHandle(result)
+    send.set_result(handle)
+    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
+    assert executor.poll().outcome is Outcome.RUNNING
+    arm.state = ArmStowState.DEPLOYED
+    timer.callback()
+    assert executor.cancelling
+    assert base.cancel_calls == 1
+    assert handle.cancel_calls == 0
+    assert "Stowed-arm feedback lost" in executor._cancel_detail
 
 
 def test_rejection_fails_instead_of_waiting_forever():
@@ -353,6 +432,9 @@ def test_navigation_monitor_stops_on_success_and_shutdown():
     handle = FakeGoalHandle(result)
     send.set_result(handle)
     result.set_result(SimpleNamespace(status=GoalStatus.STATUS_SUCCEEDED))
+    assert executor.poll().outcome is Outcome.RUNNING
+    timer.cancel.assert_not_called()
+    base.next = BaseOutcome.SUCCESS
     assert executor.poll().outcome is Outcome.SUCCESS
     timer.cancel.assert_called_once()
     arm.state = ArmStowState.DEPLOYED

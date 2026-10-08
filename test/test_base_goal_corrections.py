@@ -167,15 +167,34 @@ def make_movement(
     return executor, client, resolutions, poll_at, complete
 
 
+def complete_stationary_handoff(poll, complete, x):
+    """Let the walk settle, acknowledge its stand, then measure fresh settling."""
+    assert poll(x, 0.6).outcome is BaseMovementOutcome.RUNNING
+    assert complete(x).outcome is BaseMovementOutcome.RUNNING
+    assert poll(x, 0.1).outcome is BaseMovementOutcome.RUNNING
+    return poll(x, 0.6)
+
+
+def observe_tag(executor, poll, x, tag_x, advance):
+    stamp = executor._ros_time_sec() + advance
+    executor.tag_state_source.set_observation(tag_x, stamp)
+    return poll(x, advance)
+
+
 def test_relative_retry_reuses_same_absolute_goal_and_profile():
     executor, client, resolutions, poll, complete = make_movement("relative")
     complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
     assert poll(0.8, 5).outcome is BaseMovementOutcome.RUNNING
-    assert len(client.goals) == 2
-    assert client.goals[0] == client.goals[1]
+    assert len(client.goals) == 3
+    assert client.goals[0] == client.goals[2]
     assert len(resolutions) == 1
     complete(1.0)
-    assert poll(1.0, 0.6).outcome is BaseMovementOutcome.SUCCESS
+    assert (
+        complete_stationary_handoff(poll, complete, 1.0).outcome
+        is BaseMovementOutcome.SUCCESS
+    )
+    assert len(client.goals) == 4
     assert not executor.active
 
 
@@ -183,18 +202,14 @@ def test_tag_correction_replans_from_stable_post_settle_observation():
     executor, client, resolutions, poll, complete = make_movement("tag")
 
     complete(0.8)
-    executor.tag_state_source.set_observation(1.1, 100.7)
-    assert poll(0.8, 0.6).outcome is BaseMovementOutcome.RUNNING
-
-    executor.tag_state_source.set_observation(1.1, 100.8)
-    assert poll(0.8, 0.1).outcome is BaseMovementOutcome.RUNNING
-
-    executor.tag_state_source.set_observation(1.1, 100.9)
-    update = poll(0.8, 0.1)
+    complete_stationary_handoff(poll, complete, 0.8)
+    for _ in range(3):
+        update = observe_tag(executor, poll, 0.8, 1.1, 0.1)
+        assert update.outcome is BaseMovementOutcome.RUNNING
 
     assert update.outcome is BaseMovementOutcome.RUNNING
     assert "fresh tag-relative target" in update.detail
-    assert len(client.goals) == 2
+    assert len(client.goals) == 3
     assert len(resolutions) == 2
     assert executor._movement_plan.target.pose.position.x == pytest.approx(1.1)
 
@@ -202,17 +217,24 @@ def test_tag_correction_replans_from_stable_post_settle_observation():
 def test_tag_verification_accepts_observed_one_hz_spot_cadence():
     executor, client, _, poll, complete = make_movement("tag")
     complete(1.0)
-    assert poll(1.0, 0.6).outcome is BaseMovementOutcome.RUNNING
+    assert (
+        complete_stationary_handoff(poll, complete, 1.0).outcome
+        is BaseMovementOutcome.RUNNING
+    )
 
-    for stamp, advance in ((101.067, 0.467), (102.134, 1.067)):
-        executor.tag_state_source.set_observation(1.0, stamp)
-        assert poll(1.0, advance).outcome is BaseMovementOutcome.RUNNING
+    for advance in (0.467, 1.067):
+        assert (
+            observe_tag(executor, poll, 1.0, 1.0, advance).outcome
+            is BaseMovementOutcome.RUNNING
+        )
         # Repeated state publications cannot satisfy the sample requirement.
         assert poll(1.0).outcome is BaseMovementOutcome.RUNNING
 
-    executor.tag_state_source.set_observation(1.0, 103.201)
-    assert poll(1.0, 1.067).outcome is BaseMovementOutcome.SUCCESS
-    assert len(client.goals) == 1
+    assert (
+        observe_tag(executor, poll, 1.0, 1.0, 1.067).outcome
+        is BaseMovementOutcome.SUCCESS
+    )
+    assert len(client.goals) == 2
 
 
 def test_tag_timeout_allows_full_five_seconds_after_settling():
@@ -221,7 +243,10 @@ def test_tag_timeout_allows_full_five_seconds_after_settling():
     poll(0.0, 20.0)
     complete(1.0)
     executor.tag_state_source.clear()
-    assert poll(1.0, 0.6).outcome is BaseMovementOutcome.RUNNING
+    assert (
+        complete_stationary_handoff(poll, complete, 1.0).outcome
+        is BaseMovementOutcome.RUNNING
+    )
     assert poll(1.0, 4.9).outcome is BaseMovementOutcome.RUNNING
     assert (
         poll(1.0, 0.11).outcome
@@ -238,14 +263,19 @@ def test_precision_approach_does_not_start_tag_wait_while_still_walking():
         assert executor._tag_settle_boundary_stamp is None
         assert len(client.goals) == 1
     assert poll(1.0, 0.6).outcome is BaseMovementOutcome.RUNNING
-    assert executor._tag_settle_boundary_stamp == pytest.approx(110.6)
+    assert len(client.goals) == 2
+    assert executor._tag_settle_boundary_stamp is None
+    assert complete(1.0).outcome is BaseMovementOutcome.RUNNING
+    assert poll(1.0, 0.1).outcome is BaseMovementOutcome.RUNNING
+    assert poll(1.0, 0.6).outcome is BaseMovementOutcome.RUNNING
+    assert executor._tag_settle_boundary_stamp == pytest.approx(111.3)
 
 
 def test_body_sway_does_not_reject_stationary_tag_in_odom():
     executor, client, _, poll, complete = make_movement("tag")
     complete(1.0)
-    poll(1.0, 0.6)
-    capture_offsets = {101: 0.03, 102: -0.03, 103: 0.04}
+    complete_stationary_handoff(poll, complete, 1.0)
+    capture_offsets = {102: 0.03, 103: -0.03, 104: 0.04}
     requested = []
     original_lookup = executor.motion_planner.tf_listener.lookup_a_tform_b
 
@@ -261,30 +291,30 @@ def test_body_sway_does_not_reject_stationary_tag_in_odom():
         return transform
 
     executor.motion_planner.tf_listener.lookup_a_tform_b = lookup
-    for stamp, advance in ((101, 0.4), (102, 1.0), (103, 1.0)):
+    for stamp, advance in ((102, 0.7), (103, 1.0), (104, 1.0)):
         executor.tag_state_source.set_observation(
             1.0 - capture_offsets[stamp], stamp,
         )
         executor.tag_state_source.tag.pose.header.frame_id = "body"
         update = poll(1.0, advance)
-        if stamp < 103:
+        if stamp < 104:
             assert update.outcome is BaseMovementOutcome.RUNNING
     assert update.outcome is BaseMovementOutcome.SUCCESS
-    assert requested == [101, 102, 103]
-    assert len(client.goals) == 1
+    assert requested == [102, 103, 104]
+    assert len(client.goals) == 2
 
 
 def test_missing_capture_time_transform_is_bounded():
     executor, _, _, poll, complete = make_movement("tag")
     complete(1.0)
-    poll(1.0, 0.6)
-    executor.tag_state_source.set_observation(1.0, 101)
+    complete_stationary_handoff(poll, complete, 1.0)
+    executor.tag_state_source.set_observation(1.0, 102)
 
     def unavailable(_):
         raise MovementGeometryUnavailable("capture TF unavailable")
 
     executor.motion_planner.observation_in_odom = unavailable
-    update = poll(1.0, 0.4)
+    update = poll(1.0, 0.7)
     assert update.outcome is BaseMovementOutcome.RUNNING
     assert "capture-time tag transform" in update.detail
     update = poll(1.0, 5.0)
@@ -295,23 +325,27 @@ def test_two_correction_attempts_then_failure():
     executor, client, _, poll, complete = make_movement()
     for x in (0.5, 0.65):
         complete(x)
+        complete_stationary_handoff(poll, complete, x)
         assert poll(x, 5).outcome is BaseMovementOutcome.RUNNING
     complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
     update = poll(0.8, 5)
     assert update.outcome is BaseMovementOutcome.MOTION_FAILED
     assert "attempt limit" in update.detail
-    assert len(client.goals) == 3
+    assert len(client.goals) == 6
 
 
 def test_no_progress_stops_early():
     _, client, _, poll, complete = make_movement()
     complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
     poll(0.8, 5)
     complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
     update = poll(0.8, 5)
     assert update.outcome is BaseMovementOutcome.MOTION_FAILED
     assert "insufficient progress" in update.detail
-    assert len(client.goals) == 2
+    assert len(client.goals) == 4
 
 
 def test_stale_pose_at_deadline_does_not_retry_previous_error():
@@ -332,6 +366,7 @@ def test_execution_failure_is_not_retried():
 def test_cancel_during_correction_prevents_further_attempts():
     executor, client, _, poll, complete = make_movement()
     complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
     poll(0.8, 5)
     executor.poll()
     executor.cancel()
@@ -348,7 +383,7 @@ def test_cancel_during_correction_prevents_further_attempts():
     assert executor._movement_plan is None
     assert executor.correction_policy.attempts == 0
     executor.poll()
-    assert len(client.goals) == 2
+    assert len(client.goals) == 3
 
 
 def test_zero_corrections_disables_retry():
@@ -358,11 +393,12 @@ def test_zero_corrections_disables_retry():
         )
     )
     complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
     assert (
         poll(0.8, 5).outcome
         is BaseMovementOutcome.MOTION_FAILED
     )
-    assert len(client.goals) == 1
+    assert len(client.goals) == 2
     assert client.handles[-1].cancel_calls == 0
 
 
@@ -370,7 +406,7 @@ def test_cancel_while_waiting_for_fresh_tag_releases_cleanly():
     executor, client, _, poll, complete = make_movement("tag")
 
     complete(0.8)
-    waiting = poll(0.8, 0.6)
+    waiting = complete_stationary_handoff(poll, complete, 0.8)
 
     assert waiting.outcome is BaseMovementOutcome.RUNNING
     assert "post-settle tag 7" in waiting.detail
@@ -384,42 +420,34 @@ def test_repeated_tag_corrections_use_new_settle_boundaries():
     executor, client, _, poll, complete = make_movement("tag")
 
     complete(0.8)
-    for stamp, advance in (
-        (100.7, 0.6),
-        (100.8, 0.1),
-        (100.9, 0.1),
-    ):
-        executor.tag_state_source.set_observation(1.1, stamp)
-        update = poll(0.8, advance)
+    complete_stationary_handoff(poll, complete, 0.8)
+    first_boundary = executor._tag_settle_boundary_stamp
+    for _ in range(3):
+        update = observe_tag(executor, poll, 0.8, 1.1, 0.1)
 
     assert update.outcome is BaseMovementOutcome.RUNNING
-    assert len(client.goals) == 2
+    assert len(client.goals) == 3
     assert executor._movement_plan.target.pose.position.x == pytest.approx(1.1)
 
     complete(1.0)
-    for stamp, advance in (
-        (101.5, 0.6),
-        (101.6, 0.1),
-        (101.7, 0.1),
-    ):
-        executor.tag_state_source.set_observation(1.2, stamp)
-        update = poll(1.0, advance)
+    complete_stationary_handoff(poll, complete, 1.0)
+    second_boundary = executor._tag_settle_boundary_stamp
+    assert second_boundary > first_boundary
+    for _ in range(3):
+        update = observe_tag(executor, poll, 1.0, 1.2, 0.1)
 
     assert update.outcome is BaseMovementOutcome.RUNNING
-    assert len(client.goals) == 3
+    assert len(client.goals) == 5
     assert executor._movement_plan.target.pose.position.x == pytest.approx(1.2)
 
     complete(1.2)
-    for stamp, advance in (
-        (102.3, 0.6),
-        (102.4, 0.1),
-        (102.5, 0.1),
-    ):
-        executor.tag_state_source.set_observation(1.2, stamp)
-        update = poll(1.2, advance)
+    complete_stationary_handoff(poll, complete, 1.2)
+    assert executor._tag_settle_boundary_stamp > second_boundary
+    for _ in range(3):
+        update = observe_tag(executor, poll, 1.2, 1.2, 0.1)
 
     assert update.outcome is BaseMovementOutcome.SUCCESS
-    assert len(client.goals) == 3
+    assert len(client.goals) == 6
     assert not executor.active
 
 
@@ -432,7 +460,7 @@ def test_missing_post_settle_tag_times_out():
     complete(0.8)
     executor.tag_state_source.clear()
 
-    waiting = poll(0.8, 0.6)
+    waiting = complete_stationary_handoff(poll, complete, 0.8)
     assert waiting.outcome is BaseMovementOutcome.RUNNING
     assert "post-settle tag 7" in waiting.detail
 
@@ -452,14 +480,16 @@ def test_unstable_post_settle_tag_times_out():
     )
 
     complete(0.8)
-    executor.tag_state_source.set_observation(1.1, 100.7)
-    assert poll(0.8, 0.6).outcome is BaseMovementOutcome.RUNNING
-
-    executor.tag_state_source.set_observation(1.2, 100.8)
-    assert poll(0.8, 0.2).outcome is BaseMovementOutcome.RUNNING
-
-    executor.tag_state_source.set_observation(1.1, 101.2)
-    failed = poll(0.8, 0.4)
+    complete_stationary_handoff(poll, complete, 0.8)
+    assert (
+        observe_tag(executor, poll, 0.8, 1.1, 0.1).outcome
+        is BaseMovementOutcome.RUNNING
+    )
+    assert (
+        observe_tag(executor, poll, 0.8, 1.2, 0.2).outcome
+        is BaseMovementOutcome.RUNNING
+    )
+    failed = observe_tag(executor, poll, 0.8, 1.1, 0.4)
 
     assert (
         failed.outcome
@@ -476,19 +506,15 @@ def test_transient_tag_replan_geometry_is_bounded():
     )
 
     complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
     executor.motion_planner.resolve_tag_observation = (
         lambda *_: (_ for _ in ()).throw(
             MovementGeometryUnavailable("Waiting for TF")
         )
     )
 
-    for stamp, advance in (
-        (100.7, 0.6),
-        (100.8, 0.1),
-        (100.9, 0.1),
-    ):
-        executor.tag_state_source.set_observation(1.1, stamp)
-        update = poll(0.8, advance)
+    for _ in range(3):
+        update = observe_tag(executor, poll, 0.8, 1.1, 0.1)
 
     assert update.outcome is BaseMovementOutcome.RUNNING
     assert "tag re-planning geometry" in update.detail
@@ -503,19 +529,15 @@ def test_unexpected_tag_replan_failure_is_reported():
     executor, _, _, poll, complete = make_movement("tag")
 
     complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
     executor.motion_planner.resolve_tag_observation = (
         lambda *_: (_ for _ in ()).throw(
             ValueError("bad tag transform")
         )
     )
 
-    for stamp, advance in (
-        (100.7, 0.6),
-        (100.8, 0.1),
-        (100.9, 0.1),
-    ):
-        executor.tag_state_source.set_observation(1.1, stamp)
-        update = poll(0.8, advance)
+    for _ in range(3):
+        update = observe_tag(executor, poll, 0.8, 1.1, 0.1)
 
     assert update.outcome is BaseMovementOutcome.MOTION_FAILED
     assert "bad tag transform" in update.detail

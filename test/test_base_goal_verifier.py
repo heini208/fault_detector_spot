@@ -134,11 +134,25 @@ def test_executor_verifies_actual_goal_and_cancellation_during_settling():
     result.set_result(SimpleNamespace(result=SimpleNamespace(success=True)))
     assert executor.poll().outcome is BaseMovementOutcome.RUNNING
     assert executor.active
+    stand_send, stand_result = ManualFuture(), ManualFuture()
+    executor.action_client.send_future = stand_send
     clock.now = 0.6
     transform.header.stamp.nanosec = 600_000_000
+    assert executor.poll().outcome is BaseMovementOutcome.RUNNING
+    stand_send.set_result(FakeGoalHandle(stand_result))
+    assert executor.poll().outcome is BaseMovementOutcome.RUNNING
+    stand_result.set_result(SimpleNamespace(result=SimpleNamespace(success=True)))
+    assert executor.poll().outcome is BaseMovementOutcome.RUNNING
+    clock.now = 0.7
+    transform.header.stamp.nanosec = 700_000_000
+    assert executor.poll().outcome is BaseMovementOutcome.RUNNING
+    clock.now = 1.3
+    transform.header.stamp.sec = 11
+    transform.header.stamp.nanosec = 300_000_000
     assert executor.poll().outcome is BaseMovementOutcome.SUCCESS
     assert not executor.active
 
+    executor.action_client.send_future = send
     executor.motion_planner.resolve_relative = lambda _: plan
     executor.relative(object())
     executor.poll()

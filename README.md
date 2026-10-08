@@ -636,6 +636,21 @@ blocks movement. Height is scoped to the stand command and never changes the
 driver's persistent mobility parameters. The slider retains the selection for
 reuse.
 
+Application-managed walks finish with an explicit stationary pose hold. Relative and
+tag moves first wait for measured arrival/settling, then replace the walking
+command and verify the achieved position again using fresh post-stand samples.
+The hold uses Spot's absolute `body_pose` stand command with the freshly measured
+full `odom`-to-`body` pose, preserving achieved position, height, lean and yaw.
+It does not request the default body alignment relative to the feet, which can
+undo small turns accomplished by twisting the body. Missing or stale full pose
+feedback fails the handoff without falling back to a recentering stand. Explicit
+Stand and walking-height preparation retain their normal posture-reset behavior.
+Tag correction uses observations captured after this final settling. This keeps
+an old mobility trajectory from remaining active during subsequent arm work.
+Normal walking obstacle avoidance remains enabled; standing still allows Spot's
+normal balance adjustments. A failed stand or missing settling feedback prevents
+successful completion and progression to the next queued command.
+
 Waypoint execution owns its preparation in `WaypointNavigationExecutor`, so both
 the waypoint tree and direct application callers must pass the same sequence:
 confirm/stow the arm, prepare walking height, then dispatch the Nav2 goal. The
@@ -645,8 +660,10 @@ is rechecked after height preparation and monitored during navigation. Loss of
 stowed-arm confirmation requests Nav2 cancellation and fails the operation.
 Preparation failures prevent Nav2 dispatch, and cancellation reaches the current
 preparation or navigation operation, including goals accepted after cancellation.
+After Nav2 reports success, the same base executor performs the stationary stand
+and confirms fresh settling before waypoint execution reports success.
 Nav2 goals sent straight to its action server by external clients still bypass
-this application-owned preparation.
+this application-owned preparation and completion.
 
 Changes to this interface require rebuilding `fault_detector_msgs` together with
 `fault_detector_spot` before launching the updated application.

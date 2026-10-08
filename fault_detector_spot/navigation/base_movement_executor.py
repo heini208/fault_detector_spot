@@ -13,7 +13,9 @@ from fault_detector_spot.navigation.body_height_readiness import (
     BodyHeightReadiness, BodyHeightSource,
 )
 
-from bosdyn.api import trajectory_pb2
+from bosdyn.api import geometry_pb2, trajectory_pb2
+from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
+from bosdyn.client.frame_helpers import ODOM_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
 from bosdyn.util import seconds_to_duration
 from bosdyn_spot_api_msgs.conversions import convert
@@ -93,6 +95,7 @@ class BaseMovementUpdate:
 class _BaseOperation(Enum):
     MOVEMENT = "movement"
     PREPARE = "prepare"
+    FINISH_WALKING = "finish_walking"
     STAND = "stand"
     CHANGE_HEIGHT = "change_height"
     SIT = "sit"
@@ -112,6 +115,8 @@ class _BasePhase(Enum):
     CONFIRMING_STANDING = "confirming_standing"
     EXECUTING_MOVEMENT = "executing_movement"
     VERIFYING_ENDPOINT = "verifying_endpoint"
+    EXECUTING_STATIONARY_STAND = "executing_stationary_stand"
+    VERIFYING_STATIONARY_STAND = "verifying_stationary_stand"
     WAITING_FOR_FRESH_TAG = "waiting_for_fresh_tag"
     CORRECTING = "correcting"
     CANCELLING = "cancelling"
@@ -231,6 +236,7 @@ class BaseMovementExecutor(MovementExecutor):
         self._target_strategy = None
         self._semantic_tag_command = None
         self._tag_settle_boundary_stamp = None
+        self._stationary_stand_stamp = None
         self._cancellation_terminal_update = None
         self._cancellation_complete = False
 
@@ -274,6 +280,20 @@ class BaseMovementExecutor(MovementExecutor):
         self._operation = _BaseOperation.STAND
         self._set_phase(_BasePhase.EXECUTING_STAND)
         return super()._start_goal(self._build_stand_goal)
+
+    def finish_walking(self) -> BaseMovementUpdate:
+        """Replace finished navigation with a stand and confirm physical settling."""
+        if self.active:
+            return self._busy_update()
+        self._active = True
+        self._operation = _BaseOperation.FINISH_WALKING
+        return self._begin_stationary_stand()
+
+    def _begin_stationary_stand(self):
+        self._reset_goal_lifecycle()
+        self._goal_verifier = None
+        self._set_phase(_BasePhase.EXECUTING_STATIONARY_STAND)
+        return self._submit_goal(self._build_stationary_hold_goal)
 
     def change_height(self, body_height_m: float) -> BaseMovementUpdate:
         """Send a command-local stand height; never change walking defaults."""
@@ -338,7 +358,10 @@ class BaseMovementExecutor(MovementExecutor):
         if self._phase is _BasePhase.CONFIRMING_STANDING:
             return self._poll_standing_confirmation()
 
-        if self._phase is _BasePhase.VERIFYING_ENDPOINT:
+        if self._phase in {
+            _BasePhase.VERIFYING_ENDPOINT,
+            _BasePhase.VERIFYING_STATIONARY_STAND,
+        }:
             return self._poll_goal_verification()
 
         if self._phase is _BasePhase.WAITING_FOR_FRESH_TAG:
@@ -349,6 +372,7 @@ class BaseMovementExecutor(MovementExecutor):
 
         if self._phase in {
             _BasePhase.EXECUTING_STAND,
+            _BasePhase.EXECUTING_STATIONARY_STAND,
             _BasePhase.EXECUTING_MOVEMENT,
             _BasePhase.CORRECTING,
             _BasePhase.EXECUTING_SIT,
@@ -521,24 +545,38 @@ class BaseMovementExecutor(MovementExecutor):
         if self._phase in {
             _BasePhase.EXECUTING_MOVEMENT,
             _BasePhase.CORRECTING,
+            _BasePhase.EXECUTING_STATIONARY_STAND,
         }:
-            plan = self._movement_plan
-            if plan is None:
-                return self._finish(
-                    BaseMovementOutcome.EXECUTION_ERROR,
-                    "Base movement has no plan for endpoint verification",
-                )
-            self._goal_verifier = BaseGoalVerifier(
-                self.motion_planner.planar_target(plan),
-                self.goal_verification_config,
-                self._monotonic_clock(),
-                motion_timeout_sec=self.result_timeout_sec,
-            )
-            self._tag_observation_tracker.reset()
-            self._set_phase(_BasePhase.VERIFYING_ENDPOINT)
-            return self._poll_goal_verification()
+            return self._begin_endpoint_verification()
 
         return super()._handle_successful_result(result)
+
+    def _begin_endpoint_verification(self):
+        stationary = self._phase is _BasePhase.EXECUTING_STATIONARY_STAND
+        plan = self._movement_plan
+        if self._operation is _BaseOperation.FINISH_WALKING:
+            # Nav2 owns endpoint accuracy. Only physical settling is used here.
+            target = (0.0, 0.0, 0.0)
+        elif plan is not None:
+            target = self.motion_planner.planar_target(plan)
+        else:
+            return self._finish(
+                BaseMovementOutcome.EXECUTION_ERROR,
+                "Base movement has no plan for endpoint verification",
+            )
+        self._goal_verifier = BaseGoalVerifier(
+            target,
+            self.goal_verification_config,
+            self._monotonic_clock(),
+            motion_timeout_sec=None if stationary else self.result_timeout_sec,
+        )
+        self._stationary_stand_stamp = self._ros_time_sec() if stationary else None
+        self._tag_observation_tracker.reset()
+        self._set_phase(
+            _BasePhase.VERIFYING_STATIONARY_STAND if stationary
+            else _BasePhase.VERIFYING_ENDPOINT
+        )
+        return self._poll_goal_verification()
 
     def _poll_goal_verification(self):
         verifier = self._goal_verifier
@@ -551,12 +589,35 @@ class BaseMovementExecutor(MovementExecutor):
         sample = self.base_pose_source.sample()
         pose = sample.planar_pose if sample is not None else None
         stamp = sample.stamp_sec if sample is not None else None
+        if (self._stationary_stand_stamp is not None
+                and (stamp is None or stamp <= self._stationary_stand_stamp)):
+            pose = None
         outcome = verifier.update(
             pose,
             stamp,
             self._ros_time_sec(),
             self._monotonic_clock(),
         )
+
+        if self._phase is _BasePhase.VERIFYING_ENDPOINT and verifier.settled:
+            # Driver AT_GOAL can precede physical arrival: only replace the
+            # walking command once measured motion has stopped. Verify again
+            # after stand because that transition can change the achieved pose.
+            return self._begin_stationary_stand()
+
+        if self._operation is _BaseOperation.FINISH_WALKING:
+            if verifier.settled and outcome is not False:
+                return self._finish(
+                    BaseMovementOutcome.SUCCESS, "Stationary stand confirmed after walking",
+                )
+            if outcome is False:
+                return self._finish(
+                    BaseMovementOutcome.MOTION_FAILED,
+                    f"Base did not settle after walking; {verifier.detail}",
+                )
+            return BaseMovementUpdate(
+                BaseMovementOutcome.RUNNING, "Waiting for stationary base after walking",
+            )
 
         if self._target_strategy is _BaseTargetStrategy.FRESH_TAG_TARGET:
             if verifier.settled:
@@ -1029,6 +1090,7 @@ class BaseMovementExecutor(MovementExecutor):
         self._target_strategy = None
         self._semantic_tag_command = None
         self._tag_settle_boundary_stamp = None
+        self._stationary_stand_stamp = None
         self._cancellation_terminal_update = None
         self._cancellation_complete = False
         self._tag_observation_tracker.reset()
@@ -1051,6 +1113,30 @@ class BaseMovementExecutor(MovementExecutor):
             abs(body_height_m - current_offset) / DEPLOYED_ARM_HEIGHT_SPEED_MPS
         )
         return self._build_stand_goal(body_height_m, duration_sec, current_offset)
+
+    def _build_stationary_hold_goal(self) -> RobotCommand.Goal:
+        """End locomotion without recentering a leaned/twisted achieved body pose."""
+        sample = self.base_pose_source.sample()
+        if (sample is None or sample.body_pose is None
+                or not BaseGoalVerifier.sample_is_fresh(
+                    sample.planar_pose, sample.stamp_sec, self._ros_time_sec(),
+                    self.goal_verification_config.maximum_pose_age_sec,
+                )):
+            raise ValueError("Stationary hold requires a fresh full odom-to-body pose")
+        pose = sample.body_pose
+        pose.validate()
+        native_pose = geometry_pb2.SE3Pose(
+            position=geometry_pb2.Vec3(**pose.position.to_dict()),
+            rotation=geometry_pb2.Quaternion(**pose.orientation.to_dict()),
+        )
+        params = spot_command_pb2.MobilityParams()
+        params.body_control.body_pose.CopyFrom(
+            RobotCommandBuilder.body_pose(ODOM_FRAME_NAME, native_pose)
+        )
+        command = RobotCommandBuilder.synchro_stand_command(params=params)
+        goal = RobotCommand.Goal()
+        convert(command, goal.command)
+        return goal
 
     def _build_stand_goal(
         self, body_height_m=0.0, duration_sec=0, start_height_m=None,

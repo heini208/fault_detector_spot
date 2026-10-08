@@ -1,4 +1,4 @@
-"""Read Spot's measured planar base pose from TF."""
+"""Read Spot's measured body pose and planar projection from one TF sample."""
 
 from dataclasses import dataclass
 import math
@@ -9,18 +9,20 @@ from fault_detector_spot.shared.geometry.rotation import (
     quaternion_to_rpy,
 )
 from fault_detector_spot.shared.geometry.models import (
-    QuaternionData,
+    PoseData,
 )
+from fault_detector_spot.shared.ros.tf_transforms import transform_to_pose_data
 
 
 @dataclass(frozen=True)
 class BasePoseSample:
-    """One measured planar base pose with its source timestamp."""
+    """Planar feedback and optional full body geometry at the same timestamp."""
 
     x_m: float
     y_m: float
     yaw_rad: float
     stamp_sec: float
+    body_pose: PoseData | None = None
 
     @property
     def planar_pose(self):
@@ -42,16 +44,9 @@ class BasePoseSource:
                 BODY_FRAME_NAME,
                 timeout_sec=0.0,
             )
-            translation = transform.transform.translation
-            rotation = transform.transform.rotation
-            _, _, yaw = quaternion_to_rpy(
-                QuaternionData(
-                    x=float(rotation.x),
-                    y=float(rotation.y),
-                    z=float(rotation.z),
-                    w=float(rotation.w),
-                )
-            )
+            body_pose = transform_to_pose_data(transform)
+            translation = body_pose.position
+            _, _, yaw = quaternion_to_rpy(body_pose.orientation)
             stamp = (
                 float(transform.header.stamp.sec)
                 + float(transform.header.stamp.nanosec) * 1e-9
@@ -73,6 +68,7 @@ class BasePoseSource:
             y_m=values[1],
             yaw_rad=values[2],
             stamp_sec=values[3],
+            body_pose=body_pose,
         )
 
 

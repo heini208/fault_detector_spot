@@ -215,7 +215,7 @@ def test_base_executor_uses_explicit_execution_phases():
     assert "MOVEMENT_STAND" not in executor
     assert "_verification_started" not in executor
     assert "_state_wait_started" not in executor
-    assert "if self._phase is _BasePhase.VERIFYING_ENDPOINT:" in executor
+    assert "VERIFYING_STATIONARY_STAND" in executor
     assert "tag_observation_timeout_sec" in executor
     assert (
         "if self._phase is _BasePhase.WAITING_FOR_FRESH_TAG:"

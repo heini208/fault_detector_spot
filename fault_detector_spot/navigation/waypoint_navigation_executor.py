@@ -38,11 +38,12 @@ class _Phase(Enum):
     PREPARING_BASE = "preparing_base"
     WAITING_FOR_GOAL = "waiting_for_goal"
     NAVIGATING = "navigating"
+    FINISHING_BASE = "finishing_base"
     CANCELLING = "cancelling"
 
 
 class WaypointNavigationExecutor:
-    """Stow, prepare height, then navigate; poll without spinning or blocking."""
+    """Stow, prepare height, navigate and finish stationary without blocking."""
 
     def __init__(self, arm_executor, base_executor, action_client, stamp_now,
                  monotonic_clock=time.monotonic, goal_response_timeout_sec=2.0, node=None):
@@ -109,12 +110,18 @@ class WaypointNavigationExecutor:
     def _preparation_update(self, update):
         arm = self._phase is _Phase.STOWING
         outcomes = ArmMovementOutcome if arm else BaseMovementOutcome
-        label = "Arm stow" if arm else "Walking height"
+        finishing = self._phase is _Phase.FINISHING_BASE
+        label = "Walking completion" if finishing else "Arm stow" if arm else "Walking height"
         if update.outcome is outcomes.RUNNING:
             return self._running(f"{label}: {update.detail}")
         self._owned_preparation = None
         if update.outcome is not outcomes.SUCCESS:
             return self._failure(f"{label} failed: {update.detail}")
+        if finishing:
+            self._clear()
+            return WaypointNavigationUpdate(
+                WaypointNavigationOutcome.SUCCESS, "Navigation succeeded; base stationary",
+            )
         if arm:
             self._phase = _Phase.PREPARING_BASE
             return self._start_preparation(
@@ -162,6 +169,8 @@ class WaypointNavigationExecutor:
             failure = self._navigation_guard_failure()
             if failure is not None:
                 return self._failure(failure)
+            if self._phase is _Phase.FINISHING_BASE:
+                return self._preparation_update(self._owned_preparation.poll())
             if self._phase is _Phase.WAITING_FOR_GOAL:
                 if not self._send_future.done():
                     return self._running("Waiting for Nav2 goal acceptance")
@@ -177,9 +186,11 @@ class WaypointNavigationExecutor:
             result = self._result_future.result()
             if result.status != GoalStatus.STATUS_SUCCEEDED:
                 return self._failure(f"Nav2 navigation failed with status {result.status}")
-            self._clear()
-            return WaypointNavigationUpdate(WaypointNavigationOutcome.SUCCESS,
-                                            "Navigation succeeded")
+            self._cancel_terminal = True
+            self._phase = _Phase.FINISHING_BASE
+            return self._start_preparation(
+                self.base_executor, self.base_executor.finish_walking,
+            )
         except Exception as exception:
             return self._failure(f"Waypoint navigation failed: {exception}")
 
@@ -196,6 +207,8 @@ class WaypointNavigationExecutor:
             self._start_monitor()
             if self._owned_preparation is not None:
                 self._owned_preparation.cancel()
+            if self._cancel_terminal:
+                return
             if self._send_future is None:
                 self._cancel_terminal = True
                 return
@@ -229,7 +242,9 @@ class WaypointNavigationExecutor:
                 return
             if self.cancelling:
                 update = self._poll_cancellation()
-            elif self._phase in {_Phase.WAITING_FOR_GOAL, _Phase.NAVIGATING}:
+            elif self._phase in {
+                _Phase.WAITING_FOR_GOAL, _Phase.NAVIGATING, _Phase.FINISHING_BASE,
+            }:
                 try:
                     failure = self._navigation_guard_failure()
                 except Exception as exception:

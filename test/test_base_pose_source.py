@@ -25,6 +25,7 @@ def test_valid_transform_returns_planar_sample():
     transform.header.stamp.nanosec = 500_000_000
     transform.transform.translation.x = 1.25
     transform.transform.translation.y = -0.5
+    transform.transform.translation.z = 0.47
     transform.transform.rotation.w = 1.0
 
     sample = BasePoseSource(Listener(transform)).sample()
@@ -32,6 +33,8 @@ def test_valid_transform_returns_planar_sample():
     assert sample is not None
     assert sample.planar_pose == (1.25, -0.5, 0.0)
     assert sample.stamp_sec == 12.5
+    assert sample.body_pose.position.z == 0.47
+    assert sample.body_pose.orientation.w == 1.0
 
 
 def test_lookup_failure_returns_no_sample():
