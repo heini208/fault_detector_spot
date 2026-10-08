@@ -133,7 +133,7 @@ parameter group. Robot, kinematics, joint limits and planner configuration remai
 owned by that package. There is no duplicated MoveIt launch or custom map updater.
 
 Configure `occupancy_map_monitor/PointCloudOctomapUpdater` with corrected
-`/velodyne/points_sensor`, 5 cm voxels, 3 m range and 5 cm robot-mask padding.
+`/velodyne/points_sensor`, 5 cm voxels, 3 m range and 10 cm robot-mask padding.
 The adapter's monotonic rate limit caps input at 5 Hz. Disable the native ROS-time
 throttle (`max_update_rate: 0.0`) to prevent stalled updates after backward clock
 jumps during recording replay. The mask padding excludes robot returns rather than
@@ -142,16 +142,38 @@ occupancy. `/fault_detector/moveit/filtered_lidar` exposes the updater's filtere
 cloud for inspection. Verify mount calibration before enabling either consumer.
 No changes to the Spot driver are needed.
 
-A live capture on 2026-10-08 reproduced wrist collisions despite correct point
-masking: with the previous 3 cm padding, retained points generated 5 cm cells
-intersecting wrist geometry. Offline checks with the installed ShapeMask,
-OctoMap and FCL libraries, all 31 robot collision shapes and acquisition-time
-TF removed those intersections at 5 cm padding, excluding 60 additional points
-from the same capture. This is a bounded correction, not proof for every pose.
-It also excludes nearby external returns within the padded robot shapes.
-After loading the new configuration, reconstruct the scene from fresh data;
-old occupied cells may persist until cleared. Custom sensor-head geometry is
-still absent and cannot be supplied by publishing a probe TF alone.
+The initial 3-to-5 cm padding correction was insufficient. A subsequent saved
+MoveIt log still showed `arm_link_hr0` colliding with the OctoMap at the starting
+pose. Point masking happens before voxelization; additionally, the installed
+geometric_shapes mesh padding moves vertices radially, rather than constructing
+a uniform offset surface. A point outside the padded mesh can therefore create
+a voxel intersecting the unpadded robot.
+
+Offline checks on 2026-10-08 used the installed ShapeMask, OctoMap and FCL
+libraries, all 31 collision shapes, and two matched cloud/TF captures. Moving
+each entire robot/cloud capture together through 125 alignments within one
+voxel kept the physical geometry and mask results unchanged while varying voxel
+placement. With 5 cm voxels and 5 cm padding, the extended-arm capture had arm
+contacts in 20/125 alignments, including shoulder and wrist links; the folded-arm
+capture had none. The fresh folded capture matched the live filter exactly and
+MoveIt reported its current start state valid. That observation does not recreate
+the earlier failed movement.
+
+At 10 cm padding and the same 5 cm resolution, both captures had zero contacts
+with any robot link over their 125 alignments each. Only 19/17,406 and 10/16,868
+additional surviving points were excluded (about 0.11% and 0.06%). Retaining
+5 cm padding and using 2.5 cm voxels also passed the earlier capture, but roughly
+doubled its occupied-cell count; the padding adjustment preserves the current
+map resolution and processing rate. It does exclude additional real returns
+close to the robot. These finite captures are regression evidence, not a
+guarantee for all poses, timing errors or accumulated occupancy.
+
+Restart MoveIt with the updated configuration and reconstruct occupancy from
+fresh observations before repeating the failed-pose check. Clearing occupancy
+alone does not reload padding. Do not automatically clear the map or ignore
+collisions to force a plan through: old occluded voxels and unmodelled geometry
+remain separate possible causes. Custom sensor-head geometry is still absent
+and cannot be supplied by publishing a probe TF alone.
 
 `moveit_ros_perception` is a declared runtime dependency. The configured
 lidar/OMPL path now uses matching MoveIt 2.5.10 libraries and `moveit_msgs` 2.2.3.

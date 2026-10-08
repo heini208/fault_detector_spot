@@ -256,12 +256,17 @@ it, and stops it when neither needs it. Verify its mount calibration before use
 The updater uses 5 cm voxels, a 3 m sensing range and input capped at 5 Hz by the
 adapter's monotonic clock. MoveIt's own ROS-time throttle is disabled so backward
 clock jumps during recording replay do not stall updates. MoveIt's robot/attached-body
-self-filter and free-space rays process this input. The 5 cm filter
+self-filter and free-space rays process this input. The 10 cm filter
 padding excludes returns close to robot geometry; it is not obstacle inflation.
-With a captured live cloud, the previous 3 cm padding correctly excluded robot
-points but left occupied 5 cm voxels intersecting the wrist. The 5 cm padding
-removed those intersections in offline native-library checks. Other poses and
-unmodelled sensor heads still need validation. Restart MoveIt to load a changed
+MoveIt masks points before voxelizing them, and native mesh padding expands
+vertices radially rather than adding a uniform shell. The previous 5 cm padding
+left arm-overlapping cells in 20 of 125 grid alignments tested with an extended-arm
+capture. At 10 cm padding, neither that capture nor a folded-arm capture produced
+robot-overlapping cells across their 125 alignments each, excluding only 19 and
+10 additional points respectively. This checks two captured poses, not every
+pose or accumulated map. The larger mask also excludes some nearby environmental
+returns. Other poses and unmodelled sensor heads still need validation.
+Restart MoveIt to load a changed
 padding setting and reconstruct the scene from fresh observations. Clearing
 the map alone does not reload this startup configuration; existing occupied
 cells do not expire automatically.

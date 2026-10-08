@@ -1,4 +1,4 @@
-# Consumed only by move_group; the lidar frame adapter is launched separately.
+# Consumed only by move_group; the shared lidar runtime owns the adapter.
 # MoveIt's SRDF must have a floating odom -> body virtual joint. Humble's
 # PlanningSceneMonitor uses the robot model frame despite octomap_frame below.
 /move_group:
@@ -11,8 +11,9 @@
       point_cloud_topic: /velodyne/points_sensor
       max_range: 3.0
       point_subsample: 1
-      # Point masking precedes voxelization; allow for cells overlapping the arm.
-      padding_offset: 0.05
+      # Mask points before voxelization. Mesh padding is radial, not a uniform
+      # shell; 5 cm padding still left 5 cm cells intersecting the bare arm.
+      padding_offset: 0.10
       padding_scale: 1.0
       # The adapter caps input at 5 Hz using monotonic time. MoveIt's ROS-time
       # throttle stalls after backward clock jumps during recording replay.
