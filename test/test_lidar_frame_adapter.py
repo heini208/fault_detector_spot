@@ -356,7 +356,8 @@ def test_clock_epoch_change_requires_new_dynamic_tf_and_preserves_static_mount(r
 
 @pytest.mark.parametrize("stamp,now,accepted", [
     (0.0, 10.0, False), (9.0, 10.0, False), (10.1, 10.0, False),
-    (9.8, 0.0, False), (9.5, 10.0, True), (10.05, 10.0, True),
+    (9.8, 0.0, False), (9.249, 10.0, False), (9.25, 10.0, True),
+    (9.444, 10.0, True), (10.05, 10.0, True),
 ])
 def test_freshness_bounds_checked_before_tf_lookup(rig, stamp, now, accepted):
     value = rig()
@@ -374,7 +375,7 @@ def test_scan_that_expires_during_transform_is_not_published(rig, monkeypatch):
 
     def delayed_transform(*args, **kwargs):
         output = original(*args, **kwargs)
-        value.node.now = 10.4
+        value.node.now = 10.6
         return output
 
     monkeypatch.setattr(adapter_module, "transform_lidar_cloud", delayed_transform)

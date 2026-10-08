@@ -74,7 +74,9 @@ with `publish_mount_tf:=false`. The calibration is in
 using it. No hardware or live TF validation was performed for this change.
 
 Processing is bounded by depth-one queues, a 5 Hz attempt limit, a 100,000-point
-limit and a 0.5 s age limit checked both before and after conversion. Clouds more
+limit and a 0.75 s age limit checked both before and after conversion. The age
+limit accommodates user-measured live lidar delays around 0.4 s with spikes to
+0.56 s, without waiting or changing acquisition timestamps. Clouds more
 than 50 ms in the future, missing timestamps, unsupported layouts and invalid
 transforms are rejected. TF lookup never waits or substitutes the latest pose.
 Backward ROS clock jumps and clock-source changes clear dynamic TF history. The

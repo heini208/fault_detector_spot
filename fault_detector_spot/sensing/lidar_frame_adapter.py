@@ -49,8 +49,9 @@ class LidarFrameAdapter:
         descriptor = ParameterDescriptor(read_only=True)
         self.sensor_frame = node.declare_parameter(
             "sensor_frame", "lidar_sensor", descriptor).value
+        # Live SDK clouds arrive about 0.4 s old, with observed spikes to 0.56 s.
         self.max_cloud_age_sec = node.declare_parameter(
-            "max_cloud_age_sec", 0.5, descriptor).value
+            "max_cloud_age_sec", 0.75, descriptor).value
         self.max_points = node.declare_parameter(
             "max_points", 100000, descriptor).value
         max_rate_hz = node.declare_parameter(
@@ -87,13 +88,18 @@ class LidarFrameAdapter:
             ),
         )
 
-    def _check_age(self, cloud):
+    def _check_age(self, cloud, stage):
         stamp = Time.from_msg(cloud.header.stamp)
         now_ns = self.node.get_clock().now().nanoseconds
         age_sec = (now_ns - stamp.nanoseconds) / 1e9
         if (now_ns <= 0 or stamp.nanoseconds <= 0
                 or not -0.05 <= age_sec <= self.max_cloud_age_sec):
-            raise ValueError("Lidar acquisition time is missing, stale or in the future")
+            raise ValueError(
+                "Lidar acquisition time is missing, stale or in the future "
+                f"(stage={stage}, age={age_sec:+.3f} s, "
+                f"allowed=-0.050..{self.max_cloud_age_sec:.3f} s, "
+                f"stamp_ns={stamp.nanoseconds}, now_ns={now_ns})"
+            )
         return stamp
 
     def receive_cloud(self, cloud):
@@ -103,13 +109,13 @@ class LidarFrameAdapter:
         self._last_attempt = now
         try:
             validate_lidar_cloud(cloud, self.max_points)
-            stamp = self._check_age(cloud)
+            stamp = self._check_age(cloud, "input")
             # No waiting, latest-TF fallback, or retained cloud backlog.
             transform = self._buffer.lookup_transform(
                 self.sensor_frame, cloud.header.frame_id, stamp, timeout=Duration(),
             )
             output = transform_lidar_cloud(cloud, transform, self.max_points)
-            self._check_age(output)
+            self._check_age(output, "after transform")
         except (ValueError, TypeError, AssertionError, TransformException) as exception:
             self.node.get_logger().warning(
                 f"Skipping lidar cloud: {exception}", throttle_duration_sec=2.0,

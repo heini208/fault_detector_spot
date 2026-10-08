@@ -99,22 +99,60 @@ def test_reset_then_fresh_settled_height_then_movement(operation, known):
     assert not readiness.reset_required
 
 
-@pytest.mark.parametrize("failure", ["missing", "stale", "future", "nan"])
+@pytest.mark.parametrize("failure", ["missing", "lookup", "stale", "future", "nan"])
 def test_unreliable_height_blocks_without_dispatch(failure):
     executor, clock, source, readiness, client, built = rig()
     if failure == "missing":
         source.available = False
+    elif failure == "lookup":
+        source.sample = Mock(side_effect=RuntimeError("missing feet frame"))
     elif failure == "stale":
         source.stamp = 1.0
     elif failure == "future":
-        source.stamp = 100.0
+        source.stamp = clock.now + 0.01
     else:
         source.height = float("nan")
     assert executor.prepare_for_navigation().outcome is BaseMovementOutcome.RUNNING
     clock.now += 2.1
-    assert executor.poll().outcome is BaseMovementOutcome.HEIGHT_STATE_UNAVAILABLE
+    update = executor.poll()
+    assert update.outcome is BaseMovementOutcome.HEIGHT_STATE_UNAVAILABLE
+    assert readiness.last_error and readiness.last_error in update.detail
+    if failure == "lookup":
+        assert "RuntimeError: missing feet frame" in update.detail
+    elif failure in {"stale", "future"}:
+        assert "TF age=" in update.detail
     assert client.send_calls == 0
     assert not executor.active
+
+
+@pytest.mark.parametrize("phase", ["initial", "confirmation"])
+def test_height_check_reads_clock_after_delayed_tf_lookup(phase):
+    executor, clock, source, readiness, client, built = rig()
+    if phase == "confirmation":
+        source.height = 0.35
+        executor.prepare_for_navigation()
+        complete_stand(executor, client)
+        source.height = 0.5
+
+    original_sample = source.sample
+
+    def delayed_sample():
+        clock.now += 0.04
+        source.stamp = clock.now - 0.02
+        return original_sample()
+
+    source.sample = delayed_sample
+    if phase == "initial":
+        update = executor.prepare_for_navigation()
+    else:
+        clock.now += 0.1
+        assert executor.poll().outcome is BaseMovementOutcome.RUNNING
+        clock.now += 0.31
+        update = executor.poll()
+    assert update.outcome is BaseMovementOutcome.SUCCESS
+    assert readiness.last_error == ""
+    assert client.send_calls == (0 if phase == "initial" else 1)
+    assert built == []
 
 
 @pytest.mark.parametrize("failure", ["failed", "rejected", "wrong_height", "stale_after_reset"])
@@ -160,11 +198,11 @@ def test_repeated_timestamp_cannot_confirm_settling():
     readiness.begin_confirmation(clock.now)
     clock.now += 0.1
     source.stamp = clock.now
-    assert not readiness.confirm_reset(clock.now)
+    assert not readiness.confirm_reset(clock)
     clock.now += 0.31
-    assert not readiness.confirm_reset(clock.now)
+    assert not readiness.confirm_reset(clock)
     source.stamp = clock.now
-    assert readiness.confirm_reset(clock.now)
+    assert readiness.confirm_reset(clock)
 
 
 def test_height_change_invalidates_quick_check_even_before_feedback():
@@ -193,7 +231,7 @@ def test_walking_preparation_restores_commanded_offset(operation, needs_reset):
     assert executor._commanded_height_m == 0.0
 
 
-def test_tf_source_uses_namespaced_feet_to_body_and_handles_missing_data():
+def test_tf_source_uses_namespaced_feet_to_body_and_preserves_lookup_error():
     transform = TransformStamped()
     transform.header.stamp.sec = 7
     transform.transform.translation.z = 0.5
@@ -203,7 +241,8 @@ def test_tf_source_uses_namespaced_feet_to_body_and_handles_missing_data():
     assert source.sample() == BodyHeightSample(0.5, 7.0)
     listener.lookup_a_tform_b.assert_called_once_with("spot/feet_center", "spot/body", timeout_sec=0.0)
     listener.lookup_a_tform_b.side_effect = RuntimeError("missing TF")
-    assert source.sample() is None
+    with pytest.raises(RuntimeError, match="missing TF"):
+        source.sample()
 
 
 
@@ -235,11 +274,11 @@ def test_confirmation_restarts_after_measurement_gap_or_height_motion():
     executor, clock, source, readiness, client, built = rig()
     readiness.begin_confirmation(clock.now)
     clock.now += 0.1
-    assert not readiness.confirm_reset(clock.now)
+    assert not readiness.confirm_reset(clock)
     clock.now += 0.6
-    assert not readiness.confirm_reset(clock.now)
+    assert not readiness.confirm_reset(clock)
     clock.now += 0.1
     source.height = 0.508
-    assert not readiness.confirm_reset(clock.now)
+    assert not readiness.confirm_reset(clock)
     clock.now += 0.31
-    assert readiness.confirm_reset(clock.now)
+    assert readiness.confirm_reset(clock)

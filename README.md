@@ -441,8 +441,11 @@ physical lidar TF already exists, set `publish_mount_tf:=false` and
 publisher for the chosen physical sensor frame.
 
 The adapter uses queues of depth one, limits conversion attempts to 5 Hz and
-100,000 points, and drops clouds older than 0.5 s or more than 50 ms in the
-future. Missing timestamped TF drops that scan immediately; there is no wait,
+100,000 points, and drops clouds older than 0.75 s or more than 50 ms in the
+future. The age limit accommodates measured live lidar delays of about 0.4 s
+with spikes to 0.56 s; it adds no waiting and does not change acquisition timestamps.
+Freshness is checked both before and after conversion. Missing timestamped TF
+drops that scan immediately; there is no wait,
 latest-transform substitution, or stored scan to replay later. Malformed clouds
 are rejected and warnings are throttled. Backward ROS clock jumps and clock-source
 changes clear dynamic TF history.

@@ -23,20 +23,15 @@ class BodyHeightSource:
         self.robot_name = robot_name
 
     def sample(self):
-        try:
-            transform = self.tf_listener.lookup_a_tform_b(
-                namespace_with(self.robot_name, "feet_center"),
-                namespace_with(self.robot_name, "body"),
-                timeout_sec=0.0,
-            )
-            height = float(transform.transform.translation.z)
-            stamp = (float(transform.header.stamp.sec)
-                     + float(transform.header.stamp.nanosec) * 1e-9)
-            if not all(math.isfinite(value) for value in (height, stamp)):
-                return None
-            return BodyHeightSample(height, stamp)
-        except Exception:
-            return None
+        transform = self.tf_listener.lookup_a_tform_b(
+            namespace_with(self.robot_name, "feet_center"),
+            namespace_with(self.robot_name, "body"),
+            timeout_sec=0.0,
+        )
+        height = float(transform.transform.translation.z)
+        stamp = (float(transform.header.stamp.sec)
+                 + float(transform.header.stamp.nanosec) * 1e-9)
+        return BodyHeightSample(height, stamp)
 
 
 class BodyHeightReadiness:
@@ -54,17 +49,32 @@ class BodyHeightReadiness:
         self.settle_tolerance_m = settle_tolerance_m
         self.nominal_height_m = None
         self.reset_required = False
+        self.last_error = "No height sample received"
         self.begin_confirmation(0.0)
 
-    def sample(self, ros_now):
-        sample = self.source.sample()
+    def sample(self, ros_time_sec):
+        try:
+            sample = self.source.sample()
+            # TF can advance during lookup: compare against time read afterward.
+            ros_now = ros_time_sec()
+        except Exception as exception:
+            self.last_error = f"{type(exception).__name__}: {exception}"
+            return None
         if sample is None:
+            self.last_error = "No height sample received"
             return None
         values = (sample.height_m, sample.stamp_sec, ros_now)
         if not all(math.isfinite(value) for value in values):
+            self.last_error = "Non-finite height or timestamp"
             return None
-        if not 0 <= ros_now - sample.stamp_sec <= self.maximum_age_sec:
+        age = ros_now - sample.stamp_sec
+        if not 0 <= age <= self.maximum_age_sec:
+            self.last_error = (
+                f"TF age={age:+.3f} s, allowed=0..{self.maximum_age_sec:.3f} s "
+                f"(stamp={sample.stamp_sec:.6f}, now={ros_now:.6f})"
+            )
             return None
+        self.last_error = ""
         return sample
 
     def at_nominal_height(self, sample):
@@ -81,8 +91,8 @@ class BodyHeightReadiness:
         self._last_stamp = None
         self._stable_since = None
 
-    def confirm_reset(self, ros_now):
-        sample = self.sample(ros_now)
+    def confirm_reset(self, ros_time_sec):
+        sample = self.sample(ros_time_sec)
         if sample is None or sample.stamp_sec <= self._after_stamp:
             self._anchor = self._stable_since = None
             return False

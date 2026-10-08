@@ -409,12 +409,13 @@ class BaseMovementExecutor(MovementExecutor):
         return self._check_walking_height()
 
     def _check_walking_height(self):
-        sample = self.height_readiness.sample(self._ros_time_sec())
+        sample = self.height_readiness.sample(self._ros_time_sec)
         if sample is None:
             if self._deadline_expired(self._phase_started, self.ready_state_timeout_sec):
                 return self._finish(
                     BaseMovementOutcome.HEIGHT_STATE_UNAVAILABLE,
-                    "Walking height unavailable: need fresh feet_center-to-body TF",
+                    "Walking height unavailable: need fresh feet_center-to-body TF; "
+                    + self.height_readiness.last_error,
                 )
             return BaseMovementUpdate(BaseMovementOutcome.RUNNING,
                                       "Waiting for measured body height")
@@ -432,7 +433,7 @@ class BaseMovementExecutor(MovementExecutor):
 
     def _confirm_walking_height(self):
         if (self._fresh_posture_state() is PostureState.STANDING
-                and self.height_readiness.confirm_reset(self._ros_time_sec())):
+                and self.height_readiness.confirm_reset(self._ros_time_sec)):
             return self._walking_height_ready()
         if self._deadline_expired(self._phase_started, self.height_reset_timeout_sec):
             return self._finish(
