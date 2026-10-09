@@ -66,10 +66,14 @@ def test_movement_callers_use_boolean_confirmation(monkeypatch, reply, handler):
         tag_dropdown=SimpleNamespace(currentText=lambda: "7"),
         build_move_to_tag_intent=lambda: intent,
         build_move_base_intent=lambda _kind: intent,
+        reset_body_height_on_move=False,
         ignore_environment_collisions_checkbox=Mock(isChecked=Mock(return_value=True)),
     )
     controls._execute_basic_movement = lambda intent: (
         ManipulationControls._execute_basic_movement(controls, intent)
+    )
+    controls._submit_base_move = lambda intent: (
+        BaseMovementControls._submit_base_move(controls, intent)
     )
     controls.ask_question = lambda title, message: UIControlHelper.ask_question(
         controls, title, message,

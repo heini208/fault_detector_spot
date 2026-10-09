@@ -475,7 +475,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
 
     def _move_base_to_tag(self, command: SemanticCommand):
         tag = self._required_tag(command)
-        return [
+        commands = [
             BaseToTagCommand(
                 command_id=CommandID.MOVE_BASE_TO_TAG,
                 stamp=self._create_command_stamp(),
@@ -485,6 +485,17 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 walking_profile=command.walking_profile,
             )
         ]
+        # Walking completes at nominal height; restore an adjusted height only
+        # after the base has reached its target, within the same request.
+        if command.body_height_m != 0.0:
+            commands.append(
+                ChangeBodyHeightCommand(
+                    command_id=CommandID.CHANGE_BODY_HEIGHT,
+                    stamp=self._create_command_stamp(),
+                    body_height_m=command.body_height_m,
+                )
+            )
+        return commands
 
     def _move_base_with_offset(self, command: SemanticCommand):
         return [

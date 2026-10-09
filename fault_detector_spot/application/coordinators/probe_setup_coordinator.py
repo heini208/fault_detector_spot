@@ -51,6 +51,7 @@ from fault_detector_spot.inspection.setup.probe_setup_motion import (
     ProbeMotionRequest,
     ProbeSetupMotionCommandFactory,
 )
+from fault_detector_spot.navigation.body_height import validate_body_height
 
 
 def _serialized_transaction(method):
@@ -295,11 +296,13 @@ class ProbeSetupCoordinator:
             )
         )
         safe_tolerance = .1
+        base_body_height_m = 0.0
         if draft.selected_object_id in object_ids and draft.selected_routine_id in routine_ids:
             definition = self.object_repository.load(draft.selected_object_id)
             routine = definition.get_routine(draft.selected_routine_id)
             if routine is not None:
                 safe_tolerance = routine.safe_approach_position_tolerance_m
+                base_body_height_m = routine.base_body_height_m
         distances = ()
         if probe_ids:
             definition = self.object_repository.load(draft.selected_object_id)
@@ -320,6 +323,7 @@ class ProbeSetupCoordinator:
             probe_point_target_surface_distances_m=distances,
             probe_point_fully_custom=tuple(routine.get_probe_point(p).fully_custom for p in probe_ids) if probe_ids else (),
             has_base_position=has_base_position,
+            base_body_height_m=base_body_height_m,
             has_routine_safe_approach_pose=has_routine_safe_approach_pose,
             routine_safe_position_tolerance_m=safe_tolerance,
         )
@@ -439,9 +443,11 @@ class ProbeSetupCoordinator:
     def save_base_position(
         self,
         context: SetupContextSnapshot,
+        body_height_m: float = 0.0,
     ) -> ProbeSetupSnapshot:
-        """Persist the current base pose relative to the selected routine tag."""
+        """Persist the current planar base pose and selected body height."""
         draft = self._draft(context)
+        body_height_m = validate_body_height(body_height_m)
         if not draft.selected_object_id or not draft.selected_routine_id:
             raise ValueError(
                 "Select an inspection object and routine before saving "
@@ -463,6 +469,7 @@ class ProbeSetupCoordinator:
             draft.selected_object_id,
             draft.selected_routine_id,
             base_position,
+            body_height_m,
         )
         return self._advance(draft)
 

@@ -88,6 +88,31 @@ def test_object_repository_round_trip(tmp_path):
     assert repository.list_object_ids() == ["motor_a"]
 
 
+def test_object_repository_saves_base_pose_and_height_atomically(tmp_path):
+    repository = ObjectRepository(tmp_path)
+    path = repository.save(make_object())
+    assert "base_body_height_m" not in path.read_text()
+    assert repository.load("motor_a").get_routine("magnetic_scan").base_body_height_m == 0.0
+    base_position = PoseData.identity()
+    base_position.position.x = -1.25
+
+    saved = repository.set_routine_base_position(
+        "motor_a", "magnetic_scan", base_position, base_body_height_m=-0.15
+    )
+
+    assert repository.load("motor_a") == saved
+    routine = saved.get_routine("magnetic_scan")
+    assert routine.base_position == base_position
+    assert routine.base_position.position.z == 0.0
+    assert routine.base_body_height_m == -0.15
+    saved_text = path.read_text()
+    with pytest.raises(ValueError, match="Body height"):
+        repository.set_routine_base_position(
+            "motor_a", "magnetic_scan", PoseData.identity(), base_body_height_m=0.21
+        )
+    assert path.read_text() == saved_text
+
+
 def test_object_repository_creates_new_object_without_overwrite(tmp_path):
     repository = ObjectRepository(tmp_path)
     definition = InspectionObject(

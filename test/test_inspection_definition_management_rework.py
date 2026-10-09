@@ -164,6 +164,16 @@ def test_move_to_base_position_submits_selected_routine_intent(controls):
     assert controls.move_to_base_position_button.isEnabled()
 
 
+def test_save_without_height_selection_does_not_reuse_stored_height(controls):
+    saved = state("motor", "magnetic_scan", has_base_position=True)
+    saved.base_body_height_m = 0.12
+    controls.apply_setup_state(saved)
+
+    assert controls.handle_save_base_position()
+
+    assert controls.ui.requests[-1].body_height_m == 0.0
+
+
 def test_deletion_submits_typed_intent_without_local_mutation(controls):
     controls.apply_setup_state(state("motor", "magnetic_scan"))
 

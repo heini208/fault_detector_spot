@@ -695,6 +695,7 @@ def test_selected_definition_metadata_is_server_owned(tmp_path):
 
     assert selected.selected_reference_tag_id == 7
     assert selected.selected_reference_tag_family == "36h11"
+    assert selected.base_body_height_m == 0.0
     assert not hasattr(selected, "selected_sensor_id")
     assert not hasattr(selected, "sensor_ids")
 
@@ -704,6 +705,7 @@ def test_selected_definition_metadata_is_server_owned(tmp_path):
     assert object_only.selected_routine_id == ""
     assert object_only.selected_reference_tag_id == -1
     assert object_only.selected_reference_tag_family == ""
+    assert object_only.base_body_height_m == 0.0
 
 
 def test_routine_base_position_is_persisted_and_overwritten(tmp_path):
@@ -716,24 +718,72 @@ def test_routine_base_position_is_persisted_and_overwritten(tmp_path):
     first = pose(-1.2, 0.4)
     first.orientation = yaw_quaternion(-30.0)
     probe.motion_state_source.base_pose = first
-    saved = probe.save_base_position(state.context)
+    saved = probe.save_base_position(state.context, body_height_m=0.12)
 
     routine = probe.object_repository.load("motor").get_routine(
         "magnetic_scan"
     )
     assert saved.has_base_position
     assert routine.base_position == first
+    assert routine.base_body_height_m == 0.12
+    assert saved.base_body_height_m == 0.12
+
+    object_only = probe.select_object(saved.context, "motor")
+    assert object_only.base_body_height_m == 0.0
+    selected = probe.select_routine(object_only.context, "motor", "magnetic_scan")
+    assert selected.base_body_height_m == 0.12
 
     second = pose(-0.9, -0.2)
     second.orientation = yaw_quaternion(15.0)
     probe.motion_state_source.base_pose = second
-    saved = probe.save_base_position(saved.context)
+    saved = probe.save_base_position(selected.context)
 
     routine = probe.object_repository.load("motor").get_routine(
         "magnetic_scan"
     )
     assert saved.has_base_position
     assert routine.base_position == second
+    assert routine.base_body_height_m == 0.0
+    assert saved.base_body_height_m == 0.0
+    assert "base_body_height_m" not in routine.to_dict()
+
+
+@pytest.mark.parametrize("height", [-0.201, 0.201, float("inf"), float("nan")])
+def test_saving_base_position_rejects_invalid_height_without_changing_routine(tmp_path, height):
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(probe, probe.open_context("probe-ui").context)
+    stored = probe.object_repository.get_object_path("motor").read_text()
+
+    with pytest.raises(ValueError, match="Body height"):
+        probe.save_base_position(state.context, body_height_m=height)
+
+    assert probe.object_repository.get_object_path("motor").read_text() == stored
+    assert probe.snapshot(state.context).base_body_height_m == 0.0
+
+
+def test_base_position_api_and_state_adapter_transport_saved_height(tmp_path):
+    from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
+    from fault_detector_spot.application.api.probe_setup_api import ProbeSetupApi
+    from fault_detector_spot.inspection.setup.probe_setup_state_adapter import ProbeSetupStateAdapter
+    from test_command_request_correlation import FakeClock
+
+    probe, _ = coordinator(tmp_path)
+    state = create_selected_routine(probe, probe.open_context("probe-ui").context)
+    api = ProbeSetupApi.__new__(ProbeSetupApi)
+    api.coordinator = probe
+    intent = ProbeSetupIntent()
+    intent.body_height_m = -0.08
+
+    saved = api._save_base_position(state.context, intent)
+    message = ProbeSetupStateAdapter(FakeClock()).message(
+        saved,
+        ProbeSetupIntent.OPERATION_SAVE_BASE_POSITION,
+        ProbeSetupState.STATE_READY,
+        "Saved base position",
+    )
+
+    assert saved.base_body_height_m == -0.08
+    assert message.base_body_height_m == -0.08
 
 
 def test_geometry_and_approvals_are_owned_by_context(tmp_path):

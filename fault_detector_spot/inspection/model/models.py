@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
+from fault_detector_spot.navigation.body_height import validate_body_height
 from fault_detector_spot.shared.geometry.models import PoseData, QuaternionData, Vector3Data
 
 from fault_detector_spot.inspection.sensing import (
@@ -401,6 +402,7 @@ class InspectionRoutine:
     probe_points: List[ProbePoint] = field(
         default_factory=list
     )
+    base_body_height_m: float = 0.0
 
     @classmethod
     def from_dict(
@@ -430,6 +432,7 @@ class InspectionRoutine:
                 if data.get("base_position") is not None
                 else None
             ),
+            base_body_height_m=float(data.get("base_body_height_m", 0.0)),
             safe_approach_position_tolerance_m=float(data.get("safe_approach_position_tolerance_m", .1)),
             safe_approach_pose_object=(
                 PoseData.from_dict(data["safe_approach_pose_object"])
@@ -453,6 +456,7 @@ class InspectionRoutine:
             "Routine display name",
         )
         self.reference_tag.validate()
+        validate_body_height(self.base_body_height_m)
         if not math.isfinite(self.safe_approach_position_tolerance_m) or self.safe_approach_position_tolerance_m <= 0:
             raise ValueError("Safe approach tolerance must be positive and finite")
         if self.safe_approach_pose_object is not None:
@@ -579,6 +583,8 @@ class InspectionRoutine:
             )
         if self.base_position is not None:
             result["base_position"] = self.base_position.to_dict()
+        if self.base_body_height_m != 0.0:
+            result["base_body_height_m"] = self.base_body_height_m
         return result
 
 

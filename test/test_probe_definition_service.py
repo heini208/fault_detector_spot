@@ -41,10 +41,15 @@ class FakeObjectRepository:
         object_id,
         routine_id,
         base_position,
+        base_body_height_m=0.0,
     ):
         definition = self.load(object_id)
         routine = definition.get_routine(routine_id)
-        stored = replace(routine, base_position=base_position)
+        stored = replace(
+            routine,
+            base_position=base_position,
+            base_body_height_m=base_body_height_m,
+        )
         self.definitions[object_id] = replace(
             definition,
             routines=[
@@ -161,6 +166,7 @@ def test_definition_service_builds_snapshot_metadata():
         "motor",
         "magnetic_scan",
         base_position,
+        base_body_height_m=0.13,
     )
     metadata = definitions.selected_definition_lists(
         "motor",
@@ -174,6 +180,7 @@ def test_definition_service_builds_snapshot_metadata():
         .base_position
         == base_position
     )
+    assert objects.load("motor").get_routine("magnetic_scan").base_body_height_m == 0.13
 
 
 def test_definition_service_delete_operations_are_repository_owned():

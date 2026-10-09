@@ -87,6 +87,8 @@ def test_inspection_object_round_trip_preserves_routine_order():
 def test_routine_base_position_round_trip_is_optional_and_planar():
     routine = make_routine()
     assert "base_position" not in routine.to_dict()
+    assert "base_body_height_m" not in routine.to_dict()
+    assert InspectionRoutine.from_dict(routine.to_dict()).base_body_height_m == 0.0
 
     base_position = PoseData.identity()
     base_position.position.x = -1.25
@@ -94,16 +96,37 @@ def test_routine_base_position_round_trip_is_optional_and_planar():
     base_position.orientation.z = math.sin(math.radians(-35.0) * 0.5)
     base_position.orientation.w = math.cos(math.radians(-35.0) * 0.5)
     routine.base_position = base_position
+    routine.base_body_height_m = -0.12
 
     restored = InspectionRoutine.from_dict(routine.to_dict())
     restored.validate()
 
     assert restored.base_position == base_position
     assert restored.to_dict()["base_position"] == base_position.to_dict()
+    assert restored.base_body_height_m == -0.12
+    assert restored.to_dict()["base_body_height_m"] == -0.12
 
     restored.base_position.position.z = 0.01
     with pytest.raises(ValueError, match="planar tag-relative"):
         restored.validate()
+
+
+@pytest.mark.parametrize("height", [-0.2, 0.0, 0.2])
+def test_routine_base_body_height_accepts_stationary_height_bounds(height):
+    routine = make_routine()
+    routine.base_body_height_m = height
+    restored = InspectionRoutine.from_dict(routine.to_dict())
+    restored.validate()
+    assert restored.base_body_height_m == height
+
+
+@pytest.mark.parametrize("height", [-0.201, 0.201, float("inf"), float("nan")])
+def test_routine_base_body_height_rejects_invalid_saved_height(height):
+    serialized = make_routine().to_dict()
+    serialized["base_body_height_m"] = height
+    routine = InspectionRoutine.from_dict(serialized)
+    with pytest.raises(ValueError, match="Body height"):
+        routine.validate()
 
 
 def test_uncaptured_routine_round_trip_preserves_empty_reference_views():

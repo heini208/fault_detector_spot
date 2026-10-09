@@ -104,6 +104,7 @@ class ProbeSetupSnapshot:
     routine_safe_position_tolerance_m: float = .1
     aligned_position_tolerance_m: float = .01
     final_position_tolerance_m: float = .01
+    base_body_height_m: float = 0.0
 
     @classmethod
     def from_draft(
@@ -121,6 +122,7 @@ class ProbeSetupSnapshot:
         has_base_position=False,
         has_routine_safe_approach_pose=False,
         routine_safe_position_tolerance_m=.1,
+        base_body_height_m=0.0,
     ) -> "ProbeSetupSnapshot":
         return cls(
             pre_approach_path=tuple(deepcopy(draft.pre_approach_path)),
@@ -146,6 +148,7 @@ class ProbeSetupSnapshot:
             probe_point_fully_custom=tuple(probe_point_fully_custom),
             routine_safe_position_tolerance_m=routine_safe_position_tolerance_m,
             has_base_position=bool(has_base_position),
+            base_body_height_m=base_body_height_m,
             has_routine_safe_approach_pose=bool(has_routine_safe_approach_pose),
             reference_pixel=deepcopy(draft.reference_pixel),
             geometry=deepcopy(draft.geometry),

@@ -32,6 +32,7 @@ from fault_detector_spot.navigation.walking_profile import (
     WalkingProfile,
     WalkingProfiles,
 )
+from fault_detector_spot.navigation.body_height import validate_body_height
 from fault_detector_spot.shared.geometry.movement_geometry import (
     MovementGeometryResolver,
     MovementGeometryUnavailable,
@@ -45,6 +46,7 @@ class BaseMovementPlan:
     target: PoseStamped
     linear_speed_mps: float
     profile: WalkingProfile
+    body_height_m: float = 0.0
 
 
 class BaseMotionPlanner:
@@ -118,6 +120,33 @@ class BaseMotionPlanner:
         (offset.pose.orientation.x, offset.pose.orientation.y,
          offset.pose.orientation.z, offset.pose.orientation.w) = map(float, rotation)
         return prepared
+
+    def resolve_yaw_correction(
+        self, planar_pose, target_yaw_rad: float, body_height_m: float,
+    ) -> BaseMovementPlan:
+        """Restore heading in place with precision settings at the given height."""
+        if len(planar_pose) != 3 or not all(
+            math.isfinite(value) for value in planar_pose
+        ):
+            raise ValueError("Yaw correction requires a finite measured planar pose")
+        if not math.isfinite(target_yaw_rad):
+            raise ValueError("Yaw correction target must be finite")
+        target = PoseStamped()
+        target.header.frame_id = ODOM_FRAME_NAME
+        target.pose.position.x = float(planar_pose[0])
+        target.pose.position.y = float(planar_pose[1])
+        orientation = quaternion_from_euler("z", target_yaw_rad)
+        target.pose.orientation.x = orientation.x
+        target.pose.orientation.y = orientation.y
+        target.pose.orientation.z = orientation.z
+        target.pose.orientation.w = orientation.w
+        profile = self.walking_profiles.for_move(override="precision")
+        return BaseMovementPlan(
+            target=target,
+            linear_speed_mps=profile.relative_speed_mps,
+            profile=profile,
+            body_height_m=validate_body_height(body_height_m),
+        )
 
     def observation_in_odom(self, pose):
         """Express a tag pose in odom using its capture-time transform."""
@@ -289,9 +318,10 @@ class BaseMotionPlanner:
                 -profile.angular_speed_rad_s,
             ).to_proto(),
         )
-        # Every walk uses nominal height, independent of the last stand command.
+        # Normal plans keep nominal height. Height-preserving yaw corrections
+        # explicitly carry their stationary offset in the plan.
         params = RobotCommandBuilder.mobility_params(
-            body_height=0.0,
+            body_height=validate_body_height(plan.body_height_m),
             locomotion_hint=GAITS[profile.gait],
         )
         params.vel_limit.CopyFrom(velocity_limit)

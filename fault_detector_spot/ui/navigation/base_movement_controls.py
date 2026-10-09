@@ -31,8 +31,11 @@ class BaseMovementControls(UIControlHelper):
     MAX_BODY_HEIGHT_M = MAX_BODY_HEIGHT_M
     BODY_HEIGHT_STEP_M = 0.01
 
-    def __init__(self, parent_ui: "Fault_Detector_UI"):
+    def __init__(
+        self, parent_ui: "Fault_Detector_UI", *, reset_body_height_on_move=False,
+    ):
         self.offset_fields = {}
+        self.reset_body_height_on_move = reset_body_height_on_move
         super().__init__(parent_ui)
 
     def init_ros_communication(self):
@@ -182,8 +185,9 @@ class BaseMovementControls(UIControlHelper):
         self.change_height_button = QPushButton("Change Height")
         self.change_height_button.clicked.connect(self.handle_change_height)
         self.change_height_button.setToolTip(
-            "Apply this height offset while stationary. The next base movement "
-            "restores normal walking height."
+            "Apply this height offset, then correct any heading drift in "
+            "precision mode at that height. The next base movement restores "
+            "normal walking height."
         )
         row.addWidget(self.change_height_button)
 
@@ -284,6 +288,11 @@ class BaseMovementControls(UIControlHelper):
 
     # ---------------------- Button Handlers ----------------------
 
+    def _submit_base_move(self, intent):
+        request_id = self.ui.execute_operation(intent)
+        if request_id is not None and self.reset_body_height_on_move:
+            self.body_height_slider.setValue(0)
+
     def handle_change_height(self):
         intent = OperationalIntent()
         intent.intent = OperationalIntent.INTENT_CHANGE_BODY_HEIGHT
@@ -301,7 +310,7 @@ class BaseMovementControls(UIControlHelper):
             f"in frame {intent.offset.header.frame_id}?"
         )
         if self.ask_question("Confirm Move Base Relative", msg):
-            self.ui.execute_operation(intent)
+            self._submit_base_move(intent)
 
     def handle_move_to_tag(self):
         text = self.tag_dropdown.currentText().strip()
@@ -321,4 +330,4 @@ class BaseMovementControls(UIControlHelper):
             f"Yaw={math.degrees(2 * math.asin(intent.offset.pose.orientation.z)):.1f}°?"
         )
         if self.ask_question("Confirm Move to Tag", msg):
-            self.ui.execute_operation(intent)
+            self._submit_base_move(intent)

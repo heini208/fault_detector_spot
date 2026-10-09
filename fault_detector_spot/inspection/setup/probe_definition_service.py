@@ -97,6 +97,7 @@ class ProbeDefinitionService:
         object_id: str,
         routine_id: str,
         base_position: PoseData,
+        base_body_height_m: float = 0.0,
     ) -> tuple[str, str]:
         object_name = self._name(object_id, "object ID")
         routine_name = self._name(routine_id, "routine ID")
@@ -104,6 +105,7 @@ class ProbeDefinitionService:
             object_name,
             routine_name,
             base_position,
+            base_body_height_m,
         )
         return object_name, routine_name
 

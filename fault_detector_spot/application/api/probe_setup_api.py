@@ -233,8 +233,8 @@ class ProbeSetupApi:
     def _save_routine_safe_approach_pose(self, context, intent):
         return self.coordinator.save_routine_safe_approach_pose(context, intent.position_tolerance_m)
 
-    def _save_base_position(self, context, _intent):
-        return self.coordinator.save_base_position(context)
+    def _save_base_position(self, context, intent):
+        return self.coordinator.save_base_position(context, intent.body_height_m)
 
     def _select_reference_pixel(self, context, intent):
         return self.coordinator.select_reference_pixel(

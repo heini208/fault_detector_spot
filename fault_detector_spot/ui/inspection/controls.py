@@ -110,6 +110,7 @@ class InspectionControls(UIControlHelper):
         self.routine_arm_movement_controls = None
         self.base_position_dialog = None
         self.base_position_movement_controls = None
+        self._base_position_scope = None
         self.save_base_position_button = None
         super().__init__(parent_ui)
         self.refresh_setup_state()
@@ -815,11 +816,22 @@ class InspectionControls(UIControlHelper):
         self.base_position_dialog.setModal(False)
         self.base_position_dialog.resize(620, 520)
         layout = QVBoxLayout(self.base_position_dialog)
-        self.base_position_movement_controls = BaseMovementControls(self.ui)
+        hint = QLabel(
+            "Position the base and select a body height, then save. "
+            "Move to Base Position reaches the saved position first, then "
+            "applies the selected height. Opening this dialog or requesting "
+            "a base move here resets the selection to 0.00 m, which skips "
+            "the height step."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.base_position_movement_controls = BaseMovementControls(
+            self.ui, reset_body_height_on_move=True,
+        )
         for row in self.base_position_movement_controls.rows:
             layout.addLayout(row)
         self.save_base_position_button = QPushButton(
-            "Save Current Tag Relative Position as Routine Base Position"
+            "Save Current Tag Relative Position and Selected Height"
         )
         self.save_base_position_button.clicked.connect(
             self.handle_save_base_position
@@ -835,6 +847,9 @@ class InspectionControls(UIControlHelper):
             return False
         if self.base_position_dialog is None:
             self._make_base_position_dialog()
+        self._base_position_scope = (
+            state.selected_object_id, state.selected_routine_id,
+        )
         self.update_base_position_tags_dropdown()
         self.update_base_position_frames_dropdown()
         self._apply_base_position_movement_defaults()
@@ -859,6 +874,7 @@ class InspectionControls(UIControlHelper):
             )
 
         controls.offset_fields["X"].setText("-1.00")
+        controls.body_height_slider.setValue(0)
 
         if state.selected_reference_tag_id < 0:
             return
@@ -894,11 +910,16 @@ class InspectionControls(UIControlHelper):
             return False
         intent = ProbeSetupIntent()
         intent.operation = ProbeSetupIntent.OPERATION_SAVE_BASE_POSITION
+        controls = self.base_position_movement_controls
+        if controls is not None and self._base_position_scope == (
+            state.selected_object_id, state.selected_routine_id,
+        ):
+            intent.body_height_m = controls.body_height_slider.value() / 100.0
         request_id = self._submit_probe_setup(intent)
         if request_id is None:
             return False
         self.base_position_status_label.setText(
-            "Base position: saving current tag-relative pose..."
+            "Base position: saving current tag-relative pose and height..."
         )
         return True
 
@@ -934,13 +955,19 @@ class InspectionControls(UIControlHelper):
         self.move_to_base_position_button.setEnabled(
             configured and not base_move_active
         )
-        self.base_position_status_label.setText(
-            "Base position: configured"
-            if configured
-            else "Base position: not configured"
-        )
+        status = "Base position: not configured"
+        if configured:
+            status = "Base position: configured"
+            if state.base_body_height_m != 0.0:
+                status += f" (body height {state.base_body_height_m:+.2f} m)"
+        self.base_position_status_label.setText(status)
         if self.save_base_position_button is not None:
-            self.save_base_position_button.setEnabled(selected)
+            same_routine = selected and self._base_position_scope == (
+                state.selected_object_id, state.selected_routine_id,
+            )
+            self.save_base_position_button.setEnabled(same_routine)
+            if not same_routine:
+                self.base_position_dialog.hide()
 
     def _create_reference_camera_dropdowns(self):
         for slot_index, content in enumerate(self.reference_view_widgets):

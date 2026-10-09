@@ -47,7 +47,8 @@ class BaseGoalVerificationConfig:
 class BaseGoalVerifier:
     """Track physical settling independently from requested goal accuracy."""
 
-    def __init__(self, target, config, started_at, motion_timeout_sec=None):
+    def __init__(self, target, config, started_at, motion_timeout_sec=None,
+                 yaw_only=False):
         if len(target) != 3 or not all(
             math.isfinite(value) for value in target
         ):
@@ -58,6 +59,7 @@ class BaseGoalVerifier:
         self.config = config
         self.started_at = started_at
         self.motion_timeout_sec = motion_timeout_sec
+        self.yaw_only = yaw_only
         self._progress_at = started_at
         self._progress_error = None
         self.anchor = None
@@ -122,6 +124,8 @@ class BaseGoalVerifier:
             self.detail = "Base pose unavailable or stale"
         else:
             position, yaw = self.errors(pose, self.target)
+            if self.yaw_only:
+                position = 0.0
             self.current_error = (position, yaw)
             # Driver AT_GOAL can precede physical arrival. Give a moving
             # base time to finish, but do not extend the deadline for noise,
@@ -146,6 +150,8 @@ class BaseGoalVerifier:
                 and yaw <= c.yaw_tolerance_rad
             )
             self.detail = (
+                f"Base yaw error: {math.degrees(yaw):.2f} deg"
+                if self.yaw_only else
                 f"Base goal error: {position:.4f} m, "
                 f"{math.degrees(yaw):.2f} deg"
             )

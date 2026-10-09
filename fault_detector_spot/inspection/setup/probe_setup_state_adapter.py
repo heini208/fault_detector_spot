@@ -53,6 +53,7 @@ class ProbeSetupStateAdapter:
             snapshot.selected_reference_tag_family
         )
         message.has_base_position = bool(snapshot.has_base_position)
+        message.base_body_height_m = float(snapshot.base_body_height_m)
         message.has_routine_safe_approach_pose = bool(
             snapshot.has_routine_safe_approach_pose
         )

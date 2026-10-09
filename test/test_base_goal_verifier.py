@@ -227,3 +227,53 @@ def test_late_progress_cannot_revive_expired_verification():
     )
     check.update((0.5, 0, 0), 100, 100, 0)
     assert check.update((0.8, 0, 0), 106, 106, 6) is False
+
+
+def test_yaw_only_accuracy_ignores_position_but_requires_heading_and_settling():
+    check = BaseGoalVerifier(
+        (0, 0, 0), BaseGoalVerificationConfig(), 0, yaw_only=True,
+    )
+    assert check.update((4, -3, 0.2), 10, 10, 0) is None
+    assert check.current_error == pytest.approx((0, 0.2))
+    assert check.update((4, -3, 0.2), 10.6, 10.6, 0.6) is None
+    assert check.settled
+    assert not check.within_tolerance
+    assert "Base yaw error" in check.detail
+    assert " m," not in check.detail
+
+    assert check.update((4, -3, 0), 11, 11, 1) is None
+    assert not check.settled
+    assert check.update((4, -3, 0), 11.6, 11.6, 1.6) is True
+    assert check.current_error == (0.0, 0.0)
+
+
+def test_yaw_only_verification_still_requires_translation_to_stop():
+    check = BaseGoalVerifier(
+        (0, 0, 0), BaseGoalVerificationConfig(), 0, yaw_only=True,
+    )
+    assert check.update((0.1, 0, 0), 10, 10, 0) is None
+    assert check.update((0.15, 0, 0), 10.6, 10.6, 0.6) is None
+    assert check.within_tolerance
+    assert not check.settled
+    assert check.update((0.15, 0, 0), 11.2, 11.2, 1.2) is True
+
+
+def test_translation_does_not_extend_yaw_only_progress_deadline():
+    check = BaseGoalVerifier(
+        (0, 0, 0), BaseGoalVerificationConfig(), 0,
+        motion_timeout_sec=30.0, yaw_only=True,
+    )
+    check.update((10, 0, 0.2), 100, 100, 0)
+    assert check.update((5, 0, 0.2), 104, 104, 4) is None
+    assert check.update((5, 0, 0.2), 105, 105, 5) is False
+
+
+def test_yaw_progress_extends_deadline_even_if_position_changes():
+    check = BaseGoalVerifier(
+        (0, 0, 0), BaseGoalVerificationConfig(), 0,
+        motion_timeout_sec=30.0, yaw_only=True,
+    )
+    check.update((0, 0, 0.4), 100, 100, 0)
+    assert check.update((1, 0, 0.3), 104, 104, 4) is None
+    assert check.update((1, 0, 0.3), 108.9, 108.9, 8.9) is None
+    assert check.update((1, 0, 0.3), 109, 109, 9) is False

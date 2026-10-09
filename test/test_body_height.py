@@ -25,6 +25,7 @@ from fault_detector_spot.application.ros.semantic_command_adapter import (
     semantic_command_from_message, semantic_command_to_message,
 )
 from fault_detector_spot.navigation.base_movement_executor import BaseMovementExecutor, BaseMovementOutcome
+from fault_detector_spot.navigation.base_pose_source import BasePoseSample
 from fault_detector_spot.manipulation.arm_state_source import ArmStowState
 from fault_detector_spot.navigation.body_height_readiness import BodyHeightReadiness, BodyHeightSample
 from fault_detector_spot.navigation.behaviours.change_body_height_behaviour import ChangeBodyHeightBehaviour
@@ -106,21 +107,10 @@ def test_height_is_stand_only_and_next_walk_uses_nominal_height(height, tag_rela
 
 
 def test_height_uses_existing_executor_busy_and_result_lifecycle():
-    from test_base_movement_executor import ManualFuture, FakeActionClient, FakeGoalHandle
-
-    send = ManualFuture()
-    result = ManualFuture()
-    executor = BaseMovementExecutor(
-        object(), action_client=FakeActionClient(send),
-        height_readiness=measured_height(0.0),
-        ros_time_sec=lambda: 10.0,
-    )
+    executor, client = command_rig()
     assert executor.change_height(0.12).outcome is BaseMovementOutcome.RUNNING
     assert executor.change_height(-0.12).outcome is BaseMovementOutcome.BUSY
-    send.set_result(FakeGoalHandle(result))
-    executor.poll()
-    result.set_result(SimpleNamespace(result=SimpleNamespace(success=True, message="done")))
-    assert executor.poll().outcome is BaseMovementOutcome.SUCCESS
+    assert finish_command(executor, client).outcome is BaseMovementOutcome.SUCCESS
     assert not executor.active
 
 
@@ -130,6 +120,10 @@ def measured_height(offset):
     ))
     readiness.nominal_height_m = 0.5
     return readiness
+
+
+def measured_base_pose(clock=lambda: 10.0):
+    return SimpleNamespace(sample=lambda: BasePoseSample(0.0, 0.0, 0.0, clock()))
 
 
 @pytest.mark.parametrize("state", [
@@ -148,6 +142,7 @@ def test_height_transition_has_constant_rate_unless_arm_stowed(state, start, hei
         object(), action_client=client,
         arm_state_source=SimpleNamespace(stow_state=lambda: state),
         height_readiness=measured_height(start), ros_time_sec=lambda: 10.0,
+        base_pose_source=measured_base_pose(),
     )
     executor._commanded_height_m = start
     assert executor.change_height(height).outcome is BaseMovementOutcome.RUNNING
@@ -173,7 +168,7 @@ def test_height_transition_has_constant_rate_unless_arm_stowed(state, start, hei
 
 @pytest.mark.parametrize("failure", ["missing", "stale", "no_reference"])
 @pytest.mark.parametrize("height", [-0.2, 0.0, 0.2])
-def test_height_change_uses_commanded_zero_without_tf_or_nominal_reference(failure, height):
+def test_height_change_uses_commanded_zero_without_measured_height_reference(failure, height):
     from test_base_movement_executor import ManualFuture, FakeActionClient
 
     readiness = measured_height(0.1)
@@ -186,6 +181,9 @@ def test_height_change_uses_commanded_zero_without_tf_or_nominal_reference(failu
     executor = BaseMovementExecutor(
         object(), action_client=client, height_readiness=readiness,
         ros_time_sec=lambda: 11.0 if failure == "stale" else 10.0,
+        base_pose_source=measured_base_pose(
+            lambda: 11.0 if failure == "stale" else 10.0
+        ),
     )
     update = executor.change_height(height)
     assert update.outcome is BaseMovementOutcome.RUNNING
@@ -233,10 +231,16 @@ def test_nav2_velocity_uses_unchanged_wrapper_defaults_after_height_command():
 
 
 def command_rig():
-    from test_base_movement_executor import ManualFuture, FakeActionClient
+    from test_base_movement_executor import ManualClock, ManualFuture, FakeActionClient
     client = FakeActionClient(ManualFuture())
     client.send_goal_async = Mock(wraps=client.send_goal_async)
-    return BaseMovementExecutor(object(), action_client=client), client
+    client.clock = ManualClock()
+    client.clock.now = 10.0
+    return BaseMovementExecutor(
+        object(), action_client=client,
+        base_pose_source=measured_base_pose(client.clock),
+        ros_time_sec=client.clock, monotonic_clock=client.clock,
+    ), client
 
 
 def finish_command(executor, client, success=True, accepted=True):
@@ -247,6 +251,12 @@ def finish_command(executor, client, success=True, accepted=True):
     if accepted:
         result.set_result(SimpleNamespace(result=SimpleNamespace(success=success)))
         update = executor.poll()
+        if success and update.outcome is BaseMovementOutcome.RUNNING:
+            # Height completion additionally needs fresh, settled yaw feedback.
+            client.clock.now += 0.1
+            assert executor.poll().outcome is BaseMovementOutcome.RUNNING
+            client.clock.now += 0.6
+            update = executor.poll()
     client.send_future = ManualFuture()
     return update
 
@@ -258,7 +268,7 @@ def submitted_height_points(client):
     return params.body_control.base_offset_rt_footprint.points
 
 
-def test_sequential_heights_track_successful_targets_without_tf():
+def test_sequential_heights_track_successful_targets_after_yaw_verification():
     executor, client = command_rig()
     previous = 0.0
     for height in (-0.2, 0.2, 0.1, -0.2):

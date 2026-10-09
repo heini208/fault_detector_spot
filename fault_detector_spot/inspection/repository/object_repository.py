@@ -161,8 +161,9 @@ class ObjectRepository:
         object_id: str,
         routine_id: str,
         base_position: PoseData,
+        base_body_height_m: float = 0.0,
     ) -> InspectionObject:
-        """Replace one routine's saved tag-relative base position."""
+        """Replace one routine's saved planar base pose and body height."""
         validate_storage_name(object_id, "object ID")
         validate_storage_name(routine_id, "routine ID")
         if not isinstance(base_position, PoseData):
@@ -174,7 +175,11 @@ class ObjectRepository:
                 "Inspection routine does not exist: "
                 f"{object_id}/{routine_id}"
             )
-        stored_routine = replace(routine, base_position=base_position)
+        stored_routine = replace(
+            routine,
+            base_position=base_position,
+            base_body_height_m=base_body_height_m,
+        )
         stored_routine.validate()
         stored_definition = replace(
             definition,

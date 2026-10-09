@@ -14,7 +14,7 @@ from fault_detector_spot.application.commanding.semantic_command import (
 
 
 def routine_base_position_command(intent, repository, state_source):
-    """Build one base-to-tag command from authoritative routine data."""
+    """Build base motion and its final body height from authoritative data."""
     if (
         intent.intent
         != OperationalIntent.INTENT_MOVE_TO_ROUTINE_BASE_POSITION
@@ -84,6 +84,7 @@ def routine_base_position_command(intent, repository, state_source):
             ),
         ),
         walking_profile=intent.walking_profile,
+        body_height_m=routine.base_body_height_m,
         inspection=InspectionSelection(
             object_id=intent.object_id,
             routine_id=intent.routine_id,

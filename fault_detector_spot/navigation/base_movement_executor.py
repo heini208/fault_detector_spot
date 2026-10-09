@@ -109,6 +109,7 @@ class _BaseTargetStrategy(Enum):
 class _BasePhase(Enum):
     IDLE = "idle"
     WAITING_FOR_POSTURE = "waiting_for_posture"
+    WAITING_FOR_HEIGHT_POSE = "waiting_for_height_pose"
     EXECUTING_STAND = "executing_stand"
     CHECKING_HEIGHT = "checking_height"
     CONFIRMING_HEIGHT = "confirming_height"
@@ -214,6 +215,8 @@ class BaseMovementExecutor(MovementExecutor):
         # nominal height; all subsequent successful stand/walk commands own it.
         self._commanded_height_m = 0.0
         self._pending_commanded_height_m = None
+        self._height_target_m = None
+        self._height_yaw_target = None
         self.ready_state_timeout_sec = self._positive_timeout(
             ready_state_timeout_sec,
             "Base ready state timeout",
@@ -296,15 +299,37 @@ class BaseMovementExecutor(MovementExecutor):
         return self._submit_goal(self._build_stationary_hold_goal)
 
     def change_height(self, body_height_m: float) -> BaseMovementUpdate:
-        """Send a command-local stand height; never change walking defaults."""
+        """Adjust height and restore any heading drift at the requested height."""
         if self.active:
             return self._busy_update()
         height = validate_body_height(body_height_m)
         self.height_readiness.require_reset()
+        self.correction_policy.reset()
+        self._active = True
         self._operation = _BaseOperation.CHANGE_HEIGHT
-        self._pending_commanded_height_m = height
+        self._height_target_m = height
+        self._set_phase(_BasePhase.WAITING_FOR_HEIGHT_POSE)
+        return self._start_height_change()
+
+    def _start_height_change(self):
+        sample = self.base_pose_source.sample()
+        if sample is None or not BaseGoalVerifier.sample_is_fresh(
+            sample.planar_pose, sample.stamp_sec, self._ros_time_sec(),
+            self.goal_verification_config.maximum_pose_age_sec,
+        ):
+            if self._deadline_expired(self._phase_started, self.ready_state_timeout_sec):
+                return self._finish(
+                    BaseMovementOutcome.MOTION_FAILED,
+                    "Height change requires a fresh measured base heading",
+                )
+            return BaseMovementUpdate(
+                BaseMovementOutcome.RUNNING,
+                "Waiting for measured base heading before changing height",
+            )
+        self._height_yaw_target = sample.planar_pose
         self._set_phase(_BasePhase.EXECUTING_STAND)
-        return super()._start_goal(lambda: self._build_height_goal(height))
+        self._pending_goal_builder = lambda: self._build_height_goal(self._height_target_m)
+        return self._submit_goal(self._pending_goal_builder)
 
     def sit(self) -> BaseMovementUpdate:
         """Start Spot's native sit command directly."""
@@ -348,6 +373,9 @@ class BaseMovementExecutor(MovementExecutor):
 
         if self._phase is _BasePhase.WAITING_FOR_POSTURE:
             return self._advance_movement_start()
+
+        if self._phase is _BasePhase.WAITING_FOR_HEIGHT_POSE:
+            return self._start_height_change()
 
         if self._phase is _BasePhase.CHECKING_HEIGHT:
             return self._check_walking_height()
@@ -520,8 +548,12 @@ class BaseMovementExecutor(MovementExecutor):
         return self._submit_goal(build_goal)
 
     def _submit_goal(self, goal_builder):
-        if self._operation is not _BaseOperation.CHANGE_HEIGHT:
-            # Stand/reset, sit, and every walk use nominal standing offset.
+        if self._operation is _BaseOperation.CHANGE_HEIGHT:
+            # Height adjustment, its yaw correction, and the final measured
+            # pose hold all retain this operation's requested height.
+            self._pending_commanded_height_m = self._height_target_m
+        else:
+            # Stand/reset, sit, and ordinary walks use nominal standing offset.
             self._pending_commanded_height_m = 0.0
         return super()._submit_goal(goal_builder)
 
@@ -530,6 +562,8 @@ class BaseMovementExecutor(MovementExecutor):
             self._commanded_height_m = self._pending_commanded_height_m
             self._pending_commanded_height_m = None
         if self._phase is _BasePhase.EXECUTING_STAND:
+            if self._operation is _BaseOperation.CHANGE_HEIGHT:
+                return self._begin_endpoint_verification()
             if self._operation not in {
                 _BaseOperation.MOVEMENT, _BaseOperation.PREPARE,
             }:
@@ -552,9 +586,15 @@ class BaseMovementExecutor(MovementExecutor):
         return super()._handle_successful_result(result)
 
     def _begin_endpoint_verification(self):
-        stationary = self._phase is _BasePhase.EXECUTING_STATIONARY_STAND
+        height_change = self._operation is _BaseOperation.CHANGE_HEIGHT
+        stationary = (
+            self._phase is _BasePhase.EXECUTING_STATIONARY_STAND
+            or (height_change and self._phase is _BasePhase.EXECUTING_STAND)
+        )
         plan = self._movement_plan
-        if self._operation is _BaseOperation.FINISH_WALKING:
+        if height_change and self._height_yaw_target is not None:
+            target = self._height_yaw_target
+        elif self._operation is _BaseOperation.FINISH_WALKING:
             # Nav2 owns endpoint accuracy. Only physical settling is used here.
             target = (0.0, 0.0, 0.0)
         elif plan is not None:
@@ -569,6 +609,7 @@ class BaseMovementExecutor(MovementExecutor):
             self.goal_verification_config,
             self._monotonic_clock(),
             motion_timeout_sec=None if stationary else self.result_timeout_sec,
+            yaw_only=height_change,
         )
         self._stationary_stand_stamp = self._ros_time_sec() if stationary else None
         self._tag_observation_tracker.reset()
@@ -604,6 +645,21 @@ class BaseMovementExecutor(MovementExecutor):
             # walking command once measured motion has stopped. Verify again
             # after stand because that transition can change the achieved pose.
             return self._begin_stationary_stand()
+
+        if self._operation is _BaseOperation.CHANGE_HEIGHT:
+            if outcome is True:
+                return self._finish(
+                    BaseMovementOutcome.SUCCESS,
+                    f"Body height adjusted and heading verified; {verifier.detail}",
+                )
+            if verifier.settled:
+                return self._correct_height_yaw(verifier, sample)
+            if outcome is False:
+                return self._finish(
+                    BaseMovementOutcome.MOTION_FAILED,
+                    f"Base did not settle after height adjustment; {verifier.detail}",
+                )
+            return BaseMovementUpdate(BaseMovementOutcome.RUNNING, verifier.detail)
 
         if self._operation is _BaseOperation.FINISH_WALKING:
             if verifier.settled and outcome is not False:
@@ -659,6 +715,38 @@ class BaseMovementExecutor(MovementExecutor):
         return BaseMovementUpdate(
             BaseMovementOutcome.RUNNING,
             verifier.detail,
+        )
+
+    def _correct_height_yaw(self, verifier, sample):
+        """Correct heading at the achieved height without walking-height reset."""
+        state = self._fresh_posture_state()
+        if state is not PostureState.STANDING:
+            return self._finish(
+                self._posture_state_failure_outcome(state),
+                "Fresh standing posture is required for height-change yaw correction",
+            )
+        config = self.goal_verification_config
+        result = self.correction_policy.decide(
+            verifier.current_error,
+            config.position_tolerance_m,
+            config.yaw_tolerance_rad,
+        )
+        if result.decision is not BaseCorrectionDecision.CORRECT:
+            return self._finish(
+                BaseMovementOutcome.MOTION_FAILED,
+                "Height-change heading remains outside tolerance; "
+                f"{verifier.detail}; {result.detail}",
+            )
+        # Only yaw is restored: use the current measured x/y for every attempt,
+        # so body displacement caused by changing height is never replayed.
+        pose = sample.planar_pose
+        yaw = self._height_yaw_target[2]
+        height = self._height_target_m
+        self._goal_verifier = None
+        self._reset_goal_lifecycle()
+        return self._submit_movement_plan(
+            lambda: self.motion_planner.resolve_yaw_correction(pose, yaw, height),
+            _BasePhase.CORRECTING,
         )
 
     def _poll_fresh_tag_target(self):
@@ -1079,6 +1167,8 @@ class BaseMovementExecutor(MovementExecutor):
             # Cancellation, timeout, or failure can leave an intermediate pose.
             self._commanded_height_m = None
         self._pending_commanded_height_m = None
+        self._height_target_m = None
+        self._height_yaw_target = None
         super()._reset_operation()
         self.correction_policy.reset()
         self._goal_verifier = None
