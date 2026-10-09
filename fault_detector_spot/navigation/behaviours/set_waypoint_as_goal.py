@@ -26,6 +26,12 @@ class SetWaypointAsGoal(py_trees.behaviour.Behaviour):
             "last_command",
             access=py_trees.common.Access.WRITE,
         )
+        self.blackboard.register_key(
+            "active_map_name",
+            access=py_trees.common.Access.READ,
+        )
+        for key in ("command_failure_request_id", "command_failure_detail"):
+            self.blackboard.register_key(key, access=py_trees.common.Access.WRITE)
         if not self.node.has_parameter("navigation.map_root"):
             self.node.declare_parameter(
                 "navigation.map_root",
@@ -43,26 +49,36 @@ class SetWaypointAsGoal(py_trees.behaviour.Behaviour):
             not self.blackboard.exists("last_command")
             or self.blackboard.last_command is None
         ):
-            self.feedback_message = "No last_command on blackboard"
-            return py_trees.common.Status.FAILURE
+            return self._fail("No last_command on blackboard")
         command: WaypointCommand = self.blackboard.last_command
+        command.goal_pose = None
         if not command.waypoint_name or not command.map_name:
-            self.feedback_message = "No waypoint_name or map_name in last_command"
-            return py_trees.common.Status.FAILURE
+            return self._fail("No waypoint_name or map_name in last_command", command)
+        active_map = (
+            self.blackboard.active_map_name
+            if self.blackboard.exists("active_map_name") else None
+        )
+        if not active_map:
+            return self._fail("Cannot move to waypoint: no active map", command)
+        if command.map_name != active_map:
+            return self._fail(
+                f"Waypoint '{command.waypoint_name}' belongs to map "
+                f"'{command.map_name}', but the active map is '{active_map}'",
+                command,
+            )
         try:
             waypoint = self.repository.get_waypoint(
                 command.map_name,
                 command.waypoint_name,
             )
         except (FileNotFoundError, OSError, ValueError) as exception:
-            self.feedback_message = str(exception)
-            return py_trees.common.Status.FAILURE
+            return self._fail(str(exception), command)
         if waypoint is None:
-            self.feedback_message = (
+            return self._fail(
                 f"Waypoint '{command.waypoint_name}' not found "
-                f"in map '{command.map_name}'"
+                f"in map '{command.map_name}'",
+                command,
             )
-            return py_trees.common.Status.FAILURE
         goal = PoseStamped()
         goal.header.frame_id = "map"
         goal.header.stamp = self.node.get_clock().now().to_msg()
@@ -72,3 +88,11 @@ class SetWaypointAsGoal(py_trees.behaviour.Behaviour):
             f"Set goal_pose to waypoint '{command.waypoint_name}'"
         )
         return py_trees.common.Status.SUCCESS
+
+    def _fail(self, detail, command=None):
+        self.feedback_message = detail
+        self.blackboard.command_failure_request_id = (
+            command.request_id if command is not None else ""
+        )
+        self.blackboard.command_failure_detail = detail
+        return py_trees.common.Status.FAILURE
