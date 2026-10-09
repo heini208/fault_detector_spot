@@ -41,6 +41,7 @@ class ProbeSetupClient(QObject):
 
     state_changed = pyqtSignal(object)
     request_rejected = pyqtSignal(str)
+    transaction_failed = pyqtSignal(int, str)
     close_finished = pyqtSignal(bool, str)
     preview_received = pyqtSignal(object)
     preview_rejected = pyqtSignal(str, str)
@@ -343,16 +344,17 @@ class ProbeSetupClient(QObject):
         self._pending_request_id = local_id
         future = self._execute_client.call_async(request)
         future.add_done_callback(
-            partial(self._receive_response, local_id)
+            partial(self._receive_response, local_id, intent.operation)
         )
         return local_id
 
-    def _receive_response(self, local_id, future):
+    def _receive_response(self, local_id, operation, future):
         if self._pending_request_id == local_id:
             self._pending_request_id = ""
         try:
             response = future.result()
         except Exception as exception:
+            self.transaction_failed.emit(operation, str(exception))
             self.request_rejected.emit(str(exception))
             return
         self._emit_state(response.state)

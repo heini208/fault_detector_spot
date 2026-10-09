@@ -3,10 +3,12 @@
 from copy import deepcopy
 import asyncio
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import yaml
 from geometry_msgs.msg import TransformStamped
 from rclpy.clock import ROSClock
 from rclpy.executors import Executor
@@ -195,6 +197,7 @@ class FakeNode:
         self.declarations = {}
         self.now = 10.0
         self.published = []
+        self.collision_published = []
         self.warnings = []
         self.publishers = []
         self.subscriptions = []
@@ -232,7 +235,8 @@ class FakeNode:
 
     def create_publisher(self, message_type, topic, qos):
         self.publishers.append((message_type, topic, qos))
-        return SimpleNamespace(publish=self.published.append)
+        messages = self.published if topic == "output" else self.collision_published
+        return SimpleNamespace(publish=messages.append)
 
     def create_subscription(self, message_type, topic, callback, qos):
         self.subscriptions.append((message_type, topic, callback, qos))
@@ -306,7 +310,13 @@ def test_adapter_uses_explicit_acquisition_time_and_bounded_volatile_qos(rig):
     assert input_qos.reliability == ReliabilityPolicy.BEST_EFFORT
     assert output_qos.reliability == ReliabilityPolicy.RELIABLE
     assert output_qos.durability == DurabilityPolicy.VOLATILE
-    for name in ("sensor_frame", "max_cloud_age_sec", "max_points", "max_rate_hz"):
+    collision_qos = value.node.publishers[1][2]
+    assert collision_qos.depth == 1
+    assert collision_qos.reliability == ReliabilityPolicy.RELIABLE
+    assert collision_qos.durability == DurabilityPolicy.VOLATILE
+    assert value.node.collision_published[0] is value.node.published[0]
+    for name in ("sensor_frame", "max_cloud_age_sec", "max_points", "max_rate_hz",
+                 "collision_max_rate_hz"):
         assert value.node.declarations[name].read_only
     assert value.node.jump_threshold.min_backward.nanoseconds == -1
     assert value.node.jump_threshold.on_clock_change
@@ -426,6 +436,7 @@ def test_freshness_bounds_checked_before_tf_lookup(rig, stamp, now, accepted):
     value.adapter.receive_cloud(cloud(stamp=stamp))
 
     assert bool(value.node.published) is accepted
+    assert bool(value.node.collision_published) is accepted
     assert bool(value.buffer.calls) is accepted
 
 
@@ -444,6 +455,7 @@ def test_scan_that_expires_during_transform_is_not_published(rig, monkeypatch):
 
     assert len(value.buffer.calls) == 1
     assert value.node.published == []
+    assert value.node.collision_published == []
 
 
 def test_missing_tf_drops_scan_without_latest_time_fallback_and_recovers(rig):
@@ -452,6 +464,7 @@ def test_missing_tf_drops_scan_without_latest_time_fallback_and_recovers(rig):
     value.adapter.receive_cloud(cloud())
     assert len(value.buffer.calls) == 1
     assert value.node.published == []
+    assert value.node.collision_published == []
 
     value.now += 1.0
     value.buffer.error = None
@@ -477,13 +490,56 @@ def test_default_rate_cap_skips_work_and_resumes_after_ros_clock_rewind(rig):
     value = rig()
     value.adapter.receive_cloud(cloud())
     value.node.now = 5.0
-    value.now += 0.19
+    value.now += 0.049
     value.adapter.receive_cloud(cloud(stamp=5.0))
     assert len(value.buffer.calls) == len(value.node.published) == 1
 
-    value.now += 0.02
+    value.now += 0.002
     value.adapter.receive_cloud(cloud(stamp=5.0))
     assert len(value.buffer.calls) == len(value.node.published) == 2
+    assert len(value.node.collision_published) == 1
+
+    value.now += 0.15
+    value.adapter.receive_cloud(cloud(stamp=5.0))
+    assert len(value.node.published) == 3
+    assert len(value.node.collision_published) == 2
+    assert value.node.collision_published[-1] is value.node.published[-1]
+
+
+def test_default_cadence_keeps_jittered_driver_clouds_within_nav2_deadline(rig):
+    value = rig()
+    received_at = []
+    collision_received_at = []
+    for index in range(30):
+        # A nominal 10 Hz driver can alternate just before/after each deadline.
+        # A strict cap of 5 Hz or even 10 Hz discards valid scans in this stream.
+        elapsed = index * 0.1 + (0.001 if index % 2 else 0.0)
+        value.now = 100.0 + elapsed
+        value.node.now = 10.0 + elapsed
+        source = cloud(stamp=9.8 + elapsed)
+        collision_count = len(value.node.collision_published)
+
+        value.adapter.receive_cloud(source)
+
+        assert len(value.node.published) == index + 1
+        assert value.node.published[-1].header.stamp == source.header.stamp
+        received_at.append(elapsed)
+        if len(value.node.collision_published) > collision_count:
+            collision_received_at.append(elapsed)
+            assert value.node.collision_published[-1] is value.node.published[-1]
+
+    assert len(value.buffer.calls) == 30  # One conversion shared by both outputs.
+    assert 1 < len(collision_received_at) < len(received_at)
+    assert min(np.diff(collision_received_at)) >= 0.2 - 1e-12
+
+    config = yaml.safe_load(
+        (Path(__file__).parents[1] / "config/nav2_lidar_params.yaml").read_text()
+    )
+    max_gap = max(np.diff(received_at))
+    for costmap, layer in (("local_costmap", "voxel_layer"),
+                           ("global_costmap", "obstacle_layer")):
+        observation = config[costmap][costmap]["ros__parameters"][layer]["velodyne"]
+        assert max_gap < observation["expected_update_rate"]
 
 
 def test_rejected_scans_also_consume_the_rate_budget(rig):
@@ -512,13 +568,20 @@ def test_callback_applies_configured_point_limit_before_tf_work(rig):
     ("sensor_frame", ""), ("max_cloud_age_sec", 0.0),
     ("max_cloud_age_sec", float("nan")), ("max_points", 0),
     ("max_rate_hz", 0.0), ("max_rate_hz", float("inf")),
+    ("collision_max_rate_hz", 0.0), ("collision_max_rate_hz", float("nan")),
 ])
 def test_invalid_configuration_fails_before_creating_traffic(rig, parameter, value):
     with pytest.raises(ValueError):
         rig({parameter: value})
 
 
-def test_topic_remap_loop_is_rejected(monkeypatch, rig):
-    monkeypatch.setattr(FakeNode, "resolve_topic_name", lambda self, topic: "/same_topic")
+@pytest.mark.parametrize("aliases", [
+    ("input", "output"), ("input", "collision_output"), ("output", "collision_output"),
+])
+def test_topic_remap_loop_or_merged_outputs_are_rejected(monkeypatch, rig, aliases):
+    monkeypatch.setattr(
+        FakeNode, "resolve_topic_name",
+        lambda self, topic: "/same_topic" if topic in aliases else "/" + topic,
+    )
     with pytest.raises(ValueError):
         rig()

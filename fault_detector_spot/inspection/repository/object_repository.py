@@ -156,6 +156,51 @@ class ObjectRepository:
         self.save(stored_definition)
         return stored_definition
 
+    def set_routine_map(
+        self,
+        object_id: str,
+        routine_id: str,
+        map_id: str,
+    ) -> InspectionObject:
+        """Save a routine's navigation map, clearing a different map's waypoint."""
+        return self._set_routine_navigation(
+            object_id, routine_id, map_id=map_id,
+        )
+
+    def set_routine_waypoint(
+        self,
+        object_id: str,
+        routine_id: str,
+        waypoint_id: str,
+    ) -> InspectionObject:
+        """Save the routine's waypoint within its configured navigation map."""
+        return self._set_routine_navigation(
+            object_id, routine_id, waypoint_id=waypoint_id,
+        )
+
+    def _set_routine_navigation(self, object_id, routine_id, **changes):
+        validate_storage_name(object_id, "object ID")
+        validate_storage_name(routine_id, "routine ID")
+        definition = self.load(object_id)
+        routine = definition.get_routine(routine_id)
+        if routine is None:
+            raise KeyError(
+                f"Inspection routine does not exist: {object_id}/{routine_id}"
+            )
+        if "map_id" in changes and changes["map_id"] != routine.map_id:
+            changes["waypoint_id"] = ""
+        stored_routine = replace(routine, **changes)
+        stored_routine.validate()
+        stored_definition = replace(
+            definition,
+            routines=[
+                stored_routine if candidate.routine_id == routine_id else candidate
+                for candidate in definition.routines
+            ],
+        )
+        self.save(stored_definition)
+        return stored_definition
+
     def set_routine_base_position(
         self,
         object_id: str,

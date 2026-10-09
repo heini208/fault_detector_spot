@@ -23,6 +23,7 @@ from fault_detector_spot.application.controllers.command_controller import (
 from fault_detector_spot.application.ros.operational_intent_adapter import (
     operational_intent_to_command,
     ROUTINE_BASE_POSITION_INTENTS,
+    ROUTINE_NAVIGATION_INTENTS,
     ROUTINE_SAFE_APPROACH_INTENTS,
     SAVED_PROBE_INTENTS,
 )
@@ -97,6 +98,10 @@ class ApplicationController:
             command = (
                 self.probe_setup_coordinator.routine_safe_approach_command(intent)
             )
+        elif intent.intent in ROUTINE_NAVIGATION_INTENTS:
+            if self.probe_setup_coordinator is None:
+                raise RuntimeError("Routine navigation controls are unavailable")
+            command = self.probe_setup_coordinator.routine_navigation_command(intent)
         request = CommandRequest.create(
             command=command,
             client_id=required_client_id(client_id),

@@ -59,19 +59,28 @@ class LidarFrameAdapter:
             "max_cloud_age_sec", 0.75, descriptor).value
         self.max_points = node.declare_parameter(
             "max_points", 100000, descriptor).value
+        # Leave headroom above the driver's 10 Hz cadence: capping at Nav2's
+        # 0.2 s observation deadline drops jittered arrivals and makes scans stale.
         max_rate_hz = node.declare_parameter(
-            "max_rate_hz", 5.0, descriptor).value
+            "max_rate_hz", 20.0, descriptor).value
+        collision_max_rate_hz = node.declare_parameter(
+            "collision_max_rate_hz", 5.0, descriptor).value
         if (not self.sensor_frame or self.sensor_frame != self.sensor_frame.strip()
                 or self.sensor_frame.startswith("/")):
             raise ValueError("sensor_frame must be a nonempty TF frame without a leading slash")
         if (type(self.max_points) is not int or self.max_points <= 0
                 or not math.isfinite(self.max_cloud_age_sec) or self.max_cloud_age_sec <= 0
-                or not math.isfinite(max_rate_hz) or max_rate_hz <= 0):
+                or not math.isfinite(max_rate_hz) or max_rate_hz <= 0
+                or not math.isfinite(collision_max_rate_hz) or collision_max_rate_hz <= 0):
             raise ValueError("Cloud age, point limit and update rate must be positive and finite")
-        if node.resolve_topic_name("input") == node.resolve_topic_name("output"):
-            raise ValueError("Lidar input and output topics must be different")
+        topics = {node.resolve_topic_name(topic)
+                  for topic in ("input", "output", "collision_output")}
+        if len(topics) != 3:
+            raise ValueError("Lidar input and output topics must all be different")
         self._period_sec = 1.0 / max_rate_hz
         self._last_attempt = -math.inf
+        self._collision_period_sec = 1.0 / collision_max_rate_hz
+        self._last_collision_publish = -math.inf
         self._buffer = Buffer()
         self._clock_jump = node.get_clock().create_jump_callback(
             JumpThreshold(
@@ -82,6 +91,12 @@ class LidarFrameAdapter:
         self._listener = TransformListener(self._buffer, node)
         self._publisher = node.create_publisher(
             PointCloud2, "output", QoSProfile(
+                depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.VOLATILE,
+            ),
+        )
+        self._collision_publisher = node.create_publisher(
+            PointCloud2, "collision_output", QoSProfile(
                 depth=1, reliability=ReliabilityPolicy.RELIABLE,
                 durability=DurabilityPolicy.VOLATILE,
             ),
@@ -135,6 +150,12 @@ class LidarFrameAdapter:
             )
             return
         self._publisher.publish(output)
+        # MoveIt's occupancy updater keeps its existing workload budget without
+        # throttling navigation. Reuse this scan; never retain it for later.
+        now = time.monotonic()
+        if now - self._last_collision_publish >= self._collision_period_sec:
+            self._collision_publisher.publish(output)
+            self._last_collision_publish = now
 
     def destroy(self):
         if self._clock_jump is not None:

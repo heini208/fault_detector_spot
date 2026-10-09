@@ -217,7 +217,7 @@ def test_sensor_config_uses_corrected_lidar_and_native_updater():
     assert parameters["sensors"] == ["lidar"]
     lidar = parameters["lidar"]
     assert lidar["sensor_plugin"] == "occupancy_map_monitor/PointCloudOctomapUpdater"
-    assert lidar["point_cloud_topic"] == "/velodyne/points_sensor"
+    assert lidar["point_cloud_topic"] == "/velodyne/points_sensor_collision"
     assert lidar["max_range"] == 3.0
     assert lidar["point_subsample"] == 1
     assert lidar["padding_offset"] == 0.20

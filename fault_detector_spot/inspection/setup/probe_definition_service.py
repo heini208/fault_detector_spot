@@ -92,6 +92,30 @@ class ProbeDefinitionService:
         self.object_repository.add_routine(object_name, routine)
         return object_name, routine
 
+    def set_routine_map(
+        self,
+        object_id: str,
+        routine_id: str,
+        map_id: str,
+    ) -> tuple[str, str]:
+        object_name = self._name(object_id, "object ID")
+        routine_name = self._name(routine_id, "routine ID")
+        self.object_repository.set_routine_map(object_name, routine_name, map_id)
+        return object_name, routine_name
+
+    def set_routine_waypoint(
+        self,
+        object_id: str,
+        routine_id: str,
+        waypoint_id: str,
+    ) -> tuple[str, str]:
+        object_name = self._name(object_id, "object ID")
+        routine_name = self._name(routine_id, "routine ID")
+        self.object_repository.set_routine_waypoint(
+            object_name, routine_name, waypoint_id,
+        )
+        return object_name, routine_name
+
     def set_routine_base_position(
         self,
         object_id: str,

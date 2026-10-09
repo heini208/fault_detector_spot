@@ -91,10 +91,14 @@ class ProbeSetupCoordinator:
         geometry=None,
         motion_state_source=None,
         motion_command_factory=None,
+        map_repository=None,
+        map_artifacts=None,
     ):
         self.setup_coordinator = setup_coordinator
         self.reference_repository = reference_repository
         self.object_repository = reference_repository.object_repository
+        self.map_repository = map_repository
+        self.map_artifacts = map_artifacts
         self.definition_service = ProbeDefinitionService(
             self.object_repository,
         )
@@ -197,6 +201,15 @@ class ProbeSetupCoordinator:
             self.object_repository,
         )
 
+    def routine_navigation_command(self, intent):
+        """Snapshot routine navigation targets for the shared command lane."""
+        from fault_detector_spot.inspection.execution.routine_navigation import (
+            routine_navigation_command,
+        )
+        return routine_navigation_command(
+            intent, self.object_repository, self.map_repository, self.map_artifacts,
+        )
+
     def open_context(self, client_id: str) -> ProbeSetupSnapshot:
         """Open one independent server-owned probe setup draft."""
         context = self.setup_coordinator.open_context(
@@ -286,12 +299,32 @@ class ProbeSetupCoordinator:
         )
         safe_tolerance = .1
         base_body_height_m = 0.0
+        routine_map_name = ""
+        routine_waypoint_name = ""
         if draft.selected_object_id in object_ids and draft.selected_routine_id in routine_ids:
             definition = self.object_repository.load(draft.selected_object_id)
             routine = definition.get_routine(draft.selected_routine_id)
             if routine is not None:
                 safe_tolerance = routine.safe_approach_position_tolerance_m
                 base_body_height_m = routine.base_body_height_m
+                routine_map_name = routine.map_id
+                routine_waypoint_name = routine.waypoint_id
+        navigation_map_names = (
+            tuple(self.map_repository.list_map_ids())
+            if self.map_repository is not None else ()
+        )
+        routine_waypoint_names = ()
+        if routine_map_name and self.map_repository is not None:
+            try:
+                map_definition = self.map_repository.load(routine_map_name)
+            except (OSError, ValueError, KeyError, TypeError):
+                # Keep the saved association visible and editable if its map
+                # was removed or damaged. Operations validate it separately.
+                pass
+            else:
+                routine_waypoint_names = tuple(
+                    waypoint.waypoint_id for waypoint in map_definition.waypoints
+                )
         distances = ()
         if probe_ids:
             definition = self.object_repository.load(draft.selected_object_id)
@@ -315,6 +348,10 @@ class ProbeSetupCoordinator:
             base_body_height_m=base_body_height_m,
             has_routine_safe_approach_pose=has_routine_safe_approach_pose,
             routine_safe_position_tolerance_m=safe_tolerance,
+            routine_map_name=routine_map_name,
+            routine_waypoint_name=routine_waypoint_name,
+            navigation_map_names=navigation_map_names,
+            routine_waypoint_names=routine_waypoint_names,
         )
 
     @_serialized_transaction
@@ -426,6 +463,48 @@ class ProbeSetupCoordinator:
             draft.selected_routine_id = routine.routine_id
             draft.selected_reference_view_id = ""
             draft.clear_geometry()
+        return self._advance(draft)
+
+    def _navigation_assignment_draft(self, context, object_id, routine_id):
+        draft = self._selected_draft(context)
+        if (object_id, routine_id) != (draft.selected_object_id, draft.selected_routine_id):
+            raise ValueError("The selected routine changed before navigation settings were saved")
+        if draft.refinement is not None:
+            raise RuntimeError("Close probe refinement before changing routine navigation")
+        return draft
+
+    @_serialized_transaction
+    def save_routine_map(self, context, object_id, routine_id, map_name):
+        """Associate a saved map without changing the running navigation map."""
+        draft = self._navigation_assignment_draft(context, object_id, routine_id)
+        normalized = map_name.strip()
+        with self._lock:
+            if normalized:
+                if self.map_repository is None:
+                    raise RuntimeError("Navigation map data is unavailable")
+                self.map_repository.load(normalized)
+            self.definition_service.set_routine_map(object_id, routine_id, normalized)
+        return self._advance(draft)
+
+    @_serialized_transaction
+    def save_routine_waypoint(self, context, object_id, routine_id, map_name, waypoint_name):
+        """Associate only a waypoint belonging to the routine's saved map."""
+        draft = self._navigation_assignment_draft(context, object_id, routine_id)
+        normalized = waypoint_name.strip()
+        # Context locks are independent per client; keep the map membership
+        # check and assignment together across clients changing the same routine.
+        with self._lock:
+            routine = self.object_repository.load(object_id).get_routine(routine_id)
+            if map_name.strip() != routine.map_id:
+                raise ValueError("The routine map changed before the waypoint was saved")
+            if normalized:
+                if not routine.map_id:
+                    raise ValueError("Set a routine map before setting a waypoint")
+                if self.map_repository is None:
+                    raise RuntimeError("Navigation map data is unavailable")
+                if self.map_repository.get_waypoint(routine.map_id, normalized) is None:
+                    raise ValueError(f"Waypoint '{normalized}' does not exist in map '{routine.map_id}'")
+            self.definition_service.set_routine_waypoint(object_id, routine_id, normalized)
         return self._advance(draft)
 
     @_serialized_transaction

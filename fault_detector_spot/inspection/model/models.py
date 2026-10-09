@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from fault_detector_spot.navigation.body_height import validate_body_height
 from fault_detector_spot.shared.geometry.models import PoseData, QuaternionData, Vector3Data
+from fault_detector_spot.shared.persistence.file_storage import validate_storage_name
 
 from fault_detector_spot.inspection.sensing import (
     surface_distance_validation as _surface_distance_validation,
@@ -403,6 +404,8 @@ class InspectionRoutine:
         default_factory=list
     )
     base_body_height_m: float = 0.0
+    map_id: str = ""
+    waypoint_id: str = ""
 
     @classmethod
     def from_dict(
@@ -433,6 +436,8 @@ class InspectionRoutine:
                 else None
             ),
             base_body_height_m=float(data.get("base_body_height_m", 0.0)),
+            map_id=data.get("map_id", ""),
+            waypoint_id=data.get("waypoint_id", ""),
             safe_approach_position_tolerance_m=float(data.get("safe_approach_position_tolerance_m", .1)),
             safe_approach_pose_object=(
                 PoseData.from_dict(data["safe_approach_pose_object"])
@@ -457,6 +462,18 @@ class InspectionRoutine:
         )
         self.reference_tag.validate()
         validate_body_height(self.base_body_height_m)
+        for value, label in (
+            (self.map_id, "Routine map ID"),
+            (self.waypoint_id, "Routine waypoint ID"),
+        ):
+            if not isinstance(value, str):
+                raise TypeError(f"{label} must be a string")
+            if value != value.strip():
+                raise ValueError(f"{label} must not contain surrounding whitespace")
+        if self.map_id:
+            validate_storage_name(self.map_id, "Routine map ID")
+        if self.waypoint_id and not self.map_id:
+            raise ValueError("Routine waypoint requires a map")
         if not math.isfinite(self.safe_approach_position_tolerance_m) or self.safe_approach_position_tolerance_m <= 0:
             raise ValueError("Safe approach tolerance must be positive and finite")
         if self.safe_approach_pose_object is not None:
@@ -585,6 +602,10 @@ class InspectionRoutine:
             result["base_position"] = self.base_position.to_dict()
         if self.base_body_height_m != 0.0:
             result["base_body_height_m"] = self.base_body_height_m
+        if self.map_id:
+            result["map_id"] = self.map_id
+        if self.waypoint_id:
+            result["waypoint_id"] = self.waypoint_id
         return result
 
 

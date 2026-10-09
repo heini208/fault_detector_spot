@@ -48,6 +48,7 @@ def test_default_launch_only_starts_adapter_and_calibrated_mount(launch_file):
     assert context.launch_configurations == {
         "input_topic": "/velodyne/points",
         "output_topic": "/velodyne/points_sensor",
+        "collision_output_topic": "/velodyne/points_sensor_collision",
         "sensor_frame": "lidar_sensor",
         "use_sim_time": "false",
         "publish_mount_tf": "true",
@@ -71,6 +72,7 @@ def test_default_launch_only_starts_adapter_and_calibrated_mount(launch_file):
     assert adapter["parameters"][0]["sensor_frame"].perform(context) == "lidar_sensor"
     assert [(source, target.perform(context)) for source, target in adapter["remappings"]] == [
         ("input", "/velodyne/points"), ("output", "/velodyne/points_sensor"),
+        ("collision_output", "/velodyne/points_sensor_collision"),
     ]
 
 
@@ -92,6 +94,7 @@ def test_existing_tf_and_custom_topics_share_target_and_clock(launch_file, publi
     context, nodes = defaults(launch_file)
     context.launch_configurations.update({
         "input_topic": "/robot/raw_points", "output_topic": "/robot/sensor_points",
+        "collision_output_topic": "/robot/collision_points",
         "sensor_frame": "robot/physical_lidar", "use_sim_time": "true",
         "publish_mount_tf": publish_mount_tf,
         "calibration_file": "/tmp/custom_lidar_mount.yaml",
@@ -106,6 +109,7 @@ def test_existing_tf_and_custom_topics_share_target_and_clock(launch_file, publi
     assert adapter["parameters"][0]["use_sim_time"].perform(context) == "true"
     assert [(source, target.perform(context)) for source, target in adapter["remappings"]] == [
         ("input", "/robot/raw_points"), ("output", "/robot/sensor_points"),
+        ("collision_output", "/robot/collision_points"),
     ]
 
 

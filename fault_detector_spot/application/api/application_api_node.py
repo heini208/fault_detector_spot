@@ -250,6 +250,8 @@ class ApplicationApiNode(Node):
                 self.sensor_attachment_controller
             ),
             motion_state_source=self.probe_setup_motion_state,
+            map_repository=self.navigation_setup_coordinator.map_repository,
+            map_artifacts=self.navigation_setup_coordinator.map_artifacts,
         )
         self.application_controller.attach_probe_setup(
             self.probe_setup_coordinator
@@ -560,6 +562,7 @@ class ApplicationApiNode(Node):
         self.application_controller.close()
         self.command_transport.close()
         self.probe_setup_motion_state.close()
+        self.navigation_setup_state.close()
         self._operation_server.destroy()
         return super().destroy_node()
 

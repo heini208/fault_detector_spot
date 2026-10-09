@@ -1261,6 +1261,7 @@ class FinalizingInspectionControls(InspectionControls):
 
     def handle_application_state(self, status):
         """Track inspection movements and standalone close-surface tests."""
+        super().handle_application_state(status)
         self._handle_base_position_status(status)
         self._handle_routine_arm_pose_status(status)
         self._handle_saved_probe_status(status)

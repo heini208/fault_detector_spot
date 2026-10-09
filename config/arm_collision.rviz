@@ -36,7 +36,7 @@ Visualization Manager:
       Enabled: true
       Value: true
       Topic:
-        Value: /velodyne/points_sensor
+        Value: /velodyne/points_sensor_collision
         Reliability Policy: Best Effort
         Durability Policy: Volatile
         History Policy: Keep Last

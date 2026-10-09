@@ -105,6 +105,10 @@ class ProbeSetupSnapshot:
     aligned_position_tolerance_m: float = .01
     final_position_tolerance_m: float = .01
     base_body_height_m: float = 0.0
+    routine_map_name: str = ""
+    routine_waypoint_name: str = ""
+    navigation_map_names: Tuple[str, ...] = ()
+    routine_waypoint_names: Tuple[str, ...] = ()
 
     @classmethod
     def from_draft(
@@ -123,6 +127,10 @@ class ProbeSetupSnapshot:
         has_routine_safe_approach_pose=False,
         routine_safe_position_tolerance_m=.1,
         base_body_height_m=0.0,
+        routine_map_name="",
+        routine_waypoint_name="",
+        navigation_map_names=(),
+        routine_waypoint_names=(),
     ) -> "ProbeSetupSnapshot":
         return cls(
             pre_approach_path=tuple(deepcopy(draft.pre_approach_path)),
@@ -149,6 +157,10 @@ class ProbeSetupSnapshot:
             routine_safe_position_tolerance_m=routine_safe_position_tolerance_m,
             has_base_position=bool(has_base_position),
             base_body_height_m=base_body_height_m,
+            routine_map_name=routine_map_name,
+            routine_waypoint_name=routine_waypoint_name,
+            navigation_map_names=tuple(navigation_map_names),
+            routine_waypoint_names=tuple(routine_waypoint_names),
             has_routine_safe_approach_pose=bool(has_routine_safe_approach_pose),
             reference_pixel=deepcopy(draft.reference_pixel),
             geometry=deepcopy(draft.geometry),

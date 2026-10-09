@@ -8,14 +8,15 @@
     sensors: [lidar]
     lidar:
       sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
-      point_cloud_topic: /velodyne/points_sensor
+      point_cloud_topic: /velodyne/points_sensor_collision
       max_range: 3.0
       point_subsample: 1
       # Expand the sensing mask to tolerate voxel overlap and point/model error.
       # Mesh padding is radial: this is not a uniform 20 cm clearance shell.
       padding_offset: 0.20
       padding_scale: 1.1
-      # The adapter caps input at 5 Hz using monotonic time. MoveIt's ROS-time
+      # The adapter caps this collision stream at 5 Hz using monotonic time,
+      # independently of the faster navigation stream. MoveIt's ROS-time
       # throttle stalls after backward clock jumps during recording replay.
       max_update_rate: 0.0
       filtered_cloud_topic: /fault_detector/moveit/filtered_lidar

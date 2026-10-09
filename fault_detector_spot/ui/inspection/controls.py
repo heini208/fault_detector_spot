@@ -314,8 +314,8 @@ class InspectionControls(UIControlHelper):
         self.management_dialog.raise_()
         self.management_dialog.activateWindow()
 
-    def handle_application_state(self, _status):
-        return None
+    def handle_application_state(self, status):
+        self.routine_navigation_controls.handle_application_state(status)
 
     def _update_create_routine_button(self, _index=None):
         self.create_routine_button.setEnabled(
@@ -695,7 +695,10 @@ class InspectionControls(UIControlHelper):
         preparation = QWidget()
         layout = QVBoxLayout(preparation)
         layout.setSpacing(8)
-        self.routine_navigation_controls = RoutineNavigationControls()
+        self.routine_navigation_controls = RoutineNavigationControls(
+            submit_setup=self._submit_probe_setup,
+            execute_operation=lambda intent, **kwargs: self.ui.execute_operation(intent, **kwargs),
+        )
         layout.addWidget(self.routine_navigation_controls)
         layout.addWidget(self._make_base_position_group())
         layout.addStretch()
@@ -2448,9 +2451,7 @@ class InspectionControls(UIControlHelper):
         view = probe_setup_state_to_view(state)
         previous_views = tuple(self._reference_slot_view_ids)
         self._probe_setup_state = state
-        self.routine_navigation_controls.set_routine(
-            state.selected_object_id, state.selected_routine_id,
-        )
+        self.routine_navigation_controls.apply_setup_state(state)
         self._apply_object_and_routine_lists(state)
         self._apply_base_position_state(state)
         self._apply_probe_setup_view(view)
@@ -2478,9 +2479,6 @@ class InspectionControls(UIControlHelper):
         else:
             self._set_status_text(state.detail)
         return True
-
-    def apply_navigation_setup_state(self, state):
-        self.routine_navigation_controls.apply_navigation_state(state)
 
     def _apply_object_and_routine_lists(self, state):
         self.saved_object_dropdown.blockSignals(True)

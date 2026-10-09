@@ -828,6 +828,9 @@ class Fault_Detector_UI(QWidget):
         self.probe_setup_client.request_rejected.connect(
             self._process_probe_setup_rejected
         )
+        self.probe_setup_client.transaction_failed.connect(
+            self._process_probe_setup_transaction_failed
+        )
         self.probe_setup_client.preview_received.connect(
             self._process_probe_reference_preview
         )
@@ -975,6 +978,7 @@ class Fault_Detector_UI(QWidget):
             controls.handle_base_position_rejected(detail, context_id)
             controls.handle_routine_arm_pose_rejected(detail, context_id)
             controls.handle_saved_probe_rejected(detail, context_id)
+            controls.routine_navigation_controls.handle_operation_rejected(detail, context_id)
 
     def _process_sensor_acquisition_state(self, state):
         self.set_sensor_acquisition_state(state)
@@ -1006,8 +1010,6 @@ class Fault_Detector_UI(QWidget):
     def _process_navigation_setup_state(self, state):
         if hasattr(self, "navigation_controls"):
             self.navigation_controls.apply_setup_state(state)
-        if hasattr(self, "inspection_controls"):
-            self.inspection_controls.apply_navigation_setup_state(state)
         self.status_label.setText(state.detail)
 
     def _open_probe_setup(self):
@@ -1023,6 +1025,11 @@ class Fault_Detector_UI(QWidget):
         controls = getattr(self, "inspection_controls", None)
         if controls is not None:
             controls.handle_reference_start_rejected(detail)
+
+    def _process_probe_setup_transaction_failed(self, operation, detail):
+        controls = getattr(self, "inspection_controls", None)
+        if controls is not None:
+            controls.routine_navigation_controls.handle_setup_rejected(detail, operation)
 
     def _process_probe_setup_state(self, state):
         if hasattr(self, "inspection_controls"):

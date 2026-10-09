@@ -49,6 +49,7 @@ def make_adapter_node():
         remappings=[
             ("input", LaunchConfiguration("input_topic")),
             ("output", LaunchConfiguration("output_topic")),
+            ("collision_output", LaunchConfiguration("collision_output_topic")),
         ],
     )
 
@@ -61,6 +62,9 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("input_topic", default_value="/velodyne/points"),
         DeclareLaunchArgument("output_topic", default_value="/velodyne/points_sensor"),
+        DeclareLaunchArgument(
+            "collision_output_topic", default_value="/velodyne/points_sensor_collision",
+        ),
         DeclareLaunchArgument("sensor_frame", default_value="lidar_sensor"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("publish_mount_tf", default_value="true"),

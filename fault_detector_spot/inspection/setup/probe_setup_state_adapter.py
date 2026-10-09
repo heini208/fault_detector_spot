@@ -54,6 +54,10 @@ class ProbeSetupStateAdapter:
         )
         message.has_base_position = bool(snapshot.has_base_position)
         message.base_body_height_m = float(snapshot.base_body_height_m)
+        message.routine_map_name = snapshot.routine_map_name
+        message.routine_waypoint_name = snapshot.routine_waypoint_name
+        message.navigation_map_names = list(snapshot.navigation_map_names)
+        message.routine_waypoint_names = list(snapshot.routine_waypoint_names)
         message.has_routine_safe_approach_pose = bool(
             snapshot.has_routine_safe_approach_pose
         )

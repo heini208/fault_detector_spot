@@ -62,8 +62,9 @@ does not provide environmental avoidance.
 
 `sensing/lidar_frame_adapter.py` reuses Humble's vectorized
 `tf2_sensor_msgs.do_transform_cloud`. Its standalone launch publishes
-`/velodyne/points_sensor`, expressed in the physical `lidar_sensor` frame, using
-the original acquisition timestamp and its corresponding TF. It adds no mapping
+`/velodyne/points_sensor` for navigation and the separately rate-limited
+`/velodyne/points_sensor_collision` for MoveIt, both in the physical `lidar_sensor`
+frame, using the original acquisition timestamp and its corresponding TF. It adds no mapping
 or arm-executor dependency to cloud conversion. One `LidarAdapterRuntime`, owned
 by `HelperInitializer`, now starts/stops the launch asynchronously based on the
 existing collision preference and mapping/localization process owners. Both
@@ -90,9 +91,12 @@ with `publish_mount_tf:=false`. The calibration is in
 `config/lidar_mount_calibration.yaml`; verify it against the actual mount before
 using it. No hardware or live TF validation was performed for this change.
 
-Processing is bounded by depth-one queues, a 5 Hz attempt limit, a 100,000-point
-limit and a 0.75 s age limit checked both before and after conversion. The age
-limit accommodates user-measured live lidar delays around 0.4 s with spikes to
+Processing is bounded by depth-one queues, a 20 Hz attempt limit, a 100,000-point
+limit and a 0.75 s age limit checked both before and after conversion. The
+navigation stream passes the configured 10 Hz driver cadence with jitter margin;
+the collision stream reuses converted scans at no more than 5 Hz. No second
+conversion or scan backlog is introduced. The age limit accommodates
+user-measured live lidar delays around 0.4 s with spikes to
 0.56 s, without waiting or changing acquisition timestamps. Clouds more
 than 50 ms in the future, missing timestamps, unsupported layouts and invalid
 transforms are rejected. TF lookup never waits or substitutes the latest pose.
@@ -133,8 +137,8 @@ parameter group. Robot, kinematics, joint limits and planner configuration remai
 owned by that package. There is no duplicated MoveIt launch or custom map updater.
 
 Configure `occupancy_map_monitor/PointCloudOctomapUpdater` with corrected
-`/velodyne/points_sensor`, 5 cm voxels, 3 m range, 20 cm robot-mask padding and
-1.1 mask scale. These affect the sensing mask for all robot links, not the
+`/velodyne/points_sensor_collision`, 5 cm voxels, 3 m range, 20 cm robot-mask
+padding and 1.1 mask scale. These affect the sensing mask for all robot links, not the
 collision model used for planning. Mesh padding is radial rather than a uniform
 20 cm offset surface, and nearby real obstacles can fall inside the expanded mask.
 The adapter's monotonic rate limit caps input at 5 Hz. Disable the native ROS-time
@@ -336,7 +340,7 @@ configuration is available to the command below.
 
    The preset uses **Fixed Frame: odom**, the planning scene on
    `/monitored_planning_scene`, the robot's collision geometry, and corrected
-   lidar points on `/velodyne/points_sensor`. Enable **Filtered lidar** to inspect
+   lidar points on `/velodyne/points_sensor_collision`. Enable **Filtered lidar** to inspect
    `/fault_detector/moveit/filtered_lidar`; both clouds use **Best Effort**.
    Disable cloud displays when inspecting occupied voxels alone. TF shows `body`
    and `lidar_sensor`; select the actual sensor frame if using a custom name.

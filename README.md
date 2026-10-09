@@ -247,7 +247,7 @@ Starting or stopping mapping does not change the setting.
 
 The setting controls occupancy collision checks in MoveIt's current planning
 scene. The application launch configures MoveIt's native point-cloud updater for
-`/velodyne/points_sensor`, using
+`/velodyne/points_sensor_collision`, using
 [`config/moveit_sensors.yaml`](config/moveit_sensors.yaml). The application starts
 one shared lidar adapter when collision checking or mapping/localization needs
 it, and stops it when neither needs it. Verify its mount calibration before use
@@ -423,7 +423,16 @@ RTAB‑Map is launched isolated via [`lidar_rtab_mapping_launch.py`](launch/lida
 Mapping and localization started through the application now use the corrected
 `/velodyne/points_sensor` source. The existing mapping arm-exclusion filter still
 publishes `/velodyne/points_filtered` for RTAB-Map and lidar navigation. MoveIt
-consumes the corrected source directly, with its own robot filter.
+consumes the adapter's separately rate-limited `/velodyne/points_sensor_collision`
+output, with its own robot filter. Both streams reuse the same sensor-frame
+conversion, so MoveIt's 5 Hz budget does not limit navigation's scan cadence.
+
+Saving a waypoint uses the current `map <- base_link` transform while a valid
+processed localization estimate has recently arrived. The estimate's acquisition
+age is checked on receipt; a new estimate and the current transform must each
+remain fresh within 1.5 s. This accommodates RTAB-Map processing delay without
+saving the robot's older scan-time pose. Missing or stale estimates/transforms
+produce a specific error, and changing maps invalidates the previous estimate.
 
 Example:
 
@@ -455,8 +464,9 @@ See Section **10.5 Implementation Overview** and **10.6 Map lifecycle and proces
 
 The **lidar frame adapter** prepares a corrected sensor-origin cloud shared by
 MoveIt's native updater and application-managed mapping/localization. It
-converts `/velodyne/points` to `/velodyne/points_sensor` in
-the physical `lidar_sensor` frame, preserving each acquisition timestamp. It
+converts `/velodyne/points` to `/velodyne/points_sensor` for navigation and
+`/velodyne/points_sensor_collision` for MoveIt in the physical `lidar_sensor`
+frame, preserving each acquisition timestamp. It
 uses TF at that timestamp and the standard `tf2_sensor_msgs` transformation;
 it does not estimate a mount from the cloud or change the Spot driver.
 
@@ -502,12 +512,15 @@ ros2 launch fault_detector_spot lidar_frame_adapter_launch.py
 This starts only the adapter and the standard static-TF component. If a verified
 physical lidar TF already exists, set `publish_mount_tf:=false` and
 `sensor_frame:=` its actual frame name. `calibration_file`, `input_topic`,
-`output_topic`, and `use_sim_time` are also launch arguments. Run only one
-publisher for the chosen physical sensor frame.
+`output_topic`, `collision_output_topic`, and `use_sim_time` are also launch
+arguments. Run only one publisher for the chosen physical sensor frame.
 
-The adapter uses queues of depth one, limits conversion attempts to 5 Hz and
-100,000 points, and drops clouds older than 0.75 s or more than 50 ms in the
-future. The age limit accommodates measured live lidar delays of about 0.4 s
+The adapter uses queues of depth one and limits conversion attempts to 20 Hz and
+100,000 points. The conversion limit leaves margin for the configured 10 Hz
+driver's arrival jitter; navigation keeps its 0.2 s observation deadline.
+MoveIt's output retains a separate 5 Hz monotonic rate cap, with no second
+conversion or retained cloud backlog. The adapter drops clouds older than 0.75 s
+or more than 50 ms in the future. The age limit accommodates measured live lidar delays of about 0.4 s
 with spikes to 0.56 s; it adds no waiting and does not change acquisition timestamps.
 Freshness is checked both before and after conversion. Missing timestamped TF
 drops that scan immediately; there is no wait,
@@ -660,8 +673,15 @@ is rechecked after height preparation and monitored during navigation. Loss of
 stowed-arm confirmation requests Nav2 cancellation and fails the operation.
 Preparation failures prevent Nav2 dispatch, and cancellation reaches the current
 preparation or navigation operation, including goals accepted after cancellation.
-After Nav2 reports success, the same base executor performs the stationary stand
-and confirms fresh settling before waypoint execution reports success.
+After Nav2 reports success, the executor waits for 0.3 s without `/cmd_vel`
+messages before submitting the stationary stand. Even zero-velocity messages
+from Nav2's smoother become new Spot commands and can otherwise override that
+stand. A stream still active after 3 s fails the handoff; cancellation retains
+ownership until the stream is quiet and fresh measured feedback proves stopped.
+The same base executor then requires a successful stand and fresh settling before
+waypoint execution reports success. Failed base commands include Spot's mobility
+feedback status alongside the driver's message, distinguishing overrides,
+timeouts, and robot-state failures.
 Nav2 goals sent straight to its action server by external clients still bypass
 this application-owned preparation and completion.
 

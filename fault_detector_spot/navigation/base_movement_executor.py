@@ -21,6 +21,7 @@ from bosdyn.util import seconds_to_duration
 from bosdyn_spot_api_msgs.conversions import convert
 from spot_msgs.action import RobotCommand
 
+from fault_detector_spot.navigation.base_command_feedback import base_failure_detail
 from fault_detector_spot.navigation.base_correction_policy import (
     BaseCorrectionDecision,
     BaseCorrectionPolicy,
@@ -556,6 +557,12 @@ class BaseMovementExecutor(MovementExecutor):
             # Stand/reset, sit, and ordinary walks use nominal standing offset.
             self._pending_commanded_height_m = 0.0
         return super()._submit_goal(goal_builder)
+
+    def _handle_failed_result(self, result):
+        return self._finish(
+            BaseMovementOutcome.MOTION_FAILED,
+            base_failure_detail(result, self._command_failure_detail),
+        )
 
     def _handle_successful_result(self, result):
         if self._pending_commanded_height_m is not None:

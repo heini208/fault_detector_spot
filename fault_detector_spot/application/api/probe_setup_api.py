@@ -78,6 +78,8 @@ class ProbeSetupApi:
 
     def _transaction_handlers(self):
         return {
+            ProbeSetupIntent.OPERATION_SAVE_ROUTINE_MAP: self._save_routine_map,
+            ProbeSetupIntent.OPERATION_SAVE_ROUTINE_WAYPOINT: self._save_routine_waypoint,
             ProbeSetupIntent.OPERATION_SET_PATHING_POINT_SPEED: self._set_pathing_point_speed,
             ProbeSetupIntent.OPERATION_APPROVE_CUSTOM_PROBE: self._approve_custom_probe,
             ProbeSetupIntent.OPERATION_DELETE_PATHING_POINT: self._delete_pathing_point,
@@ -235,6 +237,17 @@ class ProbeSetupApi:
 
     def _save_base_position(self, context, intent):
         return self.coordinator.save_base_position(context, intent.body_height_m)
+
+    def _save_routine_map(self, context, intent):
+        return self.coordinator.save_routine_map(
+            context, intent.object_id, intent.routine_id, intent.map_name,
+        )
+
+    def _save_routine_waypoint(self, context, intent):
+        return self.coordinator.save_routine_waypoint(
+            context, intent.object_id, intent.routine_id, intent.map_name,
+            intent.waypoint_name,
+        )
 
     def _select_reference_pixel(self, context, intent):
         return self.coordinator.select_reference_pixel(

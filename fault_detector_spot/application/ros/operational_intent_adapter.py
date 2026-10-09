@@ -38,7 +38,14 @@ ROUTINE_SAFE_APPROACH_INTENTS = frozenset({
     OperationalIntent.INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH,
 })
 
+ROUTINE_NAVIGATION_INTENTS = frozenset({
+    OperationalIntent.INTENT_LAUNCH_ROUTINE_MAP,
+    OperationalIntent.INTENT_MOVE_TO_ROUTINE_WAYPOINT,
+})
+
 _INTENT_COMMAND_IDS = {
+    OperationalIntent.INTENT_LAUNCH_ROUTINE_MAP: CommandID.START_LOCALIZATION,
+    OperationalIntent.INTENT_MOVE_TO_ROUTINE_WAYPOINT: CommandID.MOVE_TO_WAYPOINT,
     OperationalIntent.INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH: (
         CommandID.MOVE_SAFE_APPROACH
     ),
@@ -238,6 +245,7 @@ def operational_intent_to_command(
         )
     if intent.intent in (
         ROUTINE_BASE_POSITION_INTENTS | ROUTINE_SAFE_APPROACH_INTENTS
+        | ROUTINE_NAVIGATION_INTENTS
     ):
         _required_text(intent.object_id, "Object ID")
         _required_text(intent.routine_id, "Routine ID")
