@@ -13,8 +13,8 @@ from fault_detector_spot.application.commanding.semantic_command import (
 )
 
 
-def routine_base_position_command(intent, repository, state_source):
-    """Build base motion and its final body height from authoritative data."""
+def routine_base_position_command(intent, repository):
+    """Snapshot saved motion settings; resolve the live tag during execution."""
     if (
         intent.intent
         != OperationalIntent.INTENT_MOVE_TO_ROUTINE_BASE_POSITION
@@ -33,41 +33,16 @@ def routine_base_position_command(intent, repository, state_source):
             "The selected routine has no configured base position"
         )
     routine.base_position.validate()
-    if state_source is None:
-        raise RuntimeError("Live robot pose data is unavailable")
 
     tag_id = routine.reference_tag.tag_id
-    reference_tag = state_source.reference_tag(tag_id)
-    if int(reference_tag.id) != tag_id:
-        raise ValueError(
-            "Live reference tag does not match the selected routine"
-        )
-    frame_id = reference_tag.pose.header.frame_id.strip()
-    if not frame_id:
-        raise ValueError("Reference tag pose frame is empty")
-
-    tag_pose = reference_tag.pose
     base_position = routine.base_position
     return SemanticCommand(
         command_id=CommandID.MOVE_BASE_TO_TAG,
+        # BaseMotionPlanner reads the visible tag after walking readiness.
+        # An unresolved pose allows admission while earlier commands are moving.
         tag=SemanticTag(
             id=tag_id,
-            pose=StampedPose(
-                frame_id=frame_id,
-                stamp_sec=int(tag_pose.header.stamp.sec),
-                stamp_nanosec=int(tag_pose.header.stamp.nanosec),
-                position=CommandVector3(
-                    x=tag_pose.pose.position.x,
-                    y=tag_pose.pose.position.y,
-                    z=tag_pose.pose.position.z,
-                ),
-                orientation=CommandQuaternion(
-                    x=tag_pose.pose.orientation.x,
-                    y=tag_pose.pose.orientation.y,
-                    z=tag_pose.pose.orientation.z,
-                    w=tag_pose.pose.orientation.w,
-                ),
-            ),
+            pose=StampedPose(),
         ),
         offset=StampedPose(
             frame_id=f"Tag_{tag_id}",

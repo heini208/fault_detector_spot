@@ -42,10 +42,22 @@ from fault_detector_spot.inspection.model.models import (
     InspectionRoutine,
     ReferenceTag,
 )
+from fault_detector_spot.navigation.base_movement_executor import (
+    BaseMovementExecutor,
+    BaseMovementOutcome,
+)
+from fault_detector_spot.navigation.posture_state_source import PostureState
 from fault_detector_spot.shared.geometry.models import (
     PoseData,
 )
 from test_application_controller import FakeCommandController
+from test_base_movement_executor import (
+    FakeActionClient,
+    FakePostureStateSource,
+    ManualFuture,
+    ReadyHeight,
+)
+from test_body_height import native_goal
 
 
 def _definition(with_base_position=True, body_height_m=0.0):
@@ -100,19 +112,15 @@ def test_saved_routine_base_position_builds_existing_base_to_tag_command(body_he
     definition = _definition(body_height_m=body_height_m)
     repository = Mock()
     repository.load.return_value = definition
-    state_source = Mock()
-    state_source.reference_tag.return_value = _tag()
-
     command = routine_base_position_command(
         _intent(),
         repository,
-        state_source,
     )
 
     base_position = definition.get_routine("scan").base_position
     assert command.command_id is CommandID.MOVE_BASE_TO_TAG
     assert command.tag.id == 7
-    assert command.tag.pose.frame_id == "body"
+    assert command.tag.pose.frame_id == ""
     assert command.offset.frame_id == "Tag_7"
     assert command.offset.position.x == base_position.position.x
     assert command.offset.position.y == base_position.position.y
@@ -125,15 +133,12 @@ def test_saved_routine_base_position_builds_existing_base_to_tag_command(body_he
     assert command.body_height_m == pytest.approx(body_height_m)
     assert command.inspection.object_id == "motor"
     assert command.inspection.routine_id == "scan"
-    state_source.reference_tag.assert_called_once_with(7)
 
 
 def _queued_base_motion(body_height_m):
     repository = Mock()
     repository.load.return_value = _definition(body_height_m=body_height_m)
-    state_source = Mock()
-    state_source.reference_tag.return_value = _tag()
-    command = routine_base_position_command(_intent(), repository, state_source)
+    command = routine_base_position_command(_intent(), repository)
     command = semantic_command_from_message(semantic_command_to_message(command))
     request = CommandRequest.create(
         command=command,
@@ -220,8 +225,46 @@ def test_missing_routine_base_position_is_rejected():
         routine_base_position_command(
             _intent(),
             repository,
-            Mock(),
         )
+
+
+@pytest.mark.parametrize("visible_at_execution", [True, False])
+def test_saved_base_move_resolves_live_tag_only_when_execution_starts(visible_at_execution):
+    _, subscriber, _ = _queued_base_motion(-0.13)
+    execution = subscriber.blackboard.command_buffer[0]
+    assert execution.tag_pose.header.frame_id == ""
+    visible_tags = {}
+    client = FakeActionClient(ManualFuture())
+    client.send_goal_async = Mock(wraps=client.send_goal_async)
+    executor = BaseMovementExecutor(
+        object(),
+        tag_state_source=SimpleNamespace(visible_snapshot=lambda: visible_tags),
+        action_client=client,
+        posture_state_source=FakePostureStateSource(PostureState.STANDING),
+        height_readiness=ReadyHeight(),
+    )
+    if visible_at_execution:
+        tag = _tag()
+        tag.pose.header.frame_id = "odom"
+        tag.pose.pose.position.x = 3.0
+        tag.pose.pose.orientation.y = -math.sin(math.pi / 4.0)
+        tag.pose.pose.orientation.w = math.cos(math.pi / 4.0)
+        visible_tags[7] = tag
+
+    update = executor.tag(execution)
+
+    if visible_at_execution:
+        assert update.outcome is BaseMovementOutcome.RUNNING
+        goal = native_goal(client.send_goal_async.call_args.args[0])
+        mobility = goal.synchronized_command.mobility_command
+        target = mobility.se2_trajectory_request.trajectory.points[0].pose
+        assert target.position.x == pytest.approx(3.0 - 1.2)
+        assert target.position.y == pytest.approx(0.35)
+        assert target.angle == pytest.approx(math.radians(20.0))
+    else:
+        assert update.outcome is BaseMovementOutcome.EXECUTION_ERROR
+        assert "not currently visible" in update.detail
+        assert client.send_calls == 0
 
 
 @pytest.mark.parametrize("field_name", ["object_id", "routine_id"])
