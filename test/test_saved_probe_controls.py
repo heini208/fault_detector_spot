@@ -16,7 +16,6 @@ from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.ros.operational_intent_adapter import operational_intent_to_command
 from test_probe_point_guided_workflow import FakeUI, make_state
 from test_probe_execution_target import inspection_object, sensor
-from fault_detector_msgs.msg import TagElement
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -50,50 +49,56 @@ def test_list_updates_and_selection_does_not_cross_routines(controls):
 
 
 @pytest.mark.parametrize("operation", [25, 26])
-def test_click_sends_selected_ids_and_disables_duplicates(controls, operation):
+def test_click_sends_selected_ids_and_allows_more_buffered_moves(controls, operation):
     controls.saved_probe_points_list.setCurrentRow(1)
     assert controls.handle_saved_probe_motion(operation)
     args, kwargs = controls.ui.execute_operation.call_args
     intent = args[0]
     assert (intent.object_id, intent.routine_id, intent.probe_point_id) == ("motor", "scan", "two")
     assert intent.intent == operation
-    assert not controls.handle_saved_probe_motion(operation)
+    assert controls.handle_saved_probe_motion(operation)
+    second_context = controls.ui.execute_operation.call_args.kwargs["context_id"]
+    assert second_context != kwargs["context_id"]
+    assert controls.saved_probe_points_list.isEnabled()
+    assert not controls.delete_saved_probe_point_button.isEnabled()
     state = ApplicationCommandState()
     state.context_id = "unrelated"
     state.state = state.STATE_SUCCEEDED
     controls.handle_application_state(state)
-    assert controls._saved_probe_operation_context
+    assert len(controls._saved_probe_operation_contexts) == 2
     state.context_id = kwargs["context_id"]
     state.state = state.STATE_FAILED
     state.detail = "No live tag"
     controls.handle_application_state(state)
     assert "No live tag" in controls.saved_probe_motion_status.text()
     assert controls.saved_probe_action_buttons[operation].isEnabled()
+    assert list(controls._saved_probe_operation_contexts) == [second_context]
+    assert not controls.delete_saved_probe_point_button.isEnabled()
+    state.context_id = second_context
+    state.state = state.STATE_CANCELLED
+    controls.handle_application_state(state)
+    assert controls.delete_saved_probe_point_button.isEnabled()
 
 
 def test_transport_rejection_allows_retry(controls):
     controls.saved_probe_points_list.setCurrentRow(0)
     controls.handle_saved_probe_motion(25)
-    controls.handle_saved_probe_rejected("Disconnected")
+    context_id = controls.ui.execute_operation.call_args.kwargs["context_id"]
+    controls.handle_saved_probe_rejected("Disconnected", context_id)
     assert controls.handle_saved_probe_motion(25)
 
 
 @pytest.mark.parametrize("operation, field", [
     (24, "safe_approach_pose_object"), (25, "aligned_preapproach_pose_object"),
 ])
-def test_saved_pose_uses_repository_geometry_and_live_tag(operation, field):
+def test_saved_pose_queues_repository_geometry_without_observing_live_tag(operation, field):
     definition = inspection_object()
     other_routine = deepcopy(definition.routines[0])
     other_routine.routine_id = "other"
     other_routine.reference_tag.tag_id = 99
     definition.routines.insert(0, other_routine)
-    tag = TagElement()
-    tag.id = 2
-    tag.pose.header.frame_id = "body"
-    tag.pose.pose.orientation.w = 1.0
-    tag.pose.pose.position.y = 2.0
     source = Mock()
-    source.reference_tag.return_value = tag
+    source.reference_tag.side_effect = RuntimeError("Robot is still moving")
     intent = saved_intent(operation)
     command = saved_probe_command(intent, Mock(load=Mock(return_value=definition)), source,
                                   Mock(require_motion_attachment=Mock(return_value=sensor())),
@@ -104,7 +109,10 @@ def test_saved_pose_uses_repository_geometry_and_live_tag(operation, field):
     assert command.offset.position.x == pose.position.x
     assert command.offset.orientation.w == pose.orientation.w
     assert command.inspection.probe_point_id == "point_1"
-    source.reference_tag.assert_called_once_with(2)
+    assert command.tag.id == 2
+    assert command.tag.pose.frame_id == ""
+    assert command.offset.frame_id == "filtered_fiducial_2"
+    source.reference_tag.assert_not_called()
     assert source.validate_aligned_probe_distance.call_count == (operation == 25)
 
 
@@ -277,8 +285,9 @@ def test_selected_point_enables_only_matching_final_move(controls):
     assert intent.probe_point_id == "custom"
     assert intent.intent == OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH
     assert not intent.override_target_surface_distance
-    assert not surface.isEnabled() and not custom.isEnabled()
-    controls.handle_saved_probe_rejected("Offline test")
+    assert not surface.isEnabled() and custom.isEnabled()
+    context_id = controls.ui.execute_operation.call_args.kwargs["context_id"]
+    controls.handle_saved_probe_rejected("Offline test", context_id)
     assert custom.isEnabled() and not surface.isEnabled()
     controls.saved_probe_points_list.setCurrentRow(-1)
     assert not surface.isEnabled() and not custom.isEnabled()

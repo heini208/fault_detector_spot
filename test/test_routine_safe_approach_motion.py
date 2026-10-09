@@ -16,7 +16,7 @@ from fault_detector_spot.ui.inspection.finalizing_controls import FinalizingInsp
 from test_application_controller import FakeCommandController
 from test_probe_execution_target import sensor
 from test_probe_point_guided_workflow import FakeUI, make_state, application
-from test_routine_base_position_motion import _definition, _tag
+from test_routine_base_position_motion import _definition
 
 
 def intent():
@@ -33,10 +33,8 @@ def test_routine_motion_resolves_shared_pose_without_any_probe_points():
     routine.safe_approach_position_tolerance_m = .045
     routine.safe_approach_pose_object = PoseData.identity()
     routine.safe_approach_pose_object.position.z = 0.3
-    source = Mock()
-    source.reference_tag.return_value = _tag()
     command = routine_safe_approach_command(
-        intent(), Mock(load=Mock(return_value=definition)), source,
+        intent(), Mock(load=Mock(return_value=definition)),
         Mock(require_motion_attachment=Mock(return_value=sensor())),
         ProbeSetupMotionCommandFactory(),
     )
@@ -48,14 +46,16 @@ def test_routine_motion_resolves_shared_pose_without_any_probe_points():
     assert command.inspection.probe_point_id == ""
     assert command.offset.position.z == pytest.approx(0.3)
     assert command.motion_sensor_id == sensor().motion_sensor_id
-    source.reference_tag.assert_called_once_with(7)
+    assert command.tag.id == 7
+    assert command.tag.pose.frame_id == ""
+    assert command.offset.frame_id == "filtered_fiducial_7"
 
 
 def test_unconfigured_routine_pose_rejects_motion():
     with pytest.raises(ValueError, match="routine safe pre-approach"):
         routine_safe_approach_command(
             intent(), Mock(load=Mock(return_value=_definition())),
-            Mock(), Mock(), Mock(),
+            Mock(), Mock(),
         )
 
 
@@ -102,15 +102,19 @@ def test_routine_row_move_works_without_point_selection_and_tracks_result(applic
     args, kwargs = ui.execute_operation.call_args
     assert args[0].intent == OperationalIntent.INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH
     assert args[0].probe_point_id == ""
-    assert not controls.handle_move_to_routine_arm_pose()
+    assert controls.handle_move_to_routine_arm_pose()
+    second_context = ui.execute_operation.call_args.kwargs["context_id"]
+    assert second_context != kwargs["context_id"]
     result = ApplicationCommandState()
     result.context_id = "unrelated"
     result.state = result.STATE_SUCCEEDED
     controls.handle_application_state(result)
-    assert not button.isEnabled()
+    assert button.isEnabled()
+    assert len(controls._routine_arm_pose_operation_contexts) == 2
     result.context_id = kwargs["context_id"]
     controls.handle_application_state(result)
     assert button.isEnabled()
+    assert controls._routine_arm_pose_operation_contexts == {second_context}
     state.has_routine_safe_approach_pose = False
     controls.apply_setup_state(state)
     assert not button.isEnabled()
@@ -126,5 +130,6 @@ def test_routine_move_submission_rejection_allows_retry(application):
     assert controls.move_to_routine_arm_pose_button.isEnabled()
     ui.execute_operation.return_value = "request"
     assert controls.handle_move_to_routine_arm_pose()
-    controls.handle_routine_arm_pose_rejected("Disconnected")
+    context_id = ui.execute_operation.call_args.kwargs["context_id"]
+    controls.handle_routine_arm_pose_rejected("Disconnected", context_id)
     assert controls.move_to_routine_arm_pose_button.isEnabled()

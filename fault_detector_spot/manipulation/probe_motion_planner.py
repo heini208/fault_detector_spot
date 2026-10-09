@@ -19,6 +19,10 @@ from fault_detector_spot.manipulation.arm_motion_speed import (
     ArmMotionSpeed,
     ArmMotionSpeedPolicy,
 )
+from fault_detector_spot.shared.geometry.movement_frames import (
+    OrientationModes,
+    TagFrames,
+)
 from fault_detector_spot.shared.geometry.movement_geometry import (
     MovementGeometryResolver,
 )
@@ -160,7 +164,7 @@ class ProbeMotionPlanner:
                 f"Tag {tag_id} is not currently usable"
             )
 
-        command.tag_pose = deepcopy(tag.pose)
+        command = self._prepare_observed_tag_command(command, tag.pose)
         command = self.geometry_resolver.prepare_move_command(
             command,
             GRAV_ALIGNED_BODY_FRAME_NAME,
@@ -170,6 +174,35 @@ class ProbeMotionPlanner:
             target=probe_target,
             sensor_id=command.motion_sensor_id,
         )
+
+    @staticmethod
+    def _prepare_observed_tag_command(command, observed_pose):
+        """Resolve object-local targets against the selected tag observation."""
+        object_frame = f"{TagFrames.SPOT_FRAME_FILTERED.value}{command.tag_id}"
+        offset = getattr(command, "offset", None)
+        object_relative = (
+            isinstance(offset, PoseStamped)
+            and offset.header.frame_id.strip() == object_frame
+        )
+        if object_relative:
+            # Keep queued offsets in their original frame so retries can
+            # resolve them again against a newer observation.
+            command = deepcopy(command)
+        command.tag_pose = deepcopy(observed_pose)
+        if not object_relative:
+            return command
+
+        # The usable observation may come from either camera. Reusing its
+        # rotation avoids mixing that pose with a separate, possibly stale TF.
+        tag_pose = command.tag_pose.pose
+        target = compose_poses(tag_pose, command.offset.pose)
+        command.offset.header = deepcopy(command.tag_pose.header)
+        command.offset.pose.position.x = target.position.x - tag_pose.position.x
+        command.offset.pose.position.y = target.position.y - tag_pose.position.y
+        command.offset.pose.position.z = target.position.z - tag_pose.position.z
+        if command.orientation_mode == OrientationModes.CUSTOM_ORIENTATION:
+            command.offset.pose.orientation = target.orientation
+        return command
 
     def resolve_probe_relative(
         self,

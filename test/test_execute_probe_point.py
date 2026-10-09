@@ -71,7 +71,9 @@ def test_surface_plan_preserves_context_and_returns_via_saved_alignment(ignore_e
     assert [step.ignore_environment_collisions for step in plan] == [
         False, False, True,
     ]
-    source.reference_tag.assert_called_once_with(2)
+    source.reference_tag.assert_not_called()
+    assert plan[0].offset.frame_id == "filtered_fiducial_2"
+    assert plan[1].offset.frame_id == "filtered_fiducial_2"
 
 
 def step(name):

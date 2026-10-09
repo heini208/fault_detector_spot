@@ -12,6 +12,7 @@ from fault_detector_spot.application.commanding.command_ids import (
 )
 from fault_detector_spot.shared.geometry.movement_frames import (
     OrientationModes,
+    TagFrames,
 )
 from fault_detector_spot.application.commanding.semantic_command import (
     CommandQuaternion,
@@ -129,6 +130,38 @@ class ProbeSetupMotionCommandFactory:
     def ready_safe_approach() -> SemanticCommand:
         return SemanticCommand(
             command_id=CommandID.READY_SAFE_APPROACH,
+        )
+
+    def saved_absolute(
+        self,
+        target_probe_pose_object: PoseData,
+        reference_tag_id: int,
+        motion_sensor_id: str,
+        safe_approach: bool = False,
+    ) -> SemanticCommand:
+        """Keep saved targets object-relative until their queued execution."""
+        target_probe_pose_object.validate()
+        sensor_id = self._required_sensor_id(motion_sensor_id)
+        return SemanticCommand(
+            command_id=(CommandID.MOVE_SAFE_APPROACH if safe_approach
+                        else CommandID.MOVE_ARM_TO_TAG),
+            tag=SemanticTag(id=reference_tag_id, pose=StampedPose()),
+            offset=StampedPose(
+                frame_id=f"{TagFrames.SPOT_FRAME_FILTERED.value}{reference_tag_id}",
+                position=CommandVector3(
+                    x=target_probe_pose_object.position.x,
+                    y=target_probe_pose_object.position.y,
+                    z=target_probe_pose_object.position.z,
+                ),
+                orientation=CommandQuaternion(
+                    x=target_probe_pose_object.orientation.x,
+                    y=target_probe_pose_object.orientation.y,
+                    z=target_probe_pose_object.orientation.z,
+                    w=target_probe_pose_object.orientation.w,
+                ),
+            ),
+            orientation_mode=OrientationModes.CUSTOM_ORIENTATION.value,
+            motion_sensor_id=sensor_id,
         )
 
     def absolute(

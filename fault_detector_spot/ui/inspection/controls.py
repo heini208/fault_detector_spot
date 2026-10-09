@@ -930,12 +930,9 @@ class InspectionControls(UIControlHelper):
         self.set_base_position_button.setEnabled(selected)
         arm_editable = selected and not state.refinement_active
         self.set_routine_arm_pose_button.setEnabled(arm_editable)
-        arm_move_active = bool(
-            getattr(self, "_routine_arm_pose_operation_context", "")
-        )
         self.move_to_routine_arm_pose_button.setEnabled(
             arm_editable and state.has_routine_safe_approach_pose
-            and not state.motion_pending and not arm_move_active
+            and not state.motion_pending
         )
         if self.routine_arm_pose_dialog is not None:
             self.save_routine_arm_pose_button.setEnabled(arm_editable)

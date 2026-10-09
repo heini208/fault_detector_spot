@@ -799,6 +799,9 @@ class Fault_Detector_UI(QWidget):
         self.application_client.request_rejected.connect(
             self._process_application_error
         )
+        self.application_client.operation_rejected.connect(
+            self._process_operation_rejected
+        )
         self.application_client.emergency_stop_finished.connect(
             self._process_emergency_stop_result
         )
@@ -964,12 +967,14 @@ class Fault_Detector_UI(QWidget):
         )
 
     def _process_application_error(self, detail):
+        self.status_label.setText(f"Operation rejected: {detail}")
+
+    def _process_operation_rejected(self, context_id, detail):
         controls = getattr(self, "inspection_controls", None)
         if controls is not None:
-            controls.handle_base_position_rejected(detail)
-            controls.handle_routine_arm_pose_rejected(detail)
-            controls.handle_saved_probe_rejected(detail)
-        self.status_label.setText(f"Operation rejected: {detail}")
+            controls.handle_base_position_rejected(detail, context_id)
+            controls.handle_routine_arm_pose_rejected(detail, context_id)
+            controls.handle_saved_probe_rejected(detail, context_id)
 
     def _process_sensor_acquisition_state(self, state):
         self.set_sensor_acquisition_state(state)

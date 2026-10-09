@@ -59,9 +59,9 @@ class FinalizingInspectionControls(InspectionControls):
         self._reference_capture_in_progress = False
         self._abort_refinement_after_start = False
         self._saved_probe_scope = None
-        self._saved_probe_operation_context = ""
+        self._saved_probe_operation_contexts = {}
         self._base_position_operation_context = ""
-        self._routine_arm_pose_operation_context = ""
+        self._routine_arm_pose_operation_contexts = set()
         self._delete_probe_point_pending = ""
         self._probe_finalization_point_id = ""
         self._probe_finalization_scope = None
@@ -254,7 +254,6 @@ class FinalizingInspectionControls(InspectionControls):
             and self.saved_probe_points_list.currentItem() is not None
             and not state.refinement_active and not state.motion_pending
             and not self._reference_start_pending
-            and not self._saved_probe_operation_context
             and not self._delete_probe_point_pending
         )
         row = self.saved_probe_points_list.currentRow()
@@ -273,12 +272,11 @@ class FinalizingInspectionControls(InspectionControls):
         self.saved_custom_probe_button.setEnabled(enabled and custom)
         surface_button.setToolTip("Available for surface-relative probe points.")
         self.saved_custom_probe_button.setToolTip("Available for fully custom probe points; follows the saved final path.")
-        self.delete_saved_probe_point_button.setEnabled(enabled)
+        self.delete_saved_probe_point_button.setEnabled(
+            enabled and not self._saved_probe_operation_contexts
+        )
         self.saved_probe_points_list.setEnabled(
-            not bool(
-                self._saved_probe_operation_context
-                or self._delete_probe_point_pending
-            )
+            not bool(self._delete_probe_point_pending)
         )
 
     def _update_saved_probe_points(self, state):
@@ -323,14 +321,14 @@ class FinalizingInspectionControls(InspectionControls):
                 self.saved_probe_points_list.blockSignals(False)
             self._saved_probe_selection_after_finalization = None
             self._saved_probe_selection_changed()
-            if not self._saved_probe_operation_context:
+            if not self._saved_probe_operation_contexts:
                 self.saved_probe_motion_status.setText(
                     f"{selected}: ready."
                 )
         elif changed:
             if selected not in ids:
                 self._saved_probe_selection_changed()
-            if not self._saved_probe_operation_context:
+            if not self._saved_probe_operation_contexts:
                 self.saved_probe_motion_status.setText(
                     "Select a saved probe point."
                 )
@@ -420,8 +418,11 @@ class FinalizingInspectionControls(InspectionControls):
             return False
         return True
 
-    def handle_base_position_rejected(self, _detail):
-        if not self._base_position_operation_context:
+    def handle_base_position_rejected(self, _detail, context_id=None):
+        if not self._base_position_operation_context or (
+            context_id is not None
+            and context_id != self._base_position_operation_context
+        ):
             return
         self._base_position_operation_context = ""
         if self._probe_setup_state is not None:
@@ -456,40 +457,36 @@ class FinalizingInspectionControls(InspectionControls):
         )
         intent.object_id = state.selected_object_id
         intent.routine_id = state.selected_routine_id
-        self._routine_arm_pose_operation_context = (
-            "routine-arm-" + uuid4().hex
-        )
+        context_id = "routine-arm-" + uuid4().hex
+        self._routine_arm_pose_operation_contexts.add(context_id)
         self._apply_base_position_state(state)
         request_id = self.ui.execute_operation(
             intent,
-            context_id=self._routine_arm_pose_operation_context,
+            context_id=context_id,
         )
         if request_id is None:
             self.handle_routine_arm_pose_rejected(
-                "Movement could not be submitted."
+                "Movement could not be submitted.", context_id
             )
             return False
         return True
 
-    def handle_routine_arm_pose_rejected(self, _detail):
-        if not self._routine_arm_pose_operation_context:
+    def handle_routine_arm_pose_rejected(self, _detail, context_id):
+        if context_id not in self._routine_arm_pose_operation_contexts:
             return
-        self._routine_arm_pose_operation_context = ""
+        self._routine_arm_pose_operation_contexts.remove(context_id)
         if self._probe_setup_state is not None:
             self._apply_base_position_state(self._probe_setup_state)
 
     def _handle_routine_arm_pose_status(self, status):
-        if (
-            not self._routine_arm_pose_operation_context
-            or status.context_id != self._routine_arm_pose_operation_context
-        ):
+        if status.context_id not in self._routine_arm_pose_operation_contexts:
             return
         if status.state in {
             ApplicationCommandState.STATE_SUCCEEDED,
             ApplicationCommandState.STATE_FAILED,
             ApplicationCommandState.STATE_CANCELLED,
         }:
-            self._routine_arm_pose_operation_context = ""
+            self._routine_arm_pose_operation_contexts.remove(status.context_id)
             if self._probe_setup_state is not None:
                 self._apply_base_position_state(self._probe_setup_state)
 
@@ -516,42 +513,51 @@ class FinalizingInspectionControls(InspectionControls):
                 and self.saved_probe_distance.isEnabled()):
             intent.override_target_surface_distance = True
             intent.target_surface_distance_m = self.saved_probe_distance.value()
-        self._saved_probe_operation_context = "saved-probe-" + uuid4().hex
+        context_id = "saved-probe-" + uuid4().hex
+        self._saved_probe_operation_contexts[context_id] = point_id
         self.saved_probe_motion_status.setText(f"{point_id}: submitting movement...")
         self._refresh_saved_probe_actions()
         request_id = self.ui.execute_operation(
-            intent, context_id=self._saved_probe_operation_context,
+            intent, context_id=context_id,
         )
         if request_id is None:
-            self.handle_saved_probe_rejected("Movement could not be submitted.")
+            self.handle_saved_probe_rejected(
+                "Movement could not be submitted.", context_id
+            )
             return False
         return True
 
-    def handle_saved_probe_rejected(self, detail):
-        if not self._saved_probe_operation_context:
+    def handle_saved_probe_rejected(self, detail, context_id):
+        if context_id not in self._saved_probe_operation_contexts:
             return
-        self._saved_probe_operation_context = ""
-        self.saved_probe_motion_status.setText(detail)
+        point_id = self._saved_probe_operation_contexts.pop(context_id)
+        self.saved_probe_motion_status.setText(f"{point_id}: {detail}")
         self._refresh_saved_probe_actions()
 
     def _handle_saved_probe_status(self, status):
-        if (not self._saved_probe_operation_context
-                or status.context_id != self._saved_probe_operation_context):
+        if status.context_id not in self._saved_probe_operation_contexts:
             return
-        self.saved_probe_motion_status.setText(status.detail or "Movement in progress")
+        point_id = self._saved_probe_operation_contexts[status.context_id]
+        detail = status.detail or (
+            "Movement queued"
+            if status.state == ApplicationCommandState.STATE_QUEUED
+            else "Movement in progress"
+        )
+        self.saved_probe_motion_status.setText(f"{point_id}: {detail}")
         if status.state in {
             ApplicationCommandState.STATE_SUCCEEDED,
             ApplicationCommandState.STATE_FAILED,
             ApplicationCommandState.STATE_CANCELLED,
         }:
-            self._saved_probe_operation_context = ""
+            self._saved_probe_operation_contexts.pop(status.context_id)
             labels = {
                 ApplicationCommandState.STATE_SUCCEEDED: "Movement completed",
                 ApplicationCommandState.STATE_FAILED: "Movement failed",
                 ApplicationCommandState.STATE_CANCELLED: "Movement cancelled",
             }
             self.saved_probe_motion_status.setText(
-                labels[status.state] + (": " + status.detail if status.detail else "")
+                f"{point_id}: " + labels[status.state]
+                + (": " + status.detail if status.detail else "")
             )
         self._refresh_saved_probe_actions()
 

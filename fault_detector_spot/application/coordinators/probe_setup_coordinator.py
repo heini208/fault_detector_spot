@@ -167,9 +167,6 @@ class ProbeSetupCoordinator:
         from fault_detector_spot.inspection.execution.saved_probe_motion import (
             saved_probe_command,
         )
-        self.setup_coordinator.require_command_lane_idle(
-            "Robot command lane must be idle for saved probe-point motion"
-        )
         return saved_probe_command(
             intent,
             self.object_repository,
@@ -183,13 +180,9 @@ class ProbeSetupCoordinator:
         from fault_detector_spot.inspection.execution.saved_probe_motion import (
             routine_safe_approach_command,
         )
-        self.setup_coordinator.require_command_lane_idle(
-            "Robot command lane must be idle for routine safe-approach motion"
-        )
         return routine_safe_approach_command(
             intent,
             self.object_repository,
-            self.motion_state_source,
             self.refinement_controller.sensor_attachment_controller,
             self.refinement_controller.motion_command_factory,
         )

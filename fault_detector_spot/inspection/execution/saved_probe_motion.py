@@ -51,8 +51,6 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
             motion_sensor_id=attachment.motion_sensor_id,
             inspection=selection,
         )
-    if state_source is None:
-        raise RuntimeError("Live robot pose data is unavailable")
     if custom_final:
         pose = point.final_probe_pose_object
         tolerance = point.final_position_tolerance_m
@@ -61,6 +59,8 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
         tolerance = routine.safe_approach_position_tolerance_m
     elif intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH:
         if not point.fully_custom:
+            if state_source is None:
+                raise RuntimeError("Sensor camera geometry is unavailable")
             state_source.validate_aligned_probe_distance(
                 attachment.motion_sensor_id, point.aligned_preapproach_distance_m,
             )
@@ -68,16 +68,16 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
         tolerance = point.position_tolerance_m
     else:
         raise ValueError("Unsupported saved probe-point motion")
-    tag = state_source.reference_tag(routine.reference_tag.tag_id)
+    tag_id = routine.reference_tag.tag_id
     offsets = ()
     path = point.final_probe_path if custom_final else point.pre_approach_path
     if custom_final or intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH:
         offsets = tuple(
-            factory.absolute(waypoint.pose_object, tag, attachment.motion_sensor_id).offset
+            factory.saved_absolute(waypoint.pose_object, tag_id, attachment.motion_sensor_id).offset
             for waypoint in path
         )
     return replace(
-        factory.absolute(pose, tag, attachment.motion_sensor_id),
+        factory.saved_absolute(pose, tag_id, attachment.motion_sensor_id),
         ignore_environment_collisions=custom_final,
         command_id=(CommandID.FOLLOW_MOVE_TO_TAG_PATH
                     if custom_final or intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH
@@ -96,7 +96,7 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
 
 
 def routine_safe_approach_command(
-    intent, repository, state_source, attachments, factory,
+    intent, repository, attachments, factory,
 ):
     """Resolve the shared routine pose without requiring a probe point."""
     if intent.intent != OperationalIntent.INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH:
@@ -110,14 +110,10 @@ def routine_safe_approach_command(
     if attachments is None:
         raise RuntimeError("Sensor attachment state is unavailable")
     attachment = attachments.require_motion_attachment()
-    if state_source is None:
-        raise RuntimeError("Live robot pose data is unavailable")
-    tag = state_source.reference_tag(routine.reference_tag.tag_id)
-    if int(tag.id) != routine.reference_tag.tag_id:
-        raise ValueError("Live reference tag does not match the selected routine")
     return replace(
-        factory.absolute(
-            pose, tag, attachment.motion_sensor_id, safe_approach=True,
+        factory.saved_absolute(
+            pose, routine.reference_tag.tag_id, attachment.motion_sensor_id,
+            safe_approach=True,
         ),
         tag_position_tolerance_m=routine.safe_approach_position_tolerance_m,
         ignore_environment_collisions=False,
@@ -140,13 +136,8 @@ def probe_point_plan(command, repository, state_source, attachments, factory):
     if not attachment.has_sensor or attachment.motion_sensor_id != command.motion_sensor_id:
         raise ValueError("Probe execution requires the bound physical sensor")
 
-    # Resolve all stages against one immutable definition and tag observation.
+    # Snapshot all stages from one definition; each motion resolves its live tag.
     from types import SimpleNamespace
-    tag = state_source.reference_tag(routine.reference_tag.tag_id)
-    frozen_state = SimpleNamespace(
-        reference_tag=lambda _id: tag,
-        validate_aligned_probe_distance=state_source.validate_aligned_probe_distance,
-    )
     frozen_repository = SimpleNamespace(load=lambda _id: definition)
     frozen_attachments = SimpleNamespace(require_motion_attachment=lambda: attachment)
 
@@ -158,7 +149,7 @@ def probe_point_plan(command, repository, state_source, attachments, factory):
         intent.probe_point_id = selection.probe_point_id
         # Each stage owns its policy; a final probe bypass must not cover travel.
         return saved_probe_command(
-            intent, frozen_repository, frozen_state, frozen_attachments, factory,
+            intent, frozen_repository, state_source, frozen_attachments, factory,
         )
 
     safe = resolve(OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH)

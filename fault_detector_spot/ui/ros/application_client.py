@@ -22,6 +22,7 @@ class ApplicationClient(QObject):
 
     state_changed = pyqtSignal(object)
     request_rejected = pyqtSignal(str)
+    operation_rejected = pyqtSignal(str, str)
     emergency_stop_finished = pyqtSignal(bool, str)
 
     def __init__(self, node, client_id=None):
@@ -58,14 +59,15 @@ class ApplicationClient(QObject):
         """Submit one typed operational intent without blocking the UI."""
         if not isinstance(intent, OperationalIntent):
             raise TypeError("Expected an OperationalIntent message")
+        context_id = context_id.strip()
         if not self._operation_client.server_is_ready():
-            self.request_rejected.emit(
-                "Application operation server is unavailable"
+            self._reject_operation(
+                context_id, "Application operation server is unavailable"
             )
             return None
         goal = ExecuteOperation.Goal()
         goal.client_id = self.client_id
-        goal.context_id = context_id.strip()
+        goal.context_id = context_id
         goal.intent = deepcopy(intent)
         local_id = uuid4().hex
         future = self._operation_client.send_goal_async(
@@ -76,7 +78,7 @@ class ApplicationClient(QObject):
             ),
         )
         future.add_done_callback(
-            partial(self._receive_goal_response, local_id)
+            partial(self._receive_goal_response, local_id, context_id)
         )
         return local_id
 
@@ -108,32 +110,36 @@ class ApplicationClient(QObject):
         future.add_done_callback(self._receive_emergency_result)
         return future
 
-    def _receive_goal_response(self, local_id, future):
+    def _receive_goal_response(self, local_id, context_id, future):
         try:
             goal_handle = future.result()
         except Exception as exception:
-            self.request_rejected.emit(str(exception))
+            self._reject_operation(context_id, str(exception))
             return
         if not goal_handle.accepted:
-            self.request_rejected.emit("Operational request was rejected")
+            self._reject_operation(context_id, "Operational request was rejected")
             return
         self._goal_handles[local_id] = goal_handle
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(
-            partial(self._receive_result, local_id)
+            partial(self._receive_result, local_id, context_id)
         )
 
     def _receive_feedback(self, _local_id, feedback_message):
         self._emit_state(feedback_message.feedback.state)
 
-    def _receive_result(self, local_id, future):
+    def _receive_result(self, local_id, context_id, future):
         self._goal_handles.pop(local_id, None)
         try:
             result = future.result().result
         except Exception as exception:
-            self.request_rejected.emit(str(exception))
+            self._reject_operation(context_id, str(exception))
             return
         self._emit_state(result.state)
+
+    def _reject_operation(self, context_id, detail):
+        self.operation_rejected.emit(context_id, detail)
+        self.request_rejected.emit(detail)
 
     def _receive_state(self, state):
         self._emit_state(state)
