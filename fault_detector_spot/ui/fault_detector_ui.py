@@ -1006,6 +1006,8 @@ class Fault_Detector_UI(QWidget):
     def _process_navigation_setup_state(self, state):
         if hasattr(self, "navigation_controls"):
             self.navigation_controls.apply_setup_state(state)
+        if hasattr(self, "inspection_controls"):
+            self.inspection_controls.apply_navigation_setup_state(state)
         self.status_label.setText(state.detail)
 
     def _open_probe_setup(self):

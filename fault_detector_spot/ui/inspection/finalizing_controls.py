@@ -80,8 +80,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._configure_probe_point_entry_ui()
 
     def _configure_probe_point_entry_ui(self):
-        """Build the probe-point panel below the routine base position."""
-        splitter = self.inspection_workspace_splitter
+        """Build the probe-point controls in their execution tab."""
 
         panel = QFrame()
         panel.setFrameShape(QFrame.StyledPanel)
@@ -224,9 +223,7 @@ class FinalizingInspectionControls(InspectionControls):
         layout.addWidget(self.abort_probe_refinement_button)
         layout.addStretch()
 
-        splitter.addWidget(panel)
-        splitter.setStretchFactor(splitter.count() - 1, 1)
-        splitter.setSizes([100, 500])
+        self.inspection_workspace_tabs.addTab(panel, "Probe Point Execution")
         self._probe_point_entry_panel = panel
 
     def _saved_probe_selection_changed(self, _row=None):
@@ -597,7 +594,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._reference_start_pending = False
         self._reference_start_error = ""
         self._begin_refinement_after_reference_commit = False
-        self.inspection_workspace_splitter.setEnabled(False)
+        self.inspection_workspace_tabs.setEnabled(False)
         if self.refinement_dialog.fully_custom:
             self.refinement_dialog.show()
             return self._start_refinement_after_reference()
@@ -1090,15 +1087,15 @@ class FinalizingInspectionControls(InspectionControls):
             )
             if self.refinement_dialog.isVisible():
                 self.refinement_dialog.close_after_completion()
-            if hasattr(self, "inspection_workspace_splitter"):
-                self.inspection_workspace_splitter.setEnabled(True)
+            if hasattr(self, "inspection_workspace_tabs"):
+                self.inspection_workspace_tabs.setEnabled(True)
             return True
 
         if self._refinement_presentation is None:
             self._begin_refinement_after_reference_commit = False
             self._abort_refinement_after_start = False
-            if hasattr(self, "inspection_workspace_splitter"):
-                self.inspection_workspace_splitter.setEnabled(True)
+            if hasattr(self, "inspection_workspace_tabs"):
+                self.inspection_workspace_tabs.setEnabled(True)
             self.start_probe_refinement_button.setText(
                 "Add New Probe Point"
             )
@@ -1137,8 +1134,8 @@ class FinalizingInspectionControls(InspectionControls):
         presentation = self._refinement_presentation
         if presentation is None:
             self._begin_refinement_after_reference_commit = False
-            if hasattr(self, "inspection_workspace_splitter"):
-                self.inspection_workspace_splitter.setEnabled(True)
+            if hasattr(self, "inspection_workspace_tabs"):
+                self.inspection_workspace_tabs.setEnabled(True)
             self.start_probe_refinement_button.setText(
                 "Add New Probe Point"
             )
@@ -1161,8 +1158,8 @@ class FinalizingInspectionControls(InspectionControls):
             )
             return False
 
-        if hasattr(self, "inspection_workspace_splitter"):
-            self.inspection_workspace_splitter.setEnabled(True)
+        if hasattr(self, "inspection_workspace_tabs"):
+            self.inspection_workspace_tabs.setEnabled(True)
 
         self.start_probe_refinement_button.setText(
             "Resume Probe Point Setup"

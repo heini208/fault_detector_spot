@@ -6,8 +6,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QLabel
+from PyQt5.QtWidgets import QApplication, QLabel, QTabWidget
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState, TagElement
 
 from fault_detector_spot.ui.inspection.finalizing_controls import (
@@ -67,11 +66,14 @@ def test_workspace_uses_entry_panel_and_single_dialog_preview(
 ):
     controls = FinalizingInspectionControls(FakeUI(tmp_path))
 
-    assert controls.inspection_workspace_splitter.orientation() == (
-        Qt.Vertical
-    )
-    assert controls.inspection_workspace_splitter.count() == 2
-    base_group = controls.inspection_workspace_splitter.widget(0)
+    tabs = controls.inspection_workspace_tabs
+    assert isinstance(tabs, QTabWidget)
+    assert [tabs.tabText(index) for index in range(tabs.count())] == [
+        "Pre Probe Point", "Probe Point Execution",
+    ]
+    preparation = tabs.widget(0)
+    assert preparation.layout().itemAt(0).widget() is controls.routine_navigation_controls
+    base_group = preparation.layout().itemAt(1).widget()
     assert base_group.title() == "Routine Base and Safe Pre-approach Poses"
     assert controls.set_base_position_button.parent() is base_group
     assert controls.move_to_base_position_button.parent() is base_group
@@ -80,7 +82,7 @@ def test_workspace_uses_entry_panel_and_single_dialog_preview(
     assert not controls.set_base_position_button.isEnabled()
     assert not controls.move_to_base_position_button.isEnabled()
     assert controls.move_to_base_position_button.styleSheet() == ""
-    assert controls.inspection_workspace_splitter.widget(1) is (
+    assert controls.inspection_workspace_tabs.widget(1) is (
         controls._probe_point_entry_panel
     )
     assert controls.reference_view_widget.window() is controls.refinement_dialog

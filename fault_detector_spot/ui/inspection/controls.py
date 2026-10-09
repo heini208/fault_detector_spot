@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSizePolicy,
-    QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -62,6 +62,7 @@ from fault_detector_spot.inspection.setup.reference_view_surface_target import (
 )
 
 from .probe_refinement_dialog import ProbeRefinementDialog
+from .routine_navigation_controls import RoutineNavigationControls
 from ..sensor.models import SensorAttachmentViewStatus
 from ..navigation.base_movement_controls import BaseMovementControls
 from ..manipulation.controls import ManipulationControls
@@ -128,7 +129,7 @@ class InspectionControls(UIControlHelper):
         workspace = QVBoxLayout()
         workspace.setSpacing(6)
         workspace.addLayout(self._make_saved_definitions_row())
-        workspace.addWidget(self._make_workspace_splitter(), 1)
+        workspace.addWidget(self._make_workspace_tabs(), 1)
         return [workspace]
 
     def _make_saved_definitions_row(self):
@@ -689,14 +690,17 @@ class InspectionControls(UIControlHelper):
         self._create_reference_camera_dropdowns()
         self.refinement_dialog = ProbeRefinementDialog(self)
 
-    def _make_workspace_splitter(self):
-        self.inspection_workspace_splitter = QSplitter(Qt.Vertical)
-        self.inspection_workspace_splitter.setChildrenCollapsible(False)
-        self.inspection_workspace_splitter.addWidget(
-            self._make_base_position_group()
-        )
-        self.inspection_workspace_splitter.setStretchFactor(0, 0)
-        return self.inspection_workspace_splitter
+    def _make_workspace_tabs(self):
+        self.inspection_workspace_tabs = QTabWidget()
+        preparation = QWidget()
+        layout = QVBoxLayout(preparation)
+        layout.setSpacing(8)
+        self.routine_navigation_controls = RoutineNavigationControls()
+        layout.addWidget(self.routine_navigation_controls)
+        layout.addWidget(self._make_base_position_group())
+        layout.addStretch()
+        self.inspection_workspace_tabs.addTab(preparation, "Pre Probe Point")
+        return self.inspection_workspace_tabs
 
     def _make_base_position_group(self):
         group = QGroupBox("Routine Base and Safe Pre-approach Poses")
@@ -1652,7 +1656,7 @@ class InspectionControls(UIControlHelper):
                 "workflow."
             )
             return False
-        self.inspection_workspace_splitter.setEnabled(True)
+        self.inspection_workspace_tabs.setEnabled(True)
         self.start_probe_refinement_button.setText(
             "Resume Probe Point Position Refinement Workflow"
         )
@@ -1665,7 +1669,7 @@ class InspectionControls(UIControlHelper):
         presentation = self._refinement_presentation
         if presentation is None:
             return False
-        self.inspection_workspace_splitter.setEnabled(False)
+        self.inspection_workspace_tabs.setEnabled(False)
         self.start_probe_refinement_button.setText(
             "Start Probe Point Position Refinement Workflow"
         )
@@ -1679,8 +1683,8 @@ class InspectionControls(UIControlHelper):
     def _finish_refinement_workflow_close(self):
         self._distance_failure_requires_retraction = False
         self._retraction_failed = False
-        if hasattr(self, "inspection_workspace_splitter"):
-            self.inspection_workspace_splitter.setEnabled(True)
+        if hasattr(self, "inspection_workspace_tabs"):
+            self.inspection_workspace_tabs.setEnabled(True)
         self._refinement_presentation = None
         self.start_probe_refinement_button.setText(
             "Start Probe Point Position Refinement Workflow"
@@ -2444,6 +2448,9 @@ class InspectionControls(UIControlHelper):
         view = probe_setup_state_to_view(state)
         previous_views = tuple(self._reference_slot_view_ids)
         self._probe_setup_state = state
+        self.routine_navigation_controls.set_routine(
+            state.selected_object_id, state.selected_routine_id,
+        )
         self._apply_object_and_routine_lists(state)
         self._apply_base_position_state(state)
         self._apply_probe_setup_view(view)
@@ -2471,6 +2478,9 @@ class InspectionControls(UIControlHelper):
         else:
             self._set_status_text(state.detail)
         return True
+
+    def apply_navigation_setup_state(self, state):
+        self.routine_navigation_controls.apply_navigation_state(state)
 
     def _apply_object_and_routine_lists(self, state):
         self.saved_object_dropdown.blockSignals(True)
@@ -2693,7 +2703,7 @@ class InspectionControls(UIControlHelper):
         if previous is None:
                 self.resume_refinement_dialog()
         elif self.refinement_dialog.isVisible():
-            self.inspection_workspace_splitter.setEnabled(False)
+            self.inspection_workspace_tabs.setEnabled(False)
         self._refresh_refinement_dialog()
 
     def _request_reference_previews(self, state):

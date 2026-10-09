@@ -30,7 +30,7 @@ def test_pause_keeps_authoritative_presentation():
     source = inspect.getsource(InspectionControls.pause_refinement_dialog)
 
     assert "self._refinement_presentation = None" not in source
-    assert "inspection_workspace_splitter.setEnabled(True)" in source
+    assert "inspection_workspace_tabs.setEnabled(True)" in source
 
 
 def test_emergency_stop_allows_close_without_ending_refinement():
