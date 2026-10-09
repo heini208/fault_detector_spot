@@ -2443,6 +2443,10 @@ class InspectionControls(UIControlHelper):
     ):
         return self.refresh_setup_state()
 
+    def apply_navigation_setup_state(self, state):
+        """Forward observed navigation state to the saved routine map indicator."""
+        self.routine_navigation_controls.apply_navigation_setup_state(state)
+
     def apply_setup_state(self, state):
         if not isinstance(state, ProbeSetupState):
             raise TypeError(

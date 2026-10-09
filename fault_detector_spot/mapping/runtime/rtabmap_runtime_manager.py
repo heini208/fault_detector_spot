@@ -271,11 +271,10 @@ class RtabmapRuntimeManager(RuntimeManager):
         map_name: str = None,
         rviz: bool = True,
     ):
-        if (not self.is_running()
+        """Reuse matching localization, otherwise stop and launch its database."""
+        if (self.get_running_mode() != self.MODE_LOCALIZATION
                 or (map_name is not None and map_name != self.bb.active_map_name)):
             self._start_rtabmap(map_name, extend_map=False, rviz=rviz)
-        else:
-            self.set_mode_localization()
 
         if not self.nav2_runtime.is_running():
             self.nav2_runtime.start()

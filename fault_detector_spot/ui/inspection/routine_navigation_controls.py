@@ -7,11 +7,15 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
 )
 from fault_detector_msgs.msg import (
     ApplicationCommandState,
+    NavigationSetupIntent,
+    NavigationSetupState,
     OperationalIntent,
     ProbeSetupIntent,
     ProbeSetupState,
@@ -28,6 +32,7 @@ class RoutineNavigationControls(QGroupBox):
         self._scope = ("", "")
         self._map_names = ()
         self._saved_map_name = ""
+        self._navigation_setup_state = None
         self._saved_waypoint_name = ""
         self._waypoint_names = ()
         self._setup_blocked = False
@@ -45,12 +50,16 @@ class RoutineNavigationControls(QGroupBox):
         self.set_waypoint_button = QPushButton("Set Waypoint")
         self.move_to_waypoint_button = QPushButton("Move to Waypoint")
         self.map_name_label = QLabel()
+        self.map_runtime_label = QLabel()
+        self.map_runtime_label.setTextFormat(Qt.PlainText)
         self.waypoint_name_label = QLabel()
         for label in (self.map_name_label, self.waypoint_name_label):
             label.setFixedWidth(170)
             label.setWordWrap(True)
             label.setTextFormat(Qt.PlainText)
             self._show_assigned_name(label, "")
+        self.map_name_label.setMinimumWidth(0)
+        self.map_name_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         for row, label, dropdown, save_button, name_label, action_button in (
             (0, "Map:", self.map_dropdown, self.set_map_button,
              self.map_name_label, self.launch_map_button),
@@ -60,13 +69,22 @@ class RoutineNavigationControls(QGroupBox):
             layout.addWidget(QLabel(label), row, 0)
             layout.addWidget(dropdown, row, 1)
             layout.addWidget(save_button, row, 2)
-            layout.addWidget(name_label, row, 3)
+            if row == 0:
+                assigned_map = QHBoxLayout()
+                assigned_map.addWidget(name_label)
+                assigned_map.addWidget(self.map_runtime_label)
+                layout.addLayout(assigned_map, row, 3)
+            else:
+                layout.addWidget(name_label, row, 3)
             layout.addWidget(action_button, row, 4)
             for button in (save_button, action_button):
                 button.setEnabled(False)
         self.set_map_button.setToolTip("Save this routine's map. Clearing or changing it clears the saved waypoint.")
         self.set_waypoint_button.setToolTip("Save the selected waypoint from this routine's saved map.")
-        self.launch_map_button.setToolTip("Queue localization with this routine's saved map.")
+        self.launch_map_button.setToolTip(
+            "Queue localization with this routine's saved map, replacing mapping "
+            "or localization with a different map."
+        )
         self.move_to_waypoint_button.setToolTip("Queue movement to this routine's saved waypoint.")
 
         self.status_label = QLabel("Select a routine to configure navigation.")
@@ -80,6 +98,7 @@ class RoutineNavigationControls(QGroupBox):
         self.launch_map_button.clicked.connect(self.handle_launch_map)
         self.move_to_waypoint_button.clicked.connect(self.handle_move_to_waypoint)
         self._refresh_maps("")
+        self._refresh_map_runtime()
 
     def apply_setup_state(self, state):
         """Render assignments and map-qualified choices from probe setup."""
@@ -124,8 +143,55 @@ class RoutineNavigationControls(QGroupBox):
                 if all(scope) else "Select a routine to configure navigation."
             )
         self._show_assigned_name(self.map_name_label, self._saved_map_name)
+        self._refresh_map_runtime()
         self._show_assigned_name(self.waypoint_name_label, self._saved_waypoint_name)
         self._refresh_maps(selected_map, selected_waypoint)
+
+    def apply_navigation_setup_state(self, state):
+        """Compare the saved assignment with authoritative runtime observations."""
+        if not isinstance(state, NavigationSetupState):
+            raise TypeError("Expected a NavigationSetupState message")
+        self._navigation_setup_state = state
+        self._refresh_map_runtime()
+
+    def _refresh_map_runtime(self):
+        label = self.map_runtime_label
+        label.setVisible(bool(self._saved_map_name))
+        state = self._navigation_setup_state
+        color = "#757575"
+        text = "Runtime unknown"
+        detail = "Waiting for navigation runtime status."
+        if state is not None:
+            runtime_operation = state.operation in {
+                NavigationSetupIntent.OPERATION_START_MAPPING,
+                NavigationSetupIntent.OPERATION_START_LOCALIZATION,
+                NavigationSetupIntent.OPERATION_STOP_MAPPING,
+            }
+            if state.runtime_error:
+                text, detail = "Runtime unavailable", state.runtime_error
+            elif state.state == NavigationSetupState.STATE_UNSPECIFIED:
+                detail = "Navigation runtime status has not been confirmed."
+            elif runtime_operation and state.state == NavigationSetupState.STATE_RUNNING:
+                text, detail, color = (
+                    "Changing runtime", state.detail or "Navigation runtime is changing.", "#ef6c00",
+                )
+            elif state.mode == NavigationSetupState.MODE_NONE:
+                text, detail, color = "No map running", "No mapping or localization runtime is running.", "#c62828"
+            elif state.mode == NavigationSetupState.MODE_MAPPING:
+                text, detail, color = (
+                    "Mapping running",
+                    f"Mapping is running for {state.active_map or 'an unknown map'}. "
+                    "Launch Map to use the saved map for localization.",
+                    "#ef6c00",
+                )
+            elif state.mode == NavigationSetupState.MODE_LOCALIZATION and state.active_map:
+                matches = state.active_map == self._saved_map_name
+                text = "Correct map" if matches else "Wrong map"
+                detail = f"Localization is running with map: {state.active_map}."
+                color = "#2e7d32" if matches else "#ef6c00"
+        label.setText(f"● {text}")
+        label.setToolTip(detail)
+        label.setStyleSheet(f"color: {color};")
 
     def _refresh_maps(self, selected, selected_waypoint=None):
         self.map_dropdown.blockSignals(True)

@@ -162,6 +162,7 @@ class NavigationSetupClient(QObject):
             int(state.operation),
             int(state.mode),
             state.active_map,
+            state.runtime_error,
             state.detail,
             tuple(state.map_names),
             tuple(state.waypoint_names),

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import inspect
 
 import py_trees
+import pytest
 
 from fault_detector_spot.mapping.behaviours.enable_localization import (
     EnableLocalization,
@@ -62,8 +63,9 @@ class _AsyncHelper:
         self.change_calls.append(map_name)
         return True
 
-    def start_localization(self):
+    def start_localization(self, map_name):
         self.start_localization_calls += 1
+        self.localization_map = map_name
         return SimpleNamespace(poll=lambda: None)
 
     def is_localization_running(self):
@@ -96,6 +98,40 @@ def test_localization_does_not_succeed_when_rtabmap_is_dead():
 
     assert behavior.update() == py_trees.common.Status.FAILURE
     assert "RTAB-Map stopped" in behavior.feedback_message
+
+
+@pytest.mark.parametrize("requested_map,active_map", [
+    ("routine_map", "other_map"),
+    ("routine_map", "routine_map"),
+    ("routine_map", None),
+    ("", "selected_map"),
+])
+def test_localization_passes_target_directly_to_runtime(requested_map, active_map):
+    helper = _AsyncHelper()
+    behavior = EnableLocalization(helper)
+    behavior.blackboard = SimpleNamespace(
+        active_map_name=active_map,
+        last_command=SimpleNamespace(map_name=requested_map),
+    )
+
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert helper.localization_map == (requested_map or active_map)
+    assert helper.change_calls == []
+    behavior.blackboard.active_map_name = helper.localization_map
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+    assert helper.start_localization_calls == 1
+
+
+def test_localization_requires_the_requested_map_before_reporting_success():
+    helper = _AsyncHelper()
+    behavior = EnableLocalization(helper)
+    behavior.blackboard = SimpleNamespace(
+        active_map_name="other_map",
+        last_command=SimpleNamespace(map_name="routine_map"),
+    )
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    assert behavior.update() == py_trees.common.Status.FAILURE
+    assert "without selecting 'routine_map'" in behavior.feedback_message
 
 
 def test_running_mode_no_longer_shells_out_to_ros2_param_get():

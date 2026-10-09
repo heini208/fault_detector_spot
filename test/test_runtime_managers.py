@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import py_trees
 
+from fault_detector_spot.mapping.behaviours.enable_localization import EnableLocalization
 from fault_detector_spot.shared.ros import runtime_manager as runtime_module
 from fault_detector_spot.shared.ros.runtime_manager import RuntimeManager
 from fault_detector_spot.navigation.runtime.nav2_runtime_manager import Nav2RuntimeManager
@@ -149,6 +151,109 @@ def test_localization_launch_and_map_switch_use_one_launch_path(runtime, tmp_pat
     assert len(launches) == 4  # RTAB and Nav2 for each database.
 
 
+@pytest.mark.parametrize("target_map", ["one", "two"])
+def test_localization_replaces_mapping_even_for_the_same_map(runtime, tmp_path, target_map):
+    manager, launches, stops = runtime
+    (tmp_path / f"{target_map}.db").touch()
+    previous = manager.start_mapping("one")
+
+    process = manager.start_localization(target_map, rviz=False)
+
+    assert process is not previous
+    assert not previous.alive
+    assert manager.bb.active_map_name == target_map
+    assert manager.is_localization_running()
+    assert [call.args[0] for call in manager._call_service.call_args_list] == [
+        "/rtabmap/pause", "/rtabmap/save_db", "/rtabmap/publish_map",
+    ]
+    assert len(launches) == 3  # Old mapping, replacement localization, Nav2.
+    assert f"db_path:={tmp_path / (target_map + '.db')}" in launches[1]
+    assert "extend_map:=false" in launches[1]
+    assert "delete_db:=false" in launches[1]
+    assert "rviz:=false" in launches[1]
+
+
+def test_matching_localization_reuses_running_processes(runtime, tmp_path):
+    manager, launches, stops = runtime
+    (tmp_path / "one.db").touch()
+    process = manager.start_localization("one")
+    nav2 = manager.nav2_runtime.process
+
+    assert manager.start_localization("one") is process
+    assert manager.start_localization() is process
+    assert manager.nav2_runtime.process is nav2
+    assert len(launches) == 2
+    assert stops == []
+    manager._call_service.assert_not_called()
+
+
+def test_matching_localization_recovers_nav2_without_restarting_map(runtime, tmp_path):
+    manager, launches, stops = runtime
+    (tmp_path / "one.db").touch()
+    process = manager.start_localization("one")
+    previous_nav2 = manager.nav2_runtime.process
+    previous_nav2.alive = False
+
+    assert manager.start_localization("one") is process
+    assert manager.nav2_runtime.process is not previous_nav2
+    assert manager.is_localization_running()
+    assert len(launches) == 3
+    assert process.alive
+
+
+def test_cancelled_launch_completion_cannot_satisfy_next_map_request(runtime, tmp_path):
+    manager, launches, stops = runtime
+    (tmp_path / "one.db").touch()
+    (tmp_path / "two.db").touch()
+    behavior = EnableLocalization(manager)
+    behavior.blackboard = manager.bb
+    manager.bb.last_command = SimpleNamespace(map_name="one")
+    behavior.tick_once()
+    assert behavior.status == py_trees.common.Status.RUNNING
+    assert manager._runtime_future.result(timeout=2)
+    assert manager.bb.active_map_name == "one"
+
+    # Cancel before the leaf consumes its completed future, then reuse the
+    # command leaf for a different saved routine map.
+    behavior.stop(py_trees.common.Status.INVALID)
+    manager.bb.last_command = SimpleNamespace(map_name="two")
+    behavior.tick_once()
+    assert behavior.status == py_trees.common.Status.RUNNING
+    assert manager._runtime_future.result(timeout=2)
+    behavior.tick_once()
+
+    assert behavior.status == py_trees.common.Status.SUCCESS
+    assert manager.bb.active_map_name == "two"
+    assert manager.is_localization_running()
+    assert len(launches) == 4
+
+
+@pytest.mark.parametrize("failed_runtime", ["rtab", "nav2"])
+def test_localization_does_not_launch_replacement_until_both_processes_stop(
+    runtime, tmp_path, monkeypatch, failed_runtime,
+):
+    manager, launches, stops = runtime
+    (tmp_path / "one.db").touch()
+    (tmp_path / "two.db").touch()
+    previous = manager.start_localization("one")
+    nav2 = manager.nav2_runtime.process
+    failed_process = previous if failed_runtime == "rtab" else nav2
+    original = runtime_module.terminate_process_group
+
+    def stop(process, **kwargs):
+        return False if process is failed_process else original(process, **kwargs)
+
+    monkeypatch.setattr(runtime_module, "terminate_process_group", stop)
+    with pytest.raises(RuntimeError, match="Could not stop runtime"):
+        manager.start_localization("two")
+    assert len(launches) == 2
+    assert manager.bb.active_map_name == "one"
+    assert failed_process.alive
+    owner = manager if failed_runtime == "rtab" else manager.nav2_runtime
+    assert owner.process is failed_process
+    monkeypatch.setattr(runtime_module, "terminate_process_group", original)
+
+
 def test_invalid_localization_map_does_not_stop_current_runtime(runtime):
     manager, launches, stops = runtime
     process = manager.start_mapping("one")
@@ -248,7 +353,7 @@ def test_mode_switch_failure_preserves_previous_mode(runtime):
     manager.start_mapping("plant")
     manager._call_service.return_value = False
     with pytest.raises(RuntimeError, match="Could not switch"):
-        manager.start_localization()
+        manager.set_mode_localization()
     assert manager.get_running_mode() == manager.MODE_MAPPING
     assert not manager.nav2_runtime.is_running()
 

@@ -55,5 +55,6 @@ def test_state_fingerprint_contains_visible_navigation_state():
 
     assert "int(state.mode)" in source
     assert "state.active_map" in source
+    assert "state.runtime_error" in source
     assert "tuple(state.waypoint_names)" in source
     assert "tuple(state.landmark_names)" in source

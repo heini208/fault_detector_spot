@@ -407,6 +407,7 @@ class NavigationSetupApi:
         state.operation = int(goal.intent.operation)
         state.state = NavigationSetupState.STATE_FAILED
         state.detail = detail
+        state.runtime_error = "Runtime status unavailable"
         self._state_publisher.publish(state)
         result = ExecuteNavigationSetup.Result()
         result.state = state
@@ -432,6 +433,7 @@ class NavigationSetupApi:
         message.detail = (
             f"{detail}; {snapshot.runtime_error}" if snapshot.runtime_error else detail
         )
+        message.runtime_error = snapshot.runtime_error
         message.active_map = snapshot.active_map
         message.mode = self._mode_code(snapshot.mode)
         message.map_names = list(snapshot.map_names)

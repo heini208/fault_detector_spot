@@ -7,7 +7,14 @@ from unittest.mock import Mock
 import pytest
 from PyQt5.QtCore import Qt
 
-from fault_detector_msgs.msg import ApplicationCommandState, OperationalIntent, ProbeSetupIntent, ProbeSetupState
+from fault_detector_msgs.msg import (
+    ApplicationCommandState,
+    NavigationSetupIntent,
+    NavigationSetupState,
+    OperationalIntent,
+    ProbeSetupIntent,
+    ProbeSetupState,
+)
 from fault_detector_spot.ui.fault_detector_ui import Fault_Detector_UI
 from fault_detector_spot.ui.inspection.finalizing_controls import FinalizingInspectionControls
 from fault_detector_spot.ui.ros.probe_setup_client import ProbeSetupClient
@@ -34,6 +41,120 @@ def select(combo, name):
     index = combo.findData(name)
     assert index >= 0
     combo.setCurrentIndex(index)
+
+
+def runtime_state(mode=NavigationSetupState.MODE_LOCALIZATION, map_name="factory", **fields):
+    state = NavigationSetupState()
+    state.mode = mode
+    state.active_map = map_name
+    state.state = NavigationSetupState.STATE_SUCCEEDED
+    for name, value in fields.items():
+        setattr(state, name, value)
+    return state
+
+
+@pytest.mark.parametrize("mode,map_name,text,color", [
+    (NavigationSetupState.MODE_LOCALIZATION, "factory", "Correct map", "#2e7d32"),
+    (NavigationSetupState.MODE_LOCALIZATION, "workshop", "Wrong map", "#ef6c00"),
+    (NavigationSetupState.MODE_MAPPING, "factory", "Mapping running", "#ef6c00"),
+    (NavigationSetupState.MODE_MAPPING, "workshop", "Mapping running", "#ef6c00"),
+    (NavigationSetupState.MODE_NONE, "factory", "No map running", "#c62828"),
+    (NavigationSetupState.MODE_LOCALIZATION, "", "Runtime unknown", "#757575"),
+])
+def test_saved_map_runtime_indicator_distinguishes_observed_modes(controls, mode, map_name, text, color):
+    controls.apply_setup_state(navigation_state())
+    controls.apply_navigation_setup_state(runtime_state(mode, map_name))
+    nav = controls.routine_navigation_controls
+    assert not nav.map_runtime_label.isHidden()
+    assert nav.map_runtime_label.text() == f"● {text}"
+    assert color in nav.map_runtime_label.styleSheet()
+    if mode in {NavigationSetupState.MODE_MAPPING, NavigationSetupState.MODE_LOCALIZATION} and map_name:
+        assert map_name in nav.map_runtime_label.toolTip()
+    assert nav.launch_map_button.isEnabled()
+    assert controls.ui.requests == []
+    controls.ui.execute_operation.assert_not_called()
+
+
+def test_indicator_tracks_saved_routine_and_keeps_unsaved_map_draft_independent(controls):
+    controls.apply_navigation_setup_state(runtime_state())
+    nav = controls.routine_navigation_controls
+    assert nav.map_runtime_label.isHidden()
+    state = navigation_state()
+    controls.apply_setup_state(state)
+    assert nav.map_runtime_label.text() == "● Correct map"
+    select(nav.map_dropdown, "workshop")
+    assert nav.map_runtime_label.text() == "● Correct map"
+    controls.apply_navigation_setup_state(runtime_state(map_name="workshop"))
+    assert nav.map_runtime_label.text() == "● Wrong map"
+    assert nav.map_name_label.text() == "factory"
+    state.selected_routine_id = "other"
+    state.routine_ids.append("other")
+    state.routine_map_name = "workshop"
+    controls.apply_setup_state(state)
+    assert nav.map_runtime_label.text() == "● Correct map"
+    state.routine_map_name = ""
+    controls.apply_setup_state(state)
+    assert nav.map_runtime_label.isHidden()
+
+
+def test_unknown_error_and_runtime_transition_cannot_look_ready(controls):
+    controls.apply_setup_state(navigation_state())
+    nav = controls.routine_navigation_controls
+    assert nav.map_runtime_label.text() == "● Runtime unknown"
+    controls.apply_navigation_setup_state(runtime_state(runtime_error="Runtime status unavailable"))
+    assert nav.map_runtime_label.text() == "● Runtime unavailable"
+    assert nav.map_runtime_label.toolTip() == "Runtime status unavailable"
+    controls.apply_navigation_setup_state(runtime_state(
+        operation=NavigationSetupIntent.OPERATION_START_LOCALIZATION,
+        state=NavigationSetupState.STATE_RUNNING,
+        detail="Stopping the previous runtime",
+    ))
+    assert nav.map_runtime_label.text() == "● Changing runtime"
+    assert nav.map_runtime_label.toolTip() == "Stopping the previous runtime"
+    assert nav.launch_map_button.isEnabled()
+    controls.apply_navigation_setup_state(runtime_state())
+    assert nav.map_runtime_label.text() == "● Correct map"
+
+
+@pytest.mark.parametrize("operation,code", [
+    (NavigationSetupIntent.OPERATION_START_LOCALIZATION, NavigationSetupState.STATE_QUEUED),
+    (NavigationSetupIntent.OPERATION_ADD_CURRENT_WAYPOINT, NavigationSetupState.STATE_FAILED),
+])
+def test_queued_launch_or_failed_authoring_keeps_observed_map_indicator(controls, operation, code):
+    controls.apply_setup_state(navigation_state())
+    controls.apply_navigation_setup_state(runtime_state(operation=operation, state=code))
+    assert controls.routine_navigation_controls.map_runtime_label.text() == "● Correct map"
+
+
+def test_navigation_client_forwards_runtime_updates_and_rejects_stale_indicators(controls, monkeypatch):
+    from PyQt5.QtWidgets import QLabel
+    import fault_detector_spot.ui.ros.navigation_setup_client as client_module
+
+    monkeypatch.setattr(client_module, "ActionClient", Mock())
+    client = client_module.NavigationSetupClient(Mock(), "ui")
+    harness = SimpleNamespace(
+        inspection_controls=controls,
+        navigation_controls=Mock(),
+        status_label=QLabel(),
+    )
+    client.state_changed.connect(
+        lambda state: Fault_Detector_UI._process_navigation_setup_state(harness, state)
+    )
+    controls.apply_setup_state(navigation_state())
+    state = runtime_state(client_id="ui", context_id="navigation-context", revision=4)
+    assert client._emit_state(state)
+    label = controls.routine_navigation_controls.map_runtime_label
+    assert label.text() == "● Correct map"
+    state = runtime_state(client_id="ui", context_id="navigation-context", revision=3, map_name="workshop")
+    assert not client._emit_state(state)
+    assert label.text() == "● Correct map"
+    state = runtime_state(client_id="ui", context_id="navigation-context", revision=4, runtime_error="Runtime status unavailable")
+    assert client._emit_state(state)
+    assert label.text() == "● Runtime unavailable"
+    state.runtime_error = ""
+    assert client._emit_state(state)
+    assert label.text() == "● Correct map"
+    assert harness.navigation_controls.apply_setup_state.call_count == 3
 
 
 def test_saved_snapshot_populates_inactive_map_choices_and_assignment_labels(controls):

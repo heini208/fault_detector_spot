@@ -706,6 +706,19 @@ its Nav2 runtime manager. The current API is `start_mapping()`,
 Both expose `begin_runtime_operation()` and `poll_runtime_operation()` for
 behavior-tree callers. Slow process termination does not hold the polling lock.
 
+Inspection's Routine Navigation shows the saved map's runtime status next to its
+name: correct localization map, different localization map, no running map, or
+mapping in progress. Unavailable runtime reports are shown separately so an old
+map observation cannot appear current. The indicator compares the saved routine
+assignment, independently of an unsaved dropdown selection.
+
+**Launch Map** queues localization of the saved map. Matching localization is
+reused; another localization map or any mapping session is stopped before the
+target launches directly in localization mode. Mapping uses the existing save
+and stop sequence. A failed stop prevents the replacement launch. The runtime
+error is carried separately in `NavigationSetupState.runtime_error`, so a failed
+waypoint-save request does not make a healthy map appear stopped.
+
 The old helper modules/classes and unused path/pose aliases, standalone save
 wrapper, configuration setters, and process-only `wait_until_active()` were
 removed. Internal imports and callers use the new runtime-manager names.
