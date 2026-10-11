@@ -271,8 +271,21 @@ and restores saved geometry metadata when editing a mount. It does not depend
 on a shared filesystem. Generated ROS message serialization, failure paths, and
 storage have offline coverage; deployed DDS transfer remains to be validated.
 
-Asset download for runtime consumers, stale-definition revision checks, 3D import
-preview, and MoveIt attachment/snapshot synchronization remain future work. The
+Runtime consumers now use bounded `GetSensorMesh` reads and a coherent
+`GetSensorAttachment` read. Before each ordinary or Cartesian arm plan, the BT's
+existing scene adapter validates the loaded jaw-slot model, resolves the confirmed
+stock/custom head, applies its mesh and occupancy policy together, and verifies
+scene readback. It rechecks the scene and authoritative attachment after planning.
+`MotionAttachmentSnapshot` now carries geometry metadata as well as the tip pose.
+
+The current implementation relies on the existing command/reservation mutation
+guards plus these authoritative reads; it does not add a second physical
+attachment authority or infer geometry from the most recent UI selection. It does
+not yet add definition-revision fields to command transport. Stale-dialog revision
+checks and 3D import preview remain future work. A confirmed attachment now starts
+an idle scene-only synchronization through the existing planner, so RViz shows
+the installed head without a motion request. Arm commands can take over an
+in-progress refresh, then run their own complete preflight. The
 requirements below describe that complete target workflow. Saving an unverified
 mounting template records its provenance and does not certify physical alignment.
 
@@ -369,10 +382,12 @@ as part of the mounting interface; do not exempt the head from the entire robot.
 
 ## Replacing the original jaw in MoveIt
 
-The current `arm_link_wr1` contains permanent wrist collision geometry plus
+The original `arm_link_wr1` combined permanent wrist collision geometry with
 `front_jaw`, `middle_jaw`, and `jaw_tooth` mesh components. The moving finger is
-separate. Identify the exact physically removed part before changing the model;
-filenames alone do not establish which components disappear.
+separate. The supported model now removes those three forward-jaw collision
+components and retains the wrist and rear housing. This is a conservative
+replacement boundary; it does not claim that every physically removable part
+of the rear jaw has been separated.
 
 The baseline design is an exchangeable jaw slot:
 
@@ -383,9 +398,9 @@ The baseline design is an exchangeable jaw slot:
    interface with neither stock jaw nor head needs a separate explicit profile
    if that physical configuration will be supported.
 3. Represent the installed stock jaw or sensor head as the single owned
-   `AttachedCollisionObject` fixed to the existing `hand` link. Compose source
-   meshes through the existing wrist-to-hand transform; do not duplicate its
-   offset in the editor.
+   `AttachedCollisionObject` on `sensor_head_slot`, a collisionless fixed child
+   at the existing `hand` origin. Compose source meshes through the existing
+   wrist-to-hand transform; do not duplicate its offset in the editor.
 4. Swap this owned object through planning-scene diffs. Keep unrelated objects
    and collision rules intact. Removal of an old head must not leave it as an
    obstacle in the world.
@@ -404,9 +419,12 @@ Subsequent head changes use scene updates. The editor reference visuals must
 likewise distinguish the removed lip; a combined visual mesh may need one-time
 asset preparation. The standalone editor exports the attachment package only.
 
-Changes to `spot_moveit_config` are a prerequisite outside the current default
-edit scope. Their implementation needs explicit scope authorization. This design
-does not authorize deployment, node restarts, or physical validation.
+The one-time model change is implemented in `spot_moveit_config/config/spot.urdf`.
+The backend validates the loaded model's slot, mounting transforms, and retained
+wrist/finger collision shapes before applying an attachment. The model and both
+application packages must be rebuilt together for the next authorized startup.
+This implementation does not authorize deployment, node restarts, or physical
+validation.
 
 ## Activation and synchronization
 
@@ -436,7 +454,7 @@ Extend the current planner sequence as follows:
 
 Use stable owned object IDs and idempotent updates. Serialize updates through the
 existing planner, including cancellation and uncertain service completions. An
-activation-triggered scene refresh, if added, uses that same sequence while idle.
+activation-triggered scene refresh uses that same sequence while the arm is idle.
 External clients that modify the same scene require coordination; this design
 does not make concurrent independent scene writers safe.
 

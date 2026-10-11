@@ -1,5 +1,6 @@
 """Persistent definitions for hand-mounted inspection sensors."""
 
+from copy import deepcopy
 import math
 import re
 from dataclasses import dataclass
@@ -275,6 +276,7 @@ class MotionAttachmentSnapshot:
     attachment_revision: int
     hand_to_probe_position: Tuple[float, float, float]
     hand_to_probe_orientation: Tuple[float, float, float, float]
+    head_geometry: Optional[SensorHeadGeometry] = None
 
     def __post_init__(self) -> None:
         if (
@@ -322,6 +324,7 @@ class MotionAttachmentSnapshot:
                 float(orientation.z),
                 float(orientation.w),
             ),
+            head_geometry=deepcopy(definition.head_geometry),
         )
 
     @classmethod

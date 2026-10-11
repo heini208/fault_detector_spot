@@ -1,5 +1,6 @@
 """Managed, content-addressed collision meshes for the sensor registry."""
 
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -83,12 +84,39 @@ class SensorMeshStore:
                 geometry.collision_sha256, geometry.collision_byte_count,
             )
 
+    def read_chunk(self, sha256: str, byte_count: int, offset: int) -> bytes:
+        """Return a bounded slice of a verified, finalized asset.
+
+        Geometry is validated when published. Each download checks file size
+        and checksum, avoiding repeated geometric validation for every chunk.
+        """
+        self._validate_description(sha256, byte_count)
+        if type(offset) is not int or not 0 <= offset < byte_count:
+            raise ValueError("Collision download offset must be inside the mesh")
+        with self._lock:
+            self._check_directory()
+            data = self._read_asset(sha256, byte_count)
+            return data[offset:offset + MAX_MESH_CHUNK_BYTES]
+
     def _read_verified(self, sha256: str, byte_count: int) -> bytes:
+        data = self._read_asset(sha256, byte_count)
+        validate_collision_mesh(data)
+        return data
+
+    def _read_asset(self, sha256: str, byte_count: int) -> bytes:
         path = self.root_dir / f"{sha256}.stl"
         self._check_file(path)
-        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("Collision asset must be a regular file")
             data = stream.read(MAX_COLLISION_BYTES + 1)
-        validate_collision_mesh(data, sha256, byte_count)
+        if len(data) != byte_count:
+            raise ValueError("Collision mesh byte count does not match its metadata")
+        if hashlib.sha256(data).hexdigest() != sha256:
+            raise ValueError(
+                "Collision mesh SHA-256 checksum does not match its metadata"
+            )
         return data
 
     def _check_directory(self) -> None:

@@ -49,6 +49,12 @@ class SensorRepository:
         """Read a validated asset without relying on the original import file."""
         return self.mesh_store.read(geometry)
 
+    def read_collision_chunk(
+        self, sha256: str, byte_count: int, offset: int,
+    ) -> bytes:
+        """Return a bounded mesh chunk for another application process."""
+        return self.mesh_store.read_chunk(sha256, byte_count, offset)
+
     def get_sensor_path(self, sensor_id: str) -> Path:
         """Return the YAML path for a sensor ID."""
         validate_storage_name(sensor_id, "sensor ID")

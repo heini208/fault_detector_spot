@@ -8,7 +8,7 @@ from fault_detector_msgs.msg import (
     SensorDefinitionArray,
 )
 from fault_detector_msgs.srv import (
-    AddSensor, DeleteSensor, UpdateSensor, UploadSensorMesh,
+    AddSensor, DeleteSensor, GetSensorMesh, UpdateSensor, UploadSensorMesh,
 )
 from geometry_msgs.msg import TransformStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -42,6 +42,7 @@ class SensorRegistryApi:
     UPDATE_SENSOR_SERVICE = "fault_detector/update_sensor"
     DELETE_SENSOR_SERVICE = "fault_detector/delete_sensor"
     UPLOAD_MESH_SERVICE = "fault_detector/upload_sensor_mesh"
+    GET_MESH_SERVICE = "fault_detector/get_sensor_mesh"
 
     def __init__(self, node, controller):
         self.node = node
@@ -78,6 +79,12 @@ class SensorRegistryApi:
             self._handle_upload_mesh,
             callback_group=self._callback_group,
         )
+        self._get_mesh_service = node.create_service(
+            GetSensorMesh,
+            self.GET_MESH_SERVICE,
+            self._handle_get_mesh,
+            callback_group=self._callback_group,
+        )
         definitions = controller.definitions()
         self._broadcast_definitions(definitions)
         self._publish_definitions(definitions)
@@ -96,6 +103,27 @@ class SensorRegistryApi:
                 return response
         response.success = True
         response.message = "Mesh stored" if response.complete else "Chunk received"
+        return response
+
+    def _handle_get_mesh(self, request, response):
+        with self._lock:
+            try:
+                data = self.controller.read_collision_chunk(
+                    request.sha256, request.byte_count, request.offset,
+                )
+            except Exception as exception:
+                response.success = False
+                response.complete = False
+                response.data = b""
+                response.message = (
+                    str(exception) if isinstance(exception, ValueError)
+                    else "Collision mesh asset could not be read"
+                )
+                return response
+        response.success = True
+        response.complete = request.offset + len(data) == request.byte_count
+        response.data = data
+        response.message = "Mesh complete" if response.complete else "Mesh chunk"
         return response
 
     def _handle_add_sensor(self, request, response):
@@ -279,6 +307,7 @@ class SensorRegistryApi:
         self.node.destroy_service(self._update_service)
         self.node.destroy_service(self._delete_service)
         self.node.destroy_service(self._upload_mesh_service)
+        self.node.destroy_service(self._get_mesh_service)
         self.node.destroy_publisher(self._publisher)
 
 

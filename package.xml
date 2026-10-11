@@ -32,6 +32,7 @@
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>shape_msgs</exec_depend>
   <exec_depend>spot_moveit_config</exec_depend>
+  <exec_depend>spot_description</exec_depend>
   <exec_depend>micro_ros_agent</exec_depend>
   <exec_depend>py_trees</exec_depend>
   <exec_depend>py_trees_ros</exec_depend>

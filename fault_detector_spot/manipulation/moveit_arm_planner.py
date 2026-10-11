@@ -41,6 +41,9 @@ DEFAULT_CARTESIAN_MAX_STEP_M = 0.002
 DEFAULT_CARTESIAN_JUMP_THRESHOLD = 2.0
 DEFAULT_CARTESIAN_MIN_FRACTION = 0.999
 MIN_ARM_SH1_RAD = math.radians(-178.0)
+_READ_ONLY_PHASES = frozenset({
+    "read_scene", "verify_scene", "head_attachment", "head_model", "head_mesh", "head_verify",
+})
 
 class MoveItPlanOutcome(Enum):
     RUNNING = "running"
@@ -168,12 +171,32 @@ class MoveItArmPlanner:
         self._collision_scene = collision_scene
         self._pending_target = None
         self._pending_mode = None
+        self._queued_plan = None
         self._discarded_future = None
         self._blocked_reason = None
+        self._completed_plan = None
 
     @property
     def active(self) -> bool:
         return self._future is not None
+
+    @property
+    def scene_sync_active(self) -> bool:
+        """Whether idle synchronization still owns polling of the current request."""
+        return (self.active and self._pending_mode == "scene_sync"
+                and self._queued_plan is None)
+
+    def start_scene_sync(self) -> MoveItPlanUpdate:
+        """Update and verify the collision scene without requesting a trajectory."""
+        error = self._request_error()
+        if error is not None:
+            return error
+        if self._collision_scene is None:
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.ERROR, "MoveIt collision scene is unavailable"
+            )
+        self._pending_mode = "scene_sync"
+        return self._prepare_scene(False)
 
     def start(self, target_hand: PoseStamped, *,
               ignore_environment_collisions: bool = False) -> MoveItPlanUpdate:
@@ -184,15 +207,23 @@ class MoveItArmPlanner:
         return self._start(target_hand, "cartesian", ignore_environment_collisions)
 
     def _start(self, target_hand, mode, ignore_environment_collisions):
-        error = self._target_error(target_hand)
+        error = self._target_error(target_hand, allow_scene_sync=True)
         if error is not None:
             return error
         if type(ignore_environment_collisions) is not bool:
             return MoveItPlanUpdate(MoveItPlanOutcome.ERROR, "Collision bypass must be a boolean")
+        if self.scene_sync_active:
+            self._queued_plan = (deepcopy(target_hand), mode, ignore_environment_collisions)
+            return MoveItPlanUpdate(
+                MoveItPlanOutcome.RUNNING, "Waiting for collision scene synchronization"
+            )
         self._pending_target = deepcopy(target_hand)
         self._pending_mode = mode
         if self._collision_scene is None:
             return self._submit_plan()
+        return self._prepare_scene(ignore_environment_collisions)
+
+    def _prepare_scene(self, ignore_environment_collisions):
         try:
             phase, client, request = self._collision_scene.prepare(
                 ignore_environment_collisions
@@ -302,13 +333,15 @@ class MoveItArmPlanner:
                 ),
             )
 
-        if mode in ("read_scene", "apply"):
+        if mode not in ("motion", "cartesian"):
             try:
-                if mode == "read_scene":
-                    phase, client, request = self._collision_scene.apply_request(response)
-                    return self._submit(phase, client, request)
-                if mode == "apply" and not response.success:
-                    raise RuntimeError("MoveIt rejected the collision policy")
+                next_request = self._collision_scene.advance(mode, response)
+                if next_request is not None:
+                    return self._submit(*next_request)
+                if self._completed_plan is not None:
+                    return self._finish_plan(*self._completed_plan)
+                if self._pending_mode == "scene_sync":
+                    return self._finish_scene_sync()
                 return self._submit_plan()
             except Exception as exception:
                 self._reset()
@@ -316,6 +349,27 @@ class MoveItArmPlanner:
                     MoveItPlanOutcome.FAILURE, f"Collision policy preparation failed: {exception}"
                 )
 
+        if self._collision_scene is not None:
+            next_request = self._collision_scene.verification_request()
+            if next_request is not None:
+                self._completed_plan = (mode, response)
+                return self._submit(*next_request)
+        return self._finish_plan(mode, response)
+
+    def _finish_scene_sync(self):
+        error = self.validate_prepared_scene()
+        queued_plan = self._queued_plan
+        self._reset()
+        if error is not None:
+            return MoveItPlanUpdate(MoveItPlanOutcome.FAILURE, error)
+        if queued_plan is not None:
+            # A command owns its own fresh preflight, including its bypass flag.
+            return self._start(*queued_plan)
+        return MoveItPlanUpdate(
+            MoveItPlanOutcome.SUCCESS, "MoveIt collision scene synchronized"
+        )
+
+    def _finish_plan(self, mode, response):
         error = self.validate_prepared_scene()
         self._reset()
         if error is not None:
@@ -330,7 +384,7 @@ class MoveItArmPlanner:
         self._reset()
         if future is not None:
             if (self._collision_scene is not None
-                    and phase != "read_scene"):
+                    and phase not in _READ_ONLY_PHASES):
                 # ROS services cannot cancel server work. Even a completed
                 # exceptional response must be inspected before another request.
                 self._discarded_future = future
@@ -344,7 +398,7 @@ class MoveItArmPlanner:
 
     def _block_uncertain_request(self, phase):
         if (self._collision_scene is not None
-                and phase != "read_scene"):
+                and phase not in _READ_ONLY_PHASES):
             self._blocked_reason = (
                 f"MoveIt {phase} server completion is unknown; "
                 "restart the application and MoveIt before further arm plans"
@@ -361,7 +415,7 @@ class MoveItArmPlanner:
         if self._collision_scene is not None:
             self._collision_scene.destroy()
 
-    def _target_error(self, target_hand: PoseStamped):
+    def _request_error(self, *, allow_scene_sync=False):
         if self._discarded_future is not None:
             if not self._discarded_future.done():
                 return MoveItPlanUpdate(
@@ -377,11 +431,17 @@ class MoveItArmPlanner:
             self._discarded_future = None
         if self._blocked_reason is not None:
             return MoveItPlanUpdate(MoveItPlanOutcome.ERROR, self._blocked_reason)
-        if self.active:
+        if self.active and not (allow_scene_sync and self.scene_sync_active):
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
                 "Another MoveIt arm plan is already active",
             )
+        return None
+
+    def _target_error(self, target_hand: PoseStamped, *, allow_scene_sync=False):
+        error = self._request_error(allow_scene_sync=allow_scene_sync)
+        if error is not None:
+            return error
         if not isinstance(target_hand, PoseStamped):
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.ERROR,
@@ -689,6 +749,8 @@ class MoveItArmPlanner:
         self._planning_mode = None
         self._pending_target = None
         self._pending_mode = None
+        self._queued_plan = None
+        self._completed_plan = None
 
     @staticmethod
     def _positive(value, label: str) -> float:

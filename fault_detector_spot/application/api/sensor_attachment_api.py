@@ -3,6 +3,7 @@
 from fault_detector_msgs.msg import SensorAttachmentState as StateMessage
 from fault_detector_msgs.srv import (
     ConfirmSensorAttachment,
+    GetSensorAttachment,
     SelectSensorAttachment,
 )
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -11,6 +12,9 @@ from fault_detector_spot.application.controllers.sensor_attachment_controller im
     SensorAttachmentStatus,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
+from fault_detector_spot.shared.ros.sensor_geometry_adapter import (
+    head_geometry_to_messages,
+)
 
 
 class SensorAttachmentApi:
@@ -19,6 +23,7 @@ class SensorAttachmentApi:
     STATE_TOPIC = "fault_detector/application/sensor_attachment_state"
     SELECT_SERVICE = "fault_detector/application/select_sensor_attachment"
     CONFIRM_SERVICE = "fault_detector/application/confirm_sensor_attachment"
+    GET_SERVICE = "fault_detector/application/get_sensor_attachment"
 
     def __init__(self, node, controller):
         self.node = node
@@ -39,6 +44,12 @@ class SensorAttachmentApi:
             ConfirmSensorAttachment,
             self.CONFIRM_SERVICE,
             self._confirm,
+            callback_group=self._callback_group,
+        )
+        self._read_service = node.create_service(
+            GetSensorAttachment,
+            self.GET_SERVICE,
+            self._read,
             callback_group=self._callback_group,
         )
         self.publish_state(controller.snapshot())
@@ -93,6 +104,24 @@ class SensorAttachmentApi:
         response.state = self.publish_state(state)
         return response
 
+    def _read(self, request, response):
+        """Return one authoritative collision snapshot without changing state."""
+        try:
+            state, attachment = self.controller.planning_attachment()
+            response.head_geometry = head_geometry_to_messages(
+                attachment.head_geometry
+            )
+        except Exception as exception:
+            response.success = False
+            response.detail = str(exception)
+            response.state = self._message(self.controller.snapshot())
+            response.head_geometry = []
+            return response
+        response.success = True
+        response.detail = "Confirmed attachment geometry"
+        response.state = self._message(state)
+        return response
+
     @staticmethod
     def _message(state) -> StateMessage:
         message = StateMessage()
@@ -113,6 +142,7 @@ class SensorAttachmentApi:
         """Destroy sensor attachment ROS resources."""
         self.node.destroy_service(self._select_service)
         self.node.destroy_service(self._confirm_service)
+        self.node.destroy_service(self._read_service)
         self.node.destroy_publisher(self._publisher)
 
 

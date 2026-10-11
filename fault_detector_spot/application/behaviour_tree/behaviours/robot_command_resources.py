@@ -40,6 +40,8 @@ from fault_detector_spot.manipulation.moveit_arm_planner import (
 from fault_detector_spot.manipulation.moveit_collision_scene import (
     MoveItCollisionScene,
 )
+from fault_detector_spot.manipulation.moveit_sensor_head import MoveItSensorHead
+from fault_detector_spot.manipulation.moveit_scene_refresh import MoveItSceneRefresh
 from fault_detector_spot.manipulation.arm_collision_control import ArmCollisionControl
 from fault_detector_spot.manipulation.arm_motion_parameters import (
     ArmMotionParameters,
@@ -82,6 +84,7 @@ class RobotCommandResources:
         self._posture_state_source = None
         self._arm_motion_speed_policy = None
         self._moveit_arm_planner = None
+        self._moveit_scene_refresh = None
         self._arm_collision_control = None
         self._arm_movement_executors = {}
         self._base_movement_executors = {}
@@ -171,8 +174,10 @@ class RobotCommandResources:
             self._bind_node(node)
             if self._moveit_arm_planner is None:
                 config = ArmMotionParameters(node)
+                sensor_head = MoveItSensorHead(node)
                 collision_scene = MoveItCollisionScene(
                     node, self.get_arm_collision_control(node),
+                    sensor_head=sensor_head,
                 )
                 self._moveit_arm_planner = MoveItArmPlanner(
                     node,
@@ -187,7 +192,14 @@ class RobotCommandResources:
                     ),
                     collision_scene=collision_scene,
                 )
+                self._moveit_scene_refresh = MoveItSceneRefresh(
+                    node, self._moveit_arm_planner, sensor_head, self._arm_motion_idle,
+                )
             return self._moveit_arm_planner
+
+    def _arm_motion_idle(self):
+        with self._lock:
+            return not any(executor.active for executor in self._arm_movement_executors.values())
 
     def get_arm_movement_executor(
         self,
@@ -338,6 +350,7 @@ class RobotCommandResources:
             probe_surface_source = self._probe_surface_source
             posture_state_source = self._posture_state_source
             moveit_arm_planner = self._moveit_arm_planner
+            moveit_scene_refresh = self._moveit_scene_refresh
             arm_collision_control = self._arm_collision_control
             arm_executors = tuple(
                 self._arm_movement_executors.values()
@@ -356,6 +369,7 @@ class RobotCommandResources:
             self._posture_state_source = None
             self._arm_motion_speed_policy = None
             self._moveit_arm_planner = None
+            self._moveit_scene_refresh = None
             self._arm_collision_control = None
             self._arm_movement_executors.clear()
             self._base_movement_executors.clear()
@@ -363,6 +377,8 @@ class RobotCommandResources:
             self._node = None
 
         resources = []
+        if moveit_scene_refresh is not None:
+            resources.append(("MoveIt scene refresh", moveit_scene_refresh.destroy))
         if waypoint_executor is not None:
             resources.append(("waypoint executor", waypoint_executor.shutdown))
         resources.extend(

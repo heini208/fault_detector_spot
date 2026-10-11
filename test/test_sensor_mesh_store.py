@@ -198,3 +198,42 @@ def test_failed_publish_discards_partial_without_creating_asset(
         store.store_chunk(digest, len(mesh), 0, mesh)
 
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("offset", (-1, True, 284, 285))
+def test_download_rejects_invalid_offsets(tmp_path, mesh, offset):
+    store = SensorMeshStore(tmp_path)
+    digest = geometry_for(mesh).collision_sha256
+    store.store_chunk(digest, len(mesh), 0, mesh)
+
+    with pytest.raises(ValueError, match="offset"):
+        store.read_chunk(digest, len(mesh), offset)
+
+
+def test_download_rejects_partial_upload(tmp_path, mesh):
+    store = SensorMeshStore(tmp_path)
+    digest = geometry_for(mesh).collision_sha256
+    store.store_chunk(digest, len(mesh), 0, mesh[:100])
+
+    with pytest.raises(FileNotFoundError):
+        store.read_chunk(digest, len(mesh), 0)
+
+
+def test_download_checks_integrity_without_repeating_mesh_geometry_validation(
+    tmp_path, mesh, monkeypatch,
+):
+    store = SensorMeshStore(tmp_path)
+    digest = geometry_for(mesh).collision_sha256
+    store.store_chunk(digest, len(mesh), 0, mesh)
+
+    def fail_validation(*_args):
+        pytest.fail("Downloading a published asset must not revalidate its geometry")
+
+    monkeypatch.setattr(
+        "fault_detector_spot.inspection.repository.sensor_mesh_store.validate_collision_mesh",
+        fail_validation,
+    )
+    assert store.read_chunk(digest, len(mesh), 10) == mesh[10:]
+    (tmp_path / f"{digest}.stl").write_bytes(b"x" + mesh[1:])
+    with pytest.raises(ValueError, match="checksum"):
+        store.read_chunk(digest, len(mesh), 10)

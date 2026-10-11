@@ -48,6 +48,14 @@ class SensorRegistryController:
             sha256, byte_count, offset, data,
         )
 
+    def read_collision_chunk(
+        self, sha256: str, byte_count: int, offset: int,
+    ) -> bytes:
+        """Read immutable collision data without changing an attachment."""
+        return self.sensor_repository.read_collision_chunk(
+            sha256, byte_count, offset,
+        )
+
     def create(self, definition: SensorDefinition) -> SensorDefinition:
         """Create one definition while the physical command lane is idle."""
         return self._mutate(

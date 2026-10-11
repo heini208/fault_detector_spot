@@ -67,6 +67,7 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
 
         self.nav2_runtime = self.rtabmap_runtime.nav2_runtime
         collision_control = self.robot_command_resources.get_arm_collision_control(self.node)
+        self.robot_command_resources.get_moveit_arm_planner(self.node)
         self.lidar_adapter_runtime = LidarAdapterRuntime(
             self.node, self.bb_client, self.rtabmap_runtime, collision_control,
         )

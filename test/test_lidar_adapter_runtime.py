@@ -345,6 +345,7 @@ def test_helper_shares_consumers_and_routes_only_managed_mapping_to_corrected_cl
     )
     helper = helper_module.HelperInitializer("test", node)
     assert helper.setup(timeout=1)
+    helper.robot_command_resources.get_moveit_arm_planner.assert_called_once_with(node)
     assert helper_module.RtabmapRuntimeManager.call_args.kwargs["raw_lidar_topic"] == "/velodyne/points_sensor"
     helper_module.LidarAdapterRuntime.assert_called_once_with(
         node, helper.bb_client, helper.rtabmap_runtime,

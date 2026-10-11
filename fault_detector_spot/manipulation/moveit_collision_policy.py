@@ -54,3 +54,31 @@ def occupancy_collision_matrix(matrix, *, ignore_environment_collisions):
     result.default_entry_names = list(defaults)
     result.default_entry_values = list(defaults.values())
     return result
+
+
+def sensor_head_collision_matrix(matrix, object_id, *, ignore_environment_collisions):
+    """Check the owned head against everything except its explicit touch links.
+
+    MoveIt handles touch_links on the attachment itself. Clear stale ACM grants
+    for this object only, and include it in the existing occupancy preference.
+    """
+    result = occupancy_collision_matrix(
+        matrix, ignore_environment_collisions=ignore_environment_collisions,
+    )
+    names = list(result.entry_names)
+    if object_id not in names:
+        for row in result.entry_values:
+            row.enabled.append(False)
+        names.append(object_id)
+        result.entry_names = names
+        result.entry_values.append(AllowedCollisionEntry(enabled=[False] * len(names)))
+    index = names.index(object_id)
+    for other, name in enumerate(names):
+        allowed = name == OCTOMAP_OBJECT_ID and ignore_environment_collisions
+        result.entry_values[index].enabled[other] = allowed
+        result.entry_values[other].enabled[index] = allowed
+    defaults = dict(zip(result.default_entry_names, result.default_entry_values))
+    defaults[object_id] = False
+    result.default_entry_names = list(defaults)
+    result.default_entry_values = list(defaults.values())
+    return result

@@ -196,9 +196,38 @@ consistently wound binary STL meshes of at most 200,000 triangles and 32 MiB.
 
 The small indicator below the import button is red for no geometry, amber for
 imported geometry awaiting save, and green when opening a mount with saved
-geometry. MoveIt attachment and collision-scene integration are still pending.
-After this interface change, rebuild `fault_detector_msgs` and
-`fault_detector_spot` on both the UI and backend installations before use.
+geometry. This indicator describes storage, not physical installation or MoveIt
+synchronization. Select and confirm the physically installed mount as usual.
+
+Before every MoveIt arm plan, the backend obtains the confirmed attachment,
+fetches its saved mesh through bounded `GetSensorMesh` reads, and installs one
+owned attached collision object, `fault_detector_sensor_head`. The exported
+`hand_to_geometry` placement is applied once; the existing sensor-tip TF remains
+independent. Missing geometry, pending confirmation, an incompatible robot model,
+or a failed scene update blocks planning. Legacy mounts need a saved `.sensorhead`
+package before they can be used for MoveIt arm motion.
+
+The supported MoveIt model removes only the three forward stock-jaw collision
+meshes (`front_jaw`, `middle_jaw`, `jaw_tooth`) and adds a fixed `sensor_head_slot`
+at the `hand` origin. It retains the original wrist, rear housing and moving
+finger. Confirmed **No sensor** restores those three stock meshes as the same
+owned attachment. The retained rear housing is conservative where a physical
+mount replaces more of the stock jaw.
+
+RViz's **MoveIt collision scene** display in `config/arm_collision.rviz` shows
+the installed attachment in green after confirming the physical mount. The BT
+runtime refreshes and verifies the scene while the arm is idle; no movement
+request is needed. Importing and saving alone do not confirm an installation.
+The application API, BT runtime, and MoveIt must be running: RViz itself does not
+read the sensor registry. A movement requested during a refresh safely takes over
+the existing sequence, then performs its own complete planning checks.
+Use the planning-scene collision display; a plain RobotModel visual display still
+shows the original driver visuals.
+
+This requires the one-time jaw-slot model change in `spot_moveit_config`, and a
+rebuild of `fault_detector_msgs`, `fault_detector_spot`, and `spot_moveit_config`
+before the next authorized application startup. The UI and backend must use
+matching generated interfaces. Local offline tests do not deploy these changes.
 
 Each mount definition also owns zero or more generic acquisition channels. A
 channel has a stable channel ID and an explicit source kind. ROS-topic channels
@@ -351,14 +380,22 @@ processes from before the update: `GetCartesianPath` changed in `moveit_msgs`
 2.2.3. Its added scaling fields keep their defaults; the executor continues to
 control the requested movement duration.
 
-Before each arm plan, the planner reads only MoveIt's Allowed Collision Matrix
-and applies the requested occupancy policy. Disabled or explicitly bypassed
-movements ignore the `<octomap>` object; enabled movements check it. Occupancy
-itself is neither cleared nor replaced. Self-collision rules, explicit collision
-objects, attached geometry, target tolerances, trajectory validation, and the
-contact guard are unchanged. Cartesian requests retain `avoid_collisions=True`.
-The policy preparation uses two asynchronous MoveIt service calls; it no longer
-fetches or converts a map.
+Before each arm plan, the planner reads the confirmed attachment and MoveIt's
+robot description, then applies the head geometry and occupancy policy in one
+scene diff. Disabled or explicitly bypassed movements ignore the `<octomap>`
+object; enabled movements check it, including the installed sensor head. The
+OctoMap itself is neither cleared nor replaced. Explicit world objects and
+self-collision checking remain in force. Custom heads may touch only the hand
+and its mounting wrist link; stock jaws retain the original adjacency allowances.
+Cartesian requests retain `avoid_collisions=True`.
+
+The planner verifies the applied mesh, placement, contact links, and collision
+policy by reading the scene back. It repeats that verification after planning,
+then queries the authoritative attachment again before accepting the trajectory.
+The existing command/reservation guards prevent attachment changes while commands
+are active or queued. Remote asset transfer is keyed by checksum, never a shared
+filesystem path. Validated geometry is cached; scene synchronization still runs
+for every plan, including after a MoveIt restart.
 
 The checkbox **Ignore environmental obstacles for next basic arm movement**
 applies to one submitted basic arm action, then clears immediately, including

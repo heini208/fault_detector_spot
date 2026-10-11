@@ -26,6 +26,11 @@ import launch_ros.actions.node as node_actions
 import pytest
 import yaml
 
+from fault_detector_spot.manipulation.sensor_head_geometry import (
+    stock_head_attachment,
+    validate_sensor_head_model,
+)
+
 
 ROOT = Path(__file__).parents[1]
 SENSORS = ROOT / "config/moveit_sensors.yaml"
@@ -36,7 +41,7 @@ def expand_configuration(entity, context):
         children = entity.entities
     else:
         assert isinstance(entity, (
-            GroupAction, IncludeLaunchDescription, Node, SetParameter,
+            DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, Node, SetParameter,
             SetParametersFromFile, PushEnvironment, PopEnvironment,
             PushLaunchConfigurations, PopLaunchConfigurations,
         )), f"Unexpected launch action: {type(entity)}"
@@ -169,6 +174,49 @@ def test_sensors_are_scoped_to_original_move_group_without_changing_its_config(
     assert SENSORS not in paths
     assert not any("use_sim_time:=" in argument for argument in command)
     assert next(iter(documents[0].values()))["ros__parameters"] == {"own_parameter": 1}
+
+
+def test_real_move_group_launch_uses_the_supported_sensor_jaw_slot(launch_parameters):
+    _, original, captured, _, _ = launch_parameters
+    launch = IncludeLaunchDescription(PythonLaunchDescriptionSource(
+        str(original / "launch/move_group.launch.py"),
+    ))
+    expand_configuration(launch, LaunchContext())
+    parameters = next(iter(captured[0][2][0].values()))["ros__parameters"]
+    description = parameters["robot_description"]
+
+    validate_sensor_head_model(description)
+    stock = stock_head_attachment(description)
+
+    assert stock.link_name == "sensor_head_slot"
+    assert len(stock.object.meshes) == 3
+
+
+def test_standalone_demo_keeps_stock_jaw_collision_geometry_in_every_node(launch_parameters):
+    _, original, captured, _, _ = launch_parameters
+    launch = IncludeLaunchDescription(PythonLaunchDescriptionSource(
+        str(original / "launch/demo.launch.py"),
+    ))
+    context = LaunchContext()
+    context.launch_configurations["rviz"] = "true"
+    expand_configuration(launch, context)
+    descriptions = [
+        next(iter(documents[0].values()))["ros__parameters"]["robot_description"]
+        for _, _, documents in captured
+    ]
+
+    assert len(descriptions) == 4
+    assert len(set(descriptions)) == 1
+    model = ET.fromstring(descriptions[0])
+    wrist = model.find("link[@name='arm_link_wr1']")
+    meshes = [mesh.get("filename").rsplit("/", 1)[-1]
+              for mesh in wrist.findall("collision/geometry/mesh")]
+    assert sorted(meshes) == sorted((
+        "arm_link_wr1.obj", "front_jaw.obj", "middle_jaw.obj", "jaw_tooth.obj",
+    ))
+    assert model.find("link[@name='sensor_head_slot']") is not None
+    with pytest.raises(ValueError, match="does not support"):
+        validate_sensor_head_model(descriptions[0])
 
 
 @pytest.mark.parametrize("missing", ["plugin", "joint", "type", "parent_frame", "child_link"])

@@ -32,6 +32,13 @@ _AUTOMATIC_SENSOR_COMMANDS = frozenset({
     CommandID.ORIENT_TO_TAG,
 })
 
+_PLANNED_ARM_COMMANDS = _AUTOMATIC_SENSOR_COMMANDS | {
+    CommandID.MOVE_ARM_RELATIVE,
+    CommandID.MOVE_SAFE_APPROACH,
+    CommandID.ADJUST_SAFE_APPROACH,
+    CommandID.MOVE_CLOSE_TO_SURFACE,
+}
+
 
 class SensorAttachmentStatus(str, Enum):
     """Describe authoritative physical sensor attachment state."""
@@ -206,6 +213,19 @@ class SensorAttachmentController:
         with self._lock:
             return self._motion_attachment_locked()
 
+    def planning_attachment(
+        self,
+    ) -> tuple[SensorAttachmentState, MotionAttachmentSnapshot]:
+        """Read confirmed state and collision geometry in one locked snapshot."""
+        with self._lock:
+            attachment = self._motion_attachment_locked()
+            if attachment.has_sensor and attachment.head_geometry is None:
+                raise RuntimeError(
+                    f"Sensor '{attachment.sensor_id}' has no collision geometry. "
+                    "Import and save a sensorhead file before planning arm motion."
+                )
+            return self._state, attachment
+
     def require_confirmed_sensor(
         self,
         expected_sensor_id: str = "",
@@ -301,11 +321,16 @@ class SensorAttachmentController:
         requires_automatic_binding = (
             command.command_id in _AUTOMATIC_SENSOR_COMMANDS
         )
-        if not requires_automatic_binding and not command.motion_sensor_id:
+        if (
+            command.command_id not in _PLANNED_ARM_COMMANDS
+            and not command.motion_sensor_id
+        ):
             return request
 
         with self._lock:
             attachment = self._motion_attachment_locked()
+            if not requires_automatic_binding and not command.motion_sensor_id:
+                return request
             motion_sensor_id = attachment.motion_sensor_id
             if (
                 command.motion_sensor_id

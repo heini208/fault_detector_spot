@@ -410,6 +410,32 @@ def test_move_to_tag_requires_then_uses_confirmed_bare_hand(tmp_path, command_id
     assert accepted[0].command.motion_sensor_id == BARE_HAND_MOTION_ID
 
 
+@pytest.mark.parametrize("command_id", (
+    CommandID.MOVE_ARM_RELATIVE,
+    CommandID.MOVE_SAFE_APPROACH,
+    CommandID.ADJUST_SAFE_APPROACH,
+    CommandID.MOVE_CLOSE_TO_SURFACE,
+))
+def test_planned_arm_commands_require_confirmation_without_rebinding_target(
+    tmp_path, command_id,
+):
+    controller, _, _, commands = build_controller(tmp_path)
+    commands.add_request_preparer(controller.prepare_request)
+    request = CommandRequest.create(
+        command=SemanticCommand(command_id=command_id), client_id="test",
+        origin=CommandOrigin.SYSTEM, recording_policy=RecordingPolicy.EXCLUDE,
+    )
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        commands.submit(request)
+    controller.confirm_sensor("", controller.snapshot().attachment_revision)
+    accepted = []
+    commands.add_accepted_listener(accepted.append)
+
+    commands.submit(request)
+
+    assert accepted[0].command.motion_sensor_id == ""
+
+
 def test_explicit_stale_motion_attachment_is_rejected(tmp_path):
     controller, repository, _, command_controller = build_controller(
         tmp_path
