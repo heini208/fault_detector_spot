@@ -6,6 +6,7 @@ from fault_detector_spot.inspection.model.sensor_models import (
     rpy_degrees_from_quaternion,
 )
 from fault_detector_spot.inspection.repository.sensor_head_import import (
+    has_sensor_head_collision_geometry,
     load_sensor_head_transform,
 )
 
@@ -27,10 +28,12 @@ def import_sensor_head_transform(controls) -> None:
     try:
         pose = load_sensor_head_transform(paths[0])
         rotation = rpy_degrees_from_quaternion(pose.orientation)
+        has_geometry = has_sensor_head_collision_geometry(paths[0])
     except (OSError, ValueError) as exception:
         controls.transform_status_value.setText(f"Import failed: {exception}")
         return
     controls.apply_imported_transform(
         (pose.position.x, pose.position.y, pose.position.z),
         rotation,
+        has_geometry,
     )

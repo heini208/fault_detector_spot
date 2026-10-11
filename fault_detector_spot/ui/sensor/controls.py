@@ -249,6 +249,15 @@ class SensorControls(QWidget):
         )
         form.addRow(self.import_mount_button)
 
+        self.collision_geometry_status = QLabel()
+        self.collision_geometry_status.setWordWrap(True)
+        self.set_collision_geometry_available(False)
+        self.collision_geometry_status.setToolTip(
+            "Shows geometry found in the selected file. Collision geometry "
+            "is not yet saved to the mount or used for path planning."
+        )
+        form.addRow(self.collision_geometry_status)
+
         translation = self._vector_fields(
             ("X", "Y", "Z"),
             "m",
@@ -557,6 +566,7 @@ class SensorControls(QWidget):
         ):
             field.setText(self._format_number(value))
         self._set_channel_rows(definition.channels)
+        self.set_collision_geometry_available(False)
         self.transform_status_value.setText(
             "Editing manual transform. Saving overwrites this sensor."
         )
@@ -564,7 +574,21 @@ class SensorControls(QWidget):
         self._refresh_save_availability()
         self._refresh_detected_mount_actions()
 
-    def apply_imported_transform(self, translation_m, rotation_degrees) -> None:
+    def set_collision_geometry_available(self, available: bool) -> None:
+        """Show collision mesh presence in the current form's imported file."""
+        self.collision_geometry_status.setText(
+            "● Collision geometry found in imported file"
+            if available
+            else "● No collision geometry imported"
+        )
+        color = "#2e7d32" if available else "#c62828"
+        self.collision_geometry_status.setStyleSheet(
+            f"color: {color}; font-size: 12px;"
+        )
+
+    def apply_imported_transform(
+        self, translation_m, rotation_degrees, has_collision_geometry=False,
+    ) -> None:
         """Fill the editable transform without saving the sensor definition."""
         if not self.import_mount_button.isEnabled():
             return
@@ -574,6 +598,7 @@ class SensorControls(QWidget):
         ):
             field.setText(self._format_number(value))
             field.setCursorPosition(0)
+        self.set_collision_geometry_available(has_collision_geometry)
         self.transform_status_value.setText(
             "Sensor-tip transform imported. Review the values, then save."
         )
@@ -591,6 +616,7 @@ class SensorControls(QWidget):
         ):
             field.setText("0.0")
         self._set_channel_rows((_DEFAULT_GEOMETRY_CHANNEL,))
+        self.set_collision_geometry_available(False)
         self._set_transform_fields_editable(True)
         self._set_channel_fields_editable(True)
         self.save_mount_button.setEnabled(True)

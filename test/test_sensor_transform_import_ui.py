@@ -1,7 +1,9 @@
 """Offline coverage of the file-picker-to-editable-transform workflow."""
 
 import json
+import hashlib
 import os
+import struct
 from types import SimpleNamespace
 from zipfile import ZipFile
 
@@ -58,6 +60,24 @@ def package(tmp_path):
     with ZipFile(path, "w") as archive:
         archive.writestr("manifest.json", json.dumps(manifest))
     return path
+
+
+@pytest.fixture
+def package_with_geometry(package):
+    with ZipFile(package) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    mesh = b"\0" * 80 + struct.pack("<I", 1) + struct.pack(
+        "<12fH", 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,
+    )
+    manifest["collision_mesh"] = {
+        "path": "collision.stl",
+        "byte_count": len(mesh),
+        "sha256": hashlib.sha256(mesh).hexdigest(),
+    }
+    with ZipFile(package, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.writestr("collision.stl", mesh)
+    return package
 
 
 def select_file(monkeypatch, path, accepted=True, during_dialog=None):
@@ -118,6 +138,8 @@ def test_unsuccessful_import_preserves_existing_values(
 ):
     controls.translation_fields[0].setText("0.1234")
     controls.rotation_fields[2].setText("45.0")
+    controls.set_collision_geometry_available(True)
+    geometry_before = controls.collision_geometry_status.text()
     before = field_values(controls)
     status_before = controls.transform_status_value.text()
     path = tmp_path / "invalid.zip"
@@ -128,6 +150,7 @@ def test_unsuccessful_import_preserves_existing_values(
     controls.import_mount_button.click()
 
     assert field_values(controls) == before
+    assert controls.collision_geometry_status.text() == geometry_before
     if outcome == "cancel":
         assert controls.transform_status_value.text() == status_before
     else:
@@ -179,3 +202,55 @@ def test_discard_resets_imported_transform(controls, package, monkeypatch):
 
     assert tuple(float(value) for value in field_values(controls)) == (0.0,) * 6
     assert controls.import_mount_button.isEnabled()
+
+
+def test_geometry_indicator_tracks_import_and_discard(
+    controls, package_with_geometry, monkeypatch,
+):
+    assert "No collision geometry" in controls.collision_geometry_status.text()
+    assert "#c62828" in controls.collision_geometry_status.styleSheet()
+    select_file(monkeypatch, package_with_geometry)
+
+    controls.import_mount_button.click()
+
+    assert "found in imported file" in controls.collision_geometry_status.text()
+    assert "#2e7d32" in controls.collision_geometry_status.styleSheet()
+    controls.mark_sensor_save_pending()
+    controls.finish_sensor_save(False, "Save failed")
+    assert "found in imported file" in controls.collision_geometry_status.text()
+
+    controls.discard_mount_button.click()
+
+    assert "No collision geometry" in controls.collision_geometry_status.text()
+    assert "#c62828" in controls.collision_geometry_status.styleSheet()
+
+
+def test_transform_only_import_clears_previous_geometry_indicator(
+    controls, package, monkeypatch,
+):
+    controls.set_collision_geometry_available(True)
+    select_file(monkeypatch, package)
+
+    controls.import_mount_button.click()
+
+    assert "No collision geometry" in controls.collision_geometry_status.text()
+    assert float(controls.translation_fields[0].text()) == pytest.approx(
+        0.046238241757377466
+    )
+
+
+def test_opening_saved_mount_clears_draft_geometry_status(controls):
+    controls.apply_definitions((SimpleNamespace(
+        sensor_id="saved", display_name="Saved mount", probe_frame="saved_probe",
+        position=(0.1, 0.2, 0.3), rotation_degrees=(0.0, 0.0, 0.0), channels=(),
+    ),))
+    controls.apply_attachment_state(SimpleNamespace(
+        selected_sensor_id="", status="active",
+    ))
+    controls.set_collision_geometry_available(True)
+    controls.mount_table.selectRow(0)
+
+    controls.edit_selected_sensor()
+
+    assert controls.mount_id_field.text() == "saved"
+    assert "No collision geometry" in controls.collision_geometry_status.text()

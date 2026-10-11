@@ -1,8 +1,11 @@
 """Read the hand-to-probe transform from a mount creator archive."""
 
+import hashlib
 import json
 import math
 from pathlib import Path
+import stat
+import struct
 from typing import Union
 import zipfile
 import zlib
@@ -18,6 +21,7 @@ MAX_FILE_BYTES = 32 * 1024 * 1024
 MAX_EXPANDED_BYTES = 128 * 1024 * 1024
 MAX_ENTRIES = 256
 MAX_MANIFEST_BYTES = 64 * 1024
+MAX_MESH_TRIANGLES = 200_000
 
 
 def _read_manifest(archive: zipfile.ZipFile) -> dict:
@@ -95,3 +99,78 @@ def load_sensor_head_transform(path: Union[str, Path]) -> PoseData:
         zlib.error,
     ) as error:
         raise ValueError(f"Invalid sensor-head archive: {error}") from error
+
+
+def _has_collision_mesh(archive: zipfile.ZipFile, manifest: dict) -> bool:
+    asset = manifest.get("collision_mesh")
+    if not isinstance(asset, dict):
+        return False
+    name = asset.get("path")
+    size = asset.get("byte_count")
+    checksum = asset.get("sha256")
+    if (
+        not isinstance(name, str)
+        or "\\" in name or ":" in name
+        or any(part in ("", ".", "..") for part in name.split("/"))
+        or type(size) is not int or not 0 < size <= MAX_FILE_BYTES
+        or not isinstance(checksum, str)
+    ):
+        return False
+    entry = archive.getinfo(name)
+    file_type = stat.S_IFMT(entry.external_attr >> 16)
+    if (
+        entry.is_dir() or file_type not in (0, stat.S_IFREG)
+        or entry.flag_bits & 1 or entry.file_size != size
+    ):
+        return False
+    with archive.open(entry) as stream:
+        data = stream.read(MAX_FILE_BYTES + 1)
+    if len(data) != size or hashlib.sha256(data).hexdigest() != checksum:
+        return False
+    if len(data) < 84:
+        return False
+    triangle_count = struct.unpack_from("<I", data, 80)[0]
+    if (
+        not 1 <= triangle_count <= MAX_MESH_TRIANGLES
+        or len(data) != 84 + 50 * triangle_count
+    ):
+        return False
+    return all(
+        math.isfinite(value)
+        for triangle in struct.iter_unpack("<12fH", memoryview(data)[84:])
+        for value in triangle[:12]
+    )
+
+
+def has_sensor_head_collision_geometry(path: Union[str, Path]) -> bool:
+    """Check for a placed binary STL without importing or saving geometry.
+
+    This verifies the asset's integrity and basic structure, not whether its
+    shape is suitable for collision planning. Missing or invalid data is false.
+    """
+    try:
+        if Path(path).stat().st_size > MAX_FILE_BYTES:
+            return False
+        with zipfile.ZipFile(path) as archive:
+            manifest = _read_manifest(archive)
+            if (
+                type(manifest.get("schema_version")) is not int
+                or manifest["schema_version"] != 1
+                or manifest.get("reference_frame") != "hand"
+                or manifest.get("units") != "m"
+            ):
+                return False
+            placement = manifest.get("hand_to_geometry")
+            if not isinstance(placement, dict):
+                return False
+            PoseData(
+                position=Vector3Data(*_coordinates(placement, "translation", 3)),
+                orientation=QuaternionData(*_coordinates(placement, "quaternion", 4)),
+            ).validate()
+            return _has_collision_mesh(archive, manifest)
+    except (
+        OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile,
+        OverflowError, RecursionError, RuntimeError, NotImplementedError,
+        zlib.error,
+    ):
+        return False

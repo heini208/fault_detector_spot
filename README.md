@@ -184,6 +184,9 @@ rotation (degrees). Review or adjust the values, then use **Save Sensor Mount**.
 This step imports the sensor-tip transform only; collision geometry import is
 not connected yet. The mount ID, name, and acquisition channels remain editable
 through the existing form.
+The small collision-geometry indicator below the import button is green when
+the selected file contains a matching collision mesh and red otherwise. This
+reports file contents, not saved geometry or active planning collision checks.
 
 Each mount definition also owns zero or more generic acquisition channels. A
 channel has a stable channel ID and an explicit source kind. ROS-topic channels
