@@ -24,6 +24,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from fault_detector_spot.inspection.model.sensor_models import (
+    DEFAULT_HAND_SENSOR_ID,
+)
+
+
 @dataclass(frozen=True)
 class SensorChannelIntent:
     """Describe one channel entered in the sensor-mount form."""
@@ -39,6 +44,9 @@ _DEFAULT_GEOMETRY_CHANNEL = SensorChannelIntent(
     topic="",
     message_type="",
     source_kind="spot_geometry",
+)
+_DEFAULT_HAND_READ_ONLY = (
+    "The default hand configuration is read-only and uses stock hand geometry."
 )
 
 
@@ -834,6 +842,9 @@ class SensorControls(QWidget):
         intent = self._definition_intent()
         if intent is None:
             return
+        if intent.sensor_id == DEFAULT_HAND_SENSOR_ID:
+            self.transform_status_value.setText(_DEFAULT_HAND_READ_ONLY)
+            return
         if self._editing_sensor_id:
             if not self._mutation_allowed(self._editing_sensor_id):
                 self.transform_status_value.setText(
@@ -926,6 +937,8 @@ class SensorControls(QWidget):
             if selected_active
             else ""
         )
+        if definition is not None and definition.sensor_id == DEFAULT_HAND_SENSOR_ID:
+            tooltip = _DEFAULT_HAND_READ_ONLY
         self.edit_mount_button.setToolTip(tooltip)
         self.delete_mount_button.setToolTip(tooltip)
 
@@ -956,6 +969,8 @@ class SensorControls(QWidget):
         self.import_mount_button.setEnabled(allowed)
 
     def _mutation_allowed(self, sensor_id: str) -> bool:
+        if sensor_id == DEFAULT_HAND_SENSOR_ID:
+            return False
         state = self._attachment_state
         if state is None:
             return False
@@ -1241,7 +1256,8 @@ class SensorControls(QWidget):
             definition.display_name,
             definition.sensor_id,
             definition.probe_frame,
-            "Manual",
+            "Default (stock hand)"
+            if definition.sensor_id == DEFAULT_HAND_SENSOR_ID else "Manual",
         )
         for column, value in enumerate(values):
             self.mount_table.setItem(

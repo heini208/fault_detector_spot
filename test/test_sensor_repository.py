@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from fault_detector_spot.inspection.model.sensor_models import (
+    DEFAULT_HAND_SENSOR_ID,
     SensorChannel,
     SensorDefinition,
     sensor_definition_from_values,
@@ -56,6 +57,56 @@ def test_reserved_hand_id_cannot_be_created(tmp_path):
     with pytest.raises(ValueError, match="reserved"):
         repository.create(reserved)
 
+    assert repository.list_sensor_ids() == []
+
+
+def test_default_hand_id_cannot_be_created(tmp_path):
+    repository = SensorRepository(tmp_path)
+
+    with pytest.raises(ValueError, match="default hand configuration is read-only"):
+        repository.create(definition(DEFAULT_HAND_SENSOR_ID))
+
+    assert repository.list_sensor_ids() == []
+
+
+@pytest.mark.parametrize("display_name", ["hand_closed", "Renamed default"])
+@pytest.mark.parametrize("operation", ["create", "update", "delete"])
+def test_existing_default_hand_is_loadable_but_read_only(
+    tmp_path, display_name, operation,
+):
+    repository = SensorRepository(tmp_path)
+    original = replace(
+        definition(DEFAULT_HAND_SENSOR_ID, x=0.05),
+        display_name=display_name,
+    )
+    path = repository.get_sensor_path(DEFAULT_HAND_SENSOR_ID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(original.to_dict()), encoding="utf-8")
+    before = path.read_bytes()
+
+    assert repository.load_all() == [original]
+    with pytest.raises(ValueError, match="default hand configuration is read-only"):
+        if operation == "delete":
+            repository.delete(DEFAULT_HAND_SENSOR_ID)
+        else:
+            getattr(repository, operation)(
+                definition(DEFAULT_HAND_SENSOR_ID, x=0.40),
+            )
+
+    assert path.read_bytes() == before
+    assert repository.load(DEFAULT_HAND_SENSOR_ID) == original
+
+
+def test_default_hand_display_name_does_not_protect_custom_sensor(tmp_path):
+    repository = SensorRepository(tmp_path)
+    original = replace(definition("custom"), display_name="hand_closed")
+    repository.create(original)
+    updated = replace(
+        definition("custom", x=0.35), display_name="hand_closed",
+    )
+
+    assert repository.update(updated) == updated
+    assert repository.delete("custom") == updated
     assert repository.list_sensor_ids() == []
 
 

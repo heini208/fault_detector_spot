@@ -12,6 +12,7 @@ from rcl_interfaces.srv import GetParameters
 from rclpy.serialization import deserialize_message, serialize_message
 
 from fault_detector_spot.inspection.model.sensor_geometry import MAX_MESH_CHUNK_BYTES
+from fault_detector_spot.inspection.model.sensor_models import DEFAULT_HAND_SENSOR_ID
 from fault_detector_spot.manipulation.moveit_sensor_head import MoveItSensorHead
 from fault_detector_spot.manipulation.sensor_head_geometry import SENSOR_HEAD_OBJECT_ID
 from fault_detector_spot.shared.geometry.models import PoseData, QuaternionData, Vector3Data
@@ -205,14 +206,17 @@ def test_bare_hand_reconfirmation_refreshes_even_when_revision_is_reused(
     assert head.needs_scene_sync
 
 
-def test_confirmed_bare_hand_restores_stock_jaw_without_mesh_download(
-    head, robot_description,
+@pytest.mark.parametrize("sensor_id", ("", DEFAULT_HAND_SENSOR_ID))
+def test_confirmed_stock_hand_restores_stock_jaw_without_mesh_download(
+    head, robot_description, sensor_id,
 ):
-    request = read_model(head, robot_description, attachment_response(None, ""))
+    response = attachment_response(None, sensor_id)
+    request = read_model(head, robot_description, response)
 
     assert request is None
     assert len(head.expected.object.meshes) == 3
     assert head.expected.object.id == SENSOR_HEAD_OBJECT_ID
+    assert head.advance("head_verify", wire(response)) is None
 
 
 def test_cache_reuses_only_bytes_and_applies_new_placement(head, mount, robot_description):
@@ -309,7 +313,9 @@ def test_download_rejects_failed_or_invalid_chunks(head, mount, robot_descriptio
     assert head.expected is None
 
 
-@pytest.mark.parametrize("sensor_id,geometry_present", (("probe", False), ("", True)))
+@pytest.mark.parametrize("sensor_id,geometry_present", (
+    ("probe", False), ("", True), (DEFAULT_HAND_SENSOR_ID, True),
+))
 def test_attachment_identity_and_geometry_must_agree(head, mount, sensor_id, geometry_present):
     response = attachment_response(mount.geometry if geometry_present else None, sensor_id)
     head.prepare()

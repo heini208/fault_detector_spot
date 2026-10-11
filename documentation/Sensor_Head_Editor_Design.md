@@ -426,6 +426,13 @@ application packages must be rebuilt together for the next authorized startup.
 This implementation does not authorize deployment, node restarts, or physical
 validation.
 
+The stored default closed-hand probe (`hand_tip`, displayed as `hand_closed`)
+uses this same stock jaw profile and retains its stored probe transform. Its ID
+is reserved: the UI and registry reject creation, replacement, and deletion,
+and custom collision geometry cannot override the stock profile. Stock meshes
+come from the existing robot model assets, not a copied sensor-head import.
+Other registered mounts still require imported collision geometry for planning.
+
 ## Activation and synchronization
 
 Keep the distinction between **file exported**, **definition imported**,

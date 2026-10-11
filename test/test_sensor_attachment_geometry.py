@@ -4,6 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from fault_detector_msgs.msg import SensorAttachmentState
 from fault_detector_msgs.srv import GetSensorAttachment
 from rclpy.serialization import deserialize_message, serialize_message
@@ -14,7 +15,11 @@ from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin, CommandRequest, RecordingPolicy,
 )
 from fault_detector_spot.application.commanding.semantic_command import SemanticCommand
-from fault_detector_spot.inspection.model.sensor_models import MotionAttachmentSnapshot
+from fault_detector_spot.inspection.model.sensor_models import (
+    DEFAULT_HAND_SENSOR_ID,
+    MotionAttachmentSnapshot,
+    sensor_definition_from_values,
+)
 from fault_detector_spot.shared.ros.sensor_geometry_adapter import head_geometry_from_messages
 
 from test_sensor_attachment_controller import build_controller, sensor_definition
@@ -143,6 +148,33 @@ def test_confirmed_bare_hand_returns_no_geometry(registered):
     assert response.state.active_sensor_id == ""
     assert response.state.attachment_revision == confirmed.attachment_revision
     assert not response.head_geometry
+
+
+def test_confirmed_default_hand_keeps_probe_pose_and_uses_stock_geometry(registered):
+    definition = sensor_definition_from_values(
+        DEFAULT_HAND_SENSOR_ID, "hand_closed", .05, 0, 0, 0, 0, 0,
+    )
+    path = registered.repository.get_sensor_path(DEFAULT_HAND_SENSOR_ID)
+    path.write_text(yaml.safe_dump(definition.to_dict()), encoding="utf-8")
+    original = path.read_bytes()
+    pending = registered.controller.select_sensor(DEFAULT_HAND_SENSOR_ID)
+    confirmed = registered.controller.confirm_sensor(
+        DEFAULT_HAND_SENSOR_ID, pending.attachment_revision,
+    )
+
+    response = read(registered.api)
+    attachment = registered.controller.require_motion_attachment()
+
+    assert response.success, response.detail
+    assert response.state.status == SensorAttachmentState.STATUS_ACTIVE
+    assert response.state.active_sensor_id == DEFAULT_HAND_SENSOR_ID
+    assert response.state.attachment_revision == confirmed.attachment_revision
+    assert not response.head_geometry
+    assert attachment.sensor_id == DEFAULT_HAND_SENSOR_ID
+    assert attachment.probe_frame == "hand_tip_probe"
+    assert attachment.hand_to_probe_position == (.05, 0, 0)
+    assert attachment.hand_to_probe_orientation == (0, 0, 0, 1)
+    assert path.read_bytes() == original
 
 
 def test_planning_rejects_a_legacy_mount_without_breaking_tip_only_consumers(registered):

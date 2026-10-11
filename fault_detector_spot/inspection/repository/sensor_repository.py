@@ -7,6 +7,7 @@ from typing import List, Optional, Union
 import yaml
 
 from fault_detector_spot.inspection.model.sensor_models import (
+    DEFAULT_HAND_SENSOR_ID,
     SensorDefinition,
 )
 from fault_detector_spot.inspection.model.sensor_geometry import SensorHeadGeometry
@@ -89,6 +90,7 @@ class SensorRepository:
 
     def create(self, definition: SensorDefinition) -> SensorDefinition:
         """Create a physical sensor definition without overwrite."""
+        self._require_editable(definition.sensor_id)
         definition.validate()
         path = self.get_sensor_path(definition.sensor_id)
         if path.exists():
@@ -100,6 +102,7 @@ class SensorRepository:
 
     def update(self, definition: SensorDefinition) -> SensorDefinition:
         """Replace an existing physical sensor definition atomically."""
+        self._require_editable(definition.sensor_id)
         definition.validate()
         path = self.get_sensor_path(definition.sensor_id)
         if not path.is_file():
@@ -112,6 +115,7 @@ class SensorRepository:
 
     def delete(self, sensor_id: str) -> SensorDefinition:
         """Delete one physical sensor definition and allow ID reuse."""
+        self._require_editable(sensor_id)
         definition = self.load(sensor_id)
         self.get_sensor_path(sensor_id).unlink()
         return definition
@@ -132,6 +136,11 @@ class SensorRepository:
             self.load(sensor_id)
             for sensor_id in self.list_sensor_ids()
         ]
+
+    @staticmethod
+    def _require_editable(sensor_id: str) -> None:
+        if sensor_id == DEFAULT_HAND_SENSOR_ID:
+            raise ValueError("The default hand configuration is read-only")
 
     def _write(self, definition: SensorDefinition) -> None:
         self._validate_geometry_asset(definition)

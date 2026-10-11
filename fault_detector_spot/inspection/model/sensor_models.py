@@ -17,7 +17,13 @@ from fault_detector_spot.shared.persistence.file_storage import (
 
 SENSOR_PARENT_FRAME = "hand"
 BARE_HAND_MOTION_ID = SENSOR_PARENT_FRAME
+DEFAULT_HAND_SENSOR_ID = "hand_tip"
 _SENSOR_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def uses_stock_hand_geometry(sensor_id: str) -> bool:
+    """Use the stock jaw for bare hand and the default closed-hand probe."""
+    return sensor_id in ("", DEFAULT_HAND_SENSOR_ID)
 
 
 class SensorChannelSource(str, Enum):
@@ -235,6 +241,10 @@ class SensorDefinition:
             )
         self.hand_to_probe.validate()
         if self.head_geometry is not None:
+            if self.sensor_id == DEFAULT_HAND_SENSOR_ID:
+                raise ValueError(
+                    "The default hand configuration uses stock hand geometry"
+                )
             if not isinstance(self.head_geometry, SensorHeadGeometry):
                 raise TypeError("Sensor head geometry must be a SensorHeadGeometry")
             self.head_geometry.validate()

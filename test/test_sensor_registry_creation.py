@@ -1,8 +1,10 @@
 """Tests for application-owned sensor registry mutations."""
 
+from dataclasses import replace
 from threading import RLock
 
 import pytest
+import yaml
 from fault_detector_msgs.srv import AddSensor, DeleteSensor, UpdateSensor
 
 from fault_detector_spot.application.api.sensor_registry_api import (
@@ -27,6 +29,7 @@ from fault_detector_spot.application.controllers.sensor_registry_controller impo
     SensorRegistryController,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
+    DEFAULT_HAND_SENSOR_ID,
     SensorChannel,
     SensorChannelSource,
     sensor_definition_from_values,
@@ -260,6 +263,40 @@ def test_add_sensor_persists_and_publishes_definition(tmp_path):
     assert stored.hand_to_probe.position.x == pytest.approx(0.20)
     assert api._static_broadcaster.transforms == [stored]
     assert api.published == [(stored,)]
+
+
+@pytest.mark.parametrize("operation", ["add", "update", "delete"])
+def test_default_hand_mutation_fails_without_publishing(tmp_path, operation):
+    api, _, _, repository = api_state(tmp_path)
+    original = replace(
+        definition(DEFAULT_HAND_SENSOR_ID, x=0.05),
+        display_name="hand_closed",
+    )
+    path = repository.get_sensor_path(DEFAULT_HAND_SENSOR_ID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(original.to_dict()), encoding="utf-8")
+    before = path.read_bytes()
+
+    if operation == "add":
+        response = SensorRegistryApi._handle_add_sensor(
+            api, add_request(DEFAULT_HAND_SENSOR_ID), AddSensor.Response(),
+        )
+    elif operation == "update":
+        response = SensorRegistryApi._handle_update_sensor(
+            api, update_request(DEFAULT_HAND_SENSOR_ID), UpdateSensor.Response(),
+        )
+    else:
+        request = DeleteSensor.Request()
+        request.sensor_id = DEFAULT_HAND_SENSOR_ID
+        response = SensorRegistryApi._handle_delete_sensor(
+            api, request, DeleteSensor.Response(),
+        )
+
+    assert response.success is False
+    assert "default hand configuration is read-only" in response.message
+    assert path.read_bytes() == before
+    assert api._static_broadcaster.transforms == []
+    assert api.published == []
 
 
 def test_registry_ros_definition_round_trips_channels():

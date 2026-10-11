@@ -67,6 +67,9 @@ def test_sensor_definition_round_trips_geometry_separately_from_tip():
     assert restored == definition
     assert restored.head_geometry.hand_to_geometry != restored.hand_to_probe
 
+    with pytest.raises(ValueError, match="uses stock hand geometry"):
+        replace(restored, sensor_id="hand_tip").validate()
+
 
 def test_manual_sensor_definition_keeps_legacy_serialization():
     definition = SensorDefinition("probe", "Probe", PoseData.identity())

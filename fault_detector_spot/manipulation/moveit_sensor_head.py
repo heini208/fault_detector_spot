@@ -8,6 +8,7 @@ from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import GetParameters
 
 from fault_detector_spot.inspection.model.sensor_geometry import MAX_MESH_CHUNK_BYTES
+from fault_detector_spot.inspection.model.sensor_models import uses_stock_hand_geometry
 from fault_detector_spot.manipulation.sensor_head_geometry import (
     sensor_head_attachment,
     stock_head_attachment,
@@ -78,7 +79,10 @@ class MoveItSensorHead:
             if (state[0] != SensorAttachmentState.STATUS_ACTIVE or state[2]):
                 raise RuntimeError("Sensor attachment confirmation is pending")
             geometry = head_geometry_from_messages(response.head_geometry)
-            if bool(state[1]) != (geometry is not None):
+            stock_profile = uses_stock_hand_geometry(state[1])
+            if stock_profile and geometry is not None:
+                raise RuntimeError("Stock hand profile must use built-in collision geometry")
+            if not stock_profile and geometry is None:
                 raise RuntimeError("Confirmed sensor mount has no collision geometry")
             if phase == "head_verify":
                 if state != self._state or geometry != self._geometry:

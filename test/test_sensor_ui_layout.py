@@ -395,6 +395,54 @@ def test_delete_selected_emits_exact_sensor_id(application):
     assert deleted == ["test"]
 
 
+@pytest.mark.parametrize("selected_id", ("", "other", "hand_tip"))
+def test_default_hand_cannot_be_edited_or_deleted(application, selected_id):
+    controls = SensorControls()
+    controls.apply_definitions((definition("hand_tip", "hand_closed"),))
+    controls.apply_attachment_state(attachment("active", active_sensor_id=selected_id))
+    controls.mount_table.selectRow(0)
+    deleted = []
+    controls.delete_requested.connect(deleted.append)
+
+    assert not controls.edit_mount_button.isEnabled()
+    assert not controls.delete_mount_button.isEnabled()
+    assert "read-only" in controls.edit_mount_button.toolTip()
+    assert "stock hand" in controls.edit_mount_button.toolTip()
+    assert controls.mount_table.item(0, 3).text() == "Default (stock hand)"
+
+    controls.edit_selected_sensor()
+    controls._request_sensor_deletion()
+
+    assert controls.mount_id_field.text() == ""
+    assert deleted == []
+    assert controls.select_mount_button.isEnabled()
+
+
+def test_default_hand_id_cannot_be_submitted_as_a_new_mount(application):
+    controls = SensorControls()
+    controls.mount_id_field.setText("hand_tip")
+    controls.display_name_field.setText("Renamed hand")
+    created = []
+    controls.create_requested.connect(created.append)
+
+    controls.save_mount_button.click()
+
+    assert created == []
+    assert "read-only" in controls.transform_status_value.text()
+
+
+def test_custom_mount_named_hand_closed_remains_editable(application):
+    controls = SensorControls()
+    controls.apply_definitions((definition("custom", "hand_closed"),))
+    controls.apply_attachment_state(attachment("active"))
+    controls.mount_table.selectRow(0)
+    controls.edit_mount_button.click()
+
+    assert controls.mount_id_field.text() == "custom"
+    assert controls.save_mount_button.isEnabled()
+    assert controls.delete_mount_button.isEnabled()
+
+
 def test_discard_changes_returns_to_new_sensor_form(application):
     controls = SensorControls()
     controls.apply_definitions((definition(),))

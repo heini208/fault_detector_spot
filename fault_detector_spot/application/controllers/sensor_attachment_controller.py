@@ -16,6 +16,7 @@ from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     MotionAttachmentSnapshot,
     SensorDefinition,
+    uses_stock_hand_geometry,
 )
 from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (
     PersistedSensorAttachmentSelection,
@@ -219,7 +220,10 @@ class SensorAttachmentController:
         """Read confirmed state and collision geometry in one locked snapshot."""
         with self._lock:
             attachment = self._motion_attachment_locked()
-            if attachment.has_sensor and attachment.head_geometry is None:
+            if (
+                not uses_stock_hand_geometry(attachment.sensor_id)
+                and attachment.head_geometry is None
+            ):
                 raise RuntimeError(
                     f"Sensor '{attachment.sensor_id}' has no collision geometry. "
                     "Import and save a sensorhead file before planning arm motion."
