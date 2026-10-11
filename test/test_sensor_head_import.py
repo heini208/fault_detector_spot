@@ -12,7 +12,13 @@ import pytest
 from fault_detector_spot.inspection.repository import sensor_head_import
 from fault_detector_spot.inspection.repository.sensor_head_import import (
     has_sensor_head_collision_geometry,
+    load_sensor_head,
     load_sensor_head_transform,
+)
+from fault_detector_spot.inspection.model.sensor_geometry import (
+    MOUNTING_TEMPLATE_ID,
+    MOUNTING_TEMPLATE_REVISION,
+    REFERENCE_MODEL_FINGERPRINT,
 )
 
 
@@ -22,6 +28,12 @@ def manifest():
         "schema_version": 1,
         "reference_frame": "hand",
         "units": "m",
+        "mounting_template_id": MOUNTING_TEMPLATE_ID,
+        "mounting_template_revision": MOUNTING_TEMPLATE_REVISION,
+        "reference_model_fingerprint": REFERENCE_MODEL_FINGERPRINT,
+        "mounting_template_verified": False,
+        "clearance_m": 0.0,
+        "configuration_method": "manual",
         "hand_to_probe": {
             "translation": [0.046238241757377466, -0.00107, -0.079173945],
             "quaternion": [0.0, math.sin(0.2), 0.0, math.cos(0.2)],
@@ -172,11 +184,14 @@ def test_file_access_failure_is_preserved(tmp_path):
 
 @pytest.fixture
 def collision_mesh():
-    return b"\0" * 80 + struct.pack(
-        "<I12fH", 1,
-        0, 0, 1,  # Normal.
-        0, 0, 0, 1, 0, 0, 0, 1, 0,  # Three vertices.
-        0,
+    vertices = ((0, 0, 0), (.1, 0, 0), (0, .1, 0), (0, 0, .1))
+    faces = ((0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3))
+    return b"\0" * 80 + struct.pack("<I", len(faces)) + b"".join(
+        struct.pack(
+            "<12fH", 0, 0, 0,
+            *(coordinate for index in face for coordinate in vertices[index]), 0,
+        )
+        for face in faces
     )
 
 
@@ -300,3 +315,80 @@ def test_collision_status_handles_unreadable_archive(tmp_path):
     assert not has_sensor_head_collision_geometry(path)
     path.write_bytes(b"Not a ZIP archive")
     assert not has_sensor_head_collision_geometry(path)
+
+
+def test_full_import_preserves_pose_mesh_and_unverified_provenance(
+    tmp_path, manifest, collision_mesh,
+):
+    add_collision_description(manifest, collision_mesh)
+    manifest["hand_to_geometry"]["translation"] = [-.112, .042, -.065]
+    path = write_archive(tmp_path, manifest, [("collision.stl", collision_mesh)])
+
+    imported = load_sensor_head(path)
+
+    assert imported.collision_mesh == collision_mesh
+    assert imported.hand_to_probe == load_sensor_head_transform(path)
+    assert imported.head_geometry.hand_to_geometry.position.x == -.112
+    assert imported.head_geometry.mounting_template_verified is False
+    assert imported.head_geometry.asset_path == (
+        f"assets/{hashlib.sha256(collision_mesh).hexdigest()}.stl"
+    )
+    assert sorted(item.name for item in tmp_path.iterdir()) == ["head.sensorhead"]
+
+
+@pytest.mark.parametrize("field,value", (
+    ("mounting_template_id", "different-template"),
+    ("mounting_template_revision", True),
+    ("mounting_template_revision", 2),
+    ("reference_model_fingerprint", "0" * 64),
+    ("mounting_template_verified", "false"),
+    ("clearance_m", .001),
+    ("configuration_method", "unknown"),
+))
+def test_full_import_rejects_unsupported_metadata(
+    tmp_path, manifest, collision_mesh, field, value,
+):
+    add_collision_description(manifest, collision_mesh)
+    manifest[field] = value
+    path = write_archive(tmp_path, manifest, [("collision.stl", collision_mesh)])
+
+    with pytest.raises(ValueError):
+        load_sensor_head(path)
+
+
+@pytest.mark.parametrize("damage", ("missing", "checksum", "open", "placement"))
+def test_full_import_rejects_invalid_geometry_as_one_package(
+    tmp_path, manifest, collision_mesh, damage,
+):
+    if damage == "open":
+        collision_mesh = (
+            collision_mesh[:80] + struct.pack("<I", 3) + collision_mesh[84:-50]
+        )
+    add_collision_description(manifest, collision_mesh)
+    entries = [("collision.stl", collision_mesh)]
+    if damage == "missing":
+        entries = []
+    elif damage == "checksum":
+        manifest["collision_mesh"]["sha256"] = "0" * 64
+    elif damage == "placement":
+        manifest["hand_to_geometry"]["quaternion"] = [0, 0, 0, 0]
+    path = write_archive(tmp_path, manifest, entries)
+
+    with pytest.raises(ValueError):
+        load_sensor_head(path)
+    assert load_sensor_head_transform(path).position.x == (
+        manifest["hand_to_probe"]["translation"][0]
+    )
+
+
+@pytest.mark.parametrize("name", ("../payload", "/payload", "folder\\payload"))
+def test_full_import_rejects_unsafe_unused_entries(
+    tmp_path, manifest, collision_mesh, name,
+):
+    add_collision_description(manifest, collision_mesh)
+    path = write_archive(
+        tmp_path, manifest, [("collision.stl", collision_mesh), (name, b"unused")]
+    )
+
+    with pytest.raises(ValueError, match="safe relative path"):
+        load_sensor_head(path)

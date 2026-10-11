@@ -64,6 +64,7 @@ def test_registry_client_owns_only_definition_resources():
         SensorRegistryClient.ADD_SENSOR_SERVICE,
         SensorRegistryClient.UPDATE_SENSOR_SERVICE,
         SensorRegistryClient.DELETE_SENSOR_SERVICE,
+        SensorRegistryClient.UPLOAD_MESH_SERVICE,
     ]
 
     client.destroy()
@@ -103,6 +104,7 @@ def test_registry_client_maps_definition_without_attachment_state():
             orientation=orientation,
         ),
         channels=(),
+        head_geometry=(),
     )
 
     view = client._definition_view(sensor)

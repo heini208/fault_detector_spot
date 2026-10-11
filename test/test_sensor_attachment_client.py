@@ -151,6 +151,7 @@ def test_definition_view_exposes_rotation_for_edit_form(application):
     sensor = SimpleNamespace(
         sensor_id="test",
         display_name="Test sensor",
+        head_geometry=(),
         hand_to_probe=SimpleNamespace(
             position=SimpleNamespace(x=0.1, y=0.2, z=0.3),
             orientation=SimpleNamespace(

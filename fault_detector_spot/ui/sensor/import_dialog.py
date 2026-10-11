@@ -1,4 +1,4 @@
-"""File selection and presentation for sensor-tip transform imports."""
+"""File selection and presentation for sensor mount package imports."""
 
 from PyQt5.QtWidgets import QDialog, QFileDialog
 
@@ -6,8 +6,7 @@ from fault_detector_spot.inspection.model.sensor_models import (
     rpy_degrees_from_quaternion,
 )
 from fault_detector_spot.inspection.repository.sensor_head_import import (
-    has_sensor_head_collision_geometry,
-    load_sensor_head_transform,
+    load_sensor_head,
 )
 
 
@@ -26,14 +25,17 @@ def import_sensor_head_transform(controls) -> None:
     if not paths or not controls.import_mount_button.isEnabled():
         return
     try:
-        pose = load_sensor_head_transform(paths[0])
+        imported = load_sensor_head(paths[0])
+        pose = imported.hand_to_probe
         rotation = rpy_degrees_from_quaternion(pose.orientation)
-        has_geometry = has_sensor_head_collision_geometry(paths[0])
     except (OSError, ValueError) as exception:
         controls.transform_status_value.setText(f"Import failed: {exception}")
         return
-    controls.apply_imported_transform(
+    controls.apply_imported_mount(
         (pose.position.x, pose.position.y, pose.position.z),
         rotation,
-        has_geometry,
+        (pose.orientation.x, pose.orientation.y,
+         pose.orientation.z, pose.orientation.w),
+        imported.head_geometry,
+        imported.collision_mesh,
     )

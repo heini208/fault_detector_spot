@@ -44,13 +44,16 @@ _DEFAULT_GEOMETRY_CHANNEL = SensorChannelIntent(
 
 @dataclass(frozen=True)
 class SensorDefinitionIntent:
-    """Describe one manually entered physical sensor transform."""
+    """Describe one physical sensor mount entered in the form."""
 
     sensor_id: str
     display_name: str
     translation_m: tuple
     rotation_degrees: tuple
     channels: tuple = ()
+    head_geometry: object = None
+    collision_mesh: bytes = b""
+    orientation: tuple | None = None
 
 
 class SensorControls(QWidget):
@@ -70,6 +73,12 @@ class SensorControls(QWidget):
         self._head_connection_state = None
         self._topic_message_types = {}
         self._editing_sensor_id = ""
+        self._save_pending = False
+        self._head_geometry = None
+        self._collision_mesh = b""
+        self._source_position = None
+        self._source_orientation = None
+        self._source_transform_text = ()
         self._build_ui()
         self._connect_intents()
         self._set_channel_rows((_DEFAULT_GEOMETRY_CHANNEL,))
@@ -245,16 +254,17 @@ class SensorControls(QWidget):
 
         self.import_mount_button = QPushButton("Import mount_creator ZIP")
         self.import_mount_button.setToolTip(
-            "Fill the hand-to-probe transform from a .sensorhead file."
+            "Import the sensor-tip transform and collision geometry "
+            "from a .sensorhead file."
         )
         form.addRow(self.import_mount_button)
 
         self.collision_geometry_status = QLabel()
         self.collision_geometry_status.setWordWrap(True)
-        self.set_collision_geometry_available(False)
+        self._refresh_geometry_status()
         self.collision_geometry_status.setToolTip(
-            "Shows geometry found in the selected file. Collision geometry "
-            "is not yet saved to the mount or used for path planning."
+            "Save the sensor mount to store imported geometry. "
+            "Path-planning integration is not yet available."
         )
         form.addRow(self.collision_geometry_status)
 
@@ -547,8 +557,10 @@ class SensorControls(QWidget):
     def edit_selected_sensor(self) -> None:
         """Open the selected stored sensor in the definition form."""
         definition = self._selected_definition()
-        if definition is None or not self._mutation_allowed(
-            definition.sensor_id
+        if (
+            self._save_pending
+            or definition is None
+            or not self._mutation_allowed(definition.sensor_id)
         ):
             return
         self._editing_sensor_id = definition.sensor_id
@@ -560,13 +572,20 @@ class SensorControls(QWidget):
             definition.position,
         ):
             field.setText(self._format_number(value))
+            field.setCursorPosition(0)
         for field, value in zip(
             self.rotation_fields,
             definition.rotation_degrees,
         ):
             field.setText(self._format_number(value))
+            field.setCursorPosition(0)
         self._set_channel_rows(definition.channels)
-        self.set_collision_geometry_available(False)
+        self._head_geometry = getattr(definition, "head_geometry", None)
+        self._collision_mesh = b""
+        self._remember_transform(
+            definition.position, getattr(definition, "orientation", None),
+        )
+        self._refresh_geometry_status()
         self.transform_status_value.setText(
             "Editing manual transform. Saving overwrites this sensor."
         )
@@ -574,22 +593,23 @@ class SensorControls(QWidget):
         self._refresh_save_availability()
         self._refresh_detected_mount_actions()
 
-    def set_collision_geometry_available(self, available: bool) -> None:
-        """Show collision mesh presence in the current form's imported file."""
-        self.collision_geometry_status.setText(
-            "● Collision geometry found in imported file"
-            if available
-            else "● No collision geometry imported"
-        )
-        color = "#2e7d32" if available else "#c62828"
+    def _refresh_geometry_status(self) -> None:
+        if self._head_geometry is None:
+            text, color = "No collision geometry imported", "#c62828"
+        elif self._collision_mesh:
+            text, color = "Collision geometry ready to save", "#a66300"
+        else:
+            text, color = "Collision geometry saved", "#2e7d32"
+        self.collision_geometry_status.setText(f"● {text}")
         self.collision_geometry_status.setStyleSheet(
             f"color: {color}; font-size: 12px;"
         )
 
-    def apply_imported_transform(
-        self, translation_m, rotation_degrees, has_collision_geometry=False,
+    def apply_imported_mount(
+        self, translation_m, rotation_degrees, orientation,
+        head_geometry, collision_mesh,
     ) -> None:
-        """Fill the editable transform without saving the sensor definition."""
+        """Keep a validated mount package in the draft until the user saves."""
         if not self.import_mount_button.isEnabled():
             return
         for field, value in zip(
@@ -598,14 +618,36 @@ class SensorControls(QWidget):
         ):
             field.setText(self._format_number(value))
             field.setCursorPosition(0)
-        self.set_collision_geometry_available(has_collision_geometry)
+        self._head_geometry = head_geometry
+        self._collision_mesh = collision_mesh
+        self._remember_transform(translation_m, orientation)
+        self._refresh_geometry_status()
         self.transform_status_value.setText(
-            "Sensor-tip transform imported. Review the values, then save."
+            "Sensor-tip transform and geometry imported. "
+            "Review the values, then save."
+        )
+
+    def _remember_transform(self, position, orientation) -> None:
+        """Preserve full precision when rounded display fields are unchanged."""
+        self._source_position = tuple(position)
+        self._source_orientation = (
+            tuple(orientation) if orientation is not None else None
+        )
+        self._source_transform_text = tuple(
+            field.text()
+            for field in (*self.translation_fields, *self.rotation_fields)
         )
 
     def clear_sensor_definition(self) -> None:
         """Reset the definition form to create a new sensor mount."""
+        if self._save_pending:
+            return
         self._editing_sensor_id = ""
+        self._head_geometry = None
+        self._collision_mesh = b""
+        self._source_position = None
+        self._source_orientation = None
+        self._source_transform_text = ()
         self.mount_id_field.setReadOnly(False)
         self.mount_id_field.clear()
         self.display_name_field.clear()
@@ -616,7 +658,7 @@ class SensorControls(QWidget):
         ):
             field.setText("0.0")
         self._set_channel_rows((_DEFAULT_GEOMETRY_CHANNEL,))
-        self.set_collision_geometry_available(False)
+        self._refresh_geometry_status()
         self._set_transform_fields_editable(True)
         self._set_channel_fields_editable(True)
         self.save_mount_button.setEnabled(True)
@@ -629,14 +671,16 @@ class SensorControls(QWidget):
 
     def mark_sensor_save_pending(self) -> None:
         """Prevent duplicate submissions while the registry is saving."""
+        self._save_pending = True
         self.mount_id_field.setReadOnly(True)
         self._set_transform_fields_editable(False)
         self._set_channel_fields_editable(False)
         self.save_mount_button.setEnabled(False)
         self.discard_mount_button.setEnabled(False)
         self.transform_status_value.setText(
-            "Saving sensor transform..."
+            "Saving sensor mount..."
         )
+        self._refresh_registry_actions()
         self._refresh_detected_mount_actions()
 
     def finish_sensor_save(
@@ -645,6 +689,8 @@ class SensorControls(QWidget):
         message: str,
     ) -> None:
         """Render the result of one registry create or update request."""
+        self._save_pending = False
+        self._refresh_registry_actions()
         detail = message.strip() or (
             "Sensor mount saved"
             if success
@@ -661,6 +707,14 @@ class SensorControls(QWidget):
         self.transform_status_value.setText(detail)
         self._refresh_save_availability()
         self._refresh_detected_mount_actions()
+
+    def set_mesh_upload_progress(self, sent: int, total: int) -> None:
+        """Render transfer progress only for the current pending save."""
+        if self._save_pending:
+            self.transform_status_value.setText(
+                f"Uploading collision geometry: "
+                f"{sent / 1024:.0f} / {total / 1024:.0f} KiB"
+            )
 
     def finish_sensor_deletion(
         self,
@@ -775,6 +829,8 @@ class SensorControls(QWidget):
         self.select_requested.emit("")
 
     def _request_sensor_save(self) -> None:
+        if self._save_pending:
+            return
         intent = self._definition_intent()
         if intent is None:
             return
@@ -828,18 +884,35 @@ class SensorControls(QWidget):
         except ValueError as exception:
             self.transform_status_value.setText(str(exception))
             return None
+        orientation = None
+        if self._source_position is not None:
+            translation = tuple(
+                original if field.text() == displayed else entered
+                for field, original, displayed, entered in zip(
+                    self.translation_fields, self._source_position,
+                    self._source_transform_text[:3], translation,
+                )
+            )
+            if tuple(field.text() for field in self.rotation_fields) == (
+                self._source_transform_text[3:]
+            ):
+                orientation = self._source_orientation
         return SensorDefinitionIntent(
             sensor_id=sensor_id,
             display_name=display_name,
             translation_m=translation,
             rotation_degrees=rotation,
             channels=self._channel_values(),
+            head_geometry=self._head_geometry,
+            collision_mesh=self._collision_mesh,
+            orientation=orientation,
         )
 
     def _refresh_registry_actions(self) -> None:
         definition = self._selected_definition()
         enabled = (
-            definition is not None
+            not self._save_pending
+            and definition is not None
             and self._mutation_allowed(definition.sensor_id)
         )
         self.edit_mount_button.setEnabled(enabled)
@@ -858,6 +931,9 @@ class SensorControls(QWidget):
 
     def _refresh_save_availability(self) -> None:
         self._refresh_import_availability()
+        if self._save_pending:
+            self.save_mount_button.setEnabled(False)
+            return
         if not self._editing_sensor_id:
             self.save_mount_button.setEnabled(True)
             return
@@ -869,9 +945,13 @@ class SensorControls(QWidget):
             )
 
     def _refresh_import_availability(self) -> None:
-        allowed = not self.translation_fields[0].isReadOnly() and (
-            not self._editing_sensor_id
-            or self._mutation_allowed(self._editing_sensor_id)
+        allowed = (
+            not self._save_pending
+            and not self.translation_fields[0].isReadOnly()
+            and (
+                not self._editing_sensor_id
+                or self._mutation_allowed(self._editing_sensor_id)
+            )
         )
         self.import_mount_button.setEnabled(allowed)
 

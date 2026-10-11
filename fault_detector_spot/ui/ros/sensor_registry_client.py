@@ -1,11 +1,15 @@
 """ROS client for the physical sensor definition registry."""
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from array import array
+from concurrent.futures import Future
+
+from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from fault_detector_msgs.msg import SensorChannel, SensorDefinitionArray
 from fault_detector_msgs.srv import (
     AddSensor,
     DeleteSensor,
     UpdateSensor,
+    UploadSensorMesh,
 )
 
 from fault_detector_spot.shared.geometry.models import (
@@ -16,7 +20,15 @@ from fault_detector_spot.inspection.model.sensor_models import (
     rpy_degrees_from_quaternion,
     sensor_probe_frame,
 )
+from fault_detector_spot.inspection.model.sensor_geometry import (
+    MAX_MESH_CHUNK_BYTES,
+    validate_collision_mesh,
+)
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
+from fault_detector_spot.shared.ros.sensor_geometry_adapter import (
+    head_geometry_from_messages,
+    head_geometry_to_messages,
+)
 from fault_detector_spot.ui.sensor.models import (
     SensorChannelView,
     SensorDefinitionView,
@@ -30,11 +42,13 @@ class SensorRegistryClient(QObject):
     creation_finished = pyqtSignal(bool, str)
     update_finished = pyqtSignal(bool, str)
     deletion_finished = pyqtSignal(str, bool, str)
+    upload_progress = pyqtSignal(int, int)
 
     SENSOR_TOPIC = "fault_detector/sensors"
     ADD_SENSOR_SERVICE = "fault_detector/add_sensor"
     UPDATE_SENSOR_SERVICE = "fault_detector/update_sensor"
     DELETE_SENSOR_SERVICE = "fault_detector/delete_sensor"
+    UPLOAD_MESH_SERVICE = "fault_detector/upload_sensor_mesh"
 
     def __init__(self, node):
         super().__init__()
@@ -57,6 +71,10 @@ class SensorRegistryClient(QObject):
             DeleteSensor,
             self.DELETE_SENSOR_SERVICE,
         )
+        self._upload_mesh_client = node.create_client(
+            UploadSensorMesh,
+            self.UPLOAD_MESH_SERVICE,
+        )
 
     def create_sensor(
         self,
@@ -65,6 +83,9 @@ class SensorRegistryClient(QObject):
         translation_m,
         rotation_degrees,
         channels=(),
+        head_geometry=None,
+        collision_mesh=b"",
+        orientation=None,
     ):
         """Create one manually configured sensor definition."""
         return self._save_sensor(
@@ -76,6 +97,9 @@ class SensorRegistryClient(QObject):
             translation_m,
             rotation_degrees,
             channels,
+            head_geometry,
+            collision_mesh,
+            orientation,
         )
 
     def update_sensor(
@@ -85,6 +109,9 @@ class SensorRegistryClient(QObject):
         translation_m,
         rotation_degrees,
         channels=(),
+        head_geometry=None,
+        collision_mesh=b"",
+        orientation=None,
     ):
         """Replace one existing sensor definition."""
         return self._save_sensor(
@@ -96,6 +123,9 @@ class SensorRegistryClient(QObject):
             translation_m,
             rotation_degrees,
             channels,
+            head_geometry,
+            collision_mesh,
+            orientation,
         )
 
     def delete_sensor(self, sensor_id: str):
@@ -128,6 +158,9 @@ class SensorRegistryClient(QObject):
         translation_m,
         rotation_degrees,
         channels,
+        head_geometry,
+        collision_mesh,
+        orientation,
     ):
         if not client.service_is_ready():
             result_signal.emit(
@@ -144,7 +177,23 @@ class SensorRegistryClient(QObject):
             rotation_degrees,
             "rotation",
         )
-        quaternion = quaternion_from_rpy_degrees(*rotation)
+        quaternion = (
+            QuaternionData(*orientation)
+            if orientation is not None
+            else quaternion_from_rpy_degrees(*rotation)
+        )
+        quaternion.validate()
+        if collision_mesh:
+            if head_geometry is None:
+                raise ValueError("Collision mesh requires geometry metadata")
+            validate_collision_mesh(
+                collision_mesh,
+                head_geometry.collision_sha256,
+                head_geometry.collision_byte_count,
+            )
+            if not self._upload_mesh_client.service_is_ready():
+                result_signal.emit(False, "Collision mesh upload service is unavailable")
+                return None
 
         request = request_type()
         request.sensor.sensor_id = sensor_id.strip()
@@ -159,8 +208,17 @@ class SensorRegistryClient(QObject):
         request.sensor.channels = [
             self._channel_message(channel) for channel in channels
         ]
+        request.sensor.head_geometry = head_geometry_to_messages(head_geometry)
 
-        future = client.call_async(request)
+        try:
+            future = (
+                self._upload_and_save(client, request, head_geometry, collision_mesh)
+                if collision_mesh
+                else client.call_async(request)
+            )
+        except Exception as exception:
+            result_signal.emit(False, str(exception))
+            return None
         future.add_done_callback(
             lambda result: self._handle_registry_result(
                 result,
@@ -168,6 +226,74 @@ class SensorRegistryClient(QObject):
             )
         )
         return future
+
+    def _upload_and_save(self, client, request, geometry, mesh):
+        """Upload bounded chunks, then submit one combined definition update."""
+        completion = Future()
+        total = len(mesh)
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setInterval(30_000)
+
+        def timed_out():
+            if not completion.done():
+                completion.set_exception(TimeoutError(
+                    "Timed out waiting for the sensor registry during mesh save"
+                ))
+
+        def cleanup(_future):
+            timer.stop()
+            timer.deleteLater()
+
+        timer.timeout.connect(timed_out)
+        completion.add_done_callback(cleanup)
+
+        def finish(future):
+            if completion.done():
+                return
+            try:
+                completion.set_result(future.result())
+            except Exception as exception:
+                completion.set_exception(exception)
+
+        def upload(offset):
+            chunk = UploadSensorMesh.Request()
+            chunk.sha256 = geometry.collision_sha256
+            chunk.byte_count = total
+            chunk.offset = offset
+            chunk.data = array("B", mesh[offset:offset + MAX_MESH_CHUNK_BYTES])
+            try:
+                timer.start()
+                future = self._upload_mesh_client.call_async(chunk)
+                future.add_done_callback(lambda result: accept(result, offset + len(chunk.data)))
+            except Exception as exception:
+                completion.set_exception(exception)
+
+        def accept(future, next_offset):
+            if completion.done():
+                return
+            try:
+                response = future.result()
+                if response is None or not response.success:
+                    raise RuntimeError(
+                        response.message if response is not None
+                        else "Collision mesh upload returned no response"
+                    )
+                if response.complete:
+                    self.upload_progress.emit(total, total)
+                    timer.start()
+                    client.call_async(request).add_done_callback(finish)
+                elif next_offset < total:
+                    self.upload_progress.emit(next_offset, total)
+                    upload(next_offset)
+                else:
+                    raise RuntimeError("Collision mesh upload did not complete")
+            except Exception as exception:
+                completion.set_exception(exception)
+
+        self.upload_progress.emit(0, total)
+        upload(0)
+        return completion
 
     def _receive_definitions(self, message):
         definitions = tuple(
@@ -199,6 +325,7 @@ class SensorRegistryClient(QObject):
                 orientation.w,
             ),
             rotation_degrees=rpy_degrees_from_quaternion(orientation),
+            head_geometry=head_geometry_from_messages(sensor.head_geometry),
             channels=tuple(
                 SensorChannelView(
                     channel_id=channel.channel_id,
@@ -286,6 +413,7 @@ class SensorRegistryClient(QObject):
         self.node.destroy_client(self._add_sensor_client)
         self.node.destroy_client(self._update_sensor_client)
         self.node.destroy_client(self._delete_sensor_client)
+        self.node.destroy_client(self._upload_mesh_client)
 
 
 __all__ = [

@@ -333,6 +333,42 @@ def test_edit_save_emits_update_not_create(application):
     assert updates[0].translation_m[0] == pytest.approx(0.25)
 
 
+def test_edit_preserves_stored_transform_precision(application):
+    stored = definition(position=(0.12345678901234568, 0.2, 0.3))
+    stored.orientation = (0.0, 0.7071067811865475, 0.0, 0.7071067811865476)
+    stored.rotation_degrees = (0.0, 90.0, 0.0)
+    controls = SensorControls()
+    controls.apply_definitions((stored,))
+    controls.apply_attachment_state(attachment("active"))
+    controls.mount_table.selectRow(0)
+    controls.edit_mount_button.click()
+
+    intent = controls._definition_intent()
+
+    assert float(controls.translation_fields[0].text()) != stored.position[0]
+    assert intent.translation_m == stored.position
+    assert intent.orientation == stored.orientation
+
+
+def test_pending_save_blocks_replacing_the_current_draft(application):
+    controls = SensorControls()
+    controls.apply_definitions((definition(),))
+    controls.apply_attachment_state(attachment("active"))
+    controls.mount_id_field.setText("new_mount")
+    controls.display_name_field.setText("Draft")
+    controls.mount_table.selectRow(0)
+    controls.mark_sensor_save_pending()
+
+    controls.apply_attachment_state(attachment("active"))
+    controls.edit_selected_sensor()
+    controls.clear_sensor_definition()
+
+    assert controls.mount_id_field.text() == "new_mount"
+    assert not controls.save_mount_button.isEnabled()
+    assert not controls.edit_mount_button.isEnabled()
+    assert not controls.delete_mount_button.isEnabled()
+
+
 def test_edit_and_delete_are_disabled_for_selected_attachment(application):
     controls = SensorControls()
     controls.apply_definitions((definition(),))
@@ -441,3 +477,8 @@ def test_main_ui_wires_create_update_and_delete_sensor_intents():
     assert "self.sensor_attachment_client.update_sensor" not in source
     assert "self.sensor_attachment_client.delete_sensor(" not in source
     assert '"Delete sensor mount"' in source
+    assert (
+        "self.sensor_registry_client.upload_progress.connect(\n"
+        "            self._process_sensor_mesh_upload_progress\n"
+        "        )"
+    ) in source

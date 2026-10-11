@@ -4,7 +4,9 @@ import math
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
+
+from fault_detector_spot.inspection.model.sensor_geometry import SensorHeadGeometry
 
 from fault_detector_spot.shared.geometry.models import PoseData, QuaternionData, Vector3Data
 from fault_detector_spot.shared.persistence.file_storage import (
@@ -188,6 +190,7 @@ class SensorDefinition:
     display_name: str
     hand_to_probe: PoseData
     channels: Tuple[SensorChannel, ...] = ()
+    head_geometry: Optional[SensorHeadGeometry] = None
 
     @property
     def probe_frame(self) -> str:
@@ -210,6 +213,10 @@ class SensorDefinition:
                 SensorChannel.from_dict(channel)
                 for channel in raw_channels
             ),
+            head_geometry=(
+                SensorHeadGeometry.from_dict(data["head_geometry"])
+                if data.get("head_geometry") is not None else None
+            ),
         )
 
     def validate(self) -> None:
@@ -226,6 +233,10 @@ class SensorDefinition:
                 "Sensor display name must not contain surrounding whitespace"
             )
         self.hand_to_probe.validate()
+        if self.head_geometry is not None:
+            if not isinstance(self.head_geometry, SensorHeadGeometry):
+                raise TypeError("Sensor head geometry must be a SensorHeadGeometry")
+            self.head_geometry.validate()
         seen_channel_ids = set()
         for channel in self.channels:
             if not isinstance(channel, SensorChannel):
@@ -241,7 +252,7 @@ class SensorDefinition:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the sensor definition."""
-        return {
+        data = {
             "sensor_id": self.sensor_id,
             "display_name": self.display_name,
             "hand_to_probe": self.hand_to_probe.to_dict(),
@@ -249,6 +260,9 @@ class SensorDefinition:
                 channel.to_dict() for channel in self.channels
             ],
         }
+        if self.head_geometry is not None:
+            data["head_geometry"] = self.head_geometry.to_dict()
+        return data
 
 
 @dataclass(frozen=True)
@@ -343,12 +357,14 @@ def sensor_definition_from_values(
     pitch_degrees: float,
     yaw_degrees: float,
     channels: Tuple[SensorChannel, ...] = (),
+    head_geometry: Optional[SensorHeadGeometry] = None,
 ) -> SensorDefinition:
     """Create and validate a sensor definition from UI transform values."""
     definition = SensorDefinition(
         sensor_id=sensor_id,
         display_name=display_name,
         channels=tuple(channels),
+        head_geometry=head_geometry,
         hand_to_probe=PoseData(
             position=Vector3Data(x=x, y=y, z=z),
             orientation=quaternion_from_rpy_degrees(

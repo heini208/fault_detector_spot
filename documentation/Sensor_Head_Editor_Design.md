@@ -261,6 +261,21 @@ attachment revision. Both the tip and collision volume belong to that snapshot.
 
 ### Import, persistence, and remote operation
 
+The current Spot implementation saves imported geometry and the probe pose
+together through **Save Sensor Mount**. It uses a bounded `UploadSensorMesh`
+service (48 KiB per request) to stage a content-addressed asset, followed by the
+existing add/update service carrying geometry metadata. The backend checks the
+completed mesh and referenced asset before atomically writing the sensor YAML.
+The UI retains imported bytes until save succeeds, displays upload progress,
+and restores saved geometry metadata when editing a mount. It does not depend
+on a shared filesystem. Generated ROS message serialization, failure paths, and
+storage have offline coverage; deployed DDS transfer remains to be validated.
+
+Asset download for runtime consumers, stale-definition revision checks, 3D import
+preview, and MoveIt attachment/snapshot synchronization remain future work. The
+requirements below describe that complete target workflow. Saving an unverified
+mounting template records its provenance and does not certify physical alignment.
+
 The import dialog previews the complete proposed result before applying it.
 Validate archive paths, expanded size and entry limits, supported schema, units,
 finite transforms, hashes, mesh validity, and reference compatibility. Reject path

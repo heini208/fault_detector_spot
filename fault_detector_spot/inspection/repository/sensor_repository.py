@@ -9,6 +9,8 @@ import yaml
 from fault_detector_spot.inspection.model.sensor_models import (
     SensorDefinition,
 )
+from fault_detector_spot.inspection.model.sensor_geometry import SensorHeadGeometry
+from fault_detector_spot.inspection.repository.sensor_mesh_store import SensorMeshStore
 from fault_detector_spot.shared.persistence.file_storage import (
     atomic_write_text,
     validate_storage_name,
@@ -35,6 +37,17 @@ class SensorRepository:
             storage_root = ros_home / "fault_detector_spot"
             root_dir = storage_root / "sensors"
         self.root_dir = Path(root_dir).expanduser()
+        self.mesh_store = SensorMeshStore(self.root_dir / "assets")
+
+    def store_collision_chunk(
+        self, sha256: str, byte_count: int, offset: int, data: bytes,
+    ) -> bool:
+        """Upload collision bytes into managed storage before saving a definition."""
+        return self.mesh_store.store_chunk(sha256, byte_count, offset, data)
+
+    def read_collision_mesh(self, geometry: SensorHeadGeometry) -> bytes:
+        """Read a validated asset without relying on the original import file."""
+        return self.mesh_store.read(geometry)
 
     def get_sensor_path(self, sensor_id: str) -> Path:
         """Return the YAML path for a sensor ID."""
@@ -65,6 +78,7 @@ class SensorRepository:
                 f"Sensor ID mismatch in {path}: {definition.sensor_id}"
             )
         definition.validate()
+        self._validate_geometry_asset(definition)
         return definition
 
     def create(self, definition: SensorDefinition) -> SensorDefinition:
@@ -114,6 +128,7 @@ class SensorRepository:
         ]
 
     def _write(self, definition: SensorDefinition) -> None:
+        self._validate_geometry_asset(definition)
         content = yaml.safe_dump(
             definition.to_dict(),
             sort_keys=False,
@@ -123,3 +138,7 @@ class SensorRepository:
             self.get_sensor_path(definition.sensor_id),
             content,
         )
+
+    def _validate_geometry_asset(self, definition: SensorDefinition) -> None:
+        if definition.head_geometry is not None:
+            self.read_collision_mesh(definition.head_geometry)

@@ -1,4 +1,4 @@
-"""Offline coverage of the file-picker-to-editable-transform workflow."""
+"""Offline coverage of mount package import and sensor definition drafts."""
 
 import json
 import hashlib
@@ -14,6 +14,9 @@ from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog
 
 from fault_detector_spot.inspection.model.sensor_models import (
     quaternion_from_rpy_degrees,
+)
+from fault_detector_spot.inspection.repository.sensor_head_import import (
+    load_sensor_head,
 )
 from fault_detector_spot.ui.sensor.controls import SensorControls
 from fault_detector_spot.ui.sensor.import_dialog import (
@@ -42,42 +45,48 @@ def controls(application):
 @pytest.fixture
 def package(tmp_path):
     rotation = quaternion_from_rpy_degrees(12.5, -31.25, 84.75)
+    vertices = ((0, 0, 0), (0.01, 0, 0), (0, 0.01, 0), (0, 0, 0.01))
+    faces = ((0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3))
+    mesh = b"\0" * 80 + struct.pack("<I", len(faces)) + b"".join(
+        struct.pack(
+            "<12fH", 0, 0, 0,
+            *(coordinate for index in face for coordinate in vertices[index]),
+            0,
+        )
+        for face in faces
+    )
     manifest = {
         "schema_version": 1,
         "reference_frame": "hand",
         "units": "m",
         "display_name": "Exporter name",
+        "mounting_template_id": "spot-hand-reference-v1",
+        "mounting_template_revision": 1,
+        "reference_model_fingerprint": (
+            "a5746b4090dafe81c140c62d69be15dc682d5835d5384c6bbda8592e53391f46"
+        ),
+        "mounting_template_verified": False,
+        "configuration_method": "manual",
+        "clearance_m": 0,
         "hand_to_probe": {
             "translation": [0.046238241757377466, -0.00107, -0.07917394514872324],
             "quaternion": [rotation.x, rotation.y, rotation.z, rotation.w],
         },
         "hand_to_geometry": {
-            "translation": [9.0, 8.0, 7.0],
+            "translation": [0.09, 0.08, 0.07],
             "quaternion": [0.0, 0.0, 0.0, 1.0],
+        },
+        "collision_mesh": {
+            "path": "collision.stl",
+            "byte_count": len(mesh),
+            "sha256": hashlib.sha256(mesh).hexdigest(),
         },
     }
     path = tmp_path / "head.sensorhead"
     with ZipFile(path, "w") as archive:
         archive.writestr("manifest.json", json.dumps(manifest))
-    return path
-
-
-@pytest.fixture
-def package_with_geometry(package):
-    with ZipFile(package) as archive:
-        manifest = json.loads(archive.read("manifest.json"))
-    mesh = b"\0" * 80 + struct.pack("<I", 1) + struct.pack(
-        "<12fH", 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,
-    )
-    manifest["collision_mesh"] = {
-        "path": "collision.stl",
-        "byte_count": len(mesh),
-        "sha256": hashlib.sha256(mesh).hexdigest(),
-    }
-    with ZipFile(package, "w") as archive:
-        archive.writestr("manifest.json", json.dumps(manifest))
         archive.writestr("collision.stl", mesh)
-    return package
+    return path
 
 
 def select_file(monkeypatch, path, accepted=True, during_dialog=None):
@@ -130,15 +139,23 @@ def test_import_fills_probe_transform_preserving_identity_and_channels(
     assert len(saves) == 1
     assert saves[0].translation_m[0] == 0.051
     assert saves[0].rotation_degrees == pytest.approx((12.5, -31.25, 84.75))
+    imported = load_sensor_head(package)
+    assert saves[0].head_geometry == imported.head_geometry
+    assert saves[0].collision_mesh == imported.collision_mesh
+    assert saves[0].orientation == tuple(
+        getattr(imported.hand_to_probe.orientation, axis) for axis in "xyzw"
+    )
 
 
 @pytest.mark.parametrize("outcome", ("cancel", "invalid", "missing"))
 def test_unsuccessful_import_preserves_existing_values(
-    controls, tmp_path, monkeypatch, outcome,
+    controls, package, tmp_path, monkeypatch, outcome,
 ):
+    select_file(monkeypatch, package)
+    controls.import_mount_button.click()
     controls.translation_fields[0].setText("0.1234")
     controls.rotation_fields[2].setText("45.0")
-    controls.set_collision_geometry_available(True)
+    intent_before = controls._definition_intent()
     geometry_before = controls.collision_geometry_status.text()
     before = field_values(controls)
     status_before = controls.transform_status_value.text()
@@ -151,6 +168,7 @@ def test_unsuccessful_import_preserves_existing_values(
 
     assert field_values(controls) == before
     assert controls.collision_geometry_status.text() == geometry_before
+    assert controls._definition_intent() == intent_before
     if outcome == "cancel":
         assert controls.transform_status_value.text() == status_before
     else:
@@ -164,9 +182,38 @@ def test_import_is_disabled_during_save_and_restored_on_failure(controls):
     ))
 
     assert not controls.import_mount_button.isEnabled()
+    assert not controls.save_mount_button.isEnabled()
 
     controls.finish_sensor_save(False, "Save failed")
     assert controls.import_mount_button.isEnabled()
+    assert controls.save_mount_button.isEnabled()
+
+
+def test_upload_progress_cannot_overwrite_the_save_result(controls):
+    controls.mark_sensor_save_pending()
+
+    controls.set_mesh_upload_progress(48 * 1024, 164 * 1024)
+
+    assert controls.transform_status_value.text() == (
+        "Uploading collision geometry: 48 / 164 KiB"
+    )
+    controls.finish_sensor_save(False, "Upload failed")
+    controls.set_mesh_upload_progress(96 * 1024, 164 * 1024)
+    assert controls.transform_status_value.text() == "Upload failed"
+
+
+def test_main_upload_progress_handles_controls_not_yet_constructed(controls):
+    from fault_detector_spot.ui.fault_detector_ui import Fault_Detector_UI
+
+    ui = SimpleNamespace()
+    handler = Fault_Detector_UI._process_sensor_mesh_upload_progress
+
+    handler(ui, 0, 1024)
+
+    ui.sensor_controls = controls
+    controls.mark_sensor_save_pending()
+    handler(ui, 512, 1024)
+    assert "Uploading collision geometry:" in controls.transform_status_value.text()
 
 
 def test_import_rechecks_attachment_after_dialog(controls, package, monkeypatch):
@@ -202,22 +249,30 @@ def test_discard_resets_imported_transform(controls, package, monkeypatch):
 
     assert tuple(float(value) for value in field_values(controls)) == (0.0,) * 6
     assert controls.import_mount_button.isEnabled()
+    controls.mount_id_field.setText("other")
+    controls.display_name_field.setText("Other sensor")
+    intent = controls._definition_intent()
+    assert intent.head_geometry is None
+    assert intent.collision_mesh == b""
+    assert intent.orientation is None
 
 
 def test_geometry_indicator_tracks_import_and_discard(
-    controls, package_with_geometry, monkeypatch,
+    controls, package, monkeypatch,
 ):
     assert "No collision geometry" in controls.collision_geometry_status.text()
     assert "#c62828" in controls.collision_geometry_status.styleSheet()
-    select_file(monkeypatch, package_with_geometry)
+    select_file(monkeypatch, package)
 
     controls.import_mount_button.click()
 
-    assert "found in imported file" in controls.collision_geometry_status.text()
-    assert "#2e7d32" in controls.collision_geometry_status.styleSheet()
+    assert "ready to save" in controls.collision_geometry_status.text()
+    assert "#a66300" in controls.collision_geometry_status.styleSheet()
+    intent_before = controls._definition_intent()
     controls.mark_sensor_save_pending()
     controls.finish_sensor_save(False, "Save failed")
-    assert "found in imported file" in controls.collision_geometry_status.text()
+    assert "ready to save" in controls.collision_geometry_status.text()
+    assert controls._definition_intent() == intent_before
 
     controls.discard_mount_button.click()
 
@@ -225,32 +280,86 @@ def test_geometry_indicator_tracks_import_and_discard(
     assert "#c62828" in controls.collision_geometry_status.styleSheet()
 
 
-def test_transform_only_import_clears_previous_geometry_indicator(
-    controls, package, monkeypatch,
+@pytest.mark.parametrize("problem", ("missing", "checksum", "placement"))
+def test_invalid_geometry_does_not_partially_apply_a_new_tip(
+    controls, package, tmp_path, monkeypatch, problem,
 ):
-    controls.set_collision_geometry_available(True)
     select_file(monkeypatch, package)
+    controls.import_mount_button.click()
+    before = controls._definition_intent()
+    with ZipFile(package) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        mesh = archive.read("collision.stl")
+    manifest["hand_to_probe"]["translation"][0] = 1.23
+    if problem == "missing":
+        del manifest["collision_mesh"]
+    elif problem == "checksum":
+        manifest["collision_mesh"]["sha256"] = "0" * 64
+    else:
+        manifest["hand_to_geometry"]["quaternion"] = [0, 0, 0, 0]
+    path = tmp_path / "invalid.sensorhead"
+    with ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.writestr("collision.stl", mesh)
+    select_file(monkeypatch, path)
 
     controls.import_mount_button.click()
 
-    assert "No collision geometry" in controls.collision_geometry_status.text()
-    assert float(controls.translation_fields[0].text()) == pytest.approx(
-        0.046238241757377466
-    )
+    assert controls._definition_intent() == before
+    assert "Import failed:" in controls.transform_status_value.text()
 
 
-def test_opening_saved_mount_clears_draft_geometry_status(controls):
+@pytest.mark.parametrize("has_geometry", (True, False))
+def test_opening_saved_mount_replaces_draft_geometry(
+    controls, package, monkeypatch, has_geometry,
+):
+    imported = load_sensor_head(package)
+    geometry = imported.head_geometry if has_geometry else None
     controls.apply_definitions((SimpleNamespace(
         sensor_id="saved", display_name="Saved mount", probe_frame="saved_probe",
-        position=(0.1, 0.2, 0.3), rotation_degrees=(0.0, 0.0, 0.0), channels=(),
+        position=(0.1, 0.2, 0.3), orientation=(0.0, 0.0, 0.0, 1.0),
+        rotation_degrees=(0.0, 0.0, 0.0), channels=(), head_geometry=geometry,
     ),))
     controls.apply_attachment_state(SimpleNamespace(
         selected_sensor_id="", status="active",
     ))
-    controls.set_collision_geometry_available(True)
+    select_file(monkeypatch, package)
+    controls.import_mount_button.click()
     controls.mount_table.selectRow(0)
 
     controls.edit_selected_sensor()
 
     assert controls.mount_id_field.text() == "saved"
-    assert "No collision geometry" in controls.collision_geometry_status.text()
+    intent = controls._definition_intent()
+    assert intent.head_geometry == geometry
+    assert intent.collision_mesh == b""
+    if has_geometry:
+        assert "geometry saved" in controls.collision_geometry_status.text()
+        assert "#2e7d32" in controls.collision_geometry_status.styleSheet()
+    else:
+        assert "No collision geometry" in controls.collision_geometry_status.text()
+    controls.translation_fields[0].setText("0.123")
+    assert controls._definition_intent().head_geometry == geometry
+
+
+def test_import_preserves_full_tip_precision_until_corresponding_fields_change(
+    controls, package, monkeypatch,
+):
+    with ZipFile(package) as archive:
+        pose = json.loads(archive.read("manifest.json"))["hand_to_probe"]
+    select_file(monkeypatch, package)
+    controls.import_mount_button.click()
+
+    intent = controls._definition_intent()
+
+    assert intent.translation_m == tuple(pose["translation"])
+    assert intent.orientation == tuple(pose["quaternion"])
+    controls.translation_fields[0].setText("0.123")
+    intent = controls._definition_intent()
+    assert intent.translation_m == (0.123, *pose["translation"][1:])
+    assert intent.orientation == tuple(pose["quaternion"])
+    controls.rotation_fields[2].setText("25")
+    intent = controls._definition_intent()
+    assert intent.orientation is None
+    assert intent.rotation_degrees[2] == 25
+    assert intent.head_geometry == load_sensor_head(package).head_geometry

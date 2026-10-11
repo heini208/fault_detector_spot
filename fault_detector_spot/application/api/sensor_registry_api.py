@@ -7,7 +7,9 @@ from fault_detector_msgs.msg import (
     SensorDefinition as SensorDefinitionMessage,
     SensorDefinitionArray,
 )
-from fault_detector_msgs.srv import AddSensor, DeleteSensor, UpdateSensor
+from fault_detector_msgs.srv import (
+    AddSensor, DeleteSensor, UpdateSensor, UploadSensorMesh,
+)
 from geometry_msgs.msg import TransformStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
 from synchros2.static_transform_broadcaster import (
@@ -26,6 +28,10 @@ from fault_detector_spot.inspection.model.sensor_models import (
     SensorDefinition,
 )
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
+from fault_detector_spot.shared.ros.sensor_geometry_adapter import (
+    head_geometry_from_messages,
+    head_geometry_to_messages,
+)
 
 
 class SensorRegistryApi:
@@ -35,6 +41,7 @@ class SensorRegistryApi:
     ADD_SENSOR_SERVICE = "fault_detector/add_sensor"
     UPDATE_SENSOR_SERVICE = "fault_detector/update_sensor"
     DELETE_SENSOR_SERVICE = "fault_detector/delete_sensor"
+    UPLOAD_MESH_SERVICE = "fault_detector/upload_sensor_mesh"
 
     def __init__(self, node, controller):
         self.node = node
@@ -65,9 +72,31 @@ class SensorRegistryApi:
             self._handle_delete_sensor,
             callback_group=self._callback_group,
         )
+        self._upload_mesh_service = node.create_service(
+            UploadSensorMesh,
+            self.UPLOAD_MESH_SERVICE,
+            self._handle_upload_mesh,
+            callback_group=self._callback_group,
+        )
         definitions = controller.definitions()
         self._broadcast_definitions(definitions)
         self._publish_definitions(definitions)
+
+    def _handle_upload_mesh(self, request, response):
+        with self._lock:
+            try:
+                response.complete = self.controller.upload_collision_mesh(
+                    request.sha256, request.byte_count, request.offset,
+                    bytes(request.data),
+                )
+            except Exception as exception:
+                response.success = False
+                response.complete = False
+                response.message = str(exception)
+                return response
+        response.success = True
+        response.message = "Mesh stored" if response.complete else "Chunk received"
+        return response
 
     def _handle_add_sensor(self, request, response):
         return self._handle_definition_mutation(
@@ -195,6 +224,7 @@ class SensorRegistryApi:
             SensorRegistryApi._channel_message(channel)
             for channel in definition.channels
         ]
+        message.head_geometry = head_geometry_to_messages(definition.head_geometry)
         return message
 
     @staticmethod
@@ -213,6 +243,7 @@ class SensorRegistryApi:
         definition = SensorDefinition(
             sensor_id=message.sensor_id,
             display_name=message.display_name,
+            head_geometry=head_geometry_from_messages(message.head_geometry),
             channels=tuple(
                 SensorChannel(
                     channel_id=channel.channel_id,
@@ -247,6 +278,7 @@ class SensorRegistryApi:
         self.node.destroy_service(self._add_service)
         self.node.destroy_service(self._update_service)
         self.node.destroy_service(self._delete_service)
+        self.node.destroy_service(self._upload_mesh_service)
         self.node.destroy_publisher(self._publisher)
 
 

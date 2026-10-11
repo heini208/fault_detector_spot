@@ -179,14 +179,26 @@ physically confirm an offline sensor definition. Connection state does not gate
 arm movement and does not modify physical attachment state.
 
 **Import mount_creator ZIP** opens a file picker for `.sensorhead`
-exports. It fills the current form's hand-to-probe translation (metres) and
-rotation (degrees). Review or adjust the values, then use **Save Sensor Mount**.
-This step imports the sensor-tip transform only; collision geometry import is
-not connected yet. The mount ID, name, and acquisition channels remain editable
-through the existing form.
-The small collision-geometry indicator below the import button is green when
-the selected file contains a matching collision mesh and red otherwise. This
-reports file contents, not saved geometry or active planning collision checks.
+exports. It validates the collision mesh and its hand-relative placement, and
+fills the hand-to-probe translation (metres) and rotation (degrees). Review or
+adjust the tip values, then use **Save Sensor Mount**. The mount ID, name, and
+acquisition channels stay with the current form. Invalid imports preserve the
+existing draft. Unchanged tip fields retain the exported transform's precision.
+
+Saving uploads the mesh in bounded 48 KiB chunks to the registry, validates it
+again, and atomically stores the tip and geometry metadata in the sensor YAML.
+Meshes live under `$ROS_HOME/fault_detector_spot/sensors/assets/<sha256>.stl`;
+the original download is no longer needed. Existing assets are reused, and
+editing a saved mount preserves its geometry without uploading the mesh again.
+Upload failures leave the saved definition unchanged and keep the draft for retry.
+Imports support the current hand reference template, metre units, and closed,
+consistently wound binary STL meshes of at most 200,000 triangles and 32 MiB.
+
+The small indicator below the import button is red for no geometry, amber for
+imported geometry awaiting save, and green when opening a mount with saved
+geometry. MoveIt attachment and collision-scene integration are still pending.
+After this interface change, rebuild `fault_detector_msgs` and
+`fault_detector_spot` on both the UI and backend installations before use.
 
 Each mount definition also owns zero or more generic acquisition channels. A
 channel has a stable channel ID and an explicit source kind. ROS-topic channels

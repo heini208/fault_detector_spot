@@ -40,6 +40,14 @@ class SensorRegistryController:
         """Return validated definitions in stable sensor ID order."""
         return tuple(self.sensor_repository.load_all())
 
+    def upload_collision_mesh(
+        self, sha256: str, byte_count: int, offset: int, data: bytes,
+    ) -> bool:
+        """Stage an asset without changing any sensor definition or attachment."""
+        return self.sensor_repository.store_collision_chunk(
+            sha256, byte_count, offset, data,
+        )
+
     def create(self, definition: SensorDefinition) -> SensorDefinition:
         """Create one definition while the physical command lane is idle."""
         return self._mutate(

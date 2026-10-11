@@ -1,5 +1,9 @@
 """Tests for persistent physical sensor transform storage."""
 
+from dataclasses import replace
+import hashlib
+import struct
+
 import pytest
 import yaml
 
@@ -11,6 +15,13 @@ from fault_detector_spot.inspection.model.sensor_models import (
 from fault_detector_spot.inspection.repository.sensor_repository import (
     SensorRepository,
 )
+from fault_detector_spot.inspection.model.sensor_geometry import (
+    MOUNTING_TEMPLATE_ID,
+    MOUNTING_TEMPLATE_REVISION,
+    REFERENCE_MODEL_FINGERPRINT,
+    SensorHeadGeometry,
+)
+from fault_detector_spot.shared.geometry.models import PoseData
 
 
 def definition(sensor_id="bmm150_01", x=0.20):
@@ -158,3 +169,128 @@ def test_load_all_sorts_physical_sensor_ids(tmp_path):
     assert [
         item.sensor_id for item in repository.load_all()
     ] == ["sensor_a", "sensor_b"]
+
+
+@pytest.fixture
+def collision_asset():
+    vertices = ((0, 0, 0), (0.1, 0, 0), (0, 0.1, 0), (0, 0, 0.1))
+    faces = ((0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3))
+    data = bytes(80) + struct.pack("<I", len(faces))
+    for face in faces:
+        points = [coordinate for index in face for coordinate in vertices[index]]
+        data += struct.pack("<12fH", 0, 0, 0, *points, 0)
+    geometry = SensorHeadGeometry(
+        hashlib.sha256(data).hexdigest(), len(data), PoseData.identity(),
+        MOUNTING_TEMPLATE_ID, MOUNTING_TEMPLATE_REVISION,
+        REFERENCE_MODEL_FINGERPRINT, False,
+    )
+    return data, geometry
+
+
+def test_geometry_and_pose_survive_source_deletion_and_repository_restart(
+    tmp_path, collision_asset,
+):
+    data, geometry = collision_asset
+    source = tmp_path / "download.stl"
+    source.write_bytes(data)
+    repository = SensorRepository(tmp_path / "sensors")
+    repository.store_collision_chunk(
+        geometry.collision_sha256, len(data), 0, source.read_bytes(),
+    )
+    stored = replace(definition("test", x=0.15), head_geometry=geometry)
+    repository.create(stored)
+    source.unlink()
+
+    restarted = SensorRepository(repository.root_dir)
+
+    assert restarted.load("test") == stored
+    assert restarted.read_collision_mesh(geometry) == data
+    assert (repository.root_dir / geometry.asset_path).read_bytes() == data
+    assert str(source) not in repository.get_sensor_path("test").read_text()
+
+
+def test_deleting_definition_keeps_asset_shared_by_another_mount(
+    tmp_path, collision_asset,
+):
+    data, geometry = collision_asset
+    repository = SensorRepository(tmp_path)
+    repository.store_collision_chunk(geometry.collision_sha256, len(data), 0, data)
+    repository.create(replace(definition("first"), head_geometry=geometry))
+    second = replace(definition("second"), head_geometry=geometry)
+    repository.create(second)
+
+    repository.delete("first")
+
+    assert repository.load("second") == second
+    assert repository.read_collision_mesh(geometry) == data
+    assert len(list((tmp_path / "assets").iterdir())) == 1
+
+
+def test_missing_asset_rejects_create_without_writing_yaml(tmp_path, collision_asset):
+    _, geometry = collision_asset
+    repository = SensorRepository(tmp_path)
+
+    with pytest.raises(FileNotFoundError):
+        repository.create(replace(definition("test"), head_geometry=geometry))
+
+    assert not repository.get_sensor_path("test").exists()
+
+
+def test_failed_geometry_update_preserves_previous_pose_and_geometry(
+    tmp_path, collision_asset,
+):
+    data, geometry = collision_asset
+    repository = SensorRepository(tmp_path)
+    repository.store_collision_chunk(geometry.collision_sha256, len(data), 0, data)
+    original = replace(definition("test", x=0.15), head_geometry=geometry)
+    repository.create(original)
+    before = repository.get_sensor_path("test").read_bytes()
+    missing = replace(geometry, collision_sha256="0" * 64)
+
+    with pytest.raises(FileNotFoundError):
+        repository.update(replace(definition("test", x=0.9), head_geometry=missing))
+
+    assert repository.get_sensor_path("test").read_bytes() == before
+    assert repository.load("test") == original
+
+
+def test_atomic_yaml_failure_preserves_previous_pose_and_geometry(
+    tmp_path, collision_asset, monkeypatch,
+):
+    data, geometry = collision_asset
+    repository = SensorRepository(tmp_path)
+    repository.store_collision_chunk(geometry.collision_sha256, len(data), 0, data)
+    original = replace(definition("test", x=0.15), head_geometry=geometry)
+    repository.create(original)
+    before = repository.get_sensor_path("test").read_bytes()
+
+    def fail_replace(*_args):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(
+        "fault_detector_spot.shared.persistence.file_storage.os.replace",
+        fail_replace,
+    )
+    with pytest.raises(OSError, match="disk failure"):
+        repository.update(replace(definition("test", x=0.9), head_geometry=geometry))
+
+    assert repository.get_sensor_path("test").read_bytes() == before
+    assert repository.load("test") == original
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["assets", "test.yaml"]
+
+
+def test_tampered_asset_rejects_load_and_update(tmp_path, collision_asset):
+    data, geometry = collision_asset
+    repository = SensorRepository(tmp_path)
+    repository.store_collision_chunk(geometry.collision_sha256, len(data), 0, data)
+    original = replace(definition("test"), head_geometry=geometry)
+    repository.create(original)
+    before = repository.get_sensor_path("test").read_bytes()
+    (tmp_path / geometry.asset_path).write_bytes(b"invalid")
+
+    with pytest.raises(ValueError):
+        repository.load("test")
+    with pytest.raises(ValueError):
+        repository.update(replace(original, display_name="Changed"))
+
+    assert repository.get_sensor_path("test").read_bytes() == before

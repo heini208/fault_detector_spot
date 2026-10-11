@@ -1,6 +1,7 @@
 """Tests for hand-mounted sensor definitions and transform helpers."""
 
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -17,6 +18,12 @@ from fault_detector_spot.inspection.model.sensor_models import (
     rpy_degrees_from_quaternion,
     sensor_definition_from_values,
     sensor_probe_frame,
+)
+from fault_detector_spot.inspection.model.sensor_geometry import (
+    MOUNTING_TEMPLATE_ID,
+    MOUNTING_TEMPLATE_REVISION,
+    REFERENCE_MODEL_FINGERPRINT,
+    SensorHeadGeometry,
 )
 
 
@@ -38,6 +45,36 @@ def test_sensor_definition_round_trip_and_derived_frame():
     assert restored == definition
     assert restored.probe_frame == "bmm150_01_probe"
     assert sensor_probe_frame("bmm150_01") == "bmm150_01_probe"
+
+
+def test_sensor_definition_round_trips_geometry_separately_from_tip():
+    geometry = SensorHeadGeometry(
+        collision_sha256="a" * 64,
+        collision_byte_count=284,
+        hand_to_geometry=PoseData.identity(),
+        mounting_template_id=MOUNTING_TEMPLATE_ID,
+        mounting_template_revision=MOUNTING_TEMPLATE_REVISION,
+        reference_model_fingerprint=REFERENCE_MODEL_FINGERPRINT,
+        mounting_template_verified=False,
+    )
+    definition = sensor_definition_from_values(
+        "probe", "Probe", .1, .2, .3, 0, 0, 0, head_geometry=geometry,
+    )
+
+    restored = SensorDefinition.from_dict(definition.to_dict())
+    restored.validate()
+
+    assert restored == definition
+    assert restored.head_geometry.hand_to_geometry != restored.hand_to_probe
+
+
+def test_manual_sensor_definition_keeps_legacy_serialization():
+    definition = SensorDefinition("probe", "Probe", PoseData.identity())
+
+    assert "head_geometry" not in definition.to_dict()
+    assert SensorDefinition.from_dict(definition.to_dict()).head_geometry is None
+    with pytest.raises(TypeError, match="SensorHeadGeometry"):
+        replace(definition, head_geometry={}).validate()
 
 
 def test_sensor_definition_round_trips_configured_channels():

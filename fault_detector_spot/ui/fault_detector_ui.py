@@ -541,6 +541,8 @@ class Fault_Detector_UI(QWidget):
             if update
             else self.sensor_registry_client.create_sensor
         )
+        self.sensor_controls.mark_sensor_save_pending()
+        self.status_label.setText("Status: saving sensor mount")
         try:
             future = operation(
                 intent.sensor_id,
@@ -548,6 +550,9 @@ class Fault_Detector_UI(QWidget):
                 intent.translation_m,
                 intent.rotation_degrees,
                 intent.channels,
+                head_geometry=intent.head_geometry,
+                collision_mesh=intent.collision_mesh,
+                orientation=intent.orientation,
             )
         except (TypeError, ValueError) as exception:
             self.sensor_controls.finish_sensor_save(
@@ -555,11 +560,6 @@ class Fault_Detector_UI(QWidget):
                 str(exception),
             )
             return None
-        if future is not None:
-            self.sensor_controls.mark_sensor_save_pending()
-            self.status_label.setText(
-                "Status: saving sensor transform"
-            )
         return future
 
     def _process_sensor_save_result(self, success, message):
@@ -572,6 +572,10 @@ class Fault_Detector_UI(QWidget):
             self.status_label.setText(f"Status: {message}")
             return
         self._process_application_error(message)
+
+    def _process_sensor_mesh_upload_progress(self, sent, total):
+        if hasattr(self, "sensor_controls"):
+            self.sensor_controls.set_mesh_upload_progress(sent, total)
 
     def _delete_sensor_definition(self, sensor_id):
         if self.sensor_registry_client is None:
@@ -769,6 +773,9 @@ class Fault_Detector_UI(QWidget):
         )
         self.sensor_registry_client.update_finished.connect(
             self._process_sensor_save_result
+        )
+        self.sensor_registry_client.upload_progress.connect(
+            self._process_sensor_mesh_upload_progress
         )
         self.sensor_registry_client.deletion_finished.connect(
             self._process_sensor_deletion_result

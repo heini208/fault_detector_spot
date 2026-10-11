@@ -45,6 +45,7 @@ class SensorDefinitionView:
     orientation: tuple
     rotation_degrees: tuple
     channels: tuple = ()
+    head_geometry: object = None
 
 
 @dataclass(frozen=True)
