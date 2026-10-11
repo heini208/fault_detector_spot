@@ -50,6 +50,7 @@ from .ros.sensor_topic_suggestion_client import (
     SensorTopicSuggestionClient,
 )
 from .sensor.controls import SensorControls
+from .sensor.import_dialog import import_sensor_head_transform
 from .sensor.models import (
     SensorAcquisitionViewStatus,
     SensorAttachmentViewStatus,
@@ -166,6 +167,9 @@ class Fault_Detector_UI(QWidget):
         self.base_movement_controls = BaseMovementControls(self)
         self.inspection_controls = FinalizingInspectionControls(self)
         self.sensor_controls = SensorControls(self)
+        self.sensor_controls.import_requested.connect(
+            lambda: import_sensor_head_transform(self.sensor_controls)
+        )
         self.sensor_controls.select_requested.connect(
             self._select_sensor_attachment
         )

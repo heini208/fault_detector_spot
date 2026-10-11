@@ -17,6 +17,10 @@ class SensorUiPreview(QMainWindow):
         self.resize(1000, 720)
 
         controls = SensorControls()
+        controls.import_mount_button.setEnabled(False)
+        controls.import_mount_button.setToolTip(
+            "Import mount packages in the main application."
+        )
         controls.add_preview_mount(
             "Hall probe mount",
             "bmm150_mount",

@@ -81,16 +81,23 @@ def rpy_degrees_from_quaternion(
     z /= norm
     w /= norm
 
-    roll = math.atan2(
-        2.0 * (w * x + y * z),
-        1.0 - 2.0 * (x * x + y * y),
-    )
-    pitch_input = 2.0 * (w * y - z * x)
-    pitch = math.asin(max(-1.0, min(1.0, pitch_input)))
-    yaw = math.atan2(
-        2.0 * (w * z + x * y),
-        1.0 - 2.0 * (y * y + z * z),
-    )
+    rotation_xx = 1.0 - 2.0 * (y * y + z * z)
+    rotation_yx = 2.0 * (w * z + x * y)
+    cos_pitch = math.hypot(rotation_xx, rotation_yx)
+    pitch = math.atan2(2.0 * (w * y - z * x), cos_pitch)
+    if cos_pitch > 1e-8:
+        roll = math.atan2(
+            2.0 * (w * x + y * z),
+            1.0 - 2.0 * (x * x + y * y),
+        )
+        yaw = math.atan2(rotation_yx, rotation_xx)
+    else:
+        # At gimbal lock only combined roll/yaw is observable. Choose zero roll.
+        roll = 0.0
+        yaw = math.atan2(
+            2.0 * (w * z - x * y),
+            1.0 - 2.0 * (x * x + z * z),
+        )
     return (
         math.degrees(roll),
         math.degrees(pitch),

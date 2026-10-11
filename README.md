@@ -178,6 +178,13 @@ transcription. Detection is optional: users can still type, save, select, and
 physically confirm an offline sensor definition. Connection state does not gate
 arm movement and does not modify physical attachment state.
 
+**Import mount_creator ZIP** opens a file picker for `.sensorhead`
+exports. It fills the current form's hand-to-probe translation (metres) and
+rotation (degrees). Review or adjust the values, then use **Save Sensor Mount**.
+This step imports the sensor-tip transform only; collision geometry import is
+not connected yet. The mount ID, name, and acquisition channels remain editable
+through the existing form.
+
 Each mount definition also owns zero or more generic acquisition channels. A
 channel has a stable channel ID and an explicit source kind. ROS-topic channels
 store a complete topic and `package/msg/Type`; the derived `spot_geometry`

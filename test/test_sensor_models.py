@@ -189,6 +189,29 @@ def test_rpy_degree_conversion_round_trips_quaternion():
     assert yaw == pytest.approx(91.0)
 
 
+@pytest.mark.parametrize(
+    "pitch",
+    [90.0, -90.0, 89.999999, -89.999999, 89.9999999, -89.9999999],
+)
+@pytest.mark.parametrize("roll, yaw", [(30.0, 60.0), (123.0, -87.0)])
+def test_rpy_conversion_preserves_rotation_at_gimbal_lock(roll, pitch, yaw):
+    original = quaternion_from_rpy_degrees(roll, pitch, yaw)
+
+    angles = rpy_degrees_from_quaternion(original)
+    restored = quaternion_from_rpy_degrees(*angles)
+
+    original_values = tuple(original.to_dict().values())
+    restored_values = tuple(restored.to_dict().values())
+    # Either quaternion sign represents the same rotation.
+    sign = 1 if sum(
+        before * after
+        for before, after in zip(original_values, restored_values)
+    ) >= 0 else -1
+    assert restored_values == pytest.approx(
+        tuple(sign * value for value in original_values), rel=0, abs=1e-8
+    )
+
+
 def test_rpy_degrees_are_saved_as_normalized_quaternion():
     quaternion = quaternion_from_rpy_degrees(0.0, 0.0, 90.0)
 

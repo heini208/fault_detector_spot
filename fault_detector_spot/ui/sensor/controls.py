@@ -60,6 +60,7 @@ class SensorControls(QWidget):
     create_requested = pyqtSignal(object)
     update_requested = pyqtSignal(object)
     delete_requested = pyqtSignal(str)
+    import_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         """Build the sensor mount workspace."""
@@ -243,9 +244,8 @@ class SensorControls(QWidget):
         form.addRow("Probe frame:", self.probe_frame_field)
 
         self.import_mount_button = QPushButton("Import mount_creator ZIP")
-        self.import_mount_button.setEnabled(False)
         self.import_mount_button.setToolTip(
-            "Mount package import is not available yet."
+            "Fill the hand-to-probe transform from a .sensorhead file."
         )
         form.addRow(self.import_mount_button)
 
@@ -394,6 +394,7 @@ class SensorControls(QWidget):
         )
 
     def _connect_intents(self) -> None:
+        self.import_mount_button.clicked.connect(self.import_requested)
         self.select_mount_button.clicked.connect(
             self._request_selected_mount
         )
@@ -562,6 +563,20 @@ class SensorControls(QWidget):
         self._set_transform_fields_editable(True)
         self._refresh_save_availability()
         self._refresh_detected_mount_actions()
+
+    def apply_imported_transform(self, translation_m, rotation_degrees) -> None:
+        """Fill the editable transform without saving the sensor definition."""
+        if not self.import_mount_button.isEnabled():
+            return
+        for field, value in zip(
+            (*self.translation_fields, *self.rotation_fields),
+            (*translation_m, *rotation_degrees),
+        ):
+            field.setText(self._format_number(value))
+            field.setCursorPosition(0)
+        self.transform_status_value.setText(
+            "Sensor-tip transform imported. Review the values, then save."
+        )
 
     def clear_sensor_definition(self) -> None:
         """Reset the definition form to create a new sensor mount."""
@@ -816,6 +831,7 @@ class SensorControls(QWidget):
         self.delete_mount_button.setToolTip(tooltip)
 
     def _refresh_save_availability(self) -> None:
+        self._refresh_import_availability()
         if not self._editing_sensor_id:
             self.save_mount_button.setEnabled(True)
             return
@@ -825,6 +841,13 @@ class SensorControls(QWidget):
             self.transform_status_value.setText(
                 "Remove or switch this sensor before editing it."
             )
+
+    def _refresh_import_availability(self) -> None:
+        allowed = not self.translation_fields[0].isReadOnly() and (
+            not self._editing_sensor_id
+            or self._mutation_allowed(self._editing_sensor_id)
+        )
+        self.import_mount_button.setEnabled(allowed)
 
     def _mutation_allowed(self, sensor_id: str) -> bool:
         state = self._attachment_state
@@ -865,6 +888,7 @@ class SensorControls(QWidget):
             *self.rotation_fields,
         ):
             field.setReadOnly(not editable)
+        self._refresh_import_availability()
 
     def _set_channel_fields_editable(self, editable: bool) -> None:
         self.channel_table.setEnabled(editable)
@@ -1134,7 +1158,7 @@ class SensorControls(QWidget):
 
     @staticmethod
     def _format_number(value: float) -> str:
-        return format(float(value), ".8g")
+        return format(float(value), ".15g")
 
     @staticmethod
     def _vector_fields(labels, unit):
@@ -1148,10 +1172,11 @@ class SensorControls(QWidget):
             label = QLabel(f"{label_text}:")
             field = QLineEdit()
             field.setText("0.0")
+            field.textChanged.connect(field.setToolTip)
             field.setMaximumWidth(85)
             validator = QDoubleValidator(field)
             validator.setLocale(QLocale.c())
-            validator.setNotation(QDoubleValidator.StandardNotation)
+            validator.setNotation(QDoubleValidator.ScientificNotation)
             field.setValidator(validator)
             fields.append(field)
             layout.addWidget(label)
