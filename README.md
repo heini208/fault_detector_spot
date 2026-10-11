@@ -214,6 +214,12 @@ finger. Confirmed **No sensor** restores those three stock meshes as the same
 owned attachment. The retained rear housing is conservative where a physical
 mount replaces more of the stock jaw.
 
+The MoveIt model also includes closed convex hip meshes and a refined upper-arm
+envelope derived from the supplied Spot visuals. `arm_link_hr0` owns the collision
+geometry for both itself and its identity-fixed parent `arm_link_sh1`; the latter's
+missing-collision warning does not indicate a separate unmodelled arm segment.
+These model changes do not reduce the lidar filtering margins described below.
+
 RViz's **MoveIt collision scene** display in `config/arm_collision.rviz` shows
 the installed attachment in green after confirming the physical mount. The BT
 runtime refreshes and verifies the scene while the arm is idle; no movement
