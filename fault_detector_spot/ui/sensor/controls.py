@@ -95,7 +95,6 @@ class SensorControls(QWidget):
         body.addWidget(self._build_definition_group(), 6)
         content_layout.addLayout(body)
 
-        content_layout.addWidget(self._build_configuration_group())
         content_layout.addStretch()
 
         scroll.setWidget(content)
@@ -243,6 +242,13 @@ class SensorControls(QWidget):
         form.addRow("Display name:", self.display_name_field)
         form.addRow("Probe frame:", self.probe_frame_field)
 
+        self.import_mount_button = QPushButton("Import mount_creator ZIP")
+        self.import_mount_button.setEnabled(False)
+        self.import_mount_button.setToolTip(
+            "Mount package import is not available yet."
+        )
+        form.addRow(self.import_mount_button)
+
         translation = self._vector_fields(
             ("X", "Y", "Z"),
             "m",
@@ -386,44 +392,6 @@ class SensorControls(QWidget):
             if expanded
             else "Show acquisition channels"
         )
-
-    def _build_configuration_group(self) -> QGroupBox:
-        group = QGroupBox("Configuration")
-        layout = QGridLayout(group)
-        layout.setHorizontalSpacing(16)
-        layout.setVerticalSpacing(5)
-
-        manual_title = QLabel("Manual transform")
-        manual_title.setStyleSheet("font-weight: bold;")
-        manual_text = QLabel(
-            "Enter the transform from the Spot hand frame to the sensor "
-            "probe frame above. This is manual configuration, not an "
-            "automatic calibration result."
-        )
-        manual_text.setWordWrap(True)
-
-        automatic_title = QLabel("Automatic calibration")
-        automatic_title.setStyleSheet("font-weight: bold;")
-        automatic_text = QLabel(
-            "Reserved for a later workflow that can determine the probe "
-            "transform automatically."
-        )
-        automatic_text.setWordWrap(True)
-
-        self.start_configuration_button = QPushButton(
-            "Start Automatic Calibration"
-        )
-        self.start_configuration_button.setEnabled(False)
-
-        layout.addWidget(manual_title, 0, 0)
-        layout.addWidget(manual_text, 1, 0)
-        layout.addWidget(automatic_title, 0, 1)
-        layout.addWidget(automatic_text, 1, 1)
-        layout.addWidget(self.start_configuration_button, 2, 1)
-
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 1)
-        return group
 
     def _connect_intents(self) -> None:
         self.select_mount_button.clicked.connect(
