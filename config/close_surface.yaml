@@ -3,7 +3,8 @@
     close_surface.robot_name: ''
 
     close_surface.settle_sec: 0.5
-    close_surface.sample_timeout_sec: 3.0
+    # Collection budget after settling; newest valid depth must still be fresh.
+    close_surface.sample_timeout_sec: 6.0
 
     close_surface.maximum_step_m: 0.010
     close_surface.tolerance_m: 0.005

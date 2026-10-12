@@ -117,7 +117,7 @@ def test_execution_start_owns_lifecycle_and_cancel():
     assert result is MoveCloseToSurfaceOutcome.RUNNING
     assert action.active
     assert action._phase == "sampling"
-    assert action.feedback_message == "Collecting initial live surface distance"
+    assert action.feedback_message == "Waiting to settle before collecting surface distance"
 
     executor.active = True
     action.cancel()
@@ -236,7 +236,7 @@ def test_contact_replanning_is_bounded_and_only_for_incomplete_paths(detail, ret
 @pytest.mark.parametrize("verified", [False, True])
 def test_sampling_rejects_misaligned_measured_plane_even_at_standoff(monkeypatch, verified):
     action = execution()
-    action._clock = lambda: 4.0
+    action._clock = lambda: action.config.sample_timeout_sec + 1.0
     action._phase_started = 0.0
     action._sample_receipt_not_before = 0.0
     action._surface_samples = {}

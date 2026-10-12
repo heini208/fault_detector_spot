@@ -261,9 +261,18 @@ def aggregate_surface_distance_samples(
     )
     if not np.all(np.isfinite(distances)):
         raise ValueError("Surface-distance samples must be finite")
-    peak_to_peak = float(np.max(distances) - np.min(distances))
+    minimum_distance = float(np.min(distances))
+    maximum_distance = float(np.max(distances))
+    peak_to_peak = maximum_distance - minimum_distance
     if peak_to_peak > stability_tolerance_m:
-        raise ValueError("Surface-distance frames are unstable")
+        raise ValueError(
+            "Surface-distance frames are unstable: "
+            f"peak-to-peak {peak_to_peak * 1000.0:.2f} mm > "
+            f"{stability_tolerance_m * 1000.0:.2f} mm limit; "
+            f"distance range {minimum_distance * 1000.0:.2f}–"
+            f"{maximum_distance * 1000.0:.2f} mm across "
+            f"{len(selected)} selected frames spanning {sample_span:.3f} s"
+        )
 
     errors = distances - target_distance_m
     directions = {

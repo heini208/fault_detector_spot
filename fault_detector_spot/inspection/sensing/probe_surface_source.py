@@ -66,6 +66,7 @@ class ProbeSurfaceSource(RuntimeSource):
         self._hand_depth_history = deque(
             maxlen=HAND_DEPTH_HISTORY_MAX_SAMPLES
         )
+        self._surface_distance_cache = {}
         self._hand_depth_camera_info = None
         self._attachment_state = None
         self._tf_buffer = tf_buffer
@@ -279,6 +280,7 @@ class ProbeSurfaceSource(RuntimeSource):
         receipt_not_before: float = 0.0,
         maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
         minimum_samples: int = 1,
+        maximum_latest_age_sec: float | None = None,
     ):
         """Return fresh probe-axis surface-distance samples."""
         sensor_id = str(sensor_id).strip()
@@ -288,6 +290,11 @@ class ProbeSurfaceSource(RuntimeSource):
             raise ValueError("Surface sample receipt threshold must be finite")
         if not math.isfinite(float(maximum_age_sec)) or maximum_age_sec <= 0.0:
             raise ValueError("Maximum hand-depth age must be positive")
+        if maximum_latest_age_sec is not None and (
+            not math.isfinite(float(maximum_latest_age_sec))
+            or maximum_latest_age_sec <= 0.0
+        ):
+            raise ValueError("Maximum latest hand-depth age must be positive")
         if (
             isinstance(minimum_samples, bool)
             or not isinstance(minimum_samples, int)
@@ -298,14 +305,29 @@ class ProbeSurfaceSource(RuntimeSource):
         with self._lock:
             camera_info = deepcopy(self._hand_depth_camera_info)
             history = tuple(self._hand_depth_history)
+            attachment_state = deepcopy(self._attachment_state)
         if camera_info is None:
             raise ValueError(
                 "No registered hand-depth camera info is available"
             )
 
         samples = []
+        valid_receipts = []
         errors = []
         now = time.monotonic()
+        context = (
+            sensor_id,
+            None if attachment_state is None else (
+                attachment_state.status,
+                attachment_state.active_sensor_id,
+                attachment_state.attachment_revision,
+            ),
+            camera_info.header.frame_id,
+            camera_info.width,
+            camera_info.height,
+            tuple(camera_info.k),
+            tuple(camera_info.p),
+        )
         post_start_count = 0
         eligible_count = 0
         for receipt_time, depth_image in history:
@@ -331,15 +353,43 @@ class ProbeSurfaceSource(RuntimeSource):
                     depth_frame,
                     lookup_time=stamp,
                 )
-                samples.append(
-                    measure_probe_surface_distance(
+                # Check timestamped TF on every poll; only reuse the expensive
+                # depth fit when its image, calibration, attachment and pose
+                # are unchanged. Failed fits/TF lookups must remain retryable.
+                cache_key = (context, probe_to_camera)
+                with self._lock:
+                    cached = self._surface_distance_cache.get(id(depth_image))
+                if cached is not None and cached[0] == cache_key:
+                    sample = deepcopy(cached[1])
+                else:
+                    sample = measure_probe_surface_distance(
                         depth_image,
                         camera_info,
                         probe_to_camera,
                     )
-                )
+                    with self._lock:
+                        if any(
+                            image is depth_image
+                            for _, image in self._hand_depth_history
+                        ):
+                            self._surface_distance_cache[id(depth_image)] = (
+                                deepcopy(cache_key), deepcopy(sample),
+                            )
+                samples.append(sample)
+                valid_receipts.append(receipt_time)
             except Exception as exception:
                 errors.append(str(exception))
+
+        if maximum_latest_age_sec is not None and valid_receipts:
+            # Plane fitting itself takes time. Freshness must be checked when
+            # returning a measurement, not only before processing the batch.
+            latest_age = time.monotonic() - max(valid_receipts)
+            if latest_age < -1e-9 or latest_age > maximum_latest_age_sec:
+                raise ValueError(
+                    "Latest valid registered hand-depth sample is stale: "
+                    f"age={latest_age:.3f}s, "
+                    f"max_age={maximum_latest_age_sec:.3f}s"
+                )
 
         if len(samples) < minimum_samples:
             newest_age = now - history[-1][0] if history else None
@@ -384,6 +434,14 @@ class ProbeSurfaceSource(RuntimeSource):
             self._hand_depth_history.append(
                 (time.monotonic(), deepcopy(message))
             )
+            buffered_images = {
+                id(image) for _, image in self._hand_depth_history
+            }
+            self._surface_distance_cache = {
+                key: cached
+                for key, cached in self._surface_distance_cache.items()
+                if key in buffered_images
+            }
 
     def _receive_hand_depth_camera_info(self, message: CameraInfo) -> None:
         with self._lock:
@@ -406,6 +464,7 @@ class ProbeSurfaceSource(RuntimeSource):
                 setattr(self, attribute, None)
         with self._lock:
             self._hand_depth_history.clear()
+            self._surface_distance_cache.clear()
             self._hand_depth_camera_info = None
             self._attachment_state = None
 

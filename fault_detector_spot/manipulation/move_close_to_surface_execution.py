@@ -28,6 +28,9 @@ from fault_detector_spot.inspection.model.sensor_models import (
 from fault_detector_spot.inspection.sensing.live_surface_distance import (
     aggregate_surface_distance_samples,
 )
+from fault_detector_spot.inspection.sensing.probe_surface_source import (
+    MAX_HAND_DEPTH_AGE_SEC,
+)
 from fault_detector_spot.manipulation.arm_motion_speed import ArmMotionSpeed
 from fault_detector_spot.manipulation.arm_movement_result import (
     ArmMovementOutcome,
@@ -55,7 +58,7 @@ class MoveCloseToSurfaceOutcome(Enum):
 @dataclass(frozen=True)
 class MoveCloseToSurfaceConfig:
     settle_sec: float = 0.5
-    sample_timeout_sec: float = 3.0
+    sample_timeout_sec: float = 6.0
     maximum_step_m: float = 0.010
     tolerance_m: float = 0.005
     maximum_travel_m: float = 0.400
@@ -305,17 +308,19 @@ class MoveCloseToSurfaceExecution:
 
     def _start_sampling(self) -> None:
         self._surface_samples = {}
-        self._sample_receipt_not_before = self._clock()
+        self._sample_receipt_not_before = self._clock() + self.config.settle_sec
         self._phase_started = self._sample_receipt_not_before
         self._plan = None
         self._previous_probe_pose = None
         self._approach_steps = 0
         self._phase = "sampling"
-        self.feedback_message = "Collecting initial live surface distance"
+        self.feedback_message = "Waiting to settle before collecting surface distance"
 
     def _update_sampling(self) -> MoveCloseToSurfaceOutcome:
         self._require_attachment_unchanged()
         now = self._clock()
+        if now < self._sample_receipt_not_before:
+            return MoveCloseToSurfaceOutcome.RUNNING
         last_error = None
 
         try:
@@ -327,6 +332,7 @@ class MoveCloseToSurfaceExecution:
                     self.config.minimum_surface_span_sec,
                 ),
                 minimum_samples=self.config.minimum_surface_samples,
+                maximum_latest_age_sec=MAX_HAND_DEPTH_AGE_SEC,
             )
             for sample in fresh:
                 self._surface_samples[sample.stamp_seconds] = sample

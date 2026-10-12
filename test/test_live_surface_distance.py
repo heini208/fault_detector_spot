@@ -313,6 +313,30 @@ def test_aggregate_rejects_unstable_or_directionally_mixed_frames():
         )
 
 
+def test_instability_diagnostic_describes_only_the_selected_recent_window():
+    samples = [
+        distance_sample(0.20, 9.0),
+        distance_sample(0.079, 10.0),
+        distance_sample(0.080, 10.1),
+        distance_sample(0.091, 10.2),
+    ]
+
+    with pytest.raises(ValueError) as error:
+        aggregate_surface_distance_samples(
+            samples,
+            target_distance_m=0.03,
+            maximum_step_m=0.02,
+            stability_tolerance_m=0.006,
+        )
+
+    assert str(error.value) == (
+        "Surface-distance frames are unstable: "
+        "peak-to-peak 12.00 mm > 6.00 mm limit; "
+        "distance range 79.00–91.00 mm across "
+        "3 selected frames spanning 0.200 s"
+    )
+
+
 def test_aggregate_uses_plane_closest_to_median_distance():
     far_plane = fitted_plane(0.079)
     median_plane = fitted_plane(0.080)

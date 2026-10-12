@@ -440,6 +440,15 @@ Point**. A bypass on the complete probe-point command does not disable checking
 for its safe or aligned approach stages. Corrections, retries, contact retreat,
 and returns along the final segment preserve that segment's bypass.
 
+Positive-distance **Move Close to Surface / Wall** waits for the configured
+settling interval before collecting depth frames, then allows six seconds to
+obtain at least five distinct frames spanning one second. The accepted window
+must still have at most 5 mm distance variation, and its newest valid reading
+must be no older than 0.5 seconds. Successful frame fits are reused while their
+camera calibration, timestamped transform, and attachment remain unchanged.
+An unstable-distance error reports the measured spread and range; successful
+surface alignment alone does not establish stable distance.
+
 A toggle change affects subsequent planning and does not interrupt an executing
 movement. Changing the setting during ordinary plan preparation invalidates that
 pending movement; submit it again with the desired setting. Explicit bypass
