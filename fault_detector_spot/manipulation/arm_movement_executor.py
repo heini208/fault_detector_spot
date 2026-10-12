@@ -99,10 +99,12 @@ class _ArmOperation:
     MOVEMENT = "movement"
     READY_WAIT = "ready_wait"
     READY_PREPARE = "ready_prepare"
+    READY_PREPARE_STOP = "ready_prepare_stop"
     GUARDED_MOVEMENT = "guarded_movement"
     TAG_POSITION_VERIFY = "tag_position_verify"
     SURFACE_ORIENTATION_VERIFY = "surface_orientation_verify"
     PREPARE = "prepare"
+    PREPARE_STOP = "prepare_stop"
     STOW = "stow"
     GRIPPER = "gripper"
     CONFIRM_STOP = "confirm_stop"
@@ -1095,25 +1097,56 @@ class ArmMovementExecutor(MovementExecutor):
         with self._execution_lock:
             if self.active:
                 return self._busy_update()
-            if self.guarded_probe_execution is None:
-                return ArmMovementUpdate(ArmMovementOutcome.STOP_UNCONFIRMED,
-                                         "Stop confirmation monitor is unavailable")
             self._active = True
             self._operation = _ArmOperation.CONFIRM_STOP
-            self.guarded_probe_execution.reset()
-            if self._guarded_probe_monitor is not None:
-                self._guarded_probe_monitor.cancel(None)
-                update = self._guarded_probe_monitor.poll()
-            else:
-                update = self.guarded_probe_execution.cancel()
-            return self._finish_stop_confirmation(update)
+            return self._begin_stop_confirmation()
+
+    def _begin_prepare_stop(self):
+        self._operation = (
+            _ArmOperation.READY_PREPARE_STOP
+            if self._operation == _ArmOperation.READY_PREPARE
+            else _ArmOperation.PREPARE_STOP
+        )
+        return self._begin_stop_confirmation()
+
+    def _begin_stop_confirmation(self):
+        if self.guarded_probe_execution is None:
+            return self._finish_stop_confirmation(ArmMovementUpdate(
+                ArmMovementOutcome.STOP_UNCONFIRMED,
+                "Stop confirmation monitor is unavailable",
+            ))
+        self.guarded_probe_execution.reset()
+        if self._guarded_probe_monitor is not None:
+            self._guarded_probe_monitor.cancel(None)
+            update = self._guarded_probe_monitor.poll()
+        else:
+            update = self.guarded_probe_execution.cancel()
+        return self._finish_stop_confirmation(update)
 
     def _finish_stop_confirmation(self, update):
+        preparing = self._operation in (
+            _ArmOperation.PREPARE_STOP, _ArmOperation.READY_PREPARE_STOP,
+        )
         if update.outcome is ArmMovementOutcome.RUNNING:
+            if preparing:
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.RUNNING,
+                    f"Ready arm lift completed; {update.detail}",
+                )
             return update
         outcome = (ArmMovementOutcome.SUCCESS
                    if update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED
                    else ArmMovementOutcome.STOP_UNCONFIRMED)
+        if preparing and outcome is ArmMovementOutcome.SUCCESS:
+            self._operation = (
+                _ArmOperation.READY_PREPARE
+                if self._operation == _ArmOperation.READY_PREPARE_STOP
+                else _ArmOperation.PREPARE
+            )
+            self._verification_started = self._monotonic_clock()
+            return self._poll_state_confirmation()
+        if preparing:
+            return super()._finish(outcome, f"Ready arm stop failed: {update.detail}")
         return super()._finish(outcome, update.detail)
 
     def poll(self) -> ArmMovementUpdate:
@@ -1130,7 +1163,11 @@ class ArmMovementExecutor(MovementExecutor):
                     "No arm movement is active",
                 )
 
-            if self._operation == _ArmOperation.CONFIRM_STOP:
+            if self._operation in (
+                _ArmOperation.CONFIRM_STOP,
+                _ArmOperation.PREPARE_STOP,
+                _ArmOperation.READY_PREPARE_STOP,
+            ):
                 owner = self._guarded_probe_monitor or self.guarded_probe_execution
                 return self._finish_stop_confirmation(owner.poll())
 
@@ -1669,8 +1706,11 @@ class ArmMovementExecutor(MovementExecutor):
         if self._operation in (
             _ArmOperation.PREPARE,
             _ArmOperation.READY_PREPARE,
-            _ArmOperation.STOW,
         ):
+            self._reset_goal_lifecycle()
+            return self._begin_prepare_stop()
+
+        if self._operation == _ArmOperation.STOW:
             self._reset_goal_lifecycle()
             self._verification_started = self._monotonic_clock()
             return self._poll_state_confirmation()
@@ -1784,7 +1824,7 @@ class ArmMovementExecutor(MovementExecutor):
         ):
             expected = ArmStowState.DEPLOYED
             timeout_sec = self.ready_deployed_timeout_sec
-            success_detail = "Arm deployed"
+            success_detail = "Arm deployed and stopped"
             failure_detail = (
                 "Ready arm movement completed, but Spot did not report "
                 f"DEPLOYED within {timeout_sec:.1f} s"

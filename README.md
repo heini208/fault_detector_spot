@@ -689,6 +689,11 @@ changes. The file is loaded once per process; edits apply on the next start.
 ROS launch/parameter overrides still take precedence over the YAML defaults.
 Explicit constructor arguments take precedence over both (useful in tests).
 
+Every successful Ready Arm lift ends with a native `ArmStopCommand`, followed
+by physical-stop confirmation and deployed-state verification. This also
+applies when a requested arm move first deploys the arm automatically: the
+requested move waits until preparation has stopped successfully.
+
 If the force baseline is unstable before a guarded arm move, execution sends
 one native `ArmStopCommand` to stop the previous arm command. After fresh
 velocity feedback confirms the stop, it rebuilds the plan and collects a new

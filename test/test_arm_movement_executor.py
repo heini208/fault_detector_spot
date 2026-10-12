@@ -932,6 +932,8 @@ def test_executor_rejects_overlapping_arm_movement(monkeypatch):
 def test_stowed_relative_prepares_before_resolving_requested_goal(
     monkeypatch,
 ):
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
     relative = PoseStamped()
     relative.header.frame_id = "hand"
     relative.pose.position.x = 0.10
@@ -968,6 +970,8 @@ def test_stowed_relative_prepares_before_resolving_requested_goal(
         transformer,
         action_client=client,
         arm_state_source=state,
+        arm_stop_service_client=stop_client,
+        monotonic_clock=clock,
     )
 
     started = executor.relative(command)
@@ -987,14 +991,20 @@ def test_stowed_relative_prepares_before_resolving_requested_goal(
     waiting = executor.poll()
 
     assert waiting.outcome is ArmMovementOutcome.RUNNING
-    assert "deployed" in waiting.detail
+    assert "Ready arm lift completed" in waiting.detail
+    assert len(stop_client.requests) == 1
     assert command.calls == []
 
     state.state = ArmStowState.DEPLOYED
     transformer.transforms[(frame, "hand")] = deployed_transform
     client.send_future = ManualFuture()
 
-    resumed = executor.poll()
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert command.calls == []
+    assert len(client.sent_goals) == 1
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    resumed = confirm_physical_stop(executor, clock, 0.1)
 
     assert resumed.outcome is ArmMovementOutcome.RUNNING
     assert command.calls == [transformer]
@@ -1052,6 +1062,8 @@ def test_prepare_noops_when_arm_is_already_deployed():
 
 
 def test_prepare_uses_shared_speed_and_verifies_deployed(monkeypatch):
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
     current = transform(
         executor_module.GRAV_ALIGNED_BODY_FRAME_NAME,
         "hand",
@@ -1075,6 +1087,12 @@ def test_prepare_uses_shared_speed_and_verifies_deployed(monkeypatch):
         transformer,
         action_client=client,
         arm_state_source=state,
+        arm_stop_service_client=stop_client,
+        monotonic_clock=clock,
+    )
+    monkeypatch.setattr(
+        executor.guarded_probe_execution.force_baseline_sampler,
+        "start", lambda: pytest.fail("Ready stop must not require a force baseline"),
     )
 
     started = executor.prepare()
@@ -1096,14 +1114,99 @@ def test_prepare_uses_shared_speed_and_verifies_deployed(monkeypatch):
     )
     waiting = executor.poll()
     assert waiting.outcome is ArmMovementOutcome.RUNNING
+    assert "Ready arm lift completed" in waiting.detail
+    assert len(stop_client.requests) == 1
+    assert executor.active
+    assert executor.stow().outcome is ArmMovementOutcome.BUSY
+
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    waiting = confirm_physical_stop(executor, clock, 0.1)
+    assert waiting.outcome is ArmMovementOutcome.RUNNING
     assert "deployed" in waiting.detail
 
     state.state = ArmStowState.DEPLOYED
     completed = executor.poll()
 
     assert completed.outcome is ArmMovementOutcome.SUCCESS
-    assert completed.detail == "Arm deployed"
+    assert completed.detail == "Arm deployed and stopped"
+    assert len(stop_client.requests) == 1
     assert not executor.active
+
+
+def ready_lift_completed(monkeypatch, *, following_move):
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
+    frame = executor_module.GRAV_ALIGNED_BODY_FRAME_NAME
+    state = FakeArmStateSource(ArmStowState.STOWED)
+    executor, client = executor_with_client(
+        FakeTransformer({(frame, "hand"): transform(frame, "hand")}),
+        arm_state_source=state, arm_stop_service_client=stop_client,
+        monotonic_clock=clock,
+    )
+    capture_builder(monkeypatch)
+    target = PoseStamped()
+    target.header.frame_id = "hand"
+    target.pose.position.x = 0.1
+    target.pose.orientation.w = 1.0
+    command = FakeRelativeCommand(target)
+    started = executor.relative(command) if following_move else executor.prepare()
+    assert started.outcome is ArmMovementOutcome.RUNNING
+    result_future = ManualFuture()
+    client.send_future.set_result(FakeGoalHandle(result_future=result_future))
+    executor.poll()
+    state.state = ArmStowState.DEPLOYED
+    result_future.set_result(SimpleNamespace(result=SimpleNamespace(success=True)))
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert len(stop_client.requests) == 1
+    assert command.calls == []
+    return executor, client, stop_client, clock, command
+
+
+@pytest.mark.parametrize("following_move", [False, True])
+@pytest.mark.parametrize("failure", ["service", "settling"])
+def test_ready_stop_failure_cannot_report_ready_or_start_followup(
+    monkeypatch, following_move, failure,
+):
+    executor, client, stop_client, clock, command = ready_lift_completed(
+        monkeypatch, following_move=following_move,
+    )
+    stop_client.future.set_result(SimpleNamespace(
+        success=failure != "service", message="Stop rejected",
+    ))
+    update = executor.poll()
+    if failure == "settling":
+        assert update.outcome is ArmMovementOutcome.RUNNING
+        clock.now = 3.0
+        update = executor.poll()
+
+    assert update.outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert "Ready arm stop failed" in update.detail
+    assert not executor.active
+    assert command.calls == []
+    assert len(client.sent_goals) == 1
+
+
+@pytest.mark.parametrize("stop_accepted", [False, True])
+def test_cancel_during_ready_stop_discards_pending_followup(monkeypatch, stop_accepted):
+    executor, client, stop_client, clock, command = ready_lift_completed(
+        monkeypatch, following_move=True,
+    )
+    if stop_accepted:
+        stop_client.future.set_result(SimpleNamespace(success=True))
+        executor.poll()
+    stop_client.future = ManualFuture()
+    executor.cancel()
+    assert executor.active
+    assert executor.cancelling
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    executor.poll()
+    confirm_physical_stop(executor, clock, 0.1)
+
+    assert not executor.active
+    assert not executor.cancelling
+    assert command.calls == []
+    assert len(client.sent_goals) == 1
 
 
 def test_prepare_reports_missing_arm_state_after_bounded_wait():
