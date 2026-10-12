@@ -230,6 +230,13 @@ the existing sequence, then performs its own complete planning checks.
 Use the planning-scene collision display; a plain RobotModel visual display still
 shows the original driver visuals.
 
+The collision viewer uses `spot_moveit_robot_description` and its matching
+semantic-description topic, both published by MoveIt. This avoids receiving the
+driver's different URDF on `/robot_description`, which would report unknown
+`hand` / `sensor_head_slot` links and an empty arm group. Rebuild both packages
+and restart MoveIt and RViz when updating this topic configuration. The robot is
+opaque by default; adjust **Scene Robot → Robot Alpha** to change transparency.
+
 This requires the one-time jaw-slot model change in `spot_moveit_config`, and a
 rebuild of `fault_detector_msgs`, `fault_detector_spot`, and `spot_moveit_config`
 before the next authorized application startup. The UI and backend must use

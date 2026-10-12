@@ -19,7 +19,7 @@ Visualization Manager:
       Name: MoveIt collision scene
       Enabled: true
       Value: true
-      Robot Description: robot_description
+      Robot Description: spot_moveit_robot_description
       Move Group Namespace: ''
       Planning Scene Topic: /monitored_planning_scene
       Scene Geometry:
@@ -30,7 +30,7 @@ Visualization Manager:
       Scene Robot:
         Show Robot Visual: false
         Show Robot Collision: true
-        Robot Alpha: 0.4
+        Robot Alpha: 0.7
     - Class: rviz_default_plugins/PointCloud2
       Name: Corrected lidar
       Enabled: true

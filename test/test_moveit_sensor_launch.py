@@ -192,6 +192,31 @@ def test_real_move_group_launch_uses_the_supported_sensor_jaw_slot(launch_parame
     assert len(stock.object.meshes) == 3
 
 
+def test_collision_viewer_receives_paired_moveit_descriptions_away_from_driver(launch_parameters):
+    _, original, captured, _, _ = launch_parameters
+    launch = IncludeLaunchDescription(PythonLaunchDescriptionSource(
+        str(original / "launch/move_group.launch.py"),
+    ))
+    expand_configuration(launch, LaunchContext())
+    command, _, documents = captured[0]
+    parameters = next(iter(documents[0].values()))["ros__parameters"]
+    remappings = dict(argument.split(":=", 1) for argument in command if ":=" in argument)
+    view = yaml.safe_load((ROOT / "config/arm_collision.rviz").read_text())
+    scene, = [display for display in view["Visualization Manager"]["Displays"]
+              if display["Class"] == "moveit_rviz_plugin/PlanningScene"]
+    name = scene["Robot Description"]
+    # Humble also uses this key in a temporary node name: no namespace slashes.
+    assert name != "robot_description" and name.replace("_", "").isalnum()
+    for suffix in ("", "_semantic"):
+        parameter = "robot_description" + suffix
+        assert remappings[parameter] == "/" + name + suffix
+        assert parameters["publish_" + parameter] is True
+        assert parameters[parameter]
+        assert name + suffix not in parameters  # GetParameters clients keep the usual keys.
+    assert parameters["robot_description_kinematics.arm.kinematics_solver"]
+    validate_sensor_head_model(parameters["robot_description"])
+
+
 def test_standalone_demo_keeps_stock_jaw_collision_geometry_in_every_node(launch_parameters):
     _, original, captured, _, _ = launch_parameters
     launch = IncludeLaunchDescription(PythonLaunchDescriptionSource(
