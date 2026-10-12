@@ -305,8 +305,11 @@ Requirements:
 ### Optional environmental collision checks for arm planning
 
 The **Environment collision checking** control starts **Disabled** on every
-application startup. It can be switched on or off whenever the command backend
-is available, independently of mapping, localization, or lidar attachment.
+application startup. Enabling requires a confirmed physical head attachment
+(including confirmed **No sensor** for the stock jaw). The backend enforces this
+requirement and the UI explains when confirmation is missing. Disabling remains
+available; losing confirmation does not silently turn collision checking off.
+The setting is independent of mapping, localization, or lidar attachment.
 Starting or stopping mapping does not change the setting.
 
 The setting controls occupancy collision checks in MoveIt's current planning

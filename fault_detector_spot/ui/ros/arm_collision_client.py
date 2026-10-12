@@ -14,6 +14,7 @@ from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 class ArmCollisionState:
     available: bool
     enabled: bool
+    can_enable: bool
 
 
 class ArmCollisionClient(QObject):
@@ -59,11 +60,13 @@ class ArmCollisionClient(QObject):
         values = {value.key: value.value for value in message.values}
         available = values.get("arm_collision_available")
         enabled = values.get("arm_collision_enabled")
-        if available not in ("true", "false") or enabled not in ("true", "false"):
+        can_enable = values.get("arm_collision_can_enable")
+        if any(value not in ("true", "false") for value in (available, enabled, can_enable)):
             return
         self.last_state = ArmCollisionState(
             available=available == "true",
             enabled=available == "true" and enabled == "true",
+            can_enable=can_enable == "true",
         )
         self.last_received_at = self._clock()
         self.state_changed.emit(self.last_state)

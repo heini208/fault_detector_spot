@@ -136,7 +136,7 @@ def test_sensors_are_scoped_to_original_move_group_without_changing_its_config(
         str(original / "launch/move_group.launch.py"),
     ))
     expand_configuration(baseline, LaunchContext())
-    assert len(captured) == 1
+    assert len(captured) == 2
     baseline_parameters = next(iter(captured[0][2][0].values()))["ros__parameters"]
 
     description = module.generate_launch_description()
@@ -149,8 +149,8 @@ def test_sensors_are_scoped_to_original_move_group_without_changing_its_config(
     original_context = dict(context.launch_configurations)
     group, = [entity for entity in description.entities if isinstance(entity, GroupAction)]
     expand_configuration(group, context)
-    assert len(captured) == 2
-    command, paths, documents = captured[1]
+    assert len(captured) == 4
+    command, paths, documents = captured[2]
     assert "__node:=move_group" in command
     assert len(paths) == 2 and paths[0] == SENSORS
     assert f"use_sim_time:={use_sim_time.title()}" in command
@@ -170,7 +170,7 @@ def test_sensors_are_scoped_to_original_move_group_without_changing_its_config(
         parameters=[{"own_parameter": 1}],
     )
     expand_configuration(sibling, context)
-    command, paths, documents = captured[2]
+    command, paths, documents = captured[4]
     assert SENSORS not in paths
     assert not any("use_sim_time:=" in argument for argument in command)
     assert next(iter(documents[0].values()))["ros__parameters"] == {"own_parameter": 1}
@@ -270,7 +270,7 @@ def test_missing_prerequisite_warns_and_keeps_original_arm_planning(launch_param
     context.launch_configurations["use_sim_time"] = "true"
     group, = [entity for entity in description.entities if isinstance(entity, GroupAction)]
     expand_configuration(group, context)
-    assert len(captured) == 1
+    assert len(captured) == 2
     command, paths, documents = captured[0]
     assert "__node:=move_group" in command
     assert "use_sim_time:=True" in command
@@ -297,3 +297,26 @@ def test_sensor_config_uses_corrected_lidar_and_native_updater():
     assert lidar["padding_scale"] == 1.1
     assert lidar["max_update_rate"] == 0.0  # Adapter owns the replay-safe rate cap.
     assert lidar["filtered_cloud_topic"] == "/fault_detector/moveit/filtered_lidar"
+
+
+def test_live_launch_publishes_only_the_missing_fixed_head_slot_tf(launch_parameters):
+    _, original, captured, _, _ = launch_parameters
+    expand_configuration(IncludeLaunchDescription(PythonLaunchDescriptionSource(
+        str(original / "launch/move_group.launch.py"),
+    )), LaunchContext())
+    assert len(captured) == 2
+    command, _, documents = captured[0]
+    model = ET.fromstring(next(iter(documents[0].values()))["ros__parameters"]["robot_description"])
+    slot = next(
+        joint for joint in model.findall("joint")
+        if joint.find("child").get("link") == "sensor_head_slot"
+    )
+    assert slot.get("type") == "fixed"
+    assert slot.find("parent").get("link") == "hand"
+    assert slot.find("origin").get("xyz") == "0 0 0"
+    assert slot.find("origin").get("rpy") == "0 0 0"
+    command, _, _ = captured[1]
+    assert Path(command[0]).name == "static_transform_publisher"
+    assert command[command.index("--frame-id") + 1] == "hand"
+    assert command[command.index("--child-frame-id") + 1] == "sensor_head_slot"
+    assert "__node:=sensor_head_slot_tf" in command

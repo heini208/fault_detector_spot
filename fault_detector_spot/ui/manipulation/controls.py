@@ -283,6 +283,10 @@ class ManipulationControls(UIControlHelper):
                     "No reply to the setting request. The checkmark reflects the latest control status; "
                     "further setting requests wait for the outstanding reply."
                 )
+            elif not checked and not state.can_enable and not client.pending:
+                interactive = False
+                text = "Confirm head attachment first"
+                detail = "Confirm the physically installed head in Sensor mounts before enabling collision checking."
         button.blockSignals(True)
         button.setChecked(checked)
         button.blockSignals(False)

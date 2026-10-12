@@ -47,11 +47,12 @@ class Node:
         assert client is self
         self.destroyed.append("client")
 
-    def state(self, available, enabled):
+    def state(self, available, enabled, can_enable=True):
         self.subscriptions["fault_detector/arm_collision_checking"](
             DiagnosticStatus(values=[
                 KeyValue(key="arm_collision_available", value=str(available).lower()),
                 KeyValue(key="arm_collision_enabled", value=str(enabled).lower()),
+                KeyValue(key="arm_collision_can_enable", value=str(can_enable).lower()),
             ])
         )
 
@@ -278,3 +279,28 @@ def test_reply_cannot_clear_timestamp_of_request_admitted_during_release(applica
     node.future.set_result(SetBool.Response(success=True, message="Disabled"))
     assert not client.pending
     client.destroy()
+
+
+def test_missing_attachment_confirmation_blocks_enabling_and_explains_why(controls):
+    controls.node.state(True, False, can_enable=False)
+    button = controls.arm_collision_toggle
+    assert not button.isEnabled() and not button.isChecked()
+    assert button.text() == "Confirm head attachment first"
+    assert "Sensor mounts" in button.toolTip()
+    button.click()
+    assert not controls.node.requests
+    controls.node.state(True, False, can_enable=True)
+    assert button.isEnabled()
+    button.click()
+    assert controls.node.requests[-1].data is True
+
+
+def test_losing_confirmation_still_allows_disabling_collision_checks(controls):
+    controls.node.state(True, True, can_enable=False)
+    button = controls.arm_collision_toggle
+    assert button.isEnabled() and button.isChecked()
+    button.click()
+    assert controls.node.requests[-1].data is False
+    controls.node.future.set_result(SetBool.Response(success=True, message="Disabled"))
+    controls.node.state(True, False, can_enable=False)
+    assert not button.isEnabled() and not button.isChecked()

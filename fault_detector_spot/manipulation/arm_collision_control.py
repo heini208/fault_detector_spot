@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from threading import RLock
 
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
+from fault_detector_msgs.msg import SensorAttachmentState
 from rclpy.clock import Clock, ClockType
 from std_srvs.srv import SetBool
 
-from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
+from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS, LATCHED_QOS
 
 
 @dataclass(frozen=True)
@@ -28,8 +29,13 @@ class ArmCollisionControl:
         self._lock = RLock()
         self._state = ArmCollisionPolicy(enabled=False, revision=0)
         self._closed = False
+        self._attachment_confirmed = False
         self._publisher = node.create_publisher(
             DiagnosticStatus, "fault_detector/arm_collision_checking", LATCHED_QOS,
+        )
+        self._attachment_subscription = node.create_subscription(
+            SensorAttachmentState, "fault_detector/application/sensor_attachment_state",
+            self._receive_attachment, APPLICATION_STATE_QOS,
         )
         self._service = node.create_service(
             SetBool, "fault_detector/set_arm_collision_checking", self._set_enabled,
@@ -43,12 +49,23 @@ class ArmCollisionControl:
         with self._lock:
             return self._state
 
+    def _receive_attachment(self, state):
+        with self._lock:
+            self._attachment_confirmed = (
+                state.status == SensorAttachmentState.STATUS_ACTIVE
+                and not state.pending_sensor_id
+            )
+            # Losing confirmation must never silently disable collision checking.
+            self._publish_state()
+
     def set_enabled(self, enabled):
         if type(enabled) is not bool:
             raise TypeError("Arm collision checking must be a boolean")
         with self._lock:
             if self._closed:
                 raise RuntimeError("Arm collision control is closed")
+            if enabled and not self._attachment_confirmed:
+                raise RuntimeError("Confirm the head attachment before enabling collision checking")
             if enabled != self._state.enabled:
                 self._state = ArmCollisionPolicy(enabled, self._state.revision + 1)
             self._publish_state()
@@ -79,6 +96,7 @@ class ArmCollisionControl:
                 values=[
                     KeyValue(key="arm_collision_available", value="true"),
                     KeyValue(key="arm_collision_enabled", value=str(self._state.enabled).lower()),
+                    KeyValue(key="arm_collision_can_enable", value=str(self._attachment_confirmed).lower()),
                 ],
             ))
 
@@ -88,5 +106,6 @@ class ArmCollisionControl:
                 return
             self._closed = True
         self.node.destroy_timer(self._timer)
+        self.node.destroy_subscription(self._attachment_subscription)
         self.node.destroy_service(self._service)
         self.node.destroy_publisher(self._publisher)
