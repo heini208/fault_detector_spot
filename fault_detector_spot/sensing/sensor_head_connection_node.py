@@ -16,7 +16,7 @@ from fault_detector_spot.shared.ros.qos_profiles import (
 )
 
 import rclpy
-from rclpy.node import Node
+from rclpy.node import Node, NodeNameNonExistentError
 
 
 STATUS_TOPIC = "fault_detector/state/sensor_head_connection"
@@ -174,9 +174,18 @@ class SensorHeadConnectionNode(Node):
     def poll(self) -> SensorHeadConnectionState:
         """Inspect the graph and publish one connection snapshot."""
         now = time.monotonic()
-        connected = discovered_sensor_ids(
-            self.get_service_names_and_types()
-        )
+        services = []
+        # The global service list also contains retained application clients.
+        # Only server endpoints establish that a sensor head is connected.
+        for node_name, namespace in self.get_node_names_and_namespaces():
+            try:
+                services.extend(self.get_service_names_and_types_by_node(
+                    node_name, namespace,
+                ))
+            except NodeNameNonExistentError:
+                # A head can disconnect between the two graph queries.
+                continue
+        connected = discovered_sensor_ids(services)
         agent_running = (
             True if connected else self._fresh_agent_state(now)
         )
