@@ -40,7 +40,10 @@ DEFAULT_ORIENTATION_TOLERANCE_RAD = 0.01
 DEFAULT_VELOCITY_SCALING = 0.5
 DEFAULT_ACCELERATION_SCALING = 0.4
 DEFAULT_CARTESIAN_MAX_STEP_M = 0.002
-DEFAULT_CARTESIAN_JUMP_THRESHOLD = 2.0
+# This factor compares each raw IK increment with the whole-path mean. A
+# smooth approach with changing wrist geometry can start above twice that mean; keep
+# MoveIt's jump check active with room for this changing joint sensitivity.
+DEFAULT_CARTESIAN_JUMP_THRESHOLD = 3.0
 DEFAULT_CARTESIAN_MIN_FRACTION = 0.999
 MIN_ARM_SH1_RAD = math.radians(-178.0)
 _READ_ONLY_PHASES = frozenset({
@@ -526,14 +529,25 @@ class MoveItArmPlanner:
             )
         trajectory = response.solution.joint_trajectory
         if fraction + 1e-12 < self.cartesian_min_fraction:
+            cause = (
+                "cause is not reported by the Cartesian service "
+                "(IK, collision, or jump rejection)"
+            )
+            if (fraction > 0.0 and len(trajectory.points) == 1
+                    and self.cartesian_jump_threshold > 0.0):
+                cause = (
+                    "positive fraction with only the starting pose suggests "
+                    "first-transition joint-jump rejection "
+                    f"(relative factor {self.cartesian_jump_threshold:.3f}); "
+                    "the Cartesian service does not report the exact cause"
+                )
             return MoveItPlanUpdate(
                 MoveItPlanOutcome.FAILURE,
                 "MoveIt Cartesian path is incomplete: "
                 f"fraction {fraction:.6f} < "
                 f"{self.cartesian_min_fraction:.6f}; "
                 f"{self._partial_trajectory_detail(trajectory)}; "
-                "cause is not reported by the Cartesian service "
-                "(IK, collision, or jump rejection); inspect move_group logs "
+                f"{cause}; inspect move_group logs "
                 "for the rejected segment",
             )
 

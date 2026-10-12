@@ -13,6 +13,9 @@ from fault_detector_spot.inspection.geometry.depth_point_cloud import (
 from fault_detector_spot.inspection.geometry.surface_normal import (
     estimate_surface_normal,
 )
+from fault_detector_spot.inspection.sensing.live_surface_plane import (
+    estimate_live_surface_normal,
+)
 from fault_detector_spot.inspection.sensing.probe_surface_source import (
     ProbeSurfaceSource,
 )
@@ -122,6 +125,27 @@ def test_surface_source_accepts_noisy_planar_depth():
                        result.normal_camera.z])
     assert math.degrees(math.acos(np.clip(normal @ expected, -1, 1))) < 1.0
     assert result.plane_rmse_m < 0.015
+
+
+def test_live_surface_estimate_retains_fitted_plane_instead_of_raw_seed_depth():
+    camera = make_camera_info(81, 81, 300.0)
+    values = np.full((81, 81), 0.6)
+    values[48, 40] = 0.61
+    depth = make_32fc1(values.ravel(), 81, 81)
+    depth.header.stamp.sec = 12
+    depth.header.stamp.nanosec = 34
+
+    result = estimate_live_surface_normal(depth, camera)
+
+    assert result.projected_point.point_camera.z == pytest.approx(0.61)
+    plane = result.surface_plane_camera
+    assert plane is not None
+    plane.validate()
+    assert plane.normal == result.normal_camera
+    assert plane.inlier_count == result.sample_count
+    assert plane.rmse_m == result.plane_rmse_m
+    assert plane.point.z == pytest.approx(0.6, abs=0.0001)
+    assert result.stamp_nanoseconds == 12000000034
 
 
 def test_latest_hand_depth_can_require_frame_received_after_operation_start(monkeypatch):

@@ -21,6 +21,9 @@ from fault_detector_spot.application.ros.operational_intent_adapter import (
 from fault_detector_spot.inspection.sensing.probe_surface_source import (
     ProbeSurfaceSource,
 )
+from fault_detector_spot.inspection.sensing.live_surface_plane import (
+    estimate_live_surface_normal,
+)
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
 )
@@ -317,11 +320,13 @@ def test_behaviour_only_dispatches_to_executor(bypass):
 
 def test_surface_source_owns_live_depth_to_normal_resolution():
     source = inspect.getsource(ProbeSurfaceSource.surface_normal)
+    estimator = inspect.getsource(estimate_live_surface_normal)
 
     assert "self.latest_hand_depth(" in source
-    assert "project_reference_pixel(" in source
-    assert "MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M" in source
-    assert "estimate_surface_normal(" in source
+    assert "estimate_live_surface_normal(" in source
+    assert "project_reference_pixel(" in estimator
+    assert "MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M" in estimator
+    assert "estimate_surface_normal(" in estimator
 
 
 def test_executor_owns_surface_orientation_calculation_and_guarded_move():

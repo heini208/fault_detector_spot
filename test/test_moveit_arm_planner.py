@@ -57,7 +57,7 @@ def test_default_position_tolerance_is_five_millimeters():
 
 def test_cartesian_defaults_require_dense_nearly_complete_path():
     assert DEFAULT_CARTESIAN_MAX_STEP_M == pytest.approx(0.002)
-    assert DEFAULT_CARTESIAN_JUMP_THRESHOLD == pytest.approx(2.0)
+    assert DEFAULT_CARTESIAN_JUMP_THRESHOLD == pytest.approx(3.0)
     assert DEFAULT_CARTESIAN_MIN_FRACTION == pytest.approx(0.999)
 
 
@@ -96,7 +96,7 @@ def test_cartesian_request_is_straight_collision_checked_hand_path():
     assert len(request.waypoints) == 1
     assert request.waypoints[0].position.x == pytest.approx(0.42)
     assert request.max_step == pytest.approx(0.002)
-    assert request.jump_threshold == pytest.approx(2.0)
+    assert request.jump_threshold == pytest.approx(3.0)
     assert request.avoid_collisions
     assert not request.path_constraints.joint_constraints
 
@@ -151,6 +151,36 @@ def test_trajectory_safety_gate_rejects_arm_sh1_below_margin():
 
     with pytest.raises(ValueError, match="below configured safety floor"):
         planner._validate_and_describe(trajectory)
+
+
+@pytest.mark.parametrize("fraction, points, jump_factor, probable_jump", [
+    (1.0 / 115.0, 1, 3.0, True),
+    (0.0, 1, 3.0, False),
+    (0.1, 2, 3.0, False),
+    (1.0 / 115.0, 1, 0.0, False),
+])
+def test_incomplete_cartesian_diagnostic_distinguishes_start_only_jump_signature(
+    fraction, points, jump_factor, probable_jump,
+):
+    planner = planner_shell()
+    planner.cartesian_jump_threshold = jump_factor
+    trajectory = valid_trajectory()
+    trajectory.points = [trajectory.points[0]] * points
+    response = SimpleNamespace(
+        error_code=MoveItErrorCodes(val=MoveItErrorCodes.SUCCESS),
+        fraction=fraction,
+        solution=SimpleNamespace(joint_trajectory=trajectory),
+    )
+
+    update = planner._cartesian_result(response)
+
+    assert update.outcome is MoveItPlanOutcome.FAILURE
+    assert update.trajectory is None
+    assert ("suggests first-transition joint-jump rejection" in update.detail) is probable_jump
+    if probable_jump:
+        assert "relative factor 3.000" in update.detail
+    else:
+        assert "IK, collision, or jump rejection" in update.detail
 
 
 @pytest.mark.parametrize("code, name, explanation", [

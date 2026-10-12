@@ -449,6 +449,23 @@ camera calibration, timestamped transform, and attachment remain unchanged.
 An unstable-distance error reports the measured spread and range; successful
 surface alignment alone does not establish stable distance.
 
+Distance sensing first uses depth within 25 mm of the calibrated probe axis.
+When that region has no depth support, it can use the same visible lower-middle
+surface plane as alignment. This assumes the local plane continues toward the
+hidden probe region: its measured centroid must be within 15 cm of the plane's
+intersection with probe +X, and that intersection must be 3–500 mm ahead of the
+probe tip. The 15 cm allowance accommodates a lower mounted tip; distance still
+uses the calibrated camera-to-probe transform. Too few or out-of-range axial
+points are still rejected. Plane quality,
+alignment, multi-frame stability, and force checks continue to apply.
+
+Cartesian approaches use 2 mm path sampling and require at least 99.9% path
+completion. MoveIt's relative joint-jump check remains enabled with a factor
+of 3 against the whole-path average joint change; a factor of 2 can reject
+smooth approaches whose initial wrist motion is larger than later increments.
+A positive completion fraction with only the starting pose is reported as
+probable first-transition jump rejection, rather than a confirmed IK failure.
+
 A toggle change affects subsequent planning and does not interrupt an executing
 movement. Changing the setting during ordinary plan preparation invalidates that
 pending movement; submit it again with the desired setting. Explicit bypass

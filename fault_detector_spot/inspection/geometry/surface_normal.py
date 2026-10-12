@@ -14,6 +14,7 @@ from fault_detector_spot.inspection.geometry.depth_point_cloud import (
     create_organized_depth_point_cloud,
 )
 from fault_detector_spot.inspection.geometry.surface_plane import (
+    SurfacePlane,
     fit_surface_plane,
 )
 from fault_detector_spot.inspection.model.models import (
@@ -39,6 +40,7 @@ class SurfaceNormalEstimate:
     plane_rmse_m: float
     neighborhood_radius_px: int = 0
     stamp_nanoseconds: int = 0
+    surface_plane_camera: SurfacePlane | None = None
 
 
 def estimate_surface_normal(
@@ -126,6 +128,7 @@ def estimate_surface_normal(
                 sample_count=plane.inlier_count,
                 plane_rmse_m=plane.rmse_m,
                 neighborhood_radius_px=radius,
+                surface_plane_camera=plane,
             )
         except ValueError as exception:
             last_error = exception

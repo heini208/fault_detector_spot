@@ -2,11 +2,9 @@
 
 from collections import deque
 from copy import deepcopy
-from dataclasses import replace
 from threading import RLock
 import math
 import time
-import numpy as np
 
 from fault_detector_msgs.msg import SensorAttachmentState
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
@@ -16,16 +14,13 @@ from sensor_msgs.msg import CameraInfo, Image
 
 from fault_detector_spot.inspection.geometry.surface_normal import (
     SurfaceNormalEstimate,
-    estimate_surface_normal,
 )
-from fault_detector_spot.inspection.geometry.surface_plane import (
-    DEFAULT_DEPTH_PLANE_TOLERANCE_M,
-)
-from fault_detector_spot.inspection.geometry.depth_point_cloud import (
-    create_organized_depth_point_cloud,
-)
-from fault_detector_spot.inspection.model.models import (
-    ImagePoint,
+from fault_detector_spot.inspection.sensing.live_surface_plane import (
+    MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M,
+    SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
+    SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT,
+    SURFACE_ORIENTATION_WINDOW_RADIUS_PX,
+    estimate_live_surface_normal,
 )
 from fault_detector_spot.shared.geometry.models import (
     PoseData,
@@ -37,9 +32,6 @@ from fault_detector_spot.inspection.model.sensor_models import (
 from fault_detector_spot.inspection.sensing.live_surface_distance import (
     measure_probe_surface_distance,
 )
-from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
-    project_reference_pixel,
-)
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 from fault_detector_spot.shared.ros.tf_transforms import lookup_pose_data
 from fault_detector_spot.shared.runtime_source import RuntimeSource
@@ -47,10 +39,6 @@ from fault_detector_spot.shared.runtime_source import RuntimeSource
 
 HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
 MAX_HAND_DEPTH_AGE_SEC = 0.5
-SURFACE_ORIENTATION_WINDOW_RADIUS_PX = 16
-SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX = 32
-SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT = 30
-MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M = 0.290
 SENSOR_ATTACHMENT_TOPIC = "fault_detector/application/sensor_attachment_state"
 
 
@@ -163,13 +151,6 @@ class ProbeSurfaceSource(RuntimeSource):
         receipt_not_before: float = 0.0,
     ) -> SurfaceNormalEstimate:
         """Return a live local surface normal from the lower-middle image patch."""
-        if (
-            isinstance(window_radius_px, bool)
-            or not isinstance(window_radius_px, int)
-            or window_radius_px <= 0
-        ):
-            raise ValueError("Surface orientation window radius must be positive")
-
         if float(receipt_not_before) > 0.0:
             depth_image, camera_info = self.latest_hand_depth(
                 maximum_age_sec,
@@ -179,100 +160,11 @@ class ProbeSurfaceSource(RuntimeSource):
             depth_image, camera_info = self.latest_hand_depth(
                 maximum_age_sec,
             )
-        point_cloud = create_organized_depth_point_cloud(
-            depth_image, camera_info,
+        return estimate_live_surface_normal(
+            depth_image,
+            camera_info,
+            window_radius_px=window_radius_px,
         )
-        # Approximate the surface near the probe below the camera. This
-        # assumes the visible patch continues toward the hidden contact region.
-        # Keep the fit window above the bottom edge; small images stay centered.
-        height = int(depth_image.height)
-        fit_radius = max(
-            window_radius_px, SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
-        )
-        center = ImagePoint(
-            u=int(depth_image.width) // 2,
-            v=max(height // 2, min(3 * height // 4, height - 1 - fit_radius)),
-        )
-        # Choose the dominant local depth rather than trusting one possibly
-        # isolated foreground/outlier pixel as the depth gate for the plane.
-        rows, columns = np.nonzero(point_cloud.valid_mask)
-        nearby = ((columns - center.u) ** 2 + (rows - center.v) ** 2
-                  <= window_radius_px ** 2)
-        rows, columns = rows[nearby], columns[nearby]
-        seed = center
-        if len(rows):
-            depths = point_cloud.depth_m[rows, columns]
-            median_depth = float(np.median(depths))
-            supported = np.abs(depths - median_depth) <= 0.05
-            if np.count_nonzero(supported) < 0.60 * len(depths):
-                raise ValueError("Ambiguous lower-middle depth: no dominant surface")
-            candidates = np.flatnonzero(supported)
-            nearest = candidates[np.argmin(
-                (columns[candidates] - center.u) ** 2
-                + (rows[candidates] - center.v) ** 2
-            )]
-            seed = ImagePoint(u=int(columns[nearest]), v=int(rows[nearest]))
-        try:
-            projected = project_reference_pixel(
-                seed,
-                depth_image,
-                camera_info,
-                search_radius_px=window_radius_px,
-                point_cloud=point_cloud,
-                rgb_size=(
-                    int(depth_image.width),
-                    int(depth_image.height),
-                ),
-            )
-        except ValueError as exception:
-            if "No valid depth within" not in str(exception):
-                raise
-            raise ValueError(
-                "No valid registered hand depth was found in the lower-middle "
-                f"{window_radius_px} px window. The surface may be too "
-                "close or too far from the gripper depth camera."
-            ) from exception
-
-        camera_distance_m = float(projected.depth_m)
-        if camera_distance_m < MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M:
-            raise ValueError(
-                "Surface is too close for reliable orientation: "
-                f"camera distance {camera_distance_m:.3f} m, minimum "
-                f"{MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M:.3f} m"
-            )
-
-        try:
-            estimate = estimate_surface_normal(
-                projected,
-                depth_image,
-                camera_info,
-                neighborhood_radius_px=max(
-                    window_radius_px, SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
-                ),
-                maximum_neighborhood_radius_px=max(
-                    window_radius_px,
-                    SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX,
-                ),
-                minimum_sample_count=(
-                    SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT
-                ),
-                point_cloud=point_cloud,
-                neighborhood_center_pixel=projected.sampled_pixel,
-                maximum_plane_rmse_m=DEFAULT_DEPTH_PLANE_TOLERANCE_M,
-                minimum_tangent_spread_m=0.003,
-            )
-            stamp = depth_image.header.stamp
-            return replace(
-                estimate,
-                projected_point=replace(projected, requested_pixel=center,
-                                        mapped_pixel=center),
-                stamp_nanoseconds=int(stamp.sec) * 1000000000 + int(stamp.nanosec),
-            )
-        except ValueError as exception:
-            raise ValueError(
-                "Unable to fit a reliable front surface plane: "
-                f"{exception}"
-            ) from exception
 
     def surface_distance_samples(
         self,
