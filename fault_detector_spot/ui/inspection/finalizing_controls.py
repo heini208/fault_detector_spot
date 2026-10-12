@@ -52,6 +52,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._surface_test_active = False
         self._surface_move_succeeded = False
         self._surface_move_target_m = None
+        self._surface_move_context_id = ""
         self._refinement_emergency_stop_requested = False
         self._reference_preview_cache = {}
         self._reference_view_id_by_camera = {}
@@ -1053,13 +1054,31 @@ class FinalizingInspectionControls(InspectionControls):
             return False
         if presentation.active_stage is not RefinementStage.PROBE:
             return False
-        if not self._surface_result_current():
+        if not self._can_open_probe_summary():
             self.surface_distance_test_status_label.setText(
                 "Reach the requested surface distance before continuing."
             )
             return False
         self.refinement_dialog.show_summary()
         return True
+
+    def _can_open_probe_summary(self):
+        presentation = self._refinement_presentation
+        return bool(
+            presentation is not None
+            and presentation.active_stage is RefinementStage.PROBE
+            and presentation.pending_motion is None
+            and not presentation.recovery_required
+            and not self._distance_failure_requires_retraction
+            and not self._retraction_failed
+            and not self._surface_test_active
+            and self._surface_result_current()
+            and (
+                self._custom_probe_mode()
+                or presentation.motion_states[RefinementStage.ALIGNMENT]
+                is RefinementMotionState.REACHED
+            )
+        )
 
     def handle_refinement_back(self):
         if self.refinement_dialog.is_summary_page():
@@ -1232,12 +1251,19 @@ class FinalizingInspectionControls(InspectionControls):
 
     def handle_test_surface_distance(self):
         presentation = self._require_refinement_presentation()
+        state = self._probe_setup_state
+        if state is None or not state.context_id:
+            self.surface_distance_test_status_label.setText(
+                "Probe setup context is unavailable"
+            )
+            return False
         self._surface_test_active = False
         self._surface_move_succeeded = False
+        self._surface_move_context_id = state.context_id
         self._surface_move_target_m = float(
             presentation.target_surface_distance_m
         )
-        self._update_save_probe_point_state()
+        self._refresh_refinement_dialog()
 
         intent = OperationalIntent()
         intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
@@ -1247,7 +1273,11 @@ class FinalizingInspectionControls(InspectionControls):
         intent.aligned_preapproach_distance_m = float(
             presentation.aligned_preapproach_distance_m
         )
-        request_id = self.ui.execute_operation(intent)
+        # Keep this generic arm command associated with the wizard. Otherwise
+        # its motion invalidates the wizard's reached-alignment checkpoint.
+        request_id = self.ui.execute_operation(
+            intent, context_id=self._surface_move_context_id,
+        )
         if request_id is None:
             self.surface_distance_test_status_label.setText(
                 "Move close to surface is unavailable"
@@ -1257,6 +1287,7 @@ class FinalizingInspectionControls(InspectionControls):
         self.surface_distance_test_status_label.setText(
             "Move close to surface running"
         )
+        self._refresh_refinement_dialog()
         return True
 
     def handle_application_state(self, status):
@@ -1269,6 +1300,7 @@ class FinalizingInspectionControls(InspectionControls):
             not self._surface_test_active
             or status.intent
             != OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+            or status.context_id != self._surface_move_context_id
         ):
             return None
         client = getattr(self.ui, "application_client", None)
@@ -1316,6 +1348,8 @@ class FinalizingInspectionControls(InspectionControls):
             not self._surface_move_succeeded
             or presentation is None
             or self._surface_move_target_m is None
+            or self._probe_setup_state is None
+            or self._probe_setup_state.context_id != self._surface_move_context_id
         ):
             return False
         return math.isclose(
@@ -1382,7 +1416,7 @@ class FinalizingInspectionControls(InspectionControls):
             status = f"Probe point '{point_id}' already exists."
         elif not numeric_ready:
             status = "Enter positive tolerances and measurement duration."
-        elif not self._surface_result_current():
+        elif not self._can_open_probe_summary():
             status = ("Reach and save the final probe candidate before saving."
                       if state.fully_custom else
                       "Run Move Close to Surface successfully before saving.")
@@ -1482,6 +1516,7 @@ class FinalizingInspectionControls(InspectionControls):
             self._surface_test_active = False
             self._surface_move_succeeded = False
             self._surface_move_target_m = None
+            self._surface_move_context_id = ""
             return
         if presentation.active_stage is not RefinementStage.PROBE:
             self._surface_move_succeeded = False
@@ -1502,13 +1537,14 @@ class FinalizingInspectionControls(InspectionControls):
                 or (probe_page and alignment_reached)
             )
         )
-        self.refinement_dialog.continue_to_summary_button.setEnabled(
-            probe_page
-            and alignment_reached
-            and self._surface_result_current()
-            and not pending
-            and not retraction_required
-        )
+        can_continue = self._can_open_probe_summary()
+        self.refinement_dialog.continue_to_summary_button.setEnabled(can_continue)
+        if probe_page:
+            self.refinement_dialog.next_button.setVisible(
+                not self.refinement_dialog.is_summary_page()
+            )
+            self.refinement_dialog.next_button.setText("Next")
+            self.refinement_dialog.next_button.setEnabled(can_continue)
         self._update_save_probe_point_state()
         if (
             self._probe_finalization_point_id

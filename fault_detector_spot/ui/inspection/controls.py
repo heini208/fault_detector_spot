@@ -1719,10 +1719,10 @@ class InspectionControls(UIControlHelper):
         return True
 
     def handle_refinement_next(self):
-        if self._custom_probe_mode() and self._refinement_presentation.active_stage is RefinementStage.PROBE:
-            return self.handle_open_probe_summary()
         presentation = self._require_refinement_presentation()
         stage = presentation.active_stage
+        if stage is RefinementStage.PROBE:
+            return self.handle_open_probe_summary()
         if (
             not presentation.stage_is_approved(stage)
             or (stage in (RefinementStage.SAFE_APPROACH, RefinementStage.ALIGNMENT)

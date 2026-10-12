@@ -1034,7 +1034,12 @@ class ProbeRefinementDialog(QDialog):
 
         state = self.controls._probe_setup_state
         self.summary_reference_group.setVisible(not self.fully_custom)
-        self.summary_final_pose_label.setText(self.controls._pose_summary(presentation.approved_pose(RefinementStage.PROBE)))
+        final_pose = presentation.approved_pose(RefinementStage.PROBE)
+        self.summary_final_pose_label.setText(
+            self.controls._pose_summary(final_pose)
+            if final_pose is not None
+            else "Calculated from the approved alignment and target distance when saving"
+        )
         self.summary_speeds_label.setText(f"Pre-approach: {100 * state.pre_approach_speed_scale:g}%; final: {100 * state.final_probe_speed_scale:g}%" if state and self.fully_custom else (f"Pre-approach: {100 * state.pre_approach_speed_scale:g}%" if state else ""))
         if state is None or not state.has_reference_pixel:
             self.summary_reference_camera_label.setText("Not set")
