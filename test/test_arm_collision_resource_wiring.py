@@ -107,3 +107,15 @@ def test_idle_refresh_checks_execution_even_when_planner_has_finished(factories)
     assert not arm_is_idle()
 
     resources.close()
+
+
+def test_planning_budget_override_reaches_shared_planner(factories):
+    planner, _, _, _, _ = factories
+    resources = resources_module.RobotCommandResources()
+    node = Node()
+    node.values["arm.motion.moveit_allowed_planning_time_sec"] = 24.0
+
+    resources.get_moveit_arm_planner(node)
+
+    assert planner.call_args.kwargs["allowed_planning_time_sec"] == 24.0
+    resources.close()

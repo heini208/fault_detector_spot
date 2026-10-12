@@ -16,6 +16,8 @@ from moveit_msgs.msg import (
 from moveit_msgs.srv import GetCartesianPath, GetMotionPlan
 from shape_msgs.msg import SolidPrimitive
 
+from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
+
 
 ARM_JOINT_NAMES = (
     "arm_sh0",
@@ -31,8 +33,8 @@ DEFAULT_PLANNING_FRAME = "body"
 DEFAULT_GROUP_NAME = "arm"
 DEFAULT_END_EFFECTOR_LINK = "hand"
 DEFAULT_PLANNER_ID = "RRTConnectkConfigDefault"
-DEFAULT_ALLOWED_PLANNING_TIME_SEC = 5.0
 DEFAULT_RESPONSE_TIMEOUT_SEC = 7.0
+MOTION_RESPONSE_MARGIN_SEC = 2.0
 DEFAULT_POSITION_TOLERANCE_M = 0.005
 DEFAULT_ORIENTATION_TOLERANCE_RAD = 0.01
 DEFAULT_VELOCITY_SCALING = 0.5
@@ -73,9 +75,7 @@ class MoveItArmPlanner:
         group_name: str = DEFAULT_GROUP_NAME,
         end_effector_link: str = DEFAULT_END_EFFECTOR_LINK,
         planner_id: str = DEFAULT_PLANNER_ID,
-        allowed_planning_time_sec: float = (
-            DEFAULT_ALLOWED_PLANNING_TIME_SEC
-        ),
+        allowed_planning_time_sec: float | None = None,
         response_timeout_sec: float = DEFAULT_RESPONSE_TIMEOUT_SEC,
         position_tolerance_m: float = DEFAULT_POSITION_TOLERANCE_M,
         orientation_tolerance_rad: float = (
@@ -103,7 +103,9 @@ class MoveItArmPlanner:
         self.end_effector_link = str(end_effector_link).strip()
         self.planner_id = str(planner_id).strip()
         self.allowed_planning_time_sec = self._positive(
-            allowed_planning_time_sec,
+            ArmMotionParameters().get(
+                "motion.moveit_allowed_planning_time_sec", allowed_planning_time_sec,
+            ),
             "Allowed planning time",
         )
         self.response_timeout_sec = self._positive(
@@ -294,6 +296,13 @@ class MoveItArmPlanner:
 
         if not future.done():
             timeout = self.response_timeout_sec
+            if self._planning_mode == "motion":
+                # The service deadline must allow the requested search budget
+                # plus time to deliver its result. Other phases stay bounded.
+                timeout = max(
+                    timeout,
+                    self.allowed_planning_time_sec + MOTION_RESPONSE_MARGIN_SEC,
+                )
             if (
                 self._monotonic_clock() - self._started_at
                 >= timeout
@@ -591,11 +600,55 @@ class MoveItArmPlanner:
             "MoveIt could not compute an arm plan "
             f"({name}, error code {error_code})"
         )
-        if error_code == MoveItErrorCodes.GOAL_STATE_INVALID:
-            detail += (
-                ": no valid goal state found for the requested hand pose; "
+        explanations = {
+            MoveItErrorCodes.FAILURE: (
+                "MoveIt reported a generic planning failure; inspect move_group "
+                "logs for goal sampling, IK, collision, or joint-limit details"
+            ),
+            MoveItErrorCodes.PLANNING_FAILED: (
+                "MoveIt did not report whether reachability or collision caused "
+                "the failure; inspect move_group logs for the rejected state or path"
+            ),
+            MoveItErrorCodes.NO_IK_SOLUTION: (
+                "no inverse-kinematics solution found for the requested hand pose; "
+                "check target position, orientation, and sensor-to-hand calibration"
+            ),
+            MoveItErrorCodes.START_STATE_IN_COLLISION: (
+                "MoveIt reports the current robot state in collision; inspect "
+                "the current arm and mounted sensor geometry in the planning scene"
+            ),
+            MoveItErrorCodes.GOAL_IN_COLLISION: (
+                "MoveIt reports the requested goal in collision; inspect "
+                "the target arm and mounted sensor geometry in the planning scene"
+            ),
+            MoveItErrorCodes.START_STATE_INVALID: (
+                "MoveIt rejected the starting robot state; check current joint "
+                "states and move_group logs for joint-limit or collision failures"
+            ),
+            MoveItErrorCodes.INVALID_ROBOT_STATE: (
+                "MoveIt rejected the robot state; check joint-state values "
+                "against the robot model"
+            ),
+            MoveItErrorCodes.GOAL_STATE_INVALID: (
+                "no valid goal state found for the requested hand pose; "
                 "check move_group logs for IK, collision, or joint-limit failures"
-            )
+            ),
+            MoveItErrorCodes.GOAL_CONSTRAINTS_VIOLATED: (
+                "the planned goal does not satisfy the requested hand-pose "
+                "constraints; inspect the target position and orientation"
+            ),
+            MoveItErrorCodes.INVALID_GOAL_CONSTRAINTS: (
+                "MoveIt rejected the goal constraints; check the requested "
+                "hand pose, planning frame, and end-effector link"
+            ),
+            MoveItErrorCodes.TIMED_OUT: (
+                "MoveIt exhausted its planning time; inspect move_group logs "
+                "for reachability or collision problems before retrying"
+            ),
+        }
+        explanation = explanations.get(error_code)
+        if explanation is not None:
+            detail += f": {explanation}"
         return detail
 
     def _pose_goal_constraints(

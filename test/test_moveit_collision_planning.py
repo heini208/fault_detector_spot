@@ -217,13 +217,17 @@ def test_abandoned_mutation_or_plan_waits_for_actual_server_reply(rig, stage, ca
     rig.advance_to(stage)
     previous = rig.planner._future
     events = list(rig.node.events)
+    timeout = 17.0 if stage == "plan" else 7.0
     if cancel:
+        if stage == "plan":
+            rig.clock = 8.0
+            assert rig.planner.poll().outcome is MoveItPlanOutcome.RUNNING
         rig.planner.cancel()
     else:
-        rig.clock = 8.0
+        rig.clock = timeout
         update = rig.planner.poll()
         assert update.outcome is MoveItPlanOutcome.TIMEOUT
-        assert "7.0 s" in update.detail
+        assert f"{timeout:.1f} s" in update.detail
     assert not previous.cancelled()
     assert not rig.planner.active
     update = rig.planner.start(rig.target, ignore_environment_collisions=True)
@@ -281,4 +285,66 @@ def test_unavailable_service_never_falls_through_to_unchecked_planning(rig, unav
     assert update.outcome is MoveItPlanOutcome.SERVICE_UNAVAILABLE
     assert not rig.node.clients[unavailable].requests
     assert not rig.node.clients[PLAN].requests
+    assert not rig.planner.active
+
+
+def test_motion_plan_can_finish_after_old_response_deadline(rig):
+    rig.advance_to("plan")
+    request = rig.node.clients[PLAN].requests[-1].motion_plan_request
+    assert request.allowed_planning_time == 15.0
+
+    rig.clock = 8.0
+    assert rig.planner.poll().outcome is MoveItPlanOutcome.RUNNING
+    assert rig.node.events == [READ, APPLY, PLAN]
+
+    rig.clock = 14.0
+    update = rig.planned()
+    assert update.outcome is MoveItPlanOutcome.SUCCESS
+    assert update.trajectory is not None
+    assert not rig.planner.active
+
+
+@pytest.mark.parametrize(
+    "planning_budget,response_timeout,expected_deadline",
+    [(3.0, 7.0, 7.0), (15.0, 7.0, 17.0), (30.0, 7.0, 32.0),
+     (15.0, 40.0, 40.0)],
+)
+def test_motion_deadline_allows_planning_budget_and_response_margin(
+    rig, planning_budget, response_timeout, expected_deadline,
+):
+    rig.planner.allowed_planning_time_sec = planning_budget
+    rig.planner.response_timeout_sec = response_timeout
+    # Scene preparation time must not consume the actual planning budget.
+    rig.advance_to("apply")
+    rig.clock = 2.0
+    rig.applied()
+    assert rig.node.clients[PLAN].requests[-1].motion_plan_request.allowed_planning_time == planning_budget
+
+    rig.clock = 2.0 + expected_deadline - 0.001
+    assert rig.planner.poll().outcome is MoveItPlanOutcome.RUNNING
+    rig.clock = 2.0 + expected_deadline
+    update = rig.planner.poll()
+    assert update.outcome is MoveItPlanOutcome.TIMEOUT
+    assert f"{expected_deadline:.1f} s" in update.detail
+    assert not rig.planner.active
+    assert not rig.node.clients[PLAN].future.cancelled()
+
+
+@pytest.mark.parametrize("phase", ["read_scene", "apply", "cartesian"])
+def test_motion_budget_does_not_extend_other_service_deadlines(rig, phase):
+    rig.planner.allowed_planning_time_sec = 30.0
+    if phase == "cartesian":
+        rig.planner.start_cartesian(rig.target)
+        rig.read()
+        rig.applied()
+    else:
+        rig.advance_to("read" if phase == "read_scene" else "apply")
+    assert rig.planner._planning_mode == phase
+
+    rig.clock = 6.999
+    assert rig.planner.poll().outcome is MoveItPlanOutcome.RUNNING
+    rig.clock = 7.0
+    update = rig.planner.poll()
+    assert update.outcome is MoveItPlanOutcome.TIMEOUT
+    assert "7.0 s" in update.detail
     assert not rig.planner.active

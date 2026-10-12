@@ -1448,7 +1448,7 @@ def test_guarded_moveit_failure_releases_without_arm_stop(outcome_name):
     executor._operation = executor_module._ArmOperation.GUARDED_MOVEMENT
     executor._moveit_cartesian_plan = object()
     guard = executor.guarded_probe_execution
-    guard._phase = _Phase.MOVING
+    guard._phase = _Phase.MOTION_PREPARING
     guard._plan = SimpleNamespace(force_guard_enabled=False)
 
     result = executor.poll()
@@ -1460,6 +1460,113 @@ def test_guarded_moveit_failure_releases_without_arm_stop(outcome_name):
     assert executor.arm_stop_service_client.requests == []
     assert client.sent_goals == []
     assert executor.stow().outcome is ArmMovementOutcome.RUNNING
+
+
+@pytest.mark.parametrize("cartesian_path", [False, True])
+@pytest.mark.parametrize("baseline_recovery", [False, True])
+def test_guarded_moveit_plans_before_collecting_fresh_force_baseline(
+    monkeypatch, cartesian_path, baseline_recovery,
+):
+    from fault_detector_spot.manipulation.arm_force_baseline import ForceBaselineSampler
+    from fault_detector_spot.manipulation.arm_state_source import HandForceSample
+    from fault_detector_spot.manipulation.moveit_arm_planner import MoveItPlanOutcome, MoveItPlanUpdate
+
+    clock = ManualClock()
+    state = FakeArmStateSource(ArmStowState.DEPLOYED)
+    state.sample = HandForceSample(0.0, 0.0, 0.0, 0.0)
+    state.hand_force_sample = lambda: state.sample
+    planning = SimpleNamespace(
+        update=MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, "Planning"),
+    )
+    starts, scene_checks, built = [], [], []
+    preparing = MoveItPlanUpdate(MoveItPlanOutcome.RUNNING, "Planning")
+    planner = SimpleNamespace(
+        planning_frame="body",
+        start=lambda target, **kwargs: starts.append(("motion", kwargs)) or preparing,
+        start_cartesian=lambda target, **kwargs: starts.append(("cartesian", kwargs)) or preparing,
+        poll=lambda: planning.update,
+        cancel=lambda: None,
+        validate_prepared_scene=lambda: scene_checks.append(clock.now),
+    )
+    stop_client = FakeArmStopServiceClient()
+    executor, client = executor_with_client(
+        FakeTransformer({("body", "hand"): transform("body", "hand")}),
+        arm_state_source=state, arm_stop_service_client=stop_client,
+        moveit_arm_planner=planner, monotonic_clock=clock,
+        force_baseline_sampler=ForceBaselineSampler(
+            state, minimum_samples=3, minimum_span_sec=0.2,
+            timeout_sec=1.0, monotonic_clock=clock,
+        ),
+    )
+    monkeypatch.setattr(
+        executor, "_build_moveit_joint_goal",
+        lambda trajectory, **kwargs: built.append(trajectory) or object(),
+    )
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.position.x = 0.1
+    target.pose.orientation.w = 1.0
+    assert executor.guarded_probe(
+        target, "hand", cartesian_path=cartesian_path,
+        ignore_environment_collisions=True,
+    ).outcome is ArmMovementOutcome.RUNNING
+
+    # Scene preparation/planning can outlast the motion watchdog without any
+    # RobotCommand or force baseline being started.
+    clock.now = 5.0
+    update = executor.poll()
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert update.detail == "Planning"
+    assert client.sent_goals == stop_client.requests == built == []
+    assert not executor.guarded_probe_execution.force_baseline_sampler.active
+    assert starts == [(
+        "cartesian" if cartesian_path else "motion",
+        {"ignore_environment_collisions": True},
+    )]
+
+    trajectory = object()
+    planning.update = MoveItPlanUpdate(MoveItPlanOutcome.SUCCESS, "Planned", trajectory)
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert executor.guarded_probe_execution.force_baseline_sampler.active
+    assert client.sent_goals == built == scene_checks == []
+    if baseline_recovery:
+        for stamp, force in ((5.1, 0.0), (5.2, 9.0), (5.3, 0.0)):
+            clock.now = stamp
+            state.sample = HandForceSample(stamp, force, 0.0, 0.0)
+            assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+        clock.now = 6.0
+        assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+        assert len(stop_client.requests) == 1
+        assert client.sent_goals == built == []
+        stop_client.future.set_result(SimpleNamespace(success=True))
+        executor.poll()
+        assert confirm_physical_stop(executor, clock, 6.1).outcome is ArmMovementOutcome.RUNNING
+        assert starts == starts[:1] * 2  # Replan with the original mode and collision policy.
+        trajectory = object()
+        planning.update = MoveItPlanUpdate(MoveItPlanOutcome.SUCCESS, "Replanned", trajectory)
+        assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+
+    baseline_started = clock.now
+    for stamp in (baseline_started + 0.1, baseline_started + 0.2):
+        clock.now = stamp
+        state.sample = HandForceSample(stamp, 0.0, 0.0, 0.0)
+        assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+        assert client.sent_goals == []
+    clock.now = baseline_started + 0.3
+    state.sample = HandForceSample(clock.now, 0.0, 0.0, 0.0)
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert built == [trajectory]
+    assert scene_checks == [clock.now]
+    assert len(client.sent_goals) == 1
+
+    # Once submission starts, losing force telemetry must still stop the arm.
+    clock.now += 0.3
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert len(stop_client.requests) == 1 + int(baseline_recovery)
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    executor.poll()
+    update = confirm_physical_stop(executor, clock, clock.now + 0.1)
+    assert update.outcome is ArmMovementOutcome.FORCE_STALE
 
 
 def tag_verification_executor(monkeypatch, error=.02):

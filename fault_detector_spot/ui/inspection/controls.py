@@ -458,6 +458,10 @@ class InspectionControls(UIControlHelper):
             "Approve Current Pose"
         )
         self.move_aligned_pose_button = QPushButton("Move to Final Candidate")
+        self.move_aligned_pose_button.setToolTip(
+            "Move directly to the final candidate. Use Move Along Set Path "
+            "to visit the saved pathing points first."
+        )
         self.use_current_alignment_button = QPushButton(
             "Save Final Aligned Pre-approach Pose"
         )

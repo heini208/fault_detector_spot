@@ -376,7 +376,9 @@ class ArmMovementExecutor(MovementExecutor):
                 force_baseline_sampler=force_baseline_sampler,
                 force_contact_policy=force_contact_policy,
                 contact_evidence_analyzer=self.contact_evidence_analyzer,
-                start_motion=self._continue_probe,
+                prepare_motion=self._prepare_guarded_motion,
+                poll_preparation=self._poll_guarded_motion_preparation,
+                start_motion=self._start_prepared_guarded_motion,
                 start_retreat=self._continue_contact_retreat,
                 poll_goal=self._guard_poll_goal,
                 cancel_goal=self._guard_cancel_goal,
@@ -900,8 +902,47 @@ class ArmMovementExecutor(MovementExecutor):
             plan = build_plan()
             return self._build_pose_goal(plan.target_hand, plan.duration_sec)
 
-        self._pending_goal_builder = build_goal
-        return self._submit_goal(build_goal)
+        return self._stage_probe_goal(build_goal)
+
+    def _stage_probe_goal(self, goal_builder):
+        self._pending_goal_builder = goal_builder
+        if self._preparing_guarded_motion:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.SUCCESS,
+                "Arm trajectory prepared; waiting for force baseline",
+            )
+        return self._submit_goal(goal_builder)
+
+    def _prepare_guarded_motion(self, plan):
+        # Planning and collision-scene preparation must finish before sampling
+        # the force baseline. No RobotCommand is submitted by this phase.
+        self._preparing_guarded_motion = True
+        self._next_probe_cartesian_path = self._guarded_cartesian_path
+        return self._continue_probe(plan)
+
+    def _poll_guarded_motion_preparation(self):
+        if self._pending_moveit_plan_builder is not None:
+            return self._advance_moveit_planning_start()
+        if self._moveit_cartesian_plan is not None:
+            return self._poll_moveit_planning()
+        if self._pending_goal_builder is not None:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.SUCCESS, "Arm trajectory prepared",
+            )
+        return ArmMovementUpdate(
+            ArmMovementOutcome.EXECUTION_ERROR,
+            "Guarded movement lost its prepared arm trajectory",
+        )
+
+    def _start_prepared_guarded_motion(self, _plan):
+        goal_builder = self._pending_goal_builder
+        if goal_builder is None or not self._preparing_guarded_motion:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                "Guarded movement has no prepared arm trajectory",
+            )
+        self._preparing_guarded_motion = False
+        return self._submit_goal(goal_builder)
 
     def _moveit_planning_required(self) -> bool:
         return (
@@ -1001,8 +1042,7 @@ class ArmMovementExecutor(MovementExecutor):
                 minimum_duration_sec=plan.duration_sec,
             )
 
-        self._pending_goal_builder = build_goal
-        return self._submit_goal(build_goal)
+        return self._stage_probe_goal(build_goal)
 
     @staticmethod
     def _moveit_failure_outcome(_outcome):
@@ -1593,6 +1633,7 @@ class ArmMovementExecutor(MovementExecutor):
         return self._poll_result()
 
     def _guard_cancel_goal(self) -> None:
+        self._preparing_guarded_motion = False
         self._reset_moveit_planning(cancel=True)
         self._pending_goal_builder = None
         if not self.cancelling:
@@ -1744,6 +1785,7 @@ class ArmMovementExecutor(MovementExecutor):
                 self.guarded_probe_execution.reset()
 
     def _clear_arm_operation_state(self) -> None:
+        self._preparing_guarded_motion = False
         self._tag_accuracy = None
         self._operation = None
         self._operation_speed = None

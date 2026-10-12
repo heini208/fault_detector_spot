@@ -145,6 +145,23 @@ class GoalDriver:
         return self.stop_updates.pop(0)
 
 
+class PreparingGoalDriver(GoalDriver):
+
+    def __init__(self):
+        super().__init__()
+        self.preparation_updates = []
+        self.prepared_plans = []
+
+    def prepare(self, plan):
+        self.prepared_plans.append(plan)
+        return self.poll_preparation()
+
+    def poll_preparation(self):
+        if self.preparation_updates:
+            return self.preparation_updates.pop(0)
+        return ArmMovementUpdate(ArmMovementOutcome.RUNNING, "Planning")
+
+
 def pose(x):
     result = PoseStamped()
     result.header.frame_id = "body"
@@ -197,7 +214,12 @@ def execution(
     force_policy=None,
     contact_evidence_analyzer=None,
     start_retreat=None,
+    prepare_motion=None,
+    poll_preparation=None,
 ):
+    def prepared(*_args):
+        return ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Plan ready")
+
     return GuardedProbeExecution(
         arm_state_source=state,
         force_baseline_sampler=ImmediateBaseline(),
@@ -208,6 +230,8 @@ def execution(
         ),
         contact_evidence_analyzer=contact_evidence_analyzer,
         start_motion=driver.start,
+        prepare_motion=prepare_motion or prepared,
+        poll_preparation=poll_preparation or prepared,
         start_retreat=start_retreat,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,
@@ -235,12 +259,109 @@ def execution(
     )
 
 
-@pytest.mark.parametrize("stable_retry", [True, False])
-def test_unstable_baseline_stops_once_then_requires_a_new_baseline(stable_retry):
+def test_slow_preparation_waits_for_a_fresh_baseline_before_motion():
     clock = ManualClock()
     state = FakeArmStateSource()
-    driver = GoalDriver()
-    guard = execution(state, driver, clock, pose(0.0))
+    driver = PreparingGoalDriver()
+    guard = execution(
+        state, driver, clock, pose(0.0),
+        prepare_motion=driver.prepare, poll_preparation=driver.poll_preparation,
+    )
+    guard.force_baseline_sampler = ForceBaselineSampler(
+        state, minimum_samples=3, minimum_span_sec=0.2,
+        maximum_component_span_n=3.0, timeout_sec=0.5,
+        monotonic_clock=clock,
+    )
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+    for stamp in (0.5, 2.0):
+        clock.now = stamp
+        assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+        assert guard.observe_force_sample(None) is None
+        assert guard.observe_force_sample(HandForceSample(stamp, 100.0, 0.0, 0.0)) is None
+        assert not guard.force_baseline_sampler.active
+        assert driver.started_goals == []
+
+    driver.preparation_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Plan ready"))
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    assert guard.force_baseline_sampler.active
+    assert guard._primary_motion_started_at is None
+    for stamp in (2.1, 2.2):
+        clock.now = stamp
+        state.sample = HandForceSample(stamp, 1.0, 2.0, 3.0)
+        assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+        assert driver.started_goals == []
+    clock.now = 2.3
+    state.sample = HandForceSample(2.3, 1.0, 2.0, 3.0)
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    assert driver.started_goals == driver.prepared_plans
+    assert guard._primary_motion_started_at == 2.3
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 0
+    assert driver.stop_count == 0
+
+
+@pytest.mark.parametrize("immediate", [False, True])
+def test_preparation_failure_surfaces_without_baseline_or_arm_stop(immediate):
+    driver = PreparingGoalDriver()
+    guard = execution(
+        FakeArmStateSource(), driver, ManualClock(), pose(0.0),
+        prepare_motion=driver.prepare, poll_preparation=driver.poll_preparation,
+    )
+    sampler = FailedBaseline(ForceBaselineOutcome.FORCE_UNAVAILABLE)
+    guard.force_baseline_sampler = sampler
+    failure = ArmMovementUpdate(ArmMovementOutcome.PLANNING_FAILED, "No valid goal")
+    if immediate:
+        driver.preparation_updates.append(failure)
+    update = guard.start(plan)
+    if not immediate:
+        assert update.outcome is ArmMovementOutcome.RUNNING
+        driver.preparation_updates.append(failure)
+        update = guard.poll()
+    assert update == failure
+    assert not guard.active
+    assert sampler.starts == 0
+    assert driver.started_goals == []
+
+
+@pytest.mark.parametrize("during_baseline", [False, True])
+def test_cancelled_preparation_cannot_start_a_late_goal(during_baseline):
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = PreparingGoalDriver()
+    guard = execution(
+        state, driver, clock, pose(0.0),
+        prepare_motion=driver.prepare, poll_preparation=driver.poll_preparation,
+    )
+    guard.force_baseline_sampler = ForceBaselineSampler(state, monotonic_clock=clock)
+    if during_baseline:
+        driver.preparation_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Plan ready"))
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+    assert guard.cancel().outcome is ArmMovementOutcome.RUNNING
+    assert driver.cancel_count == 1
+    driver.preparation_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Late plan"))
+    driver.stop_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped"))
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    assert confirm_physical_stop(guard, state, clock, 0.1).outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED
+    assert guard.poll().outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED
+    assert driver.started_goals == [("arm_stop", 1)]
+
+
+@pytest.mark.parametrize("preparation", [False, True])
+@pytest.mark.parametrize("stable_retry", [True, False])
+def test_unstable_baseline_stops_once_then_requires_a_new_baseline(stable_retry, preparation):
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = PreparingGoalDriver()
+    if preparation:
+        driver.preparation_updates = [
+            ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Plan ready"),
+            ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Replacement plan ready"),
+        ]
+    guard = execution(
+        state, driver, clock, pose(0.0),
+        prepare_motion=driver.prepare if preparation else None,
+        poll_preparation=driver.poll_preparation if preparation else None,
+    )
     guard.force_baseline_sampler = ForceBaselineSampler(
         state, minimum_samples=3, minimum_span_sec=0.2,
         maximum_component_span_n=3.0, timeout_sec=0.5,
@@ -271,6 +392,8 @@ def test_unstable_baseline_stops_once_then_requires_a_new_baseline(stable_retry)
     assert len(plans) == 1  # Pre-acceptance feedback cannot confirm the stop.
     assert confirm_physical_stop(guard, state, clock, 0.6).outcome is ArmMovementOutcome.RUNNING
     assert len(plans) == 2
+    assert driver.cancel_count == 1
+    assert driver.prepared_plans == (plans if preparation else [])
     assert plans[1].current_hand.pose.position.x == pytest.approx(1.0)
     assert driver.started_goals == [("arm_stop", 1)]
 

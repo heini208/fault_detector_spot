@@ -145,6 +145,8 @@ def execution(state, driver, clock, telemetry):
         arm_state_source=state,
         force_baseline_sampler=Baseline(),
         force_contact_policy=Policy(),
+        prepare_motion=lambda _plan: ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Plan ready"),
+        poll_preparation=lambda: ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Plan ready"),
         start_motion=driver.start,
         poll_goal=driver.poll,
         cancel_goal=driver.cancel,

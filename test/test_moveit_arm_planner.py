@@ -153,27 +153,38 @@ def test_trajectory_safety_gate_rejects_arm_sh1_below_margin():
         planner._validate_and_describe(trajectory)
 
 
-@pytest.mark.parametrize("code, name", [
-    (-27, "GOAL_STATE_INVALID"),
-    (-26, "START_STATE_INVALID"),
-    (-31, "NO_IK_SOLUTION"),
-    (-12345, "UNKNOWN"),
+@pytest.mark.parametrize("code, name, explanation", [
+    (99999, "FAILURE", "goal sampling, IK, collision, or joint-limit"),
+    (-1, "PLANNING_FAILED", "did not report whether reachability or collision"),
+    (-27, "GOAL_STATE_INVALID", "check move_group logs"),
+    (-26, "START_STATE_INVALID", "check current joint states"),
+    (-31, "NO_IK_SOLUTION", "no inverse-kinematics solution found"),
+    (-10, "START_STATE_IN_COLLISION", "current robot state in collision"),
+    (-12, "GOAL_IN_COLLISION", "requested goal in collision"),
+    (-17, "INVALID_ROBOT_STATE", "check joint-state values"),
+    (-14, "GOAL_CONSTRAINTS_VIOLATED", "does not satisfy the requested hand-pose"),
+    (-16, "INVALID_GOAL_CONSTRAINTS", "rejected the goal constraints"),
+    (-6, "TIMED_OUT", "exhausted its planning time"),
+    (-12345, "UNKNOWN", None),
 ])
-def test_failed_plan_reports_symbolic_code_and_releases_future(code, name):
+@pytest.mark.parametrize("mode", ["motion", "cartesian"])
+def test_failed_plan_reports_diagnostic_and_releases_future(code, name, explanation, mode):
     planner = planner_shell()
-    planner._planning_mode = "motion"
+    planner._planning_mode = mode
+    result = SimpleNamespace(error_code=MoveItErrorCodes(val=code))
+    response = (result if mode == "cartesian"
+                else SimpleNamespace(motion_plan_response=result))
     planner._future = SimpleNamespace(
         done=lambda: True,
-        result=lambda: SimpleNamespace(motion_plan_response=SimpleNamespace(
-            error_code=MoveItErrorCodes(val=code),
-        )),
+        result=lambda: response,
     )
 
     update = planner.poll()
 
     assert update.outcome is MoveItPlanOutcome.FAILURE
-    assert name in update.detail
-    assert str(code) in update.detail
+    assert f"({name}, error code {code})" in update.detail
     assert not planner.active
-    if code == -27:
-        assert "check move_group logs" in update.detail
+    if explanation is not None:
+        assert explanation in update.detail
+    else:
+        assert update.detail.endswith(f"({name}, error code {code})")

@@ -181,6 +181,9 @@ class RobotCommandResources:
                 )
                 self._moveit_arm_planner = MoveItArmPlanner(
                     node,
+                    allowed_planning_time_sec=config.get(
+                        "motion.moveit_allowed_planning_time_sec"
+                    ),
                     velocity_scaling=config.get(
                         "motion.moveit_velocity_scaling"
                     ),

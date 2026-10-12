@@ -694,6 +694,20 @@ by physical-stop confirmation and deployed-state verification. This also
 applies when a requested arm move first deploys the arm automatically: the
 requested move waits until preparation has stopped successfully.
 
+Guarded movements complete collision-scene preparation and MoveIt planning
+before collecting a fresh force baseline. Only after that baseline succeeds
+is the prepared trajectory submitted and the motion force watchdog activated.
+Planning failures retain their MoveIt error code and cannot be masked by a
+force timeout during planning. Collision-scene validity is checked again at
+trajectory submission.
+
+MoveIt pose planning allows up to 15 seconds to find a solution, configured by
+`arm.motion.moveit_allowed_planning_time_sec` in `config/arm_motion.yaml`.
+The motion-planning response deadline allows at least this budget plus two
+seconds; scene and Cartesian service deadlines remain seven seconds. A larger
+budget gives difficult goal sampling more time but cannot make an unreachable
+or colliding candidate valid. Changes apply on the next application start.
+
 If the force baseline is unstable before a guarded arm move, execution sends
 one native `ArmStopCommand` to stop the previous arm command. After fresh
 velocity feedback confirms the stop, it rebuilds the plan and collects a new

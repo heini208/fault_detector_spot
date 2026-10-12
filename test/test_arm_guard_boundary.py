@@ -77,7 +77,8 @@ def test_low_level_probe_is_explicitly_unguarded():
     source = _source(EXECUTOR)
     method = _method_source(source, "probe")
 
-    assert "_submit_goal(" in method
+    assert "_stage_probe_goal(" in method
+    assert "_submit_goal(" in _method_source(source, "_stage_probe_goal")
     assert "guarded_probe_execution" not in method
     assert "ready_probe(" not in method
 
@@ -191,11 +192,13 @@ def test_only_probe_moveit_completion_and_native_stow_submit_arm_motion():
                 callers.setdefault(call.func.attr, set()).add(method.name)
 
     assert callers["_submit_goal"] == {
-        "probe", "_poll_moveit_planning", "_advance_stow_start",
+        "_stage_probe_goal", "_start_prepared_guarded_motion", "_advance_stow_start",
     }
     assert callers["_build_pose_goal"] == {"probe"}
     assert callers["probe"] == {"_continue_probe", "_continue_contact_retreat"}
-    assert "start_motion=self._continue_probe" in _source(EXECUTOR)
+    assert "prepare_motion=self._prepare_guarded_motion" in _source(EXECUTOR)
+    assert "poll_preparation=self._poll_guarded_motion_preparation" in _source(EXECUTOR)
+    assert "start_motion=self._start_prepared_guarded_motion" in _source(EXECUTOR)
     assert "start_retreat=self._continue_contact_retreat" in _source(EXECUTOR)
     assert "self._start_motion(plan)" in _source(GUARD)
     assert "self._start_retreat(retreat_plan)" in _source(GUARD)

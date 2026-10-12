@@ -32,6 +32,7 @@ from fault_detector_spot.shared.geometry.movement_geometry import (
 class _Phase(Enum):
     FORCE_BASELINE = "force_baseline"
     PLAN_WAIT = "plan_wait"
+    MOTION_PREPARING = "motion_preparing"
     MOVING = "moving"
     ARM_STOPPING = "arm_stopping"
     ARM_SETTLING = "arm_settling"
@@ -46,6 +47,8 @@ class GuardedProbeExecution:
         arm_state_source,
         force_baseline_sampler,
         force_contact_policy,
+        prepare_motion,
+        poll_preparation,
         start_motion,
         poll_goal,
         cancel_goal,
@@ -79,6 +82,8 @@ class GuardedProbeExecution:
                     f"GuardedProbeExecution requires {label}"
                 )
         callbacks = (
+            (prepare_motion, "prepare motion"),
+            (poll_preparation, "poll preparation"),
             (start_motion, "start motion"),
             (poll_goal, "poll goal"),
             (cancel_goal, "cancel goal"),
@@ -101,6 +106,8 @@ class GuardedProbeExecution:
         self.force_baseline_sampler = force_baseline_sampler
         self.force_contact_policy = force_contact_policy
         self._start_motion = start_motion
+        self._prepare_motion = prepare_motion
+        self._poll_preparation = poll_preparation
         self._start_retreat = start_motion if start_retreat is None else start_retreat
         self._poll_goal = poll_goal
         self._cancel_goal = cancel_goal
@@ -198,6 +205,8 @@ class GuardedProbeExecution:
             )
         if phase is _Phase.PLAN_WAIT:
             return self._prepare_plan()
+        if phase is _Phase.MOTION_PREPARING:
+            return self._advance_motion_preparation(self._poll_preparation)
         if phase is _Phase.MOVING:
             return self._poll_primary_motion()
         if phase is _Phase.ARM_STOPPING:
@@ -286,6 +295,7 @@ class GuardedProbeExecution:
             # A previous pose command can keep the arm oscillating. Stop that
             # hold once, then require a new baseline before submitting motion.
             self._baseline_recovery_attempted = True
+            self._cancel_goal()
             return self._begin_arm_stop(
                 terminal_outcome=ArmMovementOutcome.FORCE_UNSTABLE,
                 terminal_detail=update.detail,
@@ -345,19 +355,41 @@ class GuardedProbeExecution:
                 ArmMovementOutcome.SUCCESS,
                 "Skipped zero arm movement",
             )
-        if not plan.force_guard_enabled:
-            return self._start_primary_motion_without_force_guard()
+        if plan.force_guard_enabled:
+            try:
+                self._force_threshold_n = self._resolve_force_threshold(
+                    plan.linear_speed_mps,
+                    plan.angular_speed_rad_s,
+                    self._force_threshold_override_n,
+                )
+            except Exception as exception:
+                return self._terminal(
+                    ArmMovementOutcome.EXECUTION_ERROR,
+                    str(exception),
+                )
+        self._phase = _Phase.MOTION_PREPARING
+        return self._advance_motion_preparation(
+            lambda: self._prepare_motion(plan)
+        )
+
+    def _advance_motion_preparation(self, callback) -> ArmMovementUpdate:
+        """Finish planning before acquiring the force baseline for execution."""
         try:
-            self._force_threshold_n = self._resolve_force_threshold(
-                plan.linear_speed_mps,
-                plan.angular_speed_rad_s,
-                self._force_threshold_override_n,
-            )
+            update = callback()
         except Exception as exception:
             return self._terminal(
                 ArmMovementOutcome.EXECUTION_ERROR,
-                str(exception),
+                f"Could not prepare guarded probe movement: {exception}",
             )
+        if update.outcome is ArmMovementOutcome.RUNNING:
+            return update
+        if update.outcome is not ArmMovementOutcome.SUCCESS:
+            return self._terminal(update.outcome, update.detail)
+        return self._begin_prepared_motion()
+
+    def _begin_prepared_motion(self) -> ArmMovementUpdate:
+        if not self._plan.force_guard_enabled:
+            return self._start_primary_motion_without_force_guard()
         return self._begin_force_baseline()
 
     def _start_primary_motion_without_force_guard(

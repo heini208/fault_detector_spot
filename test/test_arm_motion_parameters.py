@@ -29,6 +29,7 @@ from fault_detector_spot.manipulation.arm_contact_evidence import (
 from fault_detector_spot.manipulation.arm_contact_telemetry import (
     ArmContactTelemetry,
 )
+from fault_detector_spot.manipulation.moveit_arm_planner import MoveItArmPlanner
 
 
 class FakeNode:
@@ -140,6 +141,7 @@ def test_standalone_consumers_use_changed_yaml(monkeypatch, tmp_path):
         "arm.motion.linear_speed_mps": 0.17,
         "arm.motion.angular_speed_rad_s": 0.61,
         "arm.motion.minimum_duration_sec": 0.71,
+        "arm.motion.moveit_allowed_planning_time_sec": 23.0,
         "arm.force_baseline.minimum_samples": 13,
         "arm.contact.consecutive_samples": 4,
         "arm.contact.shadow.off_axis_speed_threshold_mps": 0.07,
@@ -155,6 +157,14 @@ def test_standalone_consumers_use_changed_yaml(monkeypatch, tmp_path):
     assert executor.speed_policy.default_speed.linear_speed_mps == 0.17
     assert ArmMotionSpeed().angular_speed_rad_s == 0.61
     assert ArmMotionSpeedPolicy().minimum_duration_sec == 0.71
+    planning_node = SimpleNamespace(
+        get_logger=lambda: SimpleNamespace(info=lambda *_: None),
+        create_client=lambda *_: object(),
+    )
+    assert MoveItArmPlanner(planning_node).allowed_planning_time_sec == 23.0
+    assert MoveItArmPlanner(
+        planning_node, allowed_planning_time_sec=9.0,
+    ).allowed_planning_time_sec == 9.0
     assert ForceBaselineSampler(object()).minimum_samples == 13
     assert SpeedAwareForceContactPolicy().consecutive_samples == 4
     assert ArmContactEvidenceAnalyzer().off_axis_speed_threshold_mps == 0.07
