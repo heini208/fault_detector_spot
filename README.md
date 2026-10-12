@@ -234,8 +234,18 @@ The collision viewer uses `spot_moveit_robot_description` and its matching
 semantic-description topic, both published by MoveIt. This avoids receiving the
 driver's different URDF on `/robot_description`, which would report unknown
 `hand` / `sensor_head_slot` links and an empty arm group. Rebuild both packages
-and restart MoveIt and RViz when updating this topic configuration. The robot is
-opaque by default; adjust **Scene Robot → Robot Alpha** to change transparency.
+and restart MoveIt and RViz when updating this topic configuration. Robot opacity
+is 70%; adjust **Scene Robot → Robot Alpha** to change transparency.
+
+The **MoveIt collision scene** display starts disabled as a workaround for the
+intermittent MoveIt 2.5.10 startup reload crash. Once RViz finishes loading, enable
+its checkbox in **Displays** to show the robot and planning scene. This affects
+only visualization, not backend collision checking. Avoid saving this preset with
+the display enabled if you want to retain the workaround. It still needs live
+validation and does not fix the plugin's race during later model reloads.
+
+For the MoveIt 2.5.10 RViz crash in `onSceneMonitorReceivedUpdate()` during scene
+monitor teardown, see the [isolated plugin patch and build instructions](patches/moveit-2.5.10/README.md).
 
 This requires the one-time jaw-slot model change in `spot_moveit_config`, and a
 rebuild of `fault_detector_msgs`, `fault_detector_spot`, and `spot_moveit_config`
@@ -324,18 +334,21 @@ The updater uses 5 cm voxels, a 3 m sensing range and input capped at 5 Hz by th
 adapter's monotonic clock. MoveIt's own ROS-time throttle is disabled so backward
 clock jumps during recording replay do not stall updates. MoveIt's robot/attached-body
 self-filter and free-space rays process this input. The sensing mask uses
-`padding_offset: 0.20` and `padding_scale: 1.1` to exclude more returns around
+`padding_offset: 0.15` and `padding_scale: 1.1` to exclude more returns around
 the robot as its joints move. These settings apply to the whole robot model,
 including legs; they do not enlarge the planning collision geometry or alter
 motion targets. Native mesh padding expands vertices radially, so this is not
-a uniform 20 cm shell. Nearby real obstacle returns can also be excluded.
+a uniform 15 cm shell. Nearby real obstacle returns can also be excluded.
 
 Offline native-library checks used two captured poses and deliberately offset
-their mask geometry by up to 5 cm. The larger mask removed robot/voxel overlaps
+their mask geometry by up to 5 cm. The former 20 cm/1.1 mask removed robot/voxel overlaps
 in all 416 tested combinations of offset and voxel-grid alignment; the previous
 10 cm/1.0 mask had 16 arm-contact cases. This is a tolerance test, not evidence
 that the live TF is wrong by 5 cm or proof for every moving-arm pose. Other poses
-and unmodelled sensor heads still need validation.
+and unmodelled sensor heads still need validation. The current 15 cm/1.1 mask is
+an incremental reduction after the robot geometry and head-slot TF improvements;
+the earlier results do not validate this smaller mask. Inspect robot returns and
+nearby obstacles across arm poses before relying on it.
 The mask filters incoming scans; it does not erase the whole volume around the
 arm or unobserved historical trails. Restart MoveIt to load changed settings
 and reconstruct the scene from fresh observations. Clearing

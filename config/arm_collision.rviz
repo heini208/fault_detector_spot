@@ -17,8 +17,8 @@ Visualization Manager:
       Cell Size: 0.5
     - Class: moveit_rviz_plugin/PlanningScene
       Name: MoveIt collision scene
-      Enabled: true
-      Value: true
+      Enabled: false
+      Value: false
       Robot Description: spot_moveit_robot_description
       Move Group Namespace: ''
       Planning Scene Topic: /monitored_planning_scene

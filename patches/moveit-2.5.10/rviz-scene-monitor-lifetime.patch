@@ -1,0 +1,22 @@
+--- a/moveit_ros/visualization/planning_scene_rviz_plugin/src/planning_scene_display.cpp
++++ b/moveit_ros/visualization/planning_scene_rviz_plugin/src/planning_scene_display.cpp
+@@ -171,6 +171,8 @@
+ {
+   clearJobs();
+ 
++  if (planning_scene_monitor_)
++    planning_scene_monitor_->clearUpdateCallbacks();
+   planning_scene_render_.reset();
+   if (context_ && context_->getSceneManager() && planning_scene_node_)
+     context_->getSceneManager()->destroySceneNode(planning_scene_node_);
+@@ -525,6 +527,10 @@
+ 
+ void PlanningSceneDisplay::clearRobotModel()
+ {
++  // Drain in-flight callbacks while the monitor is still available to them.
++  // clearUpdateCallbacks() synchronizes with triggerSceneUpdateEvent().
++  if (planning_scene_monitor_)
++    planning_scene_monitor_->clearUpdateCallbacks();
+   planning_scene_render_.reset();
+   // Ensure old PSM is destroyed before we attempt to create a new one
+   planning_scene_monitor_.reset();

@@ -293,7 +293,7 @@ def test_sensor_config_uses_corrected_lidar_and_native_updater():
     assert lidar["point_cloud_topic"] == "/velodyne/points_sensor_collision"
     assert lidar["max_range"] == 3.0
     assert lidar["point_subsample"] == 1
-    assert lidar["padding_offset"] == 0.20
+    assert lidar["padding_offset"] == 0.15
     assert lidar["padding_scale"] == 1.1
     assert lidar["max_update_rate"] == 0.0  # Adapter owns the replay-safe rate cap.
     assert lidar["filtered_cloud_topic"] == "/fault_detector/moveit/filtered_lidar"
