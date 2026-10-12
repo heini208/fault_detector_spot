@@ -57,14 +57,16 @@ class GuardedProbeMonitor:
                 raise
             return self._update
 
-    def cancel(self, on_complete):
+    def cancel(self, on_complete, *, continue_after_timeout=False):
         """Keep the existing steady timer running through physical stop."""
         with self._execution.lock:
             if self._closed:
                 return
             self._cancel_complete = on_complete
             self._start_timer()
-            self._record(self._execution.cancel())
+            self._record(self._execution.cancel(
+                continue_after_timeout=continue_after_timeout,
+            ))
 
     def poll(self):
         """Return status without advancing the operation a second time."""

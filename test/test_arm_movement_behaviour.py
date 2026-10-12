@@ -166,6 +166,10 @@ def test_emergency_stow_waits_for_arm_and_navigation_stop():
     action.executor = SimpleNamespace(
         active=True,
         cancel=lambda: calls.append("cancel"),
+        poll=lambda: ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING,
+            "Physical stop unconfirmed; continuing to monitor",
+        ),
         stow=lambda: calls.append("stow") or ArmMovementUpdate(
             ArmMovementOutcome.RUNNING, "stowing"
         ),
@@ -174,6 +178,7 @@ def test_emergency_stow_waits_for_arm_and_navigation_stop():
     action.initialise()
     assert action.update() is Status.RUNNING
     assert calls == ["cancel"]
+    assert "Physical stop unconfirmed; continuing to monitor" in action.feedback_message
     action.executor.active = False
     assert action.update() is Status.RUNNING
     assert calls == ["cancel"]

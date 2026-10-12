@@ -29,8 +29,13 @@ class StowArmBehaviour(ArmMovementBehaviour):
             self._ensure_executor()
             if self.executor.active:
                 self.executor.cancel()
-                self.feedback_message = "Waiting for confirmed arm stop before stowing"
-                return Status.RUNNING
+                if self.executor.active:
+                    update = self.executor.poll()
+                    self.feedback_message = (
+                        "Waiting for confirmed arm stop before stowing: "
+                        f"{update.detail}"
+                    )
+                    return Status.RUNNING
             if self.robot_command_resources.navigation_stopping():
                 self.feedback_message = "Waiting for confirmed navigation stop before stowing"
                 return Status.RUNNING

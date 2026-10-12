@@ -359,6 +359,9 @@ class ArmMovementExecutor(MovementExecutor):
                 contact_retreat_speed_mps,
             ),
         }
+        self._cancel_stop_retry_interval_sec = guard_settings[
+            "stop_confirmation_timeout_sec"
+        ]
         self.guarded_probe_execution = None
         self._guarded_probe_monitor = None
         if (
@@ -1117,8 +1120,9 @@ class ArmMovementExecutor(MovementExecutor):
         """Advance the active arm operation without blocking."""
         with self._execution_lock:
             if self.cancelling:
-                if self._guarded_probe_monitor is None and self.guarded_probe_execution is not None:
-                    self._cancel_stop_finished(self.guarded_probe_execution.poll())
+                owner = self._guarded_probe_monitor or self.guarded_probe_execution
+                if owner is not None:
+                    self._cancel_stop_finished(owner.poll())
                 return ArmMovementUpdate(ArmMovementOutcome.RUNNING, self._cancellation_detail)
             if not self.active or self._operation is None:
                 return ArmMovementUpdate(
@@ -1177,7 +1181,19 @@ class ArmMovementExecutor(MovementExecutor):
 
     def cancel(self) -> None:
         with self._execution_lock:
-            if self.cancelling or not self.active:
+            if self.cancelling:
+                guard = self.guarded_probe_execution
+                if (
+                    guard is not None
+                    and not guard.active
+                    and guard.poll().outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+                    and self._monotonic_clock() >= self._cancel_stop_retry_at
+                ):
+                    # A failed service attempt can be retried while retaining
+                    # ownership, but repeated BT ticks must not flood stops.
+                    self._monitor_cancel_stop()
+                return
+            if not self.active:
                 return
             self._cancel_goal_done = False
             self._reset_moveit_planning(cancel=True)
@@ -1197,17 +1213,26 @@ class ArmMovementExecutor(MovementExecutor):
         if guard is None:
             self._cancellation_detail = "Stop unconfirmed: arm stop monitor unavailable"
             return
+        self._cancel_stop_retry_at = (
+            self._monotonic_clock() + self._cancel_stop_retry_interval_sec
+        )
         guard.reset()
         if self._guarded_probe_monitor is not None:
-            self._guarded_probe_monitor.cancel(self._cancel_stop_finished)
+            self._guarded_probe_monitor.cancel(
+                self._cancel_stop_finished, continue_after_timeout=True,
+            )
         else:
-            self._cancel_stop_finished(guard.cancel())
+            self._cancel_stop_finished(guard.cancel(continue_after_timeout=True))
 
     def _cancel_stop_finished(self, update):
         with self._execution_lock:
             if update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED and self._cancel_goal_done:
                 self._reset_operation()
-            elif update.outcome is not ArmMovementOutcome.RUNNING:
+            elif update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED:
+                self._cancellation_detail = (
+                    "Physical arm stop confirmed; waiting for action termination"
+                )
+            else:
                 self._cancellation_detail = update.detail
 
     def shutdown(self) -> None:

@@ -496,3 +496,54 @@ def test_monitor_cancellation_confirms_stop_without_bt_poll(monitored):
     assert completed[-1].outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED
     assert not m.guard.active
     assert not any(isinstance(goal, tuple) and goal[0] == 'retreat' for goal in m.driver.started_goals)
+
+
+def test_cancellation_keeps_observing_after_stop_timeout_without_bt_poll(monitored):
+    m = monitored
+    completed = []
+    m.monitor.cancel(completed.append, continue_after_timeout=True)
+    m.driver.stop_updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, 'accepted')
+    )
+    m.node.timer.callback()
+    m.emit(3.0, linear_velocity=(0.05, 0.0, 0.0))
+    m.node.timer.callback()
+
+    assert m.monitor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert 'continuing physical stop confirmation' in m.monitor.poll().detail
+    assert m.guard.active
+    assert not m.node.timer.cancelled
+    assert not completed
+    assert m.driver.stop_count == 1
+
+    confirm_physical_stop(m, 3.1)
+
+    assert completed[-1].outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED
+    assert m.node.timer.cancelled
+    assert m.driver.stop_count == 1
+    assert not m.guard.active
+
+
+def test_cancellation_requires_new_stable_interval_after_velocity_goes_stale(monitored):
+    m = monitored
+    completed = []
+    m.monitor.cancel(completed.append, continue_after_timeout=True)
+    m.driver.stop_updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, 'accepted')
+    )
+    m.node.timer.callback()
+    m.emit(0.1, linear_velocity=(0.0, 0.0, 0.0))
+    m.node.timer.callback()
+
+    m.clock.now = 3.0
+    assert m.source.hand_velocity_sample() is None
+    m.node.timer.callback()
+    m.emit(3.1, linear_velocity=(0.0, 0.0, 0.0))
+    m.node.timer.callback()
+    assert not completed
+    assert m.guard.active
+
+    m.emit(3.5, linear_velocity=(0.0, 0.0, 0.0))
+    m.node.timer.callback()
+    assert completed[-1].outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED
+    assert m.driver.stop_count == 1

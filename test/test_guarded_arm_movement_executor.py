@@ -8,6 +8,7 @@ from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.manipulation.arm_force_baseline import (
     ForceBaselineOutcome,
+    ForceBaselineSampler,
     ForceBaselineUpdate,
     HandForceBaseline,
 )
@@ -53,6 +54,9 @@ class FakeArmStateSource:
 
     def hand_velocity_sample(self):
         return self.velocity
+
+    def is_stale(self):
+        return False
 
 
 class ImmediateBaseline:
@@ -229,6 +233,141 @@ def execution(
         retreat_speed_mps=0.01,
         monotonic_clock=clock,
     )
+
+
+@pytest.mark.parametrize("stable_retry", [True, False])
+def test_unstable_baseline_stops_once_then_requires_a_new_baseline(stable_retry):
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.0))
+    guard.force_baseline_sampler = ForceBaselineSampler(
+        state, minimum_samples=3, minimum_span_sec=0.2,
+        maximum_component_span_n=3.0, timeout_sec=0.5,
+        monotonic_clock=clock,
+    )
+    plans = []
+
+    def build_plan():
+        value = plan()
+        value.current_hand.pose.position.x = clock.now
+        plans.append(value)
+        return value
+
+    state.sample = HandForceSample(0.0, 0.0, 0.0, 0.0)
+    assert guard.start(build_plan).outcome is ArmMovementOutcome.RUNNING
+    for stamp, force in ((0.1, 9.0), (0.2, 0.0), (0.5, 9.0)):
+        clock.now = stamp
+        state.sample = HandForceSample(stamp, force, 0.0, 0.0)
+        update = guard.poll()
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert "ArmStopCommand sent" in update.detail
+    assert driver.started_goals == [("arm_stop", 1)]
+
+    driver.stop_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped"))
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    state.velocity = velocity_sample(0.5)
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    assert len(plans) == 1  # Pre-acceptance feedback cannot confirm the stop.
+    assert confirm_physical_stop(guard, state, clock, 0.6).outcome is ArmMovementOutcome.RUNNING
+    assert len(plans) == 2
+    assert plans[1].current_hand.pose.position.x == pytest.approx(1.0)
+    assert driver.started_goals == [("arm_stop", 1)]
+
+    # The pre-stop force sample must not contribute to the restarted baseline.
+    for stamp, force in ((1.1, 2.0), (1.2, 2.1 if stable_retry else 11.0)):
+        clock.now = stamp
+        state.sample = HandForceSample(stamp, force, 0.0, 0.0)
+        assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+        assert driver.started_goals == [("arm_stop", 1)]
+    clock.now = 1.3
+    state.sample = HandForceSample(1.3, 2.0, 0.0, 0.0)
+    update = guard.poll()
+    if stable_retry:
+        assert update.outcome is ArmMovementOutcome.RUNNING
+        assert driver.started_goals == [("arm_stop", 1), plans[1]]
+        assert guard._force_threshold_n == 5.0
+    else:
+        clock.now = 1.5
+        update = guard.poll()
+        assert update.outcome is ArmMovementOutcome.FORCE_UNSTABLE
+        assert "retry after ArmStop failed" in update.detail
+        assert not guard.active
+        assert driver.started_goals == [("arm_stop", 1)]
+    assert driver.stop_count == 1
+
+
+class FailedBaseline(ImmediateBaseline):
+
+    def __init__(self, outcome):
+        self.outcome = outcome
+        self.starts = 0
+
+    def start(self):
+        self.starts += 1
+        return ForceBaselineUpdate(self.outcome, "Baseline failed")
+
+
+@pytest.mark.parametrize("outcome", [
+    ForceBaselineOutcome.FORCE_STALE,
+    ForceBaselineOutcome.FORCE_UNAVAILABLE,
+    ForceBaselineOutcome.TIMEOUT,
+])
+def test_missing_baseline_data_does_not_attempt_stop_recovery(outcome):
+    driver = GoalDriver()
+    guard = execution(FakeArmStateSource(), driver, ManualClock(), pose(0.0))
+    guard.force_baseline_sampler = FailedBaseline(outcome)
+
+    assert guard.start(plan).outcome is not ArmMovementOutcome.RUNNING
+    assert not guard.active
+    assert driver.started_goals == []
+
+
+@pytest.mark.parametrize("stop_failure", ["service", "settling"])
+def test_baseline_recovery_never_moves_after_unconfirmed_stop(stop_failure):
+    clock = ManualClock()
+    driver = GoalDriver()
+    guard = execution(FakeArmStateSource(), driver, clock, pose(0.0))
+    sampler = FailedBaseline(ForceBaselineOutcome.FORCE_UNSTABLE)
+    guard.force_baseline_sampler = sampler
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+    driver.stop_updates.append(ArmMovementUpdate(
+        ArmMovementOutcome.EXECUTION_ERROR if stop_failure == "service"
+        else ArmMovementOutcome.SUCCESS,
+        "Stop response",
+    ))
+    update = guard.poll()
+    if stop_failure == "settling":
+        assert update.outcome is ArmMovementOutcome.RUNNING
+        clock.now = 3.0
+        update = guard.poll()
+    assert update.outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert not guard.active
+    assert sampler.starts == 1
+    assert driver.started_goals == [("arm_stop", 1)]
+
+
+@pytest.mark.parametrize("settling", [False, True])
+def test_cancellation_during_baseline_recovery_cannot_resume_motion(settling):
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.0))
+    sampler = FailedBaseline(ForceBaselineOutcome.FORCE_UNSTABLE)
+    guard.force_baseline_sampler = sampler
+    assert guard.start(plan).outcome is ArmMovementOutcome.RUNNING
+    if settling:
+        driver.stop_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped"))
+        assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    assert guard.cancel().outcome is ArmMovementOutcome.RUNNING
+    driver.stop_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped"))
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    update = confirm_physical_stop(guard, state, clock, 0.1)
+
+    assert update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED
+    assert not guard.active
+    assert sampler.starts == 1
+    assert driver.started_goals == [("arm_stop", 1), ("arm_stop", 2)]
 
 
 @pytest.mark.parametrize("override,expected", [(None, 0.008), (0.003, 0.003), (0.02, 0.008)])

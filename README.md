@@ -689,6 +689,18 @@ changes. The file is loaded once per process; edits apply on the next start.
 ROS launch/parameter overrides still take precedence over the YAML defaults.
 Explicit constructor arguments take precedence over both (useful in tests).
 
+If the force baseline is unstable before a guarded arm move, execution sends
+one native `ArmStopCommand` to stop the previous arm command. After fresh
+velocity feedback confirms the stop, it rebuilds the plan and collects a new
+force baseline. The requested move starts only if that baseline passes the
+existing limits. An unsuccessful retry, missing force data, or an unconfirmed
+stop fails the movement; there is no repeated automatic recovery loop.
+
+During cancellation, physical-stop monitoring continues after its initial
+timeout, so later settling can release the arm for recovery. The original
+action must also terminate before another motion starts. Emergency stow shows
+the stop-confirmation detail while waiting.
+
 Arm movement result deadlines follow the submitted trajectory duration, with
 `arm.motion.moveit_result_timeout_margin_sec` (15 seconds by default) added for
 completion feedback and a minimum deadline of 30 seconds. This applies to both

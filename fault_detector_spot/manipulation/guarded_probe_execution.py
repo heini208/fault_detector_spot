@@ -211,11 +211,12 @@ class GuardedProbeExecution:
             "No guarded probe movement is active",
         )
 
-    def cancel(self):
+    def cancel(self, *, continue_after_timeout=False):
         """Stop without retreating and confirm fresh stationary arm feedback."""
         with self.lock:
             if self._stop_terminal_outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED:
                 return self.poll()
+            self._continue_stop_confirmation = bool(continue_after_timeout)
             self._cancel_goal()
             self._terminal_update = None
             return self._begin_arm_stop(
@@ -230,6 +231,7 @@ class GuardedProbeExecution:
             self._plan_builder = None
             self._plan = None
             self._force_baseline = None
+            self._baseline_recovery_attempted = False
             self._force_threshold_override_n = None
             self._force_threshold_n = None
             self._force_last_received_at = None
@@ -250,9 +252,11 @@ class GuardedProbeExecution:
             self._stop_terminal_outcome = None
             self._stop_terminal_detail = ""
             self._stop_then_retreat = False
+            self._stop_then_baseline = False
             self._stop_accepted_at = None
             self._stop_stable_since = None
             self._stop_last_velocity_received_at = None
+            self._continue_stop_confirmation = False
             self.force_baseline_sampler.reset()
 
     def _begin_force_baseline(self) -> ArmMovementUpdate:
@@ -275,6 +279,18 @@ class GuardedProbeExecution:
         if update.outcome is ForceBaselineOutcome.READY:
             self._force_baseline = update.baseline
             return self._start_primary_motion()
+        if (
+            update.outcome is ForceBaselineOutcome.FORCE_UNSTABLE
+            and not self._baseline_recovery_attempted
+        ):
+            # A previous pose command can keep the arm oscillating. Stop that
+            # hold once, then require a new baseline before submitting motion.
+            self._baseline_recovery_attempted = True
+            return self._begin_arm_stop(
+                terminal_outcome=ArmMovementOutcome.FORCE_UNSTABLE,
+                terminal_detail=update.detail,
+                then_baseline=True,
+            )
         mapping = {
             ForceBaselineOutcome.FORCE_UNAVAILABLE: (
                 ArmMovementOutcome.FORCE_UNAVAILABLE
@@ -291,7 +307,10 @@ class GuardedProbeExecution:
                 update.outcome,
                 ArmMovementOutcome.FORCE_UNAVAILABLE,
             ),
-            update.detail,
+            (
+                f"Force baseline retry after ArmStop failed: {update.detail}"
+                if self._baseline_recovery_attempted else update.detail
+            ),
         )
 
     def _prepare_plan(self) -> ArmMovementUpdate:
@@ -873,17 +892,22 @@ class GuardedProbeExecution:
         terminal_outcome: ArmMovementOutcome,
         terminal_detail: str,
         then_retreat: bool = False,
+        then_baseline: bool = False,
     ) -> ArmMovementUpdate:
         self._stop_terminal_outcome = terminal_outcome
         self._stop_terminal_detail = str(terminal_detail).strip()
         self._stop_then_retreat = bool(then_retreat)
+        self._stop_then_baseline = bool(then_baseline)
 
         self._phase = _Phase.ARM_STOPPING
         update = self._start_stop()
         if update.outcome is ArmMovementOutcome.RUNNING:
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING,
-                "Arm movement ended; ArmStopCommand sent",
+                (
+                    "Force baseline unstable; ArmStopCommand sent before retrying"
+                    if then_baseline else "Arm movement ended; ArmStopCommand sent"
+                ),
             )
         return self._terminal(
             ArmMovementOutcome.STOP_UNCONFIRMED,
@@ -922,6 +946,10 @@ class GuardedProbeExecution:
     def _poll_arm_settling(self) -> ArmMovementUpdate:
         accepted_at = self._stop_accepted_at
         sample = self.arm_state_source.hand_velocity_sample()
+        if sample is None:
+            # A telemetry gap cannot count toward continuous stable feedback,
+            # including while a cancelled operation outlives its timeout.
+            self._stop_stable_since = None
         if (
             sample is not None
             and sample.received_at > accepted_at + 1e-12
@@ -952,23 +980,29 @@ class GuardedProbeExecution:
             self._monotonic_clock() - accepted_at + 1e-9
             >= self._stop_timeout_sec
         ):
-            return self._terminal(
-                ArmMovementOutcome.STOP_UNCONFIRMED,
-                self._stop_detail(
-                    "ArmStopCommand was accepted, but physical stop was not "
-                    "confirmed before the timeout; "
-                    + (
-                        "no fresh hand velocity sample available"
-                        if sample is None else
-                        f"last hand velocity: linear {sample.linear_speed_mps:.4f} "
-                        f"m/s (limit {self._stop_linear_threshold_mps:.4f}), "
-                        f"angular {sample.angular_speed_rad_s:.4f} rad/s "
-                        f"(limit {self._stop_angular_threshold_rad_s:.4f}), "
-                        f"sample age {self._monotonic_clock() - sample.received_at:.3f} s; "
-                        f"required stable duration {self._stop_stable_duration_sec:.3f} s"
-                    )
-                ),
+            detail = self._stop_detail(
+                "ArmStopCommand was accepted, but physical stop was not "
+                "confirmed before the timeout; "
+                + (
+                    "no fresh hand velocity sample available"
+                    if sample is None else
+                    f"last hand velocity: linear {sample.linear_speed_mps:.4f} "
+                    f"m/s (limit {self._stop_linear_threshold_mps:.4f}), "
+                    f"angular {sample.angular_speed_rad_s:.4f} rad/s "
+                    f"(limit {self._stop_angular_threshold_rad_s:.4f}), "
+                    f"sample age {self._monotonic_clock() - sample.received_at:.3f} s; "
+                    f"required stable duration {self._stop_stable_duration_sec:.3f} s"
+                )
             )
+            if self._continue_stop_confirmation:
+                # Cancellation must keep ownership until the arm is stopped.
+                # Keep observing the accepted stop instead of leaving an idle
+                # monitor that can never release the executor after settling.
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.RUNNING,
+                    f"{detail}; continuing physical stop confirmation",
+                )
+            return self._terminal(ArmMovementOutcome.STOP_UNCONFIRMED, detail)
 
         return ArmMovementUpdate(
             ArmMovementOutcome.RUNNING,
@@ -976,6 +1010,11 @@ class GuardedProbeExecution:
         )
 
     def _complete_arm_stop(self) -> ArmMovementUpdate:
+        if self._stop_then_baseline:
+            self._stop_then_baseline = False
+            # Refresh measured start geometry after stopping. start() on the
+            # sampler discards all samples from before this confirmed stop.
+            return self._prepare_plan()
         if self._stop_then_retreat:
             return self._begin_retreat()
 

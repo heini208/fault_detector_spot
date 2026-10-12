@@ -5,6 +5,7 @@ import math
 from types import SimpleNamespace
 
 import pytest
+from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, TransformStamped
 
 import fault_detector_spot.manipulation.arm_movement_executor as executor_module
@@ -806,6 +807,107 @@ def test_explicit_cancel_requests_goal_cancellation(monkeypatch, poll_acceptance
     assert executor.active
     assert executor.cancelling
     assert executor.pose(target).outcome is ArmMovementOutcome.BUSY
+
+
+@pytest.mark.parametrize("action_terminates_first", [False, True])
+def test_cancel_recovers_after_timeout_only_when_action_and_stop_complete(
+    monkeypatch, action_terminates_first,
+):
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+    capture_builder(monkeypatch)
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
+    executor, client = executor_with_client(
+        FakeTransformer({("body", "hand"): transform("body", "hand")}),
+        arm_stop_service_client=stop_client,
+        monotonic_clock=clock,
+    )
+    result_future = ManualFuture()
+    handle = FakeGoalHandle(result_future=result_future)
+    executor.pose(target)
+    client.send_future.set_result(handle)
+    executor.poll()
+    executor.cancel()
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    executor.poll()
+
+    clock.now = 3.0
+    executor.arm_state_source.velocity = hand_velocity_sample(3.0, linear=0.05)
+    update = executor.poll()
+    assert update.outcome is ArmMovementOutcome.RUNNING
+    assert "continuing physical stop confirmation" in update.detail
+    assert executor.cancelling
+    assert executor.stow().outcome is ArmMovementOutcome.BUSY
+    for _ in range(10):
+        executor.cancel()
+    assert len(stop_client.requests) == 1
+
+    if not action_terminates_first:
+        confirm_physical_stop(executor, clock, 3.1)
+        assert executor.active
+        assert executor.cancelling
+        assert executor.stow().outcome is ArmMovementOutcome.BUSY
+        executor.cancel()
+        assert len(stop_client.requests) == 1
+
+    # A late action result requires another stop to rule out a late accepted
+    # goal resuming movement after the first physical stop was confirmed.
+    stop_client.future = ManualFuture()
+    result_future.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    assert executor.active
+    assert len(stop_client.requests) == 2
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    executor.poll()
+    confirm_physical_stop(executor, clock, 4.0)
+
+    assert not executor.active
+    assert not executor.cancelling
+    assert handle.cancel_count == 1
+
+
+def test_cancel_retries_failed_stop_with_cooldown():
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
+    executor, _ = executor_with_client(
+        FakeTransformer(), arm_stop_service_client=stop_client,
+        monotonic_clock=clock,
+    )
+    executor._active = True
+    executor.cancel()
+    stop_client.future.set_result(SimpleNamespace(success=False, message="rejected"))
+    assert "rejected" in executor.poll().detail
+    assert executor.active
+    assert executor.cancelling
+    for _ in range(10):
+        executor.cancel()
+    assert len(stop_client.requests) == 1
+
+    clock.now = 3.0
+    stop_client.future = ManualFuture()
+    executor.cancel()
+    assert len(stop_client.requests) == 2
+    assert executor.active
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    executor.poll()
+    confirm_physical_stop(executor, clock, 3.1)
+    assert not executor.active
+
+
+def test_explicit_stop_confirmation_still_times_out():
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
+    executor, _ = executor_with_client(
+        FakeTransformer(), arm_stop_service_client=stop_client,
+        monotonic_clock=clock,
+    )
+    assert executor.confirm_stop().outcome is ArmMovementOutcome.RUNNING
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    executor.poll()
+    clock.now = 3.0
+    assert executor.poll().outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert not executor.active
 
 
 def test_executor_rejects_overlapping_arm_movement(monkeypatch):
