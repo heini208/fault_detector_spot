@@ -1809,7 +1809,8 @@ class InspectionControls(UIControlHelper):
             presentation.motion_states[RefinementStage.PROBE].value
         )
 
-        pending = presentation.pending_motion is not None
+        pending = (presentation.pending_motion is not None
+                   or getattr(self, "_sensor_tip_distance_test_active", False))
         current = presentation.active_stage
         recovery_only = self._retraction_failed
         safe_page = current == RefinementStage.SAFE_APPROACH
@@ -2083,7 +2084,8 @@ class InspectionControls(UIControlHelper):
         dialog.fully_custom = True
         stage = presentation.active_stage
         safe_page = stage is RefinementStage.SAFE_APPROACH
-        pending = presentation.pending_motion is not None
+        pending = (presentation.pending_motion is not None
+                   or getattr(self, "_sensor_tip_distance_test_active", False))
         enabled = not pending and not presentation.recovery_required and not self._retraction_failed
         predecessor = RefinementStage.SAFE_APPROACH if stage is RefinementStage.ALIGNMENT else RefinementStage.ALIGNMENT
         editable = enabled and not safe_page and presentation.motion_states[predecessor] is RefinementMotionState.REACHED

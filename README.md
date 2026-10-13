@@ -433,31 +433,63 @@ consume it. Execution code can select the same bypass with
 `ignore_environment_collisions=True`.
 
 Safe and aligned pre-approach travel follows the global control at execution
-time. Every **Move Close to Surface / Wall** command bypasses occupancy,
-including positive stand-off distances. Final probe-point moves and their final
+time. The final approach segment of **Move Close to Surface / Wall** bypasses
+occupancy, including positive stand-off distances. Its optional distance
+observation excursion and return always retain environmental collision checks. Final probe-point moves and their final
 path waypoints always bypass it, both manually and through **Execute Probe
 Point**. A bypass on the complete probe-point command does not disable checking
 for its safe or aligned approach stages. Corrections, retries, contact retreat,
 and returns along the final segment preserve that segment's bypass.
 
-Positive-distance **Move Close to Surface / Wall** waits for the configured
-settling interval before collecting depth frames, then allows six seconds to
-obtain at least five distinct frames spanning one second. The accepted window
-must still have at most 5 mm distance variation, and its newest valid reading
-must be no older than 0.5 seconds. Successful frame fits are reused while their
-camera calibration, timestamped transform, and attachment remain unchanged.
-An unstable-distance error reports the measured spread and range; successful
-surface alignment alone does not establish stable distance.
+Positive-distance **Move Close to Surface / Wall** first runs the shared
+**Measure sensor tip distance** execution. Aligned pre-approach setup exposes
+that same operation through **Test distance measure**, which reports distance
+without performing the final approach. The test may move the arm and return;
+its label reports both perpendicular wall distance and distance along probe +X.
+A target distance of **0 mm** retains the force-guarded contact search and skips
+depth observation entirely. The standalone distance test remains available.
 
-Distance sensing first uses depth within 25 mm of the calibrated probe axis.
-When that region has no depth support, it can use the same visible lower-middle
-surface plane as alignment. This assumes the local plane continues toward the
-hidden probe region: its measured centroid must be within 15 cm of the plane's
-intersection with probe +X, and that intersection must be 3–500 mm ahead of the
-probe tip. The 15 cm allowance accommodates a lower mounted tip; distance still
-uses the calibrated camera-to-probe transform. Too few or out-of-range axial
-points are still rejected. Plane quality,
-alignment, multi-frame stability, and force checks continue to apply.
+Measurement saves the original hand and probe poses in odom using fresh,
+timestamped hand-depth TF. The expected wall point lies along the saved probe
++X axis at the configured aligned pre-approach distance (default 0.25 m for
+standalone commands without a hint). A visible, supported target patch is
+measured directly. Otherwise one translation brings it just inside the image with room for the
+full plane-fit patch, preserving orientation and making no inward movement
+along that saved axis. It does not move all the way to image center. An already
+in-view target with missing depth is retried in place. After an excursion,
+sparse depth frames are retried within the sampling timeout before returning;
+the operation never searches farther blindly.
+The translation is capped at 0.20 m and requires a complete, collision-checked,
+force-guarded Cartesian path. It measures the original target, not the tip's
+new location. No hidden-target plane extrapolation is used for this operation.
+
+Registered depth can contain empty pixels between valid reprojected samples.
+Target support therefore requires at least four measured returns enclosing the
+exact target pixel in the local patch, rather than a fixed percentage of filled
+image pixels. After fitting, at least 60% of the measured returns must agree
+with the plane and those inliers must still enclose the target. Any local
+foreground return more than the plane tolerance ahead of the fitted surface
+rejects the measurement. No depth pixels are filled or invented.
+
+After settling, the operation requires five distinct frames spanning one
+second, at most 5 mm distance variation, consistent fitted normals, and a
+newest valid reading no older than 0.5 seconds. Fits are reused only while their
+camera calibration, timestamped TF, target and attachment remain unchanged.
+The camera depth must be at least 0.290 m, and the measured axis intersection
+must be 3–500 mm ahead and within 0.10 m of the expected target distance. These
+are correspondence/visibility limits, not promised measurement accuracy.
+
+The observed plane is stored in odom. After an excursion, the arm returns with
+collision checking and fresh TF must verify hand and tip errors within 5 mm
+and 2 degrees. The reported distance and final approach use the actual returned
+tip pose. Body/reference or attachment changes invalidate the operation;
+failed returns prohibit further autonomous recovery. Cancellation stops without
+starting a return. A standalone test can report a tilted surface, but the final
+approach still rejects axis misalignment above 5 degrees. Measurement and
+approach share `close_surface.*` quality parameters; excursion limits include
+`maximum_observation_translation_m`, `observation_speed_mps`,
+`return_position_tolerance_m`, `return_orientation_tolerance_rad`, and
+`maximum_measurement_duration_sec`.
 
 Cartesian approaches use 2 mm path sampling and require at least 99.9% path
 completion. MoveIt's relative joint-jump check remains enabled with a factor

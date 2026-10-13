@@ -52,6 +52,9 @@ class FakePlanner:
     def current_hand_pose(self, _frame):
         return stamped(self.hand_pose)
 
+    def current_pose(self, _frame, controlled):
+        return stamped(pose() if controlled == "body" else self.hand_pose)
+
 
 class FakeExecutor:
     def __init__(self, hand_pose=None):
@@ -117,7 +120,7 @@ def test_execution_start_owns_lifecycle_and_cancel():
     assert result is MoveCloseToSurfaceOutcome.RUNNING
     assert action.active
     assert action._phase == "sampling"
-    assert action.feedback_message == "Waiting to settle before collecting surface distance"
+    assert action.feedback_message == "Settling before measuring sensor tip distance"
 
     executor.active = True
     action.cancel()
@@ -233,22 +236,19 @@ def test_contact_replanning_is_bounded_and_only_for_incomplete_paths(detail, ret
     assert detail in action.feedback_message
 
 
-@pytest.mark.parametrize("verified", [False, True])
-def test_sampling_rejects_misaligned_measured_plane_even_at_standoff(monkeypatch, verified):
+@pytest.mark.parametrize("distance", [0.03, 0.08])
+def test_sampling_rejects_misaligned_measured_plane_even_at_standoff(distance):
+    from fault_detector_spot.manipulation.measure_sensor_tip_distance_execution import MeasureSensorTipDistanceOutcome
     action = execution()
-    action._clock = lambda: action.config.sample_timeout_sec + 1.0
-    action._phase_started = 0.0
-    action._sample_receipt_not_before = 0.0
-    action._surface_samples = {}
     action._sensor_id = "probe"
     action._require_attachment_unchanged = lambda: None
     action._current_probe_pose = lambda: pose()
-    action.surface_source = SimpleNamespace(surface_distance_samples=lambda *a, **k: ())
-    monkeypatch.setattr(
-        "fault_detector_spot.manipulation.move_close_to_surface_execution.aggregate_surface_distance_samples",
-        lambda *a, **k: SimpleNamespace(
-            verified=verified, distance_m=0.03,
-            surface_plane_probe=SimpleNamespace(normal=Vector3Data(
+    action._measurement_outcome = MeasureSensorTipDistanceOutcome.SUCCESS
+    action._measurement = SimpleNamespace(
+        active=False, poll=lambda: MeasureSensorTipDistanceOutcome.SUCCESS,
+        feedback_message="measured", result=SimpleNamespace(
+            distance_m=distance, reference_body_pose=pose(),
+            plane_at_probe=lambda p: SimpleNamespace(normal=Vector3Data(
                 x=-math.cos(math.radians(20)), y=math.sin(math.radians(20)), z=0.0,
             )),
         ),

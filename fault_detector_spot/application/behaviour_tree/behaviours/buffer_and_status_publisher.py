@@ -145,10 +145,12 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             message.request_id = command.request_id
             message.command_id = self._command_id_text(command)
 
+        detail = getattr(command, "execution_feedback_message", "")
+        execution_detail = detail.strip() if isinstance(detail, str) else ""
         status = self.blackboard.command_tree_status
         if status == Status.RUNNING:
             message.state = CommandStatus.STATE_RUNNING
-            message.detail = (
+            message.detail = execution_detail or (
                 f"BT executing {message.command_id}"
                 if message.command_id
                 else "BT executing command"
@@ -162,7 +164,7 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
                 )
             else:
                 message.state = CommandStatus.STATE_SUCCEEDED
-                message.detail = "BT request completed"
+                message.detail = execution_detail or "BT request completed"
         elif status == Status.FAILURE:
             message.state = CommandStatus.STATE_FAILED
             failure_detail = self._current_failure_detail(message.request_id)

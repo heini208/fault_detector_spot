@@ -79,6 +79,9 @@ _INTENT_COMMAND_IDS = {
     OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE: (
         CommandID.MOVE_CLOSE_TO_SURFACE
     ),
+    OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE: (
+        CommandID.MEASURE_SENSOR_TIP_DISTANCE
+    ),
     OperationalIntent.INTENT_ORIENT_TO_SURFACE: (
         CommandID.ORIENT_TO_SURFACE
     ),
@@ -226,6 +229,14 @@ def operational_intent_to_command(
         _nonnegative_distance(
             intent.surface_tolerance_m,
             "Surface tolerance",
+        )
+    if intent.intent in (
+        OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE,
+        OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE,
+    ):
+        _nonnegative_distance(
+            intent.aligned_preapproach_distance_m,
+            "Expected sensor tip distance",
         )
     if (
         intent.intent

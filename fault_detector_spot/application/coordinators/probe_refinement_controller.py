@@ -90,6 +90,7 @@ class ProbeRefinementController:
             CommandID.MOVE_ARM_TO_TAG_AND_WAIT, CommandID.FOLLOW_MOVE_TO_TAG_PATH,
             CommandID.MOVE_SAFE_APPROACH, CommandID.ADJUST_SAFE_APPROACH,
             CommandID.READY_SAFE_APPROACH, CommandID.MOVE_CLOSE_TO_SURFACE,
+            CommandID.MEASURE_SENSOR_TIP_DISTANCE,
             CommandID.ORIENT_TO_TAG, CommandID.ORIENT_TO_SURFACE,
         }:
             return False

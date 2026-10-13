@@ -141,7 +141,7 @@ def test_command_subscriber_builds_close_surface_command():
     assert "MoveCloseToSurfaceCommand" in source
     assert "target_surface_distance_m" in source
     assert "surface_tolerance_m" in source
-    assert "aligned_preapproach_distance_m" not in source
+    assert "expected_distance_m=command.aligned_preapproach_distance_m" in source
 
 
 def test_behaviour_tree_registers_close_surface_behaviour():

@@ -12,8 +12,13 @@ from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 
+from fault_detector_spot.inspection.geometry.depth_point_cloud import camera_intrinsics
 from fault_detector_spot.inspection.geometry.surface_normal import (
     SurfaceNormalEstimate,
+)
+from fault_detector_spot.inspection.geometry.sensor_tip_observation import (
+    SensorTipObservationView,
+    observation_translation,
 )
 from fault_detector_spot.inspection.sensing.live_surface_plane import (
     MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M,
@@ -31,6 +36,11 @@ from fault_detector_spot.inspection.model.sensor_models import (
 )
 from fault_detector_spot.inspection.sensing.live_surface_distance import (
     measure_probe_surface_distance,
+)
+from fault_detector_spot.inspection.sensing.sensor_tip_distance import (
+    depth_frame_id,
+    measure_sensor_tip_distance,
+    TARGET_SUPPORT_RADIUS_PX,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 from fault_detector_spot.shared.ros.tf_transforms import lookup_pose_data
@@ -55,6 +65,7 @@ class ProbeSurfaceSource(RuntimeSource):
             maxlen=HAND_DEPTH_HISTORY_MAX_SAMPLES
         )
         self._surface_distance_cache = {}
+        self._sensor_tip_distance_cache = {}
         self._hand_depth_camera_info = None
         self._attachment_state = None
         self._tf_buffer = tf_buffer
@@ -178,6 +189,102 @@ class ProbeSurfaceSource(RuntimeSource):
         sensor_id = str(sensor_id).strip()
         if not sensor_id:
             raise ValueError("Sensor ID must not be empty")
+        return self._distance_samples(
+            measurement_context=(sensor_id,),
+            pose_target_frame=sensor_probe_frame(sensor_id),
+            measure=measure_probe_surface_distance,
+            cache=self._surface_distance_cache,
+            receipt_not_before=receipt_not_before,
+            maximum_age_sec=maximum_age_sec,
+            minimum_samples=minimum_samples,
+            maximum_latest_age_sec=maximum_latest_age_sec,
+        )
+
+    def observation_view(
+        self,
+        reference_probe_pose: PoseData,
+        expected_distance_m: float,
+        receipt_not_before: float = 0.0,
+    ) -> SensorTipObservationView:
+        """Inspect the intended target and propose a lateral camera observation."""
+        depth_image, camera_info = self.latest_hand_depth(
+            receipt_not_before=receipt_not_before,
+        )
+        stamp = Time.from_msg(depth_image.header.stamp)
+        if stamp.nanoseconds <= 0:
+            raise ValueError("Registered hand-depth timestamp is empty")
+        camera_pose = self._lookup_pose(
+            "odom", depth_frame_id(depth_image, camera_info), lookup_time=stamp,
+        )
+        translation = observation_translation(
+            reference_probe_pose, camera_pose, expected_distance_m,
+            camera_intrinsics(camera_info, (depth_image.width, depth_image.height), "Depth CameraInfo"),
+            (depth_image.width, depth_image.height),
+            SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX + TARGET_SUPPORT_RADIUS_PX + 1,
+        )
+        try:
+            measure_sensor_tip_distance(
+                depth_image, camera_info, reference_probe_pose,
+                camera_pose, expected_distance_m,
+            )
+            visible, detail = True, "Intended sensor-tip target has valid local depth support"
+        except ValueError as exception:
+            visible, detail = False, str(exception)
+        return SensorTipObservationView(visible, camera_pose, translation, detail)
+
+    def sensor_tip_pose_snapshot(self, sensor_id: str, receipt_not_before: float = 0.0):
+        """Get hand, probe and body poses at one fresh depth acquisition stamp."""
+        sensor_id = str(sensor_id).strip()
+        if not sensor_id:
+            raise ValueError("Sensor ID must not be empty")
+        depth_image, camera_info = self.latest_hand_depth(
+            receipt_not_before=receipt_not_before,
+        )
+        depth_frame_id(depth_image, camera_info)
+        stamp = Time.from_msg(depth_image.header.stamp)
+        if stamp.nanoseconds <= 0:
+            raise ValueError("Registered hand-depth timestamp is empty")
+        return tuple(
+            self._lookup_pose("odom", frame, lookup_time=stamp)
+            for frame in ("hand", sensor_probe_frame(sensor_id), "body")
+        )
+
+    def sensor_tip_distance_samples(
+        self,
+        reference_probe_pose: PoseData,
+        expected_distance_m: float,
+        receipt_not_before: float = 0.0,
+        maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
+        minimum_samples: int = 1,
+        maximum_latest_age_sec: float | None = None,
+    ):
+        """Return fresh target-local samples in the saved original probe frame."""
+        reference_probe_pose.validate()
+        if not math.isfinite(expected_distance_m) or expected_distance_m <= 0.0:
+            raise ValueError("Expected sensor-tip distance must be positive and finite")
+
+        def measure(image, camera_info, camera_pose):
+            return measure_sensor_tip_distance(
+                image, camera_info, reference_probe_pose, camera_pose,
+                expected_distance_m,
+            )
+
+        return self._distance_samples(
+            measurement_context=(deepcopy(reference_probe_pose), expected_distance_m),
+            pose_target_frame="odom",
+            measure=measure,
+            cache=self._sensor_tip_distance_cache,
+            receipt_not_before=receipt_not_before,
+            maximum_age_sec=maximum_age_sec,
+            minimum_samples=minimum_samples,
+            maximum_latest_age_sec=maximum_latest_age_sec,
+        )
+
+    def _distance_samples(
+        self, *, measurement_context, pose_target_frame, measure, cache,
+        receipt_not_before, maximum_age_sec, minimum_samples,
+        maximum_latest_age_sec,
+    ):
         if not math.isfinite(float(receipt_not_before)):
             raise ValueError("Surface sample receipt threshold must be finite")
         if not math.isfinite(float(maximum_age_sec)) or maximum_age_sec <= 0.0:
@@ -208,7 +315,7 @@ class ProbeSurfaceSource(RuntimeSource):
         errors = []
         now = time.monotonic()
         context = (
-            sensor_id,
+            measurement_context,
             None if attachment_state is None else (
                 attachment_state.status,
                 attachment_state.active_sensor_id,
@@ -240,31 +347,31 @@ class ProbeSurfaceSource(RuntimeSource):
                 )
                 if not depth_frame:
                     raise ValueError("Registered hand-depth frame is empty")
-                probe_to_camera = self._lookup_pose(
-                    sensor_probe_frame(sensor_id),
+                camera_pose = self._lookup_pose(
+                    pose_target_frame,
                     depth_frame,
                     lookup_time=stamp,
                 )
                 # Check timestamped TF on every poll; only reuse the expensive
                 # depth fit when its image, calibration, attachment and pose
                 # are unchanged. Failed fits/TF lookups must remain retryable.
-                cache_key = (context, probe_to_camera)
+                cache_key = (context, camera_pose)
                 with self._lock:
-                    cached = self._surface_distance_cache.get(id(depth_image))
+                    cached = cache.get(id(depth_image))
                 if cached is not None and cached[0] == cache_key:
                     sample = deepcopy(cached[1])
                 else:
-                    sample = measure_probe_surface_distance(
+                    sample = measure(
                         depth_image,
                         camera_info,
-                        probe_to_camera,
+                        camera_pose,
                     )
                     with self._lock:
                         if any(
                             image is depth_image
                             for _, image in self._hand_depth_history
                         ):
-                            self._surface_distance_cache[id(depth_image)] = (
+                            cache[id(depth_image)] = (
                                 deepcopy(cache_key), deepcopy(sample),
                             )
                 samples.append(sample)
@@ -329,11 +436,10 @@ class ProbeSurfaceSource(RuntimeSource):
             buffered_images = {
                 id(image) for _, image in self._hand_depth_history
             }
-            self._surface_distance_cache = {
-                key: cached
-                for key, cached in self._surface_distance_cache.items()
-                if key in buffered_images
-            }
+            for cache in (self._surface_distance_cache, self._sensor_tip_distance_cache):
+                for key in tuple(cache):
+                    if key not in buffered_images:
+                        del cache[key]
 
     def _receive_hand_depth_camera_info(self, message: CameraInfo) -> None:
         with self._lock:
@@ -357,6 +463,7 @@ class ProbeSurfaceSource(RuntimeSource):
         with self._lock:
             self._hand_depth_history.clear()
             self._surface_distance_cache.clear()
+            self._sensor_tip_distance_cache.clear()
             self._hand_depth_camera_info = None
             self._attachment_state = None
 

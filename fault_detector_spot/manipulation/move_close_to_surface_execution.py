@@ -6,7 +6,7 @@ from enum import Enum
 import math
 import time
 
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME
+from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME
 from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.inspection.execution.probe_surface_approach import (
@@ -25,11 +25,13 @@ from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     sensor_probe_frame,
 )
-from fault_detector_spot.inspection.sensing.live_surface_distance import (
-    aggregate_surface_distance_samples,
+from fault_detector_spot.manipulation.measure_sensor_tip_distance_execution import (
+    MeasureSensorTipDistanceConfig,
+    MeasureSensorTipDistanceExecution,
+    MeasureSensorTipDistanceOutcome,
 )
-from fault_detector_spot.inspection.sensing.probe_surface_source import (
-    MAX_HAND_DEPTH_AGE_SEC,
+from fault_detector_spot.manipulation.commands.measure_sensor_tip_distance_command import (
+    MeasureSensorTipDistanceCommand,
 )
 from fault_detector_spot.manipulation.arm_motion_speed import ArmMotionSpeed
 from fault_detector_spot.manipulation.arm_movement_result import (
@@ -56,7 +58,7 @@ class MoveCloseToSurfaceOutcome(Enum):
 
 
 @dataclass(frozen=True)
-class MoveCloseToSurfaceConfig:
+class MoveCloseToSurfaceConfig(MeasureSensorTipDistanceConfig):
     settle_sec: float = 0.5
     sample_timeout_sec: float = 6.0
     maximum_step_m: float = 0.010
@@ -103,6 +105,7 @@ class MoveCloseToSurfaceConfig:
         return config
 
     def validate(self) -> None:
+        super().validate()
         c = self
         positive = (
             c.settle_sec,
@@ -186,6 +189,10 @@ class MoveCloseToSurfaceExecution:
         self._clock = monotonic_clock
         self.logger = logger
         self.feedback_message = ""
+        self._measurement = MeasureSensorTipDistanceExecution(
+            executor, surface_source, config, monotonic_clock=monotonic_clock,
+            logger=logger,
+        )
         self._clear_runtime()
 
     @property
@@ -212,6 +219,12 @@ class MoveCloseToSurfaceExecution:
         if not self.active:
             raise RuntimeError("No close-surface execution is active")
         try:
+            if not self.contact_mode and self._measurement_result is not None:
+                try:
+                    self._require_attachment_unchanged()
+                except Exception as error:
+                    return self._fail_workflow(str(error), ArmMovementOutcome.RECOVERY_FAILED)
+                self._require_measurement_reference()
             if self._phase == "acquire":
                 return self._update_acquire()
             if self._phase == "contact_replan":
@@ -230,11 +243,15 @@ class MoveCloseToSurfaceExecution:
                 f"Unknown close-surface phase: {self._phase}"
             )
         except Exception as exception:
+            if not self._started:
+                return MoveCloseToSurfaceOutcome.FAILURE
             if self._approach_steps > 0 and self._recovery_hand_pose is not None:
                 return self._begin_recovery(str(exception))
             return self._fail_workflow(str(exception))
 
     def cancel(self) -> None:
+        if self._measurement.active:
+            self._measurement.cancel()
         if self.executor.active:
             self.executor.cancel()
         self._started = False
@@ -307,114 +324,73 @@ class MoveCloseToSurfaceExecution:
         return self._handle_approach_update(update)
 
     def _start_sampling(self) -> None:
-        self._surface_samples = {}
-        self._sample_receipt_not_before = self._clock() + self.config.settle_sec
-        self._phase_started = self._sample_receipt_not_before
-        self._plan = None
-        self._previous_probe_pose = None
-        self._approach_steps = 0
         self._phase = "sampling"
-        self.feedback_message = "Waiting to settle before collecting surface distance"
+        self._measurement_outcome = self._measurement.start(MeasureSensorTipDistanceCommand(
+            command_id=self._command.command_id, stamp=self._command.stamp,
+            expected_distance_m=self._command.expected_distance_m,
+        ))
+        self.feedback_message = self._measurement.feedback_message
 
     def _update_sampling(self) -> MoveCloseToSurfaceOutcome:
         self._require_attachment_unchanged()
-        now = self._clock()
-        if now < self._sample_receipt_not_before:
+        outcome = (self._measurement.poll() if self._measurement.active
+                   else self._measurement_outcome)
+        self.feedback_message = self._measurement.feedback_message
+        if outcome is MeasureSensorTipDistanceOutcome.RUNNING:
             return MoveCloseToSurfaceOutcome.RUNNING
-        last_error = None
-
-        try:
-            fresh = self.surface_source.surface_distance_samples(
-                self._sensor_id,
-                receipt_not_before=self._sample_receipt_not_before,
-                maximum_age_sec=max(
-                    self.config.sample_timeout_sec,
-                    self.config.minimum_surface_span_sec,
-                ),
-                minimum_samples=self.config.minimum_surface_samples,
-                maximum_latest_age_sec=MAX_HAND_DEPTH_AGE_SEC,
-            )
-            for sample in fresh:
-                self._surface_samples[sample.stamp_seconds] = sample
-
-            planning_target = self._planning_target_distance()
-            aggregate = aggregate_surface_distance_samples(
-                tuple(self._surface_samples.values()),
-                planning_target,
-                self.config.maximum_step_m,
-                tolerance_m=self._surface_tolerance(),
-                minimum_samples=self.config.minimum_surface_samples,
-                minimum_span_sec=self.config.minimum_surface_span_sec,
-                stability_tolerance_m=(
-                    self.config.surface_stability_tolerance_m
-                ),
-            )
-            current_probe = self._current_probe_pose()
-
-            if aggregate.surface_plane_probe is None:
-                raise RuntimeError(
-                    "Stable surface sampling did not produce surface geometry"
-                )
-            measured_axis_error = math.acos(max(-1.0, min(
-                1.0, -aggregate.surface_plane_probe.normal.x,
-            )))
-            if measured_axis_error > self.config.maximum_axis_error_rad:
-                raise ValueError(
-                    "Probe axis is not aligned with the measured surface: "
-                    f"{math.degrees(measured_axis_error):.2f} deg > "
-                    f"{math.degrees(self.config.maximum_axis_error_rad):.2f} deg"
-                )
-            if not self.contact_mode and aggregate.verified:
-                return self._success(
-                    "Surface stand-off already reached from live measurement: "
-                    f"{aggregate.distance_m:.4f} m"
-                )
-            self._plan = freeze_probe_surface_approach(
-                current_probe_pose_execution=current_probe,
-                surface_plane_probe=aggregate.surface_plane_probe,
-                target_distance_m=planning_target,
-                maximum_travel_m=self.config.maximum_travel_m,
-            )
-            if (
-                self._plan.initial_axis_error_rad
-                > self.config.maximum_axis_error_rad
-            ):
-                raise ValueError(
-                    "Probe axis is not aligned with the estimated surface: "
-                    f"{math.degrees(self._plan.initial_axis_error_rad):.2f} deg "
-                    f"> {math.degrees(self.config.maximum_axis_error_rad):.2f} deg"
-                )
-
-            self._previous_probe_pose = deepcopy(current_probe)
-            self._aligned_probe_orientation = deepcopy(
-                current_probe.orientation
-            )
-            mode = "contact" if self.contact_mode else "stand-off"
-            self.feedback_message = (
-                f"Frozen {mode} Cartesian approach from live surface estimate at "
-                f"{aggregate.distance_m:.4f} m"
-            )
-            return self._prepare_next_approach_step()
-        except Exception as exception:
-            last_error = exception
-
-        detail = str(last_error)
-        if self._surface_samples:
-            detail += (
-                f"; {len(self._surface_samples)} distinct valid frame(s) "
-                "accumulated"
-            )
-
-        if now - self._phase_started >= self.config.sample_timeout_sec:
+        if outcome is MeasureSensorTipDistanceOutcome.FAILURE:
             return self._fail_workflow(
-                "Unable to establish stable surface distance: "
-                f"{detail}"
+                "Unable to measure sensor tip distance: " + self.feedback_message,
+                self._measurement.failure_outcome or ArmMovementOutcome.EXECUTION_ERROR,
             )
-        self.feedback_message = (
-            "Collecting initial surface distance: "
-            f"{detail}"
+        result = self._measurement.result
+        if result is None:
+            raise RuntimeError("Sensor tip distance measurement returned no geometry")
+        self._measurement_result = result
+        self._require_measurement_reference()
+        current_probe = self._current_probe_pose()
+        plane = result.plane_at_probe(current_probe)
+        axis_error = math.acos(max(-1.0, min(1.0, -plane.normal.x)))
+        if axis_error > self.config.maximum_axis_error_rad:
+            return self._fail_workflow(
+                "Probe axis is not aligned with the measured surface: "
+                f"{math.degrees(axis_error):.2f} deg > "
+                f"{math.degrees(self.config.maximum_axis_error_rad):.2f} deg"
+            )
+        distance = plane.signed_distance(Vector3Data.zero())
+        target = self._planning_target_distance()
+        if abs(distance-target) + result.peak_to_peak_m <= self._surface_tolerance():
+            return self._success(f"Surface stand-off already reached: {distance:.4f} m")
+        self._plan = freeze_probe_surface_approach(
+            current_probe_pose_execution=current_probe,
+            surface_plane_probe=plane, target_distance_m=target,
+            maximum_travel_m=self.config.maximum_travel_m,
         )
-        return MoveCloseToSurfaceOutcome.RUNNING
+        self._previous_probe_pose = deepcopy(current_probe)
+        self._aligned_probe_orientation = deepcopy(current_probe.orientation)
+        return self._prepare_next_approach_step()
+
+    def _require_measurement_reference(self):
+        result = self._measurement_result
+        try:
+            body = pose_to_pose_data(self.executor.probe_motion_planner.current_pose(
+                ODOM_FRAME_NAME, "body"))
+        except Exception as error:
+            self._fail_workflow(
+                f"Unable to verify measurement reference: {error}",
+                ArmMovementOutcome.RECOVERY_FAILED,
+            )
+            raise
+        drift = self._norm(self._translation_between(body, result.reference_body_pose))
+        angle = rotation_distance_rad(body.orientation, result.reference_body_pose.orientation)
+        if (drift > self.config.reference_position_tolerance_m
+                or angle > self.config.reference_orientation_tolerance_rad):
+            # Do not let the outer probe workflow recover in an invalid frame.
+            self._fail_workflow(
+                "Body/odom reference changed after sensor tip measurement",
+                ArmMovementOutcome.RECOVERY_FAILED,
+            )
+            raise RuntimeError(self.feedback_message)
 
     def _prepare_next_approach_step(self) -> MoveCloseToSurfaceOutcome:
         self._require_attachment_unchanged()
@@ -662,7 +638,7 @@ class MoveCloseToSurfaceExecution:
 
     def _current_probe_pose(self) -> PoseData:
         current = self.executor.probe_motion_planner.current_pose(
-            GRAV_ALIGNED_BODY_FRAME_NAME,
+            self._execution_frame(),
             sensor_probe_frame(self._sensor_id),
         )
         return pose_to_pose_data(current)
@@ -670,7 +646,7 @@ class MoveCloseToSurfaceExecution:
     def _current_hand_pose(self) -> PoseData:
         return pose_to_pose_data(
             self.executor.probe_motion_planner.current_hand_pose(
-                GRAV_ALIGNED_BODY_FRAME_NAME
+                self._execution_frame()
             )
         )
 
@@ -815,7 +791,9 @@ class MoveCloseToSurfaceExecution:
     def _fail_workflow(
         self, detail: str, outcome=ArmMovementOutcome.EXECUTION_ERROR,
     ) -> MoveCloseToSurfaceOutcome:
-        if self.executor.active:
+        if self._measurement.active:
+            self._measurement.cancel()
+        if self.executor.active and outcome is not ArmMovementOutcome.BUSY:
             self.executor.cancel()
         self.failure_outcome = outcome
         self.feedback_message = str(detail).strip() or "Movement failed"
@@ -835,8 +813,8 @@ class MoveCloseToSurfaceExecution:
         self._contact_inward = None
         self._contact_search_distance_m = None
         self._contact_plan_retries = 0
-        self._surface_samples = {}
-        self._sample_receipt_not_before = 0.0
+        self._measurement_result = None
+        self._measurement_outcome = None
         self._plan = None
         self._previous_probe_pose = None
         self._requested_step_m = 0.0
@@ -845,11 +823,13 @@ class MoveCloseToSurfaceExecution:
         self._recovery_detail = ""
         self._recovery_started = False
 
-    @staticmethod
-    def _pose_stamped(data: PoseData) -> PoseStamped:
+    def _execution_frame(self):
+        return GRAV_ALIGNED_BODY_FRAME_NAME if self.contact_mode else ODOM_FRAME_NAME
+
+    def _pose_stamped(self, data: PoseData) -> PoseStamped:
         data.validate()
         stamped = PoseStamped()
-        stamped.header.frame_id = GRAV_ALIGNED_BODY_FRAME_NAME
+        stamped.header.frame_id = self._execution_frame()
         stamped.pose = pose_data_to_pose(data)
         return stamped
 

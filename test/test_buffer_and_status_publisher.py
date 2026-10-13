@@ -163,3 +163,19 @@ def test_missing_failure_metadata_uses_generic_failure_status():
     message = result.structured_status_pub.messages[0]
     assert message.state == message.STATE_FAILED
     assert message.detail == "BT execution failed for move_to_tag"
+
+
+def test_measurement_result_and_progress_reach_correlated_status():
+    result = behavior(Status.RUNNING, "measure_sensor_tip_distance")
+    command = result.blackboard.last_command
+    command.execution_feedback_message = "Returning to pre-approach pose"
+    result.update()
+    assert result.structured_status_pub.messages[-1].detail == (
+        "Returning to pre-approach pose"
+    )
+    result.blackboard.command_tree_status = Status.SUCCESS
+    command.execution_feedback_message = "Sensor tip distance: 0.261 m"
+    result.update()
+    message = result.structured_status_pub.messages[-1]
+    assert message.request_id == command.request_id
+    assert message.detail == "Sensor tip distance: 0.261 m"

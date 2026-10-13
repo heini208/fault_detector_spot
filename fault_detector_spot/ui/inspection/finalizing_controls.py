@@ -49,6 +49,9 @@ class FinalizingInspectionControls(InspectionControls):
     def __init__(self, ui):
         self._reference_start_pending = False
         self._reference_start_error = ""
+        self._sensor_tip_distance_test_active = False
+        self._sensor_tip_distance_context_id = ""
+        self._sensor_tip_distance_request_id = ""
         self._surface_test_active = False
         self._surface_move_succeeded = False
         self._surface_move_target_m = None
@@ -1092,6 +1095,12 @@ class FinalizingInspectionControls(InspectionControls):
 
     def handle_abort_probe_refinement(self):
         """Abort the current unsaved probe-point setup."""
+        if self._sensor_tip_distance_test_active:
+            self.refinement_recovery_status_label.setText(
+                "Wait for the distance test to finish or use Emergency Stop "
+                "before aborting setup."
+            )
+            return False
         if self._probe_finalization_point_id:
             self.refinement_recovery_status_label.setText(
                 "Probe-point saving is already in progress and cannot be "
@@ -1160,7 +1169,8 @@ class FinalizingInspectionControls(InspectionControls):
             )
             return True
 
-        if presentation.pending_motion is not None:
+        if (presentation.pending_motion is not None
+                or self._sensor_tip_distance_test_active):
             self.refinement_recovery_status_label.setText(
                 "Wait for the active movement and settle check before "
                 "closing the setup window."
@@ -1249,6 +1259,82 @@ class FinalizingInspectionControls(InspectionControls):
             self.refinement_dialog.close_after_completion()
         return result
 
+    def handle_test_sensor_tip_distance(self):
+        """Request a measured distance and verified return through the command API."""
+        presentation = self._require_refinement_presentation()
+        state = self._probe_setup_state
+        if (state is None or not state.context_id
+                or self._sensor_tip_distance_test_active
+                or presentation.active_stage is not RefinementStage.ALIGNMENT
+                or presentation.pending_motion is not None
+                or presentation.recovery_required
+                or presentation.motion_states[RefinementStage.ALIGNMENT]
+                is not RefinementMotionState.REACHED):
+            return False
+        self._sensor_tip_distance_context_id = (
+            state.context_id + "/measure-sensor-tip-distance/" + uuid4().hex
+        )
+        self._sensor_tip_distance_request_id = ""
+        self._sensor_tip_distance_test_active = True
+        label = self.refinement_dialog.sensor_tip_distance_status_label
+        label.setText("Measuring sensor tip distance; arm may move and return.")
+        self._refresh_refinement_dialog()
+        intent = OperationalIntent()
+        intent.intent = OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE
+        intent.aligned_preapproach_distance_m = float(
+            presentation.aligned_preapproach_distance_m
+        )
+        submitted = self.ui.execute_operation(
+            intent, context_id=self._sensor_tip_distance_context_id,
+        )
+        if submitted is None:
+            self.handle_sensor_tip_distance_rejected(
+                "Measurement could not be submitted.",
+                self._sensor_tip_distance_context_id,
+            )
+            return False
+        return True
+
+    def handle_sensor_tip_distance_rejected(self, detail, context_id):
+        if (not self._sensor_tip_distance_test_active
+                or context_id != self._sensor_tip_distance_context_id):
+            return
+        self._sensor_tip_distance_test_active = False
+        if self._sensor_tip_distance_request_id:
+            # Losing the result after acceptance leaves the return unverified.
+            self._surface_move_succeeded = False
+            self._distance_failure_requires_retraction = True
+        self.refinement_dialog.sensor_tip_distance_status_label.setText(
+            f"Measurement unavailable: {detail}"
+        )
+        self._refresh_refinement_dialog()
+
+    def _handle_sensor_tip_distance_status(self, status):
+        if (not self._sensor_tip_distance_test_active
+                or status.intent != OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE
+                or status.context_id != self._sensor_tip_distance_context_id):
+            return
+        client = getattr(self.ui, "application_client", None)
+        if client is not None and status.client_id != client.client_id:
+            return
+        if (self._sensor_tip_distance_request_id
+                and status.request_id != self._sensor_tip_distance_request_id):
+            return
+        self._sensor_tip_distance_request_id = status.request_id
+        self.refinement_dialog.sensor_tip_distance_status_label.setText(
+            status.detail.strip() or "Measuring sensor tip distance"
+        )
+        if status.state in {
+            ApplicationCommandState.STATE_SUCCEEDED,
+            ApplicationCommandState.STATE_FAILED,
+            ApplicationCommandState.STATE_CANCELLED,
+        }:
+            self._sensor_tip_distance_test_active = False
+            if status.state != ApplicationCommandState.STATE_SUCCEEDED:
+                self._surface_move_succeeded = False
+                self._distance_failure_requires_retraction = True
+        self._refresh_refinement_dialog()
+
     def handle_test_surface_distance(self):
         presentation = self._require_refinement_presentation()
         state = self._probe_setup_state
@@ -1296,6 +1382,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._handle_base_position_status(status)
         self._handle_routine_arm_pose_status(status)
         self._handle_saved_probe_status(status)
+        self._handle_sensor_tip_distance_status(status)
         if (
             not self._surface_test_active
             or status.intent
@@ -1512,6 +1599,19 @@ class FinalizingInspectionControls(InspectionControls):
             return
         self._refresh_alignment_depth_status()
         presentation = self._refinement_presentation
+        state = self._probe_setup_state
+        if (presentation is None or (
+            self._sensor_tip_distance_context_id and state is not None
+            and not self._sensor_tip_distance_context_id.startswith(
+                state.context_id + "/measure-sensor-tip-distance/"
+            )
+        )):
+            self._sensor_tip_distance_test_active = False
+            self._sensor_tip_distance_context_id = ""
+            self._sensor_tip_distance_request_id = ""
+            self.refinement_dialog.sensor_tip_distance_status_label.setText(
+                "Test may move the arm to see the target, measure, and return."
+            )
         if presentation is None:
             self._surface_test_active = False
             self._surface_move_succeeded = False
@@ -1520,7 +1620,23 @@ class FinalizingInspectionControls(InspectionControls):
             return
         if presentation.active_stage is not RefinementStage.PROBE:
             self._surface_move_succeeded = False
-        pending = presentation.pending_motion is not None
+        pending = (presentation.pending_motion is not None
+                   or self._sensor_tip_distance_test_active)
+        self.refinement_dialog.test_distance_measure_button.setEnabled(
+            presentation.active_stage is RefinementStage.ALIGNMENT
+            and presentation.motion_states[RefinementStage.ALIGNMENT]
+            is RefinementMotionState.REACHED
+            and not pending
+            and not presentation.recovery_required
+            and not self._distance_failure_requires_retraction
+            and not self._retraction_failed
+        )
+        self.refinement_dialog.abort_button.setEnabled(
+            not self._sensor_tip_distance_test_active
+        )
+        self.abort_probe_refinement_button.setEnabled(
+            not self._sensor_tip_distance_test_active
+        )
         probe_page = presentation.active_stage is RefinementStage.PROBE
         alignment_reached = (
             presentation.motion_states[RefinementStage.ALIGNMENT]

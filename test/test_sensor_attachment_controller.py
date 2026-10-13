@@ -415,6 +415,7 @@ def test_move_to_tag_requires_then_uses_confirmed_bare_hand(tmp_path, command_id
     CommandID.MOVE_SAFE_APPROACH,
     CommandID.ADJUST_SAFE_APPROACH,
     CommandID.MOVE_CLOSE_TO_SURFACE,
+    CommandID.MEASURE_SENSOR_TIP_DISTANCE,
 ))
 def test_planned_arm_commands_require_confirmation_without_rebinding_target(
     tmp_path, command_id,

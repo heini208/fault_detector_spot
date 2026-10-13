@@ -17,6 +17,7 @@ class MoveCloseToSurfaceCommand(ExecutionCommand):
         target_surface_distance_m: float,
         surface_tolerance_m: float = 0.0,
         request_id: str = "",
+        expected_distance_m: float = 0.25,
     ):
         super().__init__(command_id, stamp, request_id=request_id)
         target = float(target_surface_distance_m)
@@ -29,6 +30,10 @@ class MoveCloseToSurfaceCommand(ExecutionCommand):
             raise ValueError(
                 "Surface tolerance must be non-negative"
             )
+        expected = float(expected_distance_m)
+        if not math.isfinite(expected) or expected <= 0.0:
+            raise ValueError("Expected sensor tip distance must be positive")
+        self.expected_distance_m = expected
         self.target_surface_distance_m = target
         self.surface_tolerance_m = tolerance
 

@@ -989,6 +989,7 @@ class Fault_Detector_UI(QWidget):
             controls.handle_base_position_rejected(detail, context_id)
             controls.handle_routine_arm_pose_rejected(detail, context_id)
             controls.handle_saved_probe_rejected(detail, context_id)
+            controls.handle_sensor_tip_distance_rejected(detail, context_id)
             controls.routine_navigation_controls.handle_operation_rejected(detail, context_id)
 
     def _process_sensor_acquisition_state(self, state):

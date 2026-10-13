@@ -37,6 +37,9 @@ from fault_detector_spot.inspection.behaviours.resolve_live_inspection_object im
 from fault_detector_spot.manipulation.behaviours.close_gripper_action import (
     CloseGripperAction,
 )
+from fault_detector_spot.manipulation.behaviours.measure_sensor_tip_distance_behaviour import (
+    MeasureSensorTipDistanceBehaviour,
+)
 from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
     MoveCloseToSurfaceBehaviour,
 )
@@ -361,6 +364,12 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             CommandID.MOVE_CLOSE_TO_SURFACE,
             lambda n: MoveCloseToSurfaceBehaviour(
                 name="MoveCloseToSurfaceBehaviour",
+                robot_command_resources=robot_command_resources,
+            ),
+        ),
+        (
+            CommandID.MEASURE_SENSOR_TIP_DISTANCE,
+            lambda n: MeasureSensorTipDistanceBehaviour(
                 robot_command_resources=robot_command_resources,
             ),
         ),

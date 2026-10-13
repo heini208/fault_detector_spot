@@ -6,6 +6,7 @@ from functools import wraps
 from math import isfinite
 from threading import RLock
 
+from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
 )
@@ -145,7 +146,21 @@ class ProbeSetupCoordinator:
         with self._lock:
             contexts = tuple(draft.context for draft in self._drafts.values())
         for context in contexts:
+            scoped_measurement = (
+                status.request.command.command_id
+                is CommandID.MEASURE_SENSOR_TIP_DISTANCE
+                and status.request.context_id.startswith(
+                    context.context_id + "/measure-sensor-tip-distance/"
+                )
+            )
             if status.request.context_id == context.context_id:
+                continue
+            # A completed observation excursion verifies its own return pose.
+            # Failed/cancelled excursions cannot preserve reached-pose evidence.
+            if scoped_measurement and status.state not in {
+                CommandControllerState.FAILED,
+                CommandControllerState.CANCELLED,
+            }:
                 continue
             try:
                 lock = self._context_lock(context)

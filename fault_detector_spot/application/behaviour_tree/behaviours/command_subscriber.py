@@ -37,6 +37,9 @@ from fault_detector_spot.manipulation.commands.manipulator_move_relative_command
 from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import (
     ManipulatorToTagCommand,
 )
+from fault_detector_spot.manipulation.commands.measure_sensor_tip_distance_command import (
+    MeasureSensorTipDistanceCommand,
+)
 from fault_detector_spot.manipulation.commands.move_close_to_surface_command import (
     MoveCloseToSurfaceCommand,
 )
@@ -106,6 +109,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.SWAP_MAP: self._map_command,
             CommandID.MOVE_TO_WAYPOINT: self._waypoint_command,
             CommandID.MOVE_CLOSE_TO_SURFACE: self._move_close_to_surface,
+            CommandID.MEASURE_SENSOR_TIP_DISTANCE: self._measure_sensor_tip_distance,
             CommandID.ORIENT_TO_SURFACE: self._orient_to_surface,
             CommandID.ORIENT_TO_TAG: self._orient_to_tag,
         }
@@ -320,6 +324,16 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             stamp=self._create_command_stamp(),
             target_surface_distance_m=command.target_surface_distance_m,
             surface_tolerance_m=command.surface_tolerance_m,
+            expected_distance_m=command.aligned_preapproach_distance_m or 0.25,
+        )
+
+    def _measure_sensor_tip_distance(
+        self, command: SemanticCommand,
+    ) -> MeasureSensorTipDistanceCommand:
+        return MeasureSensorTipDistanceCommand(
+            command_id=CommandID.MEASURE_SENSOR_TIP_DISTANCE,
+            stamp=self._create_command_stamp(),
+            expected_distance_m=command.aligned_preapproach_distance_m or 0.25,
         )
 
     def _orient_to_surface(

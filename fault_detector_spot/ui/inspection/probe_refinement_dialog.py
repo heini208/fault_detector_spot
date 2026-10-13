@@ -421,6 +421,32 @@ class ProbeRefinementDialog(QDialog):
         content_layout.addWidget(self.full_control_button)
         content_layout.addWidget(distance_widget)
 
+        self.distance_measure_group = QGroupBox("Sensor tip distance")
+        measure_layout = QVBoxLayout(self.distance_measure_group)
+        self.test_distance_measure_button = QPushButton("Test distance measure")
+        self.test_distance_measure_button.setEnabled(False)
+        self.test_distance_measure_button.setToolTip(
+            "Measure the distance along sensor tip +X. The arm may move to "
+            "see the target and then return; this does not approach the wall."
+        )
+        self.test_distance_measure_button.clicked.connect(
+            self.controls.handle_test_sensor_tip_distance
+        )
+        measure_layout.addWidget(self.test_distance_measure_button)
+        self.sensor_tip_distance_status_label = QLabel(
+            "Test may move the arm to see the target, measure, and return."
+        )
+        self.sensor_tip_distance_status_label.setWordWrap(True)
+        measure_layout.addWidget(self.sensor_tip_distance_status_label)
+        self.contact_mode_hint_label = QLabel(
+            "Move Close to Wall at 0 mm uses force-guarded contact mode "
+            "and skips depth measurement and the observation movement. "
+            "The distance test remains available independently."
+        )
+        self.contact_mode_hint_label.setWordWrap(True)
+        measure_layout.addWidget(self.contact_mode_hint_label)
+        content_layout.addWidget(self.distance_measure_group)
+
         clearance_group = QGroupBox("Camera clearance recovery")
         self.clearance_group = clearance_group
         clearance_layout = QVBoxLayout(clearance_group)
@@ -957,6 +983,7 @@ class ProbeRefinementDialog(QDialog):
         self.aligned_distance_field.setVisible(not self.fully_custom)
         self.aligned_distance_label.setVisible(not self.fully_custom)
         self.clearance_group.setVisible(not self.fully_custom)
+        self.distance_measure_group.setVisible(not self.fully_custom)
         self.controls.orient_to_surface_button.parentWidget().setVisible(not self.fully_custom)
         state = self.controls._probe_setup_state
         final = self.fully_custom and stage is RefinementStage.PROBE
