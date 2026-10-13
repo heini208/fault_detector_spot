@@ -458,11 +458,14 @@ tip's final position in odom and uses the calibrated hand-to-probe transform
 to keep the hand upright. The orientation movement requires collision-checked,
 force-guarded Cartesian planning; the hand's interpolated path can cause a small
 intermediate tip excursion. Fresh post-motion TF must confirm tip position
-within 5 mm and axis alignment within 5 degrees before the achieved pose becomes
+within 10 mm and axis alignment within 5 degrees before the achieved pose becomes
 the candidate. **Save Final Aligned Pre-approach Pose** then becomes available;
 orientation does not approve the pose automatically. Measurement failure, contact, changed attachment or
 body reference prevents success; cancellation stops without starting another
-movement. The existing action is now labeled **Orient camera to surface** and
+movement. The separate check for tip movement between measurement and the start
+of alignment remains 5 mm. The 10 mm final tolerance accepts positioning error;
+it does not improve positioning accuracy or trigger a correction movement.
+The existing action is now labeled **Orient camera to surface** and
 continues to align the active probe using its lower-middle camera view;
 sensor-tip orientation measures
 the target along the original probe +X direction. The new button explicitly measures even when the

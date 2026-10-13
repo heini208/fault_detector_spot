@@ -287,13 +287,35 @@ def test_failed_or_contact_alignment_never_reports_success_or_retries(outcome):
 def test_inaccurate_achieved_alignment_fails_without_blind_retry(error):
     case = harness()
     if error == "tip_position":
-        case.executor.position_error.y = 0.006
+        case.executor.position_error.y = 0.011
     else:
         case.executor.keep_original_orientation = True
     update = finish(case)
     assert update.outcome is not ArmMovementOutcome.SUCCESS
     assert len(case.executor.calls) == 1
     assert not case.execution.active
+    assert "limit 10.00 mm" in update.detail
+    assert "limit 5.00 deg" in update.detail
+
+
+def test_reported_small_position_and_axis_error_is_accepted_without_extra_motion():
+    case = harness(angle_deg=0.34)
+    case.executor.position_error.y = 0.00689
+    case.executor.keep_original_orientation = True
+    update = finish(case)
+    assert update.outcome is ArmMovementOutcome.SUCCESS
+    assert "tip position error 6.89 mm" in update.detail
+    assert "axis error 0.34 deg" in update.detail
+    assert len(case.executor.calls) == 1
+
+
+def test_explicit_tighter_alignment_tolerance_remains_effective():
+    case = harness(tip_alignment_position_tolerance_m=0.005)
+    case.executor.position_error.y = 0.00689
+    update = finish(case)
+    assert update.outcome is ArmMovementOutcome.CHECKPOINT_TOLERANCE_FAILED
+    assert "position error 6.89 mm, limit 5.00 mm" in update.detail
+    assert len(case.executor.calls) == 1
 
 
 def test_alignment_result_waits_for_fresh_post_motion_snapshot():

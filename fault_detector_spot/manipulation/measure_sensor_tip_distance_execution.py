@@ -58,7 +58,8 @@ class MeasureSensorTipDistanceConfig:
     observation_speed_mps: float = 0.020
     return_position_tolerance_m: float = 0.010
     return_orientation_tolerance_rad: float = math.radians(2.0)
-    tip_alignment_position_tolerance_m: float = 0.005
+    tip_alignment_position_tolerance_m: float = 0.010
+    tip_alignment_start_position_tolerance_m: float = 0.005
     return_correction_speed_scale: float = 0.25
     maximum_return_corrections: int = 3
     minimum_return_correction_improvement_fraction: float = 0.10

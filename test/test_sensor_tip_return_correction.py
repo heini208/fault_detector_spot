@@ -79,7 +79,8 @@ def test_default_10_mm_return_tolerance_accepts_settled_7_43_mm_offset():
     assert finish(case) is MeasureSensorTipDistanceOutcome.SUCCESS
     assert len(case.executor.calls) == 2
     assert case.execution.config.return_position_tolerance_m == 0.010
-    assert case.execution.config.tip_alignment_position_tolerance_m == 0.005
+    assert case.execution.config.tip_alignment_position_tolerance_m == 0.010
+    assert case.execution.config.tip_alignment_start_position_tolerance_m == 0.005
 
 
 def returned(case):
