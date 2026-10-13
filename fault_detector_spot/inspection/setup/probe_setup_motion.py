@@ -48,6 +48,7 @@ class ProbeMotionKind(str, Enum):
     ADJUST_SAFE_APPROACH = "adjust_safe_approach"
     ADJUST_ALIGNED_PREAPPROACH = "adjust_aligned_preapproach"
     ORIENT_TO_SURFACE = "orient_to_surface"
+    ORIENT_SENSOR_TIP_TO_SURFACE = "orient_sensor_tip_to_surface"
     ORIENT_TO_TAG = "orient_to_tag"
 
 
@@ -222,6 +223,17 @@ class ProbeSetupMotionCommandFactory:
         return SemanticCommand(
             command_id=CommandID.ORIENT_TO_SURFACE,
             motion_sensor_id=self._required_sensor_id(motion_sensor_id),
+        )
+
+    def orient_sensor_tip_to_surface(
+        self,
+        motion_sensor_id: str,
+        expected_distance_m: float,
+    ) -> SemanticCommand:
+        return SemanticCommand(
+            command_id=CommandID.ORIENT_SENSOR_TIP_TO_SURFACE,
+            motion_sensor_id=self._required_sensor_id(motion_sensor_id),
+            aligned_preapproach_distance_m=expected_distance_m,
         )
 
     def orient_to_tag(

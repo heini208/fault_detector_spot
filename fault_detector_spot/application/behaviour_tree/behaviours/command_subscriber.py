@@ -46,6 +46,9 @@ from fault_detector_spot.manipulation.commands.move_close_to_surface_command imp
 from fault_detector_spot.manipulation.commands.orient_to_surface_command import (
     OrientToSurfaceCommand,
 )
+from fault_detector_spot.manipulation.commands.orient_sensor_tip_to_surface_command import (
+    OrientSensorTipToSurfaceCommand,
+)
 from fault_detector_spot.manipulation.commands.orient_to_tag_command import (
     OrientToTagCommand,
 )
@@ -110,6 +113,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.MOVE_TO_WAYPOINT: self._waypoint_command,
             CommandID.MOVE_CLOSE_TO_SURFACE: self._move_close_to_surface,
             CommandID.MEASURE_SENSOR_TIP_DISTANCE: self._measure_sensor_tip_distance,
+            CommandID.ORIENT_SENSOR_TIP_TO_SURFACE: self._orient_sensor_tip_to_surface,
             CommandID.ORIENT_TO_SURFACE: self._orient_to_surface,
             CommandID.ORIENT_TO_TAG: self._orient_to_tag,
         }
@@ -265,6 +269,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         for execution in commands:
             execution.ignore_environment_collisions = (
                 command.ignore_environment_collisions
+                and command_id is not CommandID.ORIENT_SENSOR_TIP_TO_SURFACE
             )
         self.logger.info(f"Received {command_id.value} command")
         return commands
@@ -333,6 +338,16 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         return MeasureSensorTipDistanceCommand(
             command_id=CommandID.MEASURE_SENSOR_TIP_DISTANCE,
             stamp=self._create_command_stamp(),
+            expected_distance_m=command.aligned_preapproach_distance_m or 0.25,
+        )
+
+    def _orient_sensor_tip_to_surface(
+        self, command: SemanticCommand,
+    ) -> OrientSensorTipToSurfaceCommand:
+        return OrientSensorTipToSurfaceCommand(
+            command_id=CommandID.ORIENT_SENSOR_TIP_TO_SURFACE,
+            stamp=self._create_command_stamp(),
+            motion_sensor_id=command.motion_sensor_id,
             expected_distance_m=command.aligned_preapproach_distance_m or 0.25,
         )
 

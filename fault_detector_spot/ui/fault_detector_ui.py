@@ -958,6 +958,11 @@ class Fault_Detector_UI(QWidget):
             f"Command: {intent_name} {state_name}"
         )
         self.command_status_label.setToolTip(state.detail)
+        if state.detail and state.intent in (
+            OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE,
+            OperationalIntent.INTENT_ORIENT_SENSOR_TIP_TO_SURFACE,
+        ):
+            self.status_label.setText(state.detail)
         self._buffer_text = (
             f"Buffer: {state.buffered_command_count} pending"
         )

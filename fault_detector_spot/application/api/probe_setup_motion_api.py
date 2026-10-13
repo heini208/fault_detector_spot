@@ -220,6 +220,9 @@ class ProbeSetupMotionApi:
             ProbeSetupMotionIntent.OPERATION_ORIENT_TO_SURFACE: (
                 ProbeMotionKind.ORIENT_TO_SURFACE
             ),
+            ProbeSetupMotionIntent.OPERATION_ORIENT_SENSOR_TIP_TO_SURFACE: (
+                ProbeMotionKind.ORIENT_SENSOR_TIP_TO_SURFACE
+            ),
             ProbeSetupMotionIntent.OPERATION_ORIENT_TO_TAG: (
                 ProbeMotionKind.ORIENT_TO_TAG
             ),
@@ -279,6 +282,9 @@ class ProbeSetupMotionApi:
             ),
             ProbeMotionKind.ORIENT_TO_SURFACE: (
                 ProbeSetupMotionIntent.OPERATION_ORIENT_TO_SURFACE
+            ),
+            ProbeMotionKind.ORIENT_SENSOR_TIP_TO_SURFACE: (
+                ProbeSetupMotionIntent.OPERATION_ORIENT_SENSOR_TIP_TO_SURFACE
             ),
             ProbeMotionKind.ORIENT_TO_TAG: (
                 ProbeSetupMotionIntent.OPERATION_ORIENT_TO_TAG

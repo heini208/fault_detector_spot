@@ -82,6 +82,9 @@ _INTENT_COMMAND_IDS = {
     OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE: (
         CommandID.MEASURE_SENSOR_TIP_DISTANCE
     ),
+    OperationalIntent.INTENT_ORIENT_SENSOR_TIP_TO_SURFACE: (
+        CommandID.ORIENT_SENSOR_TIP_TO_SURFACE
+    ),
     OperationalIntent.INTENT_ORIENT_TO_SURFACE: (
         CommandID.ORIENT_TO_SURFACE
     ),
@@ -233,11 +236,19 @@ def operational_intent_to_command(
     if intent.intent in (
         OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE,
         OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE,
+        OperationalIntent.INTENT_ORIENT_SENSOR_TIP_TO_SURFACE,
     ):
         _nonnegative_distance(
             intent.aligned_preapproach_distance_m,
             "Expected sensor tip distance",
         )
+    if intent.intent in (
+        OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE,
+        OperationalIntent.INTENT_ORIENT_SENSOR_TIP_TO_SURFACE,
+    ):
+        expected = float(intent.aligned_preapproach_distance_m)
+        if expected != 0.0 and not 0.003 <= expected <= 0.50:
+            raise ValueError("Expected sensor tip distance must be between 0.003 and 0.50 m")
     if (
         intent.intent
         == OperationalIntent.INTENT_MOVE_TO_WAYPOINT

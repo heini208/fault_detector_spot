@@ -465,7 +465,11 @@ class InspectionControls(UIControlHelper):
         self.use_current_alignment_button = QPushButton(
             "Save Final Aligned Pre-approach Pose"
         )
-        self.orient_to_surface_button = QPushButton("Orient to Surface")
+        self.orient_to_surface_button = QPushButton("Orient camera to surface")
+        self.orient_to_surface_button.setToolTip(
+            "Orient the active probe using the lower-middle surface patch "
+            "in the camera view."
+        )
         self.orient_to_surface_button.setEnabled(False)
         self.orient_to_tag_button = QPushButton("Orient to Tag")
         self.orient_to_tag_button.setEnabled(False)
@@ -2038,6 +2042,12 @@ class InspectionControls(UIControlHelper):
         return self._send_alignment_orientation(
             ProbeSetupMotionIntent.OPERATION_ORIENT_TO_TAG,
             "tag orientation",
+        )
+
+    def handle_orient_sensor_tip_to_surface(self):
+        return self._send_alignment_orientation(
+            ProbeSetupMotionIntent.OPERATION_ORIENT_SENSOR_TIP_TO_SURFACE,
+            "sensor tip surface orientation",
         )
 
     def _send_alignment_orientation(self, operation, label):

@@ -47,6 +47,7 @@ _TERMINAL_STATES = {
 }
 _ORIENTATION_MOTION_KINDS = frozenset({
     ProbeMotionKind.ORIENT_TO_SURFACE,
+    ProbeMotionKind.ORIENT_SENSOR_TIP_TO_SURFACE,
     ProbeMotionKind.ORIENT_TO_TAG,
 })
 
@@ -92,6 +93,7 @@ class ProbeRefinementController:
             CommandID.READY_SAFE_APPROACH, CommandID.MOVE_CLOSE_TO_SURFACE,
             CommandID.MEASURE_SENSOR_TIP_DISTANCE,
             CommandID.ORIENT_TO_TAG, CommandID.ORIENT_TO_SURFACE,
+            CommandID.ORIENT_SENSOR_TIP_TO_SURFACE,
         }:
             return False
         return draft.refinement.invalidate_external_arm_motion()
@@ -265,6 +267,15 @@ class ProbeRefinementController:
             updates_candidate = True
             verify_achieved_pose = False
             seeds_safe_approach_from_ready = True
+        elif motion.kind is ProbeMotionKind.ORIENT_SENSOR_TIP_TO_SURFACE:
+            target = self.current_probe_pose(draft, attachment)
+            command = self.motion_command_factory.orient_sensor_tip_to_surface(
+                attachment.motion_sensor_id,
+                refinement.aligned_preapproach_distance_m,
+            )
+            purpose = "sensor tip surface orientation"
+            updates_candidate = True
+            verify_achieved_pose = False
         elif motion.kind is ProbeMotionKind.ORIENT_TO_SURFACE:
             target = self.current_probe_pose(draft, attachment)
             command = self.motion_command_factory.orient_to_surface(
@@ -508,6 +519,12 @@ class ProbeRefinementController:
                         RefinementMotionState.NOT_TESTED
                     )
                     refinement.alignment_candidate_reached = False
+                elif motion.kind is ProbeMotionKind.ORIENT_SENSOR_TIP_TO_SURFACE:
+                    refinement.complete_motion(
+                        status.operation.request_id,
+                        achieved,
+                    )
+                    refinement.alignment_orientation_established = True
                 elif motion.kind in _ORIENTATION_MOTION_KINDS:
                     refinement.complete_alignment_orientation(
                         status.operation.request_id,
@@ -626,6 +643,7 @@ class ProbeRefinementController:
             ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
             ProbeMotionKind.ADJUST_ALIGNED_PREAPPROACH,
             ProbeMotionKind.ORIENT_TO_SURFACE,
+            ProbeMotionKind.ORIENT_SENSOR_TIP_TO_SURFACE,
             ProbeMotionKind.ORIENT_TO_TAG,
         }:
             return RefinementStage.ALIGNMENT

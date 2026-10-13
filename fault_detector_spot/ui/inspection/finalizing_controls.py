@@ -1631,6 +1631,15 @@ class FinalizingInspectionControls(InspectionControls):
             and not self._distance_failure_requires_retraction
             and not self._retraction_failed
         )
+        self.refinement_dialog.orient_sensor_tip_to_surface_button.setEnabled(
+            presentation.active_stage is RefinementStage.ALIGNMENT
+            and presentation.motion_states[RefinementStage.SAFE_APPROACH]
+            is RefinementMotionState.REACHED
+            and not pending
+            and not presentation.recovery_required
+            and not self._distance_failure_requires_retraction
+            and not self._retraction_failed
+        )
         self.refinement_dialog.abort_button.setEnabled(
             not self._sensor_tip_distance_test_active
         )

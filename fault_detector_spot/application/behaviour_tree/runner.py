@@ -46,6 +46,9 @@ from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour
 from fault_detector_spot.manipulation.behaviours.orient_to_surface_behaviour import (
     OrientToSurfaceBehaviour,
 )
+from fault_detector_spot.manipulation.behaviours.orient_sensor_tip_to_surface_behaviour import (
+    OrientSensorTipToSurfaceBehaviour,
+)
 from fault_detector_spot.manipulation.behaviours.orient_to_tag_behaviour import (
     OrientToTagBehaviour,
 )
@@ -370,6 +373,12 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
         (
             CommandID.MEASURE_SENSOR_TIP_DISTANCE,
             lambda n: MeasureSensorTipDistanceBehaviour(
+                robot_command_resources=robot_command_resources,
+            ),
+        ),
+        (
+            CommandID.ORIENT_SENSOR_TIP_TO_SURFACE,
+            lambda n: OrientSensorTipToSurfaceBehaviour(
                 robot_command_resources=robot_command_resources,
             ),
         ),

@@ -14,6 +14,7 @@ class CommandID(str, Enum):
     MOVE_ARM_RELATIVE = "move_arm_relative"
     MOVE_CLOSE_TO_SURFACE = "move_close_to_surface"
     MEASURE_SENSOR_TIP_DISTANCE = "measure_sensor_tip_distance"
+    ORIENT_SENSOR_TIP_TO_SURFACE = "orient_sensor_tip_to_surface"
     ORIENT_TO_SURFACE = "orient_to_surface"
     ORIENT_TO_TAG = "orient_to_tag"
     CHANGE_BODY_HEIGHT = "change_body_height"

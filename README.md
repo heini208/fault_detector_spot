@@ -449,6 +449,32 @@ its label reports both perpendicular wall distance and distance along probe +X.
 A target distance of **0 mm** retains the force-guarded contact search and skips
 depth observation entirely. The standalone distance test remains available.
 
+During aligned pre-approach setup, **Orient sensor tip to surface** is available
+after reaching the safe approach, before saving or reaching the final aligned
+candidate. It runs the same
+measurement and verified return, then aligns probe +X
+with the measured target's inward surface normal. It preserves the returned
+tip's final position in odom and uses the calibrated hand-to-probe transform
+to keep the hand upright. The orientation movement requires collision-checked,
+force-guarded Cartesian planning; the hand's interpolated path can cause a small
+intermediate tip excursion. Fresh post-motion TF must confirm tip position
+within 5 mm and axis alignment within 5 degrees before the achieved pose becomes
+the candidate. **Save Final Aligned Pre-approach Pose** then becomes available;
+orientation does not approve the pose automatically. Measurement failure, contact, changed attachment or
+body reference prevents success; cancellation stops without starting another
+movement. The existing action is now labeled **Orient camera to surface** and
+continues to align the active probe using its lower-middle camera view;
+sensor-tip orientation measures
+the target along the original probe +X direction. The new button explicitly measures even when the
+final approach is configured for force contact (0 mm).
+
+Manipulation controls also expose **Orient sensor tip to surface** and **Test
+surface distance** under **Surface actions**. Both use the shared measurement
+operation independently of saved probe-point setup. Their expected tip distance
+locates the target along probe +X; it is separate from the desired final wall
+gap for Move Close to Surface. The test returns the distance without making an
+approach movement.
+
 Measurement saves the original hand and probe poses in odom using fresh,
 timestamped hand-depth TF. The expected wall point lies along the saved probe
 +X axis at the configured aligned pre-approach distance (default 0.25 m for

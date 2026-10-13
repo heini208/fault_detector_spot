@@ -433,6 +433,21 @@ class ProbeRefinementDialog(QDialog):
             self.controls.handle_test_sensor_tip_distance
         )
         measure_layout.addWidget(self.test_distance_measure_button)
+        self.orient_sensor_tip_to_surface_button = QPushButton(
+            "Orient sensor tip to surface"
+        )
+        self.orient_sensor_tip_to_surface_button.setEnabled(False)
+        self.orient_sensor_tip_to_surface_button.setToolTip(
+            "Measure the intended target surface, moving to observe it and "
+            "returning if needed, then align sensor tip +X with its normal "
+            "at the current tip position. This does not approach the wall. "
+            "Use this before saving the final aligned pre-approach pose, "
+            "then save the resulting current pose."
+        )
+        self.orient_sensor_tip_to_surface_button.clicked.connect(
+            self.controls.handle_orient_sensor_tip_to_surface
+        )
+        measure_layout.addWidget(self.orient_sensor_tip_to_surface_button)
         self.sensor_tip_distance_status_label = QLabel(
             "Test may move the arm to see the target, measure, and return."
         )
@@ -441,7 +456,8 @@ class ProbeRefinementDialog(QDialog):
         self.contact_mode_hint_label = QLabel(
             "Move Close to Wall at 0 mm uses force-guarded contact mode "
             "and skips depth measurement and the observation movement. "
-            "The distance test remains available independently."
+            "Distance testing and sensor tip orientation remain available "
+            "independently and require depth."
         )
         self.contact_mode_hint_label.setWordWrap(True)
         measure_layout.addWidget(self.contact_mode_hint_label)

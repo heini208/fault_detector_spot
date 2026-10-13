@@ -72,7 +72,11 @@ class ManipulationControls(UIControlHelper):
                 self._make_environment_collision_row(),
                 self._make_reset_fields_and_move_relative_row(),
             ),
-            control_group("Surface actions", self._make_surface_action_row()),
+            control_group(
+                "Surface actions",
+                self._make_sensor_tip_surface_action_row(),
+                self._make_surface_action_row(),
+            ),
             control_group("Robot actions", self._make_control_row()),
         ]
 
@@ -314,9 +318,10 @@ class ManipulationControls(UIControlHelper):
     def _make_surface_action_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
 
-        self.orient_to_surface_button = QPushButton("Orient to Surface")
+        self.orient_to_surface_button = QPushButton("Orient camera to surface")
         self.orient_to_surface_button.setToolTip(
-            "Orient the active probe to the front-facing live surface."
+            "Orient the active probe using the lower-middle surface patch in "
+            "the camera view, preserving the final probe position."
         )
         self.orient_to_surface_button.clicked.connect(
             self.handle_orient_to_surface
@@ -367,6 +372,64 @@ class ManipulationControls(UIControlHelper):
 
         row.addStretch()
         return row
+
+    def _make_sensor_tip_surface_action_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Expected tip distance (m):"))
+        self.expected_tip_distance_input = QDoubleSpinBox()
+        self.expected_tip_distance_input.setDecimals(3)
+        self.expected_tip_distance_input.setRange(0.003, 0.500)
+        self.expected_tip_distance_input.setSingleStep(0.005)
+        self.expected_tip_distance_input.setValue(0.250)
+        self.expected_tip_distance_input.setToolTip(
+            "Approximate current sensor-tip distance along probe +X, used to find "
+            "the intended wall patch. This is separate from the desired final "
+            "distance for Move Close to Surface."
+        )
+        row.addWidget(self.expected_tip_distance_input)
+
+        self.test_surface_distance_button = QPushButton("Test surface distance")
+        self.test_surface_distance_button.setToolTip(
+            "Measure distance at the intended sensor-tip target. May move the "
+            "camera to see the target, then return and report the distance."
+        )
+        self.test_surface_distance_button.clicked.connect(
+            self.handle_test_surface_distance
+        )
+        row.addWidget(self.test_surface_distance_button)
+
+        self.orient_sensor_tip_to_surface_button = QPushButton(
+            "Orient sensor tip to surface"
+        )
+        self.orient_sensor_tip_to_surface_button.setToolTip(
+            "Measure the intended sensor-tip target, returning after any "
+            "observation movement, then align probe +X to its surface normal "
+            "while preserving the final tip position."
+        )
+        self.orient_sensor_tip_to_surface_button.clicked.connect(
+            self.handle_orient_sensor_tip_to_surface
+        )
+        row.insertWidget(0, self.orient_sensor_tip_to_surface_button)
+        row.addStretch()
+        return row
+
+    def _execute_sensor_tip_surface_action(self, intent_id):
+        intent = OperationalIntent()
+        intent.intent = intent_id
+        intent.aligned_preapproach_distance_m = float(
+            self.expected_tip_distance_input.value()
+        )
+        return self.ui.execute_operation(intent)
+
+    def handle_test_surface_distance(self):
+        return self._execute_sensor_tip_surface_action(
+            OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE
+        )
+
+    def handle_orient_sensor_tip_to_surface(self):
+        return self._execute_sensor_tip_surface_action(
+            OperationalIntent.INTENT_ORIENT_SENSOR_TIP_TO_SURFACE
+        )
 
     def handle_orient_to_surface(self):
         intent = OperationalIntent()
