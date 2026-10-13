@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
 )
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
 from std_msgs.msg import Float32
+from .expandable_status_label import ExpandableStatusLabel
 
 
 class StatusOverviewPanel(QFrame):
@@ -121,7 +122,7 @@ class StatusOverviewPanel(QFrame):
         robot_layout.setColumnStretch(3, 1)
 
         estop_button.setMinimumHeight(54)
-        status_label.setWordWrap(True)
+        status_label.setWordWrap(False)
         buffer_label.setWordWrap(True)
         visible_label.setWordWrap(True)
 
@@ -228,8 +229,8 @@ class StatusOverviewPanel(QFrame):
     def _configure_status_label(label: QLabel) -> None:
         label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         label.setSizePolicy(
-            QSizePolicy.Maximum,
-            QSizePolicy.Preferred,
+            QSizePolicy.Expanding if isinstance(label, ExpandableStatusLabel) else QSizePolicy.Maximum,
+            QSizePolicy.Fixed if isinstance(label, ExpandableStatusLabel) else QSizePolicy.Preferred,
         )
         label.setStyleSheet(
             "QLabel {"

@@ -57,6 +57,7 @@ from .sensor.models import (
     SensorHeadConnectionViewStatus,
 )
 from .shared.status_overview_panel import StatusOverviewPanel
+from .shared.expandable_status_label import ExpandableStatusLabel
 
 
 _SENSOR_RECORDING_PRESENTATIONS = {
@@ -77,9 +78,9 @@ class Fault_Detector_UI(QWidget):
         self.resize(700, 600)
         self.measurement_root = self._measurement_root_parameter()
 
-        self.status_label = QLabel("Status: Waiting for connection")
+        self.status_label = ExpandableStatusLabel("Status: Waiting for connection")
         self.buffer_label = QLabel("Buffer: []")
-        self.command_status_label = QLabel("Command: IDLE")
+        self.command_status_label = ExpandableStatusLabel("Command: IDLE", elide_mode=Qt.ElideMiddle)
         self.visible_label = QLabel("Visible tags: []")
         self.visible_label.setTextFormat(Qt.RichText)
         self.navigation_mode_label = QLabel("Navigation: OFF")
