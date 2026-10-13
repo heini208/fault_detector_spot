@@ -39,6 +39,9 @@ class _Phase(Enum):
     RETREATING = "retreating"
 
 
+MAX_PREPARATION_REPLANS = 2
+
+
 class GuardedProbeExecution:
     """Own force baseline, monitoring, stop confirmation, and retreat."""
 
@@ -70,6 +73,7 @@ class GuardedProbeExecution:
         monotonic_clock=time.monotonic,
         execution_lock=None,
         start_retreat=None,
+        validate_prepared_motion=None,
     ):
         required = (
             (arm_state_source, "arm state source"),
@@ -99,6 +103,8 @@ class GuardedProbeExecution:
                 )
         if start_retreat is not None and not callable(start_retreat):
             raise TypeError("GuardedProbeExecution start retreat callback must be callable")
+        if validate_prepared_motion is not None and not callable(validate_prepared_motion):
+            raise TypeError("Prepared motion validation callback must be callable")
         if not callable(monotonic_clock):
             raise TypeError("Monotonic clock must be callable")
 
@@ -106,6 +112,7 @@ class GuardedProbeExecution:
         self.force_baseline_sampler = force_baseline_sampler
         self.force_contact_policy = force_contact_policy
         self._start_motion = start_motion
+        self._validate_prepared_motion = validate_prepared_motion
         self._prepare_motion = prepare_motion
         self._poll_preparation = poll_preparation
         self._start_retreat = start_motion if start_retreat is None else start_retreat
@@ -239,6 +246,7 @@ class GuardedProbeExecution:
             self._phase = None
             self._plan_builder = None
             self._plan = None
+            self._preparation_replans = 0
             self._force_baseline = None
             self._baseline_recovery_attempted = False
             self._force_threshold_override_n = None
@@ -402,6 +410,9 @@ class GuardedProbeExecution:
                 "Unguarded rotation movement lost its plan",
             )
 
+        update = self._check_prepared_motion()
+        if update is not None:
+            return update
         self._phase = _Phase.MOVING
         update = self._start_motion(plan)
         if update.outcome is ArmMovementOutcome.RUNNING:
@@ -417,6 +428,9 @@ class GuardedProbeExecution:
                 "Guarded probe movement lost its plan or force baseline",
             )
 
+        update = self._check_prepared_motion()
+        if update is not None:
+            return update
         self._force_last_received_at = baseline.last_received_at
         self._force_contact_count = 0
         self._self_motion_suppression_count = 0
@@ -443,6 +457,37 @@ class GuardedProbeExecution:
         if update.outcome is ArmMovementOutcome.RUNNING:
             return update
         return self._terminal(update.outcome, update.detail)
+
+    def _check_prepared_motion(self):
+        """Replan stale prepared geometry, then acquire another force baseline."""
+        if self._validate_prepared_motion is None:
+            return None
+        try:
+            reason = self._validate_prepared_motion(self._plan)
+        except Exception as exception:
+            return self._terminal(
+                ArmMovementOutcome.PLANNING_FAILED,
+                f"Prepared arm trajectory could not be verified: {exception}",
+            )
+        if reason is None:
+            return None
+        if self._preparation_replans >= MAX_PREPARATION_REPLANS:
+            return self._terminal(
+                ArmMovementOutcome.PLANNING_FAILED,
+                f"Planning frame did not stabilize after {MAX_PREPARATION_REPLANS} replans: {reason}",
+            )
+        self._preparation_replans += 1
+        self._force_baseline = None
+        self.force_baseline_sampler.reset()
+        self._phase = _Phase.PLAN_WAIT
+        update = self._prepare_plan()
+        if update.outcome is ArmMovementOutcome.RUNNING:
+            return ArmMovementUpdate(
+                update.outcome,
+                f"Replanning prepared arm trajectory ({self._preparation_replans}/"
+                f"{MAX_PREPARATION_REPLANS}): {reason}; {update.detail}",
+            )
+        return update
 
     def _poll_primary_motion(self) -> ArmMovementUpdate:
         plan = self._plan

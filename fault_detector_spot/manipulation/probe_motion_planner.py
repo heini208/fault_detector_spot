@@ -463,6 +463,8 @@ class ProbeMotionPlanner:
         self,
         target: PoseStamped,
         execution_frame: str = "",
+        *,
+        frame_transform=None,
     ) -> PoseStamped:
         if not isinstance(target, PoseStamped):
             raise TypeError("Arm pose target must be a PoseStamped")
@@ -475,11 +477,16 @@ class ProbeMotionPlanner:
         if not normalized_frame or target_frame == normalized_frame:
             return deepcopy(target)
 
-        transform = self.tf_listener.lookup_a_tform_b(
-            normalized_frame,
-            target_frame,
-            timeout_sec=0.0,
-        )
+        transform = frame_transform
+        if transform is None:
+            transform = self.tf_listener.lookup_a_tform_b(
+                normalized_frame,
+                target_frame,
+                timeout_sec=0.0,
+            )
+        elif (transform.header.frame_id.strip() != normalized_frame
+              or transform.child_frame_id.strip() != target_frame):
+            raise ValueError("Planning target transform does not match its frames")
         return tf2_geometry_msgs.do_transform_pose_stamped(
             target,
             transform,

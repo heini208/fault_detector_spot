@@ -87,10 +87,6 @@ class MoveCloseToSurfaceConfig(MeasureSensorTipDistanceConfig):
     def from_node(cls, node):
         defaults = cls()
         values = {}
-        integer_fields = {
-            "maximum_approach_steps",
-            "minimum_surface_samples",
-        }
         for field in fields(cls):
             name = f"close_surface.{field.name}"
             default = getattr(defaults, field.name)
@@ -98,7 +94,7 @@ class MoveCloseToSurfaceConfig(MeasureSensorTipDistanceConfig):
                 node.declare_parameter(name, default)
             value = node.get_parameter(name).value
             values[field.name] = (
-                int(value) if field.name in integer_fields else float(value)
+                value if type(default) is int else float(value)
             )
         config = cls(**values)
         config.validate()
@@ -328,6 +324,7 @@ class MoveCloseToSurfaceExecution:
         self._measurement_outcome = self._measurement.start(MeasureSensorTipDistanceCommand(
             command_id=self._command.command_id, stamp=self._command.stamp,
             expected_distance_m=self._command.expected_distance_m,
+            return_target=self._command.return_target,
         ))
         self.feedback_message = self._measurement.feedback_message
 

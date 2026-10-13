@@ -25,11 +25,16 @@ def target_camera_point(reference_probe_pose, camera_pose_odom, expected_distanc
     """Express the intended +X target in the optical camera frame."""
     if not math.isfinite(expected_distance_m) or expected_distance_m <= 0.0:
         raise ValueError("Expected sensor-tip distance must be positive and finite")
+    origin, direction = probe_axis_in_camera(reference_probe_pose, camera_pose_odom)
+    return origin + expected_distance_m * direction
+
+
+def probe_axis_in_camera(reference_probe_pose, camera_pose_odom):
+    """Express the fixed probe origin and unit +X direction in the camera."""
     probe_in_camera = relative_pose(camera_pose_odom, reference_probe_pose)
     return (
-        rotation_from_quaternion(probe_in_camera.orientation).apply(
-            [expected_distance_m, 0.0, 0.0],
-        ) + _array(probe_in_camera.position)
+        _array(probe_in_camera.position),
+        rotation_from_quaternion(probe_in_camera.orientation).apply([1.0, 0.0, 0.0]),
     )
 
 

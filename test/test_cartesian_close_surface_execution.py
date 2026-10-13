@@ -75,6 +75,7 @@ def executor_for_planning(cartesian):
     executor._pending_moveit_cartesian_path = cartesian
     executor._ignore_environment_collisions = False
     executor._moveit_cartesian_plan = None
+    executor._planning_frame_tolerances = None
     return executor, planner, plan
 
 

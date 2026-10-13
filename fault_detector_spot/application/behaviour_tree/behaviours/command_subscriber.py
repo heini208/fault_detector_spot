@@ -1,4 +1,5 @@
 from typing import List, Optional
+from dataclasses import replace
 
 from fault_detector_spot.navigation.commands.change_body_height_command import (
     ChangeBodyHeightCommand,
@@ -329,7 +330,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             stamp=self._create_command_stamp(),
             target_surface_distance_m=command.target_surface_distance_m,
             surface_tolerance_m=command.surface_tolerance_m,
-            expected_distance_m=command.aligned_preapproach_distance_m or 0.25,
+            expected_distance_m=command.aligned_preapproach_distance_m or None,
+            return_target=self._observation_return_target(command),
         )
 
     def _measure_sensor_tip_distance(
@@ -338,8 +340,16 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         return MeasureSensorTipDistanceCommand(
             command_id=CommandID.MEASURE_SENSOR_TIP_DISTANCE,
             stamp=self._create_command_stamp(),
-            expected_distance_m=command.aligned_preapproach_distance_m or 0.25,
+            expected_distance_m=command.aligned_preapproach_distance_m or None,
+            return_target=self._observation_return_target(command),
         )
+
+    def _observation_return_target(self, command: SemanticCommand):
+        if command.tag is None:
+            return None
+        if command.pre_approach_offsets:
+            raise ValueError("Observation return requires a single tag-relative target")
+        return self._move_to_tag(replace(command, command_id=CommandID.MOVE_ARM_TO_TAG))[0]
 
     def _orient_sensor_tip_to_surface(
         self, command: SemanticCommand,
@@ -348,7 +358,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             command_id=CommandID.ORIENT_SENSOR_TIP_TO_SURFACE,
             stamp=self._create_command_stamp(),
             motion_sensor_id=command.motion_sensor_id,
-            expected_distance_m=command.aligned_preapproach_distance_m or 0.25,
         )
 
     def _orient_to_surface(
@@ -465,6 +474,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 self._create_command_stamp(),
                 stamped_pose_to_message(command.offset),
                 arm_speed_scale=command.arm_speed_scale,
+                tag_position_tolerance_m=command.tag_position_tolerance_m,
+                precision_mode=command.precision_mode,
+                precision_orientation_tolerance_rad=command.precision_orientation_tolerance_rad,
             )
         ]
 
@@ -490,8 +502,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 motion_sensor_id=command.motion_sensor_id,
                 tag_position_tolerance_m=tolerance,
                 arm_speed_scale=speed_scale,
+                precision_mode=precision_mode,
+                precision_orientation_tolerance_rad=command.precision_orientation_tolerance_rad,
             )
-            for offset, tolerance, speed_scale in zip(
+            for offset, tolerance, speed_scale, precision_mode in zip(
                 (*command.pre_approach_offsets, command.offset),
                 (*(command.pre_approach_tolerances_m or
                    (command.tag_position_tolerance_m,) * len(command.pre_approach_offsets)),
@@ -499,6 +513,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 (*(command.pre_approach_speed_scales or
                    (command.arm_speed_scale,) * len(command.pre_approach_offsets)),
                  command.arm_speed_scale),
+                (*(command.pre_approach_precision_modes or
+                   (command.precision_mode,) * len(command.pre_approach_offsets)),
+                 command.precision_mode),
             )
         ]
 

@@ -118,7 +118,7 @@ class OrientSensorTipToSurfaceExecution:
             self.executor.probe_motion_planner.current_pose("odom", "body")))
         current = pose_to_pose_data(self.executor.probe_motion_planner.current_pose(
             "odom", sensor_probe_frame(self._attachment[0])))
-        if (self._position_error(current, self._origin) > self.config.return_position_tolerance_m
+        if (self._position_error(current, self._origin) > self.config.tip_alignment_position_tolerance_m
                 or rotation_distance_rad(current.orientation, self._origin.orientation)
                 > self.config.return_orientation_tolerance_rad):
             raise ValueError("Sensor tip moved after distance measurement; measure again before aligning")
@@ -172,7 +172,7 @@ class OrientSensorTipToSurfaceExecution:
             self._check_reference(body)
             position_error = self._position_error(probe, self._origin)
             axis_error = self._axis_error(probe)
-            if (position_error > self.config.return_position_tolerance_m
+            if (position_error > self.config.tip_alignment_position_tolerance_m
                     or axis_error > self.config.maximum_axis_error_rad):
                 raise ValueError(
                     f"Sensor tip alignment not verified: position error {position_error*1000:.2f} mm, "

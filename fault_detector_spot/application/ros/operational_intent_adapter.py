@@ -9,6 +9,7 @@ from fault_detector_spot.application.commanding.command_ids import (
 )
 from fault_detector_spot.shared.geometry.movement_frames import (
     OrientationModes,
+    TagFrames,
 )
 from fault_detector_spot.application.commanding.semantic_command import (
     InspectionSelection,
@@ -279,8 +280,17 @@ def operational_intent_to_command(
             intent.probe_point_id,
         )
 
+    return_anchor = (
+        intent.intent == OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+        and bool(intent.offset.header.frame_id.strip())
+    )
+    if return_anchor:
+        expected_frame = f"{TagFrames.SPOT_FRAME_FILTERED.value}{int(intent.tag.id)}"
+        if intent.offset.header.frame_id.strip() != expected_frame:
+            raise ValueError("Observation return target must use the selected tag's object frame")
+        _validate_arm_orientation(intent)
     tag = None
-    if intent.intent in _TAG_INTENTS:
+    if intent.intent in _TAG_INTENTS or return_anchor:
         tag = SemanticTag(
             id=int(intent.tag.id),
             pose=stamped_pose_from_message(
@@ -290,6 +300,8 @@ def operational_intent_to_command(
 
     return SemanticCommand(
         tag_position_tolerance_m=float(intent.tag_position_tolerance_m),
+        precision_mode=intent.precision_mode,
+        precision_orientation_tolerance_rad=float(intent.precision_orientation_tolerance_rad),
         command_id=command_id,
         tag=tag,
         offset=stamped_pose_from_message(intent.offset),

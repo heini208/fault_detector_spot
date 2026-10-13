@@ -73,9 +73,12 @@ def semantic_command_from_message(
     return SemanticCommand(
         arm_speed_scale=float(message.arm_speed_scale),
         tag_position_tolerance_m=float(message.tag_position_tolerance_m),
+        precision_mode=message.precision_mode,
+        precision_orientation_tolerance_rad=float(message.precision_orientation_tolerance_rad),
         command_id=command_id,
         tag=tag,
         pre_approach_speed_scales=tuple(message.pre_approach_speed_scales),
+        pre_approach_precision_modes=tuple(message.pre_approach_precision_modes),
         pre_approach_tolerances_m=tuple(message.pre_approach_tolerances_m),
         pre_approach_offsets=tuple(stamped_pose_from_message(pose) for pose in message.pre_approach_offsets),
         offset=stamped_pose_from_message(message.offset),
@@ -116,10 +119,13 @@ def semantic_command_to_message(
         message.tag.pose = stamped_pose_to_message(command.tag.pose)
 
     message.pre_approach_speed_scales = list(command.pre_approach_speed_scales)
+    message.pre_approach_precision_modes = list(command.pre_approach_precision_modes)
     message.pre_approach_tolerances_m = list(command.pre_approach_tolerances_m)
     message.pre_approach_offsets = [stamped_pose_to_message(pose) for pose in command.pre_approach_offsets]
     message.arm_speed_scale = command.arm_speed_scale
     message.tag_position_tolerance_m = command.tag_position_tolerance_m
+    message.precision_mode = command.precision_mode
+    message.precision_orientation_tolerance_rad = command.precision_orientation_tolerance_rad
     message.offset = stamped_pose_to_message(command.offset)
     message.orientation_mode = command.orientation_mode
     message.wait_time = float(command.wait_time)

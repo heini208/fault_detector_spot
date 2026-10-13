@@ -255,6 +255,7 @@ class ProbeSetupMotionApi:
             pitch_rad=float(intent.pitch_rad),
             yaw_rad=float(intent.yaw_rad),
             position_tolerance_m=float(intent.position_tolerance_m),
+            precision_mode=intent.precision_mode,
             orientation_tolerance_rad=float(
                 intent.orientation_tolerance_rad
             ),

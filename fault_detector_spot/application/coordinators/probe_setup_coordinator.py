@@ -687,8 +687,11 @@ class ProbeSetupCoordinator:
         context: SetupContextSnapshot,
         position_tolerance_m=None,
         arm_speed_scale=1.0,
+        precision_mode=False,
     ) -> ProbeSetupSnapshot:
         """Approve one achieved surface-aligned pre-approach pose."""
+        if type(precision_mode) is not bool:
+            raise ValueError("Precision mode must be a boolean")
         if position_tolerance_m is not None:
             if not isfinite(position_tolerance_m) or position_tolerance_m <= 0:
                 raise ValueError("Aligned position tolerance must be positive and finite")
@@ -700,6 +703,7 @@ class ProbeSetupCoordinator:
         )
         draft.aligned_position_tolerance_m = position_tolerance_m
         draft.pre_approach_speed_scale = arm_speed_scale
+        draft.aligned_precision_mode = precision_mode
         return self._advance(draft)
 
     @_serialized_transaction
@@ -708,8 +712,11 @@ class ProbeSetupCoordinator:
         context: SetupContextSnapshot,
         position_tolerance_m=.01,
         arm_speed_scale=.2,
+        precision_mode=False,
     ) -> ProbeSetupSnapshot:
         """Approve one achieved final probe pose."""
+        if type(precision_mode) is not bool:
+            raise ValueError("Precision mode must be a boolean")
         validate_arm_speed_scale(arm_speed_scale)
         if not isfinite(position_tolerance_m) or position_tolerance_m <= 0:
             raise ValueError("Final position tolerance must be positive and finite")
@@ -720,6 +727,7 @@ class ProbeSetupCoordinator:
         )
         draft.final_probe_speed_scale = arm_speed_scale
         draft.final_position_tolerance_m = position_tolerance_m
+        draft.final_precision_mode = precision_mode
         return self._advance(draft)
 
     @_serialized_transaction
@@ -926,7 +934,7 @@ class ProbeSetupCoordinator:
 
     @_serialized_transaction
     def add_pathing_point(self, context, name, position_tolerance_m=.01,
-                          arm_speed_scale=1.0, path_stage="alignment"):
+                          arm_speed_scale=1.0, path_stage="alignment", precision_mode=False):
         """Capture a full tag-relative tip pose without changing final alignment."""
         draft = self._selected_draft(context)
         self.refinement_controller.require_refinement(draft)
@@ -939,7 +947,7 @@ class ProbeSetupCoordinator:
                for point in path):
             raise ValueError("A pathing point with this name already exists")
         point = PreApproachPathPoint(
-            name, self.refinement_controller.current_probe_pose(draft), position_tolerance_m, arm_speed_scale
+            name, self.refinement_controller.current_probe_pose(draft), position_tolerance_m, arm_speed_scale, precision_mode
         )
         point.validate()
         path.append(deepcopy(point))
@@ -990,6 +998,25 @@ class ProbeSetupCoordinator:
         if not 0 <= index < len(path):
             raise ValueError("Select an existing pathing point")
         path[index].arm_speed_scale = arm_speed_scale
+        draft.dirty = True
+        return self._advance(draft)
+
+    @_serialized_transaction
+    def set_pathing_point_settings(
+        self, context, index, position_tolerance_m, arm_speed_scale,
+        precision_mode=False, path_stage="alignment",
+    ):
+        draft = self._selected_draft(context)
+        self.refinement_controller.require_refinement(draft)
+        path = self._path_for_stage(draft, path_stage)
+        if not 0 <= index < len(path):
+            raise ValueError("Select an existing pathing point")
+        point = deepcopy(path[index])
+        point.position_tolerance_m = position_tolerance_m
+        point.arm_speed_scale = arm_speed_scale
+        point.precision_mode = precision_mode
+        point.validate()
+        path[index] = point
         draft.dirty = True
         return self._advance(draft)
 

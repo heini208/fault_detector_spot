@@ -81,6 +81,7 @@ class ProbeSetupApi:
             ProbeSetupIntent.OPERATION_SAVE_ROUTINE_MAP: self._save_routine_map,
             ProbeSetupIntent.OPERATION_SAVE_ROUTINE_WAYPOINT: self._save_routine_waypoint,
             ProbeSetupIntent.OPERATION_SET_PATHING_POINT_SPEED: self._set_pathing_point_speed,
+            ProbeSetupIntent.OPERATION_SET_PATHING_POINT_SETTINGS: self._set_pathing_point_settings,
             ProbeSetupIntent.OPERATION_APPROVE_CUSTOM_PROBE: self._approve_custom_probe,
             ProbeSetupIntent.OPERATION_DELETE_PATHING_POINT: self._delete_pathing_point,
             ProbeSetupIntent.OPERATION_ADD_PATHING_POINT: self._add_pathing_point,
@@ -221,11 +222,17 @@ class ProbeSetupApi:
     def _set_pathing_point_speed(self, context, intent):
         return self.coordinator.set_pathing_point_speed(context, intent.pathing_point_index, intent.arm_speed_scale, intent.path_stage)
 
+    def _set_pathing_point_settings(self, context, intent):
+        return self.coordinator.set_pathing_point_settings(
+            context, intent.pathing_point_index, intent.position_tolerance_m,
+            intent.arm_speed_scale, intent.precision_mode, intent.path_stage,
+        )
+
     def _delete_pathing_point(self, context, intent):
         return self.coordinator.delete_pathing_point(context, int(intent.pathing_point_index), intent.path_stage)
 
     def _add_pathing_point(self, context, intent):
-        return self.coordinator.add_pathing_point(context, intent.pathing_point_name, intent.position_tolerance_m, intent.arm_speed_scale, intent.path_stage)
+        return self.coordinator.add_pathing_point(context, intent.pathing_point_name, intent.position_tolerance_m, intent.arm_speed_scale, intent.path_stage, intent.precision_mode)
 
     def _reorder_pathing_point(self, context, intent):
         return self.coordinator.reorder_pathing_point(
@@ -274,12 +281,12 @@ class ProbeSetupApi:
         return self.coordinator.approve_safe_pose(context)
 
     def _approve_aligned_pose(self, context, intent):
-        return self.coordinator.approve_aligned_pose(context, intent.position_tolerance_m, intent.arm_speed_scale)
+        return self.coordinator.approve_aligned_pose(context, intent.position_tolerance_m, intent.arm_speed_scale, intent.precision_mode)
 
     def _approve_custom_probe(self, context, intent):
         if not self.coordinator.snapshot(context).setup.fully_custom:
             raise ValueError("Explicit final pose capture requires custom mode")
-        return self.coordinator.approve_probe_pose(context, intent.position_tolerance_m, intent.arm_speed_scale)
+        return self.coordinator.approve_probe_pose(context, intent.position_tolerance_m, intent.arm_speed_scale, intent.precision_mode)
 
     def _begin_refinement(self, context, intent):
         return self.coordinator.begin_refinement(context, intent.fully_custom)

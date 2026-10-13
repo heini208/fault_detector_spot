@@ -1,4 +1,5 @@
 import types
+import math
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from typing import Any, List, Literal, Union, get_args, get_origin, get_type_hints
@@ -33,8 +34,11 @@ def deserialize_recorded_command(data: dict) -> SemanticCommand:
     data.setdefault("walking_profile", "")
     data.setdefault("body_height_m", 0.0)
     data.setdefault("tag_position_tolerance_m", 0.01)
+    data.setdefault("precision_mode", False)
+    data.setdefault("precision_orientation_tolerance_rad", math.radians(2.0))
     data.setdefault("pre_approach_tolerances_m", [])
     data.setdefault("pre_approach_speed_scales", [])
+    data.setdefault("pre_approach_precision_modes", [])
     return _deserialize_dataclass(SemanticCommand, data)
 
 

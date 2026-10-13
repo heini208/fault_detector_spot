@@ -1,4 +1,4 @@
-"""Fit actual target support when a short observation move leaves parallax."""
+"""Discover and fit actual target support without an assumed wall distance."""
 
 import numpy as np
 import pytest
@@ -36,11 +36,11 @@ def test_off_center_observation_fits_depth_through_actual_probe_intersection():
         target_camera_point(PoseData.identity(), camera, 0.29),
         (552.0, 552.0, 320.0, 240.0),
     )
-    # The reported fitted region includes both the expected and measured
-    # target patches, rather than extrapolating a fit that stops before it.
+    # The reported region fits the measured intersection directly; it need
+    # not include the unrelated pixel implied by an assumed distance.
     region = sample.source_region
     assert region.y <= intersection_v - 3
-    assert region.y + region.height > 443 + 3
+    assert region.y + region.height > intersection_v + 3
     assert region.height <= 65
 
 
@@ -60,3 +60,53 @@ def test_expanding_fit_still_rejects_missing_actual_probe_target_depth(target_de
     assert "pixel (320, 422)" in str(error.value)
     assert f"valid depth={valid_count}/49" in str(error.value)
     assert ("need at least 4 measured samples" if target_depth == 0 else "foreground depth closer") in str(error.value)
+
+
+@pytest.mark.parametrize("distance", [0.379, 0.381])
+def test_standalone_discovers_reported_distances_without_an_estimate(distance):
+    image, info, camera = edge_target_scene()
+    image.data = np.full((480, 640), distance + 0.10, dtype="<f4").tobytes()
+    sample = measure_sensor_tip_distance(
+        image, info, PoseData.identity(), camera,
+    )
+    assert sample.distance_m == pytest.approx(distance, abs=1e-6)
+    u, v = project_camera_point(
+        target_camera_point(PoseData.identity(), camera, distance),
+        (552, 552, 320, 240),
+    )
+    region = sample.source_region
+    assert region.x <= u - 3 < u + 3 < region.x + region.width
+    assert region.y <= v - 3 < v + 3 < region.y + region.height
+    # The final normal is fitted at the actual intersection, over 50 pixels
+    # from where a 250 mm assumption would have put the target.
+    assert region.y + region.height < 443 - 3
+    assert region.height <= 65
+    with pytest.raises(ValueError, match="does not match the intended"):
+        measure_sensor_tip_distance(image, info, PoseData.identity(), camera, 0.25)
+
+
+@pytest.mark.parametrize("depth", [0.0, 0.12, 0.40, 0.55])
+def test_discovery_cannot_skip_missing_occluded_or_different_actual_surface(depth):
+    image, info, camera = edge_target_scene()
+    values = np.full((480, 640), 0.48, dtype="<f4")
+    u, v = project_camera_point(
+        target_camera_point(PoseData.identity(), camera, 0.38),
+        (552, 552, 320, 240),
+    )
+    u, v = round(u), round(v)
+    values[v-3:v+4, u-3:u+4] = depth
+    image.data = values.tobytes()
+    with pytest.raises(ValueError, match="insufficient unoccluded|foreground depth closer|two-dimensional surface"):
+        measure_sensor_tip_distance(
+            image, info, PoseData.identity(), camera,
+        )
+
+
+def test_discovery_keeps_camera_minimum_and_probe_maximum_distance_limits():
+    image, info, camera = edge_target_scene()
+    for optical_depth, reason in [(0.28, "too close"), (0.61, "0.003–0.500 m range")]:
+        image.data = np.full((480, 640), optical_depth, dtype="<f4").tobytes()
+        with pytest.raises(ValueError, match=reason):
+            measure_sensor_tip_distance(
+                image, info, PoseData.identity(), camera,
+            )

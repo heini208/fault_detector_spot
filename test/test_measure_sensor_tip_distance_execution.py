@@ -17,6 +17,7 @@ from fault_detector_spot.inspection.model.sensor_models import sensor_probe_fram
 from fault_detector_spot.inspection.sensing.live_surface_distance import (
     SurfaceDistanceSample,
 )
+from fault_detector_spot.inspection.sensing.probe_surface_source import SensorTipPoseSample
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import ImageRegion
 from fault_detector_spot.manipulation.arm_movement_result import (
     ArmMovementOutcome,
@@ -140,6 +141,7 @@ class Source:
         self.sample_calls = []
         self.view_calls = []
         self.snapshot_calls = []
+        self.pose_sample_calls = []
         self.normal = Vector3Data(-1.0, 0.0, 0.0)
 
     def active_attachment(self):
@@ -153,7 +155,22 @@ class Source:
         planner = self.executor.probe_motion_planner
         return deepcopy((planner.hand, planner.tip, planner.body))
 
-    def observation_view(self, reference, expected_distance_m, *, receipt_not_before=0.0):
+    def pose_acquisition_cutoff(self, delay_sec=0.0):
+        return self.clock.now + delay_sec
+
+    def sensor_tip_pose_sample(
+        self, sensor_id, *, receipt_not_before=0.0, acquisition_not_before=0.0,
+        after_stamp_seconds=0.0,
+    ):
+        self.pose_sample_calls.append((receipt_not_before, acquisition_not_before))
+        if self.clock.now < acquisition_not_before:
+            raise ValueError("No post-settle acquisition is available")
+        hand, probe, body = self.sensor_tip_pose_snapshot(
+            sensor_id, receipt_not_before=receipt_not_before,
+        )
+        return SensorTipPoseSample(self.clock.now, hand, probe, body)
+
+    def observation_view(self, reference, expected_distance_m=None, *, receipt_not_before=0.0):
         self.view_calls.append((deepcopy(reference), expected_distance_m, receipt_not_before))
         return SensorTipObservationView(
             visible=self.initially_visible or len(self.executor.calls) > 0,
@@ -229,6 +246,8 @@ def test_visible_target_measures_without_moving():
     assert case.executor.calls == []
     assert case.execution.result.distance_m == pytest.approx(0.25)
     assert not case.execution.active
+    assert case.source.view_calls[0][1] is None
+    assert case.source.sample_calls[0][1] is None
 
 
 def test_excursion_is_guarded_collision_checked_and_returns_to_saved_hand_pose():
@@ -268,9 +287,9 @@ def test_failed_measurement_returns_before_reporting_failure():
     assert case.execution.result is None
 
 
-def test_inaccurate_return_invalidates_result_and_prevents_further_motion():
+def test_excessive_return_error_invalidates_result_and_prevents_further_motion():
     case = harness(visible=False)
-    case.executor.return_error.y = 0.006
+    case.executor.return_error.y = 0.021
 
     assert finish(case) is MeasureSensorTipDistanceOutcome.FAILURE
     assert len(case.executor.calls) == 2
@@ -476,8 +495,12 @@ def test_old_unstable_normals_do_not_poison_a_later_stable_window():
         read_samples(*args, **kwargs),
     )
     outcome = case.execution.start(case.command)
-    case.clock.now += 0.5
-    outcome = case.execution.poll()
+    for _ in range(20):
+        if "surface normals are unstable" in case.execution.feedback_message:
+            break
+        case.clock.now += 0.25
+        outcome = case.execution.poll()
+        assert outcome is MeasureSensorTipDistanceOutcome.RUNNING
     assert outcome is MeasureSensorTipDistanceOutcome.RUNNING
     assert "surface normals are unstable" in case.execution.feedback_message
     case.source.sensor_tip_distance_samples = read_samples

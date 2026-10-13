@@ -253,6 +253,8 @@ class ProbeFinalizationController:
             pre_approach_speed_scale=draft.pre_approach_speed_scale,
             final_probe_speed_scale=draft.final_probe_speed_scale,
             final_position_tolerance_m=draft.final_position_tolerance_m,
+            aligned_precision_mode=draft.aligned_precision_mode,
+            final_precision_mode=draft.final_precision_mode,
             probe_point_id=self._name(
                 probe_point_id,
                 "probe point ID",

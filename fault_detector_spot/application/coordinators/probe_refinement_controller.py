@@ -221,7 +221,9 @@ class ProbeRefinementController:
         if custom and not motion.relative and motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH:
             motion = replace(motion, position_tolerance_m=(
                 draft.final_position_tolerance_m if motion.path_stage == "probe"
-                else draft.aligned_position_tolerance_m or motion.position_tolerance_m))
+                else draft.aligned_position_tolerance_m or motion.position_tolerance_m),
+                precision_mode=(draft.aligned_precision_mode if motion.retract_path
+                                else motion.precision_mode))
         attachment = self._active_attachment(draft)
         if motion.kind in {
             ProbeMotionKind.MOVE_PATHING_POINT,
@@ -351,10 +353,11 @@ class ProbeRefinementController:
                         draft, point.pose_object, attachment, ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH
                     ).offset for point in reversed(points)),
                     pre_approach_tolerances_m=tuple(p.position_tolerance_m for p in reversed(points)),
+                    pre_approach_precision_modes=tuple(p.precision_mode for p in reversed(points)),
                     pre_approach_speed_scales=tuple(p.arm_speed_scale for p in reversed(points)),
                     arm_speed_scale=draft.final_probe_speed_scale if stage is RefinementStage.ALIGNMENT else draft.pre_approach_speed_scale,
                 )
-        command = replace(command, ignore_environment_collisions=(
+        command = replace(command, precision_mode=motion.precision_mode, ignore_environment_collisions=(
             custom and (stage is RefinementStage.PROBE
                         or (motion.retract_path and stage is RefinementStage.ALIGNMENT))
         ), tag_position_tolerance_m=(
@@ -423,6 +426,8 @@ class ProbeRefinementController:
                 command_id=CommandID.FOLLOW_MOVE_TO_TAG_PATH if final else CommandID.MOVE_ARM_TO_TAG,
                 ignore_environment_collisions=stage is RefinementStage.PROBE,
                 pre_approach_offsets=offsets,
+                precision_mode=(motion.precision_mode if final else points[index].precision_mode),
+                pre_approach_precision_modes=tuple(p.precision_mode for p in points) if final else (),
                 arm_speed_scale=((draft.final_probe_speed_scale if stage is RefinementStage.PROBE
                                   else draft.pre_approach_speed_scale) if final
                                  else points[index].arm_speed_scale),

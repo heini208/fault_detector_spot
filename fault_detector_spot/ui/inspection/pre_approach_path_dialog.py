@@ -1,7 +1,7 @@
 """Present server-owned pre-approach path editing and movement intents."""
 
 from PyQt5.QtWidgets import (
-    QDialog, QDoubleSpinBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QVBoxLayout,
+    QCheckBox, QDialog, QDoubleSpinBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QVBoxLayout,
 )
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupMotionIntent
 
@@ -13,6 +13,7 @@ class PreApproachPathDialog(QDialog):
         super().__init__(parent)
         self.controls = controls
         self._point_speeds = []
+        self._point_settings = []
         self.setWindowTitle("Pre-approach Pathing Points")
         self.resize(520, 440)
         layout = QVBoxLayout(self)
@@ -39,17 +40,22 @@ class PreApproachPathDialog(QDialog):
         self.name_field = QLineEdit()
         self.name_field.setPlaceholderText("Pathing point name")
         layout.addWidget(self.name_field)
-        layout.addWidget(QLabel("New pathing point position tolerance [m]:"))
+        layout.addWidget(QLabel("New or selected point position tolerance [m]:"))
         self.tolerance_field = QDoubleSpinBox()
         self.tolerance_field.setDecimals(3)
         self.tolerance_field.setRange(.001, 1.)
         self.tolerance_field.setValue(.01)
         layout.addWidget(self.tolerance_field)
+        self.precision_checkbox = QCheckBox("Precision checks")
+        self.precision_checkbox.setToolTip(
+            "Verify a stable achieved pose at this tolerance and allow bounded slow corrections."
+        )
+        layout.addWidget(self.precision_checkbox)
         layout.addWidget(QLabel("New or selected point speed (% of configured arm speed):"))
         self.speed_field = SpeedSlider()
         self.speed_field.setValue(100)
         layout.addWidget(self.speed_field)
-        self.save_speed_button = QPushButton("Save Speed for Selected Pathing Point")
+        self.save_speed_button = QPushButton("Save Settings for Selected Pathing Point")
         self.save_speed_button.setAutoDefault(False)
         self.save_speed_button.clicked.connect(self._save_speed)
         layout.addWidget(self.save_speed_button)
@@ -89,18 +95,25 @@ class PreApproachPathDialog(QDialog):
         if state is not None:
             tolerances = state.final_pathing_point_tolerances_m if final else state.pathing_point_tolerances_m
             speeds = state.final_pathing_point_speed_scales if final else state.pathing_point_speed_scales
-            if list(speeds) != self._point_speeds:
+            precision_modes = state.final_pathing_point_precision_modes if final else state.pathing_point_precision_modes
+            settings = list(zip(tolerances, speeds, precision_modes))
+            if settings != self._point_settings:
                 self._point_speeds = list(speeds)
+                self._point_settings = settings
                 self._select_speed(self.points.currentRow())
-            for index, (tolerance, speed) in enumerate(zip(tolerances, speeds)):
-                self.points.item(index).setToolTip(f"Position tolerance: {tolerance:g} m; speed: {100 * speed:g}%")
+            for index, (tolerance, speed, precision) in enumerate(settings):
+                mode = "Precision" if precision else "Normal"
+                self.points.item(index).setToolTip(f"{mode}; position tolerance: {tolerance:g} m; speed: {100 * speed:g}%")
         self._update_buttons()
         if state is None or not state.refinement_active:
             self.hide()
 
     def _select_speed(self, row):
-        if 0 <= row < len(self._point_speeds):
-            self.speed_field.setValue(100 * self._point_speeds[row])
+        if 0 <= row < len(self._point_settings):
+            tolerance, speed, precision = self._point_settings[row]
+            self.speed_field.setValue(100 * speed)
+            self.tolerance_field.setValue(tolerance)
+            self.precision_checkbox.setChecked(precision)
 
     def _update_buttons(self, *_):
         row = self.points.currentRow()
@@ -121,6 +134,7 @@ class PreApproachPathDialog(QDialog):
         self.add_button.setEnabled(self._enabled and bool(name) and not duplicate)
         self.name_field.setEnabled(self._enabled)
         self.tolerance_field.setEnabled(self._enabled)
+        self.precision_checkbox.setEnabled(self._enabled)
         self.speed_field.setEnabled(self._enabled)
 
     def _add(self):
@@ -130,16 +144,19 @@ class PreApproachPathDialog(QDialog):
         intent.pathing_point_name = self.name_field.text().strip()
         intent.position_tolerance_m = self.tolerance_field.value()
         intent.arm_speed_scale = self.speed_field.value() / 100.0
+        intent.precision_mode = self.precision_checkbox.isChecked()
         if self.controls._submit_probe_setup(intent):
             self._enabled = False
             self._update_buttons()
 
     def _save_speed(self):
         intent = ProbeSetupIntent()
-        intent.operation = ProbeSetupIntent.OPERATION_SET_PATHING_POINT_SPEED
+        intent.operation = ProbeSetupIntent.OPERATION_SET_PATHING_POINT_SETTINGS
         intent.path_stage = self.controls._path_stage()
         intent.pathing_point_index = self.points.currentRow()
+        intent.position_tolerance_m = self.tolerance_field.value()
         intent.arm_speed_scale = self.speed_field.value() / 100.0
+        intent.precision_mode = self.precision_checkbox.isChecked()
         if self.controls._submit_probe_setup(intent):
             self._enabled = False
             self._update_buttons()

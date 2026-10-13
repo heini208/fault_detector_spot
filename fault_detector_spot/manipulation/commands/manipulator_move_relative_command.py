@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from math import radians
 from bosdyn.client.frame_helpers import HAND_FRAME_NAME
 
 from builtin_interfaces.msg import Time
@@ -21,9 +22,15 @@ class ManipulatorMoveRelativeCommand(MoveRelativeCommand):
             offset: PoseStamped = None,
             target_frame: str = HAND_FRAME_NAME,  # Default relative to hand
             arm_speed_scale: float = 1.0,
+            tag_position_tolerance_m: float = 0.01,
+            precision_mode: bool = False,
+            precision_orientation_tolerance_rad: float = radians(2.0),
     ):
         super().__init__(command_id, stamp, offset, target_frame)
         self.arm_speed_scale = arm_speed_scale
+        self.tag_position_tolerance_m = tag_position_tolerance_m
+        self.precision_mode = precision_mode
+        self.precision_orientation_tolerance_rad = precision_orientation_tolerance_rad
 
     def compute_goal_pose(self, transformer: TFListenerWrapper) -> PoseStamped:
         # Parent computes result = offset rotated into target_frame.

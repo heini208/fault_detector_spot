@@ -2,6 +2,7 @@
 
 from collections import deque
 from copy import deepcopy
+from dataclasses import dataclass
 from threading import RLock
 import math
 import time
@@ -29,6 +30,7 @@ from fault_detector_spot.inspection.sensing.live_surface_plane import (
 )
 from fault_detector_spot.shared.geometry.models import (
     PoseData,
+    Vector3Data,
 )
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
@@ -41,6 +43,7 @@ from fault_detector_spot.inspection.sensing.sensor_tip_distance import (
     depth_frame_id,
     measure_sensor_tip_distance,
     TARGET_SUPPORT_RADIUS_PX,
+    SensorTipTargetOutsideView,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 from fault_detector_spot.shared.ros.tf_transforms import lookup_pose_data
@@ -50,6 +53,20 @@ from fault_detector_spot.shared.runtime_source import RuntimeSource
 HAND_DEPTH_HISTORY_MAX_SAMPLES = 32
 MAX_HAND_DEPTH_AGE_SEC = 0.5
 SENSOR_ATTACHMENT_TOPIC = "fault_detector/application/sensor_attachment_state"
+
+
+class NoNewSensorTipPoseSample(ValueError):
+    """The cached acquisition has already been considered by this consumer."""
+
+
+@dataclass(frozen=True)
+class SensorTipPoseSample:
+    """One acquisition-timestamped hand, tip, and body pose in odom."""
+
+    stamp_seconds: float
+    hand: PoseData
+    probe: PoseData
+    body: PoseData
 
 
 class ProbeSurfaceSource(RuntimeSource):
@@ -111,6 +128,7 @@ class ProbeSurfaceSource(RuntimeSource):
         self,
         maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
         receipt_not_before: float = 0.0,
+        acquisition_after_seconds: float | None = None,
     ):
         """Return the newest fresh registered hand depth and camera info."""
         maximum_age_sec = float(maximum_age_sec)
@@ -119,6 +137,9 @@ class ProbeSurfaceSource(RuntimeSource):
             raise ValueError("Maximum hand-depth age must be positive")
         if not math.isfinite(receipt_not_before):
             raise ValueError("Hand-depth receipt threshold must be finite")
+        if acquisition_after_seconds is not None and (
+                not math.isfinite(acquisition_after_seconds) or acquisition_after_seconds < 0.0):
+            raise ValueError("Hand-depth acquisition threshold must be finite and nonnegative")
 
         with self._lock:
             camera_info = deepcopy(self._hand_depth_camera_info)
@@ -144,6 +165,17 @@ class ProbeSurfaceSource(RuntimeSource):
             )
 
         receipt_time, depth_image = eligible[-1]
+        if acquisition_after_seconds is not None:
+            stamp = depth_image.header.stamp
+            seconds = (stamp.sec * 1_000_000_000 + stamp.nanosec) * 1e-9
+            if not math.isfinite(seconds) or seconds <= 0.0:
+                raise ValueError("Registered hand-depth timestamp is empty or nonfinite")
+            if seconds <= acquisition_after_seconds:
+                # An old cached frame becoming stale is not a new bad pose.
+                # Consumers retain their window but may not count this frame.
+                raise NoNewSensorTipPoseSample(
+                    "Waiting for a distinct, advancing pose acquisition timestamp; "
+                    f"latest={seconds:.6f}s, last accepted={acquisition_after_seconds:.6f}s")
         age = time.monotonic() - receipt_time
         if age < -1e-9 or age > maximum_age_sec:
             publishers = self.node.count_publishers("/depth_registered/hand/image")
@@ -203,7 +235,7 @@ class ProbeSurfaceSource(RuntimeSource):
     def observation_view(
         self,
         reference_probe_pose: PoseData,
-        expected_distance_m: float,
+        expected_distance_m: float | None = None,
         receipt_not_before: float = 0.0,
     ) -> SensorTipObservationView:
         """Inspect the intended target and propose a lateral camera observation."""
@@ -216,43 +248,111 @@ class ProbeSurfaceSource(RuntimeSource):
         camera_pose = self._lookup_pose(
             "odom", depth_frame_id(depth_image, camera_info), lookup_time=stamp,
         )
-        translation = observation_translation(
-            reference_probe_pose, camera_pose, expected_distance_m,
-            camera_intrinsics(camera_info, (depth_image.width, depth_image.height), "Depth CameraInfo"),
-            (depth_image.width, depth_image.height),
-            SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX + TARGET_SUPPORT_RADIUS_PX + 1,
-        )
+        translation = Vector3Data.zero()
         try:
             measure_sensor_tip_distance(
                 depth_image, camera_info, reference_probe_pose,
                 camera_pose, expected_distance_m,
             )
             visible, detail = True, "Intended sensor-tip target has valid local depth support"
+        except SensorTipTargetOutsideView as exception:
+            # This preliminary plane only determines where to observe. After
+            # moving, the actual intersection still needs its own depth.
+            translation = observation_translation(
+                reference_probe_pose, camera_pose, exception.axis_distance_m,
+                camera_intrinsics(camera_info, (depth_image.width, depth_image.height), "Depth CameraInfo"),
+                (depth_image.width, depth_image.height),
+                SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX + TARGET_SUPPORT_RADIUS_PX + 1,
+            )
+            visible, detail = False, str(exception)
         except ValueError as exception:
             visible, detail = False, str(exception)
         return SensorTipObservationView(visible, camera_pose, translation, detail)
 
     def sensor_tip_pose_snapshot(self, sensor_id: str, receipt_not_before: float = 0.0):
         """Get hand, probe and body poses at one fresh depth acquisition stamp."""
+        sample = self.sensor_tip_pose_sample(
+            sensor_id, receipt_not_before=receipt_not_before,
+        )
+        return sample.hand, sample.probe, sample.body
+
+    def pose_acquisition_cutoff(self, delay_sec: float = 0.0) -> float:
+        """Return an acquisition threshold using the ROS clock, not receipt time."""
+        delay = float(delay_sec)
+        if not math.isfinite(delay) or delay < 0.0:
+            raise ValueError("Pose acquisition delay must be finite and nonnegative")
+        now = float(self.node.get_clock().now().nanoseconds) * 1e-9
+        if not math.isfinite(now) or now <= 0.0:
+            raise ValueError("ROS clock is unavailable for pose acquisition")
+        cutoff = now + delay
+        if not math.isfinite(cutoff):
+            raise ValueError("Pose acquisition cutoff must be finite")
+        return cutoff
+
+    def sensor_tip_pose_sample(
+        self,
+        sensor_id: str,
+        *,
+        receipt_not_before: float = 0.0,
+        acquisition_not_before: float = 0.0,
+        after_stamp_seconds: float = 0.0,
+    ) -> SensorTipPoseSample:
+        """Resolve all poses at a fresh acquisition after the requested cutoff.
+
+        Receipt time uses the monotonic clock; acquisition time uses ROS time.
+        The acquisition stamp is exposed so the caller can reject duplicates
+        or out-of-order frames across a multi-frame stability check.
+        """
         sensor_id = str(sensor_id).strip()
         if not sensor_id:
             raise ValueError("Sensor ID must not be empty")
+        acquisition_not_before = float(acquisition_not_before)
+        if not math.isfinite(acquisition_not_before) or acquisition_not_before < 0.0:
+            raise ValueError("Pose acquisition threshold must be finite and nonnegative")
+        if not math.isfinite(after_stamp_seconds) or after_stamp_seconds < 0.0:
+            raise ValueError("Previous pose acquisition timestamp must be finite and nonnegative")
+        options = {"acquisition_after_seconds": after_stamp_seconds} if after_stamp_seconds > 0.0 else {}
         depth_image, camera_info = self.latest_hand_depth(
             receipt_not_before=receipt_not_before,
+            **options,
         )
         depth_frame_id(depth_image, camera_info)
-        stamp = Time.from_msg(depth_image.header.stamp)
-        if stamp.nanoseconds <= 0:
-            raise ValueError("Registered hand-depth timestamp is empty")
-        return tuple(
+        header_stamp = depth_image.header.stamp
+        stamp_seconds = float(header_stamp.sec) + float(header_stamp.nanosec) * 1e-9
+        if not math.isfinite(stamp_seconds) or stamp_seconds <= 0.0:
+            raise ValueError("Registered hand-depth timestamp is empty or nonfinite")
+        stamp = Time.from_msg(header_stamp)
+        stamp_seconds = stamp.nanoseconds * 1e-9
+        if stamp_seconds + 1e-9 < acquisition_not_before:
+            raise ValueError(
+                "Registered hand-depth acquisition precedes the required pose "
+                f"sample time: {stamp_seconds:.6f}s < {acquisition_not_before:.6f}s"
+            )
+        self._validate_pose_acquisition_age(stamp_seconds)
+        poses = tuple(
             self._lookup_pose("odom", frame, lookup_time=stamp)
             for frame in ("hand", sensor_probe_frame(sensor_id), "body")
         )
+        for pose in poses:
+            pose.validate()
+        # Timestamped TF can take time to resolve; remain fresh on return too.
+        self._validate_pose_acquisition_age(stamp_seconds)
+        return SensorTipPoseSample(stamp_seconds, *poses)
+
+    def _validate_pose_acquisition_age(self, stamp_seconds: float) -> None:
+        age = self.pose_acquisition_cutoff() - stamp_seconds
+        if age < -1e-9:
+            raise ValueError("Registered hand-depth acquisition timestamp is in the future")
+        if age > MAX_HAND_DEPTH_AGE_SEC:
+            raise ValueError(
+                "Registered hand-depth acquisition is stale for pose sampling: "
+                f"age={age:.3f}s, max_age={MAX_HAND_DEPTH_AGE_SEC:.3f}s"
+            )
 
     def sensor_tip_distance_samples(
         self,
         reference_probe_pose: PoseData,
-        expected_distance_m: float,
+        expected_distance_m: float | None = None,
         receipt_not_before: float = 0.0,
         maximum_age_sec: float = MAX_HAND_DEPTH_AGE_SEC,
         minimum_samples: int = 1,
@@ -260,7 +360,9 @@ class ProbeSurfaceSource(RuntimeSource):
     ):
         """Return fresh target-local samples in the saved original probe frame."""
         reference_probe_pose.validate()
-        if not math.isfinite(expected_distance_m) or expected_distance_m <= 0.0:
+        if expected_distance_m is not None and (
+            not math.isfinite(expected_distance_m) or expected_distance_m <= 0.0
+        ):
             raise ValueError("Expected sensor-tip distance must be positive and finite")
 
         def measure(image, camera_info, camera_pose):
@@ -270,7 +372,9 @@ class ProbeSurfaceSource(RuntimeSource):
             )
 
         return self._distance_samples(
-            measurement_context=(deepcopy(reference_probe_pose), expected_distance_m),
+            measurement_context=(
+                deepcopy(reference_probe_pose), expected_distance_m,
+            ),
             pose_target_frame="odom",
             measure=measure,
             cache=self._sensor_tip_distance_cache,
@@ -471,6 +575,8 @@ class ProbeSurfaceSource(RuntimeSource):
 __all__ = [
     "MINIMUM_SURFACE_ORIENTATION_CAMERA_DISTANCE_M",
     "ProbeSurfaceSource",
+    "SensorTipPoseSample",
+    "NoNewSensorTipPoseSample",
     "SURFACE_ORIENTATION_MAXIMUM_FIT_RADIUS_PX",
     "SURFACE_ORIENTATION_MINIMUM_SAMPLE_COUNT",
     "SURFACE_ORIENTATION_WINDOW_RADIUS_PX",

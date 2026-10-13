@@ -629,6 +629,11 @@ class InspectionControls(UIControlHelper):
             self._distance_validator(self.routine_safe_tolerance_field)
         )
         self.probe_position_tolerance_field = QLineEdit("0.01")
+        self.probe_precision_checkbox = QCheckBox("Precision checks")
+        self.probe_precision_checkbox.setToolTip(
+            "Verify a stable achieved pose against the requested tolerance "
+            "and allow bounded slow corrections. Off keeps ordinary motion checks."
+        )
         self.probe_orientation_tolerance_field = QLineEdit("0.087")
         self.probe_measurement_duration_field = QLineEdit("1.0")
         self.save_probe_point_status_label = QLabel(
@@ -2376,6 +2381,7 @@ class InspectionControls(UIControlHelper):
             ) from exception
 
     def _write_motion_tolerances(self, intent):
+        intent.precision_mode = self.probe_precision_checkbox.isChecked()
         intent.position_tolerance_m = self._distance_value(
             self.probe_position_tolerance_field,
             "Position tolerance",
@@ -3084,6 +3090,7 @@ class InspectionControls(UIControlHelper):
             else ProbeSetupIntent.OPERATION_APPROVE_ALIGNED_POSE
         )
         intent.arm_speed_scale = self.refinement_dialog.candidate_speed_field.value() / 100.0
+        intent.precision_mode = self.probe_precision_checkbox.isChecked()
         intent.position_tolerance_m = self._distance_value(
             self.probe_position_tolerance_field, "Final candidate position tolerance",
         )

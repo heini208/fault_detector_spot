@@ -136,14 +136,28 @@ class SemanticCommand:
     motion_sensor_id: str = ""
     body_height_m: float = 0.0
     tag_position_tolerance_m: float = 0.01
+    precision_mode: bool = False
+    precision_orientation_tolerance_rad: float = math.radians(2.0)
     arm_speed_scale: float = 1.0
     walking_profile: str = ""
     pre_approach_offsets: tuple[StampedPose, ...] = ()
     pre_approach_tolerances_m: tuple[float, ...] = ()
     pre_approach_speed_scales: tuple[float, ...] = ()
+    pre_approach_precision_modes: tuple[bool, ...] = ()
     ignore_environment_collisions: bool = False
 
     def __post_init__(self):
+        if not isinstance(self.precision_mode, bool):
+            raise TypeError("Precision mode must be a boolean")
+        if (not math.isfinite(self.precision_orientation_tolerance_rad)
+                or self.precision_orientation_tolerance_rad <= 0):
+            raise ValueError("Precision orientation tolerance must be positive and finite")
+        if (not isinstance(self.pre_approach_precision_modes, tuple)
+                or any(not isinstance(value, bool) for value in self.pre_approach_precision_modes)):
+            raise TypeError("Path precision modes must be a tuple of booleans")
+        if (self.pre_approach_precision_modes
+                and len(self.pre_approach_precision_modes) != len(self.pre_approach_offsets)):
+            raise ValueError("Path precision modes must match path offsets")
         if not isinstance(self.ignore_environment_collisions, bool):
             raise TypeError("Ignore environment collisions must be a boolean")
         if isinstance(self.retries, bool) or not isinstance(self.retries, int) or not 0 <= self.retries <= 100:

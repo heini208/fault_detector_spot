@@ -77,8 +77,11 @@ class ProbeMotionRequest:
     arm_speed_scale: float = 1.0
     path_stage: str = "alignment"
     retract_path: bool = False
+    precision_mode: bool = False
 
     def validate(self) -> None:
+        if type(self.precision_mode) is not bool:
+            raise ValueError("Precision mode must be a boolean")
         if not isinstance(self.kind, ProbeMotionKind):
             raise TypeError("Probe motion kind is invalid")
         if not isinstance(self.frame, ProbeMotionFrame):

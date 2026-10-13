@@ -384,6 +384,7 @@ class ProbeRefinementDialog(QDialog):
         distance_row = QHBoxLayout()
         distance_row.addWidget(QLabel("Final candidate position tolerance [m]:"))
         distance_row.addWidget(self.controls.probe_position_tolerance_field)
+        distance_row.addWidget(self.controls.probe_precision_checkbox)
         self.aligned_distance_label = QLabel("Absolute surface distance [m]:")
         distance_row.addWidget(self.aligned_distance_label)
         distance_row.addWidget(self.aligned_distance_field)
@@ -564,6 +565,7 @@ class ProbeRefinementDialog(QDialog):
         final = self.controls._path_stage() == "probe"
         count = len(state.final_pathing_point_names if final else state.pathing_point_names) if state is not None else 0
         self.candidate_speed_field.setEnabled(enabled)
+        self.controls.probe_precision_checkbox.setEnabled(enabled)
         self.full_control_button.setEnabled(enabled)
         if self.full_control_dialog is not None:
             self.full_control_dialog.setEnabled(enabled)
@@ -1011,6 +1013,9 @@ class ProbeRefinementDialog(QDialog):
         self.fine_adjustment_dialog.set_stage(final)
         if state is not None:
             self.controls.probe_position_tolerance_field.setText(f"{state.final_position_tolerance_m if final else state.aligned_position_tolerance_m:g}")
+            self.controls.probe_precision_checkbox.setChecked(
+                state.final_precision_mode if final else state.aligned_precision_mode
+            )
         self.controls.refine_translation_step_field.setValidator(self.controls._bounded_number_validator(
             self.controls.refine_translation_step_field, .001, .2 if self.fully_custom else .05, 3))
         self.path_dialog.speed_field.setValue(20 if final else 100)

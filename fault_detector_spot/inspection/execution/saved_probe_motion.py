@@ -43,8 +43,14 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
                   if intent.override_target_surface_distance
                   else point.target_surface_distance_m)
         validate_surface_distance_pair(target, point.aligned_preapproach_distance_m)
-        return SemanticCommand(
+        return replace(
+            factory.saved_absolute(
+                point.aligned_preapproach_pose_object, routine.reference_tag.tag_id,
+                attachment.motion_sensor_id,
+            ),
             command_id=CommandID.MOVE_CLOSE_TO_SURFACE,
+            precision_mode=point.aligned_precision_mode,
+            tag_position_tolerance_m=point.position_tolerance_m,
             ignore_environment_collisions=True,
             target_surface_distance_m=target,
             aligned_preapproach_distance_m=point.aligned_preapproach_distance_m,
@@ -54,9 +60,11 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
     if custom_final:
         pose = point.final_probe_pose_object
         tolerance = point.final_position_tolerance_m
+        precision = point.final_precision_mode
     elif intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH:
         pose = routine.require_safe_approach_pose()
         tolerance = routine.safe_approach_position_tolerance_m
+        precision = False
     elif intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH:
         if not point.fully_custom:
             if state_source is None:
@@ -66,6 +74,7 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
             )
         pose = point.aligned_preapproach_pose_object
         tolerance = point.position_tolerance_m
+        precision = point.aligned_precision_mode
     else:
         raise ValueError("Unsupported saved probe-point motion")
     tag_id = routine.reference_tag.tag_id
@@ -83,6 +92,8 @@ def saved_probe_command(intent, repository, state_source, attachments, factory):
                     if custom_final or intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH
                     else CommandID.MOVE_ARM_TO_TAG),
         pre_approach_offsets=offsets,
+        precision_mode=precision,
+        pre_approach_precision_modes=tuple(p.precision_mode for p in path) if offsets else (),
         pre_approach_speed_scales=tuple(p.arm_speed_scale for p in path) if offsets else (),
         arm_speed_scale=(point.final_probe_speed_scale if custom_final else
                          point.pre_approach_speed_scale if intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH else 1.0),

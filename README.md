@@ -470,16 +470,28 @@ final approach is configured for force contact (0 mm).
 
 Manipulation controls also expose **Orient sensor tip to surface** and **Test
 surface distance** under **Surface actions**. Both use the shared measurement
-operation independently of saved probe-point setup. Their expected tip distance
-locates the target along probe +X; it is separate from the desired final wall
-gap for Move Close to Surface. The test returns the distance without making an
-approach movement.
+operation independently of saved probe-point setup. **Move sensor tip close to
+surface** measures the current distance before calculating an approach to the
+requested final wall gap. None of these current-pose actions requires a
+starting distance estimate: registered depth and the calibrated probe +X ray
+locate the surface automatically. The distance test
+returns the distance without making an approach movement. Surface orientation
+remains a separate action; the approach rejects misalignment above its limit.
 
 Measurement saves the original hand and probe poses in odom using fresh,
-timestamped hand-depth TF. The expected wall point lies along the saved probe
-+X axis at the configured aligned pre-approach distance (default 0.25 m for
-standalone commands without a hint). A visible, supported target patch is
-measured directly. Otherwise one translation brings it just inside the image with room for the
+timestamped hand-depth TF. Setup and saved probe execution also supply their
+aligned tag-relative goal for the return. That goal is resolved once into odom
+before observation; later tag updates do not move the return target. It must
+be within 20 mm and 5 degrees of the actual hand and tip before observation
+can start. Standalone measurements keep the actual starting pose as their
+return target. Depth near the forward probe ray seeds a local plane fit,
+preferring nearer axial surfaces over a farther wall. Its actual intersection
+with probe +X must have local unoccluded depth and lie within the fitted region.
+A visible, supported target patch is measured directly. If it is outside the
+image, a nearby fitted surface can guide one observation translation, with at
+most 0.15 m extension from measured support. That preliminary plane is never
+accepted as the final measurement. The translation brings the target just
+inside the image with room for the
 full plane-fit patch, preserving orientation and making no inward movement
 along that saved axis. It does not move all the way to image center. An already
 in-view target with missing depth is retried in place. After an excursion,
@@ -487,7 +499,8 @@ sparse depth frames are retried within the sampling timeout before returning;
 the operation never searches farther blindly.
 The translation is capped at 0.20 m and requires a complete, collision-checked,
 force-guarded Cartesian path. It measures the original target, not the tip's
-new location. No hidden-target plane extrapolation is used for this operation.
+new location. Hidden-target extrapolation cannot produce a distance or normal
+result; the moved camera must directly observe the actual intersection.
 
 Registered depth can contain empty pixels between valid reprojected samples.
 Target support therefore requires at least four measured returns enclosing the
@@ -502,12 +515,52 @@ second, at most 5 mm distance variation, consistent fitted normals, and a
 newest valid reading no older than 0.5 seconds. Fits are reused only while their
 camera calibration, timestamped TF, target and attachment remain unchanged.
 The camera depth must be at least 0.290 m, and the measured axis intersection
-must be 3–500 mm ahead and within 0.10 m of the expected target distance. These
-are correspondence/visibility limits, not promised measurement accuracy.
+must be 3–500 mm ahead. Measurements anchored to a saved tag target additionally
+require agreement within 0.10 m of its expected wall distance. These are
+correspondence/visibility limits, not promised measurement accuracy.
 
-The observed plane is stored in odom. After an excursion, the arm returns with
-collision checking and fresh TF must verify hand and tip errors within 5 mm
-and 2 degrees. The reported distance and final approach use the actual returned
+The observed plane is stored in odom. Original and returned poses require at
+least three distinct acquisition timestamps spanning 0.3 seconds, with hand,
+tip and body variation within 1 mm and 0.2 degrees. Images must have been
+acquired after settling and be no older than 0.5 seconds; receiving an old
+image recently does not make its pose fresh. Polling an already-consumed
+image does not count another sample or erase the window when that cached
+image ages between camera updates. New stale/invalid poses still invalidate
+the window, and acquisition gaps above 0.5 seconds restart it. Waiting feedback
+reports the stability limits and the last reset's pose variation or sample gap.
+After an excursion, the arm
+returns with collision checking and verifies hand and tip errors within 10 mm
+and 2 degrees. A settled return outside those limits may authorize up to
+three slow corrections to the same return hand pose in odom. A saved goal with
+Precision enabled also retains its tighter selected tolerance. Each further
+correction requires at least 10% improvement in the worst error relative to
+its position/orientation tolerance. Both hand and tip errors must stay within
+20 mm and 5 degrees per correction, with summed requested corrections capped
+at 40 mm and 10 degrees. Corrections retain collision and force guards and run
+at one quarter of the observation speeds (5 mm/s linear by default).
+
+Before submitting an observation or return trajectory, execution rechecks
+the odom-to-body conversion used for planning. A shift of the implied hand
+target above 1 mm or 0.2 degrees discards the trajectory and repeats planning
+and force-baseline acquisition, at most twice. Missing or stale transforms
+prohibit dispatch. This does not continuously compensate body movement during
+joint trajectory execution. Return diagnostics report hand, tip and body
+displacements by odom axis. Missing transforms, changed reference/attachment,
+contact/failure during return, or non-improving corrections prevent further
+correction. The whole operation retains its 60-second deadline.
+
+Tag and relative movements offer **Normal / Precision** selection in the main
+manipulator tab. Aligned and custom final probe poses, and each path waypoint,
+store their own precision setting. Normal preserves existing movement
+behavior. Precision verifies a stable actual pose against the goal frozen in
+odom and checks position and orientation after each correction. Tag and relative
+movements allow corrections for position errors up to 200 mm, with summed
+requested corrections capped at 400 mm. They retain the three-attempt limit,
+required improvement, and angular limits used by measurement returns; observation
+returns keep their smaller 20 mm / 40 mm translation limits. Collision and force guards
+remain independent of this setting. Existing saved poses default to Normal.
+
+The reported distance and final approach use the actual returned
 tip pose. Body/reference or attachment changes invalidate the operation;
 failed returns prohibit further autonomous recovery. Cancellation stops without
 starting a return. A standalone test can report a tilted surface, but the final
@@ -515,7 +568,16 @@ approach still rejects axis misalignment above 5 degrees. Measurement and
 approach share `close_surface.*` quality parameters; excursion limits include
 `maximum_observation_translation_m`, `observation_speed_mps`,
 `return_position_tolerance_m`, `return_orientation_tolerance_rad`, and
-`maximum_measurement_duration_sec`.
+`maximum_measurement_duration_sec`. Fine-return parameters are
+`return_correction_speed_scale`, `maximum_return_correction_translation_m`,
+`maximum_return_correction_rotation_rad`, `maximum_return_corrections`,
+`minimum_return_correction_improvement_fraction`, and the two
+`maximum_return_correction_total_*` limits. Pose stability uses
+`pose_stability_minimum_samples`, `pose_stability_minimum_span_sec`,
+`pose_stability_position_tolerance_m`, and
+`pose_stability_orientation_tolerance_rad`. Planning reference limits use
+`planning_frame_position_tolerance_m` and
+`planning_frame_orientation_tolerance_rad`.
 
 Cartesian approaches use 2 mm path sampling and require at least 99.9% path
 completion. MoveIt's relative joint-jump check remains enabled with a factor

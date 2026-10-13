@@ -65,7 +65,7 @@ class ManipulationControls(UIControlHelper):
         offsets.addLayout(position, 1)
         offsets.addLayout(orientation, 1)
         return [
-            control_group("Tag actions", tag_row),
+            control_group("Tag actions", self._make_precision_mode_row(), tag_row),
             control_group(
                 "Arm offset", offsets,
                 self._make_arm_collision_row(),
@@ -154,7 +154,11 @@ class ManipulationControls(UIControlHelper):
         self.tag_tolerance_input.setRange(0.001, 0.100)
         self.tag_tolerance_input.setSingleStep(0.001)
         self.tag_tolerance_input.setValue(0.01)
-        self.tag_tolerance_input.setToolTip("Check position after movement and make one slow adjustment if needed")
+        self.tag_tolerance_input.setToolTip(
+            "Allowed position error. Normal checks the final position with one slow "
+            "adjustment if needed; Precision verifies a stable achieved pose and "
+            "allows bounded slow corrections."
+        )
         row.addWidget(self.tag_tolerance_input)
 
         row.addWidget(QLabel("Wait (s):"))
@@ -221,7 +225,32 @@ class ManipulationControls(UIControlHelper):
         )
         row.addStretch()
         row.addWidget(self.move_by_offset_button)
+        row.addWidget(QLabel("Position tolerance [m]:"))
+        self.relative_tolerance_input = QDoubleSpinBox()
+        self.relative_tolerance_input.setDecimals(3)
+        self.relative_tolerance_input.setRange(.001, .100)
+        self.relative_tolerance_input.setSingleStep(.001)
+        self.relative_tolerance_input.setValue(.01)
+        self.relative_tolerance_input.setToolTip(
+            "Allowed position error for stable pose verification in Precision mode."
+        )
+        row.addWidget(self.relative_tolerance_input)
 
+        return row
+
+    def _make_precision_mode_row(self):
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Tag / offset movement mode:"))
+        self.precision_mode_combo = QComboBox()
+        self.precision_mode_combo.addItem("Normal", False)
+        self.precision_mode_combo.addItem("Precision", True)
+        self.precision_mode_combo.setToolTip(
+            "Applies to Move to Tag and Move Arm by Offset. Precision verifies "
+            "a stable achieved pose at the requested tolerance and permits bounded "
+            "slow corrections. Normal preserves ordinary movement checks."
+        )
+        row.addWidget(self.precision_mode_combo)
+        row.addStretch()
         return row
 
     def _make_environment_collision_row(self):
@@ -355,15 +384,18 @@ class ManipulationControls(UIControlHelper):
         self.surface_tolerance_input.setSingleStep(0.001)
         self.surface_tolerance_input.setValue(0.005)
         self.surface_tolerance_input.setToolTip(
-            "Allowed surface-distance error for Move Close to Surface."
+            "Allowed sensor-tip distance error for Move sensor tip close to surface."
         )
         row.addWidget(self.surface_tolerance_input)
 
         self.move_close_to_surface_button = QPushButton(
-            "Move Close to Surface"
+            "Move sensor tip close to surface"
         )
         self.move_close_to_surface_button.setToolTip(
-            "Move along the active probe axis toward the live surface."
+            "Measure the intended sensor-tip target and return from any observation "
+            "movement, then approach along probe +X to the desired distance. "
+            "Orient the sensor tip first if needed. A desired distance of 0 m "
+            "uses force contact without depth measurement."
         )
         self.move_close_to_surface_button.clicked.connect(
             self.handle_move_close_to_surface
@@ -375,19 +407,6 @@ class ManipulationControls(UIControlHelper):
 
     def _make_sensor_tip_surface_action_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        row.addWidget(QLabel("Expected tip distance (m):"))
-        self.expected_tip_distance_input = QDoubleSpinBox()
-        self.expected_tip_distance_input.setDecimals(3)
-        self.expected_tip_distance_input.setRange(0.003, 0.500)
-        self.expected_tip_distance_input.setSingleStep(0.005)
-        self.expected_tip_distance_input.setValue(0.250)
-        self.expected_tip_distance_input.setToolTip(
-            "Approximate current sensor-tip distance along probe +X, used to find "
-            "the intended wall patch. This is separate from the desired final "
-            "distance for Move Close to Surface."
-        )
-        row.addWidget(self.expected_tip_distance_input)
-
         self.test_surface_distance_button = QPushButton("Test surface distance")
         self.test_surface_distance_button.setToolTip(
             "Measure distance at the intended sensor-tip target. May move the "
@@ -416,9 +435,6 @@ class ManipulationControls(UIControlHelper):
     def _execute_sensor_tip_surface_action(self, intent_id):
         intent = OperationalIntent()
         intent.intent = intent_id
-        intent.aligned_preapproach_distance_m = float(
-            self.expected_tip_distance_input.value()
-        )
         return self.ui.execute_operation(intent)
 
     def handle_test_surface_distance(self):
@@ -639,6 +655,7 @@ class ManipulationControls(UIControlHelper):
 
     def add_tag_info_to_intent(self, intent: OperationalIntent):
         intent.tag_position_tolerance_m = self.tag_tolerance_input.value()
+        intent.precision_mode = bool(self.precision_mode_combo.currentData())
         intent = self.add_tag_element_to_intent(intent)
         return self.add_offset_to_intent(intent)
 
@@ -692,6 +709,8 @@ class ManipulationControls(UIControlHelper):
             return
         intent.duration_sec = self.duration_input.value()
         if intent_id == OperationalIntent.INTENT_MOVE_ARM_RELATIVE:
+            intent.precision_mode = bool(self.precision_mode_combo.currentData())
+            intent.tag_position_tolerance_m = self.relative_tolerance_input.value()
             return self._execute_basic_movement(intent)
         return self.ui.execute_operation(intent)
 

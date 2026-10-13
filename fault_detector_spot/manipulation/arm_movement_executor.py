@@ -69,6 +69,10 @@ from fault_detector_spot.manipulation.probe_motion_planner import (
     ProbeMotionPlanner,
     ResolvedProbeTarget,
 )
+from fault_detector_spot.manipulation.pose_precision import (
+    PoseCorrectionBudget,
+    PoseStabilityWindow,
+)
 from fault_detector_spot.shared.geometry.movement_geometry import (
     MovementGeometryUnavailable,
 )
@@ -87,6 +91,12 @@ from fault_detector_spot.manipulation.arm_motion_parameters import (
 
 TAG_POSITION_VERIFY_TIMEOUT_SEC = 2.0
 CHECKPOINT_POSITION_TOLERANCE_M = 0.020
+PLANNING_FRAME_MAX_AGE_SEC = 0.25
+PRECISION_SETTLE_SEC = 0.5
+PRECISION_SAMPLE_TIMEOUT_SEC = 6.0
+PRECISION_CORRECTION_SPEED_SCALE = 0.25
+PRECISION_MAXIMUM_CORRECTION_TRANSLATION_M = 0.200
+PRECISION_MAXIMUM_TOTAL_CORRECTION_TRANSLATION_M = 0.400
 
 
 SURFACE_ORIENTATION_MAX_ERROR_RAD = math.radians(5.0)
@@ -379,6 +389,7 @@ class ArmMovementExecutor(MovementExecutor):
                 prepare_motion=self._prepare_guarded_motion,
                 poll_preparation=self._poll_guarded_motion_preparation,
                 start_motion=self._start_prepared_guarded_motion,
+                validate_prepared_motion=self._validate_prepared_guarded_motion,
                 start_retreat=self._continue_contact_retreat,
                 poll_goal=self._guard_poll_goal,
                 cancel_goal=self._guard_cancel_goal,
@@ -431,6 +442,13 @@ class ArmMovementExecutor(MovementExecutor):
             speed = ArmMotionSpeed(
                 baseline.linear_speed_mps * scale,
                 baseline.angular_speed_rad_s * scale,
+            )
+        if getattr(command, "precision_mode", False):
+            return self._start_precision_movement(
+                command,
+                lambda: self.probe_motion_planner.resolve_relative(command),
+                speed,
+                force_threshold_n,
             )
         if self.probe_motion_planner.relative_command_is_noop(command):
             return ArmMovementUpdate(
@@ -538,6 +556,13 @@ class ArmMovementExecutor(MovementExecutor):
         baseline = speed or self.speed_policy.default_speed
         speed = ArmMotionSpeed(baseline.linear_speed_mps * scale,
                                baseline.angular_speed_rad_s * scale)
+        if getattr(command, "precision_mode", False):
+            return self._start_precision_movement(
+                command,
+                lambda: self.probe_motion_planner.resolve_tag(command, self.tag_state_source),
+                speed,
+                force_threshold_n,
+            )
         with self._execution_lock:
             if self.active:
                 return self._busy_update()
@@ -557,6 +582,56 @@ class ArmMovementExecutor(MovementExecutor):
                 speed=speed,
                 force_threshold_n=force_threshold_n,
                 ignore_environment_collisions=command.ignore_environment_collisions,
+            )
+            if update.outcome is not ArmMovementOutcome.RUNNING:
+                self._tag_accuracy = None
+            return update
+
+    def _start_precision_movement(self, command, resolve_target, speed, force_threshold_n):
+        """Use the existing post-motion verifier for an opt-in frozen odom goal."""
+        with self._execution_lock:
+            if self.active:
+                return self._busy_update()
+            if type(command.precision_mode) is not bool:
+                raise ValueError("Precision mode must be a boolean")
+            tolerance = float(command.tag_position_tolerance_m)
+            orientation = float(getattr(command, "precision_orientation_tolerance_rad", math.radians(2.0)))
+            if any(not math.isfinite(value) or value <= 0 for value in (tolerance, orientation)):
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.EXECUTION_ERROR,
+                    "Precision position and orientation tolerances must be positive and finite",
+                )
+            self._tag_accuracy = {
+                "precision": True, "tolerance": tolerance,
+                "orientation_tolerance": orientation,
+                "target": None, "corrections": 0,
+                "budget": PoseCorrectionBudget(
+                    maximum_translation_m=PRECISION_MAXIMUM_CORRECTION_TRANSLATION_M,
+                    maximum_total_translation_m=PRECISION_MAXIMUM_TOTAL_CORRECTION_TRANSLATION_M,
+                ),
+                "speed": speed or self.speed_policy.default_speed,
+                "force_threshold": force_threshold_n,
+            }
+
+            def frozen_target():
+                state = self._tag_accuracy
+                if state["target"] is None:
+                    resolved = resolve_target()
+                    target = self.probe_motion_planner.normalize_target(resolved.target, ODOM_FRAME_NAME)
+                    pose_to_pose_data(target.pose).validate()
+                    state["target"] = ResolvedProbeTarget(deepcopy(target), resolved.sensor_id)
+                return state["target"]
+
+            planning_options = {}
+            if self.moveit_arm_planner is not None:
+                planning_options = dict(
+                    planning_frame_position_tolerance_m=0.001,
+                    planning_frame_orientation_tolerance_rad=math.radians(0.2),
+                )
+            update = self.guarded_probe(
+                frozen_target, speed=speed, force_threshold_n=force_threshold_n,
+                ignore_environment_collisions=command.ignore_environment_collisions,
+                **planning_options,
             )
             if update.outcome is not ArmMovementOutcome.RUNNING:
                 self._tag_accuracy = None
@@ -582,6 +657,8 @@ class ArmMovementExecutor(MovementExecutor):
     def _begin_tag_position_verification(self):
         self._operation = _ArmOperation.TAG_POSITION_VERIFY
         state = self._tag_accuracy
+        if state.get("precision"):
+            return self._begin_precision_verification()
         state["deadline"] = self._monotonic_clock() + TAG_POSITION_VERIFY_TIMEOUT_SEC
         state["stamp"] = None
         try:
@@ -594,6 +671,8 @@ class ArmMovementExecutor(MovementExecutor):
 
     def _poll_tag_position_verification(self):
         state = self._tag_accuracy
+        if state.get("precision"):
+            return self._poll_precision_verification()
         if self._monotonic_clock() >= state["deadline"]:
             return super()._finish(
                 ArmMovementOutcome.EXECUTION_ERROR,
@@ -639,6 +718,106 @@ class ArmMovementExecutor(MovementExecutor):
             lambda: state["target"], speed
         )
         return self._begin_guarded_probe()
+
+    def _precision_ros_now_ns(self):
+        return self.arm_state_source.node.get_clock().now().nanoseconds
+
+    def _begin_precision_verification(self):
+        state = self._tag_accuracy
+        try:
+            state["acquisition_after_ns"] = self._precision_ros_now_ns() + round(PRECISION_SETTLE_SEC * 1e9)
+        except Exception as exception:
+            return super()._finish(
+                ArmMovementOutcome.EXECUTION_ERROR,
+                f"Precision verification requires the ROS acquisition clock: {exception}",
+            )
+        state["not_before"] = self._monotonic_clock() + PRECISION_SETTLE_SEC
+        state["deadline"] = state["not_before"] + PRECISION_SAMPLE_TIMEOUT_SEC
+        state["stability"] = PoseStabilityWindow(pose_names=(
+            "hand" if state["target"].sensor_id == BARE_HAND_MOTION_ID else "sensor tip",
+        ))
+        return ArmMovementUpdate(
+            ArmMovementOutcome.RUNNING,
+            "Precision movement completed; settling before fresh pose verification",
+        )
+
+    def _poll_precision_verification(self):
+        state = self._tag_accuracy
+        now = self._monotonic_clock()
+        if now >= state["deadline"]:
+            return super()._finish(
+                ArmMovementOutcome.MOTION_FAILED,
+                "Precision verification timed out waiting for fresh, stable pose feedback",
+            )
+        if now < state["not_before"]:
+            return ArmMovementUpdate(ArmMovementOutcome.RUNNING, "Waiting for precision movement to settle")
+        window = state["stability"]
+        try:
+            current = self._tag_current_pose()
+            stamp = self._pose_stamp_ns(current)
+            if not math.isfinite(stamp) or stamp <= 0:
+                raise ValueError("Pose TF acquisition timestamp is invalid")
+            if window.last_stamp_seconds and stamp * 1e-9 <= window.last_stamp_seconds:
+                return ArmMovementUpdate(
+                    ArmMovementOutcome.RUNNING,
+                    "Waiting for a distinct, advancing precision pose acquisition timestamp",
+                )
+            age = (self._precision_ros_now_ns() - stamp) * 1e-9
+            if stamp < state["acquisition_after_ns"] or not 0 <= age <= PLANNING_FRAME_MAX_AGE_SEC:
+                raise ValueError("Pose TF is stale or predates the settling deadline")
+            sample_pose = pose_to_pose_data(current.pose)
+            sample_pose.validate()
+        except Exception as exception:
+            window.invalidate(str(exception))
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING, f"Waiting for precision pose feedback: {exception}",
+            )
+        try:
+            stable = window.add(stamp * 1e-9, (sample_pose,))
+        except Exception as exception:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING, f"Waiting for precision pose feedback: {exception}",
+            )
+        if not stable:
+            return ArmMovementUpdate(
+                ArmMovementOutcome.RUNNING,
+                f"Waiting for stable precision pose: {window.sample_count} distinct samples "
+                f"spanning {window.span_sec:.3f} s"
+                + (f"; last reset: {window.last_reset_reason}" if window.last_reset_reason else ""),
+            )
+        target = state["target"].target
+        position_error = self.speed_policy._translation_distance(current.pose, target.pose)
+        orientation_error = self.speed_policy._rotation_angle(current.pose, target.pose)
+        detail = (f"position {position_error*1000:.2f} mm (limit {state['tolerance']*1000:.2f} mm), "
+                  f"orientation {math.degrees(orientation_error):.2f} deg "
+                  f"(limit {math.degrees(state['orientation_tolerance']):.2f} deg)")
+        if position_error <= state["tolerance"] and orientation_error <= state["orientation_tolerance"]:
+            return super()._finish(
+                ArmMovementOutcome.SUCCESS,
+                f"Precision pose verified: {detail}; {state['corrections']} slow correction(s)",
+            )
+        try:
+            state["budget"].reserve(position_error, orientation_error, state["tolerance"],
+                                    state["orientation_tolerance"])
+        except ValueError as exception:
+            return super()._finish(ArmMovementOutcome.MOTION_FAILED, f"Precision pose failed: {detail}; {exception}")
+        state["corrections"] = state["budget"].corrections
+        baseline = state["speed"]
+        speed = ArmMotionSpeed(baseline.linear_speed_mps * PRECISION_CORRECTION_SPEED_SCALE,
+                               baseline.angular_speed_rad_s * PRECISION_CORRECTION_SPEED_SCALE)
+        self._guarded_force_threshold_n = state["force_threshold"]
+        self._guarded_cartesian_path = False
+        self._guarded_plan_builder = lambda: self.probe_motion_planner.build_plan(
+            lambda: state["target"], speed,
+        )
+        update = self._begin_guarded_probe()
+        if update.outcome is ArmMovementOutcome.RUNNING:
+            return ArmMovementUpdate(
+                update.outcome,
+                f"Precision correction {state['corrections']}/{state['budget'].maximum_corrections}: "
+                f"{detail}; {update.detail}",
+            )
+        return update
 
     def probe_relative(
         self,
@@ -762,11 +941,15 @@ class ArmMovementExecutor(MovementExecutor):
         cartesian_path: bool = False,
         retreat_distance_m=None,
         ignore_environment_collisions: bool = False,
+        planning_frame_position_tolerance_m=None,
+        planning_frame_orientation_tolerance_rad=None,
     ) -> ArmMovementUpdate:
         """Execute a force-guarded probe movement.
 
         retreat_distance_m overrides contact backoff for this movement only;
         None uses the configured arm.contact.retreat_distance_m default.
+        Optional planning-frame tolerances bound target drift between odom/body
+        conversion and dispatch, with up to two replans before any execution.
         """
         with self._execution_lock:
             if self.active:
@@ -777,6 +960,20 @@ class ArmMovementExecutor(MovementExecutor):
             if error is not None:
                 return error
             target_builder = self._probe_target_builder(probe_target, motion_sensor_id)
+            tolerances = (
+                planning_frame_position_tolerance_m,
+                planning_frame_orientation_tolerance_rad,
+            )
+            if any(value is not None for value in tolerances):
+                if any(value is None or not math.isfinite(value) or value <= 0
+                       for value in tolerances):
+                    raise ValueError("Planning frame position and orientation tolerances must both be positive")
+                if self.moveit_arm_planner is None:
+                    raise ValueError("Planning frame verification requires MoveIt planning")
+                self._planning_frame_tolerances = tuple(float(value) for value in tolerances)
+            else:
+                self._planning_frame_tolerances = None
+            self._planning_frame_snapshot = None
 
             self._guarded_retreat_distance_m = retreat_distance_m
             self._guarded_force_threshold_n = force_threshold_n
@@ -944,6 +1141,71 @@ class ArmMovementExecutor(MovementExecutor):
         self._preparing_guarded_motion = False
         return self._submit_goal(goal_builder)
 
+    def _fresh_planning_frame_transform(self):
+        transform = self.tf_listener.lookup_a_tform_b(
+            self.moveit_arm_planner.planning_frame, ODOM_FRAME_NAME,
+            timeout_sec=0.0,
+        )
+        stamp_ns = self._pose_stamp_ns(transform)
+        if stamp_ns <= 0:
+            raise ValueError("Planning frame TF timestamp is empty")
+        now_ns = self.arm_state_source.node.get_clock().now().nanoseconds
+        age = (now_ns - stamp_ns) * 1e-9
+        if not 0.0 <= age <= PLANNING_FRAME_MAX_AGE_SEC:
+            raise ValueError(
+                f"Planning frame TF is not fresh: age {age:.3f} s, "
+                f"maximum {PLANNING_FRAME_MAX_AGE_SEC:.3f} s"
+            )
+        transform_to_pose_data(transform).validate()
+        return transform
+
+    def _planning_target(self, target_hand, planning_frame):
+        if self._planning_frame_tolerances is None:
+            return self.probe_motion_planner.normalize_target(target_hand, planning_frame)
+        if target_hand.header.frame_id != ODOM_FRAME_NAME or planning_frame != "body":
+            raise ValueError("Planning frame verification requires an odom target and body planning frame")
+        transform = self._fresh_planning_frame_transform()
+        target = self.probe_motion_planner.normalize_target(
+            target_hand, planning_frame, frame_transform=transform,
+        )
+        self._planning_frame_snapshot = (
+            deepcopy(target_hand), deepcopy(target), deepcopy(transform),
+        )
+        return target
+
+    def _validate_prepared_guarded_motion(self, _plan):
+        if self._planning_frame_tolerances is None:
+            return None
+        snapshot = self._planning_frame_snapshot
+        if snapshot is None:
+            raise RuntimeError("Prepared arm trajectory has no planning frame snapshot")
+        source_target, planned_target, planned_transform = snapshot
+        current_transform = self._fresh_planning_frame_transform()
+        if self._pose_stamp_ns(current_transform) < self._pose_stamp_ns(planned_transform):
+            raise ValueError("Planning frame TF timestamp moved backwards")
+        current_target = self.probe_motion_planner.normalize_target(
+            source_target, self.moveit_arm_planner.planning_frame,
+            frame_transform=current_transform,
+        )
+        position_error = self.speed_policy._translation_distance(
+            current_target.pose, planned_target.pose,
+        )
+        orientation_error = self.speed_policy._rotation_angle(
+            current_target.pose, planned_target.pose,
+        )
+        position_limit, orientation_limit = self._planning_frame_tolerances
+        if position_error <= position_limit and orientation_error <= orientation_limit:
+            return None
+        # This prepared trajectory has not been submitted. Discard only its
+        # local goal; the existing guard owns replanning and baseline renewal.
+        self._pending_goal_builder = None
+        self._planning_frame_snapshot = None
+        return (
+            f"odom/body target shifted {position_error*1000:.2f} mm / "
+            f"{math.degrees(orientation_error):.3f} deg since planning "
+            f"(limits {position_limit*1000:.2f} mm / {math.degrees(orientation_limit):.3f} deg)"
+        )
+
     def _moveit_planning_required(self) -> bool:
         return (
             self.moveit_arm_planner is not None
@@ -964,7 +1226,7 @@ class ArmMovementExecutor(MovementExecutor):
 
         try:
             plan = builder()
-            target_hand = self.probe_motion_planner.normalize_target(
+            target_hand = self._planning_target(
                 plan.target_hand,
                 planner.planning_frame,
             )
@@ -1493,7 +1755,9 @@ class ArmMovementExecutor(MovementExecutor):
         if not self.active:
             return update
         if update.outcome is ArmMovementOutcome.SUCCESS and self._tag_accuracy is not None:
-            if self._tag_accuracy["corrections"] and not self._tag_accuracy.get("verify_checkpoint"):
+            if (self._tag_accuracy["corrections"]
+                    and not self._tag_accuracy.get("verify_checkpoint")
+                    and not self._tag_accuracy.get("precision")):
                 return super()._finish(
                     ArmMovementOutcome.SUCCESS,
                     "Move-to-tag completed with one slow position adjustment",
@@ -1798,6 +2062,8 @@ class ArmMovementExecutor(MovementExecutor):
         self._guarded_force_threshold_n = None
         self._guarded_cartesian_path = False
         self._next_probe_cartesian_path = False
+        self._planning_frame_tolerances = None
+        self._planning_frame_snapshot = None
         self._ignore_environment_collisions = False
 
     def _clear_surface_orientation_state(self) -> None:

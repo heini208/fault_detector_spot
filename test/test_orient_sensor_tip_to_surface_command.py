@@ -22,7 +22,7 @@ from fault_detector_spot.manipulation.commands.orient_sensor_tip_to_surface_comm
 
 
 @pytest.mark.parametrize("expected", [.12, .25, .42])
-def test_setup_orientation_range_and_attachment_survive_transport(expected):
+def test_setup_orientation_preserves_attachment_without_using_saved_distance(expected):
     command = ProbeSetupMotionCommandFactory().orient_sensor_tip_to_surface(
         "lowered_tip", expected,
     )
@@ -33,7 +33,7 @@ def test_setup_orientation_range_and_attachment_survive_transport(expected):
     assert isinstance(execution, OrientSensorTipToSurfaceCommand)
     assert execution.command_id is CommandID.ORIENT_SENSOR_TIP_TO_SURFACE
     assert execution.motion_sensor_id == "lowered_tip"
-    assert execution.expected_distance_m == pytest.approx(expected)
+    assert not hasattr(execution, "expected_distance_m")
 
 
 def test_measured_orientation_always_checks_environment_collisions():
@@ -48,10 +48,10 @@ def test_measured_orientation_always_checks_environment_collisions():
     assert execution.ignore_environment_collisions is False
 
 
-@pytest.mark.parametrize("expected", [0.0, -.1, float("nan"), float("inf")])
-def test_invalid_expected_distance_is_rejected(expected):
-    with pytest.raises(ValueError, match="must be positive"):
-        OrientSensorTipToSurfaceCommand("orient", Time(), "tip", expected)
+def test_orientation_needs_only_attachment_identity():
+    command = OrientSensorTipToSurfaceCommand("orient", Time(), "tip")
+    assert command.motion_sensor_id == "tip"
+    assert not hasattr(command, "expected_distance_m")
 
 
 def test_missing_attachment_is_rejected():

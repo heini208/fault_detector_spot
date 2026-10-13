@@ -36,6 +36,8 @@ class ProbeSetupDraft:
     pre_approach_speed_scale: float = 1.0
     final_probe_speed_scale: float = .2
     final_position_tolerance_m: float = .01
+    aligned_precision_mode: bool = False
+    final_precision_mode: bool = False
     aligned_position_tolerance_m: Optional[float] = None
     dirty: bool = False
     validation_error: str = ""
@@ -50,6 +52,8 @@ class ProbeSetupDraft:
         self.pre_approach_speed_scale = 1.0
         self.final_probe_speed_scale = .2
         self.final_position_tolerance_m = .01
+        self.aligned_precision_mode = False
+        self.final_precision_mode = False
         self.aligned_position_tolerance_m = None
         self.geometry = None
         self.setup = None
@@ -64,6 +68,8 @@ class ProbeSetupDraft:
         self.pre_approach_speed_scale = 1.0
         self.final_probe_speed_scale = .2
         self.final_position_tolerance_m = .01
+        self.aligned_precision_mode = False
+        self.final_precision_mode = False
         self.aligned_position_tolerance_m = None
         self.geometry = None
         self.setup = None
@@ -104,6 +110,8 @@ class ProbeSetupSnapshot:
     routine_safe_position_tolerance_m: float = .1
     aligned_position_tolerance_m: float = .01
     final_position_tolerance_m: float = .01
+    aligned_precision_mode: bool = False
+    final_precision_mode: bool = False
     base_body_height_m: float = 0.0
     routine_map_name: str = ""
     routine_waypoint_name: str = ""
@@ -139,6 +147,8 @@ class ProbeSetupSnapshot:
             final_probe_speed_scale=draft.final_probe_speed_scale,
             aligned_position_tolerance_m=draft.aligned_position_tolerance_m or .01,
             final_position_tolerance_m=draft.final_position_tolerance_m,
+            aligned_precision_mode=draft.aligned_precision_mode,
+            final_precision_mode=draft.final_precision_mode,
             context=draft.context,
             selected_object_id=draft.selected_object_id,
             selected_routine_id=draft.selected_routine_id,

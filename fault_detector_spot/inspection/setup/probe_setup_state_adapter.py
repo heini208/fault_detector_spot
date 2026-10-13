@@ -73,6 +73,10 @@ class ProbeSetupStateAdapter:
         message.fully_custom = bool(snapshot.setup and snapshot.setup.fully_custom)
         message.aligned_position_tolerance_m = snapshot.aligned_position_tolerance_m
         message.final_position_tolerance_m = snapshot.final_position_tolerance_m
+        message.aligned_precision_mode = snapshot.aligned_precision_mode
+        message.final_precision_mode = snapshot.final_precision_mode
+        message.pathing_point_precision_modes = [p.precision_mode for p in snapshot.pre_approach_path]
+        message.final_pathing_point_precision_modes = [p.precision_mode for p in snapshot.final_probe_path]
         message.pre_approach_speed_scale = snapshot.pre_approach_speed_scale
         message.final_probe_speed_scale = snapshot.final_probe_speed_scale
         message.pathing_point_speed_scales = [p.arm_speed_scale for p in snapshot.pre_approach_path]

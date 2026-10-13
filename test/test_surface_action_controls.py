@@ -56,31 +56,47 @@ def test_surface_group_exposes_both_sensor_actions_and_distinguishes_camera_acti
     group = controls.rows[2].itemAt(0).widget()
     labels = {button.text() for button in group.findChildren(QPushButton)}
     assert group.title() == "Surface actions"
-    assert {"Orient camera to surface", "Orient sensor tip to surface", "Test surface distance"} <= labels
+    assert {"Orient camera to surface", "Orient sensor tip to surface", "Test surface distance",
+            "Move sensor tip close to surface"} <= labels
     assert "lower-middle" in controls.orient_to_surface_button.toolTip()
-    assert controls.expected_tip_distance_input.value() == 0.25
-    assert controls.expected_tip_distance_input.minimum() == 0.003
-    assert controls.expected_tip_distance_input.maximum() == 0.50
+    assert not hasattr(controls, "expected_tip_distance_input")
     assert controls.surface_distance_input.value() == 0.03
 
 
 @pytest.mark.parametrize("button, intent_id, command_id", _ACTIONS)
-def test_sensor_tip_actions_use_separate_range_and_existing_operation_feedback(
+def test_sensor_tip_actions_need_no_distance_estimate_and_keep_operation_feedback(
     controls, button, intent_id, command_id,
 ):
     controls.surface_distance_input.setValue(0.015)
-    controls.expected_tip_distance_input.setValue(0.32)
     controls.ignore_environment_collisions_checkbox.setChecked(True)
 
     getattr(controls, button).click()
 
     intent, = controls.ui.execute_operation.call_args.args
     assert intent.intent == intent_id
-    assert intent.aligned_preapproach_distance_m == pytest.approx(0.32)
+    assert intent.aligned_preapproach_distance_m == 0.0
     assert not intent.ignore_environment_collisions
     assert controls.ignore_environment_collisions_checkbox.isChecked()
     assert operational_intent_to_command(intent).command_id is command_id
     assert intent.object_id == intent.routine_id == intent.probe_point_id == ""
+
+
+@pytest.mark.parametrize("target", [0.015, 0.0])
+def test_sensor_tip_approach_only_requests_target_gap_and_tolerance(controls, target):
+    controls.surface_distance_input.setValue(target)
+    controls.surface_tolerance_input.setValue(0.007)
+
+    controls.move_close_to_surface_button.click()
+
+    intent, = controls.ui.execute_operation.call_args.args
+    command = operational_intent_to_command(intent)
+    subscriber = CommandSubscriber()
+    subscriber._create_command_stamp = lambda: Time()
+    execution, = subscriber.fire_command_sequence(command)
+    assert execution.command_id is CommandID.MOVE_CLOSE_TO_SURFACE
+    assert intent.aligned_preapproach_distance_m == 0.0
+    assert execution.target_surface_distance_m == pytest.approx(target)
+    assert execution.surface_tolerance_m == pytest.approx(0.007)
 
 
 @pytest.mark.parametrize("button, intent_id, command_id", _ACTIONS)
@@ -110,9 +126,11 @@ def test_public_surface_actions_survive_admission_transport_and_execution_conver
     subscriber._create_command_stamp = lambda: Time()
     execution, = subscriber.fire_command_sequence(restored.command)
     assert execution.command_id is command_id
-    assert execution.expected_distance_m == pytest.approx(expected or 0.25)
     if command_id is CommandID.ORIENT_SENSOR_TIP_TO_SURFACE:
         assert execution.motion_sensor_id == "lowered_tip"
+        assert not hasattr(execution, "expected_distance_m")
+    else:
+        assert execution.expected_distance_m == (pytest.approx(expected) if expected else None)
     assert not execution.ignore_environment_collisions
 
 

@@ -16,6 +16,7 @@ from fault_detector_spot.manipulation.arm_movement_result import (
 from fault_detector_spot.manipulation.move_close_to_surface_execution import (
     MoveCloseToSurfaceConfig, MoveCloseToSurfaceExecution, MoveCloseToSurfaceOutcome,
 )
+from fault_detector_spot.inspection.sensing.probe_surface_source import SensorTipPoseSample
 from test_live_surface_distance import distance_sample, fitted_plane
 from test_move_close_to_surface_recovery import FakeExecutor, pose, stamped
 from fault_detector_spot.shared.geometry.models import Vector3Data
@@ -36,6 +37,10 @@ def sampling_execution():
             active_attachment=lambda: ("probe", 1),
             sensor_tip_distance_samples=read_samples,
             sensor_tip_pose_snapshot=lambda *args, **kwargs: (pose(), pose(), pose()),
+            pose_acquisition_cutoff=lambda delay_sec=0.0: state.now + delay_sec,
+            sensor_tip_pose_sample=lambda *args, **kwargs: SensorTipPoseSample(
+                state.now, pose(), pose(), pose(),
+            ),
             observation_view=lambda *args, **kwargs: SimpleNamespace(visible=True),
         ),
         MoveCloseToSurfaceConfig(), monotonic_clock=lambda: state.now,
@@ -54,6 +59,17 @@ def samples(start, distances):
     )
 
 
+def poll_at(action, state, *times):
+    for instant in times:
+        state.now = instant
+        outcome = action.poll()
+    return outcome
+
+
+def settle_initial_pose(action, state):
+    assert poll_at(action, state, 10.5, 10.7, 10.9) is MoveCloseToSurfaceOutcome.RUNNING
+
+
 def test_initial_settle_excludes_earlier_frames_without_using_sampling_budget():
     action, state, executor = sampling_execution()
     state.now = 10.49
@@ -64,13 +80,17 @@ def test_initial_settle_excludes_earlier_frames_without_using_sampling_budget():
 
     state.now = 10.5
     assert action.poll() is MoveCloseToSurfaceOutcome.RUNNING
+    assert not state.requests
+    assert not executor.guarded_calls
+    assert poll_at(action, state, 10.7, 10.9) is MoveCloseToSurfaceOutcome.RUNNING
     assert state.requests[-1]["receipt_not_before"] == pytest.approx(10.5)
     assert state.requests[-1]["maximum_latest_age_sec"] == pytest.approx(0.5)
-    assert action._measurement._phase_start == pytest.approx(10.5)
+    assert action._measurement._phase_start == pytest.approx(10.9)
 
 
 def test_later_stable_window_can_start_approach_after_old_three_second_budget():
     action, state, executor = sampling_execution()
+    settle_initial_pose(action, state)
     noisy = samples(10.6, [0.08, 0.10, 0.08, 0.10, 0.08])
     state.samples = noisy
     state.now = 11.8
@@ -80,9 +100,7 @@ def test_later_stable_window_can_start_approach_after_old_three_second_budget():
     assert not executor.guarded_calls
 
     state.samples = noisy + samples(13.6, [0.079, 0.080, 0.081, 0.080, 0.079])
-    state.now = 14.8
-
-    assert action.poll() is MoveCloseToSurfaceOutcome.RUNNING
+    assert poll_at(action, state, 14.8, 15.0, 15.2) is MoveCloseToSurfaceOutcome.RUNNING
     assert action._phase == "approach"
     assert len(executor.guarded_calls) == 1
     target = executor.guarded_calls[0][0][0].pose
@@ -91,13 +109,12 @@ def test_later_stable_window_can_start_approach_after_old_three_second_budget():
 
 def test_persistent_instability_still_fails_without_submitting_arm_motion():
     action, state, executor = sampling_execution()
+    settle_initial_pose(action, state)
     state.samples = samples(15.3, [0.08, 0.10, 0.08, 0.10, 0.08])
-    state.now = 10.5
-    action.poll()
-    state.now = 16.49
+    state.now = 16.89
     assert action.poll() is MoveCloseToSurfaceOutcome.RUNNING
 
-    state.now = 16.5
+    state.now = 16.91
     assert action.poll() is MoveCloseToSurfaceOutcome.FAILURE
     assert "unstable" in action.feedback_message
     assert "20.00 mm" in action.feedback_message
@@ -108,6 +125,7 @@ def test_persistent_instability_still_fails_without_submitting_arm_motion():
 
 def test_stale_source_cannot_reuse_accumulated_samples_to_start_motion():
     action, state, executor = sampling_execution()
+    settle_initial_pose(action, state)
     action._measurement._samples = {
         sample.stamp_seconds: sample
         for sample in samples(10.6, [0.08] * 5)
@@ -117,9 +135,9 @@ def test_stale_source_cannot_reuse_accumulated_samples_to_start_motion():
         raise ValueError("Newest valid surface-distance frame is stale")
 
     action.surface_source.sensor_tip_distance_samples = stale
-    state.now = 10.5
+    state.now = 11.0
     action.poll()
-    state.now = 16.5
+    state.now = 16.91
     assert action.poll() is MoveCloseToSurfaceOutcome.FAILURE
     assert "stale" in action.feedback_message
     assert not executor.guarded_calls
@@ -132,9 +150,9 @@ def test_stale_source_cannot_reuse_accumulated_samples_to_start_motion():
 ])
 def test_invalid_measurement_reference_prohibits_approach_recovery(change, settled):
     action, state, executor = sampling_execution()
+    settle_initial_pose(action, state)
     state.samples = samples(10.6, [0.08] * 5)
-    state.now = 11.8
-    assert action.poll() is MoveCloseToSurfaceOutcome.RUNNING
+    assert poll_at(action, state, 11.8, 12.0, 12.2) is MoveCloseToSurfaceOutcome.RUNNING
     assert action._phase == "approach"
     assert len(executor.guarded_calls) == 1
 
@@ -171,6 +189,7 @@ def test_invalid_measurement_reference_prohibits_approach_recovery(change, settl
 
 def test_consistently_misaligned_measurement_cannot_start_surface_approach():
     action, state, executor = sampling_execution()
+    settle_initial_pose(action, state)
     angle = math.radians(9.0)
     plane = replace(fitted_plane(0.08), normal=Vector3Data(
         -math.cos(angle), math.sin(angle), 0.0,
@@ -180,9 +199,7 @@ def test_consistently_misaligned_measurement_cannot_start_surface_approach():
         distance_sample(distance, 10.6 + index * 0.3, surface_plane_probe=plane)
         for index in range(5)
     )
-    state.now = 11.8
-
-    assert action.poll() is MoveCloseToSurfaceOutcome.FAILURE
+    assert poll_at(action, state, 11.8, 12.0, 12.2) is MoveCloseToSurfaceOutcome.FAILURE
     assert action._measurement.result is not None
     assert "not aligned" in action.feedback_message
     assert "9.00 deg > 5.00 deg" in action.feedback_message

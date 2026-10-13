@@ -85,6 +85,7 @@ def capture_joint_move(monkeypatch):
 def test_moveit_success_executes_returned_joint_trajectory(monkeypatch, scene_problem):
     planned = trajectory()
     executor = object.__new__(ArmMovementExecutor)
+    executor._preparing_guarded_motion = False
     executor.moveit_arm_planner = SimpleNamespace(
         validate_prepared_scene=lambda: None,
         poll=lambda: MoveItPlanUpdate(

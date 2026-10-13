@@ -103,7 +103,10 @@ def execution(executor=None, **changes):
 
 def test_execution_start_owns_lifecycle_and_cancel():
     executor = FakeExecutor()
-    source = SimpleNamespace(active_attachment=lambda: ("probe", 1))
+    source = SimpleNamespace(
+        active_attachment=lambda: ("probe", 1),
+        pose_acquisition_cutoff=lambda delay_sec=0.0: 100.0 + delay_sec,
+    )
     action = MoveCloseToSurfaceExecution(
         executor,
         source,

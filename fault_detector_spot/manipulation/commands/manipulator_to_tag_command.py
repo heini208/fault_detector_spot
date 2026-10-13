@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from math import cos, pi, sin
+from math import cos, pi, radians, sin
 
 from builtin_interfaces.msg import Time
 from fault_detector_spot.shared.geometry.movement_frames import (
@@ -41,6 +41,8 @@ class ManipulatorToTagCommand(MoveToTagCommand):
         motion_sensor_id: str = "",
         tag_position_tolerance_m: float = 0.01,
         arm_speed_scale: float = 1.0,
+        precision_mode: bool = False,
+        precision_orientation_tolerance_rad: float = radians(2.0),
     ):
         super().__init__(
             command_id,
@@ -52,6 +54,8 @@ class ManipulatorToTagCommand(MoveToTagCommand):
         )
         self.arm_speed_scale = arm_speed_scale
         self.tag_position_tolerance_m = tag_position_tolerance_m
+        self.precision_mode = precision_mode
+        self.precision_orientation_tolerance_rad = precision_orientation_tolerance_rad
         self.orientation_mode = orientation_mode
         self.motion_sensor_id = motion_sensor_id.strip()
 

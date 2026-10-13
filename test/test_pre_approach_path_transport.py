@@ -144,7 +144,8 @@ def test_single_pose_path_uses_existing_tag_execution():
     from dataclasses import replace
 
     command = replace(path_command(), pre_approach_offsets=(),
-                      pre_approach_tolerances_m=(), pre_approach_speed_scales=())
+                      pre_approach_tolerances_m=(), pre_approach_speed_scales=(),
+                      pre_approach_precision_modes=())
     steps = executable_path(command)
     assert len(steps) == 1
     assert steps[0].command_id == CommandID.MOVE_ARM_TO_TAG

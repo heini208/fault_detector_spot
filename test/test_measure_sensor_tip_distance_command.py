@@ -25,23 +25,31 @@ def intent(expected=0.25):
     return message
 
 
+def command_subscriber():
+    subscriber = CommandSubscriber()
+    subscriber._create_command_stamp = lambda: object()
+    return subscriber
+
+
 @pytest.mark.parametrize("expected", [0.12, 0.25, 0.42])
 def test_measurement_range_survives_transport_and_reaches_bt_command(expected):
     command = semantic_command_from_message(semantic_command_to_message(
         operational_intent_to_command(intent(expected)),
     ))
     assert command.command_id is CommandID.MEASURE_SENSOR_TIP_DISTANCE
-    subscriber = SimpleNamespace(_create_command_stamp=lambda: object())
+    subscriber = command_subscriber()
     execution = CommandSubscriber._measure_sensor_tip_distance(subscriber, command)
     assert execution.expected_distance_m == pytest.approx(expected)
 
 
-def test_unspecified_observation_range_uses_default():
-    subscriber = SimpleNamespace(_create_command_stamp=lambda: object())
+def test_unspecified_distance_stays_unknown_instead_of_inventing_a_default():
+    subscriber = command_subscriber()
     command = operational_intent_to_command(intent(0.0))
     assert CommandSubscriber._measure_sensor_tip_distance(
         subscriber, command,
-    ).expected_distance_m == pytest.approx(.25)
+    ).expected_distance_m is None
+    assert MeasureSensorTipDistanceCommand("measure", object()).expected_distance_m is None
+    assert MoveCloseToSurfaceCommand("close", object(), .03).expected_distance_m is None
 
 
 @pytest.mark.parametrize("expected", [-0.1, float("nan"), float("inf")])
@@ -59,7 +67,7 @@ def test_close_surface_uses_same_observation_range_from_setup():
     message.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
     message.target_surface_distance_m = .015
     command = operational_intent_to_command(message)
-    subscriber = SimpleNamespace(_create_command_stamp=lambda: object())
+    subscriber = command_subscriber()
     execution = CommandSubscriber._move_close_to_surface(subscriber, command)
     assert execution.expected_distance_m == pytest.approx(.36)
     assert execution.target_surface_distance_m == pytest.approx(.015)

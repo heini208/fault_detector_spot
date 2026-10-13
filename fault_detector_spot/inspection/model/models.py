@@ -188,9 +188,12 @@ class PreApproachPathPoint:
     pose_object: PoseData
     position_tolerance_m: float = 0.01
     arm_speed_scale: float = 1.0
+    precision_mode: bool = False
 
     def validate(self) -> None:
         _require_text(self.name, "Pathing point name")
+        if type(self.precision_mode) is not bool:
+            raise ValueError("Pathing point precision mode must be a boolean")
         validate_arm_speed_scale(self.arm_speed_scale)
         self.pose_object.validate()
         if not math.isfinite(self.position_tolerance_m) or self.position_tolerance_m <= 0:
@@ -201,7 +204,8 @@ class PreApproachPathPoint:
         data = _require_dict(data, "pre_approach_path_point")
         point = cls(str(data["name"]), PoseData.from_dict(data["pose_object"]),
                     float(data.get("position_tolerance_m", .01)),
-                    float(data.get("arm_speed_scale", 1.0)))
+                    float(data.get("arm_speed_scale", 1.0)),
+                    data.get("precision_mode", False))
         point.validate()
         return point
 
@@ -209,7 +213,8 @@ class PreApproachPathPoint:
         self.validate()
         return {"name": self.name, "pose_object": self.pose_object.to_dict(),
                 "position_tolerance_m": self.position_tolerance_m,
-                "arm_speed_scale": self.arm_speed_scale}
+                "arm_speed_scale": self.arm_speed_scale,
+                "precision_mode": self.precision_mode}
 
 
 @dataclass
@@ -233,6 +238,8 @@ class ProbePoint:
     pre_approach_speed_scale: float = 1.0
     final_probe_speed_scale: float = .2
     final_position_tolerance_m: float = .01
+    aligned_precision_mode: bool = False
+    final_precision_mode: bool = False
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProbePoint":
@@ -247,6 +254,8 @@ class ProbePoint:
             pre_approach_speed_scale=float(data.get("pre_approach_speed_scale", 1.0)),
             final_probe_speed_scale=float(data.get("final_probe_speed_scale", .2)),
             final_position_tolerance_m=float(data.get("final_position_tolerance_m", .01)),
+            aligned_precision_mode=data.get("aligned_precision_mode", False),
+            final_precision_mode=data.get("final_precision_mode", False),
             pre_approach_path=[
                 PreApproachPathPoint.from_dict(point)
                 for point in _require_list(
@@ -295,6 +304,8 @@ class ProbePoint:
             raise ValueError("Fully custom mode must be a boolean")
         validate_arm_speed_scale(self.pre_approach_speed_scale)
         validate_arm_speed_scale(self.final_probe_speed_scale)
+        if type(self.aligned_precision_mode) is not bool or type(self.final_precision_mode) is not bool:
+            raise ValueError("Probe point precision modes must be booleans")
         if not math.isfinite(self.final_position_tolerance_m) or self.final_position_tolerance_m <= 0:
             raise ValueError("Final pose tolerance must be positive and finite")
         if self.fully_custom:
@@ -355,6 +366,8 @@ class ProbePoint:
             "pre_approach_speed_scale": self.pre_approach_speed_scale,
             "final_probe_speed_scale": self.final_probe_speed_scale,
             "final_position_tolerance_m": self.final_position_tolerance_m,
+            "aligned_precision_mode": self.aligned_precision_mode,
+            "final_precision_mode": self.final_precision_mode,
             "pre_approach_path": [point.to_dict() for point in self.pre_approach_path],
             "probe_point_id": self.probe_point_id,
             "display_name": self.display_name,

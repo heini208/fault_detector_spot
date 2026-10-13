@@ -24,6 +24,9 @@ from fault_detector_msgs.msg import (
     ProbeSetupState,
 )
 
+from fault_detector_spot.shared.geometry.transforms import pose_data_to_pose
+from fault_detector_spot.shared.geometry.movement_frames import OrientationModes
+
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementMotionState,
     RefinementStage,
@@ -1359,6 +1362,17 @@ class FinalizingInspectionControls(InspectionControls):
         intent.aligned_preapproach_distance_m = float(
             presentation.aligned_preapproach_distance_m
         )
+        candidate = presentation.candidate_pose(RefinementStage.ALIGNMENT)
+        if (candidate is not None
+                and presentation.active_stage in (RefinementStage.ALIGNMENT, RefinementStage.PROBE)
+                and presentation.motion_states[RefinementStage.ALIGNMENT]
+                is RefinementMotionState.REACHED):
+            intent.tag.id = state.selected_reference_tag_id
+            intent.offset.header.frame_id = f"filtered_fiducial_{intent.tag.id}"
+            intent.offset.pose = pose_data_to_pose(candidate)
+            intent.orientation_mode = OrientationModes.CUSTOM_ORIENTATION.value
+            intent.tag_position_tolerance_m = state.aligned_position_tolerance_m
+            intent.precision_mode = state.aligned_precision_mode
         # Keep this generic arm command associated with the wizard. Otherwise
         # its motion invalidates the wizard's reached-alignment checkpoint.
         request_id = self.ui.execute_operation(
