@@ -168,6 +168,9 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         elif status == Status.FAILURE:
             message.state = CommandStatus.STATE_FAILED
             message.retry_safe = bool(getattr(command, "retry_safe", False))
+            message.continuation_safe = (
+                message.retry_safe or bool(getattr(command, "continuation_safe", False))
+            )
             failure_detail = self._current_failure_detail(message.request_id)
             if failure_detail:
                 message.detail = (
@@ -218,6 +221,7 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             message.detail,
             message.buffered_command_count,
             message.retry_safe,
+            message.continuation_safe,
         )
 
     @staticmethod

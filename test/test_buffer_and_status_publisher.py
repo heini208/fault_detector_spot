@@ -67,6 +67,15 @@ def test_retry_permission_is_only_published_for_failure():
     assert not value.get_structured_status_message().retry_safe
 
 
+def test_completed_recovery_can_allow_skipping_without_retry():
+    value = behavior(Status.FAILURE)
+    value.blackboard.last_command.continuation_safe = True
+    status = value.get_structured_status_message()
+    assert status.continuation_safe and not status.retry_safe
+    value.blackboard.command_tree_status = Status.SUCCESS
+    assert not value.get_structured_status_message().continuation_safe
+
+
 def test_unchanged_terminal_status_is_published_only_once():
     result = behavior(Status.SUCCESS, "move_to_tag")
 

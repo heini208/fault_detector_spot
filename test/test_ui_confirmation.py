@@ -264,3 +264,64 @@ def test_retry_button_waits_for_backend_and_can_clear_setting(application):
     assert not controls.retry_button.isChecked()
     assert controls.retry_count.isEnabled()
     parent.close()
+
+
+@pytest.mark.parametrize('choice', ['skip_start', 'skip_continue', None])
+def test_adjacent_skip_blocks_prompt_and_wait_for_confirmation(application, monkeypatch, choice):
+    import json
+    parent = QWidget()
+    parent.node = Mock()
+    controls = RecordingControls(parent)
+    controls.update_recording_state(True)
+    controls.update_recording_skip(json.dumps({
+        'active_block': 0, 'adjacent_block': 1, 'next_block': 2, 'recording_name': 'run',
+    }))
+    prompt = Mock(return_value=choice)
+    monkeypatch.setattr(controls, '_choose_adjacent_skip_block', prompt)
+    controls.skip_button.click()
+    prompt.assert_called_once_with(1, 2)
+    assert not controls.skip_button.isChecked()
+    if choice is None:
+        controls.record_control_pub.publish.assert_not_called()
+    else:
+        request = controls.record_control_pub.publish.call_args.args[0]
+        assert request.mode == choice
+        assert request.skip_block == 1
+        assert request.name == 'run'
+    controls.update_recording_skip(json.dumps({
+        'active_block': 2, 'adjacent_block': 0, 'next_block': 3, 'recording_name': 'run',
+    }))
+    assert controls.skip_button.text() == 'Stop skip block 2'
+    assert 'red' in controls.skip_button.styleSheet()
+    controls.skip_button.click()
+    assert controls.skip_button.isChecked()
+    assert controls.record_control_pub.publish.call_args.args[0].mode == 'skip_stop'
+    parent.close()
+
+
+def test_recording_feedback_shows_block_and_retries(application):
+    import json
+    parent = QWidget()
+    parent.node = Mock()
+    controls = RecordingControls(parent)
+    controls.update_recording_feedback(json.dumps({
+        'outcome': 'added', 'command_id': 'move_to_waypoint', 'skip_block': 1, 'playback_retries': 2,
+    }))
+    assert controls.recording_feedback_label.text() == 'Added: Move to waypoint · skip block 1 · 2 retries'
+    parent.close()
+
+
+def test_skip_button_waits_for_pending_outside_command(application):
+    import json
+    parent = QWidget()
+    parent.node = Mock()
+    controls = RecordingControls(parent)
+    controls.update_recording_state(True)
+    controls.update_recording_skip(json.dumps({
+        'active_block': 0, 'adjacent_block': 0, 'next_block': 2,
+        'recording_name': 'run', 'boundary_pending': True,
+    }))
+    assert not controls.skip_button.isEnabled()
+    controls.toggle_skip_block()
+    controls.record_control_pub.publish.assert_not_called()
+    parent.close()

@@ -11,7 +11,7 @@ from fault_detector_spot.application.recording.semantic_command_codec import (
     deserialize_recorded_command,
     serialize_recorded_command,
 )
-from fault_detector_spot.application.recording.recorded_step import RecordedStep
+from fault_detector_spot.application.recording.recorded_step import RecordedStep, validate_skip_blocks
 from fault_detector_spot.shared.persistence.file_storage import (
     atomic_write_text,
     validate_storage_name,
@@ -37,9 +37,11 @@ class RecordingRepository:
     def save(self, name: str, commands: Iterable[SemanticCommand | RecordedStep]) -> None:
         """Atomically replace a recording with the supplied commands."""
         path = self.path(name)
+        steps = [value if isinstance(value, RecordedStep) else RecordedStep(value) for value in commands]
+        validate_skip_blocks(steps)
         document = {
             'commands': [
-                self._serialize_step(command) for command in commands
+                self._serialize_step(step) for step in steps
             ],
         }
         content = json.dumps(document, indent=2) + '\n'
@@ -61,7 +63,9 @@ class RecordingRepository:
                 raise TypeError('Recorded command must be an object')
             data = dict(entry)
             retries = data.pop('playback_retries', 0)
-            steps.append(RecordedStep(deserialize_recorded_command(data), retries))
+            block = data.pop('skip_block', 0)
+            steps.append(RecordedStep(deserialize_recorded_command(data), retries, block))
+        validate_skip_blocks(steps)
         return steps
 
     @staticmethod
@@ -70,6 +74,8 @@ class RecordingRepository:
         data = serialize_recorded_command(step.command)
         if step.playback_retries:
             data['playback_retries'] = step.playback_retries
+        if step.skip_block:
+            data['skip_block'] = step.skip_block
         return data
 
     def delete(self, name: str) -> bool:

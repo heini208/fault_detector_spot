@@ -110,6 +110,7 @@ class RosCommandTransport:
                 detail=message.detail,
                 buffered_command_count=message.buffered_command_count,
                 retry_safe=message.retry_safe,
+                continuation_safe=message.continuation_safe,
             )
         )
 
@@ -160,6 +161,7 @@ class RosCommandTransport:
         message.detail = status.detail or status.state.value
         message.buffered_command_count = status.buffered_command_count
         message.retry_safe = status.retry_safe
+        message.continuation_safe = status.continuation_safe
         self._controller_status_publisher.publish(message)
 
     def _reject_message(self, message, detail) -> None:

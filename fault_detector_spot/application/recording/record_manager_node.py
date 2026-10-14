@@ -71,6 +71,12 @@ class RecordManager(Node):
         self._retry_tokens = {}
         self._retry_consumed = set()
         self._recording_retries = {}
+        self._skip_block = 0
+        self._last_skip_block = 0
+        self._skip_boundary = 0
+        self._next_skip_block = 1
+        self._recording_skip_blocks = {}
+        self._playback_had_skips = False
 
         self.list_pub = self.create_publisher(
             StringArray,
@@ -100,6 +106,9 @@ class RecordManager(Node):
         )
         self.recording_retries_pub = self.create_publisher(
             UInt32, "fault_detector/recording_retries", LATCHED_QOS,
+        )
+        self.recording_skip_pub = self.create_publisher(
+            String, "fault_detector/recording_skip_state", LATCHED_QOS,
         )
         self.command_submission_pub = self.create_publisher(
             CommandRequestMessage,
@@ -145,10 +154,15 @@ class RecordManager(Node):
                 self.set_recording_paused(mode == "pause")
             elif mode == "set_retries":
                 self.set_recording_retries(message.retries)
+            elif mode in {"skip_start", "skip_stop", "skip_continue"}:
+                if name and name != self.current_name:
+                    raise ValueError("Skip control belongs to a different recording")
+                self.set_skip_block(mode, message.skip_block)
         except (OSError, TypeError, ValueError) as exception:
             self.get_logger().error(f"Recording {mode} request failed: {exception}")
         finally:
-            if mode in {"start", "stop", "pause", "resume", "set_retries"}:
+            if mode in {"start", "stop", "pause", "resume", "set_retries",
+                        "skip_start", "skip_stop", "skip_continue"}:
                 self.publish_recording_state()
 
     def publish_recording_state(self):
@@ -156,6 +170,7 @@ class RecordManager(Node):
         self.recording_state_pub.publish(Bool(data=self.recording))
         self.recording_paused_pub.publish(Bool(data=self.recording_paused))
         self._publish_retry_setting()
+        self._publish_skip_state()
         self.recording_finishing_pub.publish(Bool(
             data=self._recording_stop_requested and self._has_pending_commands()
         ))
@@ -165,6 +180,52 @@ class RecordManager(Node):
             request_id not in self._recording_results
             for request_id in self._recording_commands
         )
+
+    def _adjacent_skip_block(self):
+        if not self.recording or self._skip_block or not self._last_skip_block:
+            return 0
+        outside = list(self._recording_commands)[self._skip_boundary:]
+        # A pending outside command may still be recorded, splitting the old block.
+        if any(self._recording_results.get(request_id) not in (
+            CommandStatus.STATE_FAILED, CommandStatus.STATE_CANCELLED,
+        ) for request_id in outside):
+            return 0
+        return self._last_skip_block
+
+    def _publish_skip_state(self):
+        self.recording_skip_pub.publish(String(data=json.dumps({
+            "active_block": self._skip_block,
+            "adjacent_block": self._adjacent_skip_block(),
+            "next_block": self._next_skip_block,
+            "recording_name": self.current_name or "",
+            "boundary_pending": bool(self.recording and not self._skip_block and self._last_skip_block
+                                     and any(request_id not in self._recording_results
+                                             for request_id in list(self._recording_commands)[self._skip_boundary:])),
+        })))
+
+    def set_skip_block(self, mode, expected_block=0):
+        if not self.recording or self._recording_stop_requested:
+            raise ValueError("Skip controls require an active recording")
+        if mode == "skip_stop":
+            if not self._skip_block:
+                return
+            if expected_block and expected_block != self._skip_block:
+                raise ValueError("The active skip block changed")
+            self._last_skip_block = self._skip_block
+            self._skip_boundary = len(self._recording_commands)
+            self._skip_block = 0
+        elif self._skip_block:
+            raise ValueError("Skip blocks cannot be nested")
+        elif mode == "skip_continue":
+            if not expected_block or expected_block != self._adjacent_skip_block():
+                raise ValueError("The previous skip block can no longer be continued")
+            self._skip_block = expected_block
+        elif mode == "skip_start":
+            if self._next_skip_block > 0xFFFFFFFF:
+                raise ValueError("Skip block index limit reached")
+            self._skip_block = self._next_skip_block
+            self._next_skip_block += 1
+
 
     def set_recording_retries(self, count):
         validate_retries(count)
@@ -211,6 +272,11 @@ class RecordManager(Node):
         self._retry_tokens.clear()
         self._retry_consumed.clear()
         self._recording_retries.clear()
+        self._skip_block = 0
+        self._last_skip_block = 0
+        self._skip_boundary = 0
+        self._next_skip_block = 1
+        self._recording_skip_blocks.clear()
         self._publish_recording_feedback("", "", "idle")
         self.get_logger().info(f"Started recording: {name}")
 
@@ -222,7 +288,8 @@ class RecordManager(Node):
             self.get_logger().info("Waiting for command outcomes before saving recording.")
             return
         steps = [
-            RecordedStep(command, self._recording_retries.get(request_id, 0))
+            RecordedStep(command, self._recording_retries.get(request_id, 0),
+                         self._recording_skip_blocks.get(request_id, 0))
             for request_id, command in self._recording_commands.items()
             if self._recording_results.get(request_id) == CommandStatus.STATE_SUCCEEDED
         ]
@@ -236,6 +303,8 @@ class RecordManager(Node):
         self._recording_results.clear()
         self._recording_stop_requested = False
         self._retry_consumed.add(self._retry_generation)
+        self._skip_block = 0
+        self._last_skip_block = 0
         self.publish_recordings_list()
 
     def capture_request(self, message: CommandRequestMessage) -> bool:
@@ -272,6 +341,7 @@ class RecordManager(Node):
             )
             return False
         self._recording_commands[request.request_id] = deepcopy(request.command)
+        self._recording_skip_blocks[request.request_id] = self._skip_block
         self._retry_tokens[request.request_id] = self._retry_generation
         self._refresh_successful_commands()
         self._publish_command_recording_outcome(request.request_id)
@@ -283,6 +353,9 @@ class RecordManager(Node):
             "request_id": request_id, "command_id": command_id, "outcome": outcome,
         }
         retries = self._recording_retries.get(request_id, 0)
+        block = self._recording_skip_blocks.get(request_id, 0)
+        if block and outcome in {"pending", "added"}:
+            feedback["skip_block"] = block
         if retries:
             feedback["playback_retries"] = retries
         if outcome == "added" and request_id in self._recording_retries and not retries:
@@ -320,6 +393,7 @@ class RecordManager(Node):
                         f"Recorded {command.command_id.value} without retries: retry unsupported"
                     )
         self._publish_retry_setting()
+        self._publish_skip_state()
         # Dict insertion order is acceptance order, irrespective of completion order.
         self.temp_data = [
             command for request_id, command in self._recording_commands.items()
@@ -370,6 +444,7 @@ class RecordManager(Node):
         self._playback_commands = deque(commands)
         self._playback_name = name
         self._playback_acquisition_active = False
+        self._playback_had_skips = False
         self.playback_state_pub.publish(Bool(data=True))
         self.get_logger().info(f"Playing back: {name}")
         self._dispatch_next_playback_command()
@@ -404,6 +479,23 @@ class RecordManager(Node):
                 )
                 self._dispatch_playback_step()
                 return True
+            if (message.state == CommandStatus.STATE_FAILED
+                    and (message.continuation_safe or message.retry_safe)
+                    and not self._playback_acquisition_active
+                    and self._playback_step.skip_block):
+                block = self._playback_step.skip_block
+                skipped = 0
+                while self._playback_commands and self._playback_commands[0].skip_block == block:
+                    self._playback_commands.popleft()
+                    skipped += 1
+                self._playback_had_skips = True
+                self.get_logger().warning(
+                    f"Skipping block {block} after {message.command_id}: {detail}; "
+                    f"{skipped} remaining command(s) skipped"
+                )
+                self._playback_request_id = ""
+                self._dispatch_next_playback_command()
+                return True
             self._finish_playback(
                 f"Playback stopped after {message.command_id}: {detail}",
                 failed=True,
@@ -413,7 +505,9 @@ class RecordManager(Node):
 
     def _dispatch_next_playback_command(self):
         if not self._playback_commands:
-            self._finish_playback("Playback finished.")
+            self._finish_playback(
+                "Playback finished with skips." if self._playback_had_skips else "Playback finished."
+            )
             return
         self._playback_step = self._playback_commands.popleft()
         self._playback_retries_left = self._playback_step.playback_retries

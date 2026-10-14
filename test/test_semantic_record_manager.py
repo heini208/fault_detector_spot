@@ -60,6 +60,9 @@ class FakeLogger:
 
 
 class RecordManagerHarness:
+    _adjacent_skip_block = RecordManager._adjacent_skip_block
+    _publish_skip_state = RecordManager._publish_skip_state
+    set_skip_block = RecordManager.set_skip_block
     _publish_retry_setting = RecordManager._publish_retry_setting
     set_recording_retries = RecordManager.set_recording_retries
     _dispatch_playback_step = RecordManager._dispatch_playback_step
@@ -76,6 +79,7 @@ class RecordManagerHarness:
 
     def __init__(self):
         self.recording = False
+        self.current_name = None
         self.recording_paused = False
         self.temp_data = []
         self._recorded_request_ids = set()
@@ -95,6 +99,13 @@ class RecordManagerHarness:
         self._retry_tokens = {}
         self._retry_consumed = set()
         self._recording_retries = {}
+        self._skip_block = 0
+        self._last_skip_block = 0
+        self._skip_boundary = 0
+        self._next_skip_block = 1
+        self._recording_skip_blocks = {}
+        self._playback_had_skips = False
+        self.recording_skip_pub = FakePublisher()
         self.recording_retries_pub = FakePublisher()
         self.command_submission_pub = FakePublisher()
         self.playback_state_pub = FakePublisher()
@@ -714,3 +725,121 @@ def test_emergency_command_stops_retry_playback(tmp_path):
     manager.handle_playback_status(failed)
     assert len(manager.command_submission_pub.messages) == 1
     assert not manager._playback_request_id
+
+
+def test_skip_membership_is_captured_at_acceptance_and_adjacent_ids_stay_separate(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    manager.control("skip_start")
+    first = make_request(CommandID.MOVE_TO_WAYPOINT)
+    manager.capture_request(command_request_to_message(first))
+    manager.control("skip_stop")
+    assert manager._adjacent_skip_block() == 1
+    manager.control("skip_start")
+    second = make_request(CommandID.MOVE_TO_WAYPOINT)
+    manager.capture_request(command_request_to_message(second))
+    manager.control("skip_stop")
+    for request in (first, second):
+        manager.handle_command_status(terminal_status(request.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert json.loads(manager.recording_feedback_pub.messages[-1].data)["skip_block"] == 2
+    manager.control("stop")
+    assert [step.skip_block for step in manager.repository.load_steps("session")] == [1, 2]
+
+
+def test_continue_block_ignores_failed_and_excluded_outside_commands(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    manager.control("skip_start")
+    first = make_request(CommandID.STAND_UP)
+    manager.capture_request(command_request_to_message(first))
+    manager.control("skip_stop")
+    manager.control("pause")
+    manager.capture_request(command_request_to_message(make_request(CommandID.SIT_DOWN)))
+    assert manager._adjacent_skip_block() == 1
+    manager.control("resume")
+    outside = make_request(CommandID.WAIT_TIME)
+    manager.capture_request(command_request_to_message(outside))
+    assert not manager._adjacent_skip_block()
+    with pytest.raises(ValueError, match="no longer"):
+        manager.set_skip_block("skip_continue", 1)
+    manager.handle_command_status(terminal_status(outside.request_id, CommandStatus.STATE_FAILED))
+    assert manager._adjacent_skip_block() == 1
+    manager.set_skip_block("skip_continue", 1)
+    second = make_request(CommandID.STOW_ARM)
+    manager.capture_request(command_request_to_message(second))
+    for request in (second, first):
+        manager.handle_command_status(terminal_status(request.request_id, CommandStatus.STATE_SUCCEEDED))
+    manager.control("stop")
+    assert [step.skip_block for step in manager.repository.load_steps("session")] == [1, 1]
+
+
+def test_recorded_outside_command_prevents_continuation_and_nested_start_is_rejected(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    manager.control("skip_start")
+    with pytest.raises(ValueError, match="nested"):
+        manager.set_skip_block("skip_start")
+    manager.control("skip_stop")
+    outside = make_request(CommandID.WAIT_TIME)
+    manager.capture_request(command_request_to_message(outside))
+    manager.handle_command_status(terminal_status(outside.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert not manager._adjacent_skip_block()
+    with pytest.raises(ValueError, match="no longer"):
+        manager.set_skip_block("skip_continue", 1)
+    manager.control("skip_start")
+    assert manager._skip_block == 2
+    manager.control("stop")
+    manager.control("start", "new")
+    manager.control("skip_start")
+    assert manager._skip_block == 1
+
+
+def test_playback_retries_before_skipping_only_the_failed_block(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [
+        RecordedStep(command, 2, 1), RecordedStep(command, 0, 1),
+        RecordedStep(command, 0, 2), RecordedStep(command),
+    ])
+    manager.control("play", "session")
+    for attempt in range(3):
+        status = terminal_status(manager._playback_request_id, CommandStatus.STATE_FAILED)
+        status.retry_safe = True
+        manager.handle_playback_status(status)
+        assert manager._playback_step.skip_block == (1 if attempt < 2 else 2)
+    assert len(manager.command_submission_pub.messages) == 4
+    manager.handle_playback_status(status)  # Late first-block failure cannot skip block 2.
+    assert len(manager.command_submission_pub.messages) == 4
+    manager.handle_playback_status(terminal_status(manager._playback_request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager._playback_step.skip_block == 0
+    manager.handle_playback_status(terminal_status(manager._playback_request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager.logger.info_messages[-1] == "Playback finished with skips."
+
+
+@pytest.mark.parametrize("cancelled,safe,acquisition", [
+    (True, True, False), (False, False, False), (False, True, True),
+])
+def test_skip_does_not_override_cancellation_or_unconfirmed_cleanup(tmp_path, cancelled, safe, acquisition):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [RecordedStep(command, 0, 1), RecordedStep(command)])
+    manager.control("play", "session")
+    manager._playback_acquisition_active = acquisition
+    status = terminal_status(manager._playback_request_id,
+                             CommandStatus.STATE_CANCELLED if cancelled else CommandStatus.STATE_FAILED)
+    status.continuation_safe = safe
+    manager.handle_playback_status(status)
+    assert not manager._playback_request_id
+    assert len(manager.command_submission_pub.messages) == 1
+
+
+def test_safe_failure_can_skip_without_being_retryable(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.STAND_UP)
+    manager.repository.save("session", [RecordedStep(command, 0, 1)])
+    manager.control("play", "session")
+    status = terminal_status(manager._playback_request_id, CommandStatus.STATE_FAILED)
+    status.continuation_safe = True
+    manager.handle_playback_status(status)
+    assert not manager._playback_request_id
+    assert manager.logger.info_messages[-1] == "Playback finished with skips."

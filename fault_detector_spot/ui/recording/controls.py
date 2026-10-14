@@ -3,7 +3,7 @@ import json
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from std_msgs.msg import Bool, String, UInt32
 from PyQt5.QtWidgets import (
-    QHBoxLayout, QLineEdit, QPushButton, QComboBox, QSpinBox, QWidget, QLabel, QSizePolicy,
+    QHBoxLayout, QLineEdit, QPushButton, QComboBox, QSpinBox, QWidget, QLabel, QSizePolicy, QMessageBox,
 )
 
 from fault_detector_msgs.msg import CommandRecordControl
@@ -18,6 +18,7 @@ class _RecordingSignals(QObject):
     finishing_changed = pyqtSignal(bool)
     feedback_changed = pyqtSignal(str)
     retries_changed = pyqtSignal(int)
+    skip_changed = pyqtSignal(str)
     list_changed = pyqtSignal(object)
 
 
@@ -27,12 +28,14 @@ class RecordingControls(UIControlHelper):
         self._recording_paused = None
         self._recording_finishing = False
         self._confirmed_retries = None
+        self._confirmed_skip = None
         self._signals = _RecordingSignals(parent_ui)
         self._signals.state_changed.connect(self.update_recording_state, Qt.QueuedConnection)
         self._signals.paused_changed.connect(self.update_recording_paused, Qt.QueuedConnection)
         self._signals.finishing_changed.connect(self.update_recording_finishing, Qt.QueuedConnection)
         self._signals.feedback_changed.connect(self.update_recording_feedback, Qt.QueuedConnection)
         self._signals.retries_changed.connect(self.update_recording_retries, Qt.QueuedConnection)
+        self._signals.skip_changed.connect(self.update_recording_skip, Qt.QueuedConnection)
         self._signals.list_changed.connect(self.update_recordings_dropdown, Qt.QueuedConnection)
         super().__init__(parent_ui)
 
@@ -62,6 +65,10 @@ class RecordingControls(UIControlHelper):
         self.recording_retries_sub = self.node.create_subscription(
             UInt32, "fault_detector/recording_retries",
             lambda message: self._signals.retries_changed.emit(message.data), LATCHED_QOS,
+        )
+        self.recording_skip_sub = self.node.create_subscription(
+            String, "fault_detector/recording_skip_state",
+            lambda message: self._signals.skip_changed.emit(message.data), LATCHED_QOS,
         )
 
     def make_rows(self):
@@ -110,7 +117,8 @@ class RecordingControls(UIControlHelper):
             "command fails after its retries, skip the rest of this block. "
             "Successful commands are not undone. Skip blocks cannot be nested."
         )
-        self.skip_button.toggled.connect(self._update_skip_button)
+        self.skip_button.clicked.connect(self.toggle_skip_block)
+        self.skip_button.setEnabled(False)
         controls.addWidget(self.skip_button)
 
         self.retry_button = QPushButton()
@@ -147,7 +155,6 @@ class RecordingControls(UIControlHelper):
         self._refresh_pause_button()
         controls.addWidget(self.pause_recording_button)
 
-        # Skip remains presentation-only until playback supports it.
         self.recording_options.setEnabled(bool(self._recording))
         row = QHBoxLayout()
         row.addWidget(self.recording_options)
@@ -178,6 +185,9 @@ class RecordingControls(UIControlHelper):
             text = labels[outcome]
             if command:
                 text += f": {command.capitalize()}"
+            block = feedback.get("skip_block", 0)
+            if block and outcome in {"pending", "added"}:
+                text += f" · skip block {block}"
             retries = feedback.get("playback_retries", 0)
             if outcome == "added" and retries:
                 text += f" · {retries} {'retry' if retries == 1 else 'retries'}"
@@ -196,8 +206,68 @@ class RecordingControls(UIControlHelper):
         )
 
     def _update_skip_button(self, active):
-        self.skip_button.setText("Stop skip block" if active else "Start skip block")
+        self.skip_button.setText(f"Stop skip block {active}" if active else "Start skip block")
         self._set_option_active(self.skip_button, active)
+
+    def update_recording_skip(self, payload):
+        try:
+            state = json.loads(payload)
+            for key in ("active_block", "adjacent_block", "next_block"):
+                if type(state[key]) is not int or state[key] < 0:
+                    return
+            if not isinstance(state["recording_name"], str):
+                return
+        except (ValueError, KeyError, TypeError):
+            return
+        self._confirmed_skip = state
+        self.skip_button.setChecked(bool(state["active_block"]))
+        self._update_skip_button(state["active_block"])
+        self.skip_button.setEnabled(not state.get("boundary_pending", False))
+        self.skip_button.setToolTip(
+            "Waiting for commands outside the last block to finish before choosing its boundary."
+            if state.get("boundary_pending", False) else
+            "Start a numbered skip block; press again to end it. A safely recovered "
+            "failure skips the rest of the block after retries. Successful commands "
+            "are not undone."
+        )
+
+    def _choose_adjacent_skip_block(self, previous, next_block):
+        dialog = QMessageBox(self.ui)
+        dialog.setWindowTitle("Adjacent skip blocks")
+        dialog.setText(
+            f"No command was recorded outside skip block {previous}.\n"
+            "Start a separate block or continue the previous one?"
+        )
+        new = dialog.addButton(f"New block {next_block}", QMessageBox.AcceptRole)
+        resume = dialog.addButton(f"Continue block {previous}", QMessageBox.ActionRole)
+        cancel = dialog.addButton(QMessageBox.Cancel)
+        dialog.setDefaultButton(cancel)
+        dialog.exec_()
+        if dialog.clickedButton() is new:
+            return "skip_start"
+        if dialog.clickedButton() is resume:
+            return "skip_continue"
+        return None
+
+    def toggle_skip_block(self):
+        state = self._confirmed_skip
+        if state is None:
+            return
+        self.update_recording_skip(json.dumps(state))
+        if not self._recording or self._recording_finishing or state.get("boundary_pending", False):
+            return
+        if state["active_block"]:
+            mode = "skip_stop"
+            block = state["active_block"]
+        else:
+            block = state["adjacent_block"]
+            mode = (self._choose_adjacent_skip_block(block, state["next_block"])
+                    if block else "skip_start")
+            if mode is None:
+                return
+        self.record_control_pub.publish(CommandRecordControl(
+            mode=mode, name=state["recording_name"], skip_block=block,
+        ))
 
     def _update_retry_button(self, *_):
         count = self.retry_count.value()
@@ -281,8 +351,6 @@ class RecordingControls(UIControlHelper):
         self.record_control_pub.publish(msg)
 
     def update_recording_state(self, recording):
-        if recording != self._recording:
-            self.skip_button.setChecked(False)
         self._recording = recording
         self._refresh_pause_button()
         self._refresh_recording_button()

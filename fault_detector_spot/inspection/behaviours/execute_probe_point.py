@@ -102,7 +102,7 @@ class ExecuteProbePoint(ArmMovementBehaviour):
                 return self._wait_for_tag(response.detail, "plan")
             self._tag_wait_started = None
             if not response.success:
-                return self._fail(response.detail)
+                return self._fail_with_safe_continuation(response.detail)
             if len(response.plan) != 3:
                 raise ValueError("Probe execution requires three forward motion stages")
             plan = [semantic_command_from_message(p) for p in response.plan]
@@ -213,7 +213,7 @@ class ExecuteProbePoint(ArmMovementBehaviour):
             if self._attempt < self._last_command().retries:
                 self._attempt += 1
                 return Status.RUNNING
-            return self._fail(detail)
+            return self._fail_with_safe_continuation(detail)
         return self._begin_failure(detail, resume_phase)
 
     def _begin_failure(self, detail, resume_phase):
@@ -291,7 +291,9 @@ class ExecuteProbePoint(ArmMovementBehaviour):
         if len(self._history) <= 2:
             destination = "safe approach" if len(self._history) == 2 else "initial pose"
             if self._terminal_failure:
-                return self._fail(self._terminal_failure + f"; retries exhausted; returned to {destination}")
+                return self._fail_with_safe_continuation(
+                    self._terminal_failure + f"; retries exhausted; returned to {destination}"
+                )
             self.feedback_message = "Probe measurement recorded; returned to safe approach"
             return Status.SUCCESS
         # Pop only after the preceding checkpoint was successfully reached.
@@ -321,6 +323,13 @@ class ExecuteProbePoint(ArmMovementBehaviour):
             step = steps[max(0, len(self._history) - 2)]
         return (step.ignore_environment_collisions
                 or step.command_id is CommandID.MOVE_CLOSE_TO_SURFACE)
+
+    def _fail_with_safe_continuation(self, detail):
+        # Called only before motion or after completed acquisition cleanup/backtracking.
+        stopped = not self._surface.active and not self.executor.active
+        result = self._fail(detail)
+        self.blackboard.last_command.continuation_safe = stopped
+        return result
 
     def _fail(self, detail):
         if self._surface.active:

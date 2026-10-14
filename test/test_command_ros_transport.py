@@ -187,6 +187,19 @@ def test_execution_retry_permission_survives_controller_transport():
     assert status.retry_safe
 
 
+def test_safe_continuation_permission_survives_controller_transport():
+    node = FakeNode()
+    controller = CommandController()
+    RosCommandTransport(node, controller)
+    request = make_request(CommandID.MOVE_TO_WAYPOINT)
+    controller.submit(request)
+    failed = CommandStatus(request_id=request.request_id,
+                           state=CommandStatus.STATE_FAILED, continuation_safe=True)
+    node.subscriptions["fault_detector/_internal/command_status"](failed)
+    status = node.publishers["fault_detector/_internal/commands/status"].messages[-1]
+    assert status.continuation_safe and not status.retry_safe
+
+
 def test_invalid_ros_submission_is_rejected_before_queueing():
     node = FakeNode()
     controller = CommandController()

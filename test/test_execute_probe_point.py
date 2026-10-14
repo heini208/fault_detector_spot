@@ -90,11 +90,14 @@ def response(state="complete", stopped=True):
 
 def action(retries=0):
     value = ExecuteProbePoint("Test probe execution")
+    value.blackboard = SimpleNamespace(last_command=SimpleNamespace(
+        retries=retries, request_id="probe-test",
+    ))
     value.initialise()
     value._phase = "motion"
     value._sensor_id = "probe"
     value._history = ["initial"]
-    value._last_command = lambda: SimpleNamespace(retries=retries)
+    value._last_command = lambda: value.blackboard.last_command
     value._steps = [[step("safe")], [step("a"), step("b"), step("aligned")],
                     [step("m"), step("measure")]]
     value.executor = Mock(active=False, safe_approach_speed=object())
@@ -115,7 +118,7 @@ def action(retries=0):
     value.executor.confirm_stop.side_effect = lambda: (
         value.events.append(("stop", None)) or ArmMovementUpdate(Outcome.SUCCESS, "stopped"))
     value._surface = Mock(active=False, failure_outcome=None)
-    value._fail = Mock(return_value=Status.FAILURE)
+    value._fail = Mock(wraps=value._fail)
     value._rpc = Mock(return_value=response())
     return value
 
@@ -166,6 +169,7 @@ def test_exhausted_forward_failure_backtracks_only_reached_goals():
     assert not any(target in ("aligned", "m", "measure") for _, target in value.events)
     assert value.position == "safe"
     assert "returned to safe approach" in value._fail.call_args.args[0]
+    assert value.blackboard.last_command.continuation_safe
 
 
 def test_first_goal_failure_uses_initial_pose_as_checkpoint():
@@ -182,6 +186,7 @@ def test_unsafe_outcomes_never_recover_or_retry(outcome):
     value.failures[("move", "safe")] = [outcome]
     assert run(value) is Status.FAILURE
     assert value.events == [("move", "safe")]
+    assert not value.blackboard.last_command.continuation_safe
 
 
 def test_unconfirmed_stop_prevents_recovery():
@@ -260,6 +265,7 @@ def test_exhausted_recording_failure_backtracks_after_confirmed_acquisition_stop
     value._rpc.side_effect = [response("failed", False), response("failed", True)]
     assert run(value) is Status.FAILURE
     assert value.position == "safe"
+    assert value.blackboard.last_command.continuation_safe
     assert value.events[-6:] == [("restore", name) for name in
                                 ("measure", "m", "aligned", "b", "a", "safe")]
 
@@ -270,6 +276,7 @@ def test_unconfirmed_sensor_stop_prohibits_retry_and_return():
     assert run(value) is Status.FAILURE
     value.executor.restore_probe_checkpoint.assert_not_called()
     value.executor.confirm_stop.assert_not_called()
+    assert not value.blackboard.last_command.continuation_safe
 
 
 def test_cancellation_stops_active_execution_without_retry():

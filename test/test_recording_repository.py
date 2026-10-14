@@ -67,3 +67,27 @@ def test_invalid_playback_retry_metadata_is_rejected(tmp_path, count):
     repository.path('run').write_text(json.dumps(data))
     with pytest.raises(ValueError):
         repository.load_steps('run')
+
+
+def test_skip_block_round_trip_and_old_recording_default(tmp_path):
+    from fault_detector_spot.application.recording.recorded_step import RecordedStep
+    repository = RecordingRepository(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    steps = [RecordedStep(command, 2, 1), RecordedStep(command, 0, 2), RecordedStep(command)]
+    repository.save('run', steps)
+    assert repository.load_steps('run') == steps
+    repository.save('old', [command])
+    assert repository.load_steps('old')[0].skip_block == 0
+
+
+@pytest.mark.parametrize('blocks', [[1, 0, 1], [1, 2, 1], [-1], [True], ['1'], [1.5]])
+def test_invalid_skip_boundaries_are_rejected(tmp_path, blocks):
+    repository = RecordingRepository(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    repository.save('run', [command] * len(blocks))
+    data = json.loads(repository.path('run').read_text())
+    for entry, block in zip(data['commands'], blocks):
+        entry['skip_block'] = block
+    repository.path('run').write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        repository.load_steps('run')

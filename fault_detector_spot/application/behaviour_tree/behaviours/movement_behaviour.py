@@ -95,6 +95,7 @@ class MovementBehaviour(py_trees.behaviour.Behaviour):
     def _fail(self, detail: str) -> Status:
         if self.blackboard.last_command is not None:
             self.blackboard.last_command.retry_safe = False
+            self.blackboard.last_command.continuation_safe = False
         if self._started and self.executor is not None:
             self.executor.cancel()
         self._started = False
@@ -111,6 +112,7 @@ class MovementBehaviour(py_trees.behaviour.Behaviour):
         command = self.blackboard.last_command
         if command is not None:
             command.retry_safe = False
+            command.continuation_safe = False
         self.blackboard.command_failure_request_id = (
             self._current_request_id()
         )
