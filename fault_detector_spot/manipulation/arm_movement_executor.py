@@ -263,8 +263,10 @@ class ArmMovementExecutor(MovementExecutor):
         if type(self.maximum_correction_attempts) is not int or self.maximum_correction_attempts < 0:
             raise ValueError("Maximum arm correction attempts must be a non-negative integer")
         self.precision_speed = ArmMotionSpeed(
-            linear_speed_mps=config.get("motion.precision_linear_speed_mps"),
-            angular_speed_rad_s=config.get("motion.precision_angular_speed_rad_s"),
+            linear_speed_mps=(config.get("motion.precision_linear_speed_mps")
+                              or self.speed_policy.default_speed.linear_speed_mps),
+            angular_speed_rad_s=(config.get("motion.precision_angular_speed_rad_s")
+                                 or self.speed_policy.default_speed.angular_speed_rad_s),
         )
         self.ready_speed = ArmMotionSpeed(
             linear_speed_mps=config.get('ready_linear_speed_mps'),

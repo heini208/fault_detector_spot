@@ -5,6 +5,7 @@ import math
 # Saved keys match ROS parameter names where there is a real parameter owner.
 ARM_KEYS = (
     'arm.motion.position_tolerance_m', 'arm.motion.orientation_tolerance_rad',
+    'arm.motion.probe_setup_orientation_tolerance_rad',
     'arm.correction.maximum_attempts',
     'arm.contact.minimum_force_delta_threshold_n',
     'arm.contact.reference_force_delta_threshold_n',

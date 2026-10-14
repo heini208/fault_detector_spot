@@ -84,10 +84,15 @@ def factory_settings():
         'mount_approval_at_startup': False,
         'environment_collision_checking': False,
         'arm_mode': 'normal',
-        'base_mode': base['base.walking.relative_profile'],
+        'base_mode': 'normal',
         'force_threshold_percent': 100.0,
     }
     values.update({setting: arm[f'arm.{key}'] for key, setting in ARM_KEYS.items()})
+    for kind in ('linear', 'angular'):
+        unit = 'mps' if kind == 'linear' else 'rad_s'
+        key = f'arm_precision_{kind}_speed_{unit}'
+        if values[key] == 0.0:
+            values[key] = values[f'arm_normal_{kind}_speed_{unit}']
     for mode in ('normal', 'precision'):
         values[f'base_{mode}_linear_speed_mps'] = base[f'base.walking.{mode}.relative_speed_mps']
         values[f'base_{mode}_angular_speed_rad_s'] = base[f'base.walking.{mode}.angular_speed_rad_s']
@@ -105,13 +110,19 @@ class BasicSettingsRepository:
             return {}
         except yaml.YAMLError as error:
             raise ValueError(f'Invalid settings YAML: {self.path}') from error
-        if not isinstance(document, dict) or type(document.get('version')) is not int or document['version'] != 1:
+        if not isinstance(document, dict) or type(document.get('version')) is not int or document['version'] not in (1, 2):
             raise ValueError(f'Unsupported basic settings document: {self.path}')
-        return validate_settings(document.get('settings'))
+        values = validate_settings(document.get('settings'))
+        if document['version'] == 1:
+            # Version 1 saved whole forms, including untouched defaults. Treat
+            # default-valued entries as inherited when reading those files.
+            defaults = {**factory_settings(), **factory_advanced_settings()}
+            values = {key: value for key, value in values.items() if value != defaults[key]}
+        return values
 
     def save(self, values):
         values = validate_settings(values)
-        atomic_write_text(self.path, yaml.safe_dump({'version': 1, 'settings': values}, sort_keys=True))
+        atomic_write_text(self.path, yaml.safe_dump({'version': 2, 'settings': values}, sort_keys=True))
 
 
 @lru_cache(maxsize=None)

@@ -636,7 +636,7 @@ class InspectionControls(UIControlHelper):
             "Verify a stable achieved pose against the requested tolerance "
             "and allow bounded slow corrections. Off keeps ordinary motion checks."
         )
-        self.probe_orientation_tolerance_field = QLineEdit(str(ArmMotionParameters().get("motion.orientation_tolerance_rad")))
+        self.probe_orientation_tolerance_field = QLineEdit(str(ArmMotionParameters().get("motion.probe_setup_orientation_tolerance_rad")))
         self.probe_measurement_duration_field = QLineEdit("1.0")
         self.save_probe_point_status_label = QLabel(
             "Approve all three poses and complete the definition."

@@ -9,9 +9,9 @@
     # Cartesian movement speed
     arm.motion.linear_speed_mps: 0.08
     arm.motion.angular_speed_rad_s: 0.50
-    # Precision retains its verification/correction behavior; these select initial speed.
-    arm.motion.precision_linear_speed_mps: 0.08
-    arm.motion.precision_angular_speed_rad_s: 0.50
+    # Zero inherits the effective normal speed (including ROS overrides).
+    arm.motion.precision_linear_speed_mps: 0.0
+    arm.motion.precision_angular_speed_rad_s: 0.0
     arm.motion.minimum_duration_sec: 0.50
     # Search budget; the planning response deadline includes a further 2 seconds.
     arm.motion.moveit_allowed_planning_time_sec: 15.0
@@ -25,6 +25,8 @@
     # Defaults for new arm commands; saved per-point tolerances remain authoritative.
     arm.motion.position_tolerance_m: 0.01
     arm.motion.orientation_tolerance_rad: 0.03490658503988659
+    # Probe setup historically allows 0.087 rad; manual Precision uses 2 degrees.
+    arm.motion.probe_setup_orientation_tolerance_rad: 0.087
     # Corrections after the initial precision/tag movement; zero disables retries.
     arm.correction.maximum_attempts: 3
 

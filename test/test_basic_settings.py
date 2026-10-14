@@ -60,7 +60,7 @@ def test_invalid_save_preserves_previous_file(values):
 def test_corrupt_settings_are_not_silently_replaced():
     repo = BasicSettingsRepository()
     repo.path.parent.mkdir(parents=True)
-    repo.path.write_text('version: 2\nsettings: {}\n')
+    repo.path.write_text('version: 99\nsettings: {}\n')
     with pytest.raises(ValueError, match='Unsupported'):
         repo.load()
 

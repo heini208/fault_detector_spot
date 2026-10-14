@@ -1044,7 +1044,7 @@ This uses `INTENT_EXECUTE_PROBE_POINT` with `duration_sec`, `retries`, `object_i
 The **Settings** tab saves startup preferences, default manual arm/base modes,
 normal/precision translation and rotation speeds, ready-pose speed, and the
 normal arm force-policy multiplier. Save, reload, and reset-to-default controls
-are provided. Reset changes the form; click Save to persist it.
+are provided. Reset marks this tab’s overrides for removal; click Save to apply the reset.
 
 Settings are stored atomically in `$ROS_HOME/fault_detector_spot/basic_settings.yaml`
 (default `~/.ros/fault_detector_spot/basic_settings.yaml`). The UI, application API,
@@ -1052,8 +1052,18 @@ and behavior-tree backend must share that directory. Restart all three to apply
 changes; saving does not reconfigure running processes or start/restart nodes.
 Saved speed settings override matching ROS/YAML defaults; explicit execution
 speed overrides and per-command speed scales remain in effect. Saved probe-point
-mode choices are not rewritten. Before the first save, existing YAML behavior is
-preserved. Saving the common base speed makes it apply to both tag and offset moves.
+mode choices are not rewritten. Untouched fields remain inherited, including on an
+unchanged Save. Editing the common base speed makes it apply to both tag and offset
+moves; defaults preserve their separate existing speeds (100/150 mm/s for normal
+offset/tag moves). Precision arm speed inherits the effective normal speed, including
+ROS or explicit speed-policy overrides, unless independently configured. Zero in the
+precision-speed YAML parameters means inherit; the UI displays the inherited default.
+
+Settings documents now use version 2 and store only explicitly edited overrides.
+Version 1 files stored full forms: default-valued entries are treated as inherited
+when loaded, while non-default choices are retained. Reading does not rewrite the
+file. Subsequent saves use version 2; explicit version 2 overrides remain explicit
+even when equal to a factory value. Reset and Save both tabs to remove all overrides.
 
 Startup mount approval assumes the remembered sensor (or bare hand) is physically
 installed and uses the existing attachment controller to confirm it. Missing sensor
@@ -1076,8 +1086,9 @@ the other tab's saved values. Reset remains unsaved until Save is clicked. The f
 use mm, degrees, seconds, newtons, and percentages and ignore mouse-wheel edits.
 
 Arm position defaults populate new command and path-point editors; explicit and saved
-point tolerances are retained. The default turning tolerance is sent with manual arm
-commands and populates the probe setup tolerance field. The arm correction limit caps
+point tolerances are retained. Separate turning defaults preserve the original
+manual Precision tolerance (2 degrees) and probe setup tolerance (0.087 radians,
+approximately 5 degrees). The arm correction limit caps
 Precision retries and can disable the normal tag correction at zero; ordinary tag
 moves retain their existing single-correction behavior. Fixed checkpoint and surface
 orientation correction rules remain separate. Error, improvement, and travel limits

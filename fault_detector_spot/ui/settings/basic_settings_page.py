@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QPushButton, QScrollArea,
 )
 from fault_detector_spot.shared.persistence.basic_settings import (
-    BasicSettingsRepository, factory_settings,
+    BasicSettingsRepository, factory_settings, config_parameters,
 )
 
 
@@ -31,10 +31,11 @@ class BasicSettingsPage(QWidget):
         self.defaults = self.factory_defaults()
         self.fields = {}
         self.factors = {}
+        self._reset_pending = False
         layout = QVBoxLayout(self)
         note = QLabel(
             f'{self.title}\nSave your changes, then restart both the control window and robot application to apply them. '
-            'Settings are saved locally; saving does not change an active movement.'
+            'Only edited values override the existing configuration. Saving does not change an active movement.'
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -48,7 +49,7 @@ class BasicSettingsPage(QWidget):
         self.groups.addStretch()
         buttons = QHBoxLayout()
         reset = QPushButton('Reset to defaults')
-        reset.clicked.connect(lambda: self._show_values(self.defaults))
+        reset.clicked.connect(self.reset_defaults)
         reload_button = QPushButton('Discard unsaved changes')
         reload_button.clicked.connect(self.reload)
         self.save_button = QPushButton('Save settings')
@@ -89,16 +90,27 @@ class BasicSettingsPage(QWidget):
         for part, title in [('arm', 'Arm speeds'), ('base', 'Walking speeds')]:
             form = self._group(title)
             if part == 'base':
-                hint = QLabel('These speeds apply when walking by a chosen distance or moving to a tag.')
+                hint = QLabel('Defaults keep the separate speeds for distance and tag moves. '
+                              'Editing a speed below sets it for both.')
                 hint.setWordWrap(True)
                 form.addRow(hint)
             for mode in ('normal', 'precision'):
                 self._number(form, f'{part}_{mode}_linear_speed_mps', f'{mode.title()} movement speed', 1000., ' mm/s')
                 self._number(form, f'{part}_{mode}_angular_speed_rad_s', f'{mode.title()} turning speed', 180. / math.pi, ' °/s')
-                self.fields[f'{part}_{mode}_linear_speed_mps'].setToolTip(
-                    'How fast the hand or probe moves, in millimetres per second.' if part == 'arm' else
-                    'How fast Spot walks forward, backward or sideways, in millimetres per second.'
-                )
+                if part == 'base':
+                    base = config_parameters('base_motion.yaml')
+                    relative = base[f'base.walking.{mode}.relative_speed_mps'] * 1000.
+                    tag = base[f'base.walking.{mode}.tag_speed_mps'] * 1000.
+                    self.fields[f'{part}_{mode}_linear_speed_mps'].setToolTip(
+                        f'Factory defaults: {relative:g} mm/s for distance moves, {tag:g} mm/s for tag moves. '
+                        'Unchanged fields keep the startup configuration. Editing this value sets both speeds.'
+                    )
+                else:
+                    self.fields[f'{part}_{mode}_linear_speed_mps'].setToolTip(
+                        'How fast the hand or probe moves, in millimetres per second. '
+                        + ('Unless explicitly changed, Precision uses the effective Normal speed.'
+                           if mode == 'precision' else '')
+                    )
                 self.fields[f'{part}_{mode}_angular_speed_rad_s'].setToolTip(
                     'How fast the hand or probe changes direction, in degrees per second.' if part == 'arm' else
                     'How fast Spot turns, in degrees per second.'
@@ -160,10 +172,26 @@ class BasicSettingsPage(QWidget):
         if hasattr(self, 'status'):
             self.status.setText('Changes are not saved. Click Save settings to keep them.')
 
+    def reset_defaults(self):
+        self._reset_pending = True
+        self._show_values(self.defaults)
+        self.status.setText('Click Save settings to remove this tab’s overrides and restore the original defaults.')
+
+    def _display_values(self, saved):
+        values = {**self.defaults, **saved}
+        if 'arm_normal_linear_speed_mps' in self.defaults:
+            arm = config_parameters('arm_motion.yaml')
+            for kind, unit in (('linear', 'mps'), ('angular', 'rad_s')):
+                key = f'arm_precision_{kind}_speed_{unit}'
+                if key not in saved and arm[f'arm.motion.precision_{kind}_speed_{unit}'] == 0.0:
+                    values[key] = values[f'arm_normal_{kind}_speed_{unit}']
+        return values
+
     def reload(self):
         try:
             saved = self.repository.load()
-            self._show_values({**self.defaults, **saved})
+            self._show_values(self._display_values(saved))
+            self._reset_pending = False
         except (OSError, ValueError) as error:
             self.save_button.setEnabled(False)
             self.status.setText(f'Could not load settings: {error}')
@@ -184,8 +212,15 @@ class BasicSettingsPage(QWidget):
                 if type(self.defaults[key]) is int:
                     values[key] = int(values[key])
         try:
-            self.repository.save({**self.repository.load(), **values})
+            saved = self.repository.load()
+            if self._reset_pending:
+                saved = {key: value for key, value in saved.items() if key not in self.fields}
+            for key, value in values.items():
+                if value != self._shown_values[key]:
+                    saved[key] = value
+            self.repository.save(saved)
         except (OSError, ValueError) as error:
             self.status.setText(f'Could not save settings: {error}')
             return
+        self.reload()
         self.status.setText('Saved. Restart both the control window and robot application to apply changes.')

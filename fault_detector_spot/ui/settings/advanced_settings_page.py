@@ -15,7 +15,8 @@ SECTIONS = (
     ('Arm accuracy', 'Defaults for new commands and points. Saved point tolerances stay unchanged. '
      'Turning accuracy is checked in Precision mode. Zero correction attempts disables tag/Precision retries.', (
         ('arm.motion.position_tolerance_m', 'Allowed position error', 1000., ' mm'),
-        ('arm.motion.orientation_tolerance_rad', 'Allowed turning error', DEGREES, ' °'),
+        ('arm.motion.orientation_tolerance_rad', 'Allowed turning error (Precision moves)', DEGREES, ' °'),
+        ('arm.motion.probe_setup_orientation_tolerance_rad', 'Allowed turning error (probe setup)', DEGREES, ' °'),
         ('arm.correction.maximum_attempts', 'Maximum correction attempts', 1., ''),
     )),
     ('Walking accuracy', 'Allowed error after an offset or tag move. Zero correction attempts disables retries.', (
