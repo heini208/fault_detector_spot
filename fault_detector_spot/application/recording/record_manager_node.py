@@ -2,6 +2,7 @@
 """Record and replay accepted semantic command requests."""
 
 from collections import deque
+import json
 from copy import deepcopy
 from typing import Deque, List
 
@@ -13,7 +14,7 @@ from fault_detector_msgs.msg import (
     StringArray,
 )
 from rclpy.node import Node
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
@@ -54,6 +55,7 @@ class RecordManager(Node):
         self._recording_commands = {}
         self._recording_results = {}
         self._recording_stop_requested = False
+        self._last_recording_request_id = ""
         self._playback_commands: Deque[SemanticCommand] = deque()
         self._playback_request_id = ""
         self._playback_name = ""
@@ -81,6 +83,9 @@ class RecordManager(Node):
         self.recording_finishing_pub = self.create_publisher(
             Bool, "fault_detector/recording_finishing", LATCHED_QOS,
         )
+        self.recording_feedback_pub = self.create_publisher(
+            String, "fault_detector/recording_feedback", LATCHED_QOS,
+        )
         self.command_submission_pub = self.create_publisher(
             CommandRequestMessage,
             "fault_detector/_internal/commands/submit",
@@ -107,6 +112,7 @@ class RecordManager(Node):
         )
         self.publish_recordings_list()
         self.publish_recording_state()
+        self._publish_recording_feedback("", "", "idle")
 
     def handle_control(self, message: CommandRecordControl):
         mode = message.mode.lower()
@@ -168,6 +174,8 @@ class RecordManager(Node):
         self._recording_commands.clear()
         self._recording_results.clear()
         self._recording_stop_requested = False
+        self._last_recording_request_id = ""
+        self._publish_recording_feedback("", "", "idle")
         self.get_logger().info(f"Started recording: {name}")
 
     def stop_recording(self):
@@ -189,8 +197,6 @@ class RecordManager(Node):
         self.publish_recordings_list()
 
     def capture_request(self, message: CommandRequestMessage) -> bool:
-        if not self.recording or self._recording_stop_requested:
-            return False
         try:
             request = command_request_from_message(message)
         except (TypeError, ValueError) as exception:
@@ -198,14 +204,23 @@ class RecordManager(Node):
                 f"Rejected accepted command request: {exception}"
             )
             return False
-        if (
-            request.recording_policy
-            is not RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
-        ):
-            return False
         if request.request_id in self._recorded_request_ids:
             return False
-        self._recorded_request_ids.add(request.request_id)
+        if self.recording:
+            self._recorded_request_ids.add(request.request_id)
+        self._last_recording_request_id = request.request_id
+        exclusion = (
+            "inactive" if not self.recording else
+            "finishing" if self._recording_stop_requested else
+            "excluded" if request.recording_policy is not RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE else
+            "paused" if self.recording_paused else ""
+        )
+        if exclusion:
+            self._publish_recording_feedback(
+                request.request_id, request.command.command_id.value, exclusion,
+            )
+        if exclusion and exclusion != "paused":
+            return False
         if self.recording_paused:
             self.get_logger().info(
                 f"Excluded command {request.command.command_id.value} "
@@ -214,7 +229,26 @@ class RecordManager(Node):
             return False
         self._recording_commands[request.request_id] = deepcopy(request.command)
         self._refresh_successful_commands()
+        self._publish_command_recording_outcome(request.request_id)
         return True
+
+    def _publish_recording_feedback(self, request_id, command_id, outcome):
+        """Publish confirmed capture facts; the UI owns their presentation."""
+        self.recording_feedback_pub.publish(String(data=json.dumps({
+            "request_id": request_id, "command_id": command_id, "outcome": outcome,
+        })))
+
+    def _publish_command_recording_outcome(self, request_id):
+        if request_id != self._last_recording_request_id:
+            return
+        outcome = {
+            CommandStatus.STATE_SUCCEEDED: "added",
+            CommandStatus.STATE_FAILED: "failed",
+            CommandStatus.STATE_CANCELLED: "cancelled",
+        }.get(self._recording_results.get(request_id), "pending")
+        self._publish_recording_feedback(
+            request_id, self._recording_commands[request_id].command_id.value, outcome,
+        )
 
     def _refresh_successful_commands(self):
         # Dict insertion order is acceptance order, irrespective of completion order.
@@ -246,6 +280,7 @@ class RecordManager(Node):
         if message.request_id not in self._recording_commands:
             return False
         self._refresh_successful_commands()
+        self._publish_command_recording_outcome(message.request_id)
         if self._recording_stop_requested and not self._has_pending_commands():
             # Use the same error handling as an explicit stop; unsaved data survives.
             self.handle_control(CommandRecordControl(mode="stop"))

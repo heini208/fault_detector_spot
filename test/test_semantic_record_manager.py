@@ -1,6 +1,7 @@
 """Tests for semantic command recording and sequential playback."""
 
 from collections import deque
+import json
 
 import pytest
 from fault_detector_msgs.msg import CommandStatus
@@ -58,6 +59,8 @@ class FakeLogger:
 
 
 class RecordManagerHarness:
+    _publish_recording_feedback = RecordManager._publish_recording_feedback
+    _publish_command_recording_outcome = RecordManager._publish_command_recording_outcome
     handle_command_status = RecordManager.handle_command_status
     handle_recording_status = RecordManager.handle_recording_status
     _refresh_successful_commands = RecordManager._refresh_successful_commands
@@ -75,6 +78,8 @@ class RecordManagerHarness:
         self._recording_commands = {}
         self._recording_results = {}
         self._recording_stop_requested = False
+        self._last_recording_request_id = ""
+        self.recording_feedback_pub = FakePublisher()
         self._playback_commands = deque()
         self._playback_request_id = ""
         self._playback_name = ""
@@ -550,3 +555,39 @@ def test_deferred_save_failure_can_be_retried(tmp_path, monkeypatch):
     assert manager.logger.error_messages
     manager.control("stop")
     assert manager.repository.load("session") == [request.command]
+
+
+@pytest.mark.parametrize("state,outcome", [
+    (CommandStatus.STATE_SUCCEEDED, "added"),
+    (CommandStatus.STATE_FAILED, "failed"),
+    (CommandStatus.STATE_CANCELLED, "cancelled"),
+])
+def test_recording_feedback_reports_confirmed_outcome(tmp_path, state, outcome):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    request = make_request(CommandID.STAND_UP)
+    manager.capture_request(command_request_to_message(request))
+    assert json.loads(manager.recording_feedback_pub.messages[-1].data)["outcome"] == "pending"
+    manager.handle_command_status(terminal_status(request.request_id, state))
+    assert json.loads(manager.recording_feedback_pub.messages[-1].data) == {
+        "request_id": request.request_id, "command_id": "stand_up", "outcome": outcome,
+    }
+
+
+def test_latest_command_feedback_survives_older_completion(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    first = make_request(CommandID.STAND_UP)
+    manager.capture_request(command_request_to_message(first))
+    manager.control("pause")
+    second = make_request(CommandID.STOW_ARM)
+    manager.capture_request(command_request_to_message(second))
+    feedback = manager.recording_feedback_pub.messages[-1].data
+    assert json.loads(feedback)["outcome"] == "paused"
+    manager.handle_command_status(terminal_status(first.request_id, CommandStatus.STATE_SUCCEEDED))
+    manager.handle_command_status(terminal_status(second.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager.recording_feedback_pub.messages[-1].data == feedback
+    manager.control("stop")
+    assert manager.recording_feedback_pub.messages[-1].data == feedback
+    manager.control("start", "next")
+    assert json.loads(manager.recording_feedback_pub.messages[-1].data)["outcome"] == "idle"

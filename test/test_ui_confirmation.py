@@ -211,3 +211,32 @@ def test_recording_waits_for_pending_outcomes_in_ui(application):
     controls.update_recording_state(False)
     assert controls.record_button.text() == "Start Recording"
     parent.close()
+
+
+def test_recording_feedback_displays_backend_result_even_when_controls_disabled(application):
+    import json
+    from std_msgs.msg import String
+
+    parent = QWidget()
+    parent.node = Mock()
+    controls = RecordingControls(parent)
+    callbacks = {
+        call.args[1]: call.args[2]
+        for call in parent.node.create_subscription.call_args_list
+    }
+    assert controls.recording_feedback_label.isEnabled()
+    controls.skip_button.setChecked(True)
+    controls.retry_button.setChecked(True)
+    for outcome, expected in (
+        ("pending", "Waiting for result: Stand up"),
+        ("added", "Added: Stand up"),
+        ("paused", "Not recorded · paused: Stand up"),
+    ):
+        callbacks["fault_detector/recording_feedback"](String(data=json.dumps({
+            "command_id": "stand_up", "outcome": outcome,
+        })))
+        application.processEvents()
+        assert controls.recording_feedback_label.text() == expected
+        assert controls.recording_feedback_label.toolTip() == expected
+    controls.record_control_pub.publish.assert_not_called()
+    parent.close()

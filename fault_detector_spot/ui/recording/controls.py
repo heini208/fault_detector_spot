@@ -1,7 +1,9 @@
+import json
+
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from PyQt5.QtWidgets import (
-    QHBoxLayout, QLineEdit, QPushButton, QComboBox, QSpinBox, QWidget,
+    QHBoxLayout, QLineEdit, QPushButton, QComboBox, QSpinBox, QWidget, QLabel, QSizePolicy,
 )
 
 from fault_detector_msgs.msg import CommandRecordControl
@@ -14,6 +16,7 @@ class _RecordingSignals(QObject):
     state_changed = pyqtSignal(bool)
     paused_changed = pyqtSignal(bool)
     finishing_changed = pyqtSignal(bool)
+    feedback_changed = pyqtSignal(str)
     list_changed = pyqtSignal(object)
 
 
@@ -26,6 +29,7 @@ class RecordingControls(UIControlHelper):
         self._signals.state_changed.connect(self.update_recording_state, Qt.QueuedConnection)
         self._signals.paused_changed.connect(self.update_recording_paused, Qt.QueuedConnection)
         self._signals.finishing_changed.connect(self.update_recording_finishing, Qt.QueuedConnection)
+        self._signals.feedback_changed.connect(self.update_recording_feedback, Qt.QueuedConnection)
         self._signals.list_changed.connect(self.update_recordings_dropdown, Qt.QueuedConnection)
         super().__init__(parent_ui)
 
@@ -47,6 +51,10 @@ class RecordingControls(UIControlHelper):
         self.recording_finishing_sub = self.node.create_subscription(
             Bool, "fault_detector/recording_finishing",
             lambda message: self._signals.finishing_changed.emit(message.data), LATCHED_QOS,
+        )
+        self.recording_feedback_sub = self.node.create_subscription(
+            String, "fault_detector/recording_feedback",
+            lambda message: self._signals.feedback_changed.emit(message.data), LATCHED_QOS,
         )
 
     def make_rows(self):
@@ -129,13 +137,42 @@ class RecordingControls(UIControlHelper):
         self.pause_recording_button.clicked.connect(self.toggle_recording_pause)
         self._refresh_pause_button()
         controls.addWidget(self.pause_recording_button)
-        controls.addStretch()
 
         # Skip and retry remain presentation-only until playback supports them.
         self.recording_options.setEnabled(bool(self._recording))
         row = QHBoxLayout()
         row.addWidget(self.recording_options)
+        self.recording_feedback_label = QLabel("No command yet")
+        self.recording_feedback_label.setTextFormat(Qt.PlainText)
+        self.recording_feedback_label.setAccessibleName("Last command recording result")
+        self.recording_feedback_label.setMinimumWidth(160)
+        self.recording_feedback_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        row.addWidget(self.recording_feedback_label, 1)
         return row
+
+    def update_recording_feedback(self, payload):
+        try:
+            feedback = json.loads(payload)
+            outcome = feedback["outcome"]
+            command = feedback["command_id"].replace("_", " ")
+            labels = {
+                "idle": "No command yet",
+                "pending": "Waiting for result",
+                "added": "Added",
+                "paused": "Not recorded · paused",
+                "failed": "Not recorded · failed",
+                "cancelled": "Not recorded · cancelled",
+                "excluded": "Not recorded · excluded",
+                "inactive": "Not recorded · recording off",
+                "finishing": "Not recorded · finishing",
+            }
+            text = labels[outcome]
+            if command:
+                text += f": {command.capitalize()}"
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return
+        self.recording_feedback_label.setText(text)
+        self.recording_feedback_label.setToolTip(text)
 
     @staticmethod
     def _set_option_active(button, active):
