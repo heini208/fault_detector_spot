@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from threading import RLock
 
+from fault_detector_spot.shared.persistence.basic_settings import startup_settings
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandRequest,
@@ -108,13 +109,16 @@ class SensorAttachmentController:
         state_store: SensorAttachmentStateStore,
         command_controller,
     ):
-        """Restore selection while invalidating prior sensor confirmation."""
+        """Restore selection and apply the explicit startup approval preference."""
         self.sensor_repository = sensor_repository
         self.state_store = state_store
         self.command_controller = command_controller
         self._lock = RLock()
         self._reservation_count = 0
+        self._startup_attachment_valid = True
         self._state = self._restore_state()
+        if self._startup_attachment_valid and startup_settings().get("mount_approval_at_startup", False):
+            self.confirm_sensor(self._state.selected_sensor_id, self._state.attachment_revision)
 
     def snapshot(self) -> SensorAttachmentState:
         """Return the current immutable attachment state."""
@@ -414,7 +418,11 @@ class SensorAttachmentController:
             definition = self.sensor_repository.load(persisted.sensor_id)
             definition.validate()
         except FileNotFoundError:
-            self.state_store.clear()
+            self._startup_attachment_valid = False
+            # Retain a missing selection under auto-approval so a later restart
+            # cannot reinterpret it as an approved bare hand.
+            if not startup_settings().get("mount_approval_at_startup", False):
+                self.state_store.clear()
             return SensorAttachmentState(
                 active_sensor_id="",
                 pending_sensor_id="",

@@ -259,6 +259,10 @@ class ArmMovementExecutor(MovementExecutor):
             speed_policy if speed_policy is not None
             else ArmMotionSpeedPolicy.from_config(config)
         )
+        self.precision_speed = ArmMotionSpeed(
+            linear_speed_mps=config.get("motion.precision_linear_speed_mps"),
+            angular_speed_rad_s=config.get("motion.precision_angular_speed_rad_s"),
+        )
         self.ready_speed = ArmMotionSpeed(
             linear_speed_mps=config.get('ready_linear_speed_mps'),
             angular_speed_rad_s=self.speed_policy.default_speed.angular_speed_rad_s,
@@ -437,6 +441,8 @@ class ArmMovementExecutor(MovementExecutor):
         scale = float(getattr(command, "arm_speed_scale", 1.0))
         if not math.isfinite(scale) or not 0 < scale <= 1:
             raise ValueError("Arm speed scale must be in (0, 1]")
+        if speed is None and getattr(command, "precision_mode", False):
+            speed = self.precision_speed
         if scale != 1.0:
             baseline = speed or self.speed_policy.default_speed
             speed = ArmMotionSpeed(
@@ -553,7 +559,8 @@ class ArmMovementExecutor(MovementExecutor):
         scale = float(getattr(command, "arm_speed_scale", 1.0))
         if not math.isfinite(scale) or not 0 < scale <= 1:
             raise ValueError("Arm speed scale must be in (0, 1]")
-        baseline = speed or self.speed_policy.default_speed
+        baseline = speed or (self.precision_speed if getattr(command, "precision_mode", False)
+                             else self.speed_policy.default_speed)
         speed = ArmMotionSpeed(baseline.linear_speed_mps * scale,
                                baseline.angular_speed_rad_s * scale)
         if getattr(command, "precision_mode", False):

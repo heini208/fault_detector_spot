@@ -58,6 +58,9 @@ class BaseMovementControls(UIControlHelper):
         self.walking_profile_dropdown = QComboBox()
         self.walking_profile_dropdown.addItem("Normal", "normal")
         self.walking_profile_dropdown.addItem("Precision", "precision")
+        self.walking_profile_dropdown.setCurrentIndex(
+            1 if getattr(self.ui, "basic_settings", {}).get("base_mode") == "precision" else 0
+        )
         self.walking_profile_dropdown.setToolTip(
             "Applies to the next Move to Tag or Move Base by Offset command. "
             "Precision uses the configured slower walking profile."

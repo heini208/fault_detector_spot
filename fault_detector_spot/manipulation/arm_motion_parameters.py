@@ -6,6 +6,8 @@ from pathlib import Path
 
 import yaml
 
+from fault_detector_spot.shared.persistence.basic_settings import ARM_KEYS, startup_settings
+
 
 def arm_motion_config_path():
     """Use checkout config locally and package share after installation."""
@@ -60,7 +62,7 @@ def _validate_value(name, value, default):
 class ArmMotionParameters:
     """Read YAML defaults; declare new YAML keys without a Python registry.
 
-    Explicit constructor values override ROS values, which override YAML.
+    Explicit constructor values override saved user settings, then ROS, then YAML.
     YAML is loaded once per process. Edits apply on the next process start.
     """
 
@@ -70,6 +72,7 @@ class ArmMotionParameters:
         )
         self._defaults = _load_parameters(self.path)
         self._node = node
+        self._user_settings = startup_settings() if path is None else {}
         if node is not None:
             for name, default in self._defaults.items():
                 if not node.has_parameter(name):
@@ -83,6 +86,8 @@ class ArmMotionParameters:
         default = self._defaults[name]
         if override is not None:
             value = override
+        elif ARM_KEYS.get(name.removeprefix("arm.")) in self._user_settings:
+            value = self._user_settings[ARM_KEYS[name.removeprefix("arm.")]]
         elif self._node is not None:
             value = self._node.get_parameter(name).value
         else:

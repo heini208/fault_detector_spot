@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import math
 
 from bosdyn.api.spot import robot_command_pb2
+from fault_detector_spot.shared.persistence.basic_settings import BASE_KEYS, startup_settings
 
 
 GAITS = {
@@ -53,11 +54,13 @@ class WalkingProfiles:
 
     @classmethod
     def from_node(cls, node):
+        settings = startup_settings()
+
         def parameter(key, default):
             name = f"base.walking.{key}"
             if not node.has_parameter(name):
                 node.declare_parameter(name, default)
-            return node.get_parameter(name).value
+            return settings.get(BASE_KEYS.get(key), node.get_parameter(name).value)
 
         defaults = cls()
         profiles = {}

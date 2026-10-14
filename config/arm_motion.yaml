@@ -1,4 +1,4 @@
-# Single source of arm-motion defaults. ROS parameter overrides take precedence.
+# Factory arm-motion defaults. Saved Basic settings override matching ROS values.
 # Add settings here, then read them with ArmMotionParameters.get() where used.
 # Settings are loaded at process startup; editing this file is not hot reload.
 /**:
@@ -9,6 +9,9 @@
     # Cartesian movement speed
     arm.motion.linear_speed_mps: 0.08
     arm.motion.angular_speed_rad_s: 0.50
+    # Precision retains its verification/correction behavior; these select initial speed.
+    arm.motion.precision_linear_speed_mps: 0.08
+    arm.motion.precision_angular_speed_rad_s: 0.50
     arm.motion.minimum_duration_sec: 0.50
     # Search budget; the planning response deadline includes a further 2 seconds.
     arm.motion.moveit_allowed_planning_time_sec: 15.0

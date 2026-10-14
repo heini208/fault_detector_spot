@@ -2,6 +2,8 @@
 
 import math
 
+from fault_detector_spot.shared.persistence.basic_settings import startup_settings
+
 from fault_detector_spot.manipulation.arm_motion_parameters import (
     ArmMotionParameters,
 )
@@ -80,6 +82,7 @@ class SpeedAwareForceContactPolicy:
                 "Force contact consecutive sample count must be positive"
             )
         self.consecutive_samples = consecutive_samples
+        self.threshold_multiplier = startup_settings().get("force_threshold_percent", 100.0) / 100.0
 
     @classmethod
     def from_node(cls, node):
@@ -112,7 +115,7 @@ class SpeedAwareForceContactPolicy:
             - self.minimum_threshold_n
         ) * motion_scale
         threshold = self.minimum_threshold_n + motion_allowance_n
-        return min(
+        return self.threshold_multiplier * min(
             self.maximum_threshold_n,
             max(self.minimum_threshold_n, threshold),
         )

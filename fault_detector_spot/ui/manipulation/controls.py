@@ -244,6 +244,9 @@ class ManipulationControls(UIControlHelper):
         self.precision_mode_combo = QComboBox()
         self.precision_mode_combo.addItem("Normal", False)
         self.precision_mode_combo.addItem("Precision", True)
+        self.precision_mode_combo.setCurrentIndex(
+            1 if getattr(self.ui, "basic_settings", {}).get("arm_mode") == "precision" else 0
+        )
         self.precision_mode_combo.setToolTip(
             "Applies to Move to Tag and Move Arm by Offset. Precision verifies "
             "a stable achieved pose at the requested tolerance and permits bounded "

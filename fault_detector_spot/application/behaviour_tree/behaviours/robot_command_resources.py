@@ -161,7 +161,7 @@ class RobotCommandResources:
             return self._posture_state_source
 
     def get_arm_collision_control(self, node):
-        """Share the default-off preference independently of mapping or planning."""
+        """Share the startup collision preference independently of mapping or planning."""
         with self._lock:
             self._bind_node(node)
             if self._arm_collision_control is None:

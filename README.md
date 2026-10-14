@@ -1038,3 +1038,30 @@ Standalone move-to-tag path commands retain their existing behavior.
 This uses `INTENT_EXECUTE_PROBE_POINT` with `duration_sec`, `retries`, `object_id`,
 `routine_id`, and `probe_point_id`. Rebuild `fault_detector_msgs` together with
 `fault_detector_spot` before using the updated UI and application/BT processes.
+
+### Basic UI settings
+
+The **Settings** tab saves startup preferences, default manual arm/base modes,
+normal/precision translation and rotation speeds, ready-pose speed, and the
+normal arm force-policy multiplier. Save, reload, and reset-to-default controls
+are provided. Reset changes the form; click Save to persist it.
+
+Settings are stored atomically in `$ROS_HOME/fault_detector_spot/basic_settings.yaml`
+(default `~/.ros/fault_detector_spot/basic_settings.yaml`). The UI, application API,
+and behavior-tree backend must share that directory. Restart all three to apply
+changes; saving does not reconfigure running processes or start/restart nodes.
+Saved speed settings override matching ROS/YAML defaults; explicit execution
+speed overrides and per-command speed scales remain in effect. Saved probe-point
+mode choices are not rewritten. Before the first save, existing YAML behavior is
+preserved. Saving the common base speed makes it apply to both tag and offset moves.
+
+Startup mount approval assumes the remembered sensor (or bare hand) is physically
+installed and uses the existing attachment controller to confirm it. Missing sensor
+definitions are not approved. Startup environment checking waits for valid attachment
+confirmation; subsequent manual toggles remain authoritative for the session.
+
+Force threshold 100% preserves the configured minimum/reference/maximum policy.
+Larger percentages reduce sensitivity; values must be positive and finite. This
+multiplier does not change the hard-force ceiling or explicit thresholds used by
+surface approach/contact search. Precision arm speeds configure the initial move;
+existing precision verification and corrective speed reductions are retained.

@@ -1,5 +1,6 @@
 """Expose the application command boundary as typed ROS interfaces."""
 
+from fault_detector_spot.shared.persistence.basic_settings import startup_settings
 from fault_detector_spot.application.api.probe_point_execution_api import ProbePointExecutionApi
 
 from dataclasses import dataclass, field
@@ -125,6 +126,7 @@ class ApplicationApiNode(Node):
 
     def __init__(self):
         super().__init__("application_api")
+        startup_settings()
         self._lock = RLock()
         self._executions: Dict[str, _OperationExecution] = {}
         self._callback_group = ReentrantCallbackGroup()

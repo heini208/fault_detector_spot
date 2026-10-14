@@ -13,6 +13,8 @@ from py_trees.decorators import EternalGuard, StatusToBlackboard
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import MultiThreadedExecutor
 
+from fault_detector_spot.shared.persistence.basic_settings import startup_settings
+
 from fault_detector_spot.application.behaviour_tree.behaviours.command_manager import (
     CommandManager,
 )
@@ -635,6 +637,7 @@ def build_navigate_to_goal_pose_tree(
 
 def main(args=None):
     started = time.monotonic()
+    startup_settings()
     rclpy.init(args=args)
     node = rclpy.create_node("bt_driver")
     node.get_logger().info(

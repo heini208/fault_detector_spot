@@ -1,5 +1,7 @@
 """Own the mapping-independent arm occupancy-checking preference."""
 
+from fault_detector_spot.shared.persistence.basic_settings import startup_settings
+
 from dataclasses import dataclass
 from threading import RLock
 
@@ -21,13 +23,14 @@ class ArmCollisionControl:
     """Publish planning intent; toggling never moves the arm or changes a scene.
 
     Availability means the control is online, not that obstacle sensors exist.
-    Each application process starts disabled, independently of mapping lifecycle.
+    The saved startup preference is applied once attachment confirmation arrives.
     """
 
     def __init__(self, node):
         self.node = node
         self._lock = RLock()
         self._state = ArmCollisionPolicy(enabled=False, revision=0)
+        self._startup_enable_pending = startup_settings().get("environment_collision_checking", False)
         self._closed = False
         self._attachment_confirmed = False
         self._publisher = node.create_publisher(
@@ -55,6 +58,9 @@ class ArmCollisionControl:
                 state.status == SensorAttachmentState.STATUS_ACTIVE
                 and not state.pending_sensor_id
             )
+            if self._startup_enable_pending and self._attachment_confirmed:
+                self._state = ArmCollisionPolicy(True, self._state.revision + 1)
+                self._startup_enable_pending = False
             # Losing confirmation must never silently disable collision checking.
             self._publish_state()
 
@@ -66,6 +72,7 @@ class ArmCollisionControl:
                 raise RuntimeError("Arm collision control is closed")
             if enabled and not self._attachment_confirmed:
                 raise RuntimeError("Confirm the head attachment before enabling collision checking")
+            self._startup_enable_pending = False
             if enabled != self._state.enabled:
                 self._state = ArmCollisionPolicy(enabled, self._state.revision + 1)
             self._publish_state()

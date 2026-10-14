@@ -49,6 +49,8 @@ from .ros.sensor_registry_client import SensorRegistryClient
 from .ros.sensor_topic_suggestion_client import (
     SensorTopicSuggestionClient,
 )
+from .settings.basic_settings_page import BasicSettingsPage
+from fault_detector_spot.shared.persistence.basic_settings import startup_settings
 from .sensor.controls import SensorControls
 from .sensor.import_dialog import import_sensor_head_transform
 from .sensor.models import (
@@ -74,6 +76,7 @@ class Fault_Detector_UI(QWidget):
     def __init__(self, node: Node = None):
         super().__init__()
         self.node = node
+        self.basic_settings = startup_settings()
         self.setWindowTitle("Fault Detector Spot")
         self.resize(700, 600)
         self.measurement_root = self._measurement_root_parameter()
@@ -234,6 +237,8 @@ class Fault_Detector_UI(QWidget):
         self.add_navigation_control_tab()
         self.add_inspection_control_tab()
         self.add_sensor_control_tab()
+        self.settings_page = BasicSettingsPage(self)
+        self.tabs.addTab(self.settings_page, "Settings")
 
         self.recording_controls.add_rows(main_layout)
         QTimer.singleShot(0, self._refresh_buffer_label)
