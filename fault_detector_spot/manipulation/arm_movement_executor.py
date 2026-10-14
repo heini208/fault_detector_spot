@@ -1796,7 +1796,12 @@ class ArmMovementExecutor(MovementExecutor):
                 "Surface orientation movement completed; verifying "
                 "alignment from a fresh depth frame",
             )
-        return super()._finish(update.outcome, update.detail)
+        result = super()._finish(update.outcome, update.detail)
+        # The guard reports planning failure before dispatching the planned motion.
+        return ArmMovementUpdate(
+            result.outcome, result.detail,
+            retry_safe=result.outcome is ArmMovementOutcome.PLANNING_FAILED,
+        )
 
     def _poll_surface_orientation_verification(
         self,

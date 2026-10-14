@@ -58,6 +58,15 @@ def behavior(status=Status.SUCCESS, command_id="move_to_tag"):
     return result
 
 
+def test_retry_permission_is_only_published_for_failure():
+    value = behavior(Status.FAILURE)
+    assert not value.get_structured_status_message().retry_safe
+    value.blackboard.last_command.retry_safe = True
+    assert value.get_structured_status_message().retry_safe
+    value.blackboard.command_tree_status = Status.SUCCESS
+    assert not value.get_structured_status_message().retry_safe
+
+
 def test_unchanged_terminal_status_is_published_only_once():
     result = behavior(Status.SUCCESS, "move_to_tag")
 

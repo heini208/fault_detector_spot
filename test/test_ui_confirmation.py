@@ -240,3 +240,27 @@ def test_recording_feedback_displays_backend_result_even_when_controls_disabled(
         assert controls.recording_feedback_label.toolTip() == expected
     controls.record_control_pub.publish.assert_not_called()
     parent.close()
+
+
+def test_retry_button_waits_for_backend_and_can_clear_setting(application):
+    parent = QWidget()
+    parent.node = Mock()
+    controls = RecordingControls(parent)
+    controls.update_recording_state(True)
+    assert not controls.retry_button.isEnabled()
+    controls.update_recording_retries(0)
+    controls.retry_count.setValue(3)
+    controls.retry_button.click()
+    message = controls.record_control_pub.publish.call_args.args[0]
+    assert message.mode == "set_retries" and message.retries == 3
+    assert not controls.retry_button.isChecked()
+    controls.update_recording_retries(3)
+    assert controls.retry_button.isChecked()
+    assert not controls.retry_count.isEnabled()
+    controls.retry_button.click()
+    assert controls.record_control_pub.publish.call_args.args[0].retries == 0
+    assert controls.retry_button.isChecked()
+    controls.update_recording_retries(0)
+    assert not controls.retry_button.isChecked()
+    assert controls.retry_count.isEnabled()
+    parent.close()

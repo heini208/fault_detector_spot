@@ -1,7 +1,7 @@
 import json
 
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, UInt32
 from PyQt5.QtWidgets import (
     QHBoxLayout, QLineEdit, QPushButton, QComboBox, QSpinBox, QWidget, QLabel, QSizePolicy,
 )
@@ -17,6 +17,7 @@ class _RecordingSignals(QObject):
     paused_changed = pyqtSignal(bool)
     finishing_changed = pyqtSignal(bool)
     feedback_changed = pyqtSignal(str)
+    retries_changed = pyqtSignal(int)
     list_changed = pyqtSignal(object)
 
 
@@ -25,11 +26,13 @@ class RecordingControls(UIControlHelper):
         self._recording = None
         self._recording_paused = None
         self._recording_finishing = False
+        self._confirmed_retries = None
         self._signals = _RecordingSignals(parent_ui)
         self._signals.state_changed.connect(self.update_recording_state, Qt.QueuedConnection)
         self._signals.paused_changed.connect(self.update_recording_paused, Qt.QueuedConnection)
         self._signals.finishing_changed.connect(self.update_recording_finishing, Qt.QueuedConnection)
         self._signals.feedback_changed.connect(self.update_recording_feedback, Qt.QueuedConnection)
+        self._signals.retries_changed.connect(self.update_recording_retries, Qt.QueuedConnection)
         self._signals.list_changed.connect(self.update_recordings_dropdown, Qt.QueuedConnection)
         super().__init__(parent_ui)
 
@@ -55,6 +58,10 @@ class RecordingControls(UIControlHelper):
         self.recording_feedback_sub = self.node.create_subscription(
             String, "fault_detector/recording_feedback",
             lambda message: self._signals.feedback_changed.emit(message.data), LATCHED_QOS,
+        )
+        self.recording_retries_sub = self.node.create_subscription(
+            UInt32, "fault_detector/recording_retries",
+            lambda message: self._signals.retries_changed.emit(message.data), LATCHED_QOS,
         )
 
     def make_rows(self):
@@ -109,11 +116,13 @@ class RecordingControls(UIControlHelper):
         self.retry_button = QPushButton()
         self.retry_button.setCheckable(True)
         self.retry_button.setToolTip(
-            "Allow the selected number of additional attempts for the next "
-            "recorded command, only when retrying is supported and safe. "
-            "Press again to clear the selection."
+            "Allow additional playback attempts for the next successfully recorded "
+            "command. Failures and paused recording leave the setting armed. "
+            "Retry requires a supported command and a safe execution result. "
+            "Press again to clear the setting before the next command is accepted."
         )
-        self.retry_button.toggled.connect(self._update_retry_button)
+        self.retry_button.clicked.connect(self.toggle_recording_retries)
+        self.retry_button.setEnabled(False)
         controls.addWidget(self.retry_button)
         self.retry_count = QSpinBox()
         self.retry_count.setRange(0, 100)
@@ -138,7 +147,7 @@ class RecordingControls(UIControlHelper):
         self._refresh_pause_button()
         controls.addWidget(self.pause_recording_button)
 
-        # Skip and retry remain presentation-only until playback supports them.
+        # Skip remains presentation-only until playback supports it.
         self.recording_options.setEnabled(bool(self._recording))
         row = QHBoxLayout()
         row.addWidget(self.recording_options)
@@ -169,6 +178,11 @@ class RecordingControls(UIControlHelper):
             text = labels[outcome]
             if command:
                 text += f": {command.capitalize()}"
+            retries = feedback.get("playback_retries", 0)
+            if outcome == "added" and retries:
+                text += f" · {retries} {'retry' if retries == 1 else 'retries'}"
+            elif feedback.get("retry_unsupported"):
+                text += " · retries unsupported"
         except (ValueError, KeyError, TypeError, AttributeError):
             return
         self.recording_feedback_label.setText(text)
@@ -190,6 +204,26 @@ class RecordingControls(UIControlHelper):
         noun = "retry" if count == 1 else "retries"
         self.retry_button.setText(f"Allow {count} {noun} for next command")
         self._set_option_active(self.retry_button, self.retry_button.isChecked())
+
+    def update_recording_retries(self, count):
+        self._confirmed_retries = count
+        self.retry_button.setChecked(count > 0)
+        if count:
+            self.retry_count.setValue(count)
+        self.retry_count.setEnabled(count == 0)
+        self.retry_button.setEnabled(True)
+        self._update_retry_button()
+
+    def toggle_recording_retries(self):
+        if self._confirmed_retries is None:
+            return
+        selected_count = self.retry_count.value()
+        self.update_recording_retries(self._confirmed_retries)
+        if not self._recording or self._recording_finishing:
+            return
+        msg = CommandRecordControl(mode="set_retries")
+        msg.retries = 0 if self._confirmed_retries else selected_count
+        self.record_control_pub.publish(msg)
 
     def _update_pause_button(self, active):
         self.pause_recording_button.setText(
@@ -249,7 +283,6 @@ class RecordingControls(UIControlHelper):
     def update_recording_state(self, recording):
         if recording != self._recording:
             self.skip_button.setChecked(False)
-            self.retry_button.setChecked(False)
         self._recording = recording
         self._refresh_pause_button()
         self._refresh_recording_button()

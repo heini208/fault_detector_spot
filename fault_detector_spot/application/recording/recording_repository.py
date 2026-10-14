@@ -8,9 +8,10 @@ from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
 )
 from fault_detector_spot.application.recording.semantic_command_codec import (
-    deserialize_recording,
+    deserialize_recorded_command,
     serialize_recorded_command,
 )
+from fault_detector_spot.application.recording.recorded_step import RecordedStep
 from fault_detector_spot.shared.persistence.file_storage import (
     atomic_write_text,
     validate_storage_name,
@@ -33,12 +34,12 @@ class RecordingRepository:
             raise ValueError('Recording files must not be symbolic links')
         return path
 
-    def save(self, name: str, commands: Iterable[SemanticCommand]) -> None:
+    def save(self, name: str, commands: Iterable[SemanticCommand | RecordedStep]) -> None:
         """Atomically replace a recording with the supplied commands."""
         path = self.path(name)
         document = {
             'commands': [
-                serialize_recorded_command(command) for command in commands
+                self._serialize_step(command) for command in commands
             ],
         }
         content = json.dumps(document, indent=2) + '\n'
@@ -46,9 +47,30 @@ class RecordingRepository:
 
     def load(self, name: str) -> list[SemanticCommand]:
         """Read and validate a recording; propagate read and format errors."""
+        return [step.command for step in self.load_steps(name)]
+
+    def load_steps(self, name: str) -> list[RecordedStep]:
+        """Read playback policy; existing recordings default to no playback retries."""
         content = self.path(name).read_text(encoding='utf-8')
         document = json.loads(content)
-        return deserialize_recording(document)
+        if not isinstance(document, dict) or not isinstance(document.get('commands'), list):
+            raise ValueError('Recording commands must be a list in an object')
+        steps = []
+        for entry in document['commands']:
+            if not isinstance(entry, dict):
+                raise TypeError('Recorded command must be an object')
+            data = dict(entry)
+            retries = data.pop('playback_retries', 0)
+            steps.append(RecordedStep(deserialize_recorded_command(data), retries))
+        return steps
+
+    @staticmethod
+    def _serialize_step(value):
+        step = value if isinstance(value, RecordedStep) else RecordedStep(value)
+        data = serialize_recorded_command(step.command)
+        if step.playback_retries:
+            data['playback_retries'] = step.playback_retries
+        return data
 
     def delete(self, name: str) -> bool:
         """Delete a recording and return whether a file was removed."""

@@ -23,6 +23,7 @@ from fault_detector_spot.application.commanding.semantic_command import (
 )
 from fault_detector_spot.application.recording.record_manager_node import RecordManager
 from fault_detector_spot.application.recording.recording_repository import RecordingRepository
+from fault_detector_spot.application.recording.recorded_step import RecordedStep
 from fault_detector_spot.application.recording.semantic_command_codec import (
     deserialize_recorded_command,
     deserialize_recording,
@@ -59,6 +60,9 @@ class FakeLogger:
 
 
 class RecordManagerHarness:
+    _publish_retry_setting = RecordManager._publish_retry_setting
+    set_recording_retries = RecordManager.set_recording_retries
+    _dispatch_playback_step = RecordManager._dispatch_playback_step
     _publish_recording_feedback = RecordManager._publish_recording_feedback
     _publish_command_recording_outcome = RecordManager._publish_command_recording_outcome
     handle_command_status = RecordManager.handle_command_status
@@ -83,6 +87,15 @@ class RecordManagerHarness:
         self._playback_commands = deque()
         self._playback_request_id = ""
         self._playback_name = ""
+        self._playback_step = None
+        self._playback_retries_left = 0
+        self._playback_acquisition_active = False
+        self._retry_generation = 0
+        self._retry_settings = {0: 0}
+        self._retry_tokens = {}
+        self._retry_consumed = set()
+        self._recording_retries = {}
+        self.recording_retries_pub = FakePublisher()
         self.command_submission_pub = FakePublisher()
         self.playback_state_pub = FakePublisher()
         self.logger = FakeLogger()
@@ -241,7 +254,7 @@ def test_playback_dispatches_one_command_after_each_success():
     manager = RecordManagerHarness()
     first = SemanticCommand(command_id=CommandID.STAND_UP)
     second = SemanticCommand(command_id=CommandID.STOW_ARM)
-    manager._playback_commands = deque([first, second])
+    manager._playback_commands = deque([RecordedStep(first), RecordedStep(second)])
     manager._playback_name = "inspection"
 
     manager._dispatch_next_playback_command()
@@ -288,7 +301,7 @@ def test_playback_stops_and_discards_remaining_commands_on_failure():
     manager = RecordManagerHarness()
     first = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
     second = SemanticCommand(command_id=CommandID.STOW_ARM)
-    manager._playback_commands = deque([first, second])
+    manager._playback_commands = deque([RecordedStep(first), RecordedStep(second)])
     manager._playback_name = "inspection"
     manager._dispatch_next_playback_command()
     request = command_request_from_message(
@@ -591,3 +604,113 @@ def test_latest_command_feedback_survives_older_completion(tmp_path):
     assert manager.recording_feedback_pub.messages[-1].data == feedback
     manager.control("start", "next")
     assert json.loads(manager.recording_feedback_pub.messages[-1].data)["outcome"] == "idle"
+
+
+def test_retry_setting_survives_failure_pause_and_out_of_order_success(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    manager.set_recording_retries(2)
+    first, second, third = [make_request(CommandID.MOVE_ARM_TO_TAG) for _ in range(3)]
+    manager.capture_request(command_request_to_message(first))
+    manager.control("pause")
+    manager.capture_request(command_request_to_message(make_request(CommandID.WAIT_TIME)))
+    manager.control("resume")
+    manager.capture_request(command_request_to_message(second))
+    manager.capture_request(command_request_to_message(third))
+    manager.handle_command_status(terminal_status(third.request_id, CommandStatus.STATE_SUCCEEDED))
+    manager.handle_command_status(terminal_status(second.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager.recording_retries_pub.messages[-1].data == 2
+    manager.handle_command_status(terminal_status(first.request_id, CommandStatus.STATE_FAILED))
+    assert manager.recording_retries_pub.messages[-1].data == 0
+    manager.control("stop")
+    assert [step.playback_retries for step in manager.repository.load_steps("session")] == [2, 0]
+
+
+def test_retry_setting_does_not_retroactively_change_accepted_commands(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    first = make_request(CommandID.MOVE_ARM_TO_TAG)
+    manager.set_recording_retries(2)
+    manager.capture_request(command_request_to_message(first))
+    manager.set_recording_retries(4)
+    manager.handle_command_status(terminal_status(first.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager.recording_retries_pub.messages[-1].data == 4
+    manager.control("stop")
+    assert manager.repository.load_steps("session")[0].playback_retries == 2
+
+
+def test_playback_retry_uses_new_ids_and_stops_at_budget(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [RecordedStep(command, 2)])
+    manager.control("play", "session")
+    ids = []
+    for attempt in range(3):
+        request_id = manager._playback_request_id
+        ids.append(request_id)
+        failed = terminal_status(request_id, CommandStatus.STATE_FAILED)
+        failed.retry_safe = True
+        manager.handle_playback_status(failed)
+        count = len(manager.command_submission_pub.messages)
+        manager.handle_playback_status(failed)  # Duplicate failure cannot retry again.
+        assert len(manager.command_submission_pub.messages) == count
+    assert len(set(ids)) == 3
+    assert len(manager.command_submission_pub.messages) == 3
+    assert not manager._playback_request_id
+
+
+@pytest.mark.parametrize("cancelled, safe, acquisition", [
+    (True, True, False), (False, False, False), (False, True, True),
+])
+def test_playback_retry_requires_safe_failure_without_active_acquisition(tmp_path, cancelled, safe, acquisition):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [RecordedStep(command, 2)])
+    manager.control("play", "session")
+    manager._playback_acquisition_active = acquisition
+    status = terminal_status(manager._playback_request_id,
+                             CommandStatus.STATE_CANCELLED if cancelled else CommandStatus.STATE_FAILED)
+    status.retry_safe = safe
+    manager.handle_playback_status(status)
+    assert len(manager.command_submission_pub.messages) == 1
+    assert not manager._playback_request_id
+
+
+def test_unsupported_retry_is_reported_without_changing_probe_retries(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    manager.set_recording_retries(3)
+    request = make_request(CommandID.MOVE_ARM_RELATIVE)
+    manager.capture_request(command_request_to_message(request))
+    manager.handle_command_status(terminal_status(request.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert json.loads(manager.recording_feedback_pub.messages[-1].data)["retry_unsupported"]
+    manager.control("stop")
+    assert manager.repository.load_steps("session")[0].playback_retries == 0
+
+
+def test_retry_success_advances_and_new_step_gets_its_own_budget(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [RecordedStep(command, 1), RecordedStep(command, 2)])
+    manager.control("play", "session")
+    failed = terminal_status(manager._playback_request_id, CommandStatus.STATE_FAILED)
+    failed.retry_safe = True
+    manager.handle_playback_status(failed)
+    assert manager._playback_retries_left == 0
+    manager.handle_playback_status(terminal_status(manager._playback_request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager._playback_retries_left == 2
+    assert len(manager.command_submission_pub.messages) == 3
+
+
+def test_emergency_command_stops_retry_playback(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [RecordedStep(command, 2)])
+    manager.control("play", "session")
+    original_id = manager._playback_request_id
+    manager.capture_request(command_request_to_message(make_request(CommandID.EMERGENCY_CANCEL)))
+    failed = terminal_status(original_id, CommandStatus.STATE_FAILED)
+    failed.retry_safe = True
+    manager.handle_playback_status(failed)
+    assert len(manager.command_submission_pub.messages) == 1
+    assert not manager._playback_request_id

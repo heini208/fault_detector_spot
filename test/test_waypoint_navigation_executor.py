@@ -332,6 +332,24 @@ def settle_cancel(executor, clock):
         clock.now += delta
         update = executor.poll()
     assert update.outcome is Outcome.FAILURE
+    return update
+
+
+@pytest.mark.parametrize("external_cancel", [False, True])
+def test_retry_permission_requires_confirmed_failure_stop(external_cancel):
+    executor, arm, base, client, send, clock, pose, events = rig()
+    prepare(executor, arm, base, pose)
+    result = ManualFuture()
+    send.set_result(FakeGoalHandle(result))
+    executor.poll()
+    if external_cancel:
+        executor.cancel()
+    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_ABORTED))
+    first = executor.poll()
+    assert first.outcome is Outcome.RUNNING
+    assert not first.retry_safe
+    stopped = settle_cancel(executor, clock)
+    assert stopped.retry_safe is (not external_cancel)
 
 
 def test_cancel_without_result_or_fresh_pose_keeps_ownership():

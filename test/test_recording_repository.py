@@ -45,3 +45,25 @@ def test_failed_replacement_preserves_previous_recording(
         repository.save('run', [replacement])
     assert repository.load('run') == [original]
     assert sorted(path.name for path in tmp_path.iterdir()) == ['run.json']
+
+
+def test_playback_retries_are_separate_from_execution_retries(tmp_path):
+    from fault_detector_spot.application.recording.recorded_step import RecordedStep
+    repository = RecordingRepository(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT, retries=5)
+    repository.save('run', [RecordedStep(command, 3)])
+    assert repository.load_steps('run') == [RecordedStep(command, 3)]
+    assert repository.load('run')[0].retries == 5
+    repository.save('old', [command])
+    assert repository.load_steps('old')[0].playback_retries == 0
+
+
+@pytest.mark.parametrize('count', [-1, 101, True, 1.5, '2'])
+def test_invalid_playback_retry_metadata_is_rejected(tmp_path, count):
+    repository = RecordingRepository(tmp_path)
+    repository.save('run', [SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)])
+    data = json.loads(repository.path('run').read_text())
+    data['commands'][0]['playback_retries'] = count
+    repository.path('run').write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        repository.load_steps('run')

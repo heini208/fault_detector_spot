@@ -41,6 +41,7 @@ class ArmMovementUpdate:
 
     outcome: ArmMovementOutcome
     detail: str
+    retry_safe: bool = False
 
 
 __all__ = [

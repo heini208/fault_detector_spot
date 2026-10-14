@@ -1670,6 +1670,18 @@ def test_tag_accuracy_does_not_retry_guard_failure(monkeypatch):
     assert executor._tag_accuracy is None
 
 
+@pytest.mark.parametrize("outcome,retry_safe", [
+    (ArmMovementOutcome.PLANNING_FAILED, True),
+    (ArmMovementOutcome.RECOVERY_FAILED, False),
+    (ArmMovementOutcome.STOP_UNCONFIRMED, False),
+    (ArmMovementOutcome.CONTACT, False),
+])
+def test_guarded_terminal_result_limits_playback_retries(monkeypatch, outcome, retry_safe):
+    executor, _, _, _ = tag_verification_executor(monkeypatch)
+    result = executor._finish_guarded_update(executor_module.ArmMovementUpdate(outcome, "guard result"))
+    assert result.retry_safe is retry_safe
+
+
 def test_tag_accuracy_cancellation_does_not_start_correction(monkeypatch):
     executor, feedback, _, corrections = tag_verification_executor(monkeypatch)
     stopped = []

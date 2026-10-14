@@ -60,7 +60,9 @@ class MovementBehaviour(py_trees.behaviour.Behaviour):
             if update.outcome is self.SUCCESS_OUTCOME:
                 return Status.SUCCESS
 
-            return self._fail(update.detail)
+            result = self._fail(update.detail)
+            self.blackboard.last_command.retry_safe = bool(getattr(update, "retry_safe", False))
+            return result
         except Exception as exception:
             return self._fail(
                 f"{self.__class__.__name__} failed: {exception}"
@@ -91,6 +93,8 @@ class MovementBehaviour(py_trees.behaviour.Behaviour):
         return self.blackboard.last_command
 
     def _fail(self, detail: str) -> Status:
+        if self.blackboard.last_command is not None:
+            self.blackboard.last_command.retry_safe = False
         if self._started and self.executor is not None:
             self.executor.cancel()
         self._started = False
@@ -104,6 +108,9 @@ class MovementBehaviour(py_trees.behaviour.Behaviour):
         return Status.FAILURE
 
     def _clear_failure_detail(self) -> None:
+        command = self.blackboard.last_command
+        if command is not None:
+            command.retry_safe = False
         self.blackboard.command_failure_request_id = (
             self._current_request_id()
         )

@@ -173,6 +173,20 @@ def test_bt_status_is_translated_back_to_controller_feedback():
     assert controller.active_request_id == second.request_id
 
 
+def test_execution_retry_permission_survives_controller_transport():
+    node = FakeNode()
+    controller = CommandController()
+    RosCommandTransport(node, controller)
+    request = make_request(CommandID.MOVE_TO_WAYPOINT)
+    controller.submit(request)
+    failed = CommandStatus(request_id=request.request_id,
+                           state=CommandStatus.STATE_FAILED, retry_safe=True)
+    node.subscriptions["fault_detector/_internal/command_status"](failed)
+    status = node.publishers["fault_detector/_internal/commands/status"].messages[-1]
+    assert status.state == CommandStatus.STATE_FAILED
+    assert status.retry_safe
+
+
 def test_invalid_ros_submission_is_rejected_before_queueing():
     node = FakeNode()
     controller = CommandController()

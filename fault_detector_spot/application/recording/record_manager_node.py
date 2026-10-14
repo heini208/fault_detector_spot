@@ -14,7 +14,11 @@ from fault_detector_msgs.msg import (
     StringArray,
 )
 from rclpy.node import Node
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, UInt32
+from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.recording.recorded_step import (
+    RecordedStep, RETRYABLE_COMMANDS, validate_retries,
+)
 
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
@@ -56,9 +60,17 @@ class RecordManager(Node):
         self._recording_results = {}
         self._recording_stop_requested = False
         self._last_recording_request_id = ""
-        self._playback_commands: Deque[SemanticCommand] = deque()
+        self._playback_commands: Deque[RecordedStep] = deque()
         self._playback_request_id = ""
         self._playback_name = ""
+        self._playback_step = None
+        self._playback_retries_left = 0
+        self._playback_acquisition_active = False
+        self._retry_generation = 0
+        self._retry_settings = {0: 0}
+        self._retry_tokens = {}
+        self._retry_consumed = set()
+        self._recording_retries = {}
 
         self.list_pub = self.create_publisher(
             StringArray,
@@ -85,6 +97,9 @@ class RecordManager(Node):
         )
         self.recording_feedback_pub = self.create_publisher(
             String, "fault_detector/recording_feedback", LATCHED_QOS,
+        )
+        self.recording_retries_pub = self.create_publisher(
+            UInt32, "fault_detector/recording_retries", LATCHED_QOS,
         )
         self.command_submission_pub = self.create_publisher(
             CommandRequestMessage,
@@ -128,16 +143,19 @@ class RecordManager(Node):
                 self.delete_recording(name)
             elif mode in {"pause", "resume"}:
                 self.set_recording_paused(mode == "pause")
+            elif mode == "set_retries":
+                self.set_recording_retries(message.retries)
         except (OSError, TypeError, ValueError) as exception:
             self.get_logger().error(f"Recording {mode} request failed: {exception}")
         finally:
-            if mode in {"start", "stop", "pause", "resume"}:
+            if mode in {"start", "stop", "pause", "resume", "set_retries"}:
                 self.publish_recording_state()
 
     def publish_recording_state(self):
         """Publish actual state, including after a rejected start or failed save."""
         self.recording_state_pub.publish(Bool(data=self.recording))
         self.recording_paused_pub.publish(Bool(data=self.recording_paused))
+        self._publish_retry_setting()
         self.recording_finishing_pub.publish(Bool(
             data=self._recording_stop_requested and self._has_pending_commands()
         ))
@@ -147,6 +165,19 @@ class RecordManager(Node):
             request_id not in self._recording_results
             for request_id in self._recording_commands
         )
+
+    def set_recording_retries(self, count):
+        validate_retries(count)
+        if not self.recording or self._recording_stop_requested:
+            raise ValueError("Retry settings require an active recording")
+        self._retry_generation += 1
+        self._retry_settings[self._retry_generation] = count
+
+    def _publish_retry_setting(self):
+        count = self._retry_settings[self._retry_generation]
+        if self._retry_generation in self._retry_consumed:
+            count = 0
+        self.recording_retries_pub.publish(UInt32(data=count))
 
     def set_recording_paused(self, paused: bool):
         """Exclude accepted commands without affecting their execution."""
@@ -175,6 +206,11 @@ class RecordManager(Node):
         self._recording_results.clear()
         self._recording_stop_requested = False
         self._last_recording_request_id = ""
+        self._retry_generation = 0
+        self._retry_settings = {0: 0}
+        self._retry_tokens.clear()
+        self._retry_consumed.clear()
+        self._recording_retries.clear()
         self._publish_recording_feedback("", "", "idle")
         self.get_logger().info(f"Started recording: {name}")
 
@@ -185,7 +221,12 @@ class RecordManager(Node):
         if self._has_pending_commands():
             self.get_logger().info("Waiting for command outcomes before saving recording.")
             return
-        self.repository.save(self.current_name, self.temp_data)
+        steps = [
+            RecordedStep(command, self._recording_retries.get(request_id, 0))
+            for request_id, command in self._recording_commands.items()
+            if self._recording_results.get(request_id) == CommandStatus.STATE_SUCCEEDED
+        ]
+        self.repository.save(self.current_name, steps)
         self.get_logger().info(f"Saved recording: {self.current_name}")
         self.recording = False
         self.recording_paused = False
@@ -194,6 +235,7 @@ class RecordManager(Node):
         self._recording_commands.clear()
         self._recording_results.clear()
         self._recording_stop_requested = False
+        self._retry_consumed.add(self._retry_generation)
         self.publish_recordings_list()
 
     def capture_request(self, message: CommandRequestMessage) -> bool:
@@ -204,6 +246,8 @@ class RecordManager(Node):
                 f"Rejected accepted command request: {exception}"
             )
             return False
+        if request.command.command_id in {CommandID.EMERGENCY_CANCEL, CommandID.ESTOP_STATE}:
+            self._finish_playback("Playback stopped by emergency command.", failed=True)
         if request.request_id in self._recorded_request_ids:
             return False
         if self.recording:
@@ -228,15 +272,22 @@ class RecordManager(Node):
             )
             return False
         self._recording_commands[request.request_id] = deepcopy(request.command)
+        self._retry_tokens[request.request_id] = self._retry_generation
         self._refresh_successful_commands()
         self._publish_command_recording_outcome(request.request_id)
         return True
 
     def _publish_recording_feedback(self, request_id, command_id, outcome):
         """Publish confirmed capture facts; the UI owns their presentation."""
-        self.recording_feedback_pub.publish(String(data=json.dumps({
+        feedback = {
             "request_id": request_id, "command_id": command_id, "outcome": outcome,
-        })))
+        }
+        retries = self._recording_retries.get(request_id, 0)
+        if retries:
+            feedback["playback_retries"] = retries
+        if outcome == "added" and request_id in self._recording_retries and not retries:
+            feedback["retry_unsupported"] = True
+        self.recording_feedback_pub.publish(String(data=json.dumps(feedback)))
 
     def _publish_command_recording_outcome(self, request_id):
         if request_id != self._last_recording_request_id:
@@ -251,6 +302,24 @@ class RecordManager(Node):
         )
 
     def _refresh_successful_commands(self):
+        blocked_tokens = set()
+        for request_id, command in self._recording_commands.items():
+            token = self._retry_tokens[request_id]
+            outcome = self._recording_results.get(request_id)
+            if outcome is None:
+                blocked_tokens.add(token)
+            elif (outcome == CommandStatus.STATE_SUCCEEDED
+                  and token not in blocked_tokens and token not in self._retry_consumed
+                  and self._retry_settings[token]):
+                self._retry_consumed.add(token)
+                if command.command_id in RETRYABLE_COMMANDS:
+                    self._recording_retries[request_id] = self._retry_settings[token]
+                else:
+                    self._recording_retries[request_id] = 0
+                    self.get_logger().warning(
+                        f"Recorded {command.command_id.value} without retries: retry unsupported"
+                    )
+        self._publish_retry_setting()
         # Dict insertion order is acceptance order, irrespective of completion order.
         self.temp_data = [
             command for request_id, command in self._recording_commands.items()
@@ -280,7 +349,8 @@ class RecordManager(Node):
         if message.request_id not in self._recording_commands:
             return False
         self._refresh_successful_commands()
-        self._publish_command_recording_outcome(message.request_id)
+        if self._last_recording_request_id in self._recording_commands:
+            self._publish_command_recording_outcome(self._last_recording_request_id)
         if self._recording_stop_requested and not self._has_pending_commands():
             # Use the same error handling as an explicit stop; unsaved data survives.
             self.handle_control(CommandRecordControl(mode="stop"))
@@ -291,7 +361,7 @@ class RecordManager(Node):
             self.get_logger().warning("Playback is already active.")
             return
         try:
-            commands = self.repository.load(name)
+            commands = self.repository.load_steps(name)
         except (OSError, TypeError, ValueError) as exception:
             self.get_logger().error(
                 f"Could not load recording {name}: {exception}"
@@ -299,6 +369,7 @@ class RecordManager(Node):
             return
         self._playback_commands = deque(commands)
         self._playback_name = name
+        self._playback_acquisition_active = False
         self.playback_state_pub.publish(Bool(data=True))
         self.get_logger().info(f"Playing back: {name}")
         self._dispatch_next_playback_command()
@@ -310,6 +381,12 @@ class RecordManager(Node):
         ):
             return False
         if message.state == CommandStatus.STATE_SUCCEEDED:
+            if self._playback_step is not None:
+                command_id = self._playback_step.command.command_id
+                if command_id is CommandID.START_SENSOR_RECORDING:
+                    self._playback_acquisition_active = True
+                elif command_id is CommandID.STOP_SENSOR_RECORDING:
+                    self._playback_acquisition_active = False
             self._playback_request_id = ""
             self._dispatch_next_playback_command()
             return True
@@ -318,6 +395,15 @@ class RecordManager(Node):
             CommandStatus.STATE_CANCELLED,
         ):
             detail = message.detail or "command did not succeed"
+            if (message.state == CommandStatus.STATE_FAILED and message.retry_safe
+                    and self._playback_retries_left > 0
+                    and not self._playback_acquisition_active):
+                self._playback_retries_left -= 1
+                self.get_logger().info(
+                    f"Retrying {message.command_id}; {self._playback_retries_left} retries remain: {detail}"
+                )
+                self._dispatch_playback_step()
+                return True
             self._finish_playback(
                 f"Playback stopped after {message.command_id}: {detail}",
                 failed=True,
@@ -329,9 +415,13 @@ class RecordManager(Node):
         if not self._playback_commands:
             self._finish_playback("Playback finished.")
             return
-        command = self._playback_commands.popleft()
+        self._playback_step = self._playback_commands.popleft()
+        self._playback_retries_left = self._playback_step.playback_retries
+        self._dispatch_playback_step()
+
+    def _dispatch_playback_step(self):
         request = CommandRequest.create(
-            command=command,
+            command=self._playback_step.command,
             client_id="record_manager",
             origin=CommandOrigin.PLAYBACK,
             recording_policy=RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE,
@@ -348,6 +438,9 @@ class RecordManager(Node):
         self._playback_commands.clear()
         self._playback_request_id = ""
         self._playback_name = ""
+        self._playback_step = None
+        self._playback_retries_left = 0
+        self._playback_acquisition_active = False
         if was_active:
             self.playback_state_pub.publish(Bool(data=False))
         if failed:

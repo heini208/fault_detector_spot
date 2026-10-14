@@ -31,6 +31,7 @@ class WaypointNavigationOutcome(Enum):
 class WaypointNavigationUpdate:
     outcome: WaypointNavigationOutcome
     detail: str
+    retry_safe: bool = False
 
 
 class _Phase(Enum):
@@ -63,6 +64,7 @@ class WaypointNavigationExecutor:
         self._cancel_terminal = False
         self._stop_verifier = None
         self._cancel_detail = ""
+        self._retry_after_stop = False
         self.arm_executor = arm_executor
         self.base_executor = base_executor
         self.action_client = action_client
@@ -101,6 +103,7 @@ class WaypointNavigationExecutor:
             return WaypointNavigationUpdate(WaypointNavigationOutcome.BUSY,
                                             "Waypoint or robot movement is already active")
         self._terminal_update = None
+        self._retry_after_stop = False
         if not isinstance(goal_pose, PoseStamped) or goal_pose.header.frame_id != "map":
             return self._failure("Waypoint requires a map-frame PoseStamped")
         self._goal_pose = deepcopy(goal_pose)
@@ -215,6 +218,7 @@ class WaypointNavigationExecutor:
 
     def cancel(self):
         with self._lock:
+            self._retry_after_stop = False
             if not self.active or self.cancelling:
                 return
             self._phase = _Phase.CANCELLING
@@ -359,8 +363,14 @@ class WaypointNavigationExecutor:
                     if not self._stop_verifier.settled:
                         return self._running("Nav2 ended; waiting for fresh stationary base feedback")
                 detail = self._cancel_detail
+                retry_safe = (
+                    self._retry_after_stop and self._arm_is_stowed()
+                    and not self.base_executor.active
+                )
                 self._clear()
-                return WaypointNavigationUpdate(WaypointNavigationOutcome.FAILURE, detail)
+                return WaypointNavigationUpdate(
+                    WaypointNavigationOutcome.FAILURE, detail, retry_safe=retry_safe,
+                )
             except Exception as exception:
                 self._cancel_detail = f"Navigation stop unconfirmed: {exception}"
                 return self._running(self._cancel_detail)
@@ -393,7 +403,9 @@ class WaypointNavigationExecutor:
 
     def _failure(self, detail):
         if self.active:
+            retry_candidate = self._phase in {_Phase.WAITING_FOR_GOAL, _Phase.NAVIGATING}
             self.cancel()
+            self._retry_after_stop = retry_candidate
             self._cancel_detail = detail
             return self._poll_cancellation()
         self._clear()
