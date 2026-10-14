@@ -187,6 +187,7 @@ def test_cartesian_move_limits_allow_one_standoff_correction_only():
 def test_close_surface_and_correction_always_bypass_map(monkeypatch, bypass, completed_moves):
     execution = action(contact=False)
     execution._command.ignore_environment_collisions = bypass
+    execution._command.surface_tolerance_m = 0.012
     execution._approach_steps = completed_moves
     execution._sensor_id = "probe"
     execution._attachment_revision = 1
@@ -231,3 +232,4 @@ def test_close_surface_and_correction_always_bypass_map(monkeypatch, bypass, com
     assert captured["cartesian_path"] is True
     assert captured["ignore_environment_collisions"] is True
     assert execution._requested_step_m == pytest.approx(0.12)
+    assert "retreat_distance_m" not in captured

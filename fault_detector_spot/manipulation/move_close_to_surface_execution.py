@@ -75,7 +75,6 @@ class MoveCloseToSurfaceConfig(MeasureSensorTipDistanceConfig):
     force_near_target_distance_m: float = 0.020
     approach_far_speed_mps: float = 0.005
     approach_near_speed_mps: float = 0.001
-    contact_search_retreat_distance_m: float = 0.010
     contact_search_speed_mps: float = 0.001
     contact_search_force_threshold_n: float = 2.0
     approach_slowdown_distance_m: float = 0.050
@@ -119,7 +118,6 @@ class MoveCloseToSurfaceConfig(MeasureSensorTipDistanceConfig):
             c.approach_far_speed_mps,
             c.approach_near_speed_mps,
             c.contact_search_speed_mps,
-            c.contact_search_retreat_distance_m,
             c.contact_search_force_threshold_n,
             c.approach_slowdown_distance_m,
             c.contact_search_overtravel_m,
@@ -311,7 +309,7 @@ class MoveCloseToSurfaceExecution:
             self._sensor_id,
             speed=speed,
             force_threshold_n=threshold,
-            retreat_distance_m=self.config.contact_search_retreat_distance_m,
+            retreat_distance_m=self._surface_tolerance(),
             cartesian_path=True,
             ignore_environment_collisions=True,
         )

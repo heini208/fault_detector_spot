@@ -447,7 +447,13 @@ that same operation through **Test distance measure**, which reports distance
 without performing the final approach. The test may move the arm and return;
 its label reports both perpendicular wall distance and distance along probe +X.
 A target distance of **0 mm** retains the force-guarded contact search and skips
-depth observation entirely. The standalone distance test remains available.
+depth observation entirely. In this mode, the command tolerance specifies the
+requested backoff distance after contact (for example, 0.005 m requests 5 mm).
+The existing guard caps backoff at the distance already travelled during the approach.
+An omitted/zero tolerance falls back to `close_surface.tolerance_m`; the separate
+`close_surface.contact_search_retreat_distance_m` setting has been removed.
+Positive target distances still use tolerance as the allowed distance error.
+The standalone distance test remains available.
 
 During aligned pre-approach setup, **Orient sensor tip to surface** is available
 after reaching the safe approach, before saving or reaching the final aligned

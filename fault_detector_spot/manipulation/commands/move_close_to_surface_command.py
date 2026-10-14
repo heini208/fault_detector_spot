@@ -9,7 +9,10 @@ from fault_detector_spot.manipulation.commands.manipulator_to_tag_command import
 
 
 class MoveCloseToSurfaceCommand(ExecutionCommand):
-    """Carry stand-off target and optional per-command tolerance."""
+    """Carry stand-off tolerance, reused as contact backoff for a zero target.
+
+    A zero tolerance selects the configured tolerance in either mode.
+    """
 
     def __init__(
         self,

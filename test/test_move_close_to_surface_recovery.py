@@ -396,24 +396,25 @@ def test_stop_failure_never_returns_to_start_in_either_mode(outcome, target):
     assert action.failure_outcome in {None, ArmMovementOutcome.STOP_UNCONFIRMED, ArmMovementOutcome.RETREAT_FAILED}
 
 
-def test_contact_search_settings_are_independent_of_standoff_settings():
+@pytest.mark.parametrize("tolerance, expected", [(0.003, 0.003), (0.012, 0.012), (0.0, 0.007)])
+def test_contact_search_uses_tolerance_as_backoff(tolerance, expected):
     executor = FakeExecutor()
     action = MoveCloseToSurfaceExecution(
         executor, SimpleNamespace(active_attachment=lambda: ("probe", 1)),
         MoveCloseToSurfaceConfig(
-            approach_near_speed_mps=0.002, contact_search_retreat_distance_m=0.003,
+            approach_near_speed_mps=0.002, tolerance_m=0.007,
         ),
     )
     action._current_probe_pose = lambda: pose()
     action.start(MoveCloseToSurfaceCommand(
         CommandID.MOVE_CLOSE_TO_SURFACE, stamp=object(),
-        target_surface_distance_m=0.0,
+        target_surface_distance_m=0.0, surface_tolerance_m=tolerance,
     ))
     options = executor.guarded_calls[-1][1]
     assert options["speed"].linear_speed_mps == pytest.approx(0.001)
     assert options["force_threshold_n"] == pytest.approx(2.0)
 
-    assert options["retreat_distance_m"] == pytest.approx(0.003)
+    assert options["retreat_distance_m"] == pytest.approx(expected)
 
 
 def test_recovery_waits_for_cancelled_motion_to_stop_before_moving():
