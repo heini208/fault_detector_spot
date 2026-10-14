@@ -1,6 +1,8 @@
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from std_msgs.msg import Bool
-from PyQt5.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QComboBox
+from PyQt5.QtWidgets import (
+    QHBoxLayout, QLineEdit, QPushButton, QComboBox, QSpinBox, QWidget,
+)
 
 from fault_detector_msgs.msg import CommandRecordControl
 from fault_detector_msgs.msg import StringArray
@@ -35,7 +37,8 @@ class RecordingControls(UIControlHelper):
 
     def make_rows(self):
         rows = [
-            self._make_recording_row()
+            self._make_recording_row(),
+            self._make_recording_options_row(),
         ]
         return rows
 
@@ -66,6 +69,67 @@ class RecordingControls(UIControlHelper):
 
         return row
 
+    def _make_recording_options_row(self) -> QHBoxLayout:
+        self.recording_options = QWidget()
+        controls = QHBoxLayout(self.recording_options)
+        controls.setContentsMargins(0, 0, 0, 0)
+
+        self.skip_button = QPushButton("Start skip block")
+        self.skip_button.setCheckable(True)
+        self.skip_button.toggled.connect(self._update_skip_button)
+        controls.addWidget(self.skip_button)
+
+        self.retry_button = QPushButton()
+        self.retry_button.setCheckable(True)
+        self.retry_button.setToolTip(
+            "Allow additional attempts for the next recorded command. "
+            "Press again to clear the selection."
+        )
+        self.retry_button.toggled.connect(self._update_retry_button)
+        controls.addWidget(self.retry_button)
+        self.retry_count = QSpinBox()
+        self.retry_count.setRange(0, 100)
+        self.retry_count.setValue(1)
+        self.retry_count.setAccessibleName("Additional retries for next command")
+        self.retry_count.valueChanged.connect(self._update_retry_button)
+        controls.addWidget(self.retry_count)
+        self._update_retry_button()
+
+        self.pause_recording_button = QPushButton("Don't record")
+        self.pause_recording_button.setCheckable(True)
+        self.pause_recording_button.toggled.connect(self._update_pause_button)
+        controls.addWidget(self.pause_recording_button)
+        controls.addStretch()
+
+        # Presentation state only; recording policy is not changed here.
+        self.recording_options.setEnabled(bool(self._recording))
+        row = QHBoxLayout()
+        row.addWidget(self.recording_options)
+        return row
+
+    @staticmethod
+    def _set_option_active(button, active):
+        button.setStyleSheet(
+            "background-color: red; color: white; font-weight: bold;"
+            if active else ""
+        )
+
+    def _update_skip_button(self, active):
+        self.skip_button.setText("Stop skip block" if active else "Start skip block")
+        self._set_option_active(self.skip_button, active)
+
+    def _update_retry_button(self, *_):
+        count = self.retry_count.value()
+        noun = "retry" if count == 1 else "retries"
+        self.retry_button.setText(f"Allow {count} {noun} for next command")
+        self._set_option_active(self.retry_button, self.retry_button.isChecked())
+
+    def _update_pause_button(self, active):
+        self.pause_recording_button.setText(
+            "Recording paused" if active else "Don't record"
+        )
+        self._set_option_active(self.pause_recording_button, active)
+
     def toggle_recording(self):
         if self._recording is None:
             return
@@ -95,6 +159,11 @@ class RecordingControls(UIControlHelper):
         self.record_control_pub.publish(msg)
 
     def update_recording_state(self, recording):
+        if recording != self._recording:
+            self.skip_button.setChecked(False)
+            self.retry_button.setChecked(False)
+            self.pause_recording_button.setChecked(False)
+        self.recording_options.setEnabled(recording)
         self._recording = recording
         self.record_button.setEnabled(True)
         self.record_button.setText("Stop Recording" if recording else "Start Recording")

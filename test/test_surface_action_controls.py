@@ -55,7 +55,11 @@ _ACTIONS = (
 def test_surface_group_exposes_both_sensor_actions_and_distinguishes_camera_action(controls):
     group = controls.rows[2].itemAt(0).widget()
     labels = {button.text() for button in group.findChildren(QPushButton)}
-    assert group.title() == "Surface actions"
+    assert group.toggle_button.text() == "Surface actions"
+    assert not group.toggle_button.isChecked()
+    assert group.content_frame.isHidden()
+    group.toggle_button.click()
+    assert not group.content_frame.isHidden()
     assert {"Orient camera to surface", "Orient sensor tip to surface", "Test surface distance",
             "Move sensor tip close to surface"} <= labels
     assert "lower-middle" in controls.orient_to_surface_button.toolTip()

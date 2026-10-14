@@ -1,7 +1,7 @@
 import math
 
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QCheckBox
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QCheckBox, QWidget
 
 from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
 
@@ -12,6 +12,7 @@ from fault_detector_spot.shared.geometry.movement_frames import (
 from fault_detector_spot.manipulation.arm_state_source import ArmStateSource, ArmStowState
 from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
+from ..shared.collapsible_section import CollapsibleSection
 from ..shared.posture_toggle import PostureToggle
 from ..shared.movement_layout import control_group
 from ..ros.arm_collision_client import ArmCollisionClient
@@ -74,13 +75,19 @@ class ManipulationControls(UIControlHelper):
                 self._make_environment_collision_row(),
                 self._make_reset_fields_and_move_relative_row(),
             ),
-            control_group(
-                "Surface actions",
-                self._make_sensor_tip_surface_action_row(),
-                self._make_surface_action_row(),
-            ),
+            self._make_surface_actions_section(),
             control_group("Robot actions", self._make_control_row()),
         ]
+
+    def _make_surface_actions_section(self):
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(self._make_sensor_tip_surface_action_row())
+        layout.addLayout(self._make_surface_action_row())
+        row = QHBoxLayout()
+        row.addWidget(CollapsibleSection("Surface actions", content, expanded=False))
+        return row
 
     def refresh_arm_state(self):
         if self.arm_state_button is None:
