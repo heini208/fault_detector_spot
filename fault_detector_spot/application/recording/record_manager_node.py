@@ -51,6 +51,9 @@ class RecordManager(Node):
         self.current_name = None
         self.temp_data: List[SemanticCommand] = []
         self._recorded_request_ids = set()
+        self._recording_commands = {}
+        self._recording_results = {}
+        self._recording_stop_requested = False
         self._playback_commands: Deque[SemanticCommand] = deque()
         self._playback_request_id = ""
         self._playback_name = ""
@@ -75,6 +78,9 @@ class RecordManager(Node):
             "fault_detector/recording_paused",
             LATCHED_QOS,
         )
+        self.recording_finishing_pub = self.create_publisher(
+            Bool, "fault_detector/recording_finishing", LATCHED_QOS,
+        )
         self.command_submission_pub = self.create_publisher(
             CommandRequestMessage,
             "fault_detector/_internal/commands/submit",
@@ -96,8 +102,8 @@ class RecordManager(Node):
         self.create_subscription(
             CommandStatus,
             "fault_detector/_internal/commands/status",
-            self.handle_playback_status,
-            10,
+            self.handle_command_status,
+            COMMAND_REQUEST_QOS,
         )
         self.publish_recordings_list()
         self.publish_recording_state()
@@ -126,11 +132,20 @@ class RecordManager(Node):
         """Publish actual state, including after a rejected start or failed save."""
         self.recording_state_pub.publish(Bool(data=self.recording))
         self.recording_paused_pub.publish(Bool(data=self.recording_paused))
+        self.recording_finishing_pub.publish(Bool(
+            data=self._recording_stop_requested and self._has_pending_commands()
+        ))
+
+    def _has_pending_commands(self):
+        return any(
+            request_id not in self._recording_results
+            for request_id in self._recording_commands
+        )
 
     def set_recording_paused(self, paused: bool):
         """Exclude accepted commands without affecting their execution."""
-        if not self.recording:
-            self.get_logger().warning("Cannot pause or resume an inactive recording.")
+        if not self.recording or self._recording_stop_requested:
+            self.get_logger().warning("Cannot pause or resume an inactive or finishing recording.")
             return
         if self.recording_paused != paused:
             self.recording_paused = paused
@@ -150,10 +165,17 @@ class RecordManager(Node):
         self.current_name = name
         self.temp_data.clear()
         self._recorded_request_ids.clear()
+        self._recording_commands.clear()
+        self._recording_results.clear()
+        self._recording_stop_requested = False
         self.get_logger().info(f"Started recording: {name}")
 
     def stop_recording(self):
         if not self.recording:
+            return
+        self._recording_stop_requested = True
+        if self._has_pending_commands():
+            self.get_logger().info("Waiting for command outcomes before saving recording.")
             return
         self.repository.save(self.current_name, self.temp_data)
         self.get_logger().info(f"Saved recording: {self.current_name}")
@@ -161,10 +183,13 @@ class RecordManager(Node):
         self.recording_paused = False
         self.current_name = None
         self._recorded_request_ids.clear()
+        self._recording_commands.clear()
+        self._recording_results.clear()
+        self._recording_stop_requested = False
         self.publish_recordings_list()
 
     def capture_request(self, message: CommandRequestMessage) -> bool:
-        if not self.recording:
+        if not self.recording or self._recording_stop_requested:
             return False
         try:
             request = command_request_from_message(message)
@@ -187,7 +212,43 @@ class RecordManager(Node):
                 f"({request.request_id}) from {self.current_name}: recording paused"
             )
             return False
-        self.temp_data.append(deepcopy(request.command))
+        self._recording_commands[request.request_id] = deepcopy(request.command)
+        self._refresh_successful_commands()
+        return True
+
+    def _refresh_successful_commands(self):
+        # Dict insertion order is acceptance order, irrespective of completion order.
+        self.temp_data = [
+            command for request_id, command in self._recording_commands.items()
+            if self._recording_results.get(request_id) == CommandStatus.STATE_SUCCEEDED
+        ]
+
+    def handle_command_status(self, message: CommandStatus):
+        self.handle_recording_status(message)
+        self.handle_playback_status(message)
+
+    def handle_recording_status(self, message: CommandStatus) -> bool:
+        if not self.recording or not message.request_id or message.state not in (
+            CommandStatus.STATE_SUCCEEDED,
+            CommandStatus.STATE_FAILED,
+            CommandStatus.STATE_CANCELLED,
+        ):
+            return False
+        if message.request_id in self._recording_results:
+            return False
+        # Status and acceptance use separate topics; either callback may arrive first.
+        self._recording_results[message.request_id] = message.state
+        if message.state != CommandStatus.STATE_SUCCEEDED:
+            self.get_logger().info(
+                f"Command {message.request_id} not retained in recording: "
+                f"state={message.state}; {message.detail or 'command did not succeed'}"
+            )
+        if message.request_id not in self._recording_commands:
+            return False
+        self._refresh_successful_commands()
+        if self._recording_stop_requested and not self._has_pending_commands():
+            # Use the same error handling as an explicit stop; unsaved data survives.
+            self.handle_control(CommandRecordControl(mode="stop"))
         return True
 
     def play_recording(self, name: str):

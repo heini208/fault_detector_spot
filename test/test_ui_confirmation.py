@@ -182,3 +182,32 @@ def test_recording_pause_uses_confirmed_state(application, paused_first):
     assert controls.pause_recording_button.text() == "Don't record"
     assert controls.record_control_pub.publish.call_count == 2
     parent.close()
+
+
+def test_recording_waits_for_pending_outcomes_in_ui(application):
+    from std_msgs.msg import Bool
+
+    parent = QWidget()
+    parent.node = Mock()
+    controls = RecordingControls(parent)
+    controls.update_recording_state(True)
+    callbacks = {
+        call.args[1]: call.args[2]
+        for call in parent.node.create_subscription.call_args_list
+    }
+    callbacks["fault_detector/recording_finishing"](Bool(data=True))
+    application.processEvents()
+    assert controls.record_button.text() == "Finishing recording…"
+    assert not controls.record_button.isEnabled()
+    assert not controls.recording_options.isEnabled()
+    controls.toggle_recording()
+    controls.record_control_pub.publish.assert_not_called()
+    # If saving fails after outcomes arrive, the operator can retry saving.
+    callbacks["fault_detector/recording_finishing"](Bool(data=False))
+    application.processEvents()
+    assert controls.record_button.isEnabled()
+    controls.toggle_recording()
+    assert controls.record_control_pub.publish.call_args.args[0].mode == "stop"
+    controls.update_recording_state(False)
+    assert controls.record_button.text() == "Start Recording"
+    parent.close()

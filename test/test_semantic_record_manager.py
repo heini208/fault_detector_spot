@@ -58,6 +58,10 @@ class FakeLogger:
 
 
 class RecordManagerHarness:
+    handle_command_status = RecordManager.handle_command_status
+    handle_recording_status = RecordManager.handle_recording_status
+    _refresh_successful_commands = RecordManager._refresh_successful_commands
+    _has_pending_commands = RecordManager._has_pending_commands
     capture_request = RecordManager.capture_request
     handle_playback_status = RecordManager.handle_playback_status
     _dispatch_next_playback_command = RecordManager._dispatch_next_playback_command
@@ -68,6 +72,9 @@ class RecordManagerHarness:
         self.recording_paused = False
         self.temp_data = []
         self._recorded_request_ids = set()
+        self._recording_commands = {}
+        self._recording_results = {}
+        self._recording_stop_requested = False
         self._playback_commands = deque()
         self._playback_request_id = ""
         self._playback_name = ""
@@ -113,6 +120,8 @@ def test_only_included_accepted_requests_are_recorded():
     assert manager.capture_request(command_request_to_message(included)) is True
     assert manager.capture_request(command_request_to_message(excluded)) is False
     assert manager.capture_request(command_request_to_message(included)) is False
+    assert manager.temp_data == []
+    manager.handle_command_status(terminal_status(included.request_id, CommandStatus.STATE_SUCCEEDED))
     assert len(manager.temp_data) == 1
     assert manager.temp_data[0].command_id is CommandID.STAND_UP
     assert isinstance(manager.temp_data[0], SemanticCommand)
@@ -311,6 +320,7 @@ class RecordingStorageHarness(RecordManagerHarness):
         self.list_pub = FakePublisher()
         self.recording_state_pub = FakePublisher()
         self.recording_paused_pub = FakePublisher()
+        self.recording_finishing_pub = FakePublisher()
 
     def control(self, mode, name=""):
         from fault_detector_msgs.msg import CommandRecordControl
@@ -429,6 +439,8 @@ def test_paused_commands_are_logged_but_absent_from_saved_recording(tmp_path):
     # A duplicate accepted event must not include an excluded command later.
     assert not manager.capture_request(message)
     assert manager.capture_request(command_request_to_message(after))
+    manager.handle_command_status(terminal_status(before.request_id, CommandStatus.STATE_SUCCEEDED))
+    manager.handle_command_status(terminal_status(after.request_id, CommandStatus.STATE_SUCCEEDED))
     manager.control("stop")
     assert manager.repository.load("session") == [before.command, after.command]
     assert not manager.command_submission_pub.messages
@@ -462,3 +474,79 @@ def test_failed_save_preserves_paused_recording(tmp_path, monkeypatch):
     manager.control("stop")
     assert manager.recording and manager.recording_paused
     assert manager.recording_paused_pub.messages[-1].data
+
+
+def test_stop_waits_for_outcomes_and_keeps_successes_in_accepted_order(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    requests = [make_request(command) for command in (
+        CommandID.STAND_UP, CommandID.WAIT_TIME, CommandID.SIT_DOWN, CommandID.STOW_ARM,
+    )]
+    for request in requests:
+        assert manager.capture_request(command_request_to_message(request))
+    manager.control("stop")
+    assert manager.recording_finishing_pub.messages[-1].data
+    assert not manager.repository.path("session").exists()
+    assert not manager.capture_request(command_request_to_message(make_request(CommandID.READY_ARM)))
+    manager.control("start", "another")
+    assert manager.current_name == "session"
+    for index, outcome in (
+        (3, CommandStatus.STATE_SUCCEEDED),
+        (1, CommandStatus.STATE_FAILED),
+        (2, CommandStatus.STATE_CANCELLED),
+    ):
+        manager.handle_command_status(terminal_status(requests[index].request_id, outcome))
+        assert manager.recording
+    manager.handle_command_status(terminal_status(requests[0].request_id, CommandStatus.STATE_SUCCEEDED))
+    assert not manager.recording
+    assert not manager.recording_finishing_pub.messages[-1].data
+    assert manager.repository.load("session") == [requests[0].command, requests[3].command]
+    assert not manager.command_submission_pub.messages
+
+
+@pytest.mark.parametrize("outcome", [CommandStatus.STATE_SUCCEEDED, CommandStatus.STATE_FAILED, CommandStatus.STATE_CANCELLED])
+def test_outcome_before_acceptance_and_duplicate_status(tmp_path, outcome):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    request = make_request(CommandID.STAND_UP)
+    manager.handle_command_status(terminal_status(request.request_id, outcome))
+    manager.capture_request(command_request_to_message(request))
+    manager.handle_command_status(terminal_status(request.request_id, CommandStatus.STATE_SUCCEEDED))
+    manager.control("stop")
+    expected = [request.command] if outcome == CommandStatus.STATE_SUCCEEDED else []
+    assert manager.repository.load("session") == expected
+
+
+def test_pause_is_decided_at_acceptance_not_completion(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    included = make_request(CommandID.STAND_UP)
+    excluded = make_request(CommandID.SIT_DOWN)
+    manager.capture_request(command_request_to_message(included))
+    manager.control("pause")
+    manager.capture_request(command_request_to_message(excluded))
+    manager.handle_command_status(terminal_status(included.request_id, CommandStatus.STATE_SUCCEEDED))
+    manager.control("resume")
+    manager.control("stop")
+    assert not manager.recording  # Excluded command does not delay saving.
+    manager.handle_command_status(terminal_status(excluded.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager.repository.load("session") == [included.command]
+
+
+def test_deferred_save_failure_can_be_retried(tmp_path, monkeypatch):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    request = make_request(CommandID.STAND_UP)
+    manager.capture_request(command_request_to_message(request))
+    manager.control("stop")
+    def fail_save(*args):
+        raise OSError("disk full")
+    with monkeypatch.context() as patch:
+        patch.setattr(manager.repository, "save", fail_save)
+        manager.handle_command_status(terminal_status(request.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager.recording
+    assert not manager.recording_finishing_pub.messages[-1].data
+    assert manager.temp_data == [request.command]
+    assert manager.logger.error_messages
+    manager.control("stop")
+    assert manager.repository.load("session") == [request.command]

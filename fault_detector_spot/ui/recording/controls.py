@@ -13,6 +13,7 @@ from ..shared.control_helper import UIControlHelper
 class _RecordingSignals(QObject):
     state_changed = pyqtSignal(bool)
     paused_changed = pyqtSignal(bool)
+    finishing_changed = pyqtSignal(bool)
     list_changed = pyqtSignal(object)
 
 
@@ -20,9 +21,11 @@ class RecordingControls(UIControlHelper):
     def __init__(self, parent_ui):
         self._recording = None
         self._recording_paused = None
+        self._recording_finishing = False
         self._signals = _RecordingSignals(parent_ui)
         self._signals.state_changed.connect(self.update_recording_state, Qt.QueuedConnection)
         self._signals.paused_changed.connect(self.update_recording_paused, Qt.QueuedConnection)
+        self._signals.finishing_changed.connect(self.update_recording_finishing, Qt.QueuedConnection)
         self._signals.list_changed.connect(self.update_recordings_dropdown, Qt.QueuedConnection)
         super().__init__(parent_ui)
 
@@ -40,6 +43,10 @@ class RecordingControls(UIControlHelper):
         self.recording_paused_sub = self.node.create_subscription(
             Bool, "fault_detector/recording_paused",
             lambda message: self._signals.paused_changed.emit(message.data), LATCHED_QOS,
+        )
+        self.recording_finishing_sub = self.node.create_subscription(
+            Bool, "fault_detector/recording_finishing",
+            lambda message: self._signals.finishing_changed.emit(message.data), LATCHED_QOS,
         )
 
     def make_rows(self):
@@ -168,14 +175,14 @@ class RecordingControls(UIControlHelper):
     def toggle_recording_pause(self):
         # Render only confirmed state, not the button's optimistic toggle.
         self._refresh_pause_button()
-        if not self._recording or self._recording_paused is None:
+        if not self._recording or self._recording_finishing or self._recording_paused is None:
             return
         msg = CommandRecordControl()
         msg.mode = "resume" if self._recording_paused else "pause"
         self.record_control_pub.publish(msg)
 
     def toggle_recording(self):
-        if self._recording is None:
+        if self._recording is None or (self._recording and self._recording_finishing):
             return
         name = self.record_name_field.text().strip()
 
@@ -206,15 +213,33 @@ class RecordingControls(UIControlHelper):
         if recording != self._recording:
             self.skip_button.setChecked(False)
             self.retry_button.setChecked(False)
-        self.recording_options.setEnabled(recording)
         self._recording = recording
         self._refresh_pause_button()
-        self.record_button.setEnabled(True)
-        self.record_button.setText("Stop Recording" if recording else "Start Recording")
+        self._refresh_recording_button()
         self.record_button.setStyleSheet(
             "background-color: red; color: white; font-weight: bold;" if recording else ""
         )
         self.record_name_field.setEnabled(not recording)
+
+    def update_recording_finishing(self, finishing):
+        self._recording_finishing = finishing
+        self._refresh_recording_button()
+
+    def _refresh_recording_button(self):
+        finishing = bool(self._recording and self._recording_finishing)
+        self.recording_options.setEnabled(bool(self._recording) and not finishing)
+        self.record_button.setEnabled(self._recording is not None and not finishing)
+        self.record_button.setText(
+            "Finishing recording…" if finishing else
+            "Stop Recording" if self._recording else
+            "Start Recording" if self._recording is not None else
+            "Waiting for recording state"
+        )
+        self.record_button.setToolTip(
+            "Waiting for pending command outcomes before saving. "
+            "New commands are no longer included."
+            if finishing else ""
+        )
 
     def play_selected_recording(self):
         msg = CommandRecordControl()
