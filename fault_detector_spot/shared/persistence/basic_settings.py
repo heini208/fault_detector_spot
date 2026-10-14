@@ -11,6 +11,7 @@ from types import MappingProxyType
 
 import yaml
 
+from . import advanced_settings
 from .file_storage import atomic_write_text
 from .runtime_paths import fault_detector_runtime_root
 
@@ -39,10 +40,16 @@ NUMBER_KEYS = set(ARM_KEYS.values()) | (set(BASE_KEYS.values()) - MODE_KEYS) | {
 def validate_settings(values):
     if not isinstance(values, dict):
         raise ValueError('Basic settings must be a mapping')
-    unknown = values.keys() - BOOL_KEYS - MODE_KEYS - NUMBER_KEYS
+    unknown = values.keys() - BOOL_KEYS - MODE_KEYS - NUMBER_KEYS - advanced_settings.KEYS
     if unknown:
         raise ValueError(f'Unknown basic settings: {sorted(unknown)}')
+    advanced = {key: value for key, value in values.items() if key in advanced_settings.KEYS}
+    advanced_settings.validate(advanced)
+    if advanced:
+        advanced_settings.validate_relationships({**factory_advanced_settings(), **advanced})
     for key, value in values.items():
+        if key in advanced_settings.KEYS:
+            continue
         if key in BOOL_KEYS:
             valid = type(value) is bool
         elif key in MODE_KEYS:
@@ -54,12 +61,20 @@ def validate_settings(values):
     return dict(values)
 
 
-def config_parameters(filename):
+def config_document(filename):
     source = Path(__file__).resolve().parents[3] / 'config'
     if not source.is_dir():
         from ament_index_python.packages import get_package_share_directory
         source = Path(get_package_share_directory('fault_detector_spot')) / 'config'
-    return yaml.safe_load((source / filename).read_text())['/**']['ros__parameters']
+    return yaml.safe_load((source / filename).read_text())
+
+
+def config_parameters(filename):
+    return config_document(filename)['/**']['ros__parameters']
+
+
+def factory_advanced_settings():
+    return advanced_settings.defaults(config_parameters, config_document)
 
 
 def factory_settings():
@@ -107,3 +122,8 @@ def _startup_settings(path):
 def startup_settings():
     """Return immutable overrides, captured once per process and runtime path."""
     return _startup_settings(BasicSettingsRepository().path)
+
+
+def parameter_override(name, default):
+    """Read a saved override without changing the current process snapshot."""
+    return startup_settings().get(name, default)

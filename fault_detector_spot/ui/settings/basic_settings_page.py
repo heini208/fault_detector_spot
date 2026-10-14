@@ -22,15 +22,18 @@ class _NoWheelComboBox(QComboBox):
 
 
 class BasicSettingsPage(QWidget):
+    title = 'Basic settings'
+    factory_defaults = staticmethod(factory_settings)
+
     def __init__(self, parent=None, repository=None):
         super().__init__(parent)
         self.repository = repository if repository is not None else BasicSettingsRepository()
-        self.defaults = factory_settings()
+        self.defaults = self.factory_defaults()
         self.fields = {}
         self.factors = {}
         layout = QVBoxLayout(self)
         note = QLabel(
-            'Basic settings\nSave your changes, then restart both the control window and robot application to apply them. '
+            f'{self.title}\nSave your changes, then restart both the control window and robot application to apply them. '
             'Settings are saved locally; saving does not change an active movement.'
         )
         note.setWordWrap(True)
@@ -41,6 +44,28 @@ class BasicSettingsPage(QWidget):
         self.groups = QVBoxLayout(content)
         scroll.setWidget(content)
         layout.addWidget(scroll)
+        self._build_fields()
+        self.groups.addStretch()
+        buttons = QHBoxLayout()
+        reset = QPushButton('Reset to defaults')
+        reset.clicked.connect(lambda: self._show_values(self.defaults))
+        reload_button = QPushButton('Discard unsaved changes')
+        reload_button.clicked.connect(self.reload)
+        self.save_button = QPushButton('Save settings')
+        self.save_button.clicked.connect(self.save)
+        for button in (reset, reload_button, self.save_button):
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+        self.reload()
+        for field in self.fields.values():
+            signal = (field.toggled if isinstance(field, QCheckBox) else
+                      field.currentIndexChanged if isinstance(field, QComboBox) else field.valueChanged)
+            signal.connect(self._mark_dirty)
+
+    def _build_fields(self):
         startup = self._group('Startup defaults')
         self._boolean(startup, 'mount_approval_at_startup', 'Automatically approve the mount at startup',
                       'Approves the previously selected sensor mount, or bare hand, when the robot application starts. '
@@ -93,25 +118,6 @@ class BasicSettingsPage(QWidget):
         force_hint = QLabel('100% = default. Higher values allow more force before stopping.')
         force_hint.setWordWrap(True)
         force.addRow(force_hint)
-        self.groups.addStretch()
-        buttons = QHBoxLayout()
-        reset = QPushButton('Reset to defaults')
-        reset.clicked.connect(lambda: self._show_values(self.defaults))
-        reload_button = QPushButton('Discard unsaved changes')
-        reload_button.clicked.connect(self.reload)
-        self.save_button = QPushButton('Save settings')
-        self.save_button.clicked.connect(self.save)
-        for button in (reset, reload_button, self.save_button):
-            buttons.addWidget(button)
-        layout.addLayout(buttons)
-        self.status = QLabel()
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-        self.reload()
-        for field in self.fields.values():
-            signal = (field.toggled if isinstance(field, QCheckBox) else
-                      field.currentIndexChanged if isinstance(field, QComboBox) else field.valueChanged)
-            signal.connect(self._mark_dirty)
 
     def _mark_dirty(self, *_):
         self.status.setText('Unsaved changes. Save, then restart both the control window and robot application to apply.')
@@ -175,8 +181,10 @@ class BasicSettingsPage(QWidget):
             else:
                 values[key] = (self._shown_values[key] if field.value() == self._shown_numbers[key]
                                else field.value() / self.factors[key])
+                if type(self.defaults[key]) is int:
+                    values[key] = int(values[key])
         try:
-            self.repository.save(values)
+            self.repository.save({**self.repository.load(), **values})
         except (OSError, ValueError) as error:
             self.status.setText(f'Could not save settings: {error}')
             return

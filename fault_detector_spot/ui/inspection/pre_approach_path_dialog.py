@@ -1,5 +1,7 @@
 """Present server-owned pre-approach path editing and movement intents."""
 
+from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
+
 from PyQt5.QtWidgets import (
     QCheckBox, QDialog, QDoubleSpinBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QVBoxLayout,
 )
@@ -44,7 +46,7 @@ class PreApproachPathDialog(QDialog):
         self.tolerance_field = QDoubleSpinBox()
         self.tolerance_field.setDecimals(3)
         self.tolerance_field.setRange(.001, 1.)
-        self.tolerance_field.setValue(.01)
+        self.tolerance_field.setValue(ArmMotionParameters().get("motion.position_tolerance_m"))
         layout.addWidget(self.tolerance_field)
         self.precision_checkbox = QCheckBox("Precision checks")
         self.precision_checkbox.setToolTip(

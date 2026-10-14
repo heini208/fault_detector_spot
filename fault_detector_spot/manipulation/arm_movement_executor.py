@@ -259,6 +259,9 @@ class ArmMovementExecutor(MovementExecutor):
             speed_policy if speed_policy is not None
             else ArmMotionSpeedPolicy.from_config(config)
         )
+        self.maximum_correction_attempts = config.get("correction.maximum_attempts")
+        if type(self.maximum_correction_attempts) is not int or self.maximum_correction_attempts < 0:
+            raise ValueError("Maximum arm correction attempts must be a non-negative integer")
         self.precision_speed = ArmMotionSpeed(
             linear_speed_mps=config.get("motion.precision_linear_speed_mps"),
             angular_speed_rad_s=config.get("motion.precision_angular_speed_rad_s"),
@@ -613,6 +616,7 @@ class ArmMovementExecutor(MovementExecutor):
                 "orientation_tolerance": orientation,
                 "target": None, "corrections": 0,
                 "budget": PoseCorrectionBudget(
+                    maximum_corrections=self.maximum_correction_attempts,
                     maximum_translation_m=PRECISION_MAXIMUM_CORRECTION_TRANSLATION_M,
                     maximum_total_translation_m=PRECISION_MAXIMUM_TOTAL_CORRECTION_TRANSLATION_M,
                 ),
@@ -715,6 +719,11 @@ class ArmMovementExecutor(MovementExecutor):
                 f"position {error:.4f} m (limit {state['tolerance']:.4f} m), "
                 f"orientation {math.degrees(orientation_error):.2f} deg "
                 f"(limit {math.degrees(orientation_tolerance):.2f} deg)",
+            )
+        if not state.get("verify_checkpoint") and state["corrections"] >= self.maximum_correction_attempts:
+            return super()._finish(
+                ArmMovementOutcome.MOTION_FAILED,
+                f"Arm position remains outside tolerance after {state['corrections']} corrections",
             )
         state["corrections"] += 1
         baseline = state["speed"]

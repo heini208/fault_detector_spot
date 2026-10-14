@@ -3,6 +3,8 @@ import math
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QCheckBox
 
+from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
+
 from fault_detector_msgs.msg import OperationalIntent, TagElement
 from fault_detector_spot.shared.geometry.movement_frames import (
     OrientationModes,
@@ -153,7 +155,7 @@ class ManipulationControls(UIControlHelper):
         self.tag_tolerance_input.setDecimals(3)
         self.tag_tolerance_input.setRange(0.001, 0.100)
         self.tag_tolerance_input.setSingleStep(0.001)
-        self.tag_tolerance_input.setValue(0.01)
+        self.tag_tolerance_input.setValue(ArmMotionParameters().get("motion.position_tolerance_m"))
         self.tag_tolerance_input.setToolTip(
             "Allowed position error. Normal checks the final position with one slow "
             "adjustment if needed; Precision verifies a stable achieved pose and "
@@ -230,7 +232,7 @@ class ManipulationControls(UIControlHelper):
         self.relative_tolerance_input.setDecimals(3)
         self.relative_tolerance_input.setRange(.001, .100)
         self.relative_tolerance_input.setSingleStep(.001)
-        self.relative_tolerance_input.setValue(.01)
+        self.relative_tolerance_input.setValue(ArmMotionParameters().get("motion.position_tolerance_m"))
         self.relative_tolerance_input.setToolTip(
             "Allowed position error for stable pose verification in Precision mode."
         )
@@ -659,6 +661,7 @@ class ManipulationControls(UIControlHelper):
     def add_tag_info_to_intent(self, intent: OperationalIntent):
         intent.tag_position_tolerance_m = self.tag_tolerance_input.value()
         intent.precision_mode = bool(self.precision_mode_combo.currentData())
+        intent.precision_orientation_tolerance_rad = ArmMotionParameters().get("motion.orientation_tolerance_rad")
         intent = self.add_tag_element_to_intent(intent)
         return self.add_offset_to_intent(intent)
 
@@ -713,6 +716,7 @@ class ManipulationControls(UIControlHelper):
         intent.duration_sec = self.duration_input.value()
         if intent_id == OperationalIntent.INTENT_MOVE_ARM_RELATIVE:
             intent.precision_mode = bool(self.precision_mode_combo.currentData())
+            intent.precision_orientation_tolerance_rad = ArmMotionParameters().get("motion.orientation_tolerance_rad")
             intent.tag_position_tolerance_m = self.relative_tolerance_input.value()
             return self._execute_basic_movement(intent)
         return self.ui.execute_operation(intent)

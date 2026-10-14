@@ -22,6 +22,12 @@
     # direct Cartesian arm motions; retain the existing parameter name.
     arm.motion.moveit_result_timeout_margin_sec: 15.0
 
+    # Defaults for new arm commands; saved per-point tolerances remain authoritative.
+    arm.motion.position_tolerance_m: 0.01
+    arm.motion.orientation_tolerance_rad: 0.03490658503988659
+    # Corrections after the initial precision/tag movement; zero disables retries.
+    arm.correction.maximum_attempts: 3
+
     # Probe setup safe-approach speed
     arm.safe_approach_linear_speed_mps: 0.20
     arm.safe_approach_angular_speed_rad_s: 1.00

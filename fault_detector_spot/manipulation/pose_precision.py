@@ -113,8 +113,8 @@ class PoseCorrectionBudget:
                  maximum_total_translation_m=0.040,
                  maximum_total_rotation_rad=math.radians(10.0),
                  minimum_improvement_fraction=0.10):
-        if type(maximum_corrections) is not int or maximum_corrections <= 0:
-            raise ValueError("Maximum pose corrections must be a positive integer")
+        if type(maximum_corrections) is not int or maximum_corrections < 0:
+            raise ValueError("Maximum pose corrections must be a non-negative integer")
         for value in (maximum_translation_m, maximum_rotation_rad,
                       maximum_total_translation_m, maximum_total_rotation_rad,
                       minimum_improvement_fraction):

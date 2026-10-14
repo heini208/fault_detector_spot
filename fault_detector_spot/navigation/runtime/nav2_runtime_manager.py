@@ -1,5 +1,8 @@
 """Manage the Nav2 launch process and its configuration."""
 
+from fault_detector_spot.shared.persistence.settings_parameter_files import settings_parameter_file
+from fault_detector_spot.shared.persistence.basic_settings import startup_settings
+
 import os
 from ament_index_python.packages import get_package_share_directory
 
@@ -16,16 +19,18 @@ class Nav2RuntimeManager(RuntimeManager):
         super().__init__(node, blackboard)
         self.launch_file = launch_file
         self.params_file = params_file
+        self._settings = startup_settings()
 
     def start(self, map_file=None, extra_args=None):
         args = []
-        if self.params_file:
-            params_file = self.params_file
+        if self.params_file or any(key.startswith("navigation.") for key in self._settings):
+            params_file = self.params_file or "nav2_lidar_params.yaml"
             if not os.path.isabs(params_file):
                 params_file = os.path.join(
                     get_package_share_directory("fault_detector_spot"),
                     "config", params_file,
                 )
+            params_file = settings_parameter_file(params_file, "navigation", self._settings)
             args.append(f"params_file:={params_file}")
         if map_file:
             args.append(f"map:={map_file}")

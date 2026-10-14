@@ -1,5 +1,7 @@
 """Correction policy for measured Spot base endpoint errors."""
 
+from fault_detector_spot.shared.persistence.basic_settings import parameter_override
+
 from dataclasses import dataclass
 from enum import Enum
 import math
@@ -47,9 +49,9 @@ class BaseCorrectionConfig:
             )
 
         return cls(
-            maximum_attempts=node.get_parameter(
-                maximum_attempts_key
-            ).value,
+            maximum_attempts=parameter_override(
+                maximum_attempts_key, node.get_parameter(maximum_attempts_key).value
+            ),
             minimum_progress_ratio=float(
                 node.get_parameter(minimum_progress_key).value
             ),

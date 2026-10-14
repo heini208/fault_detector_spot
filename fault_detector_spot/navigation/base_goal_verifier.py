@@ -1,5 +1,7 @@
 """Measured endpoint verification for planar base movements."""
 
+from fault_detector_spot.shared.persistence.basic_settings import parameter_override
+
 from dataclasses import dataclass, fields
 import math
 
@@ -39,7 +41,7 @@ class BaseGoalVerificationConfig:
                     getattr(defaults, field.name),
                 )
             values[field.name] = float(
-                node.get_parameter(key).value
+                parameter_override(key, node.get_parameter(key).value)
             )
         return cls(**values)
 

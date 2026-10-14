@@ -1,6 +1,8 @@
 """Inspection setup controls."""
 
 import math
+from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
+
 from copy import deepcopy
 
 from PyQt5.QtCore import QLocale, Qt, QTimer
@@ -628,13 +630,13 @@ class InspectionControls(UIControlHelper):
         self.routine_safe_tolerance_field.setValidator(
             self._distance_validator(self.routine_safe_tolerance_field)
         )
-        self.probe_position_tolerance_field = QLineEdit("0.01")
+        self.probe_position_tolerance_field = QLineEdit(str(ArmMotionParameters().get("motion.position_tolerance_m")))
         self.probe_precision_checkbox = QCheckBox("Precision checks")
         self.probe_precision_checkbox.setToolTip(
             "Verify a stable achieved pose against the requested tolerance "
             "and allow bounded slow corrections. Off keeps ordinary motion checks."
         )
-        self.probe_orientation_tolerance_field = QLineEdit("0.087")
+        self.probe_orientation_tolerance_field = QLineEdit(str(ArmMotionParameters().get("motion.orientation_tolerance_rad")))
         self.probe_measurement_duration_field = QLineEdit("1.0")
         self.save_probe_point_status_label = QLabel(
             "Approve all three poses and complete the definition."

@@ -50,6 +50,7 @@ from .ros.sensor_topic_suggestion_client import (
     SensorTopicSuggestionClient,
 )
 from .settings.basic_settings_page import BasicSettingsPage
+from .settings.advanced_settings_page import AdvancedSettingsPage
 from fault_detector_spot.shared.persistence.basic_settings import startup_settings
 from .sensor.controls import SensorControls
 from .sensor.import_dialog import import_sensor_head_transform
@@ -238,7 +239,11 @@ class Fault_Detector_UI(QWidget):
         self.add_inspection_control_tab()
         self.add_sensor_control_tab()
         self.settings_page = BasicSettingsPage(self)
-        self.tabs.addTab(self.settings_page, "Settings")
+        self.advanced_settings_page = AdvancedSettingsPage(self)
+        self.settings_tabs = QTabWidget()
+        self.settings_tabs.addTab(self.settings_page, "Basic")
+        self.settings_tabs.addTab(self.advanced_settings_page, "Advanced")
+        self.tabs.addTab(self.settings_tabs, "Settings")
 
         self.recording_controls.add_rows(main_layout)
         QTimer.singleShot(0, self._refresh_buffer_label)

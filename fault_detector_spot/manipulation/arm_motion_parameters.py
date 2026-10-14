@@ -88,6 +88,8 @@ class ArmMotionParameters:
             value = override
         elif ARM_KEYS.get(name.removeprefix("arm.")) in self._user_settings:
             value = self._user_settings[ARM_KEYS[name.removeprefix("arm.")]]
+        elif name in self._user_settings:
+            value = self._user_settings[name]
         elif self._node is not None:
             value = self._node.get_parameter(name).value
         else:

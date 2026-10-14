@@ -2,6 +2,8 @@
 
 from collections import deque
 from copy import deepcopy
+from fault_detector_spot.shared.persistence.basic_settings import parameter_override
+
 from dataclasses import dataclass
 import math
 
@@ -60,7 +62,7 @@ class TagObservationStabilityConfig:
             key = f"{prefix}.{name}"
             if not node.has_parameter(key):
                 node.declare_parameter(key, getattr(defaults, name))
-            values[name] = node.get_parameter(key).value
+            values[name] = parameter_override(key, node.get_parameter(key).value)
         values["required_samples"] = int(values["required_samples"])
         for name in (
             "maximum_position_span_m",

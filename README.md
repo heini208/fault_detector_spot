@@ -1065,3 +1065,28 @@ Larger percentages reduce sensitivity; values must be positive and finite. This
 multiplier does not change the hard-force ceiling or explicit thresholds used by
 surface approach/contact search. Precision arm speeds configure the initial move;
 existing precision verification and corrective speed reductions are retained.
+
+### Advanced UI settings
+
+**Settings → Advanced** adds arm/walking accuracy, correction limits, force thresholds,
+retreat and telemetry controls, surface-approach tuning, navigation limits and arrival
+accuracy, MoveIt scaling/obstacle-map settings, and tag observation stability. Both
+settings tabs share the existing settings file; saving or resetting one tab preserves
+the other tab's saved values. Reset remains unsaved until Save is clicked. The fields
+use mm, degrees, seconds, newtons, and percentages and ignore mouse-wheel edits.
+
+Arm position defaults populate new command and path-point editors; explicit and saved
+point tolerances are retained. The default turning tolerance is sent with manual arm
+commands and populates the probe setup tolerance field. The arm correction limit caps
+Precision retries and can disable the normal tag correction at zero; ordinary tag
+moves retain their existing single-correction behavior. Fixed checkpoint and surface
+orientation correction rules remain separate. Error, improvement, and travel limits
+still bound Precision corrections regardless of the configured attempt count.
+
+Advanced values apply on the next process start. Navigation overrides are applied by
+the application's Nav2 runtime manager to both the controller and velocity smoother.
+MoveIt obstacle-map overrides are applied by `fault_detector_launch.py` to `move_group`
+only. Restart those processes as part of the application restart to apply these
+changes. Generated parameter files live under the runtime directory in
+`generated_settings/`; packaged YAML files are never rewritten by the settings page.
+Standalone launches outside these application entry points retain their own parameters.

@@ -1,6 +1,8 @@
 """Close-surface workflow execution below the behavior tree."""
 
 from copy import deepcopy
+from fault_detector_spot.shared.persistence.basic_settings import parameter_override
+
 from dataclasses import dataclass, fields
 from enum import Enum
 import math
@@ -92,7 +94,7 @@ class MoveCloseToSurfaceConfig(MeasureSensorTipDistanceConfig):
             default = getattr(defaults, field.name)
             if not node.has_parameter(name):
                 node.declare_parameter(name, default)
-            value = node.get_parameter(name).value
+            value = parameter_override(name, node.get_parameter(name).value)
             values[field.name] = (
                 value if type(default) is int else float(value)
             )

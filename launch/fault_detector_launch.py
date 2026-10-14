@@ -1,3 +1,5 @@
+from fault_detector_spot.shared.persistence.settings_parameter_files import settings_parameter_file
+
 import os
 import xml.etree.ElementTree as ET
 
@@ -43,7 +45,7 @@ def _moveit_sensor_parameters(sensor_config, moveit_pkg):
             + "; arm planning still starts; collision toggle does not certify obstacle coverage"
         )
         return []
-    return [SetParametersFromFile(sensor_config)]
+    return [SetParametersFromFile(settings_parameter_file(sensor_config, "moveit"))]
 
 
 def generate_launch_description():
