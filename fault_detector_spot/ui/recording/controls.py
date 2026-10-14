@@ -12,14 +12,17 @@ from ..shared.control_helper import UIControlHelper
 
 class _RecordingSignals(QObject):
     state_changed = pyqtSignal(bool)
+    paused_changed = pyqtSignal(bool)
     list_changed = pyqtSignal(object)
 
 
 class RecordingControls(UIControlHelper):
     def __init__(self, parent_ui):
         self._recording = None
+        self._recording_paused = None
         self._signals = _RecordingSignals(parent_ui)
         self._signals.state_changed.connect(self.update_recording_state, Qt.QueuedConnection)
+        self._signals.paused_changed.connect(self.update_recording_paused, Qt.QueuedConnection)
         self._signals.list_changed.connect(self.update_recordings_dropdown, Qt.QueuedConnection)
         super().__init__(parent_ui)
 
@@ -33,6 +36,10 @@ class RecordingControls(UIControlHelper):
         )
         self.record_control_pub = self.node.create_publisher(
             CommandRecordControl, "fault_detector/record_control", 10
+        )
+        self.recording_paused_sub = self.node.create_subscription(
+            Bool, "fault_detector/recording_paused",
+            lambda message: self._signals.paused_changed.emit(message.data), LATCHED_QOS,
         )
 
     def make_rows(self):
@@ -112,11 +119,12 @@ class RecordingControls(UIControlHelper):
             "still execute and diagnostic logging continues. Press again to "
             "resume including commands in the recording."
         )
-        self.pause_recording_button.toggled.connect(self._update_pause_button)
+        self.pause_recording_button.clicked.connect(self.toggle_recording_pause)
+        self._refresh_pause_button()
         controls.addWidget(self.pause_recording_button)
         controls.addStretch()
 
-        # Presentation state only; recording policy is not changed here.
+        # Skip and retry remain presentation-only until playback supports them.
         self.recording_options.setEnabled(bool(self._recording))
         row = QHBoxLayout()
         row.addWidget(self.recording_options)
@@ -144,6 +152,27 @@ class RecordingControls(UIControlHelper):
             "Recording paused" if active else "Don't record"
         )
         self._set_option_active(self.pause_recording_button, active)
+
+    def _refresh_pause_button(self):
+        active = bool(self._recording and self._recording_paused)
+        self.pause_recording_button.setChecked(active)
+        self._update_pause_button(active)
+        self.pause_recording_button.setEnabled(
+            bool(self._recording) and self._recording_paused is not None
+        )
+
+    def update_recording_paused(self, paused):
+        self._recording_paused = paused
+        self._refresh_pause_button()
+
+    def toggle_recording_pause(self):
+        # Render only confirmed state, not the button's optimistic toggle.
+        self._refresh_pause_button()
+        if not self._recording or self._recording_paused is None:
+            return
+        msg = CommandRecordControl()
+        msg.mode = "resume" if self._recording_paused else "pause"
+        self.record_control_pub.publish(msg)
 
     def toggle_recording(self):
         if self._recording is None:
@@ -177,9 +206,9 @@ class RecordingControls(UIControlHelper):
         if recording != self._recording:
             self.skip_button.setChecked(False)
             self.retry_button.setChecked(False)
-            self.pause_recording_button.setChecked(False)
         self.recording_options.setEnabled(recording)
         self._recording = recording
+        self._refresh_pause_button()
         self.record_button.setEnabled(True)
         self.record_button.setText("Stop Recording" if recording else "Start Recording")
         self.record_button.setStyleSheet(

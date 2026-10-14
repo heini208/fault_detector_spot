@@ -47,6 +47,7 @@ class RecordManager(Node):
             configured_root or default_recording_root()
         )
         self.recording = False
+        self.recording_paused = False
         self.current_name = None
         self.temp_data: List[SemanticCommand] = []
         self._recorded_request_ids = set()
@@ -67,6 +68,11 @@ class RecordManager(Node):
         self.playback_state_pub = self.create_publisher(
             Bool,
             "fault_detector/playback_state",
+            LATCHED_QOS,
+        )
+        self.recording_paused_pub = self.create_publisher(
+            Bool,
+            "fault_detector/recording_paused",
             LATCHED_QOS,
         )
         self.command_submission_pub = self.create_publisher(
@@ -108,15 +114,28 @@ class RecordManager(Node):
                 self.play_recording(name)
             elif mode == "delete":
                 self.delete_recording(name)
+            elif mode in {"pause", "resume"}:
+                self.set_recording_paused(mode == "pause")
         except (OSError, TypeError, ValueError) as exception:
             self.get_logger().error(f"Recording {mode} request failed: {exception}")
         finally:
-            if mode in {"start", "stop"}:
+            if mode in {"start", "stop", "pause", "resume"}:
                 self.publish_recording_state()
 
     def publish_recording_state(self):
         """Publish actual state, including after a rejected start or failed save."""
         self.recording_state_pub.publish(Bool(data=self.recording))
+        self.recording_paused_pub.publish(Bool(data=self.recording_paused))
+
+    def set_recording_paused(self, paused: bool):
+        """Exclude accepted commands without affecting their execution."""
+        if not self.recording:
+            self.get_logger().warning("Cannot pause or resume an inactive recording.")
+            return
+        if self.recording_paused != paused:
+            self.recording_paused = paused
+            action = "Paused" if paused else "Resumed"
+            self.get_logger().info(f"{action} command capture: {self.current_name}")
 
     def start_recording(self, name: str):
         if self.recording:
@@ -127,6 +146,7 @@ class RecordManager(Node):
             return
         self.delete_recording(name)
         self.recording = True
+        self.recording_paused = False
         self.current_name = name
         self.temp_data.clear()
         self._recorded_request_ids.clear()
@@ -138,6 +158,7 @@ class RecordManager(Node):
         self.repository.save(self.current_name, self.temp_data)
         self.get_logger().info(f"Saved recording: {self.current_name}")
         self.recording = False
+        self.recording_paused = False
         self.current_name = None
         self._recorded_request_ids.clear()
         self.publish_recordings_list()
@@ -160,6 +181,12 @@ class RecordManager(Node):
         if request.request_id in self._recorded_request_ids:
             return False
         self._recorded_request_ids.add(request.request_id)
+        if self.recording_paused:
+            self.get_logger().info(
+                f"Excluded command {request.command.command_id.value} "
+                f"({request.request_id}) from {self.current_name}: recording paused"
+            )
+            return False
         self.temp_data.append(deepcopy(request.command))
         return True
 

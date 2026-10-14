@@ -65,6 +65,7 @@ class RecordManagerHarness:
 
     def __init__(self):
         self.recording = False
+        self.recording_paused = False
         self.temp_data = []
         self._recorded_request_ids = set()
         self._playback_commands = deque()
@@ -294,6 +295,7 @@ def test_playback_stops_and_discards_remaining_commands_on_failure():
 
 
 class RecordingStorageHarness(RecordManagerHarness):
+    set_recording_paused = RecordManager.set_recording_paused
     publish_recording_state = RecordManager.publish_recording_state
     handle_control = RecordManager.handle_control
     start_recording = RecordManager.start_recording
@@ -308,6 +310,7 @@ class RecordingStorageHarness(RecordManagerHarness):
         self.current_name = None
         self.list_pub = FakePublisher()
         self.recording_state_pub = FakePublisher()
+        self.recording_paused_pub = FakePublisher()
 
     def control(self, mode, name=""):
         from fault_detector_msgs.msg import CommandRecordControl
@@ -406,3 +409,56 @@ def test_recording_state_reports_actual_start_stop_and_failures(tmp_path, monkey
     assert [message.data for message in manager.recording_state_pub.messages] == [
         False, False, True, True, True, False,
     ]
+
+
+def test_paused_commands_are_logged_but_absent_from_saved_recording(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    before = make_request(CommandID.STAND_UP)
+    excluded = make_request(CommandID.WAIT_TIME)
+    after = make_request(CommandID.STOW_ARM)
+    assert manager.capture_request(command_request_to_message(before))
+    manager.control("pause")
+    assert manager.recording
+    assert manager.recording_paused_pub.messages[-1].data
+    message = command_request_to_message(excluded)
+    assert not manager.capture_request(message)
+    assert any(excluded.request_id in entry for entry in manager.logger.info_messages)
+    assert command_request_from_message(message) == excluded
+    manager.control("resume")
+    # A duplicate accepted event must not include an excluded command later.
+    assert not manager.capture_request(message)
+    assert manager.capture_request(command_request_to_message(after))
+    manager.control("stop")
+    assert manager.repository.load("session") == [before.command, after.command]
+    assert not manager.command_submission_pub.messages
+    assert not manager.playback_state_pub.messages
+
+
+def test_pause_is_idempotent_and_resets_between_recordings(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("pause")
+    assert not manager.recording_paused
+    manager.control("start", "first")
+    manager.control("pause")
+    manager.control("pause")
+    assert manager.recording_paused
+    manager.control("stop")
+    assert not manager.recording_paused_pub.messages[-1].data
+    manager.control("start", "second")
+    assert not manager.recording_paused
+    assert manager.capture_request(command_request_to_message(make_request(CommandID.STAND_UP)))
+
+
+def test_failed_save_preserves_paused_recording(tmp_path, monkeypatch):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    manager.control("pause")
+
+    def fail_save(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(manager.repository, "save", fail_save)
+    manager.control("stop")
+    assert manager.recording and manager.recording_paused
+    assert manager.recording_paused_pub.messages[-1].data

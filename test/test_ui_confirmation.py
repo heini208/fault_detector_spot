@@ -137,3 +137,48 @@ def test_recording_button_waits_for_backend_state(application):
     assert controls.record_button.text() == "Start Recording"
     assert controls.record_name_field.isEnabled()
     parent.close()
+
+
+@pytest.mark.parametrize("paused_first", [True, False])
+def test_recording_pause_uses_confirmed_state(application, paused_first):
+    from std_msgs.msg import Bool
+
+    parent = QWidget()
+    parent.node = Mock()
+    controls = RecordingControls(parent)
+    callbacks = {
+        call.args[1]: call.args[2]
+        for call in parent.node.create_subscription.call_args_list
+    }
+    recording = callbacks["fault_detector/recording_state"]
+    paused = callbacks["fault_detector/recording_paused"]
+    assert not controls.pause_recording_button.isEnabled()
+    # A newly attached UI also reflects a session paused by another client.
+    for callback in ([paused, recording] if paused_first else [recording, paused]):
+        callback(Bool(data=True))
+        application.processEvents()
+    assert controls.pause_recording_button.text() == "Recording paused"
+    assert controls.pause_recording_button.isChecked()
+    assert "red" in controls.pause_recording_button.styleSheet()
+    controls.record_control_pub.publish.assert_not_called()
+
+    controls.pause_recording_button.click()
+    assert controls.record_control_pub.publish.call_args.args[0].mode == "resume"
+    assert controls.pause_recording_button.text() == "Recording paused"
+    paused(Bool(data=False))
+    application.processEvents()
+    assert controls.pause_recording_button.text() == "Don't record"
+    assert not controls.pause_recording_button.isChecked()
+    controls.pause_recording_button.click()
+    assert controls.record_control_pub.publish.call_args.args[0].mode == "pause"
+    assert controls.pause_recording_button.text() == "Don't record"
+    paused(Bool(data=True))
+    application.processEvents()
+    assert controls.pause_recording_button.text() == "Recording paused"
+    recording(Bool(data=False))
+    paused(Bool(data=False))
+    application.processEvents()
+    assert not controls.pause_recording_button.isEnabled()
+    assert controls.pause_recording_button.text() == "Don't record"
+    assert controls.record_control_pub.publish.call_count == 2
+    parent.close()
