@@ -1,4 +1,4 @@
-"""Ready-arm offsets are supplied by YAML and applied to the target pose."""
+"""Ready-arm targets are fixed in body, independent of the starting pose."""
 
 from types import SimpleNamespace
 
@@ -17,10 +17,12 @@ from fault_detector_spot.manipulation.arm_state_source import (
 )
 
 
-def test_ready_arm_applies_yaml_forward_and_lift_offsets(monkeypatch):
+@pytest.mark.parametrize("start_x", [.2, .8])
+@pytest.mark.parametrize("state", [ArmStowState.STOWED, ArmStowState.DEPLOYED])
+def test_ready_arm_uses_fixed_yaml_body_pose(monkeypatch, start_x, state):
     config = ArmMotionParameters()
     current = TransformStamped()
-    current.transform.translation.x = 0.2
+    current.transform.translation.x = start_x
     current.transform.translation.z = 0.4
     current.transform.rotation.w = 1.0
     captured = []
@@ -33,7 +35,7 @@ def test_ready_arm_applies_yaml_forward_and_lift_offsets(monkeypatch):
     executor = executor_module.ArmMovementExecutor(
         SimpleNamespace(lookup_a_tform_b=lambda *_args, **_kwargs: current),
         arm_state_source=SimpleNamespace(
-            stow_state=lambda: ArmStowState.STOWED,
+            stow_state=lambda: state,
             is_stale=lambda: False,
         ),
         action_client=SimpleNamespace(
@@ -45,8 +47,12 @@ def test_ready_arm_applies_yaml_forward_and_lift_offsets(monkeypatch):
     update = executor.prepare()
     assert update.outcome is executor_module.ArmMovementOutcome.RUNNING
     assert captured[0][0] == pytest.approx(
-        0.2 + config.get("ready_forward_distance_m")
+        config.get("ready_position_x_m")
     )
     assert captured[0][2] == pytest.approx(
-        0.4 + config.get("ready_lift_distance_m")
+        config.get("ready_position_z_m")
     )
+
+    assert captured[0][1] == config.get("ready_position_y_m")
+    assert captured[0][3:7] == (1., 0., 0., 0.)
+    assert captured[0][7] == "body"

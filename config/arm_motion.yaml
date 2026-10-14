@@ -34,10 +34,12 @@
     arm.safe_approach_linear_speed_mps: 0.20
     arm.safe_approach_angular_speed_rad_s: 1.00
 
-    # Ready pose speed, offsets, and state waits
+    # Ready hand pose in body (metres), facing body +X, and state waits
     arm.ready_linear_speed_mps: 0.1
-    arm.ready_forward_distance_m: 0.05
-    arm.ready_lift_distance_m: 0.1
+    # Approximate old stowed-hand pose plus its forward/upward lift.
+    arm.ready_position_x_m: 0.60
+    arm.ready_position_y_m: 0.0
+    arm.ready_position_z_m: 0.36
     arm.ready_state_timeout_sec: 2.0
     arm.ready_tf_timeout_sec: 2.0
     arm.ready_deployed_timeout_sec: 2.0

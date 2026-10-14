@@ -192,7 +192,7 @@ def test_only_probe_moveit_completion_and_native_stow_submit_arm_motion():
                 callers.setdefault(call.func.attr, set()).add(method.name)
 
     assert callers["_submit_goal"] == {
-        "_stage_probe_goal", "_start_prepared_guarded_motion", "_advance_stow_start",
+        "_stage_probe_goal", "_start_prepared_guarded_motion", "_poll_state_confirmation",
     }
     assert callers["_build_pose_goal"] == {"probe"}
     assert callers["probe"] == {"_continue_probe", "_continue_contact_retreat"}

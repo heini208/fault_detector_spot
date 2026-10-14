@@ -41,6 +41,7 @@ def rig(monkeypatch, *, stowed=False, ignore_environment_collisions=False):
         ("body", "odom"): stamped_transform(),
         ("odom", "hand"): transform("odom", "hand"),
         ("flat_body", "hand"): transform("flat_body", "hand"),
+        ("body", "hand"): transform("body", "hand"),
     })
     starts = []
     baseline_actions = []

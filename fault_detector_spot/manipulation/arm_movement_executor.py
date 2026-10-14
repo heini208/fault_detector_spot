@@ -6,6 +6,7 @@ from threading import RLock
 import time
 
 from bosdyn.client.frame_helpers import (
+    BODY_FRAME_NAME,
     GRAV_ALIGNED_BODY_FRAME_NAME,
     HAND_FRAME_NAME,
     ODOM_FRAME_NAME,
@@ -115,6 +116,8 @@ class _ArmOperation:
     SURFACE_ORIENTATION_VERIFY = "surface_orientation_verify"
     PREPARE = "prepare"
     PREPARE_STOP = "prepare_stop"
+    STOW_PREPARE = "stow_prepare"
+    STOW_PREPARE_STOP = "stow_prepare_stop"
     STOW = "stow"
     GRIPPER = "gripper"
     CONFIRM_STOP = "confirm_stop"
@@ -150,8 +153,6 @@ class ArmMovementExecutor(MovementExecutor):
         contact_retreat_distance_m=None,
         contact_retreat_speed_mps=None,
         moveit_result_timeout_margin_sec=None,
-        ready_forward_distance_m=None,
-        ready_lift_distance_m=None,
         ready_state_timeout_sec=None,
         ready_tf_timeout_sec=None,
         ready_deployed_timeout_sec=None,
@@ -200,8 +201,6 @@ class ArmMovementExecutor(MovementExecutor):
             )
         self._configure_readiness(
             config=config,
-            ready_forward_distance_m=ready_forward_distance_m,
-            ready_lift_distance_m=ready_lift_distance_m,
             ready_state_timeout_sec=ready_state_timeout_sec,
             ready_tf_timeout_sec=ready_tf_timeout_sec,
             ready_deployed_timeout_sec=ready_deployed_timeout_sec,
@@ -299,20 +298,16 @@ class ArmMovementExecutor(MovementExecutor):
     def _configure_readiness(
         self,
         config,
-        ready_forward_distance_m,
-        ready_lift_distance_m,
         ready_state_timeout_sec,
         ready_tf_timeout_sec,
         ready_deployed_timeout_sec,
         stow_state_timeout_sec,
     ):
-        self.ready_forward_distance_m = self._ready_forward_distance(
-            config.get('ready_forward_distance_m', ready_forward_distance_m),
-        )
-        self.ready_lift_distance_m = self._positive_timeout(
-            config.get('ready_lift_distance_m', ready_lift_distance_m),
-            'Ready arm lift distance',
-        )
+        self.ready_target = PoseStamped()
+        self.ready_target.header.frame_id = BODY_FRAME_NAME
+        for axis in ('x', 'y', 'z'):
+            setattr(self.ready_target.pose.position, axis, config.get(f'ready_position_{axis}_m'))
+        self.ready_target.pose.orientation.w = 1.0
         self.ready_state_timeout_sec = self._positive_timeout(
             config.get('ready_state_timeout_sec', ready_state_timeout_sec),
             'Ready arm state timeout',
@@ -1230,6 +1225,7 @@ class ArmMovementExecutor(MovementExecutor):
             and self._operation not in (
                 _ArmOperation.PREPARE,
                 _ArmOperation.READY_PREPARE,
+                _ArmOperation.STOW_PREPARE,
             )
         )
 
@@ -1366,7 +1362,7 @@ class ArmMovementExecutor(MovementExecutor):
         self,
         speed=None,
     ) -> ArmMovementUpdate:
-        """Prepare a stowed arm with an unguarded controlled lift."""
+        """Move to the fixed body-frame ready pose at the configured ready speed."""
         if self.active:
             return self._busy_update()
         self._active = True
@@ -1405,7 +1401,7 @@ class ArmMovementExecutor(MovementExecutor):
         return self._start_goal(lambda: build_gripper_goal(open_fraction))
 
     def stow(self) -> ArmMovementUpdate:
-        """Stow a deployed arm through Spot's native stow command."""
+        """Return to the fixed ready pose and confirm stop before native stow."""
         if self.active:
             return self._busy_update()
         self._active = True
@@ -1422,11 +1418,11 @@ class ArmMovementExecutor(MovementExecutor):
             return self._begin_stop_confirmation()
 
     def _begin_prepare_stop(self):
-        self._operation = (
-            _ArmOperation.READY_PREPARE_STOP
-            if self._operation == _ArmOperation.READY_PREPARE
-            else _ArmOperation.PREPARE_STOP
-        )
+        self._operation = {
+            _ArmOperation.READY_PREPARE: _ArmOperation.READY_PREPARE_STOP,
+            _ArmOperation.STOW_PREPARE: _ArmOperation.STOW_PREPARE_STOP,
+            _ArmOperation.PREPARE: _ArmOperation.PREPARE_STOP,
+        }[self._operation]
         return self._begin_stop_confirmation()
 
     def _begin_stop_confirmation(self):
@@ -1446,23 +1442,24 @@ class ArmMovementExecutor(MovementExecutor):
     def _finish_stop_confirmation(self, update):
         preparing = self._operation in (
             _ArmOperation.PREPARE_STOP, _ArmOperation.READY_PREPARE_STOP,
+            _ArmOperation.STOW_PREPARE_STOP,
         )
         if update.outcome is ArmMovementOutcome.RUNNING:
             if preparing:
                 return ArmMovementUpdate(
                     ArmMovementOutcome.RUNNING,
-                    f"Ready arm lift completed; {update.detail}",
+                    f"Ready arm movement completed; {update.detail}",
                 )
             return update
         outcome = (ArmMovementOutcome.SUCCESS
                    if update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED
                    else ArmMovementOutcome.STOP_UNCONFIRMED)
         if preparing and outcome is ArmMovementOutcome.SUCCESS:
-            self._operation = (
-                _ArmOperation.READY_PREPARE
-                if self._operation == _ArmOperation.READY_PREPARE_STOP
-                else _ArmOperation.PREPARE
-            )
+            self._operation = {
+                _ArmOperation.READY_PREPARE_STOP: _ArmOperation.READY_PREPARE,
+                _ArmOperation.STOW_PREPARE_STOP: _ArmOperation.STOW_PREPARE,
+                _ArmOperation.PREPARE_STOP: _ArmOperation.PREPARE,
+            }[self._operation]
             self._verification_started = self._monotonic_clock()
             return self._poll_state_confirmation()
         if preparing:
@@ -1487,6 +1484,7 @@ class ArmMovementExecutor(MovementExecutor):
                 _ArmOperation.CONFIRM_STOP,
                 _ArmOperation.PREPARE_STOP,
                 _ArmOperation.READY_PREPARE_STOP,
+                _ArmOperation.STOW_PREPARE_STOP,
             ):
                 owner = self._guarded_probe_monitor or self.guarded_probe_execution
                 return self._finish_stop_confirmation(owner.poll())
@@ -1525,6 +1523,7 @@ class ArmMovementExecutor(MovementExecutor):
             if self._operation in (
                 _ArmOperation.PREPARE,
                 _ArmOperation.READY_PREPARE,
+                _ArmOperation.STOW_PREPARE,
             ):
                 return self._advance_prepare_start()
             if self._operation == _ArmOperation.STOW:
@@ -2029,6 +2028,7 @@ class ArmMovementExecutor(MovementExecutor):
         if self._operation in (
             _ArmOperation.PREPARE,
             _ArmOperation.READY_PREPARE,
+            _ArmOperation.STOW_PREPARE,
         ):
             self._reset_goal_lifecycle()
             return self._begin_prepare_stop()
@@ -2102,23 +2102,14 @@ class ArmMovementExecutor(MovementExecutor):
             )
 
         self._state_wait_started = None
-        if state is ArmStowState.DEPLOYED:
-            if self._operation == _ArmOperation.READY_PREPARE:
-                return self._begin_ready_probe()
-            return self._finish(
-                ArmMovementOutcome.SUCCESS,
-                "Arm is already deployed",
-            )
-
         try:
-            current_hand = self.probe_motion_planner.current_hand_pose()
+            # Require fresh geometry before submitting either ready movement.
+            self.probe_motion_planner.current_hand_pose(BODY_FRAME_NAME)
         except Exception as exception:
             return self._wait_for_ready_transform(exception)
 
         self._tf_wait_started = None
-        target_hand = deepcopy(current_hand)
-        target_hand.pose.position.x += self.ready_forward_distance_m
-        target_hand.pose.position.z += self.ready_lift_distance_m
+        target_hand = deepcopy(self.ready_target)
 
         return self._continue_probe(
             target_hand,
@@ -2141,12 +2132,15 @@ class ArmMovementExecutor(MovementExecutor):
                 "Arm is already stowed",
             )
 
-        return self._submit_goal(self._build_stow_goal)
+        self._operation = _ArmOperation.STOW_PREPARE
+        self._operation_speed = self.ready_speed
+        return self._advance_prepare_start()
 
     def _poll_state_confirmation(self) -> ArmMovementUpdate:
         if self._operation in (
             _ArmOperation.PREPARE,
             _ArmOperation.READY_PREPARE,
+            _ArmOperation.STOW_PREPARE,
         ):
             expected = ArmStowState.DEPLOYED
             timeout_sec = self.ready_deployed_timeout_sec
@@ -2171,6 +2165,11 @@ class ArmMovementExecutor(MovementExecutor):
 
         state = self._fresh_arm_state()
         if state is expected:
+            if self._operation == _ArmOperation.STOW_PREPARE:
+                self._verification_started = None
+                self._operation = _ArmOperation.STOW
+                self.result_timeout_sec = self._base_result_timeout_sec
+                return self._submit_goal(self._build_stow_goal)
             if self._operation == _ArmOperation.READY_PREPARE:
                 self._verification_started = None
                 return self._begin_ready_probe()
@@ -2231,13 +2230,13 @@ class ArmMovementExecutor(MovementExecutor):
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING,
                 "Waiting for ready-arm hand pose transform "
-                f"{GRAV_ALIGNED_BODY_FRAME_NAME} -> {HAND_FRAME_NAME}",
+                f"{BODY_FRAME_NAME} -> {HAND_FRAME_NAME}",
             )
 
         return self._finish(
             ArmMovementOutcome.EXECUTION_ERROR,
             "Ready arm hand transform "
-            f"{GRAV_ALIGNED_BODY_FRAME_NAME} -> {HAND_FRAME_NAME} "
+            f"{BODY_FRAME_NAME} -> {HAND_FRAME_NAME} "
             f"was unavailable for {self.ready_tf_timeout_sec:.1f} s: "
             f"{exception}",
         )
@@ -2261,15 +2260,6 @@ class ArmMovementExecutor(MovementExecutor):
 
     def _build_arm_stop_request(self) -> RobotCommandService.Request:
         return build_arm_stop_request()
-
-    @staticmethod
-    def _ready_forward_distance(value) -> float:
-        value = float(value)
-        if not math.isfinite(value) or value < 0.0:
-            raise ValueError(
-                "Ready arm forward distance must be non-negative and finite"
-            )
-        return value
 
     def _build_stow_goal(self) -> RobotCommand.Goal:
         return build_stow_goal()

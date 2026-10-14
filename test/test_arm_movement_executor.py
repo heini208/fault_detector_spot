@@ -267,8 +267,6 @@ def executor_with_client(transformer, **kwargs):
         default_speed=ArmMotionSpeed(0.10, 0.50),
         minimum_duration_sec=0.50,
     ))
-    kwargs.setdefault("ready_forward_distance_m", 0.0)
-    kwargs.setdefault("ready_lift_distance_m", 0.10)
     if "arm_state_source" not in kwargs:
         kwargs["arm_state_source"] = FakeArmStateSource(
             ArmStowState.DEPLOYED
@@ -810,8 +808,9 @@ def test_explicit_cancel_requests_goal_cancellation(monkeypatch, poll_acceptance
 
 
 @pytest.mark.parametrize("action_terminates_first", [False, True])
+@pytest.mark.parametrize("operation", ["pose", "stow"])
 def test_cancel_recovers_after_timeout_only_when_action_and_stop_complete(
-    monkeypatch, action_terminates_first,
+    monkeypatch, action_terminates_first, operation,
 ):
     target = PoseStamped()
     target.header.frame_id = "body"
@@ -826,7 +825,7 @@ def test_cancel_recovers_after_timeout_only_when_action_and_stop_complete(
     )
     result_future = ManualFuture()
     handle = FakeGoalHandle(result_future=result_future)
-    executor.pose(target)
+    executor.stow() if operation == "stow" else executor.pose(target)
     client.send_future.set_result(handle)
     executor.poll()
     executor.cancel()
@@ -866,6 +865,8 @@ def test_cancel_recovers_after_timeout_only_when_action_and_stop_complete(
     assert not executor.cancelling
     assert handle.cancel_count == 1
 
+
+    assert len(client.sent_goals) == 1
 
 def test_cancel_retries_failed_stop_with_cooldown():
     clock = ManualClock()
@@ -954,6 +955,7 @@ def test_stowed_relative_prepares_before_resolving_requested_goal(
     )
     transformer = FakeTransformer({
         (frame, "hand"): ready_transform,
+        (executor_module.BODY_FRAME_NAME, "hand"): transform(executor_module.BODY_FRAME_NAME, "hand", x=.2, z=.4),
     })
     state = FakeArmStateSource(ArmStowState.STOWED)
     ready_send_future = ManualFuture()
@@ -991,7 +993,7 @@ def test_stowed_relative_prepares_before_resolving_requested_goal(
     waiting = executor.poll()
 
     assert waiting.outcome is ArmMovementOutcome.RUNNING
-    assert "Ready arm lift completed" in waiting.detail
+    assert "Ready arm movement completed" in waiting.detail
     assert len(stop_client.requests) == 1
     assert command.calls == []
 
@@ -1046,26 +1048,23 @@ def test_movement_reports_missing_arm_state_after_bounded_wait():
     assert not executor.active
 
 
-def test_prepare_noops_when_arm_is_already_deployed():
-    state = FakeArmStateSource(ArmStowState.DEPLOYED)
+def test_prepare_moves_even_when_arm_is_already_deployed(monkeypatch):
+    frame = executor_module.BODY_FRAME_NAME
     executor, client = executor_with_client(
-        FakeTransformer(),
-        arm_state_source=state,
+        FakeTransformer({(frame, "hand"): transform(frame, "hand", x=.8)}),
     )
-
-    update = executor.prepare()
-
-    assert update.outcome is ArmMovementOutcome.SUCCESS
-    assert update.detail == "Arm is already deployed"
-    assert client.sent_goals == []
-    assert not executor.active
+    captured = capture_builder(monkeypatch)
+    assert executor.prepare().outcome is ArmMovementOutcome.RUNNING
+    assert captured["args"][:3] == pytest.approx((.60, 0., .36))
+    assert captured["args"][7] == frame
+    assert len(client.sent_goals) == 1
 
 
 def test_prepare_uses_shared_speed_and_verifies_deployed(monkeypatch):
     clock = ManualClock()
     stop_client = FakeArmStopServiceClient()
     current = transform(
-        executor_module.GRAV_ALIGNED_BODY_FRAME_NAME,
+        executor_module.BODY_FRAME_NAME,
         "hand",
         x=0.2,
         y=-0.1,
@@ -1073,7 +1072,7 @@ def test_prepare_uses_shared_speed_and_verifies_deployed(monkeypatch):
     )
     transformer = FakeTransformer({
         (
-            executor_module.GRAV_ALIGNED_BODY_FRAME_NAME,
+            executor_module.BODY_FRAME_NAME,
             "hand",
         ): current,
     })
@@ -1099,10 +1098,10 @@ def test_prepare_uses_shared_speed_and_verifies_deployed(monkeypatch):
 
     assert started.outcome is ArmMovementOutcome.RUNNING
     args = captured["args"]
-    assert args[0] == pytest.approx(0.2)
-    assert args[1] == pytest.approx(-0.1)
-    assert args[2] == pytest.approx(0.5)
-    assert args[8] == pytest.approx(1.0)
+    assert args[0] == pytest.approx(0.6)
+    assert args[1] == pytest.approx(0.0)
+    assert args[2] == pytest.approx(0.36)
+    assert args[8] == pytest.approx(math.sqrt(.4**2 + .1**2 + .04**2) / executor.ready_speed.linear_speed_mps)
 
     send_future.set_result(handle)
     assert executor.poll().outcome is ArmMovementOutcome.RUNNING
@@ -1114,7 +1113,7 @@ def test_prepare_uses_shared_speed_and_verifies_deployed(monkeypatch):
     )
     waiting = executor.poll()
     assert waiting.outcome is ArmMovementOutcome.RUNNING
-    assert "Ready arm lift completed" in waiting.detail
+    assert "Ready arm movement completed" in waiting.detail
     assert len(stop_client.requests) == 1
     assert executor.active
     assert executor.stow().outcome is ArmMovementOutcome.BUSY
@@ -1137,7 +1136,7 @@ def test_prepare_uses_shared_speed_and_verifies_deployed(monkeypatch):
 def ready_lift_completed(monkeypatch, *, following_move):
     clock = ManualClock()
     stop_client = FakeArmStopServiceClient()
-    frame = executor_module.GRAV_ALIGNED_BODY_FRAME_NAME
+    frame = executor_module.BODY_FRAME_NAME
     state = FakeArmStateSource(ArmStowState.STOWED)
     executor, client = executor_with_client(
         FakeTransformer({(frame, "hand"): transform(frame, "hand")}),
@@ -1150,7 +1149,11 @@ def ready_lift_completed(monkeypatch, *, following_move):
     target.pose.position.x = 0.1
     target.pose.orientation.w = 1.0
     command = FakeRelativeCommand(target)
-    started = executor.relative(command) if following_move else executor.prepare()
+    if following_move == "stow":
+        state.state = ArmStowState.DEPLOYED
+        started = executor.stow()
+    else:
+        started = executor.relative(command) if following_move else executor.prepare()
     assert started.outcome is ArmMovementOutcome.RUNNING
     result_future = ManualFuture()
     client.send_future.set_result(FakeGoalHandle(result_future=result_future))
@@ -1163,7 +1166,7 @@ def ready_lift_completed(monkeypatch, *, following_move):
     return executor, client, stop_client, clock, command
 
 
-@pytest.mark.parametrize("following_move", [False, True])
+@pytest.mark.parametrize("following_move", [False, True, "stow"])
 @pytest.mark.parametrize("failure", ["service", "settling"])
 def test_ready_stop_failure_cannot_report_ready_or_start_followup(
     monkeypatch, following_move, failure,
@@ -1188,9 +1191,10 @@ def test_ready_stop_failure_cannot_report_ready_or_start_followup(
 
 
 @pytest.mark.parametrize("stop_accepted", [False, True])
-def test_cancel_during_ready_stop_discards_pending_followup(monkeypatch, stop_accepted):
+@pytest.mark.parametrize("following_move", [True, "stow"])
+def test_cancel_during_ready_stop_discards_pending_followup(monkeypatch, stop_accepted, following_move):
     executor, client, stop_client, clock, command = ready_lift_completed(
-        monkeypatch, following_move=True,
+        monkeypatch, following_move=following_move,
     )
     if stop_accepted:
         stop_client.future.set_result(SimpleNamespace(success=True))
@@ -1260,6 +1264,9 @@ def test_stow_uses_native_command_and_verifies_stowed(monkeypatch):
     handle = FakeGoalHandle(result_future=result_future)
     client = FakeActionClient(send_future=send_future)
     captured = {}
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
+    capture_builder(monkeypatch)
 
     def build_stow():
         captured["called"] = True
@@ -1276,15 +1283,17 @@ def test_stow_uses_native_command_and_verifies_stowed(monkeypatch):
         lambda source, target: None,
     )
     executor, _ = executor_with_client(
-        FakeTransformer(),
+        FakeTransformer({("body", "hand"): transform("body", "hand", x=.8)}),
         action_client=client,
         arm_state_source=state,
+        arm_stop_service_client=stop_client,
+        monotonic_clock=clock,
     )
 
     started = executor.stow()
 
     assert started.outcome is ArmMovementOutcome.RUNNING
-    assert captured["called"]
+    assert not captured
     assert len(client.sent_goals) == 1
 
     send_future.set_result(handle)
@@ -1295,6 +1304,19 @@ def test_stow_uses_native_command_and_verifies_stowed(monkeypatch):
             result=SimpleNamespace(success=True)
         )
     )
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert not captured
+    assert len(stop_client.requests) == 1
+    stop_client.future.set_result(SimpleNamespace(success=True))
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    client.send_future = ManualFuture()
+    assert confirm_physical_stop(executor, clock, .1).outcome is ArmMovementOutcome.RUNNING
+    assert captured["called"]
+    assert len(client.sent_goals) == 2
+    result_future = ManualFuture()
+    client.send_future.set_result(FakeGoalHandle(result_future=result_future))
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    result_future.set_result(SimpleNamespace(result=SimpleNamespace(success=True)))
     waiting = executor.poll()
     assert waiting.outcome is ArmMovementOutcome.RUNNING
     assert "stowed" in waiting.detail
@@ -1410,7 +1432,7 @@ def test_contact_retreat_uses_probe_and_preserves_guard_lifecycle(monkeypatch):
 
 
 def test_public_probe_rejects_new_requests_during_preparation(monkeypatch):
-    frame = executor_module.GRAV_ALIGNED_BODY_FRAME_NAME
+    frame = executor_module.BODY_FRAME_NAME
     executor, client = executor_with_client(
         FakeTransformer({(frame, "hand"): transform(frame, "hand")}),
         arm_state_source=FakeArmStateSource(ArmStowState.STOWED),
@@ -1731,3 +1753,33 @@ def test_checkpoint_return_uses_twenty_mm_position_tolerance(monkeypatch, error,
     feedback.header.stamp.sec += 1
     assert executor.poll().outcome is expected
     assert len(corrections) == (0 if expected is ArmMovementOutcome.SUCCESS else 1)
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+def test_stow_ready_failure_never_sends_native_stow(monkeypatch, accepted):
+    executor, client = executor_with_client(
+        FakeTransformer({("body", "hand"): transform("body", "hand")}),
+    )
+    capture_builder(monkeypatch)
+    monkeypatch.setattr(executor, "_build_stow_goal", lambda: pytest.fail("Stow after ready failure"))
+    assert executor.stow().outcome is ArmMovementOutcome.RUNNING
+    result = ManualFuture()
+    client.send_future.set_result(FakeGoalHandle(result_future=result, accepted=accepted))
+    update = executor.poll()
+    if accepted:
+        assert update.outcome is ArmMovementOutcome.RUNNING
+        result.set_result(SimpleNamespace(result=SimpleNamespace(success=False, message="Failed")))
+        update = executor.poll()
+    assert update.outcome not in (ArmMovementOutcome.RUNNING, ArmMovementOutcome.SUCCESS)
+    assert not executor.active
+    assert len(client.sent_goals) == 1
+
+
+def test_stow_missing_ready_transform_times_out_without_movement():
+    clock = ManualClock()
+    executor, client = executor_with_client(FakeTransformer(), monotonic_clock=clock)
+    assert executor.stow().outcome is ArmMovementOutcome.RUNNING
+    clock.now = executor.ready_tf_timeout_sec
+    assert executor.poll().outcome is ArmMovementOutcome.EXECUTION_ERROR
+    assert not executor.active
+    assert not client.sent_goals

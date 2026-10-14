@@ -832,16 +832,29 @@ For detailed behaviour descriptions and design rationale, always refer back to
 ## Arm-motion settings
 
 [config/arm_motion.yaml](config/arm_motion.yaml) is the single source of defaults
-for arm speed, ready offsets, settling, force baseline, contact detection,
+for arm speed, the ready pose, settling, force baseline, contact detection,
 retreat, and contact telemetry. Editing an existing value requires no Python
 changes. The file is loaded once per process; edits apply on the next start.
 ROS launch/parameter overrides still take precedence over the YAML defaults.
 Explicit constructor arguments take precedence over both (useful in tests).
 
-Every successful Ready Arm lift ends with a native `ArmStopCommand`, followed
-by physical-stop confirmation and deployed-state verification. This also
-applies when a requested arm move first deploys the arm automatically: the
-requested move waits until preparation has stopped successfully.
+Ready Arm moves the hand to a fixed `body`-frame pose, including when already
+deployed: `(x, y, z) = (0.60, 0.0, 0.36)` metres, with identity orientation
+(hand facing body +X). This is an approximate replacement for the former
+stowed-hand pose plus a 5 cm forward / 10 cm upward lift, not a measured
+calibration. Adjust `arm.ready_position_x_m`, `arm.ready_position_y_m`, and
+`arm.ready_position_z_m` in `arm_motion.yaml` as needed. The former relative
+`arm.ready_forward_distance_m` and `arm.ready_lift_distance_m` settings are
+replaced by these absolute coordinates. Movement uses the Ready Pose speed.
+
+Every successful ready movement ends with a native `ArmStopCommand`, followed
+by physical-stop confirmation and deployed-state verification. Automatic
+preparation for another arm command uses the same pose when starting stowed.
+Stow Arm first moves to this pose and completes the same stop verification,
+then sends Spot's native stow command and verifies the stowed state. Failure
+or cancellation before that transition prevents the native stow command.
+An already-stowed arm stays stowed. The final native folding motion retains
+Spot's own timing; the Ready Pose speed controls the preceding movement.
 
 Guarded movements complete collision-scene preparation and MoveIt planning
 before collecting a fresh force baseline. Only after that baseline succeeds

@@ -136,8 +136,8 @@ def test_standalone_consumers_use_changed_yaml(monkeypatch, tmp_path):
         parameters_module.arm_motion_config_path().read_text()
     )["/**"]["ros__parameters"]
     values.update({
-        "arm.ready_forward_distance_m": 0.23,
-        "arm.ready_lift_distance_m": 0.31,
+        "arm.ready_position_x_m": 0.23,
+        "arm.ready_position_z_m": 0.31,
         "arm.motion.linear_speed_mps": 0.17,
         "arm.motion.angular_speed_rad_s": 0.61,
         "arm.motion.minimum_duration_sec": 0.71,
@@ -152,8 +152,8 @@ def test_standalone_consumers_use_changed_yaml(monkeypatch, tmp_path):
         parameters_module, "arm_motion_config_path", lambda: path
     )
     executor = ArmMovementExecutor(object(), action_client=object())
-    assert executor.ready_forward_distance_m == 0.23
-    assert executor.ready_lift_distance_m == 0.31
+    assert executor.ready_target.pose.position.x == 0.23
+    assert executor.ready_target.pose.position.z == 0.31
     assert executor.speed_policy.default_speed.linear_speed_mps == 0.17
     assert ArmMotionSpeed().angular_speed_rad_s == 0.61
     assert ArmMotionSpeedPolicy().minimum_duration_sec == 0.71
@@ -178,13 +178,13 @@ def test_ros_overrides_reach_consumers():
         "arm.force_baseline.minimum_samples": 17,
         "arm.contact.consecutive_samples": 6,
         "arm.contact.shadow.off_axis_speed_threshold_mps": 0.09,
-        "arm.ready_forward_distance_m": 0.0,
+        "arm.ready_position_x_m": 0.0,
     })
     config = ArmMotionParameters(node)
     executor = ArmMovementExecutor(
         object(), action_client=object(), config=config
     )
-    assert executor.ready_forward_distance_m == 0.0
+    assert executor.ready_target.pose.position.x == 0.0
     assert executor.speed_policy.default_speed.linear_speed_mps == 0.19
     assert ForceBaselineSampler.from_node(node, object()).minimum_samples == 17
     contact = SpeedAwareForceContactPolicy.from_node(node)
