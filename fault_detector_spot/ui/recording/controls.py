@@ -76,13 +76,19 @@ class RecordingControls(UIControlHelper):
 
         self.skip_button = QPushButton("Start skip block")
         self.skip_button.setCheckable(True)
+        self.skip_button.setToolTip(
+            "Start a skip block; press again to end it. During playback, if a "
+            "command fails after its retries, skip the rest of this block. "
+            "Successful commands are not undone. Skip blocks cannot be nested."
+        )
         self.skip_button.toggled.connect(self._update_skip_button)
         controls.addWidget(self.skip_button)
 
         self.retry_button = QPushButton()
         self.retry_button.setCheckable(True)
         self.retry_button.setToolTip(
-            "Allow additional attempts for the next recorded command. "
+            "Allow the selected number of additional attempts for the next "
+            "recorded command, only when retrying is supported and safe. "
             "Press again to clear the selection."
         )
         self.retry_button.toggled.connect(self._update_retry_button)
@@ -91,12 +97,21 @@ class RecordingControls(UIControlHelper):
         self.retry_count.setRange(0, 100)
         self.retry_count.setValue(1)
         self.retry_count.setAccessibleName("Additional retries for next command")
+        self.retry_count.setToolTip(
+            "Additional attempts after the first attempt: 0 means no retries, "
+            "1 allows up to 2 attempts."
+        )
         self.retry_count.valueChanged.connect(self._update_retry_button)
         controls.addWidget(self.retry_count)
         self._update_retry_button()
 
         self.pause_recording_button = QPushButton("Don't record")
         self.pause_recording_button.setCheckable(True)
+        self.pause_recording_button.setToolTip(
+            "Exclude subsequent commands from the recording JSON. Commands "
+            "still execute and diagnostic logging continues. Press again to "
+            "resume including commands in the recording."
+        )
         self.pause_recording_button.toggled.connect(self._update_pause_button)
         controls.addWidget(self.pause_recording_button)
         controls.addStretch()
