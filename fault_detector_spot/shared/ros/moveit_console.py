@@ -15,7 +15,8 @@ _STALE_TAG_WARNING = re.compile(
     r"(?:\[move_group(?:-\d+)?\] )?"
     rf"\[WARN\] \[{_NUMBER}\] "
     r"\[moveit_ros\.planning_scene_monitor\.planning_scene_monitor\]: "
-    r"Unable to transform object from frame '(?P<tag>tag36h11:\d+)' "
+    r"Unable to transform object from frame "
+    r"'(?P<tag>(?:tag36h11:|(?:filtered_)?fiducial_)\d+)' "
     r"to planning frame'odom' \(Lookup would require extrapolation into the past\. "
     rf" Requested time {_NUMBER} but the earliest data is at time {_NUMBER}, "
     r"when looking up transform from frame \[(?P=tag)\] to frame \[odom\]\)"
@@ -23,7 +24,7 @@ _STALE_TAG_WARNING = re.compile(
 
 
 class MoveItTagWarningConsoleFilter(logging.Filter):
-    """Show the first stale hand-tag warning and one reminder every 30 seconds."""
+    """Show the first stale tag-frame warning and one reminder every 30 seconds."""
 
     def __init__(self, *, clock=None):
         super().__init__()
@@ -49,7 +50,7 @@ def install_moveit_console_throttle(_context):
     if any(isinstance(item, MoveItTagWarningConsoleFilter) for item in handler.filters):
         return []
     console_filter = MoveItTagWarningConsoleFilter()
-    # MoveIt enumerates all TF frames, including expired hand-tag observations.
+    # MoveIt enumerates all TF frames, including expired base/hand-tag observations.
     # Keep every other PSM warning visible and leave native ROS logs untouched.
     handler.addFilter(console_filter)
 

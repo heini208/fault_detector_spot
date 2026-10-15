@@ -390,8 +390,9 @@ This is an optional planning aid, not live collision monitoring during execution
 The existing execution guard stays active.
 
 The application launch throttles one known console message: MoveIt's repeated
-past-extrapolation warning for a stale hand-camera `tag36h11:<id>` frame relative
-to `odom`. The first occurrence is shown, then at most one every 30 seconds.
+past-extrapolation warning for stale `tag36h11:<id>`, `fiducial_<id>` or
+`filtered_fiducial_<id>` frames relative to `odom`. The first occurrence is shown,
+then at most one every 30 seconds.
 Other warnings and errors remain visible, and native MoveIt file logs and
 `/rosout` retain the full messages. This is console filtering, not a change to tag
 timestamps, TF, collision checks or sensor freshness. MoveIt attempts to resolve
@@ -664,8 +665,9 @@ RTAB‑Map is launched isolated via [`lidar_rtab_mapping_launch.py`](launch/lida
 - Launches RViz with `config/mapping.rviz` for visualization
 
 Mapping and localization started through the application now use the corrected
-`/velodyne/points_sensor` source. The existing mapping arm-exclusion filter still
-publishes `/velodyne/points_filtered` for RTAB-Map and lidar navigation. MoveIt
+`/velodyne/points_sensor` source. The mapping arm-exclusion filter publishes
+`/velodyne/points_filtered` for RTAB-Map and navigation clearing, plus
+`/velodyne/points_obstacles` for navigation obstacle marking. MoveIt
 consumes the adapter's separately rate-limited `/velodyne/points_sensor_collision`
 output, with its own robot filter. Both streams reuse the same sensor-frame
 conversion, so MoveIt's 5 Hz budget does not limit navigation's scan cadence.
@@ -677,12 +679,26 @@ remain fresh within 1.5 s. This accommodates RTAB-Map processing delay without
 saving the robot's older scan-time pose. Missing or stale estimates/transforms
 produce a specific error, and changing maps invalidates the previous estimate.
 
-Saving a landmark requires fresh localization with usable planar covariance
-and three distinct, stable observations of the tag in `map`. The saved pose
+Saving a landmark works in both mapping and localization mode. Pressing Save
+starts an on-demand capture of that tag; it does not require a pre-filled
+observation cache. The action waits up to 10 seconds and reports progress while
+ROS callbacks continue receiving data. It requires localization and tag captures
+acquired after the request, usable planar covariance, and three distinct, stable
+observations of the tag in `map`. Acquisition delay is checked when a processed
+estimate arrives; subsequent freshness checks measure the gap between advancing
+estimates using both ROS and monotonic time. Normal RTAB-Map processing delay
+therefore does not repeatedly erase the observation window, while stopped,
+replayed or already stale estimates cannot qualify a save. The saved pose
 retains position and orientation, using TF at each observation's acquisition
-time. Invalid localization, map/clock changes, stale captures, and changing tag
-poses clear qualification. Tags used as landmarks must remain physically fixed;
-save them again from a known-good localization if they move. Saved and deleted
+time. Captures wait briefly for delayed TF without erasing valid samples; saving
+uses the newest qualified capture that is still fresh, even when a newer camera
+message is waiting for its transform. Invalid localization, stale captures, and
+changing tag poses clear qualification. A map or clock change aborts the capture.
+Success, timeout, cancellation and closing setup discard the temporary samples;
+idle authoring does not qualify tags continuously. A timeout reports which input
+is still missing, without saving a partial landmark. Tags used as landmarks
+must remain physically fixed; save them again from a known-good localization if
+they move. Saved and deleted
 landmarks are picked up by the recovery monitor without restarting localization.
 
 Landmark recovery runs continuously in localization-only mode, including during
@@ -722,18 +738,49 @@ This standalone mapping launch keeps its raw-topic default and does not own the
 shared adapter. To use the corrected source outside the application, launch the
 adapter separately and add `raw_lidar_topic:=/velodyne/points_sensor` above.
 
+RTAB-Map keeps only the latest waiting scan and uses best-effort scan delivery
+with capture-time TF odometry. Its 2 Hz detection target limits processing rate;
+it does not drain a queue of old scans. The bounded queues prevent avoidable
+backlog without changing acquisition timestamps. Processing spikes can still
+exceed the localization freshness limit; Save waits for an acceptable result
+within its collection deadline. Routine RTAB-Map timing output is hidden by the
+`warn` logger default; `rtabmap_log_level:=info` restores it for diagnosis.
+
 The lidar configuration preserves measured odometry height and tilt with
 `RGBD/ForceOdom3DoF=false`, while keeping planar registration through
-`Reg/Force3DoF=true`. Its existing height limits apply relative to the
-gravity-aligned robot frame (`Grid/MapFrameProjection=false`), so a nonzero
-odometry altitude does not move obstacles below the robot or filter them out.
+`Reg/Force3DoF=true`. New maps created through the application record
+`localization_frame=feet_center` in their metadata. RTAB-Map builds their occupancy
+grid relative to this measured ground reference, with a 5 cm ground cutoff and
+`Grid/MapFrameProjection=false`. Landmark recovery uses the same recorded pose
+reference. Waypoints continue to describe `map <- base_link`.
 
-After updating this launch, rebuild `fault_detector_spot` and restart mapping
-through the usual controls to load the settings. **Create a fresh map under a new
-name or unused database path** for validation. These settings do not repair poses
-or grids already stored with height removed; extending an old map would mix the
-two conventions. Keep existing maps intact. Saved-map localization across an
-odometry reset needs separate validation before relying on that case.
+Existing metadata without this field and databases without metadata retain
+`base_link` and the previous 12 cm cutoff. Their reference cannot be changed in
+place because RTAB-Map also stores scans relative to it. The standalone launch
+retains those legacy defaults; for a **new, unused** database, pass
+`frame_id:=feet_center ground_max_height:=0.05` to use the ground reference.
+
+Both Nav2 costmaps mark lidar returns above 5 cm and up to 1.5 m relative to
+acquisition-time `feet_center` TF. This removes the previous dependency on
+absolute map/odom altitude and the local costmap's two-voxel marking requirement.
+The selected cloud retains the actual sensor frame and timestamp; the full
+self-filtered scan supplies clearing rays, including ground returns. The arm
+exclusion box remains relative to `base_link`. Missing ground TF suppresses the
+obstacle stream so Nav2's observation deadline detects missing data, rather than
+receiving an empty cloud that could imply a clear scene. This navigation filter
+works with both legacy and new maps.
+
+Nav2 retains each source's latest scan and requires an update within 0.5 seconds,
+covering the observed arrival jitter while detecting a stopped stream. It does
+not purge a newly received scan merely because sensor delivery took longer than
+the previous 0.3-second persistence window. The filter also rejects scans older
+than 1 second at input or publication, including time spent waiting for TF;
+receiving queued old data cannot keep the costmap falsely current.
+
+After an authorized rebuild and restart, **create a fresh map under a new name**
+to validate the corrected saved occupancy grid. Existing databases and their
+stored grids are not rewritten. Sensor coverage, the 5 cm cutoff, and saved-map
+localization across an odometry reset still need hardware validation.
 
 See Section **10.5 Implementation Overview** and **10.6 Map lifecycle and process control** in [`System_Design.md`](System_Design.md) for the full flow.
 

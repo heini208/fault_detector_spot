@@ -81,7 +81,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
     """Request bounded pose resets; only fresh accepted results confirm recovery."""
 
     def __init__(self, rtabmap_runtime, tf_buffer, map_repository=None, node=None,
-                 base_frame="base_link", name="LandmarkRelocalizer", *,
+                 name="LandmarkRelocalizer", *,
                  config=None, quality_config=None, monotonic_clock=time.monotonic):
         super().__init__(name)
         self.rtabmap_runtime = rtabmap_runtime
@@ -90,7 +90,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         )
         self.tf_buffer = tf_buffer
         self.node = node
-        self.base_frame = base_frame
+        self.base_frame = None  # Loaded from the active map's pose convention.
         self.map_frame = "map"
         self.odom_frame = "odom"
         self.config = config
@@ -136,7 +136,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         self._healthy_count = 0
         self._last_health_stamp_ns = 0
         self._last_health_at = None
-        self._localization_progress = (0, None)
+        self._localization_progress = (0, None, None)
         self._odometry_progress = (0, None)
         self._stationary_reference = None
         self._stationary = False
@@ -146,6 +146,9 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         self.landmark_map = {}
         try:
             definition = self.map_repository.load(map_name)
+            self.base_frame = definition.localization_frame
+            if self.rtabmap_runtime.localization_frame != self.base_frame:
+                raise ValueError("Map pose reference differs from the running localization process")
             self.landmark_map = {
                 landmark.reference_tag.tag_id: pose_data_to_pose(landmark.pose_map)
                 for landmark in definition.localization_landmarks
@@ -171,13 +174,14 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             return False
         if self.loaded_map_name != map_name or revision != self._repository_revision:
             previous = self.landmark_map
+            previous_frame = self.base_frame
             if not self._load_landmarks_for_map(map_name):
                 self._repository_revision = None
                 self._windows.clear()
                 return False
             self.loaded_map_name = map_name
             self._repository_revision = revision
-            if previous != self.landmark_map:
+            if previous != self.landmark_map or previous_frame != self.base_frame:
                 self._reset_recovery(now_ns)
         return True
 
@@ -282,24 +286,28 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         return sorted(candidates, key=lambda item: (item[0], item[1]))
 
     def _quality_error(self, pose, now_ns, steady_now):
-        error = localization_quality_error(pose, now_ns, self.quality_config)
         if pose is None:
-            return error
+            return localization_quality_error(pose, now_ns, self.quality_config)
         try:
             stamp_ns = self._stamp_ns(pose.header.stamp)
         except (AttributeError, TypeError, ValueError):
-            return error or "Invalid localization timestamp"
-        previous_stamp, received_at = self._localization_progress
+            return "Invalid localization timestamp"
+        previous_stamp, received_at, received_ros_ns = self._localization_progress
         if stamp_ns > previous_stamp and stamp_ns <= now_ns:
             received_at = steady_now
-            self._localization_progress = (stamp_ns, received_at)
+            received_ros_ns = now_ns
+            self._localization_progress = (stamp_ns, received_at, received_ros_ns)
         if stamp_ns <= self._minimum_stamp_ns:
             return "Waiting for localization acquired after the map/runtime change"
         if stamp_ns < previous_stamp:
             return "Localization timestamp regressed"
-        if received_at is None or steady_now - received_at > self.quality_config.maximum_age_sec:
+        if (received_at is None or steady_now - received_at > self.quality_config.maximum_age_sec
+                or received_ros_ns is None
+                or not 0 <= now_ns - received_ros_ns <= self.quality_config.maximum_age_sec * 1e9):
             return "No advancing localization estimates"
-        return error
+        # Preserve acquisition stamps for TF and registration matching. Only
+        # freshness uses receipt time after validating arrival delay once.
+        return localization_quality_error(pose, received_ros_ns, self.quality_config)
 
     @staticmethod
     def _pose_error(first, second):

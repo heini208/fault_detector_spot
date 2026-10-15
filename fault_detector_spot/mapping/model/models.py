@@ -135,6 +135,7 @@ class MapDefinition:
     waypoints: List[Waypoint] = field(default_factory=list)
     localization_landmarks: List[LocalizationLandmark] = field(default_factory=list)
     object_approaches: List[ObjectApproach] = field(default_factory=list)
+    localization_frame: str = "feet_center"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MapDefinition":
@@ -148,11 +149,15 @@ class MapDefinition:
             waypoints=[Waypoint.from_dict(value) for value in waypoints],
             localization_landmarks=[LocalizationLandmark.from_dict(value) for value in landmarks],
             object_approaches=[ObjectApproach.from_dict(value) for value in approaches],
+            # Existing maps were recorded with body-referenced scan geometry.
+            localization_frame=data.get("localization_frame", "base_link"),
         )
 
     def validate(self) -> None:
         _require_text(self.map_id, "Map ID")
         _require_text(self.display_name, "Map display name")
+        if self.localization_frame not in ("base_link", "feet_center"):
+            raise ValueError("Map localization frame must be base_link or feet_center")
         waypoint_ids: Set[str] = set()
         for waypoint in self.waypoints:
             waypoint.validate()
@@ -210,6 +215,7 @@ class MapDefinition:
         return {
             "map_id": self.map_id,
             "display_name": self.display_name,
+            "localization_frame": self.localization_frame,
             "waypoints": [value.to_dict() for value in self.waypoints],
             "localization_landmarks": [value.to_dict() for value in self.localization_landmarks],
             "object_approaches": [value.to_dict() for value in self.object_approaches],

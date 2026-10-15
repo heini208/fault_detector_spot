@@ -1,5 +1,6 @@
 """Collect runtime pose and tag inputs for navigation authoring."""
 
+from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
 import math
@@ -13,7 +14,9 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from rclpy.clock import JumpThreshold
 from rclpy.duration import Duration
 from rclpy.time import Time
-from fault_detector_spot.navigation.landmark_observations import LandmarkPoseWindow
+from fault_detector_spot.navigation.landmark_observations import (
+    LandmarkObservationPending, LandmarkPoseWindow,
+)
 from fault_detector_spot.navigation.localization_quality import (
     LocalizationQualityConfig,
     localization_quality_error,
@@ -63,6 +66,14 @@ class LandmarkSaveConfig:
         return cls(**values)
 
 
+@dataclass(frozen=True)
+class _LandmarkCapture:
+    tag_id: int
+    started_ros_ns: int
+    started_at: float
+    pose_generation: int
+
+
 class NavigationSetupStateSource:
     """Cache localization input and resolve visible tags into map."""
 
@@ -79,6 +90,7 @@ class NavigationSetupStateSource:
         self._lock = RLock()
         self._localization_stamp_ns = None
         self._localization_received_at = None
+        self._localization_received_ros_ns = None
         self._localization_error = "No localization estimate received yet; wait for RTAB-Map"
         self._minimum_pose_stamp_ns = 0
         self._pose_generation = 0
@@ -93,9 +105,11 @@ class NavigationSetupStateSource:
         self._landmark_windows = {}
         self._qualified_landmarks = {}
         self._landmark_last_observations = {}
+        self._landmark_pending_observations = {}
         self._landmark_errors = {}
         self._visible_tags_received_at = None
         self._tag_generation = 0
+        self._landmark_capture = None
         self.maximum_pose_age_sec = float(maximum_pose_age_sec)
         if (not math.isfinite(self.maximum_pose_age_sec)
                 or self.maximum_pose_age_sec <= 0.0):
@@ -178,9 +192,13 @@ class NavigationSetupStateSource:
             raise ValueError(self._localization_error)
         age_sec = self._monotonic_clock() - self._localization_received_at
         if age_sec < 0 or age_sec > self.maximum_pose_age_sec:
+            last_rejection = (
+                f"; last rejected estimate: {self._localization_error}"
+                if self._localization_error else ""
+            )
             raise ValueError(
                 "Localization estimate is stale; no new valid estimate received "
-                f"within {self.maximum_pose_age_sec:g} seconds"
+                f"within {self.maximum_pose_age_sec:g} seconds{last_rejection}"
             )
 
     @staticmethod
@@ -190,6 +208,7 @@ class NavigationSetupStateSource:
     def _invalidate_localization(self, detail, minimum_stamp_ns=0):
         self._localization_stamp_ns = None
         self._localization_received_at = None
+        self._localization_received_ros_ns = None
         self._localization_error = detail
         self._minimum_pose_stamp_ns = minimum_stamp_ns
         self._pose_generation += 1
@@ -209,6 +228,7 @@ class NavigationSetupStateSource:
 
     def close(self):
         """Release the clock callback and TF listener with the API node."""
+        self.finish_landmark_capture(self._landmark_capture)
         if self._clock_jump is not None:
             self._clock_jump.unregister()
             self._clock_jump = None
@@ -216,33 +236,81 @@ class NavigationSetupStateSource:
             self._tf_listener.unregister()
             self._tf_listener = None
 
-    def visible_tag_pose(self, tag_id: int):
-        """Return a qualified full tag pose, or explain why saving is unsafe."""
+    def begin_landmark_capture(self, tag_id: int):
+        """Start qualifying only new observations for one requested tag."""
+        if isinstance(tag_id, bool) or not isinstance(tag_id, int) or tag_id < 0:
+            raise ValueError("Landmark tag ID must be a non-negative integer")
         with self._lock:
-            self._require_landmark_localization()
-            tag = self._visible_tags.get(tag_id)
-            if tag is None:
-                raise ValueError(f"Tag {tag_id} is not currently visible")
-            self._require_fresh_tag(tag)
-            received_at = self._visible_tags_received_at
-            latest = self._landmark_last_observations.get(tag_id)
-            maximum_age = self._landmark_save_config.maximum_observation_age_sec
-            if (received_at is None
-                    or not 0 <= self._monotonic_clock() - received_at <= maximum_age
-                    or (latest is not None
-                        and not 0 <= self._monotonic_clock() - latest[2] <= maximum_age)):
-                self._clear_landmark_tag(tag_id, "No fresh distinct tag observation received")
-            pose = self._qualified_landmarks.get(tag_id)
-            if pose is None:
-                raise ValueError(self._landmark_errors.get(
-                    tag_id, "Wait for distinct stable landmark observations",
-                ))
-            observation = (
-                self._stamp_ns(tag.pose.header.stamp), tag.pose.header.frame_id,
+            if self._landmark_capture is not None:
+                raise RuntimeError("A landmark capture is already active")
+            if self._landmark_save_config is None:
+                self._landmark_save_config = LandmarkSaveConfig.from_node(self.node)
+            if self._localization_quality_config is None:
+                self._localization_quality_config = LocalizationQualityConfig.from_node(self.node)
+            self._tag_generation += 1
+            self._reset_landmark_health()
+            self._visible_tags.clear()
+            self._visible_tags_received_at = None
+            capture = _LandmarkCapture(
+                tag_id, self.node.get_clock().now().nanoseconds,
+                self._monotonic_clock(), self._pose_generation,
             )
-            if latest is None or latest[:2] != observation:
-                raise ValueError("Wait for the latest tag observation to be qualified")
-            return deepcopy(pose)
+            self._landmark_capture = capture
+            return capture
+
+    def finish_landmark_capture(self, token):
+        """Release this capture without cancelling a newer request."""
+        with self._lock:
+            if token is None or token is not self._landmark_capture:
+                return
+            self._landmark_capture = None
+            self._tag_generation += 1
+            self._visible_tags.clear()
+            self._visible_tags_received_at = None
+            self._reset_landmark_health()
+
+    def _require_landmark_capture(self, tag_id):
+        capture = self._landmark_capture
+        if capture is None:
+            raise ValueError("No landmark capture is active")
+        if tag_id != capture.tag_id:
+            raise ValueError("Tag does not match the active landmark capture")
+        if capture.pose_generation != self._pose_generation:
+            raise ValueError("Map or clock changed during landmark capture; start a new capture")
+        if (self._monotonic_clock() < capture.started_at
+                or self.node.get_clock().now().nanoseconds < capture.started_ros_ns):
+            raise ValueError("Clock changed during landmark capture; start a new capture")
+        return capture
+
+    def visible_tag_pose(self, tag_id: int):
+        """Read this capture's result, or report temporary data availability."""
+        with self._lock:
+            self._require_landmark_capture(tag_id)
+            try:
+                self._require_landmark_localization()
+                tag = self._visible_tags.get(tag_id)
+                if tag is None:
+                    raise ValueError(f"Tag {tag_id} is not currently visible")
+                self._require_fresh_tag(tag)
+                received_at = self._visible_tags_received_at
+                latest = self._landmark_last_observations.get(tag_id)
+                maximum_age = self._landmark_save_config.maximum_observation_age_sec
+                if (received_at is None
+                        or not 0 <= self._monotonic_clock() - received_at <= maximum_age
+                        or (latest is not None
+                            and (not 0 <= self._monotonic_clock() - latest[2] <= maximum_age
+                                 or not 0 <= self.node.get_clock().now().nanoseconds - latest[0]
+                                 <= maximum_age * 1e9))):
+                    self._clear_landmark_tag(tag_id, "No fresh distinct tag observation received")
+                pose = self._qualified_landmarks.get(tag_id)
+                if pose is None:
+                    raise ValueError(self._landmark_errors.get(
+                        tag_id, "Wait for distinct stable landmark observations",
+                    ))
+                # New camera messages may still be waiting for their exact TF.
+                return deepcopy(pose)
+            except (TypeError, ValueError) as exception:
+                raise LandmarkObservationPending(str(exception)) from exception
 
     def _reset_landmark_health(self):
         self._landmark_healthy_since_ns = None
@@ -253,12 +321,14 @@ class NavigationSetupStateSource:
         self._landmark_windows.clear()
         self._qualified_landmarks.clear()
         self._landmark_last_observations.clear()
+        self._landmark_pending_observations.clear()
         self._landmark_errors.clear()
 
     def _clear_landmark_tag(self, tag_id, detail):
         self._landmark_windows.pop(tag_id, None)
         self._qualified_landmarks.pop(tag_id, None)
         self._landmark_last_observations.pop(tag_id, None)
+        self._landmark_pending_observations.pop(tag_id, None)
         self._landmark_errors[tag_id] = detail
 
     def _require_landmark_localization(self):
@@ -268,14 +338,21 @@ class NavigationSetupStateSource:
             self._localization_quality_config = LocalizationQualityConfig.from_node(self.node)
         try:
             self._require_live_localization()
+            capture = self._landmark_capture
+            if (capture is None or self._localization_stamp_ns is None
+                    or self._localization_stamp_ns <= capture.started_ros_ns):
+                raise ValueError("Waiting for localization acquired after Save was requested")
             if (self._monotonic_clock() - self._localization_received_at
-                    > self._localization_quality_config.maximum_age_sec):
+                    > self._localization_quality_config.maximum_age_sec
+                    or self._localization_received_ros_ns is None
+                    or not 0 <= self.node.get_clock().now().nanoseconds - self._localization_received_ros_ns
+                    <= self._localization_quality_config.maximum_age_sec * 1e9):
                 raise ValueError("Cannot save landmark: localization estimate is stale")
             if self._landmark_localization is None:
                 raise ValueError(self._localization_error or "Wait for a valid localization estimate")
             error = localization_quality_error(
                 self._landmark_localization,
-                self.node.get_clock().now().nanoseconds,
+                self._localization_received_ros_ns,
                 self._localization_quality_config,
             )
             if error:
@@ -297,6 +374,9 @@ class NavigationSetupStateSource:
             raise ValueError("Tag observation has no source frame")
         if stamp_ns <= 0 or now_ns <= 0 or stamp_ns > now_ns:
             raise ValueError("Tag observation has an invalid or future timestamp")
+        if (self._landmark_capture is None
+                or stamp_ns <= self._landmark_capture.started_ros_ns):
+            raise ValueError("Waiting for a tag observation acquired after Save was requested")
         if stamp_ns < self._minimum_pose_stamp_ns:
             raise ValueError("Wait for a tag observation acquired after the map change")
         if (now_ns - stamp_ns) / 1e9 > self._landmark_save_config.maximum_observation_age_sec:
@@ -333,18 +413,21 @@ class NavigationSetupStateSource:
                 self._reset_landmark_health()
                 return
             received_at = self._monotonic_clock()
-            if self._localization_quality_config is not None:
-                # Detect gaps even when no tag/save callback ran while the
-                # previous estimate was stale. Delayed images from that gap
-                # must not be transformed through the old map localization.
+            if self._landmark_capture is not None and self._localization_quality_config is not None:
+                # Validate acquisition delay at receipt, then track the gap
+                # between processed updates. Counting RTAB-Map's processing
+                # delay again here would reset healthy capture windows each tick.
                 previous_error = localization_quality_error(
-                    self._landmark_localization, now_ns,
+                    self._landmark_localization, self._localization_received_ros_ns,
                     self._localization_quality_config,
                 )
                 if (previous_error or self._localization_received_at is None
                         or not 0 <= received_at - self._localization_received_at
                         <= min(self.maximum_pose_age_sec,
-                               self._localization_quality_config.maximum_age_sec)):
+                               self._localization_quality_config.maximum_age_sec)
+                        or self._localization_received_ros_ns is None
+                        or not 0 <= now_ns - self._localization_received_ros_ns
+                        <= self._localization_quality_config.maximum_age_sec * 1e9):
                     self._reset_landmark_health()
                 if localization_quality_error(
                     message, now_ns, self._localization_quality_config,
@@ -356,6 +439,7 @@ class NavigationSetupStateSource:
             # Validate that delay once, then require continuing processed updates.
             self._localization_stamp_ns = stamp_ns
             self._localization_received_at = received_at
+            self._localization_received_ros_ns = now_ns
             self._localization_error = ""
             self._landmark_localization = deepcopy(message)
 
@@ -364,12 +448,17 @@ class NavigationSetupStateSource:
             self._tag_generation += 1
             tag_generation = self._tag_generation
             generation = self._pose_generation
+            capture = self._landmark_capture
+            if capture is None or capture.pose_generation != generation:
+                return
             self._visible_tags = {
                 element.id: deepcopy(element)
                 for element in message.elements
+                if element.id == capture.tag_id
             }
             self._visible_tags_received_at = self._monotonic_clock()
-            for tag_id in set(self._landmark_windows) - self._visible_tags.keys():
+            tracked = self._landmark_windows.keys() | self._landmark_pending_observations.keys()
+            for tag_id in tracked - self._visible_tags.keys():
                 self._clear_landmark_tag(tag_id, "Tag is no longer visible")
             if not self._visible_tags:
                 self._clear_landmark_samples()
@@ -392,39 +481,85 @@ class NavigationSetupStateSource:
                         <= self._landmark_save_config.maximum_observation_age_sec):
                     self._clear_landmark_tag(tag_id, "Tag observation stream was interrupted")
                     previous = None
-                if previous is not None and previous[:2] == (stamp_ns, frame):
-                    continue
+                pending = self._landmark_pending_observations.get(tag_id)
+                newest = (
+                    (self._stamp_ns(pending[-1][0].pose.header.stamp), pending[-1][0].pose.header.frame_id)
+                    if pending else previous
+                )
+                if newest is not None and (stamp_ns < newest[0] or frame != newest[1]):
+                    self._clear_landmark_tag(tag_id, "Tag acquisition changed; collecting new observations")
+                    newest = None
+                pending = self._landmark_pending_observations.setdefault(tag_id, deque(maxlen=64))
+                if newest is None or newest[:2] != (stamp_ns, frame):
+                    pending.append((tag, self._monotonic_clock()))
+                observations = list(pending)
                 health_generation = self._landmark_health_generation
-            try:
-                pose = self._tf_buffer.transform(tag.pose, "map", timeout=Duration())
-                if (pose.header.frame_id != "map"
-                        or self._stamp_ns(pose.header.stamp) != stamp_ns):
-                    raise ValueError("Tag transform must use map at the observation timestamp")
-                map_pose = pose_to_pose_data(pose)
+            for observation, received_at in observations:
                 with self._lock:
                     if generation != self._pose_generation or tag_generation != self._tag_generation:
                         return
                     if health_generation != self._landmark_health_generation:
                         return
-                    self._require_landmark_localization()
-                    self._require_fresh_tag(tag)
-                    window = self._landmark_windows.setdefault(
-                        tag_id, self._landmark_save_config.new_window(),
-                    )
-                    qualified = window.add(stamp_ns, map_pose, frame)
-                    self._landmark_last_observations[tag_id] = (
-                        stamp_ns, frame, self._monotonic_clock(),
-                    )
-                    if qualified is None:
-                        self._qualified_landmarks.pop(tag_id, None)
-                        self._landmark_errors[tag_id] = window.detail
-                    else:
-                        self._qualified_landmarks[tag_id] = qualified
-                        self._landmark_errors.pop(tag_id, None)
-            except (tf2_ros.TransformException, TypeError, ValueError) as exception:
-                with self._lock:
-                    if generation == self._pose_generation and tag_generation == self._tag_generation:
-                        self._clear_landmark_tag(tag_id, f"Cannot save landmark: {exception}")
+                    maximum_age = self._landmark_save_config.maximum_observation_age_sec
+                    stamp_ns = self._stamp_ns(observation.pose.header.stamp)
+                    if (not 0 <= self._monotonic_clock() - received_at <= maximum_age
+                            or self.node.get_clock().now().nanoseconds - stamp_ns > maximum_age * 1e9):
+                        self._discard_pending_through(tag_id, stamp_ns, keep_latest=True)
+                        continue
+                try:
+                    pose = self._tf_buffer.transform(observation.pose, "map", timeout=Duration())
+                    if (pose.header.frame_id != "map"
+                            or self._stamp_ns(pose.header.stamp) != stamp_ns):
+                        raise ValueError("Tag transform must use map at the observation timestamp")
+                    map_pose = pose_to_pose_data(pose)
+                    with self._lock:
+                        if generation != self._pose_generation or tag_generation != self._tag_generation:
+                            return
+                        if health_generation != self._landmark_health_generation:
+                            return
+                        self._require_landmark_localization()
+                        self._require_fresh_tag(observation)
+                        window = self._landmark_windows.setdefault(
+                            tag_id, self._landmark_save_config.new_window(),
+                        )
+                        qualified = window.add(stamp_ns, map_pose, observation.pose.header.frame_id)
+                        self._landmark_last_observations[tag_id] = (
+                            stamp_ns, observation.pose.header.frame_id, received_at,
+                        )
+                        self._discard_pending_through(tag_id, stamp_ns)
+                        if qualified is None:
+                            self._qualified_landmarks.pop(tag_id, None)
+                            self._landmark_errors[tag_id] = window.detail
+                        else:
+                            self._qualified_landmarks[tag_id] = qualified
+                            self._landmark_errors.pop(tag_id, None)
+                except tf2_ros.TransformException as exception:
+                    with self._lock:
+                        if generation != self._pose_generation or tag_generation != self._tag_generation:
+                            return
+                        # A temporarily missing TF says nothing about stability.
+                        # Retain both good samples and the capture for a later
+                        # snapshot, bounded by its original acquisition/receipt.
+                        window = self._landmark_windows.get(tag_id)
+                        count = window.sample_count if window is not None else 0
+                        self._landmark_errors[tag_id] = (
+                            f"Waiting for tag transform ({count}/{self._landmark_save_config.required_samples} "
+                            f"stable observations retained): {exception}"
+                        )
+                except (TypeError, ValueError) as exception:
+                    with self._lock:
+                        if generation == self._pose_generation and tag_generation == self._tag_generation:
+                            self._clear_landmark_tag(tag_id, f"Cannot save landmark: {exception}")
+                    break
+
+    def _discard_pending_through(self, tag_id, stamp_ns, *, keep_latest=False):
+        pending = self._landmark_pending_observations.get(tag_id)
+        if pending is not None:
+            # Keep an expired latest capture as a timestamp/receipt marker, so
+            # republishing it cannot restart its waiting period on a paused clock.
+            while (len(pending) > int(keep_latest)
+                   and self._stamp_ns(pending[0][0].pose.header.stamp) <= stamp_ns):
+                pending.popleft()
 
     def _receive_active_map(self, message) -> None:
         with self._lock:
@@ -439,4 +574,4 @@ class NavigationSetupStateSource:
             self._active_map_changed(message.data)
 
 
-__all__ = ["LandmarkSaveConfig", "NavigationSetupStateSource"]
+__all__ = ["LandmarkObservationPending", "LandmarkSaveConfig", "NavigationSetupStateSource"]

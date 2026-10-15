@@ -536,7 +536,7 @@ def test_default_cadence_keeps_jittered_driver_clouds_within_nav2_deadline(rig):
         (Path(__file__).parents[1] / "config/nav2_lidar_params.yaml").read_text()
     )
     max_gap = max(np.diff(received_at))
-    for costmap, layer in (("local_costmap", "voxel_layer"),
+    for costmap, layer in (("local_costmap", "obstacle_layer"),
                            ("global_costmap", "obstacle_layer")):
         observation = config[costmap][costmap]["ros__parameters"][layer]["velodyne"]
         assert max_gap < observation["expected_update_rate"]

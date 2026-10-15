@@ -2,8 +2,11 @@
 
 from copy import deepcopy
 from dataclasses import dataclass
+import math
 from threading import RLock
+import time
 from typing import Callable, Optional
+from uuid import uuid4
 
 from fault_detector_spot.shared.geometry.models import PoseData
 
@@ -37,6 +40,7 @@ from fault_detector_spot.mapping.repository.map_repository import MapRepository
 from fault_detector_spot.navigation.setup.navigation_setup_command_factory import (
     NavigationSetupCommandFactory,
 )
+from fault_detector_spot.navigation.landmark_observations import LandmarkObservationPending
 from fault_detector_spot.shared.persistence.file_storage import (
     validate_storage_name,
 )
@@ -71,6 +75,19 @@ class NavigationSetupStatus:
     snapshot: NavigationSetupSnapshot
 
 
+@dataclass
+class LandmarkSaveRequest:
+    """One bounded, context-owned collection of a landmark's observations."""
+
+    request_id: str
+    context: SetupContextSnapshot
+    map_id: str
+    tag_id: int
+    capture: object
+    deadline: float
+    detail: str = "Waiting for new localization and stable tag observations"
+
+
 class NavigationSetupCoordinator:
     """Own navigation setup validation, persistence, and delegation."""
 
@@ -82,12 +99,24 @@ class NavigationSetupCoordinator:
         current_pose: Callable[[], Optional[PoseData]],
         visible_tag_pose: Callable[[int], Optional[PoseData]],
         command_factory=None,
+        *,
+        begin_landmark_capture=None,
+        finish_landmark_capture=None,
+        landmark_capture_timeout_sec=10.0,
+        monotonic_clock=time.monotonic,
     ):
         self.setup_coordinator = setup_coordinator
         self.map_repository = map_repository
         self.map_artifacts = map_artifacts
         self.current_pose = current_pose
         self.visible_tag_pose = visible_tag_pose
+        self.begin_landmark_capture = begin_landmark_capture
+        self.finish_landmark_capture = finish_landmark_capture
+        if not math.isfinite(landmark_capture_timeout_sec) or landmark_capture_timeout_sec <= 0:
+            raise ValueError("Landmark capture timeout must be positive and finite")
+        self.landmark_capture_timeout_sec = landmark_capture_timeout_sec
+        self._monotonic_clock = monotonic_clock
+        self._landmark_save = None
         self.command_factory = (
             command_factory or NavigationSetupCommandFactory()
         )
@@ -140,6 +169,9 @@ class NavigationSetupCoordinator:
         """Close one navigation setup context."""
         with self._lock:
             self.setup_coordinator.require_current(context)
+            if (self._landmark_save is not None
+                    and self._landmark_save.context.context_id == context.context_id):
+                self.finish_landmark_save(self._landmark_save)
             self._closing_contexts.add(context.context_id)
             request_ids = self._operations.request_ids_for(context)
         for request_id in request_ids:
@@ -229,6 +261,12 @@ class NavigationSetupCoordinator:
             landmark_names=landmark_names,
             runtime_error=runtime_error,
         )
+
+    def current_snapshot(self, context):
+        """Resolve a waiting client's latest revision atomically with its state."""
+        with self._lock:
+            current = self.context(context.context_id, context.client_id)
+            return self.snapshot(current)
 
     def create_map_definition(
         self,
@@ -325,24 +363,75 @@ class NavigationSetupCoordinator:
                 raise TypeError("Tag ID must be an integer")
             if tag_id < 0:
                 raise ValueError("Tag ID must not be negative")
-            pose = self._map_pose(
-                self.visible_tag_pose(tag_id),
-                f"visible tag {tag_id}",
+            return self._persist_visible_tag_landmark(context, map_id, tag_id)
+
+    def _persist_visible_tag_landmark(self, context, map_id, tag_id):
+        pose = self._map_pose(self.visible_tag_pose(tag_id), f"visible tag {tag_id}")
+        landmark_id = f"Tag_{tag_id}"
+        self.map_repository.add_landmark(
+            map_id,
+            LocalizationLandmark(
+                landmark_id=landmark_id,
+                display_name=landmark_id,
+                reference_tag=ReferenceTag(tag_id=tag_id, tag_family="36h11"),
+                pose_map=pose,
+            ),
+        )
+        return self._advance(context)
+
+    def begin_landmark_save(self, context, map_name, tag_id):
+        """Reserve authoring and start collecting only the requested tag."""
+        with self._lock:
+            self.setup_coordinator.require_current(context)
+            self._require_idle(context)
+            map_id = self._require_active_map(map_name)
+            self._require_authoring_mode()
+            if type(tag_id) is not int or tag_id < 0:
+                raise ValueError("Tag ID must be a nonnegative integer")
+            if self.map_repository.get_landmark(map_id, f"Tag_{tag_id}") is not None:
+                raise FileExistsError(f"Landmark already exists: Tag_{tag_id}")
+            if self.begin_landmark_capture is None or self.finish_landmark_capture is None:
+                raise RuntimeError("Landmark capture is unavailable")
+            capture = self.begin_landmark_capture(tag_id)
+            request = LandmarkSaveRequest(
+                uuid4().hex, context, map_id, tag_id, capture,
+                self._monotonic_clock() + self.landmark_capture_timeout_sec,
             )
-            landmark_id = f"Tag_{tag_id}"
-            self.map_repository.add_landmark(
-                map_id,
-                LocalizationLandmark(
-                    landmark_id=landmark_id,
-                    display_name=landmark_id,
-                    reference_tag=ReferenceTag(
-                        tag_id=tag_id,
-                        tag_family="36h11",
-                    ),
-                    pose_map=pose,
-                ),
-            )
-            return self._advance(context)
+            self._landmark_save = request
+            return request
+
+    def poll_landmark_save(self, request):
+        """Save once qualified; temporary missing data leaves collection active."""
+        with self._lock:
+            if request is not self._landmark_save:
+                raise RuntimeError("Landmark collection was closed or cancelled")
+            try:
+                self.setup_coordinator.require_current(request.context)
+                self._require_active_map(request.map_id)
+                self._require_authoring_mode()
+                if self._monotonic_clock() >= request.deadline:
+                    raise TimeoutError(
+                        f"Landmark not saved after {self.landmark_capture_timeout_sec:g} seconds: "
+                        f"{request.detail}"
+                    )
+                snapshot = self._persist_visible_tag_landmark(
+                    request.context, request.map_id, request.tag_id,
+                )
+            except LandmarkObservationPending as exception:
+                request.detail = str(exception)
+                raise
+            except Exception:
+                self.finish_landmark_save(request)
+                raise
+            self.finish_landmark_save(request)
+            return snapshot
+
+    def finish_landmark_save(self, request):
+        """Release observation storage on success, failure, cancellation or close."""
+        with self._lock:
+            if request is self._landmark_save:
+                self._landmark_save = None
+                self.finish_landmark_capture(request.capture)
 
     def delete_waypoint(
         self,
@@ -535,7 +624,7 @@ class NavigationSetupCoordinator:
         return map_id
 
     def _require_idle(self, context: SetupContextSnapshot) -> None:
-        if self._operations.has_operations():
+        if self._operations.has_operations() or self._landmark_save is not None:
             raise RuntimeError(
                 "Navigation setup already has an active operation"
             )

@@ -6,6 +6,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 pkg = get_package_share_directory("fault_detector_spot")
 
@@ -16,6 +17,10 @@ def make_rtabmap_node(incremental_memory, condition):
         executable="rtabmap",
         name="rtabmap",
         output="screen",
+        arguments=[
+            "--ros-args", "--log-level",
+            ["rtabmap:=", LaunchConfiguration("rtabmap_log_level")],
+        ],
         parameters=[{
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "frame_id": LaunchConfiguration("frame_id"),
@@ -28,11 +33,19 @@ def make_rtabmap_node(incremental_memory, condition):
             "subscribe_rgbd": False,
             "subscribe_scan": False,
             "subscribe_scan_cloud": True,
+            # Resolve odometry at each scan's acquisition time through TF.
+            "subscribe_odom": False,
+            "pub_loc_pose_only_when_localizing": False,
             "approx_sync": False,
             "qos": 1,
+            # Prefer a current scan over reliable retransmission of old scans.
+            # This reader remains compatible with the reliable filter output.
+            "qos_scan": 2,
             "wait_for_transform": 0.5,
-            "topic_queue_size": 20,
-            "sync_queue_size": 20,
+            # DetectionRate gates acquisition stamps; it does not bound DDS
+            # backlog while ICP runs. Retain only the newest waiting scan.
+            "topic_queue_size": 1,
+            "sync_queue_size": 1,
             "Rtabmap/DetectionRate": "2.0",
             "Mem/NotLinkedNodesKept": "false",
             "Mem/STMSize": "30",
@@ -72,11 +85,14 @@ def make_rtabmap_node(incremental_memory, condition):
             "Grid/Sensor": "0",
             "Grid/3D": "true",
             "Grid/RayTracing": "true",
-            # Apply height limits relative to the robot, not odom's altitude.
+            # New maps use the measured support frame, not Spot's elevated body.
+            # Legacy maps explicitly retain their body frame and height cutoff.
             "Grid/MapFrameProjection": "false",
             "Grid/NormalsSegmentation": "false",
             "Grid/MinGroundHeight": "0.0",
-            "Grid/MaxGroundHeight": "0.12",
+            "Grid/MaxGroundHeight": ParameterValue(
+                LaunchConfiguration("ground_max_height"), value_type=str,
+            ),
             "Grid/MaxObstacleHeight": "1.50",
             "GridGlobal/ProbHit": "0.70",
             "GridGlobal/ProbMiss": "0.46",
@@ -114,6 +130,11 @@ def generate_launch_description():
         "rviz",
         default_value="true",
     )
+    rtabmap_log_level_arg = DeclareLaunchArgument(
+        "rtabmap_log_level",
+        default_value="warn",
+        description="RTAB-Map ROS logger severity; use info for per-scan timing diagnostics",
+    )
     raw_lidar_topic_arg = DeclareLaunchArgument(
         "raw_lidar_topic",
         default_value="/velodyne/points",
@@ -126,9 +147,23 @@ def generate_launch_description():
         "odom_topic",
         default_value="/odometry",
     )
+    # A standalone launch may reopen an existing body-frame database. The
+    # application passes feet_center/0.05 explicitly for new map metadata.
     frame_id_arg = DeclareLaunchArgument(
         "frame_id",
         default_value="base_link",
+    )
+    body_frame_arg = DeclareLaunchArgument(
+        "body_frame",
+        default_value="base_link",
+    )
+    ground_frame_arg = DeclareLaunchArgument(
+        "ground_frame",
+        default_value="feet_center",
+    )
+    ground_max_height_arg = DeclareLaunchArgument(
+        "ground_max_height",
+        default_value="0.12",
     )
     odom_frame_id_arg = DeclareLaunchArgument(
         "odom_frame_id",
@@ -150,7 +185,12 @@ def generate_launch_description():
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "input_topic": LaunchConfiguration("raw_lidar_topic"),
             "output_topic": LaunchConfiguration("lidar_topic"),
-            "base_frame": LaunchConfiguration("frame_id"),
+            # The existing arm box is body-relative; it must not move to feet.
+            "base_frame": LaunchConfiguration("body_frame"),
+            "ground_frame": LaunchConfiguration("ground_frame"),
+            "minimum_obstacle_height": 0.05,
+            "maximum_obstacle_height": 1.50,
+            "obstacle_topic": "/velodyne/points_obstacles",
             "arm_box": [
                 0.25,
                 0.70,
@@ -191,10 +231,14 @@ def generate_launch_description():
         delete_db_arg,
         extend_map_arg,
         rviz_arg,
+        rtabmap_log_level_arg,
         raw_lidar_topic_arg,
         lidar_topic_arg,
         odom_topic_arg,
         frame_id_arg,
+        body_frame_arg,
+        ground_frame_arg,
+        ground_max_height_arg,
         odom_frame_id_arg,
         map_frame_id_arg,
         lidar_self_filter_node,

@@ -29,7 +29,8 @@ def record(message=WARNING, name="move_group-1-stderr"):
     return logging.LogRecord(name, logging.INFO, "", 0, message, (), None)
 
 
-def test_screen_throttle_preserves_file_log_and_records(tmp_path):
+@pytest.mark.parametrize("tag_frame", ["tag36h11:2", "fiducial_2", "filtered_fiducial_2"])
+def test_screen_throttle_preserves_file_log_and_records(tmp_path, tag_frame):
     now = [100.0]
     screen = io.StringIO()
     screen_handler = logging.StreamHandler(screen)
@@ -40,7 +41,8 @@ def test_screen_throttle_preserves_file_log_and_records(tmp_path):
     logger.addHandler(screen_handler)
     logger.addHandler(file_handler)
     warning = record("%s")
-    warning.args = (WARNING,)
+    message = WARNING.replace("tag36h11:2", tag_frame)
+    warning.args = (message,)
     original = warning.msg, warning.args
     try:
         logger.handle(warning)
@@ -49,16 +51,19 @@ def test_screen_throttle_preserves_file_log_and_records(tmp_path):
         logger.handle(warning)
         now[0] = 130.0
         logger.handle(warning)
-        assert screen.getvalue().splitlines() == [WARNING] * 2
-        assert log_path.read_text().splitlines() == [WARNING] * 4
+        assert screen.getvalue().splitlines() == [message] * 2
+        assert log_path.read_text().splitlines() == [message] * 4
         assert (warning.msg, warning.args) == original
-        assert warning.getMessage() == WARNING
+        assert warning.getMessage() == message
     finally:
         file_handler.close()
 
 
 @pytest.mark.parametrize("message,name", [
-    (WARNING.replace("tag36h11:2", "fiducial_276"), "move_group-1-stderr"),
+    (WARNING.replace("tag36h11:2", "fiducial_camera"), "move_group-1-stderr"),
+    (WARNING.replace("tag36h11:2", "lidar_sensor"), "move_group-1-stderr"),
+    (WARNING.replace("tag36h11:2", "filtered_fiducial_2_extra"), "move_group-1-stderr"),
+    (WARNING.replace("[tag36h11:2]", "[fiducial_2]"), "move_group-1-stderr"),
     (WARNING.replace("odom", "map"), "move_group-1-stderr"),
     (WARNING.replace("[WARN]", "[ERROR]"), "move_group-1-stderr"),
     (WARNING.replace("into the past", "into the future"), "move_group-1-stderr"),
@@ -91,6 +96,19 @@ def test_one_global_monotonic_throttle_ignores_ros_clock_epoch():
     now[0] = 130.0
     assert console_filter.filter(replay_warning)
     assert not console_filter.filter(record(WARNING + "\n" + WARNING))
+
+
+def test_base_and_hand_frames_share_one_console_reminder_budget():
+    now = [100.0]
+    console_filter = MoveItTagWarningConsoleFilter(clock=lambda: now[0])
+    raw_warning = WARNING.replace("tag36h11:2", "fiducial_2")
+    filtered_warning = WARNING.replace("tag36h11:2", "filtered_fiducial_2")
+    assert console_filter.filter(record(raw_warning))
+    assert not console_filter.filter(record(filtered_warning))
+    assert not console_filter.filter(record())
+    now[0] = 130.0
+    assert console_filter.filter(record(filtered_warning + "\n" + raw_warning))
+    assert not console_filter.filter(record())
 
 
 def test_launch_hook_installs_once_and_removes_at_shutdown(monkeypatch, tmp_path):

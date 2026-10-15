@@ -8,6 +8,7 @@ from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
 from rclpy.clock import Clock, ClockType
 
 from fault_detector_spot.navigation.runtime.nav2_runtime_manager import Nav2RuntimeManager
+from fault_detector_spot.mapping.repository.map_repository import MapRepository
 from fault_detector_spot.shared.persistence.runtime_paths import (
     default_map_root,
 )
@@ -38,6 +39,7 @@ class RtabmapRuntimeManager(RuntimeManager):
         super().__init__(node, blackboard)
         self.launch_file = launch_file
         self.raw_lidar_topic = raw_lidar_topic
+        self._localization_frame = None
         configured_maps_dir = maps_dir or default_map_root()
         self.maps_dir = os.fspath(
             Path(configured_maps_dir).expanduser()
@@ -118,6 +120,11 @@ class RtabmapRuntimeManager(RuntimeManager):
 
     def _db_path(self, map_name: str):
         return os.path.join(self.maps_dir, f"{map_name}.db")
+
+    @property
+    def localization_frame(self):
+        """Reference frame passed to the last successfully launched RTAB-Map."""
+        return self._localization_frame
 
     def _publish_active_map(self):
         if self.bb.active_map_name:
@@ -234,6 +241,14 @@ class RtabmapRuntimeManager(RuntimeManager):
         db_path = self._db_path(map_name)
         if not extend_map and not os.path.exists(db_path):
             raise FileNotFoundError(f"Database file not found for map: {db_path}")
+        repository = MapRepository(self.maps_dir)
+        # The setup coordinator records feet_center for new application maps.
+        # Bare runtime calls without metadata retain the legacy frame, including
+        # their first launch, so later launches cannot silently switch frames.
+        localization_frame = (
+            repository.load(map_name).localization_frame
+            if repository.exists(map_name) else "base_link"
+        )
         if not self.stop():
             raise RuntimeError("Could not stop runtime before switching maps")
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -247,11 +262,16 @@ class RtabmapRuntimeManager(RuntimeManager):
             f"delete_db:={delete_db_str}",
             f"extend_map:={extend_map_str}",
             f"rviz:={rviz_str}",
+            f"frame_id:={localization_frame}",
+            "ground_max_height:=" + (
+                "0.05" if localization_frame == "feet_center" else "0.12"
+            ),
         ]
         if self.raw_lidar_topic is not None:
             args.append(f"raw_lidar_topic:={self.raw_lidar_topic}")
 
         proc = self._launch(self.launch_file, args)
+        self._localization_frame = localization_frame
         self.bb.slam_runtime_mode = (
             self.MODE_MAPPING if extend_map else self.MODE_LOCALIZATION
         )

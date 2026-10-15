@@ -4,6 +4,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 import py_trees
 import pytest
 from fault_detector_msgs.msg import TagElement
@@ -20,6 +21,7 @@ from fault_detector_spot.navigation.behaviours.landmark_relocalizer import (
 )
 from fault_detector_spot.navigation.localization_quality import LocalizationQualityConfig
 from fault_detector_spot.shared.geometry.models import PoseData
+from fault_detector_spot.shared.geometry.transforms import pose_to_matrix
 
 
 class Blackboard:
@@ -48,6 +50,7 @@ class TimestampedTF:
     def __init__(self, clock):
         self.clock = clock
         self.position = 0.0
+        self.frame_heights = {"feet_center": 0.0, "base_link": 0.0, "body": 0.0, "camera": 0.0}
         self.history = {}
         self.latest_stamp_delta = 0.0
         self.history_stamp_delta = 0.0
@@ -59,7 +62,7 @@ class TimestampedTF:
         if self.unavailable:
             raise TransformException("missing capture transform")
         assert target == "odom"
-        assert source in ("base_link", "body", "camera")
+        assert source in self.frame_heights
         current = stamp.nanoseconds == 0
         when = self.clock[0] if current else stamp.nanoseconds / 1e9
         delta = self.latest_stamp_delta if current else self.history_stamp_delta
@@ -68,6 +71,7 @@ class TimestampedTF:
         result.child_frame_id = source
         result.header.stamp = Time(seconds=when + delta).to_msg()
         result.transform.translation.x = self.position if current else self.history.get(stamp.nanoseconds, self.position)
+        result.transform.translation.z = self.frame_heights[source]
         result.transform.rotation.w = 1.0
         return result
 
@@ -81,12 +85,13 @@ def landmark(tag_id=7, x=2.0):
     )
 
 
-def tag(stamp, *, x=2.0, frame="body", tag_id=7):
+def tag(stamp, *, x=2.0, z=0.0, frame="body", tag_id=7):
     result = TagElement()
     result.id = tag_id
     result.pose.header.frame_id = frame
     result.pose.header.stamp = Time(seconds=stamp).to_msg()
     result.pose.pose.position.x = x
+    result.pose.pose.position.z = z
     result.pose.pose.orientation.w = 1.0
     return result
 
@@ -122,6 +127,7 @@ def rig(tmp_path):
     node.create_publisher.return_value = publisher
     runtime = SimpleNamespace(
         process=object(), get_running_mode=lambda: "localization", maps_dir=tmp_path,
+        localization_frame="feet_center",
     )
     repository = MapRepository(tmp_path)
     repository.create_empty("map_a")
@@ -150,12 +156,14 @@ def rig(tmp_path):
     def tick():
         assert behavior.update() == py_trees.common.Status.SUCCESS
 
-    def sample(*, seconds=0.25, variance=0.5, mismatch=0.0, frame="body", info=None, move=0.0):
+    def sample(*, seconds=0.25, variance=0.5, mismatch=0.0, frame="body", info=None, move=0.0, tag_z=0.0):
         advance(seconds)
         buffer.position += move
         stamp_ns = Time(seconds=clock[0]).nanoseconds
         buffer.history[stamp_ns] = buffer.position
-        blackboard.values["visible_tags"] = {7: tag(clock[0], x=2.0 - buffer.position, frame=frame)}
+        blackboard.values["visible_tags"] = {
+            7: tag(clock[0], x=2.0 - buffer.position, z=tag_z, frame=frame),
+        }
         blackboard.values["last_pose_estimation"] = localization(
             clock[0], x=buffer.position + mismatch, variance=variance,
         )
@@ -187,6 +195,50 @@ def test_uncertainty_or_confident_landmark_disagreement_requests_correction(rig,
     assert message.pose.pose.position.x == pytest.approx(0.0)
     assert rig.behavior.attempts == 1
     assert "requested" in rig.behavior.feedback_message
+
+
+@pytest.mark.parametrize("reference_frame,expected_seed_height", [("feet_center", 0.0), ("base_link", 0.6)])
+def test_recovery_seed_uses_active_maps_robot_pose_reference(rig, reference_frame, expected_seed_height):
+    map_name = "reference_map"
+    if reference_frame == "base_link":
+        # A legacy database has body-referenced scan geometry. Creating its
+        # metadata must retain that convention rather than relabel its poses.
+        rig.repo.get_map_path(map_name).with_suffix(".db").touch()
+    definition = rig.repo.create_empty(map_name)
+    assert definition.localization_frame == reference_frame
+    anchor = landmark()
+    anchor.pose_map.position.z = 1.0
+    rig.repo.add_landmark(map_name, anchor)
+    rig.buffer.frame_heights.update(body=0.6, base_link=0.6, feet_center=0.0)
+    rig.runtime.localization_frame = reference_frame
+    rig.bb["active_map_name"] = map_name
+    rig.tick()
+
+    seed = rig.trigger(tag_z=0.4)
+
+    assert rig.behavior.base_frame == reference_frame
+    assert seed.pose.pose.position.z == pytest.approx(expected_seed_height)
+    # The same physical landmark yields the same map<-odom correction for
+    # either pose convention, even though the published robot height differs.
+    odom_to_reference = np.eye(4)
+    odom_to_reference[2, 3] = rig.buffer.frame_heights[reference_frame]
+    map_to_odom = pose_to_matrix(seed.pose.pose) @ np.linalg.inv(odom_to_reference)
+    np.testing.assert_allclose(map_to_odom, np.eye(4), atol=1e-12)
+    rig.publisher.publish.assert_called_once()
+
+
+def test_runtime_pose_reference_mismatch_with_map_metadata_prevents_correction(rig):
+    rig.repo.create_empty("feet_map")
+    rig.repo.add_landmark("feet_map", landmark())
+    rig.runtime.localization_frame = "base_link"
+    rig.bb["active_map_name"] = "feet_map"
+
+    for _ in range(8):
+        rig.sample()
+
+    rig.publisher.publish.assert_not_called()
+    assert not rig.behavior.landmark_map
+    assert "pose reference differs" in rig.behavior.feedback_message
 
 
 def test_repeated_tag_stamp_never_supplies_distinct_observations(rig):

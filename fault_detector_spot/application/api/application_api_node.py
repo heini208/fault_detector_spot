@@ -164,6 +164,12 @@ class ApplicationApiNode(Node):
                 lambda tag_id:
                 self.navigation_setup_state.visible_tag_pose(tag_id)
             ),
+            begin_landmark_capture=(
+                lambda tag_id: self.navigation_setup_state.begin_landmark_capture(tag_id)
+            ),
+            finish_landmark_capture=(
+                lambda capture: self.navigation_setup_state.finish_landmark_capture(capture)
+            ),
         )
         self.navigation_setup_state = NavigationSetupStateSource(
             self,

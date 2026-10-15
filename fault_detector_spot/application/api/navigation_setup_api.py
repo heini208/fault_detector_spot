@@ -16,6 +16,7 @@ from fault_detector_msgs.msg import (
 from fault_detector_msgs.srv import CloseSetup
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.task import Future
 
 from fault_detector_spot.application.commanding.client_identity import (
     required_client_id,
@@ -32,6 +33,7 @@ from fault_detector_spot.application.coordinators.navigation_setup_coordinator i
     NavigationSetupStatus,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS, LATCHED_QOS
+from fault_detector_spot.navigation.landmark_observations import LandmarkObservationPending
 
 
 _RUNTIME_OPERATIONS = {
@@ -64,6 +66,7 @@ class NavigationSetupApi:
         self._executions = {}
         self._shutdown = Event()
         self._early_states = {}
+        self._landmark_waiters = set()
         self._callback_group = ReentrantCallbackGroup()
         self._transaction_handlers = {
             NavigationSetupIntent.OPERATION_CREATE_MAP_DEFINITION: (
@@ -146,7 +149,7 @@ class NavigationSetupApi:
     def _accept_cancel(_goal_handle):
         return CancelResponse.ACCEPT
 
-    def _execute(self, goal_handle):
+    async def _execute(self, goal_handle):
         goal = goal_handle.request
         if self._shutdown.is_set():
             return self._abort(goal_handle, goal, "Application is shutting down")
@@ -160,7 +163,84 @@ class NavigationSetupApi:
             )
         except Exception as exception:
             return self._abort(goal_handle, goal, str(exception))
+        if operation_code == NavigationSetupIntent.OPERATION_ADD_VISIBLE_TAG_LANDMARK:
+            return await self._execute_landmark_save(goal_handle, context)
         return self._execute_in_context(goal_handle, goal, context)
+
+    async def _execute_landmark_save(self, goal_handle, context):
+        """Yield the executor while the coordinator collects fresh observations."""
+        goal = goal_handle.request
+        request = None
+        timer = None
+        completed = Future()
+        last_detail = None
+
+        def poll():
+            nonlocal last_detail
+            with self._lock:
+                if completed.done():
+                    return
+                try:
+                    if self._shutdown.is_set():
+                        raise RuntimeError("Application shutdown interrupted landmark saving")
+                    if goal_handle.is_cancel_requested:
+                        completed.set_result(None)
+                        return
+                    try:
+                        snapshot = self.coordinator.poll_landmark_save(request)
+                    except LandmarkObservationPending as exception:
+                        detail = f"Collecting landmark: {exception}"
+                        if detail != last_detail:
+                            state = self._state(
+                                self.coordinator.snapshot(context), int(goal.intent.operation),
+                                NavigationSetupState.STATE_RUNNING, detail, request.request_id,
+                            )
+                            self._state_publisher.publish(state)
+                            feedback = ExecuteNavigationSetup.Feedback(state=state)
+                            goal_handle.publish_feedback(feedback)
+                            last_detail = detail
+                    else:
+                        completed.set_result(snapshot)
+                except Exception as exception:
+                    completed.set_exception(exception)
+
+        try:
+            request = self.coordinator.begin_landmark_save(
+                context, goal.intent.map_name, int(goal.intent.tag_id),
+            )
+            with self._lock:
+                self._landmark_waiters.add(completed)
+            timer = self.node.create_timer(
+                0.1, poll, clock=Clock(clock_type=ClockType.STEADY_TIME),
+                callback_group=self._callback_group,
+            )
+            poll()
+            snapshot = await completed
+            if snapshot is None:
+                state = self._state(
+                    self.coordinator.snapshot(context), int(goal.intent.operation),
+                    NavigationSetupState.STATE_CANCELLED, "Landmark saving cancelled",
+                    request.request_id,
+                )
+                self._state_publisher.publish(state)
+                goal_handle.canceled()
+                return ExecuteNavigationSetup.Result(state=state)
+            return self._succeed(goal_handle, self._state(
+                snapshot, int(goal.intent.operation), NavigationSetupState.STATE_SUCCEEDED,
+                "Landmark saved", request.request_id,
+            ))
+        except Exception as exception:
+            return self._abort(
+                goal_handle, goal, str(exception), context,
+                request.request_id if request is not None else "",
+            )
+        finally:
+            if timer is not None:
+                self.node.destroy_timer(timer)
+            with self._lock:
+                self._landmark_waiters.discard(completed)
+            if request is not None:
+                self.coordinator.finish_landmark_save(request)
 
     def _open_context(self, goal_handle, goal):
         snapshot = self.coordinator.open_context(goal.client_id)
@@ -386,13 +466,20 @@ class NavigationSetupApi:
         goal_handle.succeed()
         return result
 
-    def _abort(self, goal_handle, goal, detail, context=None):
-        if context is not None and self.coordinator.is_current(context):
+    def _abort(self, goal_handle, goal, detail, context=None, request_id=""):
+        snapshot = None
+        if context is not None:
+            try:
+                snapshot = self.coordinator.current_snapshot(context)
+            except (LookupError, ValueError):
+                pass  # Closing setup can invalidate a waiting action's context.
+        if snapshot is not None:
             state = self._state(
-                self.coordinator.snapshot(context),
+                snapshot,
                 int(goal.intent.operation),
                 NavigationSetupState.STATE_FAILED,
                 detail,
+                request_id,
             )
             self._state_publisher.publish(state)
             result = ExecuteNavigationSetup.Result()
@@ -401,9 +488,10 @@ class NavigationSetupApi:
             return result
         state = NavigationSetupState()
         state.header.stamp = self.node.get_clock().now().to_msg()
-        state.request_id = uuid4().hex
+        state.request_id = request_id or uuid4().hex
         state.client_id = goal.client_id.strip()
         state.context_id = goal.context_id.strip()
+        state.revision = context.revision if context is not None else 0
         state.operation = int(goal.intent.operation)
         state.state = NavigationSetupState.STATE_FAILED
         state.detail = detail
@@ -508,6 +596,10 @@ class NavigationSetupApi:
     def request_shutdown(self) -> None:
         """Release action waits without destroying resources used by callbacks."""
         self._shutdown.set()
+        with self._lock:
+            for waiter in self._landmark_waiters:
+                if not waiter.done():
+                    waiter.set_exception(RuntimeError("Application shutdown interrupted landmark saving"))
 
     def close(self) -> None:
         """Detach transport resources from the coordinator."""

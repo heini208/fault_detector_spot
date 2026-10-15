@@ -13,11 +13,12 @@ class FakeRepository:
 
     def load(self, map_name):
         self.loaded.append(map_name)
-        return SimpleNamespace(localization_landmarks=[])
+        return SimpleNamespace(localization_landmarks=[], localization_frame="base_link")
 
 
 class FakeSlamHelper:
     maps_dir = "/unused"
+    localization_frame = "base_link"
 
 
 def test_landmark_relocalizer_uses_its_repository_dependency():

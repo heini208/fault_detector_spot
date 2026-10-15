@@ -288,6 +288,7 @@ def test_map_repository_creates_complete_empty_map(tmp_path):
     assert serialized == {
         "map_id": "laboratory",
         "display_name": "laboratory",
+        "localization_frame": "feet_center",
         "waypoints": [],
         "localization_landmarks": [],
         "object_approaches": [],

@@ -3,6 +3,8 @@
     # Initial limits to validate with recorded data for the installed cameras,
     # tag sizes and lidar map. Covariance is a quality gate, not a probability
     # that the robot is correctly localized. Angles below are in radians.
+    # Maximum acquisition delay at receipt and subsequent gap between advancing
+    # processed estimates; processing delay is not counted again on every tick.
     navigation.localization_quality.maximum_age_sec: 1.5
     navigation.localization_quality.maximum_position_std_m: 0.30
     navigation.localization_quality.maximum_yaw_std_rad: 0.17453292519943295  # 10 deg

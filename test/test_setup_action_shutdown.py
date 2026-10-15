@@ -36,6 +36,7 @@ def test_active_setup_action_exits_without_terminal_feedback(api_type):
     goal.request.intent.operation = 1
 
     if api_type is NavigationSetupApi:
+        api._landmark_waiters = set()
         def submit(**kwargs):
             entered.set()
             return operation

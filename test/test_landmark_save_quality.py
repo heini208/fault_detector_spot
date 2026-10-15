@@ -50,7 +50,7 @@ def rig(monkeypatch):
     time_source = TimeSource()
     time_source.attach_clock(clock)
     time_source.ros_time_is_active = True
-    clock.set_ros_time_override(Time(seconds=10.0))
+    clock.set_ros_time_override(Time(seconds=9.9))
     steady = [100.0]
     params = {}
     node = Mock()
@@ -72,6 +72,9 @@ def rig(monkeypatch):
     monkeypatch.setattr(module, "parameter_override", lambda _key, value: value)
     source = module.NavigationSetupStateSource(node, monotonic_clock=lambda: steady[0])
     source._receive_active_map(String(data="map_a"))
+    capture_token = source.begin_landmark_capture(7)
+    clock.set_ros_time_override(Time(seconds=10.0))
+    steady[0] += 0.1
 
     def advance(seconds, *, ros=True):
         steady[0] += seconds
@@ -91,6 +94,7 @@ def rig(monkeypatch):
     yield SimpleNamespace(
         source=source, clock=clock, steady=steady, advance=advance,
         observe=observe, qualify=qualify, buffer=buffer, transform=transform,
+        capture_token=capture_token,
     )
     source.close()
 
@@ -115,13 +119,15 @@ def test_repeated_camera_stamp_does_not_supply_multiple_samples(rig):
     assert rig.buffer.transform.call_count == 1
 
 
-def test_save_cannot_use_previous_qualification_during_new_tag_transform(rig):
+def test_save_uses_fresh_qualified_capture_until_new_transform_is_evaluated(rig):
     rig.qualify()
     pending_saves = []
 
     def transform_while_saving(source, target, **kwargs):
-        with pytest.raises(ValueError, match="latest tag observation"):
-            rig.source.visible_tag_pose(7)
+        # Incoming captures do not invalidate a fresh, fully evaluated one just
+        # because their TF has not been evaluated yet. The resulting movement
+        # must invalidate it as soon as that transform is processed.
+        assert rig.source.visible_tag_pose(7).position.x == 11.0
         pending_saves.append(True)
         return rig.transform(source, target, **kwargs)
 
@@ -283,9 +289,12 @@ def test_map_or_clock_change_clears_visible_tags_and_qualified_samples(rig, chan
         rig.clock.set_ros_time_override(Time(seconds=5.0))
     now = rig.clock.now().nanoseconds / 1e9
     rig.source._receive_localization_pose(localization(now))
-    with pytest.raises(ValueError, match="not currently visible"):
+    with pytest.raises(ValueError, match="Map or clock changed"):
         rig.source.visible_tag_pose(7)
     assert not rig.source._landmark_windows
+    rig.source.finish_landmark_capture(rig.capture_token)
+    rig.capture_token = rig.source.begin_landmark_capture(7)
+    rig.advance(0.1)
     rig.qualify()
     assert rig.source.visible_tag_pose(7).position.x == 11.0
 
@@ -314,7 +323,7 @@ def test_full_3d_instability_restarts_save_window(rig, variation):
     assert rig.source._landmark_windows[7].sample_count == 1
 
 
-def test_tag_loss_and_transform_failure_discard_previously_qualified_pose(rig):
+def test_tag_loss_discards_qualification_but_brief_tf_delay_retains_it(rig):
     rig.qualify()
     rig.source._receive_visible_tags(TagElementArray())
     with pytest.raises(ValueError, match="not currently visible"):
@@ -322,8 +331,7 @@ def test_tag_loss_and_transform_failure_discard_previously_qualified_pose(rig):
     rig.qualify()
     rig.buffer.transform.side_effect = TransformException("no transform at capture")
     rig.observe()
-    with pytest.raises(ValueError, match="fresh distinct|no transform"):
-        rig.source.visible_tag_pose(7)
+    assert rig.source.visible_tag_pose(7).position.x == 11.0
 
 
 def test_window_restarts_on_frame_change_or_backward_stamp_and_expires_samples():

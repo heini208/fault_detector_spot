@@ -60,6 +60,13 @@ class MapRepository:
         if validate:
             definition.validate()
         path = self.get_map_path(map_id)
+        if path.is_file():
+            previous = self.load(map_id)
+            if previous.localization_frame != definition.localization_frame:
+                raise ValueError(
+                    "Cannot change an existing map's localization frame; "
+                    "create a new map instead"
+                )
         content = json.dumps(definition.to_dict(), indent=2, ensure_ascii=False)
         atomic_write_text(path, content + "\n")
         return path
@@ -73,7 +80,17 @@ class MapRepository:
         path = self.get_map_path(map_id)
         if path.exists() and not overwrite:
             raise FileExistsError(f"Map metadata already exists: {path}")
-        definition = MapDefinition(map_id=map_id, display_name=display_name or map_id)
+        # Adding metadata to an existing database must retain its scan frame.
+        localization_frame = (
+            self.load(map_id).localization_frame if path.is_file()
+            else "base_link" if path.with_suffix(".db").exists()
+            else "feet_center"
+        )
+        definition = MapDefinition(
+            map_id=map_id,
+            display_name=display_name or map_id,
+            localization_frame=localization_frame,
+        )
         self.save(map_id, definition)
         return definition
 

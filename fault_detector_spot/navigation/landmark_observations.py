@@ -8,6 +8,10 @@ from fault_detector_spot.shared.geometry.models import PoseData
 from fault_detector_spot.shared.geometry.rotation import rotation_distance_rad
 
 
+class LandmarkObservationPending(ValueError):
+    """A requested landmark capture is waiting for usable observation data."""
+
+
 class LandmarkPoseWindow:
     """Return the latest pose after a bounded, stable observation window."""
 
@@ -92,4 +96,4 @@ class LandmarkPoseWindow:
         return deepcopy(self._samples[-1][1])
 
 
-__all__ = ["LandmarkPoseWindow"]
+__all__ = ["LandmarkObservationPending", "LandmarkPoseWindow"]
