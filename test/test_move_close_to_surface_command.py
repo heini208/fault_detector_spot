@@ -123,16 +123,21 @@ def execution_for_tolerance(tolerance):
     return execution
 
 
-def test_execution_uses_command_tolerance_when_supplied():
-    execution = execution_for_tolerance(0.002)
+@pytest.mark.parametrize("requested, expected", [
+    (0.0, 0.005), (0.002, 0.005), (0.005, 0.005), (0.012, 0.012),
+])
+def test_positive_target_clamps_tolerance_to_configured_minimum(requested, expected):
+    execution = execution_for_tolerance(requested)
 
-    assert execution._surface_tolerance() == pytest.approx(0.002)
+    assert execution._surface_tolerance() == pytest.approx(expected)
 
 
-def test_execution_falls_back_to_configured_tolerance():
-    execution = execution_for_tolerance(0.0)
+@pytest.mark.parametrize("requested", [0.0, 0.002, 0.005, 0.012])
+def test_contact_target_preserves_requested_backoff(requested):
+    execution = execution_for_tolerance(requested)
+    execution._command.target_surface_distance_m = 0.0
 
-    assert execution._surface_tolerance() == pytest.approx(0.005)
+    assert execution._surface_tolerance() == pytest.approx(requested)
 
 
 def test_command_subscriber_builds_close_surface_command():

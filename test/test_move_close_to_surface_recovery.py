@@ -396,7 +396,7 @@ def test_stop_failure_never_returns_to_start_in_either_mode(outcome, target):
     assert action.failure_outcome in {None, ArmMovementOutcome.STOP_UNCONFIRMED, ArmMovementOutcome.RETREAT_FAILED}
 
 
-@pytest.mark.parametrize("tolerance, expected", [(0.003, 0.003), (0.012, 0.012), (0.0, 0.007)])
+@pytest.mark.parametrize("tolerance, expected", [(0.003, 0.003), (0.012, 0.012), (0.0, 0.0)])
 def test_contact_search_uses_tolerance_as_backoff(tolerance, expected):
     executor = FakeExecutor()
     action = MoveCloseToSurfaceExecution(

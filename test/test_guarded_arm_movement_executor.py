@@ -493,7 +493,14 @@ def test_cancellation_during_baseline_recovery_cannot_resume_motion(settling):
     assert driver.started_goals == [("arm_stop", 1), ("arm_stop", 2)]
 
 
-@pytest.mark.parametrize("override,expected", [(None, 0.008), (0.003, 0.003), (0.02, 0.008)])
+@pytest.mark.parametrize("override", [-0.001, float("nan"), float("inf")])
+def test_contact_retreat_override_rejects_invalid_values(override):
+    guard = execution(FakeArmStateSource(), GoalDriver(), ManualClock(), pose(0.008))
+    with pytest.raises(ValueError, match="non-negative and finite"):
+        guard.start(plan, retreat_distance_m=override)
+
+
+@pytest.mark.parametrize("override,expected", [(None, 0.008), (0.0, 0.0), (0.003, 0.003), (0.02, 0.008)])
 @pytest.mark.parametrize("separate_retreat", [False, True])
 def test_contact_cancels_stops_retreats_and_returns_contact(override, expected, separate_retreat):
     clock = ManualClock()
@@ -545,6 +552,15 @@ def test_contact_cancels_stops_retreats_and_returns_contact(override, expected, 
     state.velocity = velocity_sample(0.8)
     clock.now = 0.8
     retreating = guard.poll()
+
+    if override == 0.0:
+        assert retreating.outcome is ArmMovementOutcome.CONTACT
+        assert retreating.retry_safe
+        assert "backoff disabled" in retreating.detail
+        assert driver.started_goals[-1] == ("arm_stop", 1)
+        assert not retreats
+        assert not guard.active
+        return
 
     assert retreating.outcome is ArmMovementOutcome.RUNNING
     retreat_goal = driver.started_goals[-1]

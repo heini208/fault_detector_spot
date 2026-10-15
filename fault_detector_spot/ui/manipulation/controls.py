@@ -392,12 +392,14 @@ class ManipulationControls(UIControlHelper):
         row.addWidget(QLabel("Tolerance / backoff (m):"))
         self.surface_tolerance_input = QDoubleSpinBox()
         self.surface_tolerance_input.setDecimals(3)
-        self.surface_tolerance_input.setRange(0.001, 0.100)
+        self.surface_tolerance_input.setRange(0.0, 0.100)
         self.surface_tolerance_input.setSingleStep(0.001)
         self.surface_tolerance_input.setValue(0.005)
         self.surface_tolerance_input.setToolTip(
             "For a positive target distance: allowed sensor-tip distance error. "
-            "For a zero target distance: distance to back off after contact."
+            "Values below the configured minimum are rounded up. "
+            "For a zero target distance: distance to back off after contact; "
+            "zero stops without backing off."
         )
         row.addWidget(self.surface_tolerance_input)
 

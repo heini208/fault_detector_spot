@@ -85,10 +85,11 @@ def test_sensor_tip_actions_need_no_distance_estimate_and_keep_operation_feedbac
     assert intent.object_id == intent.routine_id == intent.probe_point_id == ""
 
 
+@pytest.mark.parametrize("tolerance", [0.007, 0.0])
 @pytest.mark.parametrize("target", [0.015, 0.0])
-def test_sensor_tip_approach_only_requests_target_gap_and_tolerance(controls, target):
+def test_sensor_tip_approach_only_requests_target_gap_and_tolerance(controls, target, tolerance):
     controls.surface_distance_input.setValue(target)
-    controls.surface_tolerance_input.setValue(0.007)
+    controls.surface_tolerance_input.setValue(tolerance)
 
     controls.move_close_to_surface_button.click()
 
@@ -100,7 +101,7 @@ def test_sensor_tip_approach_only_requests_target_gap_and_tolerance(controls, ta
     assert execution.command_id is CommandID.MOVE_CLOSE_TO_SURFACE
     assert intent.aligned_preapproach_distance_m == 0.0
     assert execution.target_surface_distance_m == pytest.approx(target)
-    assert execution.surface_tolerance_m == pytest.approx(0.007)
+    assert execution.surface_tolerance_m == pytest.approx(tolerance)
 
 
 @pytest.mark.parametrize("button, intent_id, command_id", _ACTIONS)

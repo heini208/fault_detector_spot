@@ -718,9 +718,9 @@ class MoveCloseToSurfaceExecution:
         requested = float(
             getattr(self._command, "surface_tolerance_m", 0.0)
         )
-        if requested > 0.0:
+        if self._command.target_surface_distance_m == 0.0:
             return requested
-        return float(self.config.tolerance_m)
+        return max(requested, float(self.config.tolerance_m))
 
     def _require_attachment_unchanged(self) -> None:
         sensor_id, revision = self.surface_source.active_attachment()

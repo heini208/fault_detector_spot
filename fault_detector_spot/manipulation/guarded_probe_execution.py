@@ -190,9 +190,10 @@ class GuardedProbeExecution:
                 )
             self.reset()
             if retreat_distance_m is not None:
-                self._retreat_distance_override_m = self._positive(
-                    retreat_distance_m, "Contact retreat distance override",
-                )
+                self._retreat_distance_override_m = float(retreat_distance_m)
+                if (not math.isfinite(self._retreat_distance_override_m)
+                        or self._retreat_distance_override_m < 0.0):
+                    raise ValueError("Contact retreat distance override must be non-negative and finite")
             self._plan_builder = plan_builder
             self._force_threshold_override_n = force_threshold_n
             return self._prepare_plan()
@@ -1138,6 +1139,13 @@ class GuardedProbeExecution:
                 ArmMovementOutcome.RETREAT_FAILED,
                 "Could not measure hand pose for contact retreat: "
                 f"{exception}",
+            )
+
+        if self._retreat_distance_override_m == 0.0:
+            return self._terminal(
+                ArmMovementOutcome.CONTACT,
+                f"{self._contact_detail}; arm stopped; contact backoff disabled",
+                retry_safe=True,
             )
 
         start = plan.current_hand.pose.position
