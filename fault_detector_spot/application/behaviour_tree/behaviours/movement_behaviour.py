@@ -1,5 +1,9 @@
 """Common py_trees adapter for movement executors."""
 
+from dataclasses import replace
+
+from fault_detector_spot.application.ros.semantic_command_adapter import stamped_pose_from_message
+
 import py_trees
 import synchros2.scope as ros_scope
 from py_trees.common import Access, Status
@@ -8,6 +12,7 @@ from py_trees.common import Access, Status
 class MovementBehaviour(py_trees.behaviour.Behaviour):
     """Translate behavior-tree ticks into movement executor calls."""
 
+    RETRY_POSE_COMMAND_ID = None
     RUNNING_OUTCOME = None
     SUCCESS_OUTCOME = None
 
@@ -61,7 +66,15 @@ class MovementBehaviour(py_trees.behaviour.Behaviour):
                 return Status.SUCCESS
 
             result = self._fail(update.detail)
-            self.blackboard.last_command.retry_safe = bool(getattr(update, "retry_safe", False))
+            command = self.blackboard.last_command
+            command.retry_command = getattr(update, "retry_command", None)
+            target = getattr(update, "retry_target", None)
+            if target is not None and self.RETRY_POSE_COMMAND_ID is not None:
+                command.retry_command = replace(
+                    command.semantic_command, command_id=self.RETRY_POSE_COMMAND_ID,
+                    offset=stamped_pose_from_message(target),
+                )
+            command.retry_safe = bool(getattr(update, "retry_safe", False))
             return result
         except Exception as exception:
             return self._fail(
@@ -94,6 +107,7 @@ class MovementBehaviour(py_trees.behaviour.Behaviour):
 
     def _fail(self, detail: str) -> Status:
         if self.blackboard.last_command is not None:
+            self.blackboard.last_command.retry_command = None
             self.blackboard.last_command.retry_safe = False
             self.blackboard.last_command.continuation_safe = False
         if self._started and self.executor is not None:
@@ -111,6 +125,7 @@ class MovementBehaviour(py_trees.behaviour.Behaviour):
     def _clear_failure_detail(self) -> None:
         command = self.blackboard.last_command
         if command is not None:
+            command.retry_command = None
             command.retry_safe = False
             command.continuation_safe = False
         self.blackboard.command_failure_request_id = (

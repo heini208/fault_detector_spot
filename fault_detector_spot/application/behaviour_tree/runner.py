@@ -350,9 +350,25 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             ),
         ),
         (
+            CommandID.MOVE_BASE_TO_POSE,
+            lambda n: BaseGoalBehaviour(
+                name="BasePoseBehaviour",
+                tag_state_source=tag_state_source,
+                robot_command_resources=robot_command_resources,
+            ),
+        ),
+        (
             CommandID.MOVE_BASE_RELATIVE,
             lambda n: BaseGoalBehaviour(
                 name="BaseRelativeBehaviour",
+                tag_state_source=tag_state_source,
+                robot_command_resources=robot_command_resources,
+            ),
+        ),
+        (
+            CommandID.MOVE_ARM_TO_POSE,
+            lambda n: ArmGoalBehaviour(
+                name="ArmPoseBehaviour",
                 tag_state_source=tag_state_source,
                 robot_command_resources=robot_command_resources,
             ),

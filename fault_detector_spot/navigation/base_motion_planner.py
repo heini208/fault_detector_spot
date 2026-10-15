@@ -68,6 +68,13 @@ class BaseMotionPlanner:
         self.walking_profiles = walking_profiles
         self.geometry_resolver = MovementGeometryResolver(tf_listener)
 
+    def resolve_absolute(self, command) -> BaseMovementPlan:
+        if command.offset.header.frame_id != ODOM_FRAME_NAME:
+            raise ValueError("Absolute base movement requires an odom target")
+        target = self.normalize_target(command.offset)
+        profile = self.walking_profiles.for_move(override=command.walking_profile)
+        return BaseMovementPlan(target, profile.relative_speed_mps, profile)
+
     def resolve_relative(self, command) -> BaseMovementPlan:
         if command is None or not callable(
             getattr(command, "compute_goal_pose", None)

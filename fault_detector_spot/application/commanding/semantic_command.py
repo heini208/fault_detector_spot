@@ -199,6 +199,12 @@ class SemanticCommand:
             raise TypeError("Command tag must be SemanticTag or None")
         if not isinstance(self.offset, StampedPose):
             raise TypeError("Command offset must be StampedPose")
+        if command_id in (CommandID.MOVE_ARM_TO_POSE, CommandID.MOVE_BASE_TO_POSE):
+            if self.offset.frame_id != "odom":
+                raise ValueError("Absolute movement requires an odom-frame target")
+            q = self.offset.orientation
+            if not math.isclose(sum(v * v for v in (q.x, q.y, q.z, q.w)), 1.0, abs_tol=1e-5):
+                raise ValueError("Absolute movement requires a unit quaternion")
         if not isinstance(self.orientation_mode, str):
             raise TypeError("Orientation mode must be a string")
         if not isinstance(self.map_name, str):

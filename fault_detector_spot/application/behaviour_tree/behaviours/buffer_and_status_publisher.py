@@ -1,5 +1,7 @@
 import math
 
+from fault_detector_spot.application.ros.semantic_command_adapter import semantic_command_to_message
+
 import py_trees
 from fault_detector_msgs.msg import CommandStatus
 from py_trees.common import Status
@@ -171,6 +173,10 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             message.continuation_safe = (
                 message.retry_safe or bool(getattr(command, "continuation_safe", False))
             )
+            retry_command = getattr(command, "retry_command", None)
+            if retry_command is not None:
+                message.has_retry_command = True
+                message.retry_command = semantic_command_to_message(retry_command)
             failure_detail = self._current_failure_detail(message.request_id)
             if failure_detail:
                 message.detail = (
@@ -222,6 +228,8 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             message.buffered_command_count,
             message.retry_safe,
             message.continuation_safe,
+            message.has_retry_command,
+            repr(message.retry_command) if message.has_retry_command else "",
         )
 
     @staticmethod

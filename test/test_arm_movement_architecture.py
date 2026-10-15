@@ -15,7 +15,7 @@ def test_runner_uses_one_arm_goal_behaviour_for_relative_and_tag():
         "fault_detector_spot/application/behaviour_tree/runner.py"
     )
 
-    assert runner.count("ArmGoalBehaviour(") == 4
+    assert runner.count("ArmGoalBehaviour(") == 5
     assert "ArmMovementAction" not in runner
     assert "ReadyArmActionSimple" not in runner
     assert "StowArmActionSimple" not in runner

@@ -197,3 +197,19 @@ def test_measurement_result_and_progress_reach_correlated_status():
     message = result.structured_status_pub.messages[-1]
     assert message.request_id == command.request_id
     assert message.detail == "Sensor tip distance: 0.261 m"
+
+
+def test_replacement_command_is_published_only_with_failure():
+    from fault_detector_spot.application.commanding.command_ids import CommandID
+    from fault_detector_spot.application.commanding.semantic_command import SemanticCommand
+    from fault_detector_spot.application.ros.semantic_command_adapter import semantic_command_from_message
+
+    value = behavior(Status.FAILURE)
+    replacement = SemanticCommand(CommandID.WAIT_TIME, wait_time=3.0)
+    value.blackboard.last_command.retry_command = replacement
+    message = value.get_structured_status_message()
+    assert message.has_retry_command
+    assert semantic_command_from_message(message.retry_command) == replacement
+    assert not message.retry_safe  # Replacement geometry grants no safety permission.
+    value.blackboard.command_tree_status = Status.SUCCESS
+    assert not value.get_structured_status_message().has_retry_command

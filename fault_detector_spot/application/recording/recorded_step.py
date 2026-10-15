@@ -11,6 +11,10 @@ RETRYABLE_COMMANDS = frozenset({
     CommandID.MOVE_ARM_TO_TAG,
     CommandID.FOLLOW_MOVE_TO_TAG_PATH,
     CommandID.WAIT_TIME,
+    CommandID.MOVE_ARM_RELATIVE,
+    CommandID.MOVE_BASE_RELATIVE,
+    CommandID.MOVE_ARM_TO_POSE,
+    CommandID.MOVE_BASE_TO_POSE,
 })
 
 

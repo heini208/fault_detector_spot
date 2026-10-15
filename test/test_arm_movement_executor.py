@@ -297,6 +297,8 @@ def test_relative_uses_current_and_absolute_goal_for_speed(monkeypatch):
         ): current_transform,
     })
     command = FakeRelativeCommand(relative)
+    transformer.transforms[("odom", "flat_body")] = transform("odom", "flat_body")
+    transformer.transforms[("odom", "hand")] = transform("odom", "hand", x=1.0)
     captured = capture_builder(monkeypatch)
     executor, client = executor_with_client(transformer)
 
@@ -309,12 +311,14 @@ def test_relative_uses_current_and_absolute_goal_for_speed(monkeypatch):
             executor_module.GRAV_ALIGNED_BODY_FRAME_NAME,
             "hand",
             0.0,
-        )
+        ),
+        ("odom", "flat_body", 0.0),
+        ("odom", "hand", 0.0),
     ]
     assert len(client.sent_goals) == 1
     args = captured["args"]
     assert args[0] == pytest.approx(1.10)
-    assert args[7] == executor_module.GRAV_ALIGNED_BODY_FRAME_NAME
+    assert args[7] == "odom"
     assert args[8] == pytest.approx(1.0)
 
 
@@ -337,6 +341,8 @@ def test_relative_speed_override_uses_same_current_to_goal_path(
             "hand",
         ): current_transform,
     })
+    transformer.transforms[("odom", "flat_body")] = transform("odom", "flat_body")
+    transformer.transforms[("odom", "hand")] = transform("odom", "hand", x=1.0)
     captured = capture_builder(monkeypatch)
     executor, _ = executor_with_client(transformer)
 
@@ -966,6 +972,8 @@ def test_stowed_relative_prepares_before_resolving_requested_goal(
     client = FakeActionClient(
         send_future=ready_send_future
     )
+    transformer.transforms[("odom", "flat_body")] = transform("odom", "flat_body")
+    transformer.transforms[("odom", "hand")] = transform("odom", "hand", x=1.0)
     captured = capture_builder(monkeypatch)
     command = FakeRelativeCommand(relative)
     executor, _ = executor_with_client(
@@ -1795,3 +1803,37 @@ def test_stow_missing_ready_transform_times_out_without_movement():
     assert executor.poll().outcome is ArmMovementOutcome.EXECUTION_ERROR
     assert not executor.active
     assert not client.sent_goals
+
+
+def test_relative_failure_freezes_odom_target_across_partial_motion_and_absolute_retry(monkeypatch):
+    from copy import deepcopy
+    from fault_detector_spot.manipulation.arm_movement_result import ArmMovementUpdate
+
+    relative = PoseStamped()
+    relative.header.frame_id = "hand"
+    relative.pose.position.x = 0.1
+    relative.pose.orientation.w = 1.0
+    transformer = FakeTransformer({
+        ("flat_body", "hand"): transform("flat_body", "hand", x=1.0),
+        ("odom", "flat_body"): transform("odom", "flat_body", x=5.0),
+        ("odom", "hand"): transform("odom", "hand", x=6.0),
+    })
+    captured = capture_builder(monkeypatch)
+    executor, _ = executor_with_client(transformer)
+    assert executor.relative(FakeRelativeCommand(relative)).outcome is ArmMovementOutcome.RUNNING
+    assert captured["args"][0] == pytest.approx(6.1)
+    # The base and hand have moved since the first goal was resolved.
+    transformer.transforms[("odom", "flat_body")] = transform("odom", "flat_body", x=8.0)
+    transformer.transforms[("odom", "hand")] = transform("odom", "hand", x=8.5)
+    update = executor._finish_guarded_update(ArmMovementUpdate(
+        ArmMovementOutcome.MOTION_FAILED, "Physical stop confirmed", retry_safe=True,
+    ))
+    assert update.retry_safe
+    assert update.retry_target.header.frame_id == "odom"
+    assert update.retry_target.pose.position.x == pytest.approx(6.1)
+    assert executor._retry_target is None
+    command = SimpleNamespace(offset=deepcopy(update.retry_target), ignore_environment_collisions=False)
+    transformer.calls.clear()
+    assert executor.absolute(command).outcome is ArmMovementOutcome.RUNNING
+    assert captured["args"][0] == pytest.approx(6.1)
+    assert transformer.calls == [("odom", "hand", 0.0)]

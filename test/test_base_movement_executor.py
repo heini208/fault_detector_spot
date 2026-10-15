@@ -592,3 +592,31 @@ def test_explicit_cancel_during_timeout_cleanup_releases_without_polling():
     )
 
     assert not executor.active
+
+
+def test_absolute_base_retry_uses_odom_pose_without_relative_resolution():
+    from fault_detector_spot.application.behaviour_tree.commands.move_to_pose_command import MoveToPoseCommand
+    from fault_detector_spot.application.commanding.command_ids import CommandID
+    from fault_detector_spot.application.commanding.semantic_command import (
+        SemanticCommand, StampedPose, CommandVector3, CommandQuaternion,
+    )
+    from builtin_interfaces.msg import Time
+
+    client = FakeActionClient(ManualFuture())
+    executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(), tf_listener=object(), action_client=client,
+        posture_state_source=FakePostureStateSource(PostureState.STANDING),
+    )
+    command = MoveToPoseCommand(SemanticCommand(
+        CommandID.MOVE_BASE_TO_POSE, walking_profile="precision",
+        offset=StampedPose(frame_id="odom", position=CommandVector3(x=3.0, y=-2.0),
+                           orientation=CommandQuaternion(z=1.0)),
+    ), Time())
+    built = []
+    executor.motion_planner.build_goal = lambda plan, robot_name="": built.append(plan) or object()
+    assert executor.absolute(command).outcome is BaseMovementOutcome.RUNNING
+    assert built[0].target == command.offset
+    assert built[0].profile == executor.motion_planner.walking_profiles.for_move(override="precision")
+    # A new execution does not share a mutable target with the command envelope.
+    command.offset.pose.position.x = 99.0
+    assert built[0].target.pose.position.x == 3.0

@@ -42,6 +42,7 @@ class CommandControllerStatus:
     buffered_command_count: int = 0
     retry_safe: bool = False
     continuation_safe: bool = False
+    retry_command: SemanticCommand | None = None
 
     @property
     def request_id(self) -> str:
@@ -58,6 +59,7 @@ class CommandExecutionStatus:
     buffered_command_count: int = 0
     retry_safe: bool = False
     continuation_safe: bool = False
+    retry_command: SemanticCommand | None = None
 
 
 class DuplicateCommandRequest(ValueError):
@@ -320,6 +322,7 @@ class CommandController:
                 status.detail,
                 retry_safe=state is CommandControllerState.FAILED and status.retry_safe,
                 continuation_safe=state is CommandControllerState.FAILED and status.continuation_safe,
+                retry_command=status.retry_command if state is CommandControllerState.FAILED else None,
             )
             self._dispatch_next_locked()
             return True
@@ -541,6 +544,7 @@ class CommandController:
         detail: str = "",
         retry_safe: bool = False,
         continuation_safe: bool = False,
+        retry_command: SemanticCommand | None = None,
     ) -> None:
         status = CommandControllerStatus(
             request=request,
@@ -549,6 +553,7 @@ class CommandController:
             buffered_command_count=len(self._queue),
             retry_safe=retry_safe,
             continuation_safe=continuation_safe,
+            retry_command=retry_command,
         )
         for listener in tuple(self._listeners):
             self._call_listener(listener, status)

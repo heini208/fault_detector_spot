@@ -1104,6 +1104,11 @@ class GuardedProbeExecution:
         return self._terminal(
             outcome,
             f"{detail}; {suffix}" if detail else suffix,
+            retry_safe=outcome in (
+                ArmMovementOutcome.MOTION_FAILED,
+                ArmMovementOutcome.TRAJECTORY_STALLED,
+                ArmMovementOutcome.RESULT_TIMEOUT,
+            ),
         )
 
     def _stop_detail(self, detail: str) -> str:
@@ -1212,10 +1217,12 @@ class GuardedProbeExecution:
         self,
         outcome: ArmMovementOutcome,
         detail: str,
+        retry_safe: bool = False,
     ) -> ArmMovementUpdate:
         update = ArmMovementUpdate(
             outcome,
             str(detail).strip(),
+            retry_safe=retry_safe,
         )
         self._phase = None
         self._terminal_update = update

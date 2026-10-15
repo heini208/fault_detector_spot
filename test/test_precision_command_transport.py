@@ -182,3 +182,37 @@ def test_observation_return_target_rejects_untyped_geometry(command_type):
     options = {"target_surface_distance_m": 0.03} if command_type is MoveCloseToSurfaceCommand else {}
     with pytest.raises(TypeError, match="tag-relative probe command"):
         command_type(CommandID.MEASURE_SENSOR_TIP_DISTANCE, Time(), return_target=PoseStamped(), **options)
+
+
+@pytest.mark.parametrize("command_id", [CommandID.MOVE_ARM_TO_POSE, CommandID.MOVE_BASE_TO_POSE])
+def test_absolute_retry_command_dispatch_preserves_target_and_settings(command_id):
+    from fault_detector_spot.application.commanding.semantic_command import CommandQuaternion, CommandVector3
+    from fault_detector_spot.application.behaviour_tree.commands.move_to_pose_command import MoveToPoseCommand
+
+    command = SemanticCommand(
+        command_id, offset=StampedPose(frame_id="odom", position=CommandVector3(x=2.0, y=-3.0),
+                                      orientation=CommandQuaternion(w=1.0)),
+        precision_mode=True, arm_speed_scale=0.4, walking_profile="precision",
+        ignore_environment_collisions=True,
+    )
+    restored = semantic_command_from_message(semantic_command_to_message(command))
+    execution, = executable_path(restored)
+    assert isinstance(execution, MoveToPoseCommand)
+    assert execution.semantic_command == command
+    assert execution.offset.header.frame_id == "odom"
+    assert execution.offset.pose.position.x == 2.0
+    assert execution.offset.pose.position.y == -3.0
+    assert execution.arm_speed_scale == 0.4
+    assert execution.precision_mode
+    assert execution.walking_profile == "precision"
+    assert execution.ignore_environment_collisions
+
+
+@pytest.mark.parametrize("command_id", [CommandID.MOVE_ARM_TO_POSE, CommandID.MOVE_BASE_TO_POSE])
+def test_absolute_retry_rejects_moving_frame_and_invalid_orientation(command_id):
+    from fault_detector_spot.application.commanding.semantic_command import CommandQuaternion
+
+    with pytest.raises(ValueError, match="odom"):
+        SemanticCommand(command_id, offset=StampedPose(frame_id="body", orientation=CommandQuaternion(w=1)))
+    with pytest.raises(ValueError, match="unit quaternion"):
+        SemanticCommand(command_id, offset=StampedPose(frame_id="odom"))

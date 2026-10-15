@@ -1,5 +1,8 @@
 """Behavior-tree adapter for geometric arm goal commands."""
 
+from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.behaviour_tree.commands.move_to_pose_command import MoveToPoseCommand
+
 from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
     ArmMovementBehaviour,
 )
@@ -30,6 +33,8 @@ class ArmGoalBehaviour(ArmMovementBehaviour):
         )
         self.safe_approach = bool(safe_approach)
 
+    RETRY_POSE_COMMAND_ID = CommandID.MOVE_ARM_TO_POSE
+
     def _start_operation(self):
         command = self._last_command()
         speed = (
@@ -37,6 +42,9 @@ class ArmGoalBehaviour(ArmMovementBehaviour):
             if self.safe_approach
             else None
         )
+
+        if isinstance(command, MoveToPoseCommand):
+            return self.executor.absolute(command)
 
         if isinstance(command, ManipulatorMoveRelativeCommand):
             return self.executor.relative(command, speed=speed)

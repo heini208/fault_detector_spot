@@ -841,3 +841,24 @@ def test_sustained_high_off_axis_self_motion_is_suppressed():
     assert driver.cancel_count == 0
     assert driver.stop_count == 0
     assert guard._self_motion_suppression_count == 2
+
+
+@pytest.mark.parametrize("outcome, retry_safe", [
+    (ArmMovementOutcome.MOTION_FAILED, True),
+    (ArmMovementOutcome.RESULT_TIMEOUT, True),
+    (ArmMovementOutcome.TRAJECTORY_CANCELLED, False),
+    (ArmMovementOutcome.RETREAT_FAILED, False),
+])
+def test_retry_permission_requires_physical_stop_confirmation(outcome, retry_safe):
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.0))
+    guard.start(plan)
+    driver.updates.append(ArmMovementUpdate(outcome, "Movement interrupted"))
+    assert not guard.poll().retry_safe
+    driver.stop_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stop accepted"))
+    assert not guard.poll().retry_safe
+    result = confirm_physical_stop(guard, state, clock, 0.1)
+    assert result.outcome is outcome
+    assert result.retry_safe is retry_safe

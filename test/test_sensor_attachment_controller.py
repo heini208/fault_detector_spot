@@ -507,3 +507,24 @@ def test_explicit_reservation_freezes_revision_and_releases_once(tmp_path):
     assert reservation.released is True
 
     assert controller.clear_sensor().status is SensorAttachmentStatus.NO_SENSOR
+
+
+def test_absolute_arm_retry_obeys_attachment_admission(tmp_path, monkeypatch):
+    import fault_detector_spot.application.controllers.sensor_attachment_controller as module
+    from fault_detector_spot.application.commanding.semantic_command import StampedPose, CommandQuaternion
+
+    monkeypatch.setattr(module, "startup_settings", lambda: {"mount_approval_at_startup": False})
+    controller, _, _, commands = build_controller(tmp_path)
+    commands.add_request_preparer(controller.prepare_request)
+    target = StampedPose(frame_id="odom", orientation=CommandQuaternion(w=1.0))
+    request = CommandRequest.create(
+        command=SemanticCommand(CommandID.MOVE_ARM_TO_POSE, offset=target), client_id="test",
+        origin=CommandOrigin.PLAYBACK, recording_policy=RecordingPolicy.EXCLUDE,
+    )
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        commands.submit(request)
+    controller.confirm_sensor("", controller.snapshot().attachment_revision)
+    accepted = []
+    commands.add_accepted_listener(accepted.append)
+    commands.submit(request)
+    assert accepted[0].command.offset == target

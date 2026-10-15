@@ -36,6 +36,9 @@ from fault_detector_spot.shared.ros.qos_profiles import (
     COMMAND_REQUEST_QOS,
     LATCHED_QOS,
 )
+from fault_detector_spot.application.ros.semantic_command_adapter import (
+    semantic_command_from_message,
+)
 
 
 class RecordManager(Node):
@@ -64,6 +67,7 @@ class RecordManager(Node):
         self._playback_request_id = ""
         self._playback_name = ""
         self._playback_step = None
+        self._playback_attempt_command = None
         self._playback_retries_left = 0
         self._playback_acquisition_active = False
         self._retry_generation = 0
@@ -457,7 +461,7 @@ class RecordManager(Node):
             return False
         if message.state == CommandStatus.STATE_SUCCEEDED:
             if self._playback_step is not None:
-                command_id = self._playback_step.command.command_id
+                command_id = self._playback_attempt_command.command_id
                 if command_id is CommandID.START_SENSOR_RECORDING:
                     self._playback_acquisition_active = True
                 elif command_id is CommandID.STOP_SENSOR_RECORDING:
@@ -470,12 +474,24 @@ class RecordManager(Node):
             CommandStatus.STATE_CANCELLED,
         ):
             detail = message.detail or "command did not succeed"
+            replacement_valid = True
+            if message.state == CommandStatus.STATE_FAILED and message.has_retry_command:
+                try:
+                    self._playback_attempt_command = semantic_command_from_message(message.retry_command)
+                except (TypeError, ValueError) as exception:
+                    replacement_valid = False
+                    detail += f"; invalid retry command: {exception}"
+            needs_target = self._playback_attempt_command.command_id in (
+                CommandID.MOVE_ARM_RELATIVE, CommandID.MOVE_BASE_RELATIVE,
+            )
             if (message.state == CommandStatus.STATE_FAILED and message.retry_safe
+                    and replacement_valid and not needs_target
                     and self._playback_retries_left > 0
                     and not self._playback_acquisition_active):
                 self._playback_retries_left -= 1
                 self.get_logger().info(
-                    f"Retrying {message.command_id}; {self._playback_retries_left} retries remain: {detail}"
+                    f"Retrying {self._playback_attempt_command.command_id.value} after "
+                    f"{message.command_id}; {self._playback_retries_left} retries remain: {detail}"
                 )
                 self._dispatch_playback_step()
                 return True
@@ -510,12 +526,13 @@ class RecordManager(Node):
             )
             return
         self._playback_step = self._playback_commands.popleft()
+        self._playback_attempt_command = self._playback_step.command
         self._playback_retries_left = self._playback_step.playback_retries
         self._dispatch_playback_step()
 
     def _dispatch_playback_step(self):
         request = CommandRequest.create(
-            command=self._playback_step.command,
+            command=self._playback_attempt_command,
             client_id="record_manager",
             origin=CommandOrigin.PLAYBACK,
             recording_policy=RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE,
@@ -533,6 +550,7 @@ class RecordManager(Node):
         self._playback_request_id = ""
         self._playback_name = ""
         self._playback_step = None
+        self._playback_attempt_command = None
         self._playback_retries_left = 0
         self._playback_acquisition_active = False
         if was_active:

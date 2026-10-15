@@ -44,7 +44,7 @@ def test_runner_uses_one_base_goal_behaviour_for_relative_and_tag():
         "fault_detector_spot/application/behaviour_tree/runner.py"
     )
 
-    assert runner.count("BaseGoalBehaviour(") == 2
+    assert runner.count("BaseGoalBehaviour(") == 3
     assert "BaseMoveRelativeAction" not in runner
     assert "BaseMoveToTagAction" not in runner
     assert "BaseGetGoalTag" not in runner

@@ -691,7 +691,7 @@ def test_unsupported_retry_is_reported_without_changing_probe_retries(tmp_path):
     manager = RecordingStorageHarness(tmp_path)
     manager.control("start", "session")
     manager.set_recording_retries(3)
-    request = make_request(CommandID.MOVE_ARM_RELATIVE)
+    request = make_request(CommandID.STOW_ARM)
     manager.capture_request(command_request_to_message(request))
     manager.handle_command_status(terminal_status(request.request_id, CommandStatus.STATE_SUCCEEDED))
     assert json.loads(manager.recording_feedback_pub.messages[-1].data)["retry_unsupported"]
@@ -843,3 +843,64 @@ def test_safe_failure_can_skip_without_being_retryable(tmp_path):
     manager.handle_playback_status(status)
     assert not manager._playback_request_id
     assert manager.logger.info_messages[-1] == "Playback finished with skips."
+
+
+@pytest.mark.parametrize("relative_id, absolute_id", [
+    (CommandID.MOVE_ARM_RELATIVE, CommandID.MOVE_ARM_TO_POSE),
+    (CommandID.MOVE_BASE_RELATIVE, CommandID.MOVE_BASE_TO_POSE),
+    (CommandID.WAIT_TIME, CommandID.WAIT_TIME),
+])
+def test_retry_replacement_is_generic_retained_and_not_saved(tmp_path, relative_id, absolute_id):
+    from fault_detector_spot.application.ros.semantic_command_adapter import semantic_command_to_message
+
+    manager = RecordingStorageHarness(tmp_path)
+    original = SemanticCommand(command_id=relative_id)
+    replacement = SemanticCommand(
+        command_id=absolute_id,
+        offset=StampedPose(frame_id="odom", position=CommandVector3(x=3.0, y=-2.0),
+                           orientation=CommandQuaternion(w=1.0)),
+        arm_speed_scale=0.4, walking_profile="precision", precision_mode=True,
+    )
+    manager.repository.save("session", [RecordedStep(original, 2, 1), RecordedStep(original, 0, 1),
+                                        RecordedStep(SemanticCommand(CommandID.WAIT_TIME), 0, 2)])
+    manager.control("play", "session")
+    failed = terminal_status(manager._playback_request_id, CommandStatus.STATE_FAILED)
+    failed.retry_safe = True
+    failed.has_retry_command = True
+    failed.retry_command = semantic_command_to_message(replacement)
+    manager.handle_playback_status(failed)
+    assert manager._playback_retries_left == 1
+    for _ in range(2):
+        request = command_request_from_message(manager.command_submission_pub.messages[-1])
+        assert request.command == replacement
+        failed = terminal_status(request.request_id, CommandStatus.STATE_FAILED)
+        failed.retry_safe = True
+        manager.handle_playback_status(failed)
+    assert manager._playback_step.skip_block == 2
+    assert len(manager.command_submission_pub.messages) == 4
+    assert manager.repository.load_steps("session")[0].command == original
+
+
+@pytest.mark.parametrize("command_id", [CommandID.MOVE_ARM_RELATIVE, CommandID.MOVE_BASE_RELATIVE])
+def test_relative_failure_without_resolved_target_never_reapplies_offset(tmp_path, command_id):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.repository.save("session", [RecordedStep(SemanticCommand(command_id), 2)])
+    manager.control("play", "session")
+    failed = terminal_status(manager._playback_request_id, CommandStatus.STATE_FAILED)
+    failed.retry_safe = True
+    manager.handle_playback_status(failed)
+    assert len(manager.command_submission_pub.messages) == 1
+    assert not manager._playback_request_id
+
+
+def test_invalid_replacement_cannot_fall_back_to_original_command(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.repository.save("session", [RecordedStep(SemanticCommand(CommandID.WAIT_TIME), 2)])
+    manager.control("play", "session")
+    failed = terminal_status(manager._playback_request_id, CommandStatus.STATE_FAILED)
+    failed.retry_safe = True
+    failed.has_retry_command = True
+    failed.retry_command.command_id = "unknown_command"
+    manager.handle_playback_status(failed)
+    assert len(manager.command_submission_pub.messages) == 1
+    assert not manager._playback_request_id

@@ -1,3 +1,4 @@
+from fault_detector_spot.application.behaviour_tree.commands.move_to_pose_command import MoveToPoseCommand
 from typing import List, Optional
 from dataclasses import replace
 
@@ -90,6 +91,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 self._move_arm_command_with_offset
             ),
             CommandID.MOVE_ARM_TO_TAG_AND_WAIT: self._move_to_tag_and_wait,
+            CommandID.MOVE_ARM_TO_POSE: self._move_to_pose,
+            CommandID.MOVE_BASE_TO_POSE: self._move_to_pose,
             CommandID.MOVE_ARM_RELATIVE: self._move_arm_command_with_offset,
             CommandID.MOVE_BASE_TO_TAG: self._move_base_to_tag,
             CommandID.MOVE_BASE_RELATIVE: self._move_base_with_offset,
@@ -268,6 +271,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 )
             commands = [builder(command)]
         for execution in commands:
+            execution.semantic_command = command
             execution.ignore_environment_collisions = (
                 command.ignore_environment_collisions
                 and command_id is not CommandID.ORIENT_SENSOR_TIP_TO_SURFACE
@@ -463,6 +467,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
 
     def _create_command_stamp(self):
         return self.node.get_clock().now().to_msg()
+
+    def _move_to_pose(self, command):
+        return [MoveToPoseCommand(command, self._create_command_stamp())]
 
     def _move_arm_command_with_offset(
         self,

@@ -11,6 +11,8 @@ class CommandID(str, Enum):
     FOLLOW_MOVE_TO_TAG_PATH = "follow_move_to_tag_path"
     MOVE_ARM_TO_TAG = "move_to_tag"
     MOVE_ARM_TO_TAG_AND_WAIT = "move_tag_and_wait"
+    MOVE_ARM_TO_POSE = "move_arm_to_pose"
+    MOVE_BASE_TO_POSE = "move_base_to_pose"
     MOVE_ARM_RELATIVE = "move_arm_relative"
     MOVE_CLOSE_TO_SURFACE = "move_close_to_surface"
     MEASURE_SENSOR_TIP_DISTANCE = "measure_sensor_tip_distance"

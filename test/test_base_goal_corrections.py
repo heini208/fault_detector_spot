@@ -331,6 +331,8 @@ def test_two_correction_attempts_then_failure():
     complete_stationary_handoff(poll, complete, 0.8)
     update = poll(0.8, 5)
     assert update.outcome is BaseMovementOutcome.MOTION_FAILED
+    assert update.retry_target.header.frame_id == "odom"
+    assert update.retry_target.pose.position.x == pytest.approx(1.0)
     assert "attempt limit" in update.detail
     assert len(client.goals) == 6
 
@@ -353,12 +355,15 @@ def test_stale_pose_at_deadline_does_not_retry_previous_error():
     complete(0.8)
     update = poll(0.8, 5, fresh=False)
     assert update.outcome is BaseMovementOutcome.MOTION_FAILED
+    assert not update.retry_safe
     assert len(client.goals) == 1
 
 
 def test_execution_failure_is_not_retried():
     _, client, _, _, complete = make_movement()
     update = complete(0.8, success=False)
+    assert not update.retry_safe
+    assert update.retry_target.header.frame_id == "odom"
     assert update.outcome is BaseMovementOutcome.MOTION_FAILED
     assert len(client.goals) == 1
 
@@ -542,3 +547,19 @@ def test_unexpected_tag_replan_failure_is_reported():
     assert update.outcome is BaseMovementOutcome.MOTION_FAILED
     assert "bad tag transform" in update.detail
     assert not executor.active
+
+
+def test_exhausted_base_goal_offers_absolute_retry_only_after_fresh_stationary_feedback():
+    executor, _, _, poll, complete = make_movement(
+        correction_config=BaseCorrectionConfig(maximum_attempts=0),
+    )
+    complete(0.8)
+    complete_stationary_handoff(poll, complete, 0.8)
+    # Whole-second samples avoid floating-point ROS stamp rounding in this fixture.
+    assert poll(0.8, 2.0 - executor._monotonic_clock()).outcome is BaseMovementOutcome.RUNNING
+    update = poll(0.8, 4.0)
+    assert update.outcome is BaseMovementOutcome.MOTION_FAILED
+    assert update.retry_safe
+    assert update.retry_target.header.frame_id == "odom"
+    assert update.retry_target.pose.position.x == pytest.approx(1.0)
+    assert executor._movement_plan is None

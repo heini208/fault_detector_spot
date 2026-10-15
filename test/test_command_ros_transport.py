@@ -290,3 +290,28 @@ def test_emergency_publish_does_not_wait_for_active_request_completion():
     controller.poll()
 
     assert controller.active_request_id == emergency_id
+
+
+def test_failure_replacement_survives_controller_transport_and_invalid_payload_blocks_retry():
+    from fault_detector_spot.application.ros.semantic_command_adapter import (
+        semantic_command_to_message, semantic_command_from_message,
+    )
+
+    for invalid in (False, True):
+        node = FakeNode()
+        controller = CommandController()
+        transport = RosCommandTransport(node, controller)
+        request = make_request(CommandID.WAIT_TIME)
+        transport.submit_message(command_request_to_message(request))
+        replacement = SemanticCommand(CommandID.WAIT_TIME, wait_time=3.0)
+        failure = CommandStatus(request_id=request.request_id, state=CommandStatus.STATE_FAILED,
+                                retry_safe=True, has_retry_command=True,
+                                retry_command=semantic_command_to_message(replacement))
+        if invalid:
+            failure.retry_command.command_id = "unknown_command"
+        assert transport.handle_command_status(failure)
+        status = node.publishers["fault_detector/_internal/commands/status"].messages[-1]
+        assert status.retry_safe is (not invalid)
+        assert status.has_retry_command is (not invalid)
+        if not invalid:
+            assert semantic_command_from_message(status.retry_command) == replacement

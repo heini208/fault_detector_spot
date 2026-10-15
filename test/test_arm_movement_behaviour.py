@@ -185,3 +185,45 @@ def test_emergency_stow_waits_for_arm_and_navigation_stop():
     navigation.stopping = False
     assert action.update() is Status.RUNNING
     assert calls == ["cancel", "stow"]
+
+
+def test_arm_failure_replacement_preserves_settings_and_is_cleared_on_next_command():
+    from geometry_msgs.msg import PoseStamped
+    from fault_detector_spot.application.commanding.command_ids import CommandID
+    from fault_detector_spot.application.commanding.semantic_command import SemanticCommand
+    from fault_detector_spot.manipulation.behaviours.arm_goal_behaviour import ArmGoalBehaviour
+    from fault_detector_spot.manipulation.commands.manipulator_move_relative_command import ManipulatorMoveRelativeCommand
+    from builtin_interfaces.msg import Time
+
+    target = PoseStamped()
+    target.header.frame_id = "odom"
+    target.pose.position.x = 4.0
+    target.pose.orientation.w = 1.0
+    semantic = SemanticCommand(CommandID.MOVE_ARM_RELATIVE, arm_speed_scale=0.3,
+                               precision_mode=True, tag_position_tolerance_m=0.02,
+                               ignore_environment_collisions=True)
+    command = ManipulatorMoveRelativeCommand(CommandID.MOVE_ARM_RELATIVE, Time())
+    command.semantic_command = semantic
+    executor = FakeExecutor(None, None)
+    executor.relative = lambda *args, **kwargs: ArmMovementUpdate(
+        ArmMovementOutcome.MOTION_FAILED, "Stopped", retry_safe=True, retry_target=target,
+    )
+    action = ArmGoalBehaviour("test", robot_command_resources=object())
+    action.executor = executor
+    action.blackboard = blackboard(command.request_id)
+    action.blackboard.last_command = command
+    action.blackboard.exists = lambda key: hasattr(action.blackboard, key)
+    action.initialise()
+    assert action.update() is Status.FAILURE
+    replacement = command.retry_command
+    assert replacement.command_id is CommandID.MOVE_ARM_TO_POSE
+    assert replacement.offset.frame_id == "odom"
+    assert replacement.offset.position.x == 4.0
+    assert replacement.arm_speed_scale == 0.3
+    assert replacement.precision_mode
+    assert replacement.tag_position_tolerance_m == 0.02
+    assert replacement.ignore_environment_collisions
+    assert command.retry_safe
+    action.initialise()
+    assert command.retry_command is None
+    assert not command.retry_safe

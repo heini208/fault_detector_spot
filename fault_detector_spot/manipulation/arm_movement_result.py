@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
+from geometry_msgs.msg import PoseStamped
 
 
 class ArmMovementOutcome(Enum):
@@ -42,6 +43,7 @@ class ArmMovementUpdate:
     outcome: ArmMovementOutcome
     detail: str
     retry_safe: bool = False
+    retry_target: PoseStamped | None = None
 
 
 __all__ = [

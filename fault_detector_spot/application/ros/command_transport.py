@@ -17,6 +17,9 @@ from fault_detector_spot.application.ros.command_request_adapter import (
 )
 from fault_detector_spot.shared.ros.qos_profiles import COMMAND_REQUEST_QOS
 from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.ros.semantic_command_adapter import (
+    semantic_command_from_message, semantic_command_to_message,
+)
 
 
 class RosCommandTransport:
@@ -103,13 +106,23 @@ class RosCommandTransport:
         state = values.get(message.state)
         if state is None:
             return False
+        retry_command = None
+        retry_safe = message.retry_safe
+        detail = message.detail
+        if state is CommandControllerState.FAILED and message.has_retry_command:
+            try:
+                retry_command = semantic_command_from_message(message.retry_command)
+            except (TypeError, ValueError) as exception:
+                retry_safe = False
+                detail += f"; invalid retry command: {exception}"
         return self.controller.handle_execution_status(
             CommandExecutionStatus(
                 request_id=message.request_id,
                 state=state,
-                detail=message.detail,
+                detail=detail,
                 buffered_command_count=message.buffered_command_count,
-                retry_safe=message.retry_safe,
+                retry_safe=retry_safe,
+                retry_command=retry_command,
                 continuation_safe=message.continuation_safe,
             )
         )
@@ -162,6 +175,9 @@ class RosCommandTransport:
         message.buffered_command_count = status.buffered_command_count
         message.retry_safe = status.retry_safe
         message.continuation_safe = status.continuation_safe
+        if status.retry_command is not None:
+            message.has_retry_command = True
+            message.retry_command = semantic_command_to_message(status.retry_command)
         self._controller_status_publisher.publish(message)
 
     def _reject_message(self, message, detail) -> None:

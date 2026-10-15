@@ -1,9 +1,11 @@
 """Centralized RobotCommand execution for Spot base movement."""
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import time
+
+from geometry_msgs.msg import PoseStamped
 
 from fault_detector_spot.manipulation.arm_state_source import ArmStowState
 from fault_detector_spot.navigation.body_height import (
@@ -91,6 +93,8 @@ class BaseMovementUpdate:
 
     outcome: BaseMovementOutcome
     detail: str
+    retry_safe: bool = False
+    retry_target: PoseStamped | None = None
 
 
 class _BaseOperation(Enum):
@@ -243,6 +247,13 @@ class BaseMovementExecutor(MovementExecutor):
         self._stationary_stand_stamp = None
         self._cancellation_terminal_update = None
         self._cancellation_complete = False
+
+    def absolute(self, command) -> BaseMovementUpdate:
+        """Execute a frozen odom target through the same readiness and verifier."""
+        return self._start_verified_base_movement(
+            lambda: self.motion_planner.resolve_absolute(command),
+            _BaseTargetStrategy.FROZEN_TARGET,
+        )
 
     def relative(self, command) -> BaseMovementUpdate:
         """Start a relative SE2 base movement."""
@@ -1163,10 +1174,22 @@ class BaseMovementExecutor(MovementExecutor):
         )
 
     def _finish(self, outcome, detail):
+        target = None
+        safe = False
+        if (self._target_strategy is _BaseTargetStrategy.FROZEN_TARGET
+                and self._movement_plan is not None
+                and outcome is not BaseMovementOutcome.SUCCESS):
+            target = deepcopy(self._movement_plan.target)
+            safe = (
+                outcome is BaseMovementOutcome.MOTION_FAILED
+                and self._phase is _BasePhase.VERIFYING_STATIONARY_STAND
+                and self._goal_verifier is not None and self._goal_verifier.settled
+            )
         if outcome is BaseMovementOutcome.GOAL_REJECTED:
             # A rejected goal cannot have changed the height.
             self._pending_commanded_height_m = None
-        return super()._finish(outcome, detail)
+        result = super()._finish(outcome, detail)
+        return replace(result, retry_safe=safe, retry_target=target)
 
     def _reset_operation(self) -> None:
         if (self._pending_commanded_height_m is not None
