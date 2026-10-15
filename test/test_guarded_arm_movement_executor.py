@@ -556,12 +556,18 @@ def test_contact_cancels_stops_retreats_and_returns_contact(override, expected, 
     driver.updates.append(
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Succeeded")
     )
-    finished = guard.poll()
+    stopping = guard.poll()
+    assert stopping.outcome is ArmMovementOutcome.RUNNING
+    assert not stopping.retry_safe
+    driver.stop_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped"))
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    finished = confirm_physical_stop(guard, state, clock, 0.9)
 
     assert finished.outcome is ArmMovementOutcome.CONTACT
+    assert finished.retry_safe
     assert f"retreated {expected:.4f} m" in finished.detail
-    assert "ArmStopCommand accepted" not in finished.detail
-    assert driver.stop_count == 1
+    assert "physical stop confirmed" in finished.detail
+    assert driver.stop_count == 2
     assert not guard.active
 
 
@@ -862,3 +868,60 @@ def test_retry_permission_requires_physical_stop_confirmation(outcome, retry_saf
     result = confirm_physical_stop(guard, state, clock, 0.1)
     assert result.outcome is outcome
     assert result.retry_safe is retry_safe
+
+
+@pytest.mark.parametrize("finish", ["stopped", "stop_failed", "retreat_failed", "cancelled", "stop_timeout"])
+def test_contact_recovery_grants_retry_only_after_complete_recovery(finish):
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.008))
+    guard.start(plan)
+    clock.now = 0.1
+    guard.observe_force_sample(HandForceSample(0.1, -20.0, 2.0, 3.0))
+    driver.stop_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped"))
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    assert confirm_physical_stop(guard, state, clock, 0.2).outcome is ArmMovementOutcome.RUNNING
+    driver.updates.append(ArmMovementUpdate(
+        ArmMovementOutcome.MOTION_FAILED if finish == "retreat_failed" else ArmMovementOutcome.SUCCESS,
+        "Retreat result",
+    ))
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    if finish == "cancelled":
+        guard.cancel()
+    driver.stop_updates.append(ArmMovementUpdate(
+        ArmMovementOutcome.EXECUTION_ERROR if finish == "stop_failed" else ArmMovementOutcome.SUCCESS,
+        "Stop result",
+    ))
+    result = guard.poll()
+    if finish == "stop_timeout":
+        clock.now += 3.1
+        result = guard.poll()
+    elif finish != "stop_failed":
+        assert not result.retry_safe
+        result = confirm_physical_stop(guard, state, clock, 0.7)
+    expected = {
+        "stopped": ArmMovementOutcome.CONTACT,
+        "stop_failed": ArmMovementOutcome.STOP_UNCONFIRMED,
+        "retreat_failed": ArmMovementOutcome.RETREAT_FAILED,
+        "cancelled": ArmMovementOutcome.TRAJECTORY_CANCELLED,
+        "stop_timeout": ArmMovementOutcome.STOP_UNCONFIRMED,
+    }
+    assert result.outcome is expected[finish]
+    assert result.retry_safe is (finish == "stopped")
+
+
+def test_contact_without_forward_travel_is_retryable_after_confirmed_stop():
+    clock = ManualClock()
+    state = FakeArmStateSource()
+    driver = GoalDriver()
+    guard = execution(state, driver, clock, pose(0.0))
+    guard.start(plan)
+    clock.now = 0.1
+    guard.observe_force_sample(HandForceSample(0.1, -20.0, 2.0, 3.0))
+    driver.stop_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "Stopped"))
+    assert guard.poll().outcome is ArmMovementOutcome.RUNNING
+    result = confirm_physical_stop(guard, state, clock, 0.2)
+    assert result.outcome is ArmMovementOutcome.CONTACT
+    assert result.retry_safe
+    assert driver.stop_count == 1

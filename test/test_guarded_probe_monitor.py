@@ -313,9 +313,18 @@ def test_timer_completes_stop_and_retreat_and_latches_result(monitored):
         ArmMovementUpdate(ArmMovementOutcome.SUCCESS, 'done')
     )
     m.node.timer.callback()
+    assert m.guard.active
+    assert m.driver.started_goals[-1] == ('arm_stop', 2)
+    assert not m.guard.poll().retry_safe
+    m.driver.stop_updates.append(
+        ArmMovementUpdate(ArmMovementOutcome.SUCCESS, 'accepted')
+    )
+    m.node.timer.callback()
+    confirm_physical_stop(m, 0.6)
     assert not m.guard.active
     finished = m.guard.poll()
     assert finished.outcome is ArmMovementOutcome.CONTACT
+    assert finished.retry_safe
     assert m.guard.poll() is finished
 
 

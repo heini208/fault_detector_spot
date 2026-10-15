@@ -1105,6 +1105,7 @@ class GuardedProbeExecution:
             outcome,
             f"{detail}; {suffix}" if detail else suffix,
             retry_safe=outcome in (
+                ArmMovementOutcome.CONTACT,
                 ArmMovementOutcome.MOTION_FAILED,
                 ArmMovementOutcome.TRAJECTORY_STALLED,
                 ArmMovementOutcome.RESULT_TIMEOUT,
@@ -1156,6 +1157,7 @@ class GuardedProbeExecution:
                 ArmMovementOutcome.CONTACT,
                 f"{self._contact_detail}; arm stopped before measurable "
                 "forward travel, so no local retreat was required",
+                retry_safe=True,
             )
 
         target = deepcopy(current_hand)
@@ -1199,9 +1201,11 @@ class GuardedProbeExecution:
             return update
 
         if update.outcome is ArmMovementOutcome.SUCCESS:
-            return self._terminal(
-                ArmMovementOutcome.CONTACT,
-                (
+            # Retreat completion alone does not confirm physical settling.
+            # Keep ownership until the existing stop monitor confirms it.
+            return self._begin_arm_stop(
+                terminal_outcome=ArmMovementOutcome.CONTACT,
+                terminal_detail=(
                     f"{self._contact_detail}; retreated "
                     f"{self._retreat_distance_m:.4f} m opposite the "
                     "measured travel direction"

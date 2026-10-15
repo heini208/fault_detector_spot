@@ -1434,8 +1434,14 @@ def test_contact_retreat_uses_probe_and_preserves_guard_lifecycle(monkeypatch):
     client.send_future.set_result(FakeGoalHandle(result_future=retreat_result))
     assert executor.poll().outcome is ArmMovementOutcome.RUNNING
     retreat_result.set_result(SimpleNamespace(result=SimpleNamespace(success=True)))
-    assert executor.poll().outcome is ArmMovementOutcome.CONTACT
-    assert len(stop_client.requests) == 1
+    stop_client.future = ManualFuture()
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    assert len(stop_client.requests) == 2
+    stop_client.future.set_result(SimpleNamespace(success=True, message="stopped"))
+    assert executor.poll().outcome is ArmMovementOutcome.RUNNING
+    recovered = confirm_physical_stop(executor, clock, 0.8)
+    assert recovered.outcome is ArmMovementOutcome.CONTACT
+    assert recovered.retry_safe
     assert not executor.active
 
 
@@ -1837,3 +1843,13 @@ def test_relative_failure_freezes_odom_target_across_partial_motion_and_absolute
     assert executor.absolute(command).outcome is ArmMovementOutcome.RUNNING
     assert captured["args"][0] == pytest.approx(6.1)
     assert transformer.calls == [("odom", "hand", 0.0)]
+
+
+def test_recovered_tag_collision_allows_playback_retry(monkeypatch):
+    executor, _, _, corrections = tag_verification_executor(monkeypatch)
+    result = executor._finish_guarded_update(executor_module.ArmMovementUpdate(
+        ArmMovementOutcome.CONTACT, "Retreat completed and physical stop confirmed", retry_safe=True,
+    ))
+    assert result.retry_safe
+    assert result.retry_target is None  # Tag retry resolves the live tag again.
+    assert not corrections

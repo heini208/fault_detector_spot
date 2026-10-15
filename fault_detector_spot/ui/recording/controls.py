@@ -124,10 +124,10 @@ class RecordingControls(UIControlHelper):
         self.retry_button = QPushButton()
         self.retry_button.setCheckable(True)
         self.retry_button.setToolTip(
-            "Allow additional playback attempts for the next successfully recorded "
-            "command. Failures and paused recording leave the setting armed. "
+            "Allow additional playback attempts for each command recorded while enabled. "
+            "The setting stays enabled until you turn it off. "
             "Retry requires a supported command and a safe execution result. "
-            "Press again to clear the setting before the next command is accepted."
+            "Press again to disable retries for subsequently accepted commands."
         )
         self.retry_button.clicked.connect(self.toggle_recording_retries)
         self.retry_button.setEnabled(False)
@@ -135,7 +135,7 @@ class RecordingControls(UIControlHelper):
         self.retry_count = QSpinBox()
         self.retry_count.setRange(0, 100)
         self.retry_count.setValue(1)
-        self.retry_count.setAccessibleName("Additional retries for next command")
+        self.retry_count.setAccessibleName("Additional retries for recorded commands")
         self.retry_count.setToolTip(
             "Additional attempts after the first attempt: 0 means no retries, "
             "1 allows up to 2 attempts."
@@ -272,7 +272,7 @@ class RecordingControls(UIControlHelper):
     def _update_retry_button(self, *_):
         count = self.retry_count.value()
         noun = "retry" if count == 1 else "retries"
-        self.retry_button.setText(f"Allow {count} {noun} for next command")
+        self.retry_button.setText(f"Allow {count} {noun}")
         self._set_option_active(self.retry_button, self.retry_button.isChecked())
 
     def update_recording_retries(self, count):

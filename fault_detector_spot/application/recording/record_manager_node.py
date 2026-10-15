@@ -73,7 +73,6 @@ class RecordManager(Node):
         self._retry_generation = 0
         self._retry_settings = {0: 0}
         self._retry_tokens = {}
-        self._retry_consumed = set()
         self._recording_retries = {}
         self._skip_block = 0
         self._last_skip_block = 0
@@ -240,8 +239,6 @@ class RecordManager(Node):
 
     def _publish_retry_setting(self):
         count = self._retry_settings[self._retry_generation]
-        if self._retry_generation in self._retry_consumed:
-            count = 0
         self.recording_retries_pub.publish(UInt32(data=count))
 
     def set_recording_paused(self, paused: bool):
@@ -271,10 +268,10 @@ class RecordManager(Node):
         self._recording_results.clear()
         self._recording_stop_requested = False
         self._last_recording_request_id = ""
+        count = self._retry_settings[self._retry_generation]
         self._retry_generation = 0
-        self._retry_settings = {0: 0}
+        self._retry_settings = {0: count}
         self._retry_tokens.clear()
-        self._retry_consumed.clear()
         self._recording_retries.clear()
         self._skip_block = 0
         self._last_skip_block = 0
@@ -306,7 +303,6 @@ class RecordManager(Node):
         self._recording_commands.clear()
         self._recording_results.clear()
         self._recording_stop_requested = False
-        self._retry_consumed.add(self._retry_generation)
         self._skip_block = 0
         self._last_skip_block = 0
         self.publish_recordings_list()
@@ -379,16 +375,12 @@ class RecordManager(Node):
         )
 
     def _refresh_successful_commands(self):
-        blocked_tokens = set()
         for request_id, command in self._recording_commands.items():
             token = self._retry_tokens[request_id]
             outcome = self._recording_results.get(request_id)
-            if outcome is None:
-                blocked_tokens.add(token)
-            elif (outcome == CommandStatus.STATE_SUCCEEDED
-                  and token not in blocked_tokens and token not in self._retry_consumed
-                  and self._retry_settings[token]):
-                self._retry_consumed.add(token)
+            if (outcome == CommandStatus.STATE_SUCCEEDED
+                    and request_id not in self._recording_retries
+                    and self._retry_settings[token]):
                 if command.command_id in RETRYABLE_COMMANDS:
                     self._recording_retries[request_id] = self._retry_settings[token]
                 else:

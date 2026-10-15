@@ -97,7 +97,6 @@ class RecordManagerHarness:
         self._retry_generation = 0
         self._retry_settings = {0: 0}
         self._retry_tokens = {}
-        self._retry_consumed = set()
         self._recording_retries = {}
         self._skip_block = 0
         self._last_skip_block = 0
@@ -632,9 +631,9 @@ def test_retry_setting_survives_failure_pause_and_out_of_order_success(tmp_path)
     manager.handle_command_status(terminal_status(second.request_id, CommandStatus.STATE_SUCCEEDED))
     assert manager.recording_retries_pub.messages[-1].data == 2
     manager.handle_command_status(terminal_status(first.request_id, CommandStatus.STATE_FAILED))
-    assert manager.recording_retries_pub.messages[-1].data == 0
+    assert manager.recording_retries_pub.messages[-1].data == 2
     manager.control("stop")
-    assert [step.playback_retries for step in manager.repository.load_steps("session")] == [2, 0]
+    assert [step.playback_retries for step in manager.repository.load_steps("session")] == [2, 2]
 
 
 def test_retry_setting_does_not_retroactively_change_accepted_commands(tmp_path):
@@ -904,3 +903,25 @@ def test_invalid_replacement_cannot_fall_back_to_original_command(tmp_path):
     manager.handle_playback_status(failed)
     assert len(manager.command_submission_pub.messages) == 1
     assert not manager._playback_request_id
+
+
+def test_retry_setting_persists_across_recordings_until_disabled(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "first")
+    manager.set_recording_retries(3)
+    unsupported = make_request(CommandID.STOW_ARM)
+    manager.capture_request(command_request_to_message(unsupported))
+    manager.handle_command_status(terminal_status(unsupported.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager.recording_retries_pub.messages[-1].data == 3
+    manager.control("stop")
+    manager.control("start", "second")
+    before = make_request(CommandID.WAIT_TIME)
+    manager.capture_request(command_request_to_message(before))
+    manager.set_recording_retries(0)
+    after = make_request(CommandID.WAIT_TIME)
+    manager.capture_request(command_request_to_message(after))
+    for request in (after, before):
+        manager.handle_command_status(terminal_status(request.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager.recording_retries_pub.messages[-1].data == 0
+    manager.control("stop")
+    assert [step.playback_retries for step in manager.repository.load_steps("second")] == [3, 0]

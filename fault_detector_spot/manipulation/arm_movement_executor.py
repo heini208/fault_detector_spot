@@ -1830,7 +1830,7 @@ class ArmMovementExecutor(MovementExecutor):
         return ArmMovementUpdate(
             result.outcome, result.detail,
             retry_safe=(result.outcome is ArmMovementOutcome.PLANNING_FAILED
-                        or (target is not None and update.retry_safe)),
+                        or update.retry_safe),
             retry_target=target if result.outcome is not ArmMovementOutcome.SUCCESS else None,
         )
 
