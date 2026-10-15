@@ -5,6 +5,7 @@ import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rtabmap_msgs.msg import Info
 
 VOLATILE_QOS = QoSProfile(
     depth=10,
@@ -13,24 +14,23 @@ VOLATILE_QOS = QoSProfile(
 )
 
 class LastLocalizationPose(py_trees.behaviour.Behaviour):
-    """
-    Listens to /pose and the localization topic (PoseWithCovarianceStamped) and updates
-    the blackboard with the latest pose estimation.
-    Prioritizes the localization topic if it is recent (slightly older is still preferred).
-    """
+    """Expose original localization estimates and registration evidence."""
 
     def __init__(self, name: str = "LastLocalizationPose", localization_leeway_sec: float = 0.1,
-                 localization_topic: str = "/localization_pose"):
+                 localization_topic: str = "/localization_pose",
+                 info_topic: str = "/info"):
         super().__init__(name)
         self.node: Optional[Node] = None
         self.blackboard = self.attach_blackboard_client()
 
         self.localization_topic = localization_topic
+        self.info_topic = info_topic
         self.localization_leeway_sec = localization_leeway_sec
         self._last_localization_pose: Optional[PoseWithCovarianceStamped] = None
-        self._last_slam_pose: Optional[PoseWithCovarianceStamped] = None
+        self._last_localization_info: Optional[Info] = None
 
         self._sub_localization: Optional[rclpy.subscription.Subscription] = None
+        self._sub_info: Optional[rclpy.subscription.Subscription] = None
 
     def setup(self, **kwargs):
         """
@@ -44,9 +44,19 @@ class LastLocalizationPose(py_trees.behaviour.Behaviour):
             self._localization_callback,
             VOLATILE_QOS
         )
+        self._sub_info = self.node.create_subscription(
+            Info,
+            self.info_topic,
+            self._info_callback,
+            VOLATILE_QOS,
+        )
 
         self.logger.info("LastLocalizationPose subscriptions.")
         self.blackboard.register_key("last_pose_estimation", access=py_trees.common.Access.WRITE)
+        self.blackboard.register_key(
+            "last_localization_info", access=py_trees.common.Access.WRITE,
+        )
+        self.blackboard.last_localization_info = None
 
         # Initialize blackboard variable with zero pose
         zero_pose = PoseWithCovarianceStamped()
@@ -64,7 +74,11 @@ class LastLocalizationPose(py_trees.behaviour.Behaviour):
     def _localization_callback(self, msg: PoseWithCovarianceStamped):
         self._last_localization_pose = msg
 
+    def _info_callback(self, msg: Info):
+        self._last_localization_info = msg
+
     def update(self) -> py_trees.common.Status:
+        self.blackboard.last_localization_info = self._last_localization_info
         if self._last_localization_pose:
             selected_pose = self._last_localization_pose
             source = self.localization_topic
@@ -75,3 +89,12 @@ class LastLocalizationPose(py_trees.behaviour.Behaviour):
         self.blackboard.last_pose_estimation = selected_pose
         self.feedback_message = f"Using pose from {source}"
         return py_trees.common.Status.SUCCESS
+
+    def shutdown(self):
+        if self.node is None:
+            return
+        for attribute in ("_sub_localization", "_sub_info"):
+            subscription = getattr(self, attribute)
+            if subscription is not None:
+                self.node.destroy_subscription(subscription)
+                setattr(self, attribute, None)

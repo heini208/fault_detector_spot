@@ -29,6 +29,11 @@ class MapRepository:
     def exists(self, map_id: str) -> bool:
         return self.get_map_path(map_id).is_file()
 
+    def revision(self, map_id: str) -> tuple:
+        """Identify an atomic metadata replacement without rereading its JSON."""
+        stat = self.get_map_path(map_id).stat()
+        return stat.st_ino, stat.st_mtime_ns, stat.st_size
+
     def load(self, map_id: str, validate: bool = True) -> MapDefinition:
         path = self.get_map_path(map_id)
         if not path.is_file():

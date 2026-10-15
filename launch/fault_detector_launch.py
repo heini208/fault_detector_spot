@@ -64,6 +64,8 @@ def generate_launch_description():
         "tag_sensing.yaml",
     )
 
+    landmark_localization_config = os.path.join(pkg, "config", "landmark_localization.yaml")
+
     close_surface_config = os.path.join(
         pkg,
         "config",
@@ -217,6 +219,7 @@ def generate_launch_description():
                 close_surface_config,
                 arm_motion_config,
                 base_motion_config,
+                landmark_localization_config,
                 {
                     "use_sim_time": use_sim_time,
                     "navigation.map_root": navigation_map_root,
@@ -230,6 +233,7 @@ def generate_launch_description():
             output="screen",
             parameters=[
                 tag_sensing_config,
+                landmark_localization_config,
                 {
                     "use_sim_time": use_sim_time,
                     "navigation.map_root": navigation_map_root,

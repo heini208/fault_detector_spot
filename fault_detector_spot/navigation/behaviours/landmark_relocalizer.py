@@ -1,487 +1,473 @@
+"""Supervise landmark-assisted recovery of the existing RTAB-Map localizer."""
+
+from dataclasses import dataclass, fields
 import math
-import typing
+import time
 
 import numpy as np
-
 import py_trees
-import rclpy
-import tf2_ros
-from fault_detector_spot.mapping.repository.map_repository import MapRepository
-from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
-from fault_detector_spot.shared.geometry.transforms import (
-    pose_data_to_pose,
-)
-from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from rclpy.duration import Duration
 from rclpy.time import Time
-from collections import defaultdict, deque
+import tf2_ros
+
+from fault_detector_spot.mapping.repository.map_repository import MapRepository
+from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
+from fault_detector_spot.navigation.landmark_observations import LandmarkPoseWindow
+from fault_detector_spot.navigation.localization_quality import (
+    LocalizationQualityConfig, accepted_localization, localization_quality_error,
+)
+from fault_detector_spot.shared.geometry.transforms import (
+    matrix_to_pose, pose_data_to_pose, pose_to_matrix, pose_to_pose_data,
+)
+from fault_detector_spot.shared.persistence.basic_settings import parameter_override
+from fault_detector_spot.shared.ros.qos_profiles import INITIALPOSE_QOS
+from fault_detector_spot.shared.ros.tf_transforms import transform_to_pose_data
+
+
+@dataclass(frozen=True)
+class LandmarkRecoveryConfig:
+    enabled: bool = True
+    required_samples: int = 5
+    maximum_sample_span_sec: float = 6.0
+    maximum_position_spread_m: float = 0.20
+    maximum_rotation_spread_rad: float = math.radians(10.0)
+    maximum_tag_age_sec: float = 1.5
+    maximum_tag_distance_m: float = 3.0
+    maximum_odometry_age_sec: float = 0.25
+    stationary_duration_sec: float = 1.0
+    stationary_position_tolerance_m: float = 0.03
+    stationary_yaw_tolerance_rad: float = math.radians(3.0)
+    position_error_threshold_m: float = 0.60
+    yaw_error_threshold_rad: float = math.radians(20.0)
+    recovery_position_tolerance_m: float = 0.30
+    recovery_yaw_tolerance_rad: float = math.radians(10.0)
+    settle_time_sec: float = 2.0
+    retry_interval_sec: float = 15.0
+    maximum_attempts: int = 3
+    healthy_samples: int = 3
+
+    def __post_init__(self):
+        if type(self.enabled) is not bool:
+            raise ValueError("Landmark recovery enabled must be a boolean")
+        for name, minimum in (("required_samples", 2), ("maximum_attempts", 1), ("healthy_samples", 2)):
+            if type(getattr(self, name)) is not int or getattr(self, name) < minimum:
+                raise ValueError(f"Landmark recovery {name} must be an integer >= {minimum}")
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if field.type is float and (
+                type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+            ):
+                raise ValueError(f"Landmark recovery {field.name} must be positive and finite")
+        if self.retry_interval_sec < self.settle_time_sec:
+            raise ValueError("Landmark retry interval must allow the settling time")
+        if (self.recovery_position_tolerance_m > self.position_error_threshold_m
+                or self.recovery_yaw_tolerance_rad > self.yaw_error_threshold_rad):
+            raise ValueError("Landmark recovery tolerances must not exceed trigger thresholds")
+
+    @classmethod
+    def from_node(cls, node):
+        defaults = cls()
+        values = {}
+        for field in fields(cls):
+            key = f"navigation.landmark_recovery.{field.name}"
+            if not node.has_parameter(key):
+                node.declare_parameter(key, getattr(defaults, field.name))
+            values[field.name] = parameter_override(key, node.get_parameter(key).value)
+        return cls(**values)
 
 
 class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
-    """Behaviour that uses AprilTag landmarks to publish `/initialpose`."""
+    """Request bounded pose resets; only fresh accepted results confirm recovery."""
 
-    def __init__(
-        self,
-        rtabmap_runtime: RtabmapRuntimeManager,
-        tf_buffer,
-        map_repository=None,
-        node=None,
-        base_frame: str = "base_link",
-        name="LandmarkRelocalizer",
-    ):
+    def __init__(self, rtabmap_runtime, tf_buffer, map_repository=None, node=None,
+                 base_frame="base_link", name="LandmarkRelocalizer", *,
+                 config=None, quality_config=None, monotonic_clock=time.monotonic):
         super().__init__(name)
         self.rtabmap_runtime = rtabmap_runtime
-        self.map_repository = (
-            map_repository
-            if map_repository is not None
-            else MapRepository(self.rtabmap_runtime.maps_dir)
+        self.map_repository = map_repository if map_repository is not None else MapRepository(
+            rtabmap_runtime.maps_dir,
         )
-        self.node = node
         self.tf_buffer = tf_buffer
-        self.blackboard = self.attach_blackboard_client()
-
-        self.landmark_map: typing.Dict[int, PoseStamped] = {}
-
+        self.node = node
         self.base_frame = base_frame
         self.map_frame = "map"
-        self.tf_timeout = Duration(seconds=0.25)
-
-        self.position_error_threshold = 0.60
-        self.yaw_error_threshold = math.radians(20.0)
-
-        self.required_samples = 5
-        self.maximum_position_spread = 0.20
-        self.maximum_yaw_spread = math.radians(10.0)
-
-        self.cooldown_sec = 15.0
-        self.last_relocalization_ns = 0
-
-        self.candidate_samples = defaultdict(
-            lambda: deque(maxlen=self.required_samples)
-        )
-
+        self.odom_frame = "odom"
+        self.config = config
+        self.quality_config = quality_config
+        self._monotonic_clock = monotonic_clock
+        self.blackboard = self.attach_blackboard_client()
+        self.initialpose_pub = None
+        self.landmark_map = {}
         self.loaded_map_name = None
+        self._repository_revision = None
+        self._context = None
+        self._last_ros_ns = None
+        self._reset_recovery(0)
 
-    def setup(self, **kwargs: typing.Any) -> None:
+    def setup(self, **kwargs):
         self.node = kwargs.get("node", self.node)
-        self.blackboard.register_key(
-            "visible_tags",
-            access=py_trees.common.Access.READ,
-        )
-        self.blackboard.register_key(
-            "visible_tags_map_frame",
-            access=py_trees.common.Access.READ,
-        )
-        self.blackboard.register_key(
-            "active_map_name",
-            access=py_trees.common.Access.READ,
-        )
+        if self.config is None:
+            self.config = LandmarkRecoveryConfig.from_node(self.node)
+        if self.quality_config is None:
+            self.quality_config = LocalizationQualityConfig.from_node(self.node)
+        for key in ("visible_tags", "active_map_name", "last_pose_estimation", "last_localization_info", "command_tree_status"):
+            self.blackboard.register_key(key, access=py_trees.common.Access.READ)
+        self.blackboard.register_key("localization_reset_hold_until", access=py_trees.common.Access.WRITE)
+        self.blackboard.set("localization_reset_hold_until", 0.0)
         self.initialpose_pub = self.node.create_publisher(
-            PoseWithCovarianceStamped,
-            "/initialpose",
-            10,
+            PoseWithCovarianceStamped, "/initialpose", INITIALPOSE_QOS,
         )
 
-    def _quat_to_yaw(self, qx, qy, qz, qw):
-        return math.atan2(
-            2.0 * (qw * qz + qx * qy),
-            1.0 - 2.0 * (qy * qy + qz * qz),
-        )
+    def shutdown(self):
+        if self.initialpose_pub is not None:
+            self.node.destroy_publisher(self.initialpose_pub)
+            self.initialpose_pub = None
+            self.blackboard.set("localization_reset_hold_until", 0.0)
 
-    def _pose_to_mat(self, pose: typing.Any) -> np.ndarray:
-        x = pose.position.x
-        y = pose.position.y
-        q = pose.orientation
-        yaw = self._quat_to_yaw(q.x, q.y, q.z, q.w)
-        c = math.cos(yaw)
-        s = math.sin(yaw)
-        return np.array([
-            [c, -s, x],
-            [s, c, y],
-            [0.0, 0.0, 1.0],
-        ])
+    def _reset_recovery(self, boundary_ns):
+        self._minimum_stamp_ns = boundary_ns
+        self._windows = {}
+        self._window_origins = {}
+        self._tag_progress = {}
+        self.attempts = 0
+        self._last_request_ns = 0
+        self._last_request_at = None
+        self._healthy_count = 0
+        self._last_health_stamp_ns = 0
+        self._last_health_at = None
+        self._localization_progress = (0, None)
+        self._odometry_progress = (0, None)
+        self._stationary_reference = None
+        self._stationary = False
+        self._failed = False
 
-    def _mat_to_pose(self, mat: np.ndarray, pose_out: typing.Any) -> None:
-        x = mat[0, 2]
-        y = mat[1, 2]
-        yaw = math.atan2(mat[1, 0], mat[0, 0])
-        qz = math.sin(yaw / 2.0)
-        qw = math.cos(yaw / 2.0)
-        pose_out.position.x = x
-        pose_out.position.y = y
-        pose_out.position.z = 0.0
-        pose_out.orientation.x = 0.0
-        pose_out.orientation.y = 0.0
-        pose_out.orientation.z = qz
-        pose_out.orientation.w = qw
-
-    def _load_landmarks_for_map(self, map_name: str) -> None:
-        self.landmark_map.clear()
-
+    def _load_landmarks_for_map(self, map_name):
+        self.landmark_map = {}
         try:
             definition = self.map_repository.load(map_name)
-        except (FileNotFoundError, OSError, TypeError, ValueError) as exception:
-            self.feedback_message = (
-                f"Failed to load landmarks: {exception}"
-            )
-            return
-
-        for landmark in definition.localization_landmarks:
-            pose = PoseStamped()
-            pose.header.frame_id = self.map_frame
-            pose.pose = pose_data_to_pose(landmark.pose_map)
-            self.landmark_map[
-                landmark.reference_tag.tag_id
-            ] = pose
-
-        if not self.landmark_map:
-            self.feedback_message = "No localization landmarks found"
-            return
-
+            self.landmark_map = {
+                landmark.reference_tag.tag_id: pose_data_to_pose(landmark.pose_map)
+                for landmark in definition.localization_landmarks
+                if landmark.reference_tag.tag_family == "36h11"
+            }
+        except (FileNotFoundError, OSError, TypeError, ValueError) as error:
+            self.feedback_message = f"Failed to load landmarks: {error}"
+            return False
         self.feedback_message = (
             f"Loaded {len(self.landmark_map)} localization landmarks"
+            if self.landmark_map else "No localization landmarks found"
         )
+        return True
 
-    def poses_equal(self, p1, p2, tol=1e-3):
-        dx = abs(p1.position.x - p2.position.x)
-        dy = abs(p1.position.y - p2.position.y)
-        yaw1 = self._quat_to_yaw(
-            p1.orientation.x,
-            p1.orientation.y,
-            p1.orientation.z,
-            p1.orientation.w,
-        )
-        yaw2 = self._quat_to_yaw(
-            p2.orientation.x,
-            p2.orientation.y,
-            p2.orientation.z,
-            p2.orientation.w,
-        )
-        dyaw = abs(
-            math.atan2(
-                math.sin(yaw1 - yaw2),
-                math.cos(yaw1 - yaw2),
+    def _refresh_landmarks(self, map_name, now_ns):
+        try:
+            revision = self.map_repository.revision(map_name)
+        except (OSError, TypeError, ValueError) as error:
+            self.landmark_map = {}
+            self._repository_revision = None
+            self._windows.clear()
+            self.feedback_message = f"Landmark metadata unavailable: {error}"
+            return False
+        if self.loaded_map_name != map_name or revision != self._repository_revision:
+            previous = self.landmark_map
+            if not self._load_landmarks_for_map(map_name):
+                self._repository_revision = None
+                self._windows.clear()
+                return False
+            self.loaded_map_name = map_name
+            self._repository_revision = revision
+            if previous != self.landmark_map:
+                self._reset_recovery(now_ns)
+        return True
+
+    @staticmethod
+    def _stamp_ns(stamp):
+        if not 0 <= stamp.nanosec < 1_000_000_000 or stamp.sec < 0:
+            raise ValueError("Invalid timestamp")
+        return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+
+    def _read(self, key):
+        return self.blackboard.get(key) if self.blackboard.exists(key) else None
+
+    def _lookup(self, target, source, stamp):
+        transform = self.tf_buffer.lookup_transform(target, source, stamp, timeout=Duration())
+        if transform.header.frame_id != target or transform.child_frame_id != source:
+            raise ValueError(f"Expected TF {target} <- {source}")
+        if stamp.nanoseconds and self._stamp_ns(transform.header.stamp) != stamp.nanoseconds:
+            raise ValueError("TF does not match the requested acquisition timestamp")
+        return pose_to_matrix(pose_data_to_pose(transform_to_pose_data(transform))), transform.header.stamp
+
+    def _observe_odometry(self, now_ns, steady_now):
+        """Require measured stationarity; RTAB-Map applies seeds at its next scan."""
+        try:
+            matrix, stamp = self._lookup(self.odom_frame, self.base_frame, Time())
+            stamp_ns = self._stamp_ns(stamp)
+            age = (now_ns - stamp_ns) / 1e9
+            if stamp_ns <= self._minimum_stamp_ns or not 0 <= age <= self.config.maximum_odometry_age_sec:
+                raise ValueError("Current odometry is stale or future-dated")
+            previous_stamp, received_at = self._odometry_progress
+            if stamp_ns > previous_stamp:
+                received_at = steady_now
+                self._odometry_progress = (stamp_ns, received_at)
+            if (stamp_ns < previous_stamp or received_at is None
+                    or steady_now - received_at > self.config.maximum_odometry_age_sec):
+                raise ValueError("No advancing odometry")
+            if self._stationary_reference is not None:
+                reference, _ = self._stationary_reference
+                _, yaw = self._pose_error(matrix, reference)
+                if (np.linalg.norm(matrix[:3, 3] - reference[:3, 3]) > self.config.stationary_position_tolerance_m
+                        or yaw > self.config.stationary_yaw_tolerance_rad):
+                    self._stationary_reference = None
+            if self._stationary_reference is None:
+                self._stationary_reference = (matrix, stamp_ns)
+            self._stationary = (
+                stamp_ns - self._stationary_reference[1] >= self.config.stationary_duration_sec * 1e9
             )
-        )
-        return dx < tol and dy < tol and dyaw < (tol * 10)
+            return matrix, stamp
+        except (tf2_ros.TransformException, TypeError, ValueError):
+            self._stationary_reference = None
+            self._stationary = False
+            return None, None
+
+    def _candidates(self, now_ns, steady_now):
+        visible = self._read("visible_tags") or {}
+        candidates = []
+        active_ids = set()
+        boundary = max(self._minimum_stamp_ns, self._last_request_ns)
+        for tag_id, tag in visible.items():
+            if tag_id not in self.landmark_map:
+                continue
+            try:
+                stamp_ns = self._stamp_ns(tag.pose.header.stamp)
+                frame = tag.pose.header.frame_id
+                age = (now_ns - stamp_ns) / 1e9
+                if stamp_ns <= boundary or not 0 <= age <= self.config.maximum_tag_age_sec:
+                    continue
+                if not frame or frame in (self.map_frame, self.odom_frame):
+                    continue  # Recovery requires a robot-relative observation.
+                progress = self._tag_progress.get(tag_id)
+                if progress is None or progress[:2] != (stamp_ns, frame):
+                    progress = (stamp_ns, frame, steady_now)
+                    self._tag_progress[tag_id] = progress
+                if steady_now - progress[2] > self.config.maximum_tag_age_sec:
+                    continue
+                observation = pose_to_matrix(tag.pose.pose)
+                distance = float(np.linalg.norm(observation[:3, 3]))
+                if distance > self.config.maximum_tag_distance_m:
+                    continue
+                odom_to_sensor, _ = self._lookup(self.odom_frame, frame, Time.from_msg(tag.pose.header.stamp))
+                # A fixed map<-odom correction is comparable across captures
+                # even while the robot moves. Never average historical base poses.
+                map_to_odom = pose_to_matrix(self.landmark_map[tag_id]) @ np.linalg.inv(
+                    odom_to_sensor @ observation,
+                )
+                window = self._windows.setdefault(tag_id, LandmarkPoseWindow(
+                    self.config.required_samples, self.config.maximum_sample_span_sec,
+                    self.config.maximum_position_spread_m, self.config.maximum_rotation_spread_rad,
+                ))
+                if window.sample_count == 0:
+                    self._window_origins[tag_id] = odom_to_sensor
+                origin = self._window_origins[tag_id]
+                active_ids.add(tag_id)
+                # Express corrections at a nearby, fixed reference. Comparing
+                # map<-odom translations at a distant origin amplifies yaw noise.
+                stable = window.add(stamp_ns, pose_to_pose_data(matrix_to_pose(map_to_odom @ origin)), frame)
+                if stable is not None:
+                    candidates.append((distance, tag_id, pose_to_matrix(pose_data_to_pose(stable)) @ np.linalg.inv(origin)))
+            except (tf2_ros.TransformException, TypeError, ValueError, np.linalg.LinAlgError):
+                continue
+        self._windows = {key: value for key, value in self._windows.items() if key in active_ids}
+        self._window_origins = {key: value for key, value in self._window_origins.items() if key in active_ids}
+        return sorted(candidates, key=lambda item: (item[0], item[1]))
+
+    def _quality_error(self, pose, now_ns, steady_now):
+        error = localization_quality_error(pose, now_ns, self.quality_config)
+        if pose is None:
+            return error
+        try:
+            stamp_ns = self._stamp_ns(pose.header.stamp)
+        except (AttributeError, TypeError, ValueError):
+            return error or "Invalid localization timestamp"
+        previous_stamp, received_at = self._localization_progress
+        if stamp_ns > previous_stamp and stamp_ns <= now_ns:
+            received_at = steady_now
+            self._localization_progress = (stamp_ns, received_at)
+        if stamp_ns <= self._minimum_stamp_ns:
+            return "Waiting for localization acquired after the map/runtime change"
+        if stamp_ns < previous_stamp:
+            return "Localization timestamp regressed"
+        if received_at is None or steady_now - received_at > self.quality_config.maximum_age_sec:
+            return "No advancing localization estimates"
+        return error
+
+    @staticmethod
+    def _pose_error(first, second):
+        difference = first[:2, 3] - second[:2, 3]
+        yaw = math.atan2(first[1, 0], first[0, 0]) - math.atan2(second[1, 0], second[0, 0])
+        return float(np.linalg.norm(difference)), abs(math.atan2(math.sin(yaw), math.cos(yaw)))
+
+    def _registration_matches(self, pose):
+        info = self._read("last_localization_info")
+        return (info is not None and info.header.frame_id == self.map_frame
+                and info.header.stamp == pose.header.stamp and accepted_localization(info))
 
     def update(self):
-        if not self.rtabmap_runtime.is_running():
-            self.candidate_samples.clear()
-            self.feedback_message = "RTAB-Map not running"
-            return py_trees.common.Status.SUCCESS
-
-        map_name = getattr(
-            self.blackboard,
-            "active_map_name",
-            None,
-        )
-
-        if not map_name:
-            self.candidate_samples.clear()
-            self.feedback_message = "No active map"
-            return py_trees.common.Status.SUCCESS
-
-        if self.loaded_map_name != map_name:
-            self._load_landmarks_for_map(map_name)
-            self.loaded_map_name = map_name
-            self.candidate_samples.clear()
-
-        if not self.landmark_map:
-            self.feedback_message = "No landmarks for active map"
-            return py_trees.common.Status.SUCCESS
-
-        if (
-            not self.blackboard.exists("visible_tags")
-            or not isinstance(self.blackboard.visible_tags, dict)
-            or not self.blackboard.visible_tags
-        ):
-            self.candidate_samples.clear()
-            self.feedback_message = "No fresh visible tags"
-            return py_trees.common.Status.SUCCESS
-
-        now_ns = self.node.get_clock().now().nanoseconds
-
-        if (
-            now_ns - self.last_relocalization_ns
-            < int(self.cooldown_sec * 1_000_000_000)
-        ):
-            self.feedback_message = "Relocalization cooldown"
-            return py_trees.common.Status.SUCCESS
-
-        visible_tags = self.blackboard.visible_tags
-
-        available_ids = [
-            int(tag_id)
-            for tag_id in visible_tags.keys()
-            if int(tag_id) in self.landmark_map
-        ]
-
-        if not available_ids:
-            self.feedback_message = "No registered landmark visible"
-            return py_trees.common.Status.SUCCESS
-
-        tag_id = min(
-            available_ids,
-            key=lambda current_id: math.sqrt(
-                visible_tags[current_id].pose.pose.position.x ** 2
-                + visible_tags[current_id].pose.pose.position.y ** 2
-                + visible_tags[current_id].pose.pose.position.z ** 2
-            ),
-        )
-
-        tag_element = visible_tags[tag_id]
-
-        tag_observed = PoseStamped()
-        tag_observed.header = tag_element.pose.header
-        tag_observed.pose = tag_element.pose.pose
-
-        try:
-            candidate_matrix, observation_stamp = (
-                self._calculate_candidate_pose(
-                    self.landmark_map[tag_id],
-                    tag_observed,
-                )
-            )
-        except Exception as exception:
-            self.feedback_message = (
-                f"Tag pose calculation failed: {exception}"
-            )
-            return py_trees.common.Status.SUCCESS
-
-        try:
-            current_transform = self.tf_buffer.lookup_transform(
-                self.map_frame,
-                self.base_frame,
-                Time.from_msg(observation_stamp),
-                self.tf_timeout,
-            )
-        except Exception:
-            try:
-                current_transform = self.tf_buffer.lookup_transform(
-                    self.map_frame,
-                    self.base_frame,
-                    Time(),
-                    self.tf_timeout,
-                )
-            except Exception as exception:
-                self.feedback_message = (
-                    f"Current robot pose unavailable: {exception}"
-                )
-                return py_trees.common.Status.SUCCESS
-
-        current_matrix = self._transform_to_mat4(current_transform)
-
-        candidate_x = float(candidate_matrix[0, 3])
-        candidate_y = float(candidate_matrix[1, 3])
-        candidate_yaw = self._matrix_yaw(candidate_matrix)
-
-        current_x = float(current_matrix[0, 3])
-        current_y = float(current_matrix[1, 3])
-        current_yaw = self._matrix_yaw(current_matrix)
-
-        position_error = math.hypot(
-            candidate_x - current_x,
-            candidate_y - current_y,
-        )
-
-        yaw_error = abs(
-            self._angle_difference(
-                candidate_yaw,
-                current_yaw,
-            )
-        )
-
-        if (
-            position_error <= self.position_error_threshold
-            and yaw_error <= self.yaw_error_threshold
-        ):
-            self.candidate_samples[tag_id].clear()
-            self.feedback_message = (
-                f"Localization agrees with tag {tag_id}: "
-                f"{position_error:.2f} m, "
-                f"{math.degrees(yaw_error):.1f} deg"
-            )
-            return py_trees.common.Status.SUCCESS
-
-        self.candidate_samples[tag_id].append(
-            (
-                candidate_x,
-                candidate_y,
-                candidate_yaw,
-            )
-        )
-
-        stable_pose = self._stable_candidate(tag_id)
-
-        if stable_pose is None:
-            self.feedback_message = (
-                f"Possible localization error from tag {tag_id}: "
-                f"{position_error:.2f} m, "
-                f"{math.degrees(yaw_error):.1f} deg, "
-                f"{len(self.candidate_samples[tag_id])}/"
-                f"{self.required_samples} samples"
-            )
-            return py_trees.common.Status.SUCCESS
-
-        corrected_x, corrected_y, corrected_yaw = stable_pose
-
-        corrected_pose = PoseWithCovarianceStamped()
-        corrected_pose.header.frame_id = self.map_frame
-        corrected_pose.header.stamp = (
-            self.node.get_clock().now().to_msg()
-        )
-
-        corrected_pose.pose.pose.position.x = corrected_x
-        corrected_pose.pose.pose.position.y = corrected_y
-        corrected_pose.pose.pose.position.z = 0.0
-
-        corrected_pose.pose.pose.orientation.x = 0.0
-        corrected_pose.pose.pose.orientation.y = 0.0
-        corrected_pose.pose.pose.orientation.z = math.sin(
-            corrected_yaw * 0.5
-        )
-        corrected_pose.pose.pose.orientation.w = math.cos(
-            corrected_yaw * 0.5
-        )
-
-        covariance = [0.0] * 36
-        covariance[0] = 0.04
-        covariance[7] = 0.04
-        covariance[35] = math.radians(10.0) ** 2
-        corrected_pose.pose.covariance = covariance
-
-        self.initialpose_pub.publish(corrected_pose)
-
-        self.last_relocalization_ns = now_ns
-        self.candidate_samples.clear()
-
-        self.feedback_message = (
-            f"Relocalized from tag {tag_id}: "
-            f"{position_error:.2f} m, "
-            f"{math.degrees(yaw_error):.1f} deg"
-        )
-
+        self._update_recovery()
+        # Supervision itself never fails or blocks the command tree. The command
+        # manager owns a brief normal-dispatch pause after a reset is published.
         return py_trees.common.Status.SUCCESS
 
-    def _pose_to_mat4(self, pose) -> np.ndarray:
-        qx = pose.orientation.x
-        qy = pose.orientation.y
-        qz = pose.orientation.z
-        qw = pose.orientation.w
-
-        norm = math.sqrt(
-            qx * qx
-            + qy * qy
-            + qz * qz
-            + qw * qw
+    def _update_recovery(self):
+        now_ns = self.node.get_clock().now().nanoseconds
+        steady_now = self._monotonic_clock()
+        map_name = self._read("active_map_name")
+        try:
+            mode = self.rtabmap_runtime.get_running_mode()
+        except RuntimeError as exception:
+            # The process and mode are updated separately by the runtime worker.
+            self._context = None
+            self._reset_recovery(now_ns)
+            self.feedback_message = f"Waiting for localization runtime: {exception}"
+            return
+        if not self.config.enabled or mode != RtabmapRuntimeManager.MODE_LOCALIZATION or not map_name:
+            self._context = None
+            self._reset_recovery(now_ns)
+            self.feedback_message = "Landmark recovery inactive (requires localization mode and active map)"
+            return
+        context = (map_name, id(self.rtabmap_runtime.process))
+        if context != self._context or (self._last_ros_ns is not None and now_ns < self._last_ros_ns):
+            self._reset_recovery(now_ns)
+            self._context = context
+            self._repository_revision = None
+        self._last_ros_ns = now_ns
+        if not self._refresh_landmarks(map_name, now_ns):
+            return
+        if not self.landmark_map:
+            self.feedback_message = "No landmarks for active map"
+            return
+        pose = self._read("last_pose_estimation")
+        quality_error = self._quality_error(pose, now_ns, steady_now)
+        odom_now, odom_stamp = self._observe_odometry(now_ns, steady_now)
+        elapsed = float("inf") if self._last_request_at is None else steady_now - self._last_request_at
+        exhausted = self.attempts >= self.config.maximum_attempts and elapsed >= self.config.retry_interval_sec
+        failure_detail = (
+            f"Landmark recovery failed after {self.attempts} attempts; automatic corrections paused "
+            "until localization recovers or the map/runtime changes"
         )
-
-        if norm == 0.0:
-            qx = 0.0
-            qy = 0.0
-            qz = 0.0
-            qw = 1.0
-        else:
-            qx /= norm
-            qy /= norm
-            qz /= norm
-            qw /= norm
-
-        rotation = np.array([
-            [
-                1.0 - 2.0 * (qy * qy + qz * qz),
-                2.0 * (qx * qy - qz * qw),
-                2.0 * (qx * qz + qy * qw),
-            ],
-            [
-                2.0 * (qx * qy + qz * qw),
-                1.0 - 2.0 * (qx * qx + qz * qz),
-                2.0 * (qy * qz - qx * qw),
-            ],
-            [
-                2.0 * (qx * qz - qy * qw),
-                2.0 * (qy * qz + qx * qw),
-                1.0 - 2.0 * (qx * qx + qy * qy),
-            ],
-        ])
-
-        matrix = np.eye(4)
-        matrix[:3, :3] = rotation
-        matrix[0, 3] = pose.position.x
-        matrix[1, 3] = pose.position.y
-        matrix[2, 3] = pose.position.z
-        return matrix
-
-    def _transform_to_mat4(self, transform) -> np.ndarray:
-        pose = PoseStamped()
-        pose.pose.position.x = transform.transform.translation.x
-        pose.pose.position.y = transform.transform.translation.y
-        pose.pose.position.z = transform.transform.translation.z
-        pose.pose.orientation = transform.transform.rotation
-        return self._pose_to_mat4(pose.pose)
-
-    def _matrix_yaw(self, matrix: np.ndarray) -> float:
-        return math.atan2(matrix[1, 0], matrix[0, 0])
-
-    def _angle_difference(self, first: float, second: float) -> float:
-        return math.atan2(
-            math.sin(first - second),
-            math.cos(first - second),
+        if exhausted and not self._failed:
+            self.node.get_logger().warning(failure_detail)
+            self._failed = True
+        candidates = self._candidates(now_ns, steady_now)
+        if not candidates:
+            self._healthy_count = 0
+            self.feedback_message = failure_detail if exhausted else "Waiting for fresh, distinct, stable landmark observations"
+            return
+        _, tag_id, map_to_odom = candidates[0]
+        for _, other_id, other in candidates[1:]:
+            reference = odom_now if odom_now is not None else self._window_origins[tag_id]
+            position, yaw = self._pose_error(map_to_odom @ reference, other @ reference)
+            if position > self.config.position_error_threshold_m or yaw > self.config.yaw_error_threshold_rad:
+                self._healthy_count = 0
+                self.feedback_message = f"Conflicting landmarks {tag_id} and {other_id}; recovery withheld"
+                return
+        error = None
+        if pose is not None:
+            try:
+                odom_at_estimate, _ = self._lookup(self.odom_frame, self.base_frame, Time.from_msg(pose.header.stamp))
+                error = self._pose_error(map_to_odom @ odom_at_estimate, pose_to_matrix(pose.pose.pose))
+            except (tf2_ros.TransformException, TypeError, ValueError):
+                pass
+        agrees = error is not None and (
+            error[0] <= self.config.recovery_position_tolerance_m
+            and error[1] <= self.config.recovery_yaw_tolerance_rad
         )
-
-    def _calculate_candidate_pose(
-        self,
-        tag_true: PoseStamped,
-        tag_observed: PoseStamped,
-    ):
-        tag_in_base = self.tf_buffer.transform(
-            tag_observed,
-            self.base_frame,
-            timeout=self.tf_timeout,
+        if not quality_error and agrees:
+            stamp_ns = self._stamp_ns(pose.header.stamp)
+            info = self._read("last_localization_info")
+            if info is None or info.header.stamp != pose.header.stamp:
+                # Pose and Info callbacks may interleave. Preserve confirmation
+                # progress briefly, but absent evidence must not stall recovery.
+                recent_confirmation = (
+                    self._healthy_count > 0 and self._last_health_at is not None
+                    and steady_now - self._last_health_at < self.quality_config.maximum_age_sec
+                )
+                if not self.attempts or elapsed < self.config.retry_interval_sec or recent_confirmation:
+                    self.feedback_message = "Waiting for registration evidence for the fresh localization estimate"
+                    return
+            if not self._registration_matches(pose):
+                self._healthy_count = 0
+            elif stamp_ns > self._last_request_ns and elapsed >= self.config.settle_time_sec:
+                if stamp_ns > self._last_health_stamp_ns:
+                    self._healthy_count += 1
+                    self._last_health_stamp_ns = stamp_ns
+                    self._last_health_at = steady_now
+                if self._healthy_count >= self.config.healthy_samples:
+                    if self.attempts:
+                        self.node.get_logger().info(f"Landmark recovery confirmed from tag {tag_id}")
+                    self.attempts = 0
+                    self._failed = False
+                    self.feedback_message = f"Localization healthy and agrees with landmark {tag_id}"
+                    return
+                self.feedback_message = f"Confirming localization recovery ({self._healthy_count}/{self.config.healthy_samples})"
+                return
+        self._healthy_count = 0
+        disagrees = error is not None and (
+            error[0] > self.config.position_error_threshold_m
+            or error[1] > self.config.yaw_error_threshold_rad
         )
-
-        map_to_tag = self._pose_to_mat4(tag_true.pose)
-        base_to_tag = self._pose_to_mat4(tag_in_base.pose)
-
-        map_to_base = map_to_tag.dot(
-            np.linalg.inv(base_to_tag)
+        if not quality_error and not disagrees and not self.attempts:
+            self.feedback_message = "Localization within landmark correction thresholds"
+            return
+        if elapsed < self.config.retry_interval_sec:
+            self.feedback_message = "Waiting for post-correction localization results"
+            return
+        if exhausted:
+            self.feedback_message = failure_detail
+            return
+        command_status = self._read("command_tree_status")
+        if command_status is None or command_status == py_trees.common.Status.RUNNING:
+            self._stationary_reference = None
+            self._stationary = False
+            self.feedback_message = "Landmark recovery pending; waiting for the running command to finish"
+            return
+        if odom_now is None or not self._stationary:
+            self.feedback_message = "Landmark recovery pending; waiting for fresh, stationary odometry"
+            return
+        try:
+            corrected = matrix_to_pose(map_to_odom @ odom_now)
+            # Catch atomic edits made during this tick before using a removed anchor.
+            if self.map_repository.revision(map_name) != self._repository_revision:
+                self.feedback_message = "Landmarks changed; waiting for new observations"
+                return
+        except (tf2_ros.TransformException, OSError, TypeError, ValueError) as exception:
+            self.feedback_message = f"Landmark correction unavailable: {exception}"
+            return
+        message = PoseWithCovarianceStamped()
+        message.header.frame_id = self.map_frame
+        message.header.stamp = odom_stamp
+        message.pose.pose = corrected
+        for index in (0, 7, 14):
+            message.pose.covariance[index] = self.config.maximum_position_spread_m ** 2
+        for index in (21, 28, 35):
+            message.pose.covariance[index] = self.config.maximum_rotation_spread_rad ** 2
+        # RTAB-Map consumes the pose as a seed, not a covariance-weighted update.
+        self.initialpose_pub.publish(message)
+        # Keep newly queued motion from starting during nominal scan processing.
+        # This bounded pause is not an acknowledgement of seed consumption. Do
+        # not shorten it on metadata/clock resets: the seed is already in flight.
+        self.blackboard.set(
+            "localization_reset_hold_until", steady_now + self.config.settle_time_sec,
         )
-
-        return map_to_base, tag_in_base.header.stamp
-
-    def _stable_candidate(self, tag_id: int):
-        samples = self.candidate_samples[tag_id]
-
-        if len(samples) < self.required_samples:
-            return None
-
-        xs = np.array([sample[0] for sample in samples])
-        ys = np.array([sample[1] for sample in samples])
-        yaws = np.array([sample[2] for sample in samples])
-
-        x = float(np.median(xs))
-        y = float(np.median(ys))
-
-        yaw = math.atan2(
-            float(np.mean(np.sin(yaws))),
-            float(np.mean(np.cos(yaws))),
+        self.attempts += 1
+        self._last_request_ns = now_ns
+        self._last_request_at = steady_now
+        self._healthy_count = 0
+        self._last_health_stamp_ns = 0
+        self._last_health_at = None
+        self._windows.clear()
+        self.feedback_message = (
+            f"Landmark {tag_id} recovery requested ({self.attempts}/{self.config.maximum_attempts}); "
+            "waiting for confirmed localization"
         )
-
-        position_spread = max(
-            math.hypot(sample_x - x, sample_y - y)
-            for sample_x, sample_y, _ in samples
-        )
-
-        yaw_spread = max(
-            abs(self._angle_difference(sample_yaw, yaw))
-            for _, _, sample_yaw in samples
-        )
-
-        if position_spread > self.maximum_position_spread:
-            return None
-
-        if yaw_spread > self.maximum_yaw_spread:
-            return None
-
-        return x, y, yaw
+        self.node.get_logger().info(self.feedback_message)

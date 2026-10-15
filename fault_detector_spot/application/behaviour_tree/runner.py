@@ -140,7 +140,7 @@ def create_root(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 def create_behavior_tree(node: rclpy.node.Node):
     root = py_trees.composites.Parallel(
         "FaultDetectorSpot",
-        policy=py_trees.common.ParallelPolicy.SuccessOnAll(),
+        policy=py_trees.common.ParallelPolicy.SuccessOnAll(synchronise=False),
     )
     root.add_children([
         build_sensing_tree(node),

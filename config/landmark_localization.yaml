@@ -1,0 +1,41 @@
+/**:
+  ros__parameters:
+    # Initial limits to validate with recorded data for the installed cameras,
+    # tag sizes and lidar map. Covariance is a quality gate, not a probability
+    # that the robot is correctly localized. Angles below are in radians.
+    navigation.localization_quality.maximum_age_sec: 1.5
+    navigation.localization_quality.maximum_position_std_m: 0.30
+    navigation.localization_quality.maximum_yaw_std_rad: 0.17453292519943295  # 10 deg
+
+    # Save only fresh map poses from distinct captures while localization is
+    # healthy. A moved tag must be saved again from a known-good localization.
+    navigation.landmark_save.required_samples: 3
+    navigation.landmark_save.maximum_sample_span_sec: 4.0
+    navigation.landmark_save.maximum_position_spread_m: 0.05
+    navigation.landmark_save.maximum_rotation_spread_rad: 0.08726646259971647  # 5 deg
+    navigation.landmark_save.maximum_observation_age_sec: 1.5
+
+    # Monitor continuously in localization mode. RTAB-Map consumes initialpose
+    # as a reset at its next scan, so issue corrections only when stationary
+    # and no command is running. A publish alone never confirms recovery.
+    navigation.landmark_recovery.enabled: true
+    navigation.landmark_recovery.required_samples: 5
+    navigation.landmark_recovery.maximum_sample_span_sec: 6.0
+    navigation.landmark_recovery.maximum_position_spread_m: 0.20
+    navigation.landmark_recovery.maximum_rotation_spread_rad: 0.17453292519943295  # 10 deg
+    navigation.landmark_recovery.maximum_tag_age_sec: 1.5
+    navigation.landmark_recovery.maximum_tag_distance_m: 3.0
+    navigation.landmark_recovery.maximum_odometry_age_sec: 0.25
+    navigation.landmark_recovery.stationary_duration_sec: 1.0
+    navigation.landmark_recovery.stationary_position_tolerance_m: 0.03
+    navigation.landmark_recovery.stationary_yaw_tolerance_rad: 0.05235987755982989  # 3 deg
+    navigation.landmark_recovery.position_error_threshold_m: 0.60
+    navigation.landmark_recovery.yaw_error_threshold_rad: 0.3490658503988659  # 20 deg
+    navigation.landmark_recovery.recovery_position_tolerance_m: 0.30
+    navigation.landmark_recovery.recovery_yaw_tolerance_rad: 0.17453292519943295  # 10 deg
+    # Also pauses normal command dispatch after a seed; emergency bypasses it.
+    # This bounded pause is not an acknowledgement from RTAB-Map.
+    navigation.landmark_recovery.settle_time_sec: 2.0
+    navigation.landmark_recovery.retry_interval_sec: 15.0
+    navigation.landmark_recovery.maximum_attempts: 3
+    navigation.landmark_recovery.healthy_samples: 3

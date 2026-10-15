@@ -16,8 +16,10 @@ from fault_detector_spot.inspection.behaviours.resolve_live_inspection_object im
     ResolveLiveInspectionObject,
 )
 from fault_detector_spot.navigation.behaviours.landmark_relocalizer import (
+    LandmarkRecoveryConfig,
     LandmarkRelocalizer,
 )
+from fault_detector_spot.navigation.localization_quality import LocalizationQualityConfig
 from fault_detector_spot.sensing.behaviours.visible_tag_to_map import VisibleTagToMap
 
 
@@ -38,6 +40,9 @@ class Node:
 
     def create_publisher(self, *args, **kwargs):
         return Mock()
+
+    def destroy_publisher(self, publisher):
+        pass
 
 
 def transform(stamp, x):
@@ -62,7 +67,10 @@ def test_bt_consumers_share_history_without_owning_the_listener():
         borrowers = [
             ResolveLiveInspectionObject("", "", tf_buffer=buffer),
             VisibleTagToMap(runtime, tf_buffer=buffer),
-            LandmarkRelocalizer(runtime, tf_buffer=buffer, map_repository=Mock()),
+            LandmarkRelocalizer(
+                runtime, tf_buffer=buffer, map_repository=Mock(),
+                config=LandmarkRecoveryConfig(), quality_config=LocalizationQualityConfig(),
+            ),
         ]
         for borrower in borrowers:
             borrower.setup(node=node)

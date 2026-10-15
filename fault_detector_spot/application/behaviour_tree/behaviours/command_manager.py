@@ -1,5 +1,7 @@
 """Dispatch buffered commands with strictly increasing identities."""
 
+import time
+
 import py_trees
 from builtin_interfaces.msg import Time
 from py_trees.common import Status
@@ -12,10 +14,11 @@ from fault_detector_spot.application.commanding.command_ids import (
 class CommandManager(py_trees.behaviour.Behaviour):
     """Promote buffered commands when the command tree is idle."""
 
-    def __init__(self, name="CommandManager"):
+    def __init__(self, name="CommandManager", *, monotonic_clock=time.monotonic):
         super().__init__(name)
         self.node = None
         self.blackboard = None
+        self._monotonic_clock = monotonic_clock
         self._last_dispatch_stamp_nanoseconds = -1
 
     def setup(self, **kwargs):
@@ -33,6 +36,10 @@ class CommandManager(py_trees.behaviour.Behaviour):
             key="last_command",
             access=py_trees.common.Access.WRITE,
         )
+        self.blackboard.register_key(
+            key="localization_reset_hold_until",
+            access=py_trees.common.Access.READ,
+        )
         try:
             _ = self.blackboard.command_buffer
         except KeyError:
@@ -49,6 +56,7 @@ class CommandManager(py_trees.behaviour.Behaviour):
         return True
 
     def update(self):
+        self.feedback_message = ""
         if not self.blackboard.command_buffer:
             return Status.SUCCESS
 
@@ -80,6 +88,14 @@ class CommandManager(py_trees.behaviour.Behaviour):
                 self.blackboard.last_command = buffered_command
                 self.blackboard.command_tree_status = None
                 return Status.SUCCESS
+
+        try:
+            hold_until = self.blackboard.localization_reset_hold_until
+        except (AttributeError, KeyError):
+            hold_until = 0.0
+        if self._monotonic_clock() < hold_until:
+            self.feedback_message = "Waiting for landmark localization reset to settle"
+            return Status.SUCCESS
 
         tree_status = self.blackboard.command_tree_status
         if tree_status != Status.RUNNING:

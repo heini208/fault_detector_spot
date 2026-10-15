@@ -1,0 +1,168 @@
+"""Offline checks for trustworthy localization and RTAB-Map evidence."""
+
+import math
+from types import SimpleNamespace
+
+import pytest
+from geometry_msgs.msg import PoseWithCovarianceStamped
+from rtabmap_msgs.msg import Info
+
+from fault_detector_spot.navigation import localization_quality
+from fault_detector_spot.navigation.localization_quality import (
+    LocalizationQualityConfig,
+    accepted_localization,
+    localization_quality_error,
+)
+
+
+def localization_pose():
+    message = PoseWithCovarianceStamped()
+    message.header.frame_id = "map"
+    message.header.stamp.sec = 10
+    message.pose.pose.orientation.w = 1.0
+    message.pose.covariance[0] = 0.01
+    message.pose.covariance[7] = 0.01
+    message.pose.covariance[35] = math.radians(3.0) ** 2
+    return message
+
+
+def quality_error(message, now_ns=10_000_000_000):
+    return localization_quality_error(message, now_ns, LocalizationQualityConfig())
+
+
+def test_valid_fresh_pose_with_planar_covariance_is_healthy():
+    message = localization_pose()
+    message.pose.covariance[1] = 0.004
+    message.pose.covariance[6] = 0.004
+
+    assert quality_error(message) == ""
+    assert quality_error(message, now_ns=11_500_000_000) == ""
+    assert "stale" in quality_error(message, now_ns=11_500_000_001)
+
+
+@pytest.mark.parametrize("stamp,reason", [(0, "invalid"), (11, "future"), (8, "stale")])
+def test_unknown_future_and_old_timestamps_are_unusable(stamp, reason):
+    message = localization_pose()
+    message.header.stamp.sec = stamp
+    assert reason in quality_error(message)
+
+
+def test_map_frame_and_finite_valid_pose_are_required():
+    message = localization_pose()
+    message.header.frame_id = "odom"
+    assert "map frame" in quality_error(message)
+    message.header.frame_id = "map"
+    message.pose.pose.position.x = float("nan")
+    assert quality_error(message)
+    message.pose.pose.position.x = 0.0
+    message.pose.pose.orientation.w = 0.0
+    assert quality_error(message)
+    assert quality_error(None)
+    assert quality_error(SimpleNamespace())
+
+
+@pytest.mark.parametrize("value", [0.0, -0.01, 9999.0, float("inf"), float("nan")])
+@pytest.mark.parametrize("index", [0, 7, 35])
+def test_unknown_and_invalid_planar_variances_are_unusable(index, value):
+    message = localization_pose()
+    message.pose.covariance[index] = value
+    assert quality_error(message)
+
+
+def test_covariance_must_be_symmetric_and_positive_semidefinite():
+    message = localization_pose()
+    message.pose.covariance[1] = 0.02
+    assert "symmetric" in quality_error(message)
+    message.pose.covariance[6] = 0.02
+    assert "positive semidefinite" in quality_error(message)
+
+
+def test_position_uncertainty_uses_major_axis_including_cross_covariance():
+    message = localization_pose()
+    message.pose.covariance[0] = 0.08
+    message.pose.covariance[7] = 0.08
+    assert quality_error(message) == ""
+    message.pose.covariance[1] = 0.04
+    message.pose.covariance[6] = 0.04
+    assert "position uncertainty" in quality_error(message)
+
+
+def test_planar_psd_check_includes_position_yaw_cross_terms():
+    message = localization_pose()
+    message.pose.covariance[5] = 0.1
+    message.pose.covariance[30] = 0.1
+    assert "positive semidefinite" in quality_error(message)
+
+
+def test_yaw_uncertainty_is_checked_separately():
+    message = localization_pose()
+    message.pose.covariance[35] = math.radians(11.0) ** 2
+    assert "yaw uncertainty" in quality_error(message)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf")])
+@pytest.mark.parametrize("field", ["maximum_age_sec", "maximum_position_std_m", "maximum_yaw_std_rad"])
+def test_quality_config_rejects_non_positive_and_non_finite(field, value):
+    with pytest.raises(ValueError, match="positive and finite"):
+        LocalizationQualityConfig(**{field: value})
+
+
+def test_quality_config_respects_ros_parameters_and_saved_overrides(monkeypatch):
+    values = {"navigation.localization_quality.maximum_age_sec": 2.0}
+    node = SimpleNamespace(
+        has_parameter=lambda key: key in values,
+        declare_parameter=lambda key, default: values.setdefault(key, default),
+        get_parameter=lambda key: SimpleNamespace(value=values[key]),
+    )
+    monkeypatch.setattr(
+        localization_quality,
+        "parameter_override",
+        lambda key, default: 0.2 if key.endswith("maximum_position_std_m") else default,
+    )
+    config = LocalizationQualityConfig.from_node(node)
+
+    assert config.maximum_age_sec == 2.0
+    assert config.maximum_position_std_m == 0.2
+    assert config.maximum_yaw_std_rad == pytest.approx(math.radians(10.0))
+
+
+def registration_info():
+    info = Info()
+    info.loop_closure_id = 123
+    info.stats_keys = ["Loop/RejectedHypothesis/"]
+    info.stats_values = [0.0]
+    return info
+
+
+def test_registration_evidence_requires_map_match_and_unrejected_hypothesis():
+    info = registration_info()
+    assert accepted_localization(info)
+    info.loop_closure_id = 0
+    assert not accepted_localization(info)
+    info.proximity_detection_id = 456
+    assert accepted_localization(info)
+    info.stats_values = [1.0]
+    assert not accepted_localization(info)
+
+
+@pytest.mark.parametrize("keys,values", [
+    ([], []),
+    (["Loop/RejectedHypothesis"], [0.0]),
+    (["Loop/RejectedHypothesis/"], []),
+    (["Loop/RejectedHypothesis/"], [float("nan")]),
+    (["Loop/RejectedHypothesis/"], [-1.0]),
+    (["Loop/RejectedHypothesis/", "Loop/RejectedHypothesis/"], [0.0, 1.0]),
+])
+def test_missing_or_malformed_rejection_evidence_is_not_accepted(keys, values):
+    info = registration_info()
+    info.stats_keys = keys
+    info.stats_values = values
+    assert not accepted_localization(info)
+
+
+def test_missing_or_invalid_registration_identifiers_are_not_accepted():
+    assert not accepted_localization(None)
+    assert not accepted_localization(SimpleNamespace())
+    info = registration_info()
+    info.loop_closure_id = -1
+    assert not accepted_localization(info)

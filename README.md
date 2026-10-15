@@ -677,6 +677,38 @@ remain fresh within 1.5 s. This accommodates RTAB-Map processing delay without
 saving the robot's older scan-time pose. Missing or stale estimates/transforms
 produce a specific error, and changing maps invalidates the previous estimate.
 
+Saving a landmark requires fresh localization with usable planar covariance
+and three distinct, stable observations of the tag in `map`. The saved pose
+retains position and orientation, using TF at each observation's acquisition
+time. Invalid localization, map/clock changes, stale captures, and changing tag
+poses clear qualification. Tags used as landmarks must remain physically fixed;
+save them again from a known-good localization if they move. Saved and deleted
+landmarks are picked up by the recovery monitor without restarting localization.
+
+Landmark recovery runs continuously in localization-only mode, including during
+long commands. Five distinct, consistent tag captures establish a candidate
+correction. Poor localization quality or persistent disagreement with the tag
+can request recovery. RTAB-Map treats `/initialpose` as a reset applied at its
+next scan, so publication waits for idle command execution and one second of
+fresh, nearly stationary odometry. Acquisition-time odometry accounts for motion
+between the tag image and the current robot pose. Conflicting landmarks withhold
+correction. This monitor does not stop an active navigation command.
+
+A reset is followed by a two-second settling period, during which the existing
+command manager keeps normal commands queued; emergency cancellation bypasses
+this pause. This bounded pause covers nominal scan processing, but is not an
+acknowledgment from RTAB-Map: severely delayed scans or external robot motion
+still require deployment validation. Recovery needs three fresh,
+accepted RTAB-Map registrations whose poses have usable covariance and agree with
+the landmark. Attempts are at least 15 seconds apart, require new tag captures,
+and stop after three unsuccessful requests. The budget resets after confirmed
+recovery, a map/runtime or clock change, or a changed set of landmark anchors.
+Behavior feedback and logs distinguish pending, requested, confirmed, and failed
+recovery. Limits live in [`config/landmark_localization.yaml`](config/landmark_localization.yaml),
+shared by the BT and application API. These initial values need validation with
+recorded data for the installed sensors; covariance alone is not proof that
+localization is correct.
+
 Example:
 
 ```bash
