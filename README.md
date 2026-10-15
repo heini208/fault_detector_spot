@@ -673,12 +673,22 @@ consumes the adapter's separately rate-limited `/velodyne/points_sensor_collisio
 output, with its own robot filter. Both streams reuse the same sensor-frame
 conversion, so MoveIt's 5 Hz budget does not limit navigation's scan cadence.
 
-Saving a waypoint uses the current `map <- base_link` transform while a valid
-processed localization estimate has recently arrived. The estimate's acquisition
-age is checked on receipt; a new estimate and the current transform must each
-remain fresh within 1.5 s. This accommodates RTAB-Map processing delay without
-saving the robot's older scan-time pose. Missing or stale estimates/transforms
-produce a specific error, and changing maps invalidates the previous estimate.
+Saving a waypoint starts an on-demand capture in either mapping or localization
+mode. The action waits up to 10 seconds for usable localization acquired after
+the Save request and a fresh current `map <- base_link` transform. It saves the
+robot's current pose when capture completes, rather than its older scan-time
+pose. Missing data reports progress while callbacks continue; cancellation,
+timeout, or a map/clock change ends the capture without saving.
+
+Both waypoint and landmark captures allow up to five seconds of localization
+processing delay, configured by
+`navigation.authoring.maximum_localization_delay_sec`. This allowance applies
+only to scans acquired after the active Save request. It does not extend the
+1.5-second limit on gaps between advancing processed results or on current robot
+TF age. Pose timestamps and covariance checks are preserved, and pre-click
+backlog, replayed estimates, unknown uncertainty, and missing transforms cannot
+qualify a save. Finishing the capture removes its processing-delay allowance;
+recovery and automatic refinement retain their existing freshness limits.
 
 Saving a landmark works in both mapping and localization mode. Pressing Save
 starts an on-demand capture of that tag; it does not require a pre-filled
@@ -701,6 +711,39 @@ is still missing, without saving a partial landmark. Tags used as landmarks
 must remain physically fixed; save them again from a known-good localization if
 they move. Saved and deleted
 landmarks are picked up by the recovery monitor without restarting localization.
+
+Saved landmarks also receive small automatic refinements in localization mode.
+The robot must be idle and stationary, with planar localization standard
+deviation at most 10 cm and yaw standard deviation at most 3 degrees. Five
+distinct tag captures and five matching, accepted RTAB-Map lidar-map
+registrations must produce stable map-relative tag poses within six seconds.
+Tags must be within 2.5 m; the burst must agree within 3 cm and 3 degrees.
+The observed pose uses the lidar estimate and acquisition-time odometry,
+including motion between the lidar scan and tag image. It does not use the
+stored landmark to compute its own measurement.
+
+Each refinement moves 10% toward the mean observation, capped at 1 cm and
+0.5 degrees. An observation differing by more than 15 cm or 10 degrees is
+rejected. Total adjustment is bounded to 5 cm and 3 degrees from the original
+saved pose. Only one update is allowed per continuous sighting, and updates
+must be at least 60 seconds apart; the tag must disappear for five seconds to
+start another sighting. The original pose, update count, last refinement time,
+and observation stamp are preserved in optional `refinement` metadata alongside
+the active `pose_map`. Existing map files remain readable. Atomic, locked
+repository updates protect concurrent authoring and map deletion; stale
+proposals are discarded. Successful refinements are logged.
+
+Refinement is deliberately disabled during mapping, because the map can change.
+It is also blocked for the current map/runtime session after any `/initialpose`
+seed, including landmark recovery and RViz resets, to avoid feeding a seed's bias
+back into the landmarks. Metadata reloads and clock resets do not remove this
+block. Attaching the monitor to an already running localization process also
+blocks refinement because earlier pose seeds are unknown. A new localization
+process requires fresh evidence again. Even repeated accepted lidar matches
+can be biased, and RTAB-Map can restore its previous pose after restart: this is
+a bounded refinement heuristic, not a guarantee of improved accuracy or a joint
+pose/landmark optimizer. Original-anchor limits and persisted cooldowns still
+apply after restart. Saving landmarks remains available in both modes.
 
 Landmark recovery runs continuously in localization-only mode, including during
 long commands. Five distinct, consistent tag captures establish a candidate
@@ -778,6 +821,15 @@ the previous 0.3-second persistence window. The filter also rejects scans older
 than 1 second at input or publication, including time spent waiting for TF;
 receiving queued old data cannot keep the costmap falsely current.
 
+The self-filter uses bulk ROS byte-array serialization for its output clouds,
+avoiding Python validation of every byte. It checks obstacle age after
+serialization too. Periodic filter diagnostics include input age and processing
+time for the body transform, filtering and obstacle stages, to distinguish
+upstream delay from local processing. Repeated Nav2 stale-buffer warnings are
+limited on the main launch console to the first warning and one reminder every
+five seconds per costmap/source. File and ROS logs retain every warning; the
+costmap freshness checks remain active.
+
 After an authorized rebuild and restart, **create a fresh map under a new name**
 to validate the corrected saved occupancy grid. Existing databases and their
 stored grids are not rewritten. Sensor coverage, the 5 cm cutoff, and saved-map
@@ -840,7 +892,7 @@ arguments. Run only one publisher for the chosen physical sensor frame.
 
 The adapter uses queues of depth one and limits conversion attempts to 20 Hz and
 100,000 points. The conversion limit leaves margin for the configured 10 Hz
-driver's arrival jitter; navigation keeps its 0.2 s observation deadline.
+driver's arrival jitter; navigation keeps its 0.5 s observation deadline.
 MoveIt's output retains a separate 5 Hz monotonic rate cap, with no second
 conversion or retained cloud backlog. The adapter drops clouds older than 0.75 s
 or more than 50 ms in the future. The age limit accommodates measured live lidar delays of about 0.4 s

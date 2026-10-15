@@ -20,6 +20,7 @@ from fault_detector_spot.navigation.behaviours.landmark_relocalizer import (
     LandmarkRelocalizer,
 )
 from fault_detector_spot.navigation.localization_quality import LocalizationQualityConfig
+from fault_detector_spot.navigation.landmark_refinement import LandmarkRefinementConfig
 from fault_detector_spot.sensing.behaviours.visible_tag_to_map import VisibleTagToMap
 
 
@@ -70,6 +71,7 @@ def test_bt_consumers_share_history_without_owning_the_listener():
             LandmarkRelocalizer(
                 runtime, tf_buffer=buffer, map_repository=Mock(),
                 config=LandmarkRecoveryConfig(), quality_config=LocalizationQualityConfig(),
+                refinement_config=LandmarkRefinementConfig(enabled=False),
             ),
         ]
         for borrower in borrowers:

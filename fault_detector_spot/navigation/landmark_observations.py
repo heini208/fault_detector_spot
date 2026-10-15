@@ -4,11 +4,19 @@ from collections import deque
 from copy import deepcopy
 import math
 
-from fault_detector_spot.shared.geometry.models import PoseData
-from fault_detector_spot.shared.geometry.rotation import rotation_distance_rad
+from scipy.spatial.transform import Rotation
+
+from fault_detector_spot.shared.geometry.models import PoseData, Vector3Data
+from fault_detector_spot.shared.geometry.rotation import (
+    quaternion_from_rotation, rotation_distance_rad, rotation_from_quaternion,
+)
 
 
-class LandmarkObservationPending(ValueError):
+class NavigationObservationPending(ValueError):
+    """A requested navigation save is waiting for usable observation data."""
+
+
+class LandmarkObservationPending(NavigationObservationPending):
     """A requested landmark capture is waiting for usable observation data."""
 
 
@@ -95,5 +103,20 @@ class LandmarkPoseWindow:
         self.detail = ""
         return deepcopy(self._samples[-1][1])
 
+    def qualified_mean_pose(self):
+        """Average a qualified stable burst without changing add() semantics."""
+        if self.sample_count < self.required_samples:
+            return None
+        poses = [pose for _, pose in self._samples]
+        count = len(poses)
+        position = Vector3Data(*(
+            math.fsum(getattr(pose.position, axis) / count for pose in poses)
+            for axis in ("x", "y", "z")
+        ))
+        orientation = quaternion_from_rotation(Rotation.concatenate([
+            rotation_from_quaternion(pose.orientation) for pose in poses
+        ]).mean())
+        return PoseData(position=position, orientation=orientation)
 
-__all__ = ["LandmarkObservationPending", "LandmarkPoseWindow"]
+
+__all__ = ["NavigationObservationPending", "LandmarkObservationPending", "LandmarkPoseWindow"]

@@ -114,3 +114,37 @@ def accepted_localization(info) -> bool:
         return math.isfinite(rejection) and rejection == 0.0
     except (AttributeError, TypeError, ValueError, OverflowError):
         return False
+
+
+def accepted_lidar_localization(info) -> bool:
+    """Whether this result includes an accepted LiDAR-to-map registration.
+
+    RTAB-Map publishes both proximity ICP counters in each extended result,
+    including zero for the unused path. Counters alone are insufficient: they
+    remain positive if subsequent optimization rejects the added links. The
+    proximity ID and rejection flag must therefore also confirm acceptance.
+    NeighborLinkRefining ICP statistics describe odometry, not a map match.
+
+    Callers still need matching capture timestamps, localization quality and
+    seed provenance checks; an accepted ICP match is not independent truth.
+    """
+    if not accepted_localization(info):
+        return False
+    try:
+        if info.proximity_detection_id <= 0:
+            return False
+        keys = list(info.stats_keys)
+        counters = []
+        for key in (
+            "Proximity/Space_detections_added_icp_global/",
+            "Proximity/Space_detections_added_icp_multi/",
+        ):
+            if keys.count(key) != 1:
+                return False
+            value = info.stats_values[keys.index(key)]
+            if isinstance(value, bool) or not math.isfinite(value) or value < 0:
+                return False
+            counters.append(value)
+        return any(value > 0 for value in counters)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False

@@ -41,26 +41,26 @@ def test_waiting_save_writes_only_after_new_observations_are_ready(rig, mode):
     context = navigation.context(rig.context.context_id, rig.context.client_id)
     request = navigation.begin_landmark_save(context, "plant", 7)
     with pytest.raises(LandmarkObservationPending, match="localization"):
-        navigation.poll_landmark_save(request)
+        navigation.poll_pose_save(request)
     assert not navigation.map_repository.load("plant").localization_landmarks
     navigation.visible_tag_pose.side_effect = None
     navigation.visible_tag_pose.return_value = map_pose(7.0)
-    snapshot = navigation.poll_landmark_save(request)
+    snapshot = navigation.poll_pose_save(request)
     assert snapshot.landmark_names == ("Tag_7",)
     navigation.finish_landmark_capture.assert_called_once_with(request.capture)
-    assert navigation._landmark_save is None
+    assert navigation._pose_save is None
     assert rig.commands.submitted == []
 
 
 def test_timeout_retains_missing_data_reason_and_releases_collection(rig):
     request = rig.navigation.begin_landmark_save(rig.context, "plant", 7)
     with pytest.raises(LandmarkObservationPending):
-        rig.navigation.poll_landmark_save(request)
+        rig.navigation.poll_pose_save(request)
     rig.now[0] += 10.0  # Monotonic time advances independently of ROS time.
     with pytest.raises(TimeoutError, match="10 seconds: Waiting for localization"):
-        rig.navigation.poll_landmark_save(request)
+        rig.navigation.poll_pose_save(request)
     assert not rig.navigation.map_repository.load("plant").localization_landmarks
-    assert rig.navigation._landmark_save is None
+    assert rig.navigation._pose_save is None
     rig.navigation.finish_landmark_capture.assert_called_once_with(request.capture)
 
 
@@ -73,7 +73,7 @@ def test_pending_save_reserves_authoring_across_contexts_and_close_discards_it(r
         rig.navigation.add_current_waypoint(other, "plant", "waypoint")
     rig.navigation.close_context(rig.context)
     with pytest.raises(RuntimeError, match="closed or cancelled"):
-        rig.navigation.poll_landmark_save(request)
+        rig.navigation.poll_pose_save(request)
     rig.navigation.finish_landmark_capture.assert_called_once_with(request.capture)
     assert not rig.navigation.map_repository.load("plant").localization_landmarks
 
@@ -84,12 +84,12 @@ def test_runtime_change_cannot_save_in_old_context_or_map(rig):
     rig.navigation.visible_tag_pose.side_effect = None
     rig.navigation.visible_tag_pose.return_value = map_pose()
     with pytest.raises((LookupError, ValueError, RuntimeError)):
-        rig.navigation.poll_landmark_save(request)
+        rig.navigation.poll_pose_save(request)
     assert not rig.navigation.map_repository.load("plant").localization_landmarks
-    assert rig.navigation._landmark_save is None
+    assert rig.navigation._pose_save is None
 
 
-def api_rig(rig):
+def api_rig(rig, *, operation=NavigationSetupIntent.OPERATION_ADD_VISIBLE_TAG_LANDMARK):
     callbacks = []
     node = Mock()
     node.get_clock.return_value = FakeClock()
@@ -99,20 +99,20 @@ def api_rig(rig):
     api.coordinator = rig.navigation
     api._lock = RLock()
     api._shutdown = Event()
-    api._landmark_waiters = set()
+    api._pose_waiters = set()
     api._state_publisher = Mock()
     api._callback_group = object()
     goal = ExecuteNavigationSetup.Goal(
         client_id=rig.context.client_id, context_id=rig.context.context_id,
         intent=NavigationSetupIntent(
-            operation=NavigationSetupIntent.OPERATION_ADD_VISIBLE_TAG_LANDMARK,
-            map_name="plant", tag_id=7,
+            operation=operation,
+            map_name="plant", tag_id=7, waypoint_name="motor_front",
         ),
     )
     handle = Mock(request=goal, is_cancel_requested=False)
     coroutine = api._execute(handle)
     waiting = coroutine.send(None)  # Waiting yields; no executor thread sleeps.
-    assert waiting in api._landmark_waiters
+    assert waiting in api._pose_waiters
     assert not waiting.done()
     return api, handle, coroutine, callbacks[0]
 
@@ -146,12 +146,12 @@ def test_context_closed_during_progress_resolves_action_instead_of_escaping_time
         rig.navigation.close_context(rig.context)
         raise LandmarkObservationPending("Waiting for a new observation")
 
-    rig.navigation.poll_landmark_save = close_before_progress
+    rig.navigation.poll_pose_save = close_before_progress
     poll()
     final = result(coroutine)
     assert final.state.state == NavigationSetupState.STATE_FAILED
-    assert not api._landmark_waiters
-    assert rig.navigation._landmark_save is None
+    assert not api._pose_waiters
+    assert rig.navigation._pose_save is None
     api.node.destroy_timer.assert_called_once_with(poll)
 
 
@@ -167,7 +167,7 @@ def test_runtime_revision_change_delivers_terminal_failure_to_the_client(rig):
     assert final.state.revision == current.context.revision
     assert final.state.mode == NavigationSetupState.MODE_NONE
     assert not rig.navigation.map_repository.load("plant").localization_landmarks
-    assert not api._landmark_waiters
+    assert not api._pose_waiters
 
 
 @pytest.mark.parametrize("interruption", ["cancel", "shutdown", "close", "timeout"])
@@ -189,8 +189,8 @@ def test_action_interruption_never_saves_and_releases_all_resources(rig, interru
     assert final.state.state == expected
     assert not rig.navigation.map_repository.load("plant").localization_landmarks
     rig.navigation.finish_landmark_capture.assert_called_once()
-    assert rig.navigation._landmark_save is None
-    assert not api._landmark_waiters
+    assert rig.navigation._pose_save is None
+    assert not api._pose_waiters
     api.node.destroy_timer.assert_called_once_with(poll)
 
 
@@ -240,8 +240,8 @@ def test_action_collects_new_state_observations_then_persists_landmark(rig, stat
     assert source._landmark_capture is None
     assert not source._landmark_windows
     assert not source._landmark_pending_observations
-    assert not navigation._landmark_save
-    assert not api._landmark_waiters
+    assert not navigation._pose_save
+    assert not api._pose_waiters
     assert rig.commands.submitted == []
     handle.succeed.assert_called_once()
     api.node.destroy_timer.assert_called_once_with(poll)

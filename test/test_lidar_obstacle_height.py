@@ -1,5 +1,6 @@
 """Offline low-obstacle checks with real TF history and no running ROS nodes."""
 
+from array import array
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -15,7 +16,7 @@ from tf2_ros import Buffer
 
 from fault_detector_spot.mapping.ros import lidar_self_filter as filter_module
 from fault_detector_spot.mapping.ros.lidar_self_filter import (
-    LidarSelfFilter, obstacle_points,
+    LidarSelfFilter, obstacle_points, point_cloud_like,
 )
 
 
@@ -107,6 +108,27 @@ def filter_rig(*, body_stamp=10.0, body_height=0.50):
 
 def coordinates(message):
     return np.frombuffer(message.data, dtype="<f4").reshape((-1, 3))
+
+
+def test_serialization_uses_ros_bulk_byte_array_without_changing_points(monkeypatch):
+    source = cloud([[2.0, 0.0, -0.65]])
+    points = np.array([[2.1, 0.0, -0.55], [2.2, -0.1, -0.45]], dtype="<f4")
+    original = PointCloud2.data
+    assigned = []
+
+    def record_assignment(message, data):
+        assigned.append(data)
+        original.fset(message, data)
+
+    monkeypatch.setattr(PointCloud2, "data", property(original.fget, record_assignment))
+
+    result = point_cloud_like(source, points)
+
+    assert isinstance(assigned[-1], array)
+    assert assigned[-1].typecode == "B"
+    np.testing.assert_array_equal(coordinates(result), points)
+    assert result.header == source.header
+    assert result.row_step == 12 * len(points)
 
 
 def test_callback_keeps_arm_mask_and_full_mapping_scan_but_marks_low_objects():
@@ -279,3 +301,23 @@ def test_ground_tf_wait_preserves_fresh_capture_but_cannot_refresh_an_expired_sc
     else:
         rig.obstacle_publisher.publish.assert_not_called()
         assert "obstacle output" in rig.warn_throttled.call_args.args[0]
+
+
+def test_obstacle_capture_expiring_during_serialization_is_not_published(monkeypatch):
+    rig = filter_rig()
+    rig.now = 10.9
+    rig.get_clock = lambda: SimpleNamespace(now=lambda: Time(seconds=rig.now))
+    original = filter_module.point_cloud_like
+
+    def delayed_serialization(message, points):
+        result = original(message, points)
+        rig.now = 11.01
+        return result
+
+    monkeypatch.setattr(filter_module, "point_cloud_like", delayed_serialization)
+    source = cloud([[2.0, 0.0, -0.55]])
+
+    assert not LidarSelfFilter.publish_obstacles(rig, source, coordinates(source))
+
+    rig.obstacle_publisher.publish.assert_not_called()
+    assert "obstacle output" in rig.warn_throttled.call_args.args[0]

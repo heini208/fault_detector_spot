@@ -18,7 +18,7 @@ from test_navigation_setup_coordinator import coordinator
 
 def receive_delayed_stream(rig, *, update_period=0.8, processing_delay=1.3):
     # The first acquisition must be newer than the active-map boundary.
-    rig.advance(1.4)
+    rig.advance(processing_delay + 0.1)
     latest = None
     for _ in range(3):
         now = rig.clock.now().nanoseconds / 1e9
@@ -32,8 +32,9 @@ def receive_delayed_stream(rig, *, update_period=0.8, processing_delay=1.3):
 
 
 @pytest.mark.parametrize("update_period", [0.5, 0.8])
-def test_processed_localization_delay_does_not_reset_stable_save_captures(save_rig, update_period):
-    latest = receive_delayed_stream(save_rig, update_period=update_period)
+@pytest.mark.parametrize("processing_delay", [1.3, 2.05, 3.2])
+def test_processed_localization_delay_does_not_reset_stable_save_captures(save_rig, update_period, processing_delay):
+    latest = receive_delayed_stream(save_rig, update_period=update_period, processing_delay=processing_delay)
 
     assert save_rig.source.visible_tag_pose(7).position.x == pytest.approx(11.0)
     # TF and registration must continue to use the original acquisition time.
@@ -61,8 +62,9 @@ def test_delayed_localization_still_expires_when_processed_updates_stop(save_rig
 
 def test_estimate_already_too_old_on_arrival_cannot_save(save_rig):
     receive_delayed_stream(save_rig)
+    save_rig.advance(5.0)
     now = save_rig.clock.now().nanoseconds / 1e9
-    save_rig.source._receive_localization_pose(localization(now - 1.6))
+    save_rig.source._receive_localization_pose(localization(now - 5.01))
 
     with pytest.raises(ValueError, match="old|stale"):
         save_rig.source.visible_tag_pose(7)
@@ -86,7 +88,7 @@ def test_replayed_delayed_estimate_does_not_extend_receipt_freshness(save_rig):
 
 @pytest.mark.parametrize("mode", ["mapping", "localization"])
 def test_delayed_stream_can_save_landmark_in_both_authoring_modes(save_rig, tmp_path, mode):
-    receive_delayed_stream(save_rig)
+    receive_delayed_stream(save_rig, processing_delay=2.05)
     navigation, commands = coordinator(tmp_path)
     navigation.map_repository.create_empty("map_a")
     navigation.visible_tag_pose = save_rig.source.visible_tag_pose

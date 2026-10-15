@@ -2,7 +2,7 @@
 
 from collections import deque
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from threading import RLock
 import time
@@ -15,7 +15,7 @@ from rclpy.clock import JumpThreshold
 from rclpy.duration import Duration
 from rclpy.time import Time
 from fault_detector_spot.navigation.landmark_observations import (
-    LandmarkObservationPending, LandmarkPoseWindow,
+    LandmarkObservationPending, LandmarkPoseWindow, NavigationObservationPending,
 )
 from fault_detector_spot.navigation.localization_quality import (
     LocalizationQualityConfig,
@@ -67,11 +67,15 @@ class LandmarkSaveConfig:
 
 
 @dataclass(frozen=True)
-class _LandmarkCapture:
-    tag_id: int
+class _PoseCapture:
     started_ros_ns: int
     started_at: float
     pose_generation: int
+
+
+@dataclass(frozen=True)
+class _LandmarkCapture(_PoseCapture):
+    tag_id: int
 
 
 class NavigationSetupStateSource:
@@ -110,6 +114,8 @@ class NavigationSetupStateSource:
         self._visible_tags_received_at = None
         self._tag_generation = 0
         self._landmark_capture = None
+        self._waypoint_capture = None
+        self._maximum_capture_localization_delay_sec = None
         self.maximum_pose_age_sec = float(maximum_pose_age_sec)
         if (not math.isfinite(self.maximum_pose_age_sec)
                 or self.maximum_pose_age_sec <= 0.0):
@@ -191,7 +197,9 @@ class NavigationSetupStateSource:
         if self._localization_received_at is None:
             raise ValueError(self._localization_error)
         age_sec = self._monotonic_clock() - self._localization_received_at
-        if age_sec < 0 or age_sec > self.maximum_pose_age_sec:
+        ros_age_ns = self.node.get_clock().now().nanoseconds - self._localization_received_ros_ns
+        if (age_sec < 0 or age_sec > self.maximum_pose_age_sec
+                or not 0 <= ros_age_ns <= self.maximum_pose_age_sec * 1e9):
             last_rejection = (
                 f"; last rejected estimate: {self._localization_error}"
                 if self._localization_error else ""
@@ -200,6 +208,11 @@ class NavigationSetupStateSource:
                 "Localization estimate is stale; no new valid estimate received "
                 f"within {self.maximum_pose_age_sec:g} seconds{last_rejection}"
             )
+        # A slower estimate is usable only inside the explicit capture that
+        # requested new data. Finishing a save must not relax the live reader.
+        arrival_age = (self._localization_received_ros_ns - self._localization_stamp_ns) / 1e9
+        if arrival_age > self._localization_arrival_limit(self._localization_stamp_ns):
+            raise ValueError("Localization estimate is stale outside its requested capture")
 
     @staticmethod
     def _stamp_ns(stamp):
@@ -229,6 +242,7 @@ class NavigationSetupStateSource:
     def close(self):
         """Release the clock callback and TF listener with the API node."""
         self.finish_landmark_capture(self._landmark_capture)
+        self.finish_waypoint_capture(self._waypoint_capture)
         if self._clock_jump is not None:
             self._clock_jump.unregister()
             self._clock_jump = None
@@ -241,8 +255,7 @@ class NavigationSetupStateSource:
         if isinstance(tag_id, bool) or not isinstance(tag_id, int) or tag_id < 0:
             raise ValueError("Landmark tag ID must be a non-negative integer")
         with self._lock:
-            if self._landmark_capture is not None:
-                raise RuntimeError("A landmark capture is already active")
+            self._begin_capture_settings()
             if self._landmark_save_config is None:
                 self._landmark_save_config = LandmarkSaveConfig.from_node(self.node)
             if self._localization_quality_config is None:
@@ -252,11 +265,106 @@ class NavigationSetupStateSource:
             self._visible_tags.clear()
             self._visible_tags_received_at = None
             capture = _LandmarkCapture(
-                tag_id, self.node.get_clock().now().nanoseconds,
-                self._monotonic_clock(), self._pose_generation,
+                self.node.get_clock().now().nanoseconds,
+                self._monotonic_clock(), self._pose_generation, tag_id,
             )
             self._landmark_capture = capture
             return capture
+
+    def _begin_capture_settings(self):
+        if self._landmark_capture is not None or self._waypoint_capture is not None:
+            raise RuntimeError("A navigation save capture is already active")
+        if self._maximum_capture_localization_delay_sec is None:
+            key = "navigation.authoring.maximum_localization_delay_sec"
+            if not self.node.has_parameter(key):
+                self.node.declare_parameter(key, 5.0)
+            value = parameter_override(key, self.node.get_parameter(key).value)
+            if type(value) not in (float, int) or not math.isfinite(value) or value <= 0:
+                raise ValueError("Navigation authoring localization delay must be positive and finite")
+            self._maximum_capture_localization_delay_sec = float(value)
+        if self._localization_quality_config is None:
+            self._localization_quality_config = LocalizationQualityConfig.from_node(self.node)
+
+    def begin_waypoint_capture(self):
+        """Wait for localization acquired after this waypoint Save click."""
+        with self._lock:
+            self._begin_capture_settings()
+            capture = _PoseCapture(
+                self.node.get_clock().now().nanoseconds,
+                self._monotonic_clock(), self._pose_generation,
+            )
+            self._waypoint_capture = capture
+            return capture
+
+    def finish_waypoint_capture(self, token):
+        with self._lock:
+            if token is not None and token is self._waypoint_capture:
+                self._waypoint_capture = None
+
+    def waypoint_capture_pose(self, token):
+        """Read a qualified current robot pose, keeping transient failures pending."""
+        with self._lock:
+            self._require_waypoint_capture(token)
+            try:
+                self._require_capture_localization(token)
+                # Keep the lock across the shared TF read and its generation
+                # checks so a cancelled capture cannot publish a late result.
+                pose = self.current_pose()
+                self._require_waypoint_capture(token)
+                return pose
+            except (TypeError, ValueError) as exception:
+                # Map/clock/identity changes are terminal, not availability gaps.
+                self._require_waypoint_capture(token)
+                raise NavigationObservationPending(str(exception)) from exception
+
+    def _require_waypoint_capture(self, token):
+        if token is None or token is not self._waypoint_capture:
+            raise ValueError("No matching waypoint capture is active")
+        self._require_capture_context(token, "waypoint")
+
+    def _require_capture_context(self, capture, kind):
+        if capture.pose_generation != self._pose_generation:
+            raise ValueError(f"Map or clock changed during {kind} capture; start a new capture")
+        if (self._monotonic_clock() < capture.started_at
+                or self.node.get_clock().now().nanoseconds < capture.started_ros_ns):
+            raise ValueError(f"Clock changed during {kind} capture; start a new capture")
+
+    def _localization_arrival_limit(self, stamp_ns):
+        capture = self._landmark_capture or self._waypoint_capture
+        if (capture is not None and capture.pose_generation == self._pose_generation
+                and stamp_ns > capture.started_ros_ns):
+            return self._maximum_capture_localization_delay_sec
+        return self.maximum_pose_age_sec
+
+    def _capture_quality_error(self, message, received_ros_ns):
+        # Covariance validation is unchanged. Processing delay has its own
+        # request-scoped bound; maximum_age_sec still bounds gaps in the stream.
+        return localization_quality_error(
+            message, received_ros_ns,
+            replace(self._localization_quality_config,
+                    maximum_age_sec=self._maximum_capture_localization_delay_sec),
+        )
+
+    def _require_capture_localization(self, capture):
+        if (self._localization_stamp_ns is None
+                or self._localization_stamp_ns <= capture.started_ros_ns):
+            detail = "Waiting for localization acquired after Save was requested"
+            if self._localization_error:
+                detail += f"; {self._localization_error}"
+            raise ValueError(detail)
+        self._require_live_localization()
+        if (self._monotonic_clock() - self._localization_received_at
+                > self._localization_quality_config.maximum_age_sec
+                or not 0 <= self.node.get_clock().now().nanoseconds - self._localization_received_ros_ns
+                <= self._localization_quality_config.maximum_age_sec * 1e9):
+            raise ValueError("Cannot save: localization estimate is stale")
+        if self._landmark_localization is None:
+            raise ValueError(self._localization_error or "Wait for a valid localization estimate")
+        error = self._capture_quality_error(
+            self._landmark_localization, self._localization_received_ros_ns,
+        )
+        if error:
+            raise ValueError(f"Cannot save: {error}")
 
     def finish_landmark_capture(self, token):
         """Release this capture without cancelling a newer request."""
@@ -275,11 +383,7 @@ class NavigationSetupStateSource:
             raise ValueError("No landmark capture is active")
         if tag_id != capture.tag_id:
             raise ValueError("Tag does not match the active landmark capture")
-        if capture.pose_generation != self._pose_generation:
-            raise ValueError("Map or clock changed during landmark capture; start a new capture")
-        if (self._monotonic_clock() < capture.started_at
-                or self.node.get_clock().now().nanoseconds < capture.started_ros_ns):
-            raise ValueError("Clock changed during landmark capture; start a new capture")
+        self._require_capture_context(capture, "landmark")
         return capture
 
     def visible_tag_pose(self, tag_id: int):
@@ -337,26 +441,10 @@ class NavigationSetupStateSource:
         if self._localization_quality_config is None:
             self._localization_quality_config = LocalizationQualityConfig.from_node(self.node)
         try:
-            self._require_live_localization()
             capture = self._landmark_capture
-            if (capture is None or self._localization_stamp_ns is None
-                    or self._localization_stamp_ns <= capture.started_ros_ns):
-                raise ValueError("Waiting for localization acquired after Save was requested")
-            if (self._monotonic_clock() - self._localization_received_at
-                    > self._localization_quality_config.maximum_age_sec
-                    or self._localization_received_ros_ns is None
-                    or not 0 <= self.node.get_clock().now().nanoseconds - self._localization_received_ros_ns
-                    <= self._localization_quality_config.maximum_age_sec * 1e9):
-                raise ValueError("Cannot save landmark: localization estimate is stale")
-            if self._landmark_localization is None:
-                raise ValueError(self._localization_error or "Wait for a valid localization estimate")
-            error = localization_quality_error(
-                self._landmark_localization,
-                self._localization_received_ros_ns,
-                self._localization_quality_config,
-            )
-            if error:
-                raise ValueError(f"Cannot save landmark: {error}")
+            if capture is None:
+                raise ValueError("No landmark capture is active")
+            self._require_capture_localization(capture)
         except ValueError:
             self._reset_landmark_health()
             raise
@@ -394,12 +482,14 @@ class NavigationSetupStateSource:
             try:
                 if message.header.frame_id != "map":
                     raise ValueError("Localization estimate must use the map frame")
-                if stamp_ns <= 0 or now_ns <= 0 or age_sec < 0:
+                if (stamp_ns <= 0 or now_ns <= 0 or age_sec < 0
+                        or not 0 <= message.header.stamp.nanosec < 1_000_000_000):
                     raise ValueError("Localization estimate has an invalid or future timestamp")
-                if age_sec > self.maximum_pose_age_sec:
+                arrival_limit = self._localization_arrival_limit(stamp_ns)
+                if age_sec > arrival_limit:
                     raise ValueError(
                         f"Localization estimate arrived {age_sec:.2f} seconds old; "
-                        f"maximum is {self.maximum_pose_age_sec:g} seconds"
+                        f"maximum is {arrival_limit:g} seconds"
                     )
                 if stamp_ns < self._minimum_pose_stamp_ns:
                     raise ValueError("Wait for a localization estimate acquired after the map change")
@@ -417,9 +507,8 @@ class NavigationSetupStateSource:
                 # Validate acquisition delay at receipt, then track the gap
                 # between processed updates. Counting RTAB-Map's processing
                 # delay again here would reset healthy capture windows each tick.
-                previous_error = localization_quality_error(
+                previous_error = self._capture_quality_error(
                     self._landmark_localization, self._localization_received_ros_ns,
-                    self._localization_quality_config,
                 )
                 if (previous_error or self._localization_received_at is None
                         or not 0 <= received_at - self._localization_received_at
@@ -429,9 +518,7 @@ class NavigationSetupStateSource:
                         or not 0 <= now_ns - self._localization_received_ros_ns
                         <= self._localization_quality_config.maximum_age_sec * 1e9):
                     self._reset_landmark_health()
-                if localization_quality_error(
-                    message, now_ns, self._localization_quality_config,
-                ):
+                if self._capture_quality_error(message, now_ns):
                     self._reset_landmark_health()
                 elif self._landmark_healthy_since_ns is None:
                     self._landmark_healthy_since_ns = stamp_ns

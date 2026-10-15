@@ -1,6 +1,7 @@
 """Map-specific navigation and localization metadata models."""
 
 from dataclasses import dataclass, field
+import math
 from typing import Any, Dict, List, Optional, Set
 
 from fault_detector_spot.inspection.model.models import (
@@ -59,6 +60,45 @@ class Waypoint:
 
 
 @dataclass
+class LandmarkRefinement:
+    """Retain the saved anchor and the history of accepted small refinements."""
+
+    original_pose_map: PoseData
+    update_count: int
+    last_refined_at: float
+    last_observation_ns: int
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LandmarkRefinement":
+        data = _require_dict(data, "landmark_refinement")
+        return cls(
+            original_pose_map=PoseData.from_dict(data["original_pose_map"]),
+            update_count=data["update_count"],
+            last_refined_at=data["last_refined_at"],
+            last_observation_ns=data["last_observation_ns"],
+        )
+
+    def validate(self) -> None:
+        self.original_pose_map.validate()
+        if type(self.update_count) is not int or self.update_count < 1:
+            raise ValueError("Landmark refinement update count must be a positive integer")
+        if (isinstance(self.last_refined_at, bool)
+                or not isinstance(self.last_refined_at, (int, float))
+                or not math.isfinite(self.last_refined_at) or self.last_refined_at <= 0):
+            raise ValueError("Landmark refinement time must be positive finite UTC seconds")
+        if type(self.last_observation_ns) is not int or self.last_observation_ns <= 0:
+            raise ValueError("Landmark refinement observation must have a positive timestamp")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "original_pose_map": self.original_pose_map.to_dict(),
+            "update_count": self.update_count,
+            "last_refined_at": self.last_refined_at,
+            "last_observation_ns": self.last_observation_ns,
+        }
+
+
+@dataclass
 class LocalizationLandmark:
     """Map-relative AprilTag used only for localization."""
 
@@ -66,6 +106,7 @@ class LocalizationLandmark:
     display_name: str
     reference_tag: ReferenceTag
     pose_map: PoseData
+    refinement: Optional[LandmarkRefinement] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LocalizationLandmark":
@@ -75,6 +116,8 @@ class LocalizationLandmark:
             display_name=str(data["display_name"]),
             reference_tag=ReferenceTag.from_dict(data["reference_tag"]),
             pose_map=PoseData.from_dict(data["pose_map"]),
+            refinement=(LandmarkRefinement.from_dict(data["refinement"])
+                        if data.get("refinement") is not None else None),
         )
 
     def validate(self) -> None:
@@ -82,14 +125,19 @@ class LocalizationLandmark:
         _require_text(self.display_name, "Landmark display name")
         self.reference_tag.validate()
         self.pose_map.validate()
+        if self.refinement is not None:
+            self.refinement.validate()
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "landmark_id": self.landmark_id,
             "display_name": self.display_name,
             "reference_tag": self.reference_tag.to_dict(),
             "pose_map": self.pose_map.to_dict(),
         }
+        if self.refinement is not None:
+            data["refinement"] = self.refinement.to_dict()
+        return data
 
 
 @dataclass

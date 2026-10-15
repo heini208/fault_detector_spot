@@ -170,6 +170,15 @@ class ApplicationApiNode(Node):
             finish_landmark_capture=(
                 lambda capture: self.navigation_setup_state.finish_landmark_capture(capture)
             ),
+            begin_waypoint_capture=(
+                lambda: self.navigation_setup_state.begin_waypoint_capture()
+            ),
+            waypoint_capture_pose=(
+                lambda capture: self.navigation_setup_state.waypoint_capture_pose(capture)
+            ),
+            finish_waypoint_capture=(
+                lambda capture: self.navigation_setup_state.finish_waypoint_capture(capture)
+            ),
         )
         self.navigation_setup_state = NavigationSetupStateSource(
             self,

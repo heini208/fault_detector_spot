@@ -20,6 +20,7 @@ from fault_detector_spot.navigation.behaviours.landmark_relocalizer import (
     LandmarkRecoveryConfig, LandmarkRelocalizer,
 )
 from fault_detector_spot.navigation.localization_quality import LocalizationQualityConfig
+from fault_detector_spot.navigation.landmark_refinement import LandmarkRefinementConfig
 from fault_detector_spot.shared.geometry.models import PoseData
 from fault_detector_spot.shared.geometry.transforms import pose_to_matrix
 
@@ -118,7 +119,7 @@ def registration(stamp, *, accepted=True):
 
 
 @pytest.fixture
-def rig(tmp_path):
+def rig(tmp_path, request):
     clock = [10.0]
     steady = [100.0]
     node = Mock()
@@ -126,7 +127,7 @@ def rig(tmp_path):
     publisher = Mock()
     node.create_publisher.return_value = publisher
     runtime = SimpleNamespace(
-        process=object(), get_running_mode=lambda: "localization", maps_dir=tmp_path,
+        process=None, get_running_mode=lambda: "localization", maps_dir=tmp_path,
         localization_frame="feet_center",
     )
     repository = MapRepository(tmp_path)
@@ -142,10 +143,13 @@ def rig(tmp_path):
     behavior = LandmarkRelocalizer(
         runtime, buffer, repository, node, config=config,
         quality_config=LocalizationQualityConfig(), monotonic_clock=lambda: steady[0],
+        refinement_config=getattr(request, "param", LandmarkRefinementConfig(enabled=False)),
+        wall_clock=lambda: 1_700_000_000.0 + steady[0],
     )
     blackboard = Blackboard()
     behavior.blackboard = blackboard
     behavior.setup()
+    runtime.process = object()
     assert behavior.update() == py_trees.common.Status.SUCCESS
 
     def advance(seconds=0.25, *, ros=True):

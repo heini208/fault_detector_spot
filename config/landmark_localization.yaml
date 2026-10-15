@@ -9,6 +9,10 @@
     navigation.localization_quality.maximum_position_std_m: 0.30
     navigation.localization_quality.maximum_yaw_std_rad: 0.17453292519943295  # 10 deg
 
+    # On-demand waypoint/landmark saves may wait for slower processed results,
+    # but only from scans acquired after Save. Stream/TF freshness stays 1.5 s.
+    navigation.authoring.maximum_localization_delay_sec: 5.0
+
     # Save only fresh map poses from distinct captures while localization is
     # healthy. A moved tag must be saved again from a known-good localization.
     navigation.landmark_save.required_samples: 3
@@ -16,6 +20,27 @@
     navigation.landmark_save.maximum_position_spread_m: 0.05
     navigation.landmark_save.maximum_rotation_spread_rad: 0.08726646259971647  # 5 deg
     navigation.landmark_save.maximum_observation_age_sec: 1.5
+
+    # Refine only against a fixed map while idle/stationary, from fresh accepted
+    # lidar-map registrations. Any initialpose seed blocks refinement for that
+    # map/runtime session. Preserve the original pose and bound lifetime drift.
+    navigation.landmark_refinement.enabled: true
+    navigation.landmark_refinement.required_samples: 5
+    navigation.landmark_refinement.maximum_sample_span_sec: 6.0
+    navigation.landmark_refinement.maximum_position_spread_m: 0.03
+    navigation.landmark_refinement.maximum_rotation_spread_rad: 0.05235987755982989  # 3 deg
+    navigation.landmark_refinement.maximum_observation_distance_m: 2.5
+    navigation.landmark_refinement.maximum_localization_position_std_m: 0.10
+    navigation.landmark_refinement.maximum_localization_yaw_std_rad: 0.05235987755982989  # 3 deg
+    navigation.landmark_refinement.gain: 0.10
+    navigation.landmark_refinement.maximum_step_position_m: 0.01
+    navigation.landmark_refinement.maximum_step_rotation_rad: 0.008726646259971648  # 0.5 deg
+    navigation.landmark_refinement.maximum_discrepancy_position_m: 0.15
+    navigation.landmark_refinement.maximum_discrepancy_rotation_rad: 0.17453292519943295  # 10 deg
+    navigation.landmark_refinement.maximum_cumulative_position_m: 0.05
+    navigation.landmark_refinement.maximum_cumulative_rotation_rad: 0.05235987755982989  # 3 deg
+    navigation.landmark_refinement.minimum_interval_sec: 60.0
+    navigation.landmark_refinement.encounter_absence_sec: 5.0
 
     # Monitor continuously in localization mode. RTAB-Map consumes initialpose
     # as a reset at its next scan, so issue corrections only when stationary

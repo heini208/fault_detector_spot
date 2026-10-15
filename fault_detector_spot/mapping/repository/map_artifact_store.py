@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Iterable, Union
 
+from fault_detector_spot.mapping.repository.map_repository import map_mutation_lock
 from fault_detector_spot.shared.persistence.file_storage import (
     validate_storage_name,
 )
@@ -27,12 +28,13 @@ class MapArtifactStore:
 
     def delete(self, map_id: str) -> tuple:
         """Delete every file belonging to one map and return its paths."""
-        paths = tuple(self.paths(map_id))
-        if not paths:
-            raise FileNotFoundError(f"Map does not exist: {map_id}")
-        for path in paths:
-            path.unlink()
-        return paths
+        with map_mutation_lock(self.maps_dir, map_id):
+            paths = tuple(self.paths(map_id))
+            if not paths:
+                raise FileNotFoundError(f"Map does not exist: {map_id}")
+            for path in paths:
+                path.unlink()
+            return paths
 
 
 __all__ = ["MapArtifactStore"]

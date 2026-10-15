@@ -20,6 +20,7 @@ from fault_detector_spot.shared.persistence.runtime_paths import (
     default_recording_root,
 )
 from fault_detector_spot.shared.ros.moveit_console import install_moveit_console_throttle
+from fault_detector_spot.shared.ros.nav2_console import install_nav2_console_throttle
 
 
 def _moveit_sensor_parameters(sensor_config, moveit_pkg):
@@ -147,6 +148,7 @@ def generate_launch_description():
             description="micro-ROS Agent log verbosity (0-6)",
         ),
         OpaqueFunction(function=install_moveit_console_throttle),
+        OpaqueFunction(function=install_nav2_console_throttle),
         GroupAction([
             *_moveit_sensor_parameters(moveit_sensors_config, moveit_pkg),
             SetParameter("use_sim_time", use_sim_time),

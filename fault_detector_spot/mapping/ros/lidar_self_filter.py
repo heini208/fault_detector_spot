@@ -1,4 +1,6 @@
+from array import array
 import math
+import time
 from typing import Sequence
 
 import numpy as np
@@ -47,7 +49,12 @@ def point_cloud_like(message, points):
     output.is_bigendian = False
     output.point_step = 12
     output.row_step = output.width * output.point_step
-    output.data = points.tobytes()
+    # ROS's sequence setter otherwise checks every byte twice in Python. Use
+    # the same bulk byte-array path as sensor_msgs_py.point_cloud2.create_cloud.
+    data = array("B")
+    if points.size:
+        data.frombytes(memoryview(points).cast("B"))
+    output.data = data
     output.is_dense = bool(np.isfinite(points).all())
     return output
 
@@ -250,9 +257,11 @@ class LidarSelfFilter(Node):
                 raise ValueError(f"Point cloud field {name} is unsupported")
 
     def cloud_callback(self, message: PointCloud2) -> None:
+        started = time.monotonic()
         try:
             self.validate_cloud(message)
             stamp = self.check_acquisition_time(message, "input")
+            input_age_sec = (self.get_clock().now().nanoseconds - stamp.nanoseconds) / 1e9
             arm_box = self.get_arm_box()
             transform = self.tf_buffer.lookup_transform(
                 self.base_frame,
@@ -263,6 +272,7 @@ class LidarSelfFilter(Node):
         except Exception as exception:
             self.warn_throttled(str(exception))
             return
+        body_ready = time.monotonic()
 
         sensor_points = np.frombuffer(
             message.data,
@@ -294,12 +304,17 @@ class LidarSelfFilter(Node):
         try:
             self.check_acquisition_time(output, "filtered output")
         except (ValueError, TypeError) as exception:
-            self.warn_throttled(str(exception))
+            self.warn_throttled(
+                f"{exception} (input_age={input_age_sec:.3f} s, "
+                f"processing={time.monotonic() - started:.3f} s)"
+            )
             return
         self.cloud_publisher.publish(output)
+        filtered_ready = time.monotonic()
         # Mapping keeps the full scan. Only Nav2 marking excludes the floor;
         # its clearing source still receives the physical ground ray endpoints.
-        self.publish_obstacles(output, filtered_points)
+        obstacle_published = self.publish_obstacles(output, filtered_points)
+        obstacles_ready = time.monotonic()
 
         now_ns = self.get_clock().now().nanoseconds
 
@@ -307,7 +322,11 @@ class LidarSelfFilter(Node):
             self.get_logger().info(
                 f"LiDAR filter: input={message.width}, "
                 f"removed={int(np.count_nonzero(excluded))}, "
-                f"output={output.width}"
+                f"output={output.width}, input_age={input_age_sec:.3f} s, "
+                f"body_tf={body_ready - started:.3f} s, "
+                f"filter={filtered_ready - body_ready:.3f} s, "
+                f"obstacles={obstacles_ready - filtered_ready:.3f} s, "
+                f"obstacles_published={bool(obstacle_published)}"
             )
             self.last_stats_ns = now_ns
 
@@ -340,13 +359,15 @@ class LidarSelfFilter(Node):
             selected = obstacle_points(
                 points, transform, self.minimum_obstacle_height, self.maximum_obstacle_height,
             )
+            output = point_cloud_like(message, selected)
             self.check_acquisition_time(message, "obstacle output")
         except (tf2_ros.TransformException, ValueError, TypeError) as exception:
             # Do not claim an empty, clear scene when ground TF is unavailable.
             # Nav2's marking observation deadline then makes the costmap stale.
             self.warn_throttled(f"Skipping obstacle cloud: {exception}")
-            return
-        self.obstacle_publisher.publish(point_cloud_like(message, selected))
+            return False
+        self.obstacle_publisher.publish(output)
+        return True
 
     def publish_arm_marker(self) -> None:
         if not bool(self.get_parameter("publish_markers").value):
