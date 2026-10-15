@@ -1,6 +1,7 @@
 """Offline recovery supervision with timestamped TF and real map metadata."""
 
 from copy import deepcopy
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -21,6 +22,7 @@ from fault_detector_spot.navigation.behaviours.landmark_relocalizer import (
 )
 from fault_detector_spot.navigation.localization_quality import LocalizationQualityConfig
 from fault_detector_spot.navigation.landmark_refinement import LandmarkRefinementConfig
+from fault_detector_spot.navigation.ros.landmark_feedback import LandmarkFeedbackEvent
 from fault_detector_spot.shared.geometry.models import PoseData
 from fault_detector_spot.shared.geometry.transforms import pose_to_matrix
 
@@ -70,7 +72,9 @@ class TimestampedTF:
         result = TransformStamped()
         result.header.frame_id = "wrong" if self.invalid_frame else target
         result.child_frame_id = source
-        result.header.stamp = Time(seconds=when + delta).to_msg()
+        # Preserve nanoseconds exactly for acquisition-time lookups; converting
+        # through float seconds can shift the reported timestamp by one ns.
+        result.header.stamp = stamp.to_msg() if not current and delta == 0.0 else Time(seconds=when + delta).to_msg()
         result.transform.translation.x = self.position if current else self.history.get(stamp.nanoseconds, self.position)
         result.transform.translation.z = self.frame_heights[source]
         result.transform.rotation.w = 1.0
@@ -125,7 +129,8 @@ def rig(tmp_path, request):
     node = Mock()
     node.get_clock.return_value.now.side_effect = lambda: Time(seconds=clock[0])
     publisher = Mock()
-    node.create_publisher.return_value = publisher
+    events = Mock()
+    node.create_publisher.side_effect = lambda _type, topic, _qos: publisher if topic == "/initialpose" else events
     runtime = SimpleNamespace(
         process=None, get_running_mode=lambda: "localization", maps_dir=tmp_path,
         localization_frame="feet_center",
@@ -139,6 +144,7 @@ def rig(tmp_path, request):
         maximum_position_spread_m=0.02, settle_time_sec=0.2,
         retry_interval_sec=1.0, maximum_attempts=2,
         recovery_position_tolerance_m=0.1, stationary_duration_sec=0.2,
+        uncertain_duration_sec=0.5,
     )
     behavior = LandmarkRelocalizer(
         runtime, buffer, repository, node, config=config,
@@ -160,7 +166,7 @@ def rig(tmp_path, request):
     def tick():
         assert behavior.update() == py_trees.common.Status.SUCCESS
 
-    def sample(*, seconds=0.25, variance=0.5, mismatch=0.0, frame="body", info=None, move=0.0, tag_z=0.0):
+    def sample(*, seconds=0.25, variance=9999.0, mismatch=0.0, frame="body", info=None, move=0.0, tag_z=0.0):
         advance(seconds)
         buffer.position += move
         stamp_ns = Time(seconds=clock[0]).nanoseconds
@@ -186,19 +192,30 @@ def rig(tmp_path, request):
     yield SimpleNamespace(
         behavior=behavior, bb=blackboard.values, clock=clock, steady=steady,
         runtime=runtime, repo=repository, buffer=buffer, node=node,
-        publisher=publisher, advance=advance, tick=tick, sample=sample, trigger=trigger,
+        publisher=publisher, events=events, advance=advance, tick=tick, sample=sample, trigger=trigger,
     )
     behavior.shutdown()
 
 
-@pytest.mark.parametrize("variance,mismatch", [(0.5, 0.0), (0.01, 1.0)])
-def test_uncertainty_or_confident_landmark_disagreement_requests_correction(rig, variance, mismatch):
-    message = rig.trigger(variance=variance, mismatch=mismatch)
+def test_sustained_not_localized_reports_request_correction(rig):
+    message = rig.trigger()
     assert message.header.frame_id == "map"
     assert message.header.stamp == Time(seconds=rig.clock[0]).to_msg()
     assert message.pose.pose.position.x == pytest.approx(0.0)
     assert rig.behavior.attempts == 1
     assert "requested" in rig.behavior.feedback_message
+    event = LandmarkFeedbackEvent.from_message(rig.events.publish.call_args.args[0])
+    assert (event.event, event.map_id, event.tag_id) == ("requested", "map_a", 7)
+    assert "waiting for confirmed" in event.detail
+
+
+def test_confident_landmark_disagreement_never_requests_correction_or_transform_work(rig):
+    rig.buffer.lookup_transform = Mock(wraps=rig.buffer.lookup_transform)
+    for _ in range(20):
+        rig.sample(variance=0.01, mismatch=1.0)
+    rig.publisher.publish.assert_not_called()
+    rig.events.publish.assert_not_called()
+    rig.buffer.lookup_transform.assert_not_called()
 
 
 @pytest.mark.parametrize("reference_frame,expected_seed_height", [("feet_center", 0.0), ("base_link", 0.6)])
@@ -296,7 +313,7 @@ def test_retries_require_new_post_request_tag_captures_and_stop_at_limit(rig):
     for _ in range(8):
         rig.advance()
         rig.bb["visible_tags"] = deepcopy(old_tag)
-        rig.bb["last_pose_estimation"] = localization(rig.clock[0], variance=0.5)
+        rig.bb["last_pose_estimation"] = localization(rig.clock[0], variance=9999.0)
         rig.tick()
     assert rig.publisher.publish.call_count == 1
     rig.trigger()
@@ -306,6 +323,9 @@ def test_retries_require_new_post_request_tag_captures_and_stop_at_limit(rig):
     assert rig.publisher.publish.call_count == 2
     assert "failed after 2 attempts" in rig.behavior.feedback_message
     assert rig.node.get_logger.return_value.warning.call_count == 1
+    events = [LandmarkFeedbackEvent.from_message(call.args[0]) for call in rig.events.publish.call_args_list]
+    assert [event.event for event in events] == ["requested", "requested", "failed"]
+    assert all((event.map_id, event.tag_id) == ("map_a", 7) for event in events)
 
 
 def test_only_matching_accepted_post_correction_estimates_confirm_recovery(rig):
@@ -323,6 +343,8 @@ def test_only_matching_accepted_post_correction_estimates_confirm_recovery(rig):
         assert rig.behavior._healthy_count == expected
         assert rig.behavior.attempts == (0 if expected == 3 else 1)
     assert "healthy" in rig.behavior.feedback_message.lower()
+    events = [LandmarkFeedbackEvent.from_message(call.args[0]) for call in rig.events.publish.call_args_list]
+    assert [event.event for event in events] == ["requested", "confirmed"]
 
 
 def test_interleaved_pose_then_matching_info_preserves_confirmation_progress(rig):
@@ -342,13 +364,67 @@ def test_interleaved_pose_then_matching_info_preserves_confirmation_progress(rig
     assert rig.behavior.attempts == 0
 
 
-def test_missing_registration_evidence_cannot_postpone_retries_forever(rig):
+@pytest.mark.parametrize("evidence", ["missing", "rejected", "disagreement", "missing_tf"])
+def test_confident_localization_suppresses_retries_even_without_confirmation(rig, evidence):
     rig.trigger()
+    rig.buffer.unavailable = evidence == "missing_tf"
     for _ in range(16):
-        rig.sample(variance=0.01)
-    assert rig.publisher.publish.call_count == 2
-    assert rig.behavior.attempts == 2
-    assert "failed after 2 attempts" in rig.behavior.feedback_message
+        rig.sample(variance=0.01, info=False if evidence == "rejected" else None,
+                   mismatch=1.0 if evidence == "disagreement" else 0.0)
+    rig.publisher.publish.assert_called_once()
+    assert rig.behavior.attempts == 1
+    assert "confident" in rig.behavior.feedback_message.lower()
+    rig.node.get_logger.return_value.warning.assert_not_called()
+
+
+def test_brief_uncertainty_and_replayed_estimates_do_not_satisfy_duration(rig):
+    rig.behavior.config = replace(rig.behavior.config, uncertain_duration_sec=2.0)
+    for _ in range(6):
+        rig.sample(seconds=0.1)
+    for _ in range(6):
+        rig.advance(0.2)
+        rig.bb["visible_tags"] = {7: tag(rig.clock[0])}
+        rig.tick()
+    rig.publisher.publish.assert_not_called()
+    # A good estimate breaks the low-confidence run completely.
+    rig.sample(variance=0.01)
+    for _ in range(8):
+        rig.sample()
+    rig.publisher.publish.assert_not_called()
+    rig.sample()
+    rig.publisher.publish.assert_called_once()
+    assert rig.behavior._uncertain_count == 0
+
+
+@pytest.mark.parametrize("fault", ["absent", "stale", "future", "zero", "partial_unknown", "non_psd", "frame"])
+def test_invalid_localization_is_not_a_reason_for_landmark_recovery(rig, fault):
+    rig.sample()
+    rig.sample()
+    for _ in range(16):
+        rig.advance()
+        pose = localization(rig.clock[0], variance=0.5)
+        if fault == "absent":
+            pose = None
+        elif fault in ("stale", "future"):
+            pose.header.stamp = Time(seconds=rig.clock[0] + (0.1 if fault == "future" else -5.1)).to_msg()
+        elif fault == "zero":
+            pose.pose.covariance = [0.0] * 36
+        elif fault == "partial_unknown":
+            pose.pose.covariance[0] = 9999.0
+        elif fault == "non_psd":
+            pose.pose.covariance[1] = pose.pose.covariance[6] = 1.0
+        else:
+            pose.header.frame_id = "odom"
+        rig.bb["last_pose_estimation"] = pose
+        rig.bb["visible_tags"] = {7: tag(rig.clock[0])}
+        rig.tick()
+    rig.publisher.publish.assert_not_called()
+    assert rig.behavior._uncertain_count == 0
+
+
+def test_explicit_rtabmap_not_localized_report_can_request_recovery(rig):
+    rig.trigger(variance=9999.0)
+    rig.publisher.publish.assert_called_once()
 
 
 def test_rejected_registration_breaks_consecutive_confirmation(rig):
@@ -384,7 +460,7 @@ def test_conflicting_visible_landmarks_withhold_recovery(rig):
         rig.bb["visible_tags"] = {
             7: tag(rig.clock[0]), 8: tag(rig.clock[0], tag_id=8),
         }
-        rig.bb["last_pose_estimation"] = localization(rig.clock[0], variance=0.5)
+        rig.bb["last_pose_estimation"] = localization(rig.clock[0], variance=9999.0)
         rig.tick()
     rig.publisher.publish.assert_not_called()
     assert "Conflicting landmarks" in rig.behavior.feedback_message
@@ -420,7 +496,7 @@ def test_ros_clock_pause_does_not_keep_tag_and_localization_producers_live(rig):
 def test_invalid_observation_or_capture_tf_never_requests_correction(rig, fault):
     for _ in range(8):
         rig.advance()
-        rig.bb["last_pose_estimation"] = localization(rig.clock[0], variance=0.5)
+        rig.bb["last_pose_estimation"] = localization(rig.clock[0], variance=9999.0)
         observation = tag(rig.clock[0])
         if fault in ("stale", "future", "zero"):
             when = {"stale": rig.clock[0] - 2.0, "future": rig.clock[0] + 0.1, "zero": 0.0}[fault]

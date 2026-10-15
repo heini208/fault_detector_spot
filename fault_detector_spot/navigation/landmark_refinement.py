@@ -18,7 +18,7 @@ from fault_detector_spot.shared.persistence.basic_settings import parameter_over
 class LandmarkRefinementConfig:
     enabled: bool = True
     required_samples: int = 5
-    maximum_sample_span_sec: float = 6.0
+    maximum_sample_span_sec: float = 30.0
     maximum_position_spread_m: float = 0.03
     maximum_rotation_spread_rad: float = math.radians(3.0)
     maximum_observation_distance_m: float = 2.5
@@ -31,7 +31,9 @@ class LandmarkRefinementConfig:
     maximum_discrepancy_rotation_rad: float = math.radians(10.0)
     maximum_cumulative_position_m: float = 0.05
     maximum_cumulative_rotation_rad: float = math.radians(3.0)
-    minimum_interval_sec: float = 60.0
+    minimum_interval_sec: float = 300.0
+    attempt_interval_sec: float = 300.0
+    sample_interval_sec: float = 0.5
     encounter_absence_sec: float = 5.0
 
     def __post_init__(self):
@@ -83,6 +85,7 @@ class _TagRefinement:
     last_commit_at: float | None = None
     last_tag_stamp_ns: int = 0
     last_registration_stamp_ns: int = 0
+    last_attempt_at: float | None = None
     anchor_signature: tuple | None = None
     proposal: PoseData | None = None
 
@@ -92,13 +95,20 @@ class LandmarkRefiner:
 
     Each sample must already have passed independent localization, observation
     quality, timestamp-alignment and range checks. This policy is a bounded
-    heuristic, not a covariance estimator. Only commit() consumes an encounter.
+    heuristic, not a covariance estimator. A committed adjustment or qualified
+    agreement consumes the encounter.
     """
 
     def __init__(self, config=None):
         self.config = config if config is not None else LandmarkRefinementConfig()
         self._tags = {}
         self._last_time = None
+        self._attempt_tag_id = None
+        self._attempt_started_at = None
+        self._last_attempt_at = None
+        self._last_sample_at = None
+        self._last_stationarity_sample_at = None
+        self._reserved_sample = None
         self.detail = "Waiting for independent landmark observations"
 
     @staticmethod
@@ -122,14 +132,21 @@ class LandmarkRefiner:
         state.proposal = None
 
     def reset_observations(self):
-        """Drop uncommitted evidence without rearming a used encounter."""
+        """Drop evidence without restarting the attempt or its cooldown."""
         for state in self._tags.values():
             self._clear_burst(state)
+        self._reserved_sample = None
 
     def reset_context(self):
         """Discard policy state after changing map or localization process."""
         self._tags.clear()
         self._last_time = None
+        self._attempt_tag_id = None
+        self._attempt_started_at = None
+        self._last_attempt_at = None
+        self._last_sample_at = None
+        self._last_stationarity_sample_at = None
+        self._reserved_sample = None
         self.detail = "Waiting for independent landmark observations"
 
     def observe_visibility(self, visible_ids, steady_now):
@@ -156,6 +173,128 @@ class LandmarkRefiner:
                     state.absent_since = steady_now
                 state.visible = False
                 self._clear_burst(state)
+                if self._reserved_sample is not None and self._reserved_sample[0] == tag_id:
+                    self._reserved_sample = None
+
+    def _end_attempt(self):
+        if self._attempt_tag_id is not None:
+            self._clear_burst(self._tags[self._attempt_tag_id])
+        self._attempt_tag_id = None
+        self._attempt_started_at = None
+        self._last_sample_at = None
+        self._last_stationarity_sample_at = None
+        self._reserved_sample = None
+
+    def _expire_attempt(self, steady_now):
+        if (self._attempt_started_at is not None
+                and steady_now - self._attempt_started_at >= self.config.maximum_sample_span_sec):
+            self._end_attempt()
+
+    @property
+    def attempt_tag_id(self):
+        """Tag selected for the bounded attempt, or None between attempts."""
+        return self._attempt_tag_id
+
+    def stationarity_sample_due(self, steady_now):
+        """Reserve a current-odometry check independently of registration rate.
+
+        The caller still supplies current confidence, command and range gates.
+        This slot never starts or extends an attempt, consumes geometry stamps,
+        or resets the cooldown.
+        """
+        self._validate_time(steady_now)
+        if self._last_time is not None and steady_now < self._last_time:
+            self.reset_observations()
+            self.detail = "Refinement clock regressed"
+            return False
+        self._last_time = steady_now
+        self._expire_attempt(steady_now)
+        if not self.config.enabled or self._attempt_tag_id is None:
+            return False
+        if not self._tags[self._attempt_tag_id].visible:
+            return False
+        if (self._last_stationarity_sample_at is not None
+                and steady_now - self._last_stationarity_sample_at < self.config.sample_interval_sec):
+            return False
+        self._last_stationarity_sample_at = steady_now
+        return True
+
+    def begin_samples(self, observations, steady_now):
+        """Reserve at most one sample before the caller does quality/TF work.
+
+        ``observations`` maps eligible visible tag IDs to (tag, registration)
+        acquisition stamps. A reservation consumes its stamps and sampling slot
+        even when subsequent quality or TF checks fail. Failed attempts remain
+        bounded by the same deadline and interval as successful attempts.
+        """
+        self._validate_time(steady_now)
+        self._reserved_sample = None
+        if self._last_time is not None and steady_now < self._last_time:
+            self.reset_observations()
+            self.detail = "Refinement clock regressed"
+            return set()
+        self._last_time = steady_now
+        self._expire_attempt(steady_now)
+        if not self.config.enabled:
+            self.detail = "Refinement disabled"
+            return set()
+        eligible = []
+        for tag_id, stamps in observations.items():
+            self._validate_tag_id(tag_id)
+            if len(stamps) != 2 or any(type(stamp) is not int or stamp <= 0 for stamp in stamps):
+                raise ValueError("Refinement acquisition stamps must be positive integers")
+            state = self._state(tag_id)
+            if not state.visible:
+                self.detail = "Refinement tag not visible"
+                continue
+            if state.encounter_used:
+                self.detail = "Landmark already refined during this encounter"
+                continue
+            if (state.last_commit_at is not None
+                    and steady_now - state.last_commit_at < self.config.minimum_interval_sec):
+                self.detail = "Waiting for landmark refinement interval"
+                continue
+            if stamps[0] < state.last_tag_stamp_ns or stamps[1] < state.last_registration_stamp_ns:
+                self._clear_burst(state)
+                self.detail = "Refinement acquisition timestamps regressed"
+                continue
+            if stamps[0] == state.last_tag_stamp_ns or stamps[1] == state.last_registration_stamp_ns:
+                self.detail = "Waiting for a new tag capture and accepted registration"
+                continue
+            eligible.append(tag_id)
+        if not eligible:
+            return set()
+        if self._attempt_tag_id is None:
+            if (self._last_attempt_at is not None
+                    and steady_now - self._last_attempt_at < self.config.attempt_interval_sec):
+                self.detail = "Waiting for landmark refinement attempt interval"
+                return set()
+            # Rotate through visible candidates instead of starving later IDs
+            # when one landmark repeatedly fails its geometry/quality checks.
+            tag_id = min(eligible, key=lambda value: (
+                self._tags[value].last_attempt_at
+                if self._tags[value].last_attempt_at is not None else -math.inf, value,
+            ))
+            self._attempt_tag_id = tag_id
+            self._attempt_started_at = self._last_attempt_at = steady_now
+            self._tags[tag_id].last_attempt_at = steady_now
+            self._clear_burst(self._tags[tag_id])
+        elif self._attempt_tag_id not in eligible:
+            return set()
+        if (self._last_stationarity_sample_at is not None
+                and steady_now - self._last_stationarity_sample_at < self.config.sample_interval_sec):
+            return set()
+        if (self._last_sample_at is not None
+                and steady_now - self._last_sample_at < self.config.sample_interval_sec):
+            return set()
+        tag_id = self._attempt_tag_id
+        tag_stamp_ns, registration_stamp_ns = observations[tag_id]
+        state = self._tags[tag_id]
+        state.last_tag_stamp_ns = tag_stamp_ns
+        state.last_registration_stamp_ns = registration_stamp_ns
+        self._last_sample_at = steady_now
+        self._reserved_sample = (tag_id, tag_stamp_ns, registration_stamp_ns, steady_now)
+        return {tag_id}
 
     def observe(
         self, tag_id, tag_stamp_ns, registration_stamp_ns,
@@ -165,10 +304,11 @@ class LandmarkRefiner:
         self._validate_tag_id(tag_id)
         self._validate_time(steady_now)
         state = self._state(tag_id)
-        for stamp in (tag_stamp_ns, registration_stamp_ns):
-            if type(stamp) is not int or stamp <= 0:
-                self._clear_burst(state)
-                raise ValueError("Refinement acquisition stamps must be positive integers")
+        reservation = (tag_id, tag_stamp_ns, registration_stamp_ns, steady_now)
+        if self._reserved_sample != reservation:
+            if tag_id not in self.begin_samples({tag_id: (tag_stamp_ns, registration_stamp_ns)}, steady_now):
+                return None
+        self._reserved_sample = None
         try:
             for pose in (observed_pose, current_pose, original_pose):
                 if not isinstance(pose, PoseData):
@@ -177,37 +317,10 @@ class LandmarkRefiner:
         except (TypeError, ValueError):
             self._clear_burst(state)
             raise
-        if not self.config.enabled or not state.visible:
-            self._clear_burst(state)
-            self.detail = "Refinement disabled or tag not visible"
-            return None
-        if self._last_time is not None and steady_now < self._last_time:
-            self._clear_burst(state)
-            self.detail = "Refinement clock regressed"
-            return None
-        if state.encounter_used:
-            self.detail = "Landmark already refined during this encounter"
-            return None
-        if (state.last_commit_at is not None
-                and steady_now - state.last_commit_at < self.config.minimum_interval_sec):
-            self._clear_burst(state)
-            self.detail = "Waiting for landmark refinement interval"
-            return None
         signature = (current_pose.to_dict(), original_pose.to_dict())
         if state.anchor_signature != signature:
             self._clear_burst(state)
             state.anchor_signature = signature
-        if (tag_stamp_ns < state.last_tag_stamp_ns
-                or registration_stamp_ns < state.last_registration_stamp_ns):
-            self._clear_burst(state)
-            self.detail = "Refinement acquisition timestamps regressed"
-            return None
-        if (tag_stamp_ns == state.last_tag_stamp_ns
-                or registration_stamp_ns == state.last_registration_stamp_ns):
-            self.detail = "Waiting for a new tag capture and accepted registration"
-            return None
-        state.last_tag_stamp_ns = tag_stamp_ns
-        state.last_registration_stamp_ns = registration_stamp_ns
         state.proposal = None
         discrepancy = self._distance(current_pose, observed_pose)
         if (discrepancy[0] > self.config.maximum_discrepancy_position_m
@@ -248,6 +361,8 @@ class LandmarkRefiner:
         actual_step = self._distance(current_pose, proposal)
         if actual_step[0] < 1e-12 and actual_step[1] < 1e-12:
             self.detail = "Landmark already agrees with independent observations"
+            state.encounter_used = True
+            self._end_attempt()
             return None
         state.proposal = proposal
         self.detail = "Bounded landmark refinement ready"
@@ -257,6 +372,7 @@ class LandmarkRefiner:
         """Consume the encounter only after the proposed pose was persisted."""
         self._validate_tag_id(tag_id)
         self._validate_time(steady_now)
+        self._expire_attempt(steady_now)
         state = self._tags.get(tag_id)
         if state is None or state.proposal is None:
             raise ValueError("No landmark refinement proposal is ready to commit")
@@ -264,7 +380,7 @@ class LandmarkRefiner:
             raise ValueError("Refinement clock regressed before commit")
         state.encounter_used = True
         state.last_commit_at = steady_now
-        self._clear_burst(state)
+        self._end_attempt()
 
     @staticmethod
     def _position(pose):

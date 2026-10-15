@@ -11,6 +11,8 @@ from fault_detector_spot.navigation import localization_quality
 from fault_detector_spot.navigation.localization_quality import (
     LocalizationQualityConfig,
     accepted_localization,
+    assess_localization_quality,
+    lidar_localization_result,
     localization_quality_error,
 )
 
@@ -100,6 +102,32 @@ def test_yaw_uncertainty_is_checked_separately():
     assert "yaw uncertainty" in quality_error(message)
 
 
+def test_only_measured_uncertainty_or_exact_not_localized_report_qualifies_for_recovery():
+    def assess(message):
+        return assess_localization_quality(message, 10_000_000_000, LocalizationQualityConfig())
+
+    message = localization_pose()
+    assert assess(message).healthy
+    assert not assess(message).not_localized
+    assert not assess(None).uncertain
+    assert not assess(None).not_localized
+    message.pose.covariance[0] = 0.5
+    assert assess(message).uncertain
+    assert not assess(message).not_localized
+    message.pose.covariance[0] = 9999.0
+    assert not assess(message).uncertain  # A mixed sentinel is not a valid report.
+    assert not assess(message).not_localized
+    for index in (0, 7, 35):
+        message.pose.covariance[index] = 9999.0
+    assert assess(message).uncertain
+    assert assess(message).not_localized
+    assert not assess(message).healthy
+    assert quality_error(message)  # It still cannot qualify for saving/refining.
+    message.pose.covariance[1] = 0.01
+    assert not assess(message).uncertain
+    assert not assess(message).not_localized
+
+
 @pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf")])
 @pytest.mark.parametrize("field", ["maximum_age_sec", "maximum_position_std_m", "maximum_yaw_std_rad"])
 def test_quality_config_rejects_non_positive_and_non_finite(field, value):
@@ -166,3 +194,66 @@ def test_missing_or_invalid_registration_identifiers_are_not_accepted():
     info = registration_info()
     info.loop_closure_id = -1
     assert not accepted_localization(info)
+
+
+def lidar_result(*, loop_id=0, proximity_id=0, rejection=0.0, global_icp=0.0, multi_icp=0.0):
+    return SimpleNamespace(
+        loop_closure_id=loop_id,
+        proximity_detection_id=proximity_id,
+        stats_keys=[
+            "Loop/RejectedHypothesis/",
+            "Proximity/Space_detections_added_icp_global/",
+            "Proximity/Space_detections_added_icp_multi/",
+        ],
+        stats_values=[rejection, global_icp, multi_icp],
+    )
+
+
+@pytest.mark.parametrize("counters", [{"global_icp": 1.0}, {"multi_icp": 1.0}])
+def test_lidar_result_distinguishes_accepted_rejected_and_missing_registrations(counters):
+    assert lidar_localization_result(lidar_result(proximity_id=42, **counters)) is True
+    assert lidar_localization_result(lidar_result(proximity_id=42, rejection=1.0, **counters)) is False
+    assert lidar_localization_result(lidar_result()) is False
+    assert lidar_localization_result(lidar_result(rejection=1.0)) is False
+
+
+@pytest.mark.parametrize("identifiers", [{"loop_id": 42}, {"proximity_id": 42}])
+def test_accepted_registration_without_lidar_evidence_is_not_a_failed_result(identifiers):
+    assert lidar_localization_result(lidar_result(**identifiers)) is None
+
+
+@pytest.mark.parametrize("missing_index", [0, 1, 2])
+def test_missing_or_duplicated_lidar_result_statistics_are_not_failure(missing_index):
+    info = lidar_result()
+    del info.stats_keys[missing_index]
+    del info.stats_values[missing_index]
+    assert lidar_localization_result(info) is None
+    info = lidar_result()
+    info.stats_keys.append(info.stats_keys[missing_index])
+    info.stats_values.append(0.0)
+    assert lidar_localization_result(info) is None
+
+
+@pytest.mark.parametrize("index", [0, 1, 2])
+@pytest.mark.parametrize("value", [-1.0, float("nan"), float("inf"), True, None])
+def test_invalid_lidar_result_statistics_are_not_failure(index, value):
+    info = lidar_result()
+    info.stats_values[index] = value
+    assert lidar_localization_result(info) is None
+
+
+@pytest.mark.parametrize("field", ["loop_closure_id", "proximity_detection_id"])
+@pytest.mark.parametrize("value", [-1, 1.5, True, None])
+def test_invalid_lidar_result_identifiers_are_not_failure(field, value):
+    info = lidar_result()
+    setattr(info, field, value)
+    assert lidar_localization_result(info) is None
+
+
+def test_missing_or_incomplete_lidar_result_is_not_failure():
+    assert lidar_localization_result(None) is None
+    assert lidar_localization_result(SimpleNamespace()) is None
+    info = lidar_result()
+    info.stats_values.pop()
+    assert lidar_localization_result(info) is None
+    assert lidar_localization_result(lidar_result(rejection=2.0)) is None

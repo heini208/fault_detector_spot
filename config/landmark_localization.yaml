@@ -26,7 +26,7 @@
     # map/runtime session. Preserve the original pose and bound lifetime drift.
     navigation.landmark_refinement.enabled: true
     navigation.landmark_refinement.required_samples: 5
-    navigation.landmark_refinement.maximum_sample_span_sec: 6.0
+    navigation.landmark_refinement.maximum_sample_span_sec: 30.0
     navigation.landmark_refinement.maximum_position_spread_m: 0.03
     navigation.landmark_refinement.maximum_rotation_spread_rad: 0.05235987755982989  # 3 deg
     navigation.landmark_refinement.maximum_observation_distance_m: 2.5
@@ -39,13 +39,35 @@
     navigation.landmark_refinement.maximum_discrepancy_rotation_rad: 0.17453292519943295  # 10 deg
     navigation.landmark_refinement.maximum_cumulative_position_m: 0.05
     navigation.landmark_refinement.maximum_cumulative_rotation_rad: 0.05235987755982989  # 3 deg
-    navigation.landmark_refinement.minimum_interval_sec: 60.0
+    # At most one tag per bounded attempt, no more than once per five minutes.
+    # Allow slow lidar results; poll stationarity at 2 Hz only during the attempt.
+    # Each geometry sample still needs newly matched, fresh lidar/tag captures.
+    navigation.landmark_refinement.attempt_interval_sec: 300.0
+    navigation.landmark_refinement.sample_interval_sec: 0.5
+    navigation.landmark_refinement.minimum_interval_sec: 300.0
     navigation.landmark_refinement.encounter_absence_sec: 5.0
 
     # Monitor continuously in localization mode. RTAB-Map consumes initialpose
     # as a reset at its next scan, so issue corrections only when stationary
     # and no command is running. A publish alone never confirms recovery.
     navigation.landmark_recovery.enabled: true
+    # High confidence always suppresses new/retried resets, even if a landmark
+    # disagrees. Missing/stale/invalid estimates do not establish uncertainty.
+    # Finite uncertainty uses separate, more conservative limits than saving.
+    # Require matched unsuccessful lidar results throughout a ten-second grace
+    # period; accepted matches restart it, unavailable evidence cannot qualify.
+    navigation.landmark_recovery.maximum_position_std_m: 0.75
+    navigation.landmark_recovery.maximum_yaw_std_rad: 0.4363323129985824  # 25 deg
+    navigation.landmark_recovery.lidar_recovery_grace_sec: 10.0
+    # Explicit RTAB-Map 9999 "not localized" reports retain the shorter debounce
+    # without requiring registration Info. Both paths require distinct poses.
+    navigation.landmark_recovery.uncertain_samples: 3
+    navigation.landmark_recovery.uncertain_duration_sec: 2.0
+    # RTAB-Map results can be seconds apart under load. Recovery allows a bounded
+    # five-second stream gap; saves/refinement keep their stricter receipt gate.
+    # Acquisition delay on arrival is bounded separately.
+    navigation.landmark_recovery.maximum_localization_delay_sec: 5.0
+    navigation.landmark_recovery.maximum_localization_gap_sec: 5.0
     navigation.landmark_recovery.required_samples: 5
     navigation.landmark_recovery.maximum_sample_span_sec: 6.0
     navigation.landmark_recovery.maximum_position_spread_m: 0.20
@@ -56,6 +78,7 @@
     navigation.landmark_recovery.stationary_duration_sec: 1.0
     navigation.landmark_recovery.stationary_position_tolerance_m: 0.03
     navigation.landmark_recovery.stationary_yaw_tolerance_rad: 0.05235987755982989  # 3 deg
+    # Agreement required between simultaneous landmark correction candidates.
     navigation.landmark_recovery.position_error_threshold_m: 0.60
     navigation.landmark_recovery.yaw_error_threshold_rad: 0.3490658503988659  # 20 deg
     navigation.landmark_recovery.recovery_position_tolerance_m: 0.30

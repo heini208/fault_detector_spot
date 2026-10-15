@@ -56,6 +56,8 @@ class StatusOverviewPanel(QFrame):
         agent_copy_button: QPushButton,
         estop_button: QPushButton,
         parent=None,
+        *,
+        landmark_feedback_label=None,
     ):
         super().__init__(parent)
         self.setFrameShape(QFrame.StyledPanel)
@@ -115,6 +117,9 @@ class StatusOverviewPanel(QFrame):
         robot_layout.addWidget(buffer_label, 1, 0)
         robot_layout.addWidget(visible_label, 1, 1)
         robot_layout.addWidget(navigation_mode_label, 1, 2)
+        if landmark_feedback_label is not None:
+            self._configure_status_label(landmark_feedback_label)
+            robot_layout.addWidget(landmark_feedback_label, 2, 0, 1, 5)
 
         robot_layout.setColumnStretch(0, 2)
         robot_layout.setColumnStretch(1, 2)

@@ -37,56 +37,82 @@ class LocalizationQualityConfig:
         return cls(**values)
 
 
-def localization_quality_error(
+@dataclass(frozen=True)
+class LocalizationAssessment:
+    """Separate measured uncertainty from missing or invalid evidence."""
+
+    detail: str = ""
+    uncertain: bool = False
+    not_localized: bool = False
+
+    @property
+    def healthy(self):
+        return not self.detail
+
+
+def assess_localization_quality(
     message, now_ns: int, config: LocalizationQualityConfig,
-) -> str:
-    """Return an explanation for an unusable estimate, or an empty string.
+) -> LocalizationAssessment:
+    """Classify a fresh estimate without treating a data fault as uncertainty.
 
     This checks the planar marginal covariance, including cross terms. A
     positive covariance is required: RTAB-Map's unknown (9999) covariance and
     unset all-zero messages must never count as evidence of good localization.
     """
     if message is None:
-        return "No localization estimate received"
+        return LocalizationAssessment("No localization estimate received")
     try:
         if message.header.frame_id != "map":
-            return "Localization estimate is not in the map frame"
+            return LocalizationAssessment("Localization estimate is not in the map frame")
         stamp = message.header.stamp
         if not 0 <= stamp.nanosec < 1_000_000_000:
-            return "Localization timestamp is invalid"
+            return LocalizationAssessment("Localization timestamp is invalid")
         stamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
         if stamp_ns <= 0 or not math.isfinite(now_ns):
-            return "Localization timestamp is invalid"
+            return LocalizationAssessment("Localization timestamp is invalid")
         age_ns = now_ns - stamp_ns
         if age_ns < 0:
-            return "Localization estimate is future-dated"
+            return LocalizationAssessment("Localization estimate is future-dated")
         if age_ns > config.maximum_age_sec * 1_000_000_000:
-            return "Localization estimate is stale"
+            return LocalizationAssessment("Localization estimate is stale")
         pose_to_matrix(message.pose.pose)
         covariance = np.asarray(message.pose.covariance, dtype=float)
         if covariance.shape != (36,):
-            return "Localization covariance must contain 36 values"
+            return LocalizationAssessment("Localization covariance must contain 36 values")
         planar = covariance.reshape(6, 6)[np.ix_((0, 1, 5), (0, 1, 5))]
         if not np.all(np.isfinite(planar)):
-            return "Localization covariance is non-finite"
+            return LocalizationAssessment("Localization covariance is non-finite")
         diagonal = np.diag(planar)
+        # CoreWrapper publishes this exact planar sentinel when it has no
+        # localization covariance. It is an explicit not-localized report,
+        # unlike a missing estimate or an arbitrary malformed covariance.
+        if np.array_equal(planar, np.eye(3) * 9999.0):
+            return LocalizationAssessment(
+                "RTAB-Map reports not localized (unknown covariance)",
+                uncertain=True, not_localized=True,
+            )
         if np.any(diagonal <= 0) or np.any(diagonal >= 9999):
-            return "Localization covariance is unknown or invalid"
+            return LocalizationAssessment("Localization covariance is unknown or invalid")
         if not np.allclose(planar, planar.T, rtol=1e-6, atol=1e-12):
-            return "Localization covariance is not symmetric"
+            return LocalizationAssessment("Localization covariance is not symmetric")
         # Use the symmetric matrix after checking numerical round-off only.
         planar = (planar + planar.T) * 0.5
         if np.linalg.eigvalsh(planar)[0] < -1e-12:
-            return "Localization covariance is not positive semidefinite"
+            return LocalizationAssessment("Localization covariance is not positive semidefinite")
         position_std = math.sqrt(np.linalg.eigvalsh(planar[:2, :2])[-1])
         yaw_std = math.sqrt(planar[2, 2])
         if position_std > config.maximum_position_std_m:
-            return "Localization position uncertainty is too high"
+            return LocalizationAssessment("Localization position uncertainty is too high", uncertain=True)
         if yaw_std > config.maximum_yaw_std_rad:
-            return "Localization yaw uncertainty is too high"
+            return LocalizationAssessment("Localization yaw uncertainty is too high", uncertain=True)
     except (AttributeError, TypeError, ValueError, OverflowError, np.linalg.LinAlgError):
-        return "Localization estimate is malformed"
-    return ""
+        return LocalizationAssessment("Localization estimate is malformed")
+    return LocalizationAssessment()
+
+
+def localization_quality_error(message, now_ns: int, config: LocalizationQualityConfig) -> str:
+    """Explain why a pose cannot qualify for authoring or refinement."""
+    return assess_localization_quality(message, now_ns, config).detail
 
 
 def accepted_localization(info) -> bool:
@@ -148,3 +174,44 @@ def accepted_lidar_localization(info) -> bool:
         return any(value > 0 for value in counters)
     except (AttributeError, TypeError, ValueError, OverflowError):
         return False
+
+
+def lidar_localization_result(info) -> bool | None:
+    """Distinguish accepted LiDAR registration from explicit failure or no evidence.
+
+    False requires a complete valid result with no accepted map registration.
+    Missing statistics and an accepted registration without verified LiDAR ICP
+    are unknown, so neither can justify landmark recovery. Callers must also
+    validate the frame, matching capture timestamp, and freshness.
+    """
+    if info is None:
+        return None
+    try:
+        identifiers = (info.loop_closure_id, info.proximity_detection_id)
+        if not all(type(value) is int and value >= 0 for value in identifiers):
+            return None
+        keys = list(info.stats_keys)
+        if len(keys) != len(info.stats_values):
+            return None
+        required = (
+            "Loop/RejectedHypothesis/",
+            "Proximity/Space_detections_added_icp_global/",
+            "Proximity/Space_detections_added_icp_multi/",
+        )
+        values = []
+        for key in required:
+            if keys.count(key) != 1:
+                return None
+            value = info.stats_values[keys.index(key)]
+            if isinstance(value, bool) or not math.isfinite(value) or value < 0:
+                return None
+            values.append(value)
+        if values[0] not in (0.0, 1.0):
+            return None
+        if accepted_lidar_localization(info):
+            return True
+        if accepted_localization(info):
+            return None
+        return False
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None

@@ -218,7 +218,7 @@ class NavigationControls(UIControlHelper):
 
         # Text field for entering waypoint name
         self.poi_name_field = QLineEdit()
-        self.poi_name_field.setPlaceholderText("Enter waypoint name or tag ID")
+        self.poi_name_field.setPlaceholderText("Enter waypoint name")
         self.poi_name_field.setFixedWidth(200)
         row.addWidget(self.poi_name_field)
 
@@ -227,9 +227,16 @@ class NavigationControls(UIControlHelper):
         self.add_waypoint_button.clicked.connect(self.handle_add_waypoint)
         row.addWidget(self.add_waypoint_button)
 
-        self.add_landmark_button = QPushButton("Add Tag ID as Landmark")
+        row.addWidget(QLabel("Visible tag:"))
+        self.landmark_tag_dropdown = QComboBox()
+        self.landmark_tag_dropdown.setMinimumWidth(100)
+        self.landmark_tag_dropdown.setToolTip("Select a visible tag to save as a landmark.")
+        row.addWidget(self.landmark_tag_dropdown)
+
+        self.add_landmark_button = QPushButton("Add Tag as Landmark")
         self.add_landmark_button.clicked.connect(self.handle_add_landmark)
         row.addWidget(self.add_landmark_button)
+        self.update_tags_dropdown()
 
         return row
 
@@ -256,6 +263,10 @@ class NavigationControls(UIControlHelper):
         return row
 
     # --- Dropdown updates ---
+    def update_tags_dropdown(self):
+        self.ui.update_tags_dropdown(self.landmark_tag_dropdown)
+        self.add_landmark_button.setEnabled(bool(self.ui.visible_tags))
+
     def update_waypoint_dropdown(self):
         self.waypoint_dropdown.clear()
 
@@ -318,13 +329,9 @@ class NavigationControls(UIControlHelper):
         )
 
     def handle_add_landmark(self):
-        name = self.poi_name_field.text().strip()
-        if not name:
-            self.show_warning("Missing ID", "Please enter a valid tag ID")
-            return
-
-        if not name.isdigit():
-            self.show_warning("Invalid Input", "Tag ID must be numeric.")
+        selected = self.landmark_tag_dropdown.currentText()
+        if not selected.isdigit() or int(selected) not in self.ui.visible_tags:
+            self.show_warning("No Visible Tag Selected", "Please select a currently visible tag.")
             return
 
         if not self._check_current_map_selected():
@@ -332,7 +339,7 @@ class NavigationControls(UIControlHelper):
         return self._submit_setup(
             NavigationSetupIntent.OPERATION_ADD_VISIBLE_TAG_LANDMARK,
             map_name=self.current_map,
-            tag_id=int(name),
+            tag_id=int(selected),
         )
 
     def handle_move_to_waypoint(self):

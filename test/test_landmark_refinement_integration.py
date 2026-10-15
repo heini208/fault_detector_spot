@@ -9,6 +9,7 @@ import pytest
 from rclpy.time import Time
 
 from fault_detector_spot.navigation.landmark_refinement import LandmarkRefinementConfig
+from fault_detector_spot.navigation.ros.landmark_feedback import LandmarkFeedbackEvent
 from test_landmark_recovery import localization, registration, rig, tag  # noqa: F401
 
 
@@ -26,11 +27,11 @@ def lidar_registration(stamp):
     return message
 
 
-def observe(rig, *, count=8, mismatch=0.05, variance=0.001, accepted=True):
+def observe(rig, *, count=14, mismatch=0.05, variance=0.001, accepted=True, distance=2.0):
     for _ in range(count):
         rig.advance()
         stamp = rig.clock[0]
-        rig.bb["visible_tags"] = {7: tag(stamp)}
+        rig.bb["visible_tags"] = {7: tag(stamp, x=distance)}
         rig.bb["last_pose_estimation"] = localization(stamp, x=mismatch, variance=variance)
         rig.bb["last_localization_info"] = (
             lidar_registration(stamp) if accepted else registration(stamp, accepted=False)
@@ -48,9 +49,12 @@ def test_small_qualified_refinement_preserves_original_and_updates_recovery_anch
     assert anchor.pose_map.position.x == pytest.approx(2.005)
     assert anchor.refinement.original_pose_map.position.x == 2.0
     assert anchor.refinement.update_count == 1
-    assert anchor.refinement.last_refined_at == pytest.approx(1_700_000_000 + 101.5)
+    assert anchor.refinement.last_refined_at == pytest.approx(1_700_000_000 + 102.75)
     assert rig.behavior.landmark_map[7].position.x == pytest.approx(2.005)
     rig.publisher.publish.assert_not_called()
+    event = LandmarkFeedbackEvent.from_message(rig.events.publish.call_args.args[0])
+    assert (event.event, event.map_id, event.tag_id) == ("refined", "map_a", 7)
+    rig.events.publish.assert_called_once()
 
 
 def test_continuous_visibility_cannot_repeat_even_after_cooldown_and_metadata_reload(rig):
@@ -63,6 +67,32 @@ def test_continuous_visibility_cannot_repeat_even_after_cooldown_and_metadata_re
     assert saved(rig).refinement.update_count == 1
 
 
+def test_failed_refinement_has_a_bounded_tf_budget_and_skips_work_during_cooldown(rig):
+    rig.buffer.unavailable = True
+    rig.buffer.lookup_transform = Mock(wraps=rig.buffer.lookup_transform)
+    observe(rig, count=124)
+    # Thirty seconds at 2 Hz, even though the command tree ticks four times/sec.
+    assert rig.buffer.lookup_transform.call_count == 60
+    rig.buffer.lookup_transform.reset_mock()
+    rig.buffer.unavailable = False
+    observe(rig, count=100)
+    rig.buffer.lookup_transform.assert_not_called()
+    rig.events.publish.assert_not_called()
+    assert saved(rig).refinement is None
+    rig.advance(300.0)
+    observe(rig)
+    assert saved(rig).refinement.update_count == 1
+
+
+def test_successful_encounter_skips_tf_and_geometry_even_after_attempt_interval(rig):
+    observe(rig)
+    rig.buffer.lookup_transform = Mock(wraps=rig.buffer.lookup_transform)
+    rig.advance(301.0)
+    observe(rig)
+    rig.buffer.lookup_transform.assert_not_called()
+    rig.events.publish.assert_called_once()
+
+
 def test_new_encounter_requires_both_absence_and_interval(rig):
     observe(rig)
     rig.bb["visible_tags"] = {}
@@ -70,10 +100,76 @@ def test_new_encounter_requires_both_absence_and_interval(rig):
     rig.advance(6.0)
     observe(rig)
     assert saved(rig).refinement.update_count == 1
-    rig.advance(60.0)
+    rig.advance(300.0)
     observe(rig)
     assert saved(rig).refinement.update_count == 2
     assert saved(rig).refinement.original_pose_map.position.x == 2.0
+
+
+def test_out_of_range_tag_does_not_consume_attempt_before_becoming_usable(rig):
+    rig.buffer.lookup_transform = Mock(wraps=rig.buffer.lookup_transform)
+    observe(rig, count=32, distance=2.51)
+    rig.buffer.lookup_transform.assert_not_called()
+    assert rig.behavior._refiner.attempt_tag_id is None
+    observe(rig, distance=2.5, mismatch=-0.45)
+    assert saved(rig).refinement.update_count == 1
+    assert saved(rig).pose_map.position.x == pytest.approx(2.005)
+
+
+def test_lost_tag_can_refine_again_after_rediscovery_in_range_but_range_alone_cannot_rearm(rig):
+    observe(rig)
+    rig.advance(301.0)
+    observe(rig, count=32, distance=2.51)
+    observe(rig)
+    assert saved(rig).refinement.update_count == 1
+    rig.bb["visible_tags"] = {}
+    rig.tick()
+    rig.advance(5.1)
+    observe(rig, count=32, distance=2.51)
+    observe(rig)
+    assert saved(rig).refinement.update_count == 2
+    events = [LandmarkFeedbackEvent.from_message(call.args[0]).event for call in rig.events.publish.call_args_list]
+    assert events == ["refined", "refined"]
+
+
+@pytest.mark.parametrize("period", [1.9, 2.8, 4.9])
+def test_confident_slow_lidar_can_refine_with_continuous_stationarity_checks(rig, period):
+    rig.behavior.config = replace(rig.behavior.config, stationary_duration_sec=1.0)
+    rig.advance(2.05 + 0.25)
+    for _ in range(6):
+        # Each accepted result is new; camera/TF/tree continue between results.
+        stamp = rig.clock[0]
+        rig.bb["last_pose_estimation"] = localization(stamp - 2.05, x=0.05, variance=0.001)
+        rig.bb["last_localization_info"] = lidar_registration(stamp - 2.05)
+        remaining = period
+        while remaining > 1e-8:
+            rig.bb["visible_tags"] = {7: tag(rig.clock[0])}
+            rig.tick()
+            step = min(0.1, remaining)
+            rig.advance(step)
+            remaining -= step
+    assert saved(rig).refinement.update_count == 1
+    assert saved(rig).pose_map.position.x == pytest.approx(2.005)
+    rig.publisher.publish.assert_not_called()
+    rig.events.publish.assert_called_once()
+
+
+@pytest.mark.parametrize("fault", ["motion", "missing_odometry"])
+def test_stationarity_fault_between_lidar_results_discards_refinement_samples(rig, fault):
+    observe(rig, count=9)  # Four qualified samples; one more would allow an update.
+    assert saved(rig).refinement is None
+    rig.advance(0.5)
+    rig.buffer.position = 0.1 if fault == "motion" else 0.0
+    rig.buffer.unavailable = fault == "missing_odometry"
+    rig.bb["visible_tags"] = {7: tag(rig.clock[0])}
+    rig.tick()  # The localization/Info pair has not changed.
+    rig.buffer.position = 0.0
+    rig.buffer.unavailable = False
+    observe(rig, count=2)
+    assert saved(rig).refinement is None
+    rig.events.publish.assert_not_called()
+    observe(rig)
+    assert saved(rig).refinement.update_count == 1
 
 
 @pytest.mark.parametrize("variance,accepted,mismatch", [
@@ -96,6 +192,40 @@ def test_many_camera_captures_with_one_lidar_registration_do_not_qualify(rig):
         rig.bb["visible_tags"] = {7: tag(rig.clock[0])}
         rig.tick()
     assert saved(rig).refinement is None
+
+
+@pytest.mark.parametrize("expired_clock", ["both", "ros", "steady"])
+def test_recovery_stream_gap_does_not_extend_refinement_receipt_freshness(rig, expired_clock):
+    # Receive a healthy pose first; its separate Info callback has not arrived.
+    rig.advance()
+    stamp = rig.clock[0]
+    rig.bb["last_pose_estimation"] = localization(stamp, x=0.05, variance=0.001)
+    rig.tick()
+    rig.behavior._refiner.begin_samples = Mock(wraps=rig.behavior._refiner.begin_samples)
+    rig.buffer.lookup_transform = Mock(wraps=rig.buffer.lookup_transform)
+    rig.repo.refine_landmark = Mock(wraps=rig.repo.refine_landmark)
+
+    # Recovery may retain this estimate between slow processed results, but
+    # delayed matching Info must not revive it for landmark refinement.
+    if expired_clock == "ros":
+        rig.clock[0] += 2.0
+    else:
+        rig.advance(2.0, ros=expired_clock == "both")
+    rig.bb["last_localization_info"] = lidar_registration(stamp)
+    rig.bb["visible_tags"] = {7: tag(rig.clock[0])}
+    rig.tick()
+
+    assert rig.behavior._quality_error(
+        rig.bb["last_pose_estimation"],
+        Time(seconds=rig.clock[0]).nanoseconds,
+        rig.steady[0],
+    ) == ""
+    rig.behavior._refiner.begin_samples.assert_not_called()
+    rig.buffer.lookup_transform.assert_not_called()
+    rig.repo.refine_landmark.assert_not_called()
+    assert saved(rig).refinement is None
+    rig.publisher.publish.assert_not_called()
+    rig.events.publish.assert_not_called()
 
 
 def test_mismatched_registration_timestamps_do_not_qualify(rig):
@@ -172,7 +302,7 @@ def test_refinement_can_be_enabled_with_recovery_disabled(rig):
 def test_capture_time_odometry_accounts_for_motion_between_lidar_and_tag(rig):
     rig.buffer.position = 0.2
     rig.advance(1.0)
-    for _ in range(10):
+    for _ in range(14):
         rig.advance()
         stamp = rig.clock[0]
         lidar_stamp = stamp - 0.5
@@ -196,6 +326,7 @@ def test_deletion_during_proposal_does_not_recreate_landmark(rig):
     observe(rig)
     assert saved(rig) is None
     assert rig.repo.refine_landmark.call_count == 1
+    rig.events.publish.assert_not_called()
 
 
 def test_incomplete_refinement_metadata_disables_anchor_without_crashing_monitor(rig):

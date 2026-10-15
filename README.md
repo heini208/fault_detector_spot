@@ -690,8 +690,12 @@ backlog, replayed estimates, unknown uncertainty, and missing transforms cannot
 qualify a save. Finishing the capture removes its processing-delay allowance;
 recovery and automatic refinement retain their existing freshness limits.
 
-Saving a landmark works in both mapping and localization mode. Pressing Save
-starts an on-demand capture of that tag; it does not require a pre-filled
+Saving a landmark works in both mapping and localization mode. Choose a tag in
+the **Visible tag** dropdown beside **Add current pose as Waypoint**, then click
+**Add Tag as Landmark**. The waypoint name field is only used for waypoints.
+The dropdown follows currently visible tags and disables saving when none are
+visible. Clicking the landmark button starts an on-demand capture of that tag;
+it does not require a pre-filled
 observation cache. The action waits up to 10 seconds and reports progress while
 ROS callbacks continue receiving data. It requires localization and tag captures
 acquired after the request, usable planar covariance, and three distinct, stable
@@ -716,7 +720,7 @@ Saved landmarks also receive small automatic refinements in localization mode.
 The robot must be idle and stationary, with planar localization standard
 deviation at most 10 cm and yaw standard deviation at most 3 degrees. Five
 distinct tag captures and five matching, accepted RTAB-Map lidar-map
-registrations must produce stable map-relative tag poses within six seconds.
+registrations must produce stable map-relative tag poses within 30 seconds.
 Tags must be within 2.5 m; the burst must agree within 3 cm and 3 degrees.
 The observed pose uses the lidar estimate and acquisition-time odometry,
 including motion between the lidar scan and tag image. It does not use the
@@ -726,12 +730,23 @@ Each refinement moves 10% toward the mean observation, capped at 1 cm and
 0.5 degrees. An observation differing by more than 15 cm or 10 degrees is
 rejected. Total adjustment is bounded to 5 cm and 3 degrees from the original
 saved pose. Only one update is allowed per continuous sighting, and updates
-must be at least 60 seconds apart; the tag must disappear for five seconds to
-start another sighting. The original pose, update count, last refinement time,
+must be at least five minutes apart; the tag must disappear for five seconds to
+start another sighting. Moving out of range while still visible does not start
+a new sighting. A qualified check that finds no adjustment necessary also
+consumes the sighting, without writing metadata. The original pose, update count, last refinement time,
 and observation stamp are preserved in optional `refinement` metadata alongside
 the active `pose_map`. Existing map files remain readable. Atomic, locked
 repository updates protect concurrent authoring and map deletion; stale
-proposals are discarded. Successful refinements are logged.
+proposals are discarded. Refinement starts an attempt lasting at most 30 seconds for
+one eligible tag at most once every five minutes, sampling at most twice per
+second. Failed attempts also consume that interval; eligible tags take turns.
+The first eligible attempt can start immediately. Tags outside usable range
+do not consume an attempt. During the attempt, current odometry is checked
+independently of slower lidar results; motion or missing odometry clears the
+collected samples. Every geometry sample requires a distinct accepted result
+matched within 1.5 seconds of its receipt. Gaps up to five seconds between such
+results do not erase the burst. Refinement covariance, TF and geometry work is
+skipped outside the bounded sampling attempt and its scheduled slots.
 
 Refinement is deliberately disabled during mapping, because the map can change.
 It is also blocked for the current map/runtime session after any `/initialpose`
@@ -747,8 +762,26 @@ apply after restart. Saving landmarks remains available in both modes.
 
 Landmark recovery runs continuously in localization-only mode, including during
 long commands. Five distinct, consistent tag captures establish a candidate
-correction. Poor localization quality or persistent disagreement with the tag
-can request recovery. RTAB-Map treats `/initialpose` as a reset applied at its
+correction. Finite position standard deviation above 75 cm or yaw standard
+deviation above 25 degrees can qualify for recovery, independently of the
+stricter 30 cm / 10 degree saving and confirmation limits. These are uncertainty
+estimates, not measured pose offsets. Finite uncertainty requires at least three
+distinct estimates spanning ten seconds of receipt time, each with a matching
+valid, unsuccessful lidar registration report. Successful lidar matches restart
+this grace period. Missing, mismatched or malformed registration evidence cannot
+qualify; briefly interleaved pose/Info callbacks can still complete a result.
+An explicit RTAB-Map `9999` not-localized covariance report retains the shorter
+three-estimate, two-second debounce without requiring registration Info.
+Switching between these two paths starts a new evidence run. Missing, stale or
+malformed poses cannot qualify. Confident localization always suppresses new resets and
+retries, even when it disagrees with the saved landmark or a previous reset
+remains unconfirmed. Recovery accepts processing delays up to five seconds and
+gaps of up to five seconds between advancing estimates, so slower RTAB-Map
+results do not continually reset the uncertainty count. Repeated timestamps
+cannot extend that timeout or count as new evidence. Saving and refinement
+retain their stricter 1.5-second receipt gate; tag and odometry freshness limits
+also remain unchanged. Acquisition stamps are preserved for TF.
+RTAB-Map treats `/initialpose` as a reset applied at its
 next scan, so publication waits for idle command execution and one second of
 fresh, nearly stationary odometry. Acquisition-time odometry accounts for motion
 between the tag image and the current robot pose. Conflicting landmarks withhold
@@ -760,11 +793,15 @@ this pause. This bounded pause covers nominal scan processing, but is not an
 acknowledgment from RTAB-Map: severely delayed scans or external robot motion
 still require deployment validation. Recovery needs three fresh,
 accepted RTAB-Map registrations whose poses have usable covariance and agree with
-the landmark. Attempts are at least 15 seconds apart, require new tag captures,
+the landmark. Attempts are at least 15 seconds apart, require new tag captures
+and sustained low-confidence estimates acquired after the preceding reset,
 and stop after three unsuccessful requests. The budget resets after confirmed
 recovery, a map/runtime or clock change, or a changed set of landmark anchors.
-Behavior feedback and logs distinguish pending, requested, confirmed, and failed
-recovery. Limits live in [`config/landmark_localization.yaml`](config/landmark_localization.yaml),
+The UI's persistent **Last landmark event** line and console logs report reset
+requests, confirmed recovery, exhausted recovery, and successful refinements,
+with the tag and map included in the UI. The line shows the latest event's time
+and expandable details; a request explicitly says that confirmation is still pending.
+Limits live in [`config/landmark_localization.yaml`](config/landmark_localization.yaml),
 shared by the BT and application API. These initial values need validation with
 recorded data for the installed sensors; covariance alone is not proof that
 localization is correct.

@@ -1,6 +1,6 @@
 """Supervise landmark-assisted recovery of the existing RTAB-Map localizer."""
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 import math
 import time
 
@@ -18,9 +18,11 @@ from fault_detector_spot.navigation.landmark_refinement import (
     LandmarkRefinementConfig, LandmarkRefiner,
 )
 from fault_detector_spot.navigation.localization_quality import (
-    LocalizationQualityConfig, accepted_lidar_localization, accepted_localization,
+    LocalizationAssessment, LocalizationQualityConfig, accepted_lidar_localization,
+    accepted_localization, assess_localization_quality, lidar_localization_result,
     localization_quality_error,
 )
+from fault_detector_spot.navigation.ros.landmark_feedback import LandmarkFeedbackPublisher
 from fault_detector_spot.shared.geometry.transforms import (
     matrix_to_pose, pose_data_to_pose, pose_to_matrix, pose_to_pose_data,
 )
@@ -50,11 +52,19 @@ class LandmarkRecoveryConfig:
     retry_interval_sec: float = 15.0
     maximum_attempts: int = 3
     healthy_samples: int = 3
+    uncertain_samples: int = 3
+    uncertain_duration_sec: float = 2.0
+    maximum_position_std_m: float = 0.75
+    maximum_yaw_std_rad: float = math.radians(25.0)
+    lidar_recovery_grace_sec: float = 10.0
+    maximum_localization_delay_sec: float = 5.0
+    maximum_localization_gap_sec: float = 5.0
 
     def __post_init__(self):
         if type(self.enabled) is not bool:
             raise ValueError("Landmark recovery enabled must be a boolean")
-        for name, minimum in (("required_samples", 2), ("maximum_attempts", 1), ("healthy_samples", 2)):
+        for name, minimum in (("required_samples", 2), ("maximum_attempts", 1),
+                              ("healthy_samples", 2), ("uncertain_samples", 2)):
             if type(getattr(self, name)) is not int or getattr(self, name) < minimum:
                 raise ValueError(f"Landmark recovery {name} must be an integer >= {minimum}")
         for field in fields(self):
@@ -67,7 +77,7 @@ class LandmarkRecoveryConfig:
             raise ValueError("Landmark retry interval must allow the settling time")
         if (self.recovery_position_tolerance_m > self.position_error_threshold_m
                 or self.recovery_yaw_tolerance_rad > self.yaw_error_threshold_rad):
-            raise ValueError("Landmark recovery tolerances must not exceed trigger thresholds")
+            raise ValueError("Landmark recovery tolerances must not exceed landmark conflict thresholds")
 
     @classmethod
     def from_node(cls, node):
@@ -106,6 +116,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         self.blackboard = self.attach_blackboard_client()
         self.initialpose_pub = None
         self.initialpose_sub = None
+        self._event_publisher = None
         self.landmark_map = {}
         self._landmarks = {}
         self._refiner = None
@@ -129,7 +140,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             self.refinement_config = LandmarkRefinementConfig.from_node(self.node)
         self._refiner = LandmarkRefiner(self.refinement_config)
         self._refinement_quality = LocalizationQualityConfig(
-            maximum_age_sec=self.quality_config.maximum_age_sec,
+            maximum_age_sec=self.config.maximum_localization_delay_sec,
             maximum_position_std_m=self.refinement_config.maximum_localization_position_std_m,
             maximum_yaw_std_rad=self.refinement_config.maximum_localization_yaw_std_rad,
         )
@@ -140,6 +151,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         self.initialpose_pub = self.node.create_publisher(
             PoseWithCovarianceStamped, "/initialpose", INITIALPOSE_QOS,
         )
+        self._event_publisher = LandmarkFeedbackPublisher(self.node, wall_clock=self._wall_clock)
         if self.refinement_config.enabled:
             # Volatile pose seeds sent before subscription cannot be audited.
             self._unobserved_process = self.rtabmap_runtime.process
@@ -153,6 +165,9 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             )
 
     def shutdown(self):
+        if self._event_publisher is not None:
+            self._event_publisher.close()
+            self._event_publisher = None
         if self.initialpose_sub is not None:
             self.node.destroy_subscription(self.initialpose_sub)
             self.initialpose_sub = None
@@ -192,7 +207,10 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         self.attempts = 0
         self._last_request_ns = 0
         self._last_request_at = None
+        self._last_request_tag_id = None
         self._healthy_count = 0
+        self._reset_uncertainty()
+        self._recovery_wait_reason = ""
         self._last_health_stamp_ns = 0
         self._last_health_at = None
         self._localization_progress = (0, None, None)
@@ -200,6 +218,14 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         self._stationary_reference = None
         self._stationary = False
         self._failed = False
+
+    def _reset_uncertainty(self):
+        self._uncertain_count = 0
+        self._uncertain_since_at = None
+        self._last_uncertain_at = None
+        self._last_uncertain_stamp_ns = 0
+        self._last_uncertain_ros_ns = None
+        self._uncertainty_not_localized = None
 
     def _load_landmarks_for_map(self, map_name):
         self.landmark_map = {}
@@ -350,28 +376,98 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         return sorted(candidates, key=lambda item: (item[0], item[1]))
 
     def _quality_error(self, pose, now_ns, steady_now):
+        return self._assess_localization(pose, now_ns, steady_now).detail
+
+    def _localization_receipt_fresh(self, now_ns, steady_now, maximum_gap_sec):
+        _, received_at, received_ros_ns = self._localization_progress
+        return (received_at is not None and received_ros_ns is not None
+                and 0 <= steady_now - received_at <= maximum_gap_sec
+                and 0 <= now_ns - received_ros_ns <= maximum_gap_sec * 1e9)
+
+    def _assess_localization(self, pose, now_ns, steady_now):
         if pose is None:
-            return localization_quality_error(pose, now_ns, self.quality_config)
+            return LocalizationAssessment("No localization estimate received")
         try:
             stamp_ns = self._stamp_ns(pose.header.stamp)
         except (AttributeError, TypeError, ValueError):
-            return "Invalid localization timestamp"
+            return LocalizationAssessment("Invalid localization timestamp")
         previous_stamp, received_at, received_ros_ns = self._localization_progress
         if stamp_ns > previous_stamp and stamp_ns <= now_ns:
             received_at = steady_now
             received_ros_ns = now_ns
             self._localization_progress = (stamp_ns, received_at, received_ros_ns)
         if stamp_ns <= self._minimum_stamp_ns:
-            return "Waiting for localization acquired after the map/runtime change"
+            return LocalizationAssessment("Waiting for localization acquired after the map/runtime change")
         if stamp_ns < previous_stamp:
-            return "Localization timestamp regressed"
-        if (received_at is None or steady_now - received_at > self.quality_config.maximum_age_sec
-                or received_ros_ns is None
-                or not 0 <= now_ns - received_ros_ns <= self.quality_config.maximum_age_sec * 1e9):
-            return "No advancing localization estimates"
+            return LocalizationAssessment("Localization timestamp regressed")
+        if not self._localization_receipt_fresh(now_ns, steady_now, self.config.maximum_localization_gap_sec):
+            return LocalizationAssessment("No advancing localization estimates")
         # Preserve acquisition stamps for TF and registration matching. Only
         # freshness uses receipt time after validating arrival delay once.
-        return localization_quality_error(pose, received_ros_ns, self.quality_config)
+        return assess_localization_quality(
+            pose, received_ros_ns,
+            replace(self.quality_config, maximum_age_sec=self.config.maximum_localization_delay_sec),
+        )
+
+    def _persistent_uncertainty(self, assessment, pose, steady_now):
+        """Give finite uncertainty time for lidar recovery; debounce explicit loss."""
+        self._recovery_wait_reason = ""
+        if not assessment.uncertain or self._stamp_ns(pose.header.stamp) <= self._last_request_ns:
+            self._reset_uncertainty()
+            return False
+        if self._uncertainty_not_localized != assessment.not_localized:
+            self._reset_uncertainty()
+        self._uncertainty_not_localized = assessment.not_localized
+        duration = self.config.uncertain_duration_sec
+        if not assessment.not_localized:
+            recovery_quality = assess_localization_quality(
+                pose, self._localization_progress[2],
+                LocalizationQualityConfig(
+                    maximum_age_sec=self.config.maximum_localization_delay_sec,
+                    maximum_position_std_m=self.config.maximum_position_std_m,
+                    maximum_yaw_std_rad=self.config.maximum_yaw_std_rad,
+                ),
+            )
+            if not recovery_quality.uncertain:
+                self._reset_uncertainty()
+                self._recovery_wait_reason = "Localization uncertainty below landmark recovery thresholds"
+                return False
+            duration = max(duration, self.config.lidar_recovery_grace_sec)
+            info = self._read("last_localization_info")
+            if info is None or info.header.stamp != pose.header.stamp:
+                # Pose and Info callbacks can interleave. Preserve a bounded
+                # streak while waiting, but never count missing Info as failure.
+                if (self._last_uncertain_at is not None
+                        and (steady_now - self._last_uncertain_at > self.config.maximum_localization_gap_sec
+                             or self._localization_progress[2] - self._last_uncertain_ros_ns
+                             > self.config.maximum_localization_gap_sec * 1e9)):
+                    self._reset_uncertainty()
+                self._recovery_wait_reason = "Waiting for matching lidar registration evidence before landmark recovery"
+                return False
+            result = lidar_localization_result(info) if info.header.frame_id == self.map_frame else None
+            if result is not False:
+                self._reset_uncertainty()
+                self._recovery_wait_reason = (
+                    "Lidar map matching succeeded; allowing lidar localization to recover"
+                    if result is True else "Landmark recovery withheld: no conclusive lidar registration result"
+                )
+                return False
+        stamp_ns = self._stamp_ns(pose.header.stamp)
+        received_at = self._localization_progress[1]
+        if stamp_ns > self._last_uncertain_stamp_ns:
+            if (self._last_uncertain_at is None
+                    or not 0 <= received_at - self._last_uncertain_at <= self.config.maximum_localization_gap_sec
+                    or self._last_uncertain_ros_ns is None
+                    or not 0 <= self._localization_progress[2] - self._last_uncertain_ros_ns
+                    <= self.config.maximum_localization_gap_sec * 1e9):
+                self._uncertain_count = 0
+                self._uncertain_since_at = received_at
+            self._uncertain_count += 1
+            self._last_uncertain_stamp_ns = stamp_ns
+            self._last_uncertain_at = received_at
+            self._last_uncertain_ros_ns = self._localization_progress[2]
+        return (self._uncertain_count >= self.config.uncertain_samples
+                and self._last_uncertain_at - self._uncertain_since_at >= duration)
 
     @staticmethod
     def _pose_error(first, second):
@@ -403,37 +499,66 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                 continue
         self._refiner.observe_visibility(set(fresh), steady_now)
         command_status = self._read("command_tree_status")
-        if (not self.refinement_config.enabled or quality_error or not self._stationary
+        if (not self.refinement_config.enabled or quality_error
                 or command_status is None or command_status == py_trees.common.Status.RUNNING
                 or self._refinement_seeded(map_name)):
             self._refiner.reset_observations()
             return False
-        # The normal quality check validated acquisition delay at receipt. Use
-        # that same receipt time with stricter uncertainty limits here.
-        if localization_quality_error(pose, self._localization_progress[2], self._refinement_quality):
+        pose_stamp_ns = self._stamp_ns(pose.header.stamp)
+        usable = {}
+        for tag_id, tag in fresh.items():
+            frame = tag.pose.header.frame_id
+            if not frame or frame in (self.map_frame, self.odom_frame):
+                continue
+            position = tag.pose.pose.position
+            distance = math.hypot(position.x, position.y, position.z)
+            if math.isfinite(distance) and distance <= self.refinement_config.maximum_observation_distance_m:
+                usable[tag_id] = (self._stamp_ns(tag.pose.header.stamp), pose_stamp_ns)
+        if not usable:
+            # Keep actual visibility separate: leaving range alone must not
+            # rearm an encounter, or consume an attempt before coming closer.
             self._refiner.reset_observations()
             return False
+        due = set()
         info = self._read("last_localization_info")
-        if info is None or info.header.stamp != pose.header.stamp:
-            return False  # Allow interleaved pose/Info callbacks to catch up.
-        if not self._registration_matches(pose) or not accepted_lidar_localization(info):
+        if info is not None and info.header.stamp == pose.header.stamp:
+            if not self._registration_matches(pose) or not accepted_lidar_localization(info):
+                self._refiner.reset_observations()
+                return False
+            if self._localization_receipt_fresh(now_ns, steady_now, self.quality_config.maximum_age_sec):
+                due = self._refiner.begin_samples(usable, steady_now)
+        # Slow or interleaved lidar callbacks need not erase a qualified burst.
+        # Only new, promptly matched results can contribute geometry samples;
+        # observe stationarity independently at 2 Hz during the bounded attempt.
+        if (self._refiner.attempt_tag_id in usable
+                and self._refiner.stationarity_sample_due(steady_now)):
+            _, last_odometry_at = self._odometry_progress
+            if (last_odometry_at is None or steady_now - last_odometry_at
+                    > self.refinement_config.sample_interval_sec * 1.5):
+                self._stationary_reference = None
+            self._observe_odometry(now_ns, steady_now)
+            if not self._stationary:
+                self._refiner.reset_observations()
+                return False
+        if not due:
+            return False
+        if not self._stationary or localization_quality_error(
+                pose, self._localization_progress[2], self._refinement_quality):
             self._refiner.reset_observations()
             return False
         try:
-            pose_stamp_ns = self._stamp_ns(pose.header.stamp)
             odom_at_pose, _ = self._lookup(self.odom_frame, self.base_frame, Time.from_msg(pose.header.stamp))
             map_to_odom = pose_to_matrix(pose.pose.pose) @ np.linalg.inv(odom_at_pose)
         except (tf2_ros.TransformException, TypeError, ValueError, np.linalg.LinAlgError):
             self._refiner.reset_observations()
             return False
-        for tag_id, tag in fresh.items():
+        for tag_id in due:
+            tag = fresh[tag_id]
             frame = tag.pose.header.frame_id
             if not frame or frame in (self.map_frame, self.odom_frame):
                 continue
             try:
                 observation = pose_to_matrix(tag.pose.pose)
-                if np.linalg.norm(observation[:3, 3]) > self.refinement_config.maximum_observation_distance_m:
-                    continue
                 odom_at_tag, _ = self._lookup(self.odom_frame, frame, Time.from_msg(tag.pose.header.stamp))
                 # Use the lidar estimate and acquisition-time odometry only;
                 # the saved anchor never participates in this measured pose.
@@ -465,6 +590,7 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                 self._refresh_landmarks(map_name, now_ns)
                 self.feedback_message = f"Refined landmark {tag_id} within saved-pose limits"
                 self.node.get_logger().info(self.feedback_message)
+                self._event_publisher.publish("refined", map_name, tag_id, self.feedback_message)
                 return True
         return False
 
@@ -501,26 +627,49 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             self.feedback_message = "No landmarks for active map"
             return
         pose = self._read("last_pose_estimation")
-        quality_error = self._quality_error(pose, now_ns, steady_now)
-        odom_now, odom_stamp = self._observe_odometry(now_ns, steady_now)
-        if self._refine_landmarks(map_name, pose, quality_error, now_ns, steady_now):
+        quality = self._assess_localization(pose, now_ns, steady_now)
+        uncertain = self._persistent_uncertainty(quality, pose, steady_now)
+        if self._refine_landmarks(map_name, pose, quality.detail, now_ns, steady_now):
             return
         if not self.config.enabled:
             self.feedback_message = "Landmark refinement monitoring; recovery disabled"
             return
+        if not quality.healthy and not quality.uncertain:
+            self._healthy_count = 0
+            self._windows.clear()
+            self._window_origins.clear()
+            self.feedback_message = f"Landmark recovery withheld: {quality.detail}"
+            return
+        if quality.healthy and not self.attempts:
+            # A landmark discrepancy is not permission to replace a confident
+            # localization. The saved anchor may itself be inaccurate.
+            self._windows.clear()
+            self._window_origins.clear()
+            self.feedback_message = "Localization healthy; landmark recovery not needed"
+            return
+        if self._recovery_wait_reason:
+            self._healthy_count = 0
+            self.feedback_message = self._recovery_wait_reason
+            return
+        odom_now, odom_stamp = self._observe_odometry(now_ns, steady_now)
         elapsed = float("inf") if self._last_request_at is None else steady_now - self._last_request_at
         exhausted = self.attempts >= self.config.maximum_attempts and elapsed >= self.config.retry_interval_sec
         failure_detail = (
             f"Landmark recovery failed after {self.attempts} attempts; automatic corrections paused "
             "until localization recovers or the map/runtime changes"
         )
-        if exhausted and not self._failed:
+        if exhausted and uncertain and not self._failed:
             self.node.get_logger().warning(failure_detail)
+            self._event_publisher.publish("failed", map_name, self._last_request_tag_id, failure_detail)
             self._failed = True
         candidates = self._candidates(now_ns, steady_now)
         if not candidates:
             self._healthy_count = 0
-            self.feedback_message = failure_detail if exhausted else "Waiting for fresh, distinct, stable landmark observations"
+            self.feedback_message = (
+                "Localization confident; waiting for landmark recovery confirmation" if quality.healthy
+                else failure_detail if exhausted
+                else "Waiting for fresh, distinct, stable landmark observations"
+            )
             return
         _, tag_id, map_to_odom = candidates[0]
         for _, other_id, other in candidates[1:]:
@@ -541,19 +690,14 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             error[0] <= self.config.recovery_position_tolerance_m
             and error[1] <= self.config.recovery_yaw_tolerance_rad
         )
-        if not quality_error and agrees:
+        if quality.healthy and agrees:
             stamp_ns = self._stamp_ns(pose.header.stamp)
             info = self._read("last_localization_info")
             if info is None or info.header.stamp != pose.header.stamp:
-                # Pose and Info callbacks may interleave. Preserve confirmation
-                # progress briefly, but absent evidence must not stall recovery.
-                recent_confirmation = (
-                    self._healthy_count > 0 and self._last_health_at is not None
-                    and steady_now - self._last_health_at < self.quality_config.maximum_age_sec
-                )
-                if not self.attempts or elapsed < self.config.retry_interval_sec or recent_confirmation:
-                    self.feedback_message = "Waiting for registration evidence for the fresh localization estimate"
-                    return
+                # Separate callbacks can interleave. A missing acknowledgement
+                # never turns a confident pose into permission for another seed.
+                self.feedback_message = "Localization confident; waiting for matching registration evidence"
+                return
             if not self._registration_matches(pose):
                 self._healthy_count = 0
             elif stamp_ns > self._last_request_ns and elapsed >= self.config.settle_time_sec:
@@ -563,7 +707,9 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                     self._last_health_at = steady_now
                 if self._healthy_count >= self.config.healthy_samples:
                     if self.attempts:
-                        self.node.get_logger().info(f"Landmark recovery confirmed from tag {tag_id}")
+                        detail = f"Landmark recovery confirmed after using tag {self._last_request_tag_id}"
+                        self.node.get_logger().info(detail)
+                        self._event_publisher.publish("confirmed", map_name, self._last_request_tag_id, detail)
                     self.attempts = 0
                     self._failed = False
                     self.feedback_message = f"Localization healthy and agrees with landmark {tag_id}"
@@ -571,12 +717,14 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
                 self.feedback_message = f"Confirming localization recovery ({self._healthy_count}/{self.config.healthy_samples})"
                 return
         self._healthy_count = 0
-        disagrees = error is not None and (
-            error[0] > self.config.position_error_threshold_m
-            or error[1] > self.config.yaw_error_threshold_rad
-        )
-        if not quality_error and not disagrees and not self.attempts:
-            self.feedback_message = "Localization within landmark correction thresholds"
+        if quality.healthy:
+            self.feedback_message = "Localization confident; further landmark resets withheld pending confirmation"
+            return
+        if not uncertain:
+            self.feedback_message = (
+                f"Checking sustained localization uncertainty ({self._uncertain_count}/{self.config.uncertain_samples}); "
+                f"{quality.detail}"
+            )
             return
         if elapsed < self.config.retry_interval_sec:
             self.feedback_message = "Waiting for post-correction localization results"
@@ -622,6 +770,9 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
         self.attempts += 1
         self._last_request_ns = now_ns
         self._last_request_at = steady_now
+        self._last_request_tag_id = tag_id
+        # Each retry must be justified by fresh post-seed uncertainty evidence.
+        self._persistent_uncertainty(LocalizationAssessment(), None, steady_now)
         self._healthy_count = 0
         self._last_health_stamp_ns = 0
         self._last_health_at = None
@@ -631,3 +782,4 @@ class LandmarkRelocalizer(py_trees.behaviour.Behaviour):
             "waiting for confirmed localization"
         )
         self.node.get_logger().info(self.feedback_message)
+        self._event_publisher.publish("requested", map_name, tag_id, self.feedback_message)

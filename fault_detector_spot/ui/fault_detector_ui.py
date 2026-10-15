@@ -37,6 +37,7 @@ from .inspection.finalizing_controls import FinalizingInspectionControls
 from .manipulation.controls import ManipulationControls
 from .navigation.base_movement_controls import BaseMovementControls
 from .navigation.controls import NavigationControls
+from .navigation.landmark_feedback import LandmarkFeedbackLabel
 from .recording.controls import RecordingControls
 from .ros.application_client import ApplicationClient
 from .ros.micro_ros_agent_status_client import MicroRosAgentStatusClient
@@ -88,6 +89,7 @@ class Fault_Detector_UI(QWidget):
         self.visible_label = QLabel("Visible tags: []")
         self.visible_label.setTextFormat(Qt.RichText)
         self.navigation_mode_label = QLabel("Navigation: OFF")
+        self.landmark_feedback_label = LandmarkFeedbackLabel()
         self.sensor_indicator_label = QLabel("●")
         self.sensor_indicator_label.setAlignment(Qt.AlignCenter)
         self.sensor_indicator_label.setFixedWidth(12)
@@ -227,6 +229,7 @@ class Fault_Detector_UI(QWidget):
             self.agent_copy_button,
             self._make_estop_button(),
             self,
+            landmark_feedback_label=self.landmark_feedback_label,
         )
         main_layout.addWidget(self.status_overview_panel)
 
@@ -837,6 +840,9 @@ class Fault_Detector_UI(QWidget):
         self.navigation_setup_client.request_rejected.connect(
             self._process_application_error
         )
+        self.navigation_setup_client.landmark_feedback_received.connect(
+            self.landmark_feedback_label.show_event, Qt.QueuedConnection,
+        )
         self.probe_setup_client = ProbeSetupClient(
             self.node,
             self.application_client.client_id,
@@ -928,6 +934,7 @@ class Fault_Detector_UI(QWidget):
         self.visible_tags = {tag.id: tag for tag in msg.elements}
         self.manipulation_controls.update_tags_dropdown()
         self.base_movement_controls.update_tags_dropdown()
+        self.navigation_controls.update_tags_dropdown()
         inspection_controls = self.__dict__.get("inspection_controls")
         if inspection_controls is not None:
             inspection_controls.update_base_position_tags_dropdown()
