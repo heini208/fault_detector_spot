@@ -30,7 +30,8 @@ def record(message=WARNING, name="move_group-1-stderr"):
 
 
 @pytest.mark.parametrize("tag_frame", ["tag36h11:2", "fiducial_2", "filtered_fiducial_2"])
-def test_screen_throttle_preserves_file_log_and_records(tmp_path, tag_frame):
+@pytest.mark.parametrize("colored", [False, True])
+def test_screen_throttle_preserves_file_log_and_records(tmp_path, tag_frame, colored):
     now = [100.0]
     screen = io.StringIO()
     screen_handler = logging.StreamHandler(screen)
@@ -42,6 +43,8 @@ def test_screen_throttle_preserves_file_log_and_records(tmp_path, tag_frame):
     logger.addHandler(file_handler)
     warning = record("%s")
     message = WARNING.replace("tag36h11:2", tag_frame)
+    if colored:
+        message = message.replace("[WARN]", "\x1b[33m[WARN]") + "\x1b[0m"
     warning.args = (message,)
     original = warning.msg, warning.args
     try:
@@ -79,6 +82,7 @@ def test_unmatched_messages_always_pass(message, name):
     assert console_filter.filter(record())
     assert console_filter.filter(record(message, name))
     assert console_filter.filter(record(message, name))
+    assert console_filter.filter(record(f"\x1b[33m{message}\x1b[0m", name))
 
 
 def test_one_global_monotonic_throttle_ignores_ros_clock_epoch():
@@ -109,6 +113,25 @@ def test_base_and_hand_frames_share_one_console_reminder_budget():
     now[0] = 130.0
     assert console_filter.filter(record(filtered_warning + "\n" + raw_warning))
     assert not console_filter.filter(record())
+
+
+def test_colored_and_plain_warnings_share_one_reminder_budget():
+    now = [100.0]
+    console_filter = MoveItTagWarningConsoleFilter(clock=lambda: now[0])
+    colored = WARNING.replace("[WARN]", "\x1b[1;33m[WARN]\x1b[m")
+    colored += "\x1b[0m"
+    assert console_filter.filter(record(colored))
+    assert not console_filter.filter(record(WARNING))
+    assert not console_filter.filter(record(colored))
+    now[0] = 130.0
+    assert console_filter.filter(record(colored))
+    assert not console_filter.filter(record(WARNING))
+
+
+def test_unrecognized_terminal_controls_are_not_removed_for_matching():
+    console_filter = MoveItTagWarningConsoleFilter(clock=lambda: 100.0)
+    assert console_filter.filter(record())
+    assert console_filter.filter(record("\x1b[2K" + WARNING))
 
 
 def test_launch_hook_installs_once_and_removes_at_shutdown(monkeypatch, tmp_path):

@@ -393,6 +393,7 @@ The application launch throttles one known console message: MoveIt's repeated
 past-extrapolation warning for stale `tag36h11:<id>`, `fiducial_<id>` or
 `filtered_fiducial_<id>` frames relative to `odom`. The first occurrence is shown,
 then at most one every 30 seconds.
+Matching ignores ROS console color codes while preserving the original output.
 Other warnings and errors remain visible, and native MoveIt file logs and
 `/rosout` retain the full messages. This is console filtering, not a change to tag
 timestamps, TF, collision checks or sensor freshness. MoveIt attempts to resolve

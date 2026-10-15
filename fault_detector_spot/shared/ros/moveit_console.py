@@ -10,6 +10,9 @@ from launch.logging import launch_config
 
 
 _PROCESS_LOGGER = re.compile(r"move_group(?:-\d+)?-(?:stdout|stderr)")
+# ROS console colors wrap the warning in SGR sequences. Ignore formatting only
+# when matching; leave the record untouched for screen rendering and file logs.
+_ANSI_SGR = re.compile(r"\x1b\[[0-9;:]*m")
 _NUMBER = r"\d+(?:\.\d+)?"
 _STALE_TAG_WARNING = re.compile(
     r"(?:\[move_group(?:-\d+)?\] )?"
@@ -34,7 +37,7 @@ class MoveItTagWarningConsoleFilter(logging.Filter):
     def filter(self, record):
         if not _PROCESS_LOGGER.fullmatch(record.name):
             return True
-        lines = record.getMessage().splitlines()
+        lines = _ANSI_SGR.sub("", record.getMessage()).splitlines()
         if not lines or not all(_STALE_TAG_WARNING.fullmatch(line) for line in lines):
             return True
         now = self._clock()
