@@ -28,7 +28,7 @@ from fault_detector_spot.inspection.model.sensor_models import (
     SensorDefinition,
 )
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
-from fault_detector_spot.shared.ros.sensor_geometry_adapter import (
+from fault_detector_spot.inspection.ros.sensor_geometry_adapter import (
     head_geometry_from_messages,
     head_geometry_to_messages,
 )

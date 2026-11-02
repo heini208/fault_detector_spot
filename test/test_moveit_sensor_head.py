@@ -16,7 +16,7 @@ from fault_detector_spot.inspection.model.sensor_models import DEFAULT_HAND_SENS
 from fault_detector_spot.manipulation.moveit_sensor_head import MoveItSensorHead
 from fault_detector_spot.manipulation.sensor_head_geometry import SENSOR_HEAD_OBJECT_ID
 from fault_detector_spot.shared.geometry.models import PoseData, QuaternionData, Vector3Data
-from fault_detector_spot.shared.ros.sensor_geometry_adapter import head_geometry_to_messages
+from fault_detector_spot.inspection.ros.sensor_geometry_adapter import head_geometry_to_messages
 
 from test_sensor_geometry import binary_stl
 from test_sensor_mesh_store import geometry_for

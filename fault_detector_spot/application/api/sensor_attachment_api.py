@@ -12,7 +12,7 @@ from fault_detector_spot.application.controllers.sensor_attachment_controller im
     SensorAttachmentStatus,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
-from fault_detector_spot.shared.ros.sensor_geometry_adapter import (
+from fault_detector_spot.inspection.ros.sensor_geometry_adapter import (
     head_geometry_to_messages,
 )
 

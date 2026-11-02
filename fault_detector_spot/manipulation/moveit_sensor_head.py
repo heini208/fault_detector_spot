@@ -15,7 +15,7 @@ from fault_detector_spot.manipulation.sensor_head_geometry import (
     validate_sensor_head_model,
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
-from fault_detector_spot.shared.ros.sensor_geometry_adapter import head_geometry_from_messages
+from fault_detector_spot.inspection.ros.sensor_geometry_adapter import head_geometry_from_messages
 
 
 class MoveItSensorHead:

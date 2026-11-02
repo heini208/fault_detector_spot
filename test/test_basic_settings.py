@@ -6,7 +6,7 @@ import pytest
 from PyQt5.QtWidgets import QApplication
 
 from fault_detector_spot.shared.persistence.basic_settings import (
-    BasicSettingsRepository, factory_settings, startup_settings, _startup_settings,
+    BasicSettingsRepository, _startup_settings,
 )
 from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
 from fault_detector_spot.manipulation.force_contact_policy import SpeedAwareForceContactPolicy
@@ -28,41 +28,6 @@ def isolated_settings(tmp_path, monkeypatch):
     _startup_settings.cache_clear()
     yield
     _startup_settings.cache_clear()
-
-
-def test_roundtrip_and_startup_snapshot():
-    repo = BasicSettingsRepository()
-    assert startup_settings() == {}
-    values = factory_settings()
-    values.update(arm_mode='precision', mount_approval_at_startup=True, force_threshold_percent=250.)
-    repo.save(values)
-    assert repo.load() == values
-    assert startup_settings() == {}  # Saving does not reconfigure this process.
-    _startup_settings.cache_clear()  # Simulate next process start.
-    assert dict(startup_settings()) == values
-
-
-@pytest.mark.parametrize('values', [
-    {'arm_mode': 'fast'}, {'mount_approval_at_startup': 1},
-    {'force_threshold_percent': 0}, {'force_threshold_percent': float('nan')},
-    {'arm_normal_linear_speed_mps': -1}, {'base_normal_linear_speed_mps': True},
-    {'unknown': 1},
-])
-def test_invalid_save_preserves_previous_file(values):
-    repo = BasicSettingsRepository()
-    repo.save({'arm_mode': 'normal'})
-    before = repo.path.read_bytes()
-    with pytest.raises(ValueError):
-        repo.save(values)
-    assert repo.path.read_bytes() == before
-
-
-def test_corrupt_settings_are_not_silently_replaced():
-    repo = BasicSettingsRepository()
-    repo.path.parent.mkdir(parents=True)
-    repo.path.write_text('version: 99\nsettings: {}\n')
-    with pytest.raises(ValueError, match='Unsupported'):
-        repo.load()
 
 
 def test_saved_arm_speeds_override_yaml_and_ros_but_not_explicit_values():

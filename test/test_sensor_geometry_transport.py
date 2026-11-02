@@ -18,7 +18,7 @@ from fault_detector_spot.inspection.model.sensor_geometry import MAX_MESH_CHUNK_
 from fault_detector_spot.inspection.model.sensor_models import quaternion_from_rpy_degrees
 from fault_detector_spot.inspection.repository.sensor_repository import SensorRepository
 from fault_detector_spot.shared.geometry.models import PoseData, Vector3Data
-from fault_detector_spot.shared.ros.sensor_geometry_adapter import (
+from fault_detector_spot.inspection.ros.sensor_geometry_adapter import (
     head_geometry_from_messages, head_geometry_to_messages,
 )
 from fault_detector_spot.ui.ros.sensor_registry_client import SensorRegistryClient

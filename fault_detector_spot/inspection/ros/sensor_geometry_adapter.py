@@ -1,4 +1,4 @@
-"""Convert optional sensor collision metadata at the ROS boundary."""
+"""Convert inspection sensor collision metadata at the ROS boundary."""
 
 from fault_detector_msgs.msg import SensorHeadGeometry as GeometryMessage
 

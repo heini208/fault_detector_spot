@@ -20,7 +20,7 @@ from fault_detector_spot.inspection.model.sensor_models import (
     MotionAttachmentSnapshot,
     sensor_definition_from_values,
 )
-from fault_detector_spot.shared.ros.sensor_geometry_adapter import head_geometry_from_messages
+from fault_detector_spot.inspection.ros.sensor_geometry_adapter import head_geometry_from_messages
 
 from test_sensor_attachment_controller import build_controller, sensor_definition
 from test_sensor_mesh_store import geometry_for, mesh

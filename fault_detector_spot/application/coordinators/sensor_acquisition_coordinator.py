@@ -14,9 +14,13 @@ from rosidl_runtime_py.utilities import get_message
 from fault_detector_spot.inspection.measurement import (
     MeasurementCompletionState,
     MeasurementRecording,
-    RosTopicRecordingSource,
-    SpotGeometryRecordingSource,
     validate_measurement_context,
+)
+from fault_detector_spot.inspection.measurement.ros_topic_recording_source import (
+    RosTopicRecordingSource,
+)
+from fault_detector_spot.inspection.measurement.spot_geometry_recording_source import (
+    SpotGeometryRecordingSource,
 )
 from fault_detector_spot.shared.geometry.models import (
     PoseData,
