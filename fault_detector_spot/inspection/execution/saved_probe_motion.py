@@ -7,7 +7,6 @@ from fault_detector_msgs.msg import OperationalIntent
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.semantic_command import (
     InspectionSelection,
-    SemanticCommand,
 )
 
 from fault_detector_spot.inspection.sensing.surface_distance_validation import (

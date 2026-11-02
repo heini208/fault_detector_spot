@@ -1309,9 +1309,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-
-
-class TagNotFound(Exception):
-    """Raised when the requested tag ID is not visible."""
-
-    pass

@@ -1,4 +1,5 @@
 import math
+from typing import TYPE_CHECKING
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QLineEdit, QDoubleSpinBox, QComboBox, QCheckBox, QWidget
@@ -16,6 +17,9 @@ from ..shared.collapsible_section import CollapsibleSection
 from ..shared.posture_toggle import PostureToggle
 from ..shared.movement_layout import control_group
 from ..ros.arm_collision_client import ArmCollisionClient
+
+if TYPE_CHECKING:
+    from ..fault_detector_ui import Fault_Detector_UI
 
 
 class TagNotFound(Exception):

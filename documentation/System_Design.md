@@ -790,7 +790,7 @@ Key points:
 
 - Implemented as a `py_trees.composites.Selector` that **checks each command ID** and runs the corresponding behaviour sequence.
 - Wraps each command in a **guarded sequence** that first verifies the blackboard variable `last_command` matches the command ID.
-- Handles both **Spot actions** (via [`ActionClientBehaviour` / `SimpleSpotAction`)](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Futility%2Fspot_action.py) and **non-robot commands** (navigation, mapping, or state updates).
+- Handles **Spot operations** through dedicated behaviour adapters and execution components, alongside mapping and state-update commands.
 - Integrated with **emergency cancellation** via a higher-level `CancelableCommandSelector` that prioritizes emergency stop sequences over normal commands.
 - Supports **preprocessing and helper logic**, e.g., fetching target poses, checking tag visibility, or computing SLAM-related goals before executing the
   command.
@@ -1499,9 +1499,12 @@ At a high level:
     - Sets up RGB‑D synchronization for all body cameras.
     - Optionally starts RViz with a preconfigured mapping/navigation layout [(`mapping.rviz`)](..%2Fconfig%2Fmapping.rviz).
 
-- Nav2 is started and stopped via `Nav2Helper`, which launches a custom Nav2 bringup file
-  ([`nav2_spot_launch.py`](..%2Flaunch%2Fnav2_spot_launch.py)) using a parameter set tuned for RTAB‑Map and multi‑camera depth input
-  [(`nav2_spot_params.yaml`](..%2Fconfig%2Fnav2_spot_params.yaml)). [`Nav2Helper`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fnav2_helper.py) also tracks whether the Nav2 process is currently running.
+- Nav2 is started and stopped via
+  [`Nav2RuntimeManager`](../fault_detector_spot/navigation/runtime/nav2_runtime_manager.py),
+  which launches [`nav2_lidar_launch.py`](../launch/nav2_lidar_launch.py) with
+  [`nav2_lidar_params.yaml`](../config/nav2_lidar_params.yaml). It tracks the Nav2
+  process while the launch includes Nav2's navigation stack using RTAB‑Map's map
+  and the filtered lidar inputs.
 
 - The currently active map name and the lists of maps, waypoints, and landmarks are published as latched topics
   (`/active_map`, `/map_list`, `/waypoint_list`, `/landmark_list`), matching the interfaces summarized in
@@ -1646,27 +1649,27 @@ is only important that:
 
 ## 10.8 Navigation to goals with Nav2
 
-Once `last_command.goal_pose` is set (from a waypoint, tag, or current pose), navigation is executed by the [`NavigateToGoalPose`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fnavigate_to_goal_pose.py) behaviour:
+Once `last_command.goal_pose` is set (from a waypoint, tag, or current pose), the
+[`NavigateToGoalPose`](../fault_detector_spot/navigation/behaviours/navigate_to_goal_pose.py)
+behaviour passes it to the shared
+[`WaypointNavigationExecutor`](../fault_detector_spot/navigation/waypoint_navigation_executor.py):
 
-- It reads `last_command.goal_pose` from the blackboard and constructs a `NavigateToPose.Goal` for Nav2.
-- It sends this goal to the `/navigate_to_pose` action server and monitors the result:
-    - `STATUS_SUCCEEDED` → behaviour returns `SUCCESS`.
-    - Any other terminal status → behaviour returns `FAILURE`.
-- The behaviour remains `RUNNING` while Nav2 is planning and executing.
+- The executor validates the map-frame goal, stows the arm, and prepares walking height.
+- It sends a `NavigateToPose.Goal` to `/navigate_to_pose` and monitors the result and runtime guards.
+- After Nav2 succeeds, it waits for the velocity stream to stop and for stationary walking completion before reporting success.
+- It owns cancellation and stopping; the behaviour propagates cancellation and maps executor outcomes to tree status.
 
-An additional support ROS2 node [`Nav2CmdVelGate`](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fnodes%2Fnavigation%2Fnav2_cmd_vel_gate.py), manages the Nav2
-controller lifecycle (e.g. activating or deactivating the `controller_server` based on goal status). This was introduced because Nav2 would otherwise
-continuously publish velocity commands and block other sources of base control. By gating the controller, the system can safely mix goal‑based navigation with
-direct base movement commands without conflicts.
+The behaviour remains `RUNNING` while preparation, navigation, or completion is in progress.
 
 Base-level commands such as `STAND_UP`, `MOVE_BASE_RELATIVE`, or `STOP_BASE` are implemented using Spot-specific action behaviours (see
 [6.3 Command Behaviour Execution Nodes](#63-command-behaviour-execution-nodes)) and can be freely combined with mapping and navigation commands in the command
 buffer or in recorded sequences.
 
-Nav2 itself is configured via the [`nav2_spot_params.yaml`](..%2Fconfig%2Fnav2_spot_params.yaml) file, which disables AMCL and the map server, subscribes
-directly to RTAB‑Map’s `/map` topic for the
-global costmap, and uses multi-source obstacle layers (depth cameras and, when available, base LiDAR) to build local and global costmaps suitable for Spot’s
-omnidirectional base.
+Nav2 uses [`nav2_lidar_params.yaml`](../config/nav2_lidar_params.yaml). The
+navigation launch relies on RTAB‑Map's `/map` for the global costmap and starts
+without AMCL or a map server. Local and global costmaps use
+`/velodyne/points_obstacles` for obstacle marking and
+`/velodyne/points_filtered` for clearing.
 
 ---
 

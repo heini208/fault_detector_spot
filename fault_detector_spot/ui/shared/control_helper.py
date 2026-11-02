@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from PyQt5.QtWidgets import QMessageBox
+
+if TYPE_CHECKING:
+    from ..fault_detector_ui import Fault_Detector_UI
 
 
 class UIControlHelper(ABC):

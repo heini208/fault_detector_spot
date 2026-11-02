@@ -1,8 +1,8 @@
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import TransformStamped
 
-from fault_detector_spot.sensing.behaviours.hand_camera_tag_detection import (
-    HandCameraTagDetection,
+from fault_detector_spot.sensing.observations.tag_observation_tracker import (
+    HandTagObservationTracker,
 )
 
 
@@ -16,7 +16,7 @@ def test_tag_element_preserves_orientation_and_stamp():
 
     stamp = Time(sec=12, nanosec=34)
 
-    tag = HandCameraTagDetection._create_tag_element(
+    tag = HandTagObservationTracker._create_tag_element(
         7,
         transform,
         stamp,

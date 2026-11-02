@@ -1,4 +1,5 @@
 import math
+from typing import TYPE_CHECKING
 
 from fault_detector_spot.navigation.body_height import (
     MIN_BODY_HEIGHT_M, MAX_BODY_HEIGHT_M,
@@ -15,6 +16,9 @@ from geometry_msgs.msg import Quaternion
 from ..shared.control_helper import UIControlHelper
 from ..shared.posture_toggle import PostureToggle
 from ..shared.movement_layout import control_group
+
+if TYPE_CHECKING:
+    from ..fault_detector_ui import Fault_Detector_UI
 
 
 class BaseMovementControls(UIControlHelper):

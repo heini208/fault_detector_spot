@@ -29,7 +29,6 @@ setup(
             'fault_detector_ui = fault_detector_spot.ui.fault_detector_ui:main',
             'bt_runner = fault_detector_spot.application.behaviour_tree.runner:main',
             'record_manager = fault_detector_spot.application.recording.record_manager_node:main',
-            'nav2_cmd_vel_gate = fault_detector_spot.navigation.ros.nav2_cmd_vel_gate:main',
             'application_api = '
             'fault_detector_spot.application.api.application_api_node:main',
             'available_frames_publisher = '

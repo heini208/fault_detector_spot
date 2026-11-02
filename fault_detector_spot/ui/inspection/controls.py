@@ -3,8 +3,6 @@
 import math
 from fault_detector_spot.manipulation.arm_motion_parameters import ArmMotionParameters
 
-from copy import deepcopy
-
 from PyQt5.QtCore import QLocale, Qt, QTimer
 from PyQt5.QtGui import QDoubleValidator, QIntValidator
 from PyQt5.QtWidgets import (
@@ -13,7 +11,6 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
-    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -37,8 +34,6 @@ from fault_detector_spot.inspection.model.models import (
     MINIMUM_ALIGNED_PREAPPROACH_SEPARATION_M,
 )
 from fault_detector_spot.shared.geometry.models import (
-    PoseData,
-    QuaternionData,
     Vector3Data,
 )
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
@@ -1840,10 +1835,6 @@ class InspectionControls(UIControlHelper):
         alignment_reached = (
             presentation.motion_states[RefinementStage.ALIGNMENT]
             == RefinementMotionState.REACHED
-        )
-        oriented = (
-            presentation.motion_states[RefinementStage.ALIGNMENT]
-            == RefinementMotionState.ORIENTED
         )
         alignment_adjustable = presentation.motion_states[
             RefinementStage.ALIGNMENT

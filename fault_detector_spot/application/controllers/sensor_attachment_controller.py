@@ -16,7 +16,6 @@ from fault_detector_spot.application.commanding.semantic_command import (
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
     MotionAttachmentSnapshot,
-    SensorDefinition,
     uses_stock_hand_geometry,
 )
 from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (

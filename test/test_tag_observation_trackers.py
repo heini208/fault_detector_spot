@@ -46,14 +46,14 @@ def tf_message(*frame_ids):
     return message
 
 
-def detection_message(tag_id=7):
+def detection_message(tag_id=7, hamming=0, decision_margin=100.0):
     message = AprilTagDetectionArray()
     message.header.stamp.sec = 10
     message.header.stamp.nanosec = 100_000_000
     detection = AprilTagDetection()
     detection.id = tag_id
-    detection.hamming = 0
-    detection.decision_margin = 100.0
+    detection.hamming = hamming
+    detection.decision_margin = decision_margin
     message.detections.append(detection)
     return message
 
@@ -95,10 +95,46 @@ def test_hand_tracker_retries_detection_until_tf_arrives():
     assert tracker.snapshot(Time(seconds=10.2)) == {}
     assert tracker.pending_tag_ids() == (7,)
 
+    tracker.receive_detections(AprilTagDetectionArray())
     buffer.transforms["tag36h11:7"] = transform(10, 2.0)
     observations = tracker.snapshot(Time(seconds=10.3))
 
     assert set(observations) == {7}
+    assert tracker.pending_tag_ids() == ()
+
+
+def test_hand_tracker_rejects_nonzero_hamming_detection():
+    tracker = HandTagObservationTracker(
+        FakeTfBuffer({"tag36h11:7": transform(10, 2.0)}),
+    )
+    tracker.receive_detections(detection_message(hamming=1))
+
+    assert tracker.pending_tag_ids() == ()
+    assert tracker.snapshot(Time(seconds=10.2)) == {}
+
+
+def test_hand_tracker_rejects_low_decision_margin_detection():
+    tracker = HandTagObservationTracker(
+        FakeTfBuffer({"tag36h11:7": transform(10, 2.0)}),
+        min_decision_margin=40.0,
+    )
+    tracker.receive_detections(detection_message(decision_margin=20.0))
+
+    assert tracker.pending_tag_ids() == ()
+    assert tracker.snapshot(Time(seconds=10.2)) == {}
+
+
+def test_hand_tracker_expires_pending_detection_before_delayed_tf():
+    buffer = FakeTfBuffer()
+    tracker = HandTagObservationTracker(buffer, tf_pending_sec=0.5)
+    tracker.receive_detections(detection_message())
+
+    assert tracker.snapshot(Time(seconds=10.2)) == {}
+    assert tracker.pending_tag_ids() == (7,)
+
+    buffer.transforms["tag36h11:7"] = transform(10, 2.0)
+
+    assert tracker.snapshot(Time(seconds=10.7)) == {}
     assert tracker.pending_tag_ids() == ()
 
 

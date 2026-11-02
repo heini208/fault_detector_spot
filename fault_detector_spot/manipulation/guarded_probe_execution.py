@@ -1250,4 +1250,4 @@ class GuardedProbeExecution:
         return normalized
 
 
-__all__ = ["GuaredProbeExecution"]
+__all__ = ["GuardedProbeExecution"]

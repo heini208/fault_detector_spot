@@ -28,11 +28,11 @@ For the full technical description, refer to the accompanying system design docu
       - `ui_classes/…` – UI and recording control nodes
 - `launch/`
   - `fault_detector_launch.py` – main launch file for real robot
-  - `sim_fault_detector_launch.py` – simplified launch for simulation
-  - `nav2_spot_launch.py` – Nav2 bringup tuned for Spot
-  - `rtab_mapping_launch.py` – RTAB‑Map launch (mapping & localization)
+  - `nav2_lidar_launch.py` – Nav2 bringup using the lidar configuration
+  - `lidar_rtab_mapping_launch.py` – RTAB‑Map launch (mapping & localization)
+  - `lidar_frame_adapter_launch.py` – standalone lidar frame adapter and mount TF
 - `config/`
-  - `nav2_spot_params.yaml` / `nav2_sim_params.yaml` – Nav2 configuration
+  - `nav2_lidar_params.yaml` – current Nav2 configuration
   - `mapping.rviz` – RViz config for mapping/navigation
   - `my_tags.yaml`, `my_tags_sim.yaml` – AprilTag configuration for `apriltag_ros`
 - `documentation/`
@@ -67,7 +67,6 @@ You must have the following ROS 2 packages installed and sourced:
 
 - **Perception**
   - [`apriltag_ros`](https://github.com/christianrauch/apriltag_ros) (or [AprilRobotics/apriltag_ros](https://github.com/AprilRobotics/apriltag_ros))
-  - `pointcloud_to_laserscan` (if using the Nav2 + synthetic scan pipeline)
 
 - **Mapping & Navigation**
   - [`rtabmap_ros`](https://github.com/introlab/rtabmap_ros) (and `rtabmap_slam`, `rtabmap_sync`)
@@ -639,19 +638,9 @@ and expected observations; this preset has only been checked offline so far.
 
 ### 4.2 Simulation / reduced setup
 
-For a simplified, simulation‑oriented setup:
-
-```bash
-ros2 launch fault_detector_spot sim_fault_detector_launch.py
-```
-
-This launches:
-
-- `fault_detector_ui`
-- `record_manager`
-- `sim_bt_runner` (instead of the full `bt_runner`)
-
-You are expected to provide simulated topics for the UI and BT (e.g. via Gazebo or your own nodes).
+This package does not supply a dedicated reduced simulation launch or simulation
+BT runner. Simulation requires a separately configured environment that supplies
+the interfaces used by the application.
 
 ### 4.3 Mapping and Localization (RTAB‑Map)
 
@@ -956,21 +945,25 @@ sees.
 
 ### 4.4 Navigation (Nav2)
 
-Nav2 is brought up isolated with [`nav2_spot_launch.py`](nav2_spot_launch.py). This:
+The application's `Nav2RuntimeManager` starts
+[`nav2_lidar_launch.py`](launch/nav2_lidar_launch.py). This:
 
-- Includes `nav2_bringup/bringup_launch.py` with custom params
-- Creates synthetic `/scan` topic from multiple depth cameras (`pointcloud_to_laserscan`)
-- Starts the `nav2_cmd_vel_gate` node to coordinate Nav2 and Spot base control
+- Includes `nav2_bringup/navigation_launch.py` with
+  [`nav2_lidar_params.yaml`](config/nav2_lidar_params.yaml)
+- Uses RTAB‑Map's `/map` for the global costmap
+- Uses `/velodyne/points_obstacles` for obstacle marking and
+  `/velodyne/points_filtered` for clearing
 
-Example:
+Standalone launch, when the mapping/localization and lidar inputs are available:
 
 ```bash
-ros2 launch fault_detector_spot nav2_spot_launch.py \
-  use_sim_time:=false \
-  map:=/path/to/your_map.yaml
+ros2 launch fault_detector_spot nav2_lidar_launch.py use_sim_time:=false
 ```
 
-The behaviour tree (`bt_runner`) interacts with Nav2 via the `NavigateToGoalPose` behaviour and Nav2’s `/navigate_to_pose` action.
+The `params_file` launch argument can select a different Nav2 configuration.
+The behaviour tree's `NavigateToGoalPose` behaviour delegates to
+`WaypointNavigationExecutor`, which owns arm stow, walking-height preparation,
+Nav2's `/navigate_to_pose` action, cancellation, and stationary completion.
 
 ---
 

@@ -12,7 +12,7 @@ import zlib
 
 from fault_detector_spot.inspection.model.sensor_geometry import (
     MAX_COLLISION_BYTES,
-    MAX_MESH_TRIANGLES,
+    MAX_MESH_TRIANGLES as MAX_MESH_TRIANGLES,
     SensorHeadGeometry,
     validate_collision_mesh,
 )

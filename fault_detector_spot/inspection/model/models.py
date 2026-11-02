@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from fault_detector_spot.navigation.body_height import validate_body_height
-from fault_detector_spot.shared.geometry.models import PoseData, QuaternionData, Vector3Data
+from fault_detector_spot.shared.geometry.models import PoseData
 from fault_detector_spot.shared.persistence.file_storage import validate_storage_name
 
 from fault_detector_spot.inspection.sensing import (
