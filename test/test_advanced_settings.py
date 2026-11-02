@@ -11,7 +11,7 @@ from PyQt5.QtGui import QWheelEvent
 from PyQt5.QtWidgets import QApplication
 
 from fault_detector_spot.shared.persistence.basic_settings import (
-    BasicSettingsRepository, factory_advanced_settings, _startup_settings,
+    BasicSettingsRepository, factory_advanced_settings,
 )
 from fault_detector_spot.shared.persistence.advanced_settings import KEYS
 from fault_detector_spot.ui.settings.basic_settings_page import BasicSettingsPage
@@ -27,14 +27,6 @@ from test_arm_motion_parameters import FakeNode
 from test_moveit_sensor_launch import launch_parameters, expand_configuration
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture(autouse=True)
-def isolated_settings(tmp_path, monkeypatch):
-    monkeypatch.setenv('ROS_HOME', str(tmp_path / 'ros'))
-    _startup_settings.cache_clear()
-    yield
-    _startup_settings.cache_clear()
 
 
 @pytest.fixture

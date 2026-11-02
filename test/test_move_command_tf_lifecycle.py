@@ -27,9 +27,6 @@ def test_behavior_tree_uses_one_robot_command_resource_owner():
         "fault_detector_spot/application/behaviour_tree/behaviours/"
         "helper_initializer.py"
     )
-    runner = _read(
-        "fault_detector_spot/application/behaviour_tree/runner.py"
-    )
     assert resources.count("ActionClientWrapper(") == 1
     assert resources.count("TFListenerWrapper(") == 1
     assert "get_arm_movement_executor(" in resources
@@ -39,7 +36,6 @@ def test_behavior_tree_uses_one_robot_command_resource_owner():
     assert "executor.guarded_probe_execution.contact_telemetry" in resources
     assert "get_posture_state_source(" in resources
     assert "self.robot_command_resources = RobotCommandResources()" in helper
-    assert "helper_initializer.close()" in runner
 
 
 def test_shared_robot_command_resources_have_explicit_teardown():

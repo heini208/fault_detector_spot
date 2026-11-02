@@ -622,7 +622,7 @@ class CommandController:
                     continuation_safe=status.state is CommandControllerState.FAILED and status.continuation_safe,
                     retry_command=status.retry_command if status.state is CommandControllerState.FAILED else None,
                 )
-                self._complete_cancellation_locked()
+                self._refresh_stop_confirmation_locked()
                 self._dispatch_next_locked()
                 return True
             if stopping:
@@ -680,9 +680,6 @@ class CommandController:
         self._last_reconciled.pop(request_id, None)
         self._last_execution_receipt.pop(request_id, None)
         self._last_execution_sequence.pop(request_id, None)
-
-    def _complete_cancellation_locked(self):
-        self._refresh_stop_confirmation_locked()
 
     def _refresh_stop_confirmation_locked(self):
         completed_stops = []

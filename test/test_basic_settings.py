@@ -22,14 +22,6 @@ from fault_detector_spot.inspection.repository.sensor_attachment_state_store imp
 from fault_detector_msgs.msg import SensorAttachmentState
 
 
-@pytest.fixture(autouse=True)
-def isolated_settings(tmp_path, monkeypatch):
-    monkeypatch.setenv('ROS_HOME', str(tmp_path / 'ros'))
-    _startup_settings.cache_clear()
-    yield
-    _startup_settings.cache_clear()
-
-
 def test_saved_arm_speeds_override_yaml_and_ros_but_not_explicit_values():
     BasicSettingsRepository().save({
         'arm_normal_linear_speed_mps': .031,

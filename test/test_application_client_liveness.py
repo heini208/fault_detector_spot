@@ -54,7 +54,7 @@ def test_silent_connection_loss_retains_acknowledged_request_and_rejects_stale_r
     adapter._poll_liveness()
     adapter._poll_liveness()
     assert len(uncertain) == 1
-    assert local_id in adapter._goal_handles
+    assert adapter._pending_operations[local_id].goal_handle is not None
     assert local_id in adapter._pending_operations
     assert adapter._pending_operations[local_id].uncertain
     assert transport.send_goal_async.call_count == 1
@@ -63,7 +63,7 @@ def test_silent_connection_loss_retains_acknowledged_request_and_rejects_stale_r
                   state(9, code=ApplicationCommandState.STATE_STOP_CONFIRMED), state(10)):
         adapter._receive_state(stale)
         assert adapter._pending_operations[local_id].uncertain
-        assert local_id in adapter._goal_handles
+        assert adapter._pending_operations[local_id].goal_handle is not None
     assert len(received) == 1
 
     adapter._receive_state(state(11))
@@ -73,7 +73,6 @@ def test_silent_connection_loss_retains_acknowledged_request_and_rejects_stale_r
     assert len(uncertain) == 2
     adapter._receive_state(state(12, code=ApplicationCommandState.STATE_STOP_CONFIRMED))
     assert not adapter._pending_operations
-    assert not adapter._goal_handles
     result_response.set_exception(RuntimeError("Late result channel failure"))
     assert len(uncertain) == 2
 
@@ -82,10 +81,9 @@ def test_result_loss_keeps_handle_until_fresh_correlated_terminal_state(client):
     adapter, local_id, _now, transport, _node, result_response = client
     adapter._receive_feedback(local_id, SimpleNamespace(feedback=SimpleNamespace(state=state(1))))
     result_response.set_exception(RuntimeError("Disconnected"))
-    assert local_id in adapter._goal_handles
+    assert adapter._pending_operations[local_id].goal_handle is not None
     assert adapter._pending_operations[local_id].uncertain
     adapter._receive_state(state(2, code=ApplicationCommandState.STATE_SUCCEEDED))
-    assert not adapter._goal_handles
     assert not adapter._pending_operations
     assert transport.send_goal_async.call_count == 1
 
@@ -100,7 +98,7 @@ def test_goal_ack_without_feedback_still_expires_to_uncertainty(client):
     now[0] = 3.1
     adapter._poll_liveness()
     assert uncertain
-    assert local_id in adapter._goal_handles
+    assert adapter._pending_operations[local_id].goal_handle is not None
     # The API topic can establish the identity for a unique pending context.
     adapter._receive_state(state(1))
     assert adapter._pending_operations[local_id].request_id == "request"
@@ -122,14 +120,13 @@ def test_topic_first_terminal_state_can_complete_through_exact_duplicate_action_
     done = state(2, context="", code=ApplicationCommandState.STATE_STOP_CONFIRMED)
     adapter._receive_state(done)
     assert adapter._pending_operations[local_id].request_id == ""
-    assert local_id in adapter._goal_handles
+    assert adapter._pending_operations[local_id].goal_handle is not None
     now[0] = 2.0
     if channel == "feedback":
         adapter._receive_feedback(local_id, SimpleNamespace(feedback=SimpleNamespace(state=done)))
     else:
         result_response.set_result(SimpleNamespace(result=SimpleNamespace(state=done)))
     assert not adapter._pending_operations
-    assert not adapter._goal_handles
     assert received == [done]
 
 
@@ -177,7 +174,7 @@ def test_ambiguous_send_exception_keeps_context_and_visible_uncertainty(monkeypa
     try:
         local_id = Fault_Detector_UI.execute_operation(harness, OperationalIntent(), "context")
         assert local_id in adapter._pending_operations
-        assert local_id in adapter._goal_handles
+        assert adapter._pending_operations[local_id].goal_handle is None
         assert "outcome unknown" in harness.status_label.text()
         assert transport.send_goal_async.call_count == 1
     finally:
@@ -246,7 +243,7 @@ def test_queued_request_needs_its_own_controller_heartbeat_while_other_work_runs
     for instant in range(13, 19):
         advance(instant)
     assert adapter._pending_operations[local_id].uncertain
-    assert local_id in adapter._goal_handles
+    assert adapter._pending_operations[local_id].goal_handle is not None
     assert commands.queued_request_ids == (queued.request_id,)
     assert dispatched == [active.request]
     assert len(uncertainties) == 1

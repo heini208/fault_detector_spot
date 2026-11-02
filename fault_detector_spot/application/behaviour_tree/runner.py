@@ -300,15 +300,6 @@ def get_helper_container(node: rclpy.node.Node):
     return helper_initializer
 
 
-def close_helper_container():
-    """Close and forget process-wide helper resources."""
-    global helper_initializer
-    if helper_initializer is None:
-        return
-    helper_initializer.close()
-    helper_initializer = None
-
-
 def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     command_selector = py_trees.composites.Selector(
         name="CommandSelector",
@@ -705,7 +696,6 @@ def make_shutdown_coordinator(node, tree, executor):
         # Freeze submissions and resource lookup before taking teardown
         # snapshots. This operation does not wait for an execution owner.
         resources.close_admission()
-        admission["motion submissions"] = resources.close_admission
     for index, subscriber in enumerate(subscribers):
         admission[f"command admission/{index}"] = subscriber.close_admission
     if tree is not None:

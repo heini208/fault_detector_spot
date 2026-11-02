@@ -13,14 +13,6 @@ from fault_detector_spot.shared.persistence.settings_parameter_files import sett
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.fixture(autouse=True)
-def isolated_settings(tmp_path, monkeypatch):
-    monkeypatch.setenv('ROS_HOME', str(tmp_path / 'ros'))
-    _startup_settings.cache_clear()
-    yield
-    _startup_settings.cache_clear()
-
-
 def test_roundtrip_and_startup_snapshot():
     repo = BasicSettingsRepository()
     assert startup_settings() == {}

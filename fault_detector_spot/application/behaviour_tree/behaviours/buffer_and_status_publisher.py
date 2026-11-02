@@ -22,7 +22,6 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         super().__init__(name)
         self.blackboard = None
         self.last_structured_status = None
-        self.last_terminal_request_id = ""
         self.structured_status_pub = None
         self.battery_percentage_pub = None
         self.battery_state_sub = None
@@ -115,14 +114,6 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
                     f"{structured_status.request_id}: "
                     f"{structured_status.detail}"
                 )
-            if structured_status.state in (
-                CommandStatus.STATE_SUCCEEDED,
-                CommandStatus.STATE_FAILED,
-            ):
-                self.last_terminal_request_id = (
-                    structured_status.request_id
-                )
-
         return Status.SUCCESS
 
     def _process_power_state(self, message: PowerState) -> None:

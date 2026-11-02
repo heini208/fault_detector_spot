@@ -40,25 +40,14 @@ def test_pure_imports_without_ros_or_qt(modules):
     result = subprocess.run(
         [sys.executable, "-I", "-c", """
 import importlib
-from importlib.abc import MetaPathFinder
 from pathlib import Path
 import runpy
 import sys
 
-class NoRosOrQt(MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        root = fullname.partition('.')[0]
-        if (
-            root.endswith(('_msgs', '_interfaces'))
-            or root.startswith(('PyQt', 'PySide', 'tf2', 'rosidl'))
-            or root in {'rclpy', 'ament_index_python', 'launch', 'launch_ros',
-                        'synchros2', 'py_trees_ros'}
-        ):
-            raise ModuleNotFoundError(f'ROS/Qt dependency is unavailable: {fullname}')
-
-sys.meta_path.insert(0, NoRosOrQt())
 root = Path(sys.argv[1])
 sys.path.insert(0, str(root))
+guard = runpy.run_path(str(root / 'ci' / 'run_pure_tests.py'))['NoRosOrQt']
+sys.meta_path.insert(0, guard())
 runpy.run_path(str(root / 'test' / 'conftest.py'))
 for name in sys.argv[2:]:
     module = importlib.import_module(name)

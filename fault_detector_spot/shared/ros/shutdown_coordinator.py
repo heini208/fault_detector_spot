@@ -132,9 +132,9 @@ class ShutdownCoordinator:
                 # A blocked poll may return much later than its peers. Demand
                 # another complete fresh sweep before using that mixed proof.
                 fresh = self._clock() - sweep_started <= 0.1
-                if not requests and not self.unresolved and fresh:
+                if not self.unresolved and fresh:
                     break
-            elif not polls and not requests:
+            elif not polls:
                 break
             self._advance(deadline)
         else:
@@ -152,11 +152,10 @@ class ShutdownCoordinator:
         # may retry cleanup, but cannot reinterpret discarded evidence as idle.
         self._confirmation_complete = True
         if self.unresolved:
+            # Reporting uses the same bounded, retryable cleanup path and runs
+            # first, before any monitor or client is released.
             self._cleanup = {"report stop-unconfirmed": lambda: self._report_unconfirmed(
                 dict(self.unresolved)), **self._cleanup}
-            report = _start(self._cleanup["report stop-unconfirmed"])
-            self._cleanup_running["report stop-unconfirmed"] = report
-            # Reporting is the first cleanup step, before monitors or clients.
 
     def close(self):
         if not self._close_lock.acquire(blocking=False):

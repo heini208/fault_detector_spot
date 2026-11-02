@@ -4,7 +4,7 @@ import inspect
 import time
 from concurrent.futures import Future
 from pathlib import Path
-from threading import RLock
+from threading import Event, RLock
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -13,6 +13,7 @@ from action_msgs.msg import GoalStatus
 
 from fault_detector_spot.application.behaviour_tree import runner
 from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
+from fault_detector_spot.shared.ros.shutdown_coordinator import ShutdownCoordinator
 
 
 ROOT = Path(__file__).parents[1]
@@ -70,7 +71,6 @@ def test_runner_preserves_ros_context_for_ordered_shutdown():
     assert 'signal_handler_options=SignalHandlerOptions.NO' in source
     assert 'with shutdown_signals()' in source
     assert 'cleanup["ROS context"] = rclpy.try_shutdown' in source
-    assert 'close_helper_container()' in source
 
 
 @pytest.mark.parametrize("executable", ["bt_runner", "application_api"])
@@ -85,9 +85,7 @@ def test_launch_has_time_to_finish_bounded_child_cleanup(executable):
     assert 'sigkill_timeout="5.0"' in bt_runner
 
 
-def test_helper_close_stops_runtimes_and_cleans_ros_resources_even_on_error():
-    from unittest.mock import Mock
-    import pytest
+def test_helper_cleanup_continues_after_error_and_retains_failed_runtime_for_retry():
     from fault_detector_spot.application.behaviour_tree.behaviours.helper_initializer import HelperInitializer
 
     helper = HelperInitializer.__new__(HelperInitializer)
@@ -97,34 +95,22 @@ def test_helper_close_stops_runtimes_and_cleans_ros_resources_even_on_error():
     helper.lidar_adapter_runtime = lidar
     tags = Mock()
     helper.tag_state_source = tags
-    helper.robot_command_resources = Mock()
-    with pytest.raises(RuntimeError, match="did not terminate"):
-        helper.close()
+    shutdown = ShutdownCoordinator(
+        close_admission={}, request_stop={}, confirmations={},
+        cleanup=helper.cleanup_operations(), progress=Event().wait,
+        report_unconfirmed=Mock(), timeout_sec=1.0, cleanup_timeout_sec=1.0,
+    )
+    report = shutdown.close()
+    assert report.cleanup_errors == {"rtabmap_runtime": "process did not terminate"}
     helper.rtabmap_runtime.close.assert_called_once_with()
     lidar.close.assert_called_once_with()
     tags.destroy.assert_called_once_with()
-    helper.robot_command_resources.close.assert_called_once_with()
     assert helper.tag_state_source is None
     helper.rtabmap_runtime.close.side_effect = None
-    helper.close()
+    assert not shutdown.close().cleanup_errors
     assert helper.rtabmap_runtime is None
     lidar.close.assert_called_once_with()
     tags.destroy.assert_called_once_with()
-
-
-def test_runner_retains_failed_helper_close_for_retry(monkeypatch):
-    from unittest.mock import Mock
-    import pytest
-
-    helper = Mock()
-    helper.close.side_effect = [RuntimeError("process did not terminate"), True]
-    monkeypatch.setattr(runner, "helper_initializer", helper)
-    with pytest.raises(RuntimeError, match="did not terminate"):
-        runner.close_helper_container()
-    assert runner.helper_initializer is helper
-    runner.close_helper_container()
-    assert runner.helper_initializer is None
-    assert helper.close.call_count == 2
 
 
 @pytest.mark.parametrize("missing", [None, "acceptance", "result", "physical_stop"])

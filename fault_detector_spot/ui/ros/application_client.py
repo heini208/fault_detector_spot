@@ -30,6 +30,7 @@ class _PendingOperation:
     last_seen: float
     request_id: str = ""
     uncertain: bool = False
+    goal_handle: object = None
 
 
 class ApplicationClient(QObject):
@@ -49,7 +50,6 @@ class ApplicationClient(QObject):
         self._lock = RLock()
         self.client_id = self._client_id(client_id)
         self._last_state_fingerprint = None
-        self._goal_handles = {}
         self._pending_operations = {}
         self._observed_states = {}
         self._state_order = CommandStateOrder()
@@ -122,7 +122,6 @@ class ApplicationClient(QObject):
         local_id = uuid4().hex
         with self._lock:
             self._pending_operations[local_id] = _PendingOperation(context_id, self._monotonic_clock())
-            self._goal_handles[local_id] = None
         try:
             future = self._operation_client.send_goal_async(
                 goal,
@@ -231,14 +230,13 @@ class ApplicationClient(QObject):
         if not goal_handle.accepted:
             with self._lock:
                 pending = self._pending_operations.pop(local_id, None)
-                self._goal_handles.pop(local_id, None)
                 if pending is not None:
                     self._reject_operation(context_id, "Operational request was rejected")
             return
         with self._lock:
             pending = self._pending_operations.get(local_id)
             if pending is not None:
-                self._goal_handles[local_id] = goal_handle
+                pending.goal_handle = goal_handle
         try:
             result_future = goal_handle.get_result_async()
         except Exception as exception:
@@ -306,7 +304,6 @@ class ApplicationClient(QObject):
                     pending.uncertain = False
                 if terminal:
                     self._pending_operations.pop(key, None)
-                    self._goal_handles.pop(key, None)
         if not fresh:
             return True
         fingerprint = (
@@ -383,7 +380,6 @@ class ApplicationClient(QObject):
         self.node.destroy_subscription(self._state_subscription)
         self.node.destroy_subscription(self._software_stop_subscription)
         with self._lock:
-            self._goal_handles.clear()
             self._pending_operations.clear()
             self._observed_states.clear()
 

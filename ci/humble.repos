@@ -5,7 +5,7 @@ repositories:
   fault_detector_msgs:
     type: git
     url: https://github.com/heini208/fault_detector_msgs.git
-    version: 648911b76bb97ccd668497b5c0fc9dd28384dda0
+    version: d14370e2cdb17bab67afa4bb6ea8e06212ce667f
   spot_moveit_config:
     type: git
     url: https://github.com/heini208/spot_moveit_config.git

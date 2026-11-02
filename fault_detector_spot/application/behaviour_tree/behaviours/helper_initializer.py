@@ -79,21 +79,6 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
     def update(self):
         return py_trees.common.Status.SUCCESS
 
-    def close(self):
-        """Retry incomplete cleanup and continue releasing independent owners."""
-        errors = []
-        for name, release in self.cleanup_operations().items():
-            try:
-                release()
-            except Exception as exception:
-                errors.append(f"{name}: {exception}")
-        try:
-            self.robot_command_resources.close()
-        except Exception as exception:
-            errors.append(f"robot command resources: {exception}")
-        if errors:
-            raise RuntimeError("; ".join(errors))
-
     def cleanup_operations(self):
         """Expose child runtimes separately for bounded ordered teardown."""
         operations = {}
