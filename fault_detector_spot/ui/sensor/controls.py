@@ -340,6 +340,13 @@ class SensorControls(QWidget):
         )
         help_text.setWordWrap(True)
 
+        self.topic_discovery_warning = QLabel(
+            "Topic discovery is unavailable. Existing suggestions may be stale; "
+            "manual entry remains available."
+        )
+        self.topic_discovery_warning.setWordWrap(True)
+        self.topic_discovery_warning.hide()
+
         self.channel_table = QTableWidget(0, 4)
         self.channel_table.setHorizontalHeaderLabels(
             ("Channel ID", "Source", "ROS topic", "Message type")
@@ -403,6 +410,7 @@ class SensorControls(QWidget):
         actions.addStretch()
 
         content_layout.addWidget(help_text)
+        content_layout.addWidget(self.topic_discovery_warning)
         content_layout.addWidget(self.channel_table)
         content_layout.addLayout(editor)
         content_layout.addLayout(actions)
@@ -536,6 +544,11 @@ class SensorControls(QWidget):
             current_topic,
             select_advertised=False,
         )
+
+    def apply_topic_discovery_error(self, error: str) -> None:
+        """Mark retained suggestions stale without changing manual input."""
+        self.topic_discovery_warning.setToolTip(error)
+        self.topic_discovery_warning.setVisible(bool(error))
 
     def apply_sensor_head_connection(self, state) -> None:
         """Render discovered IDs without constraining manual creation."""

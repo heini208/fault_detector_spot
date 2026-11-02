@@ -161,6 +161,7 @@ class Fault_Detector_UI(QWidget):
         self.micro_ros_agent_status_client = None
         self._sensor_definitions = {}
         self._sensor_topic_suggestions = ()
+        self._sensor_topic_discovery_error = ""
         self._sensor_attachment_state = None
         self._sensor_head_connection_state = None
         self._sensor_connection_stale = True
@@ -194,6 +195,7 @@ class Fault_Detector_UI(QWidget):
         self.sensor_controls.apply_topic_suggestions(
             self._sensor_topic_suggestions
         )
+        self.sensor_controls.apply_topic_discovery_error(self._sensor_topic_discovery_error)
         self.create_user_interface()
 
         self.timer = QTimer(self)
@@ -423,6 +425,11 @@ class Fault_Detector_UI(QWidget):
         self._sensor_topic_suggestions = tuple(suggestions)
         if hasattr(self, "sensor_controls"):
             self.sensor_controls.apply_topic_suggestions(suggestions)
+
+    def _process_sensor_topic_discovery_error(self, error):
+        self._sensor_topic_discovery_error = error
+        if hasattr(self, "sensor_controls"):
+            self.sensor_controls.apply_topic_discovery_error(error)
 
     def _process_sensor_attachment_state(self, state):
         self._sensor_attachment_state = state
@@ -831,6 +838,9 @@ class Fault_Detector_UI(QWidget):
         )
         self.sensor_topic_suggestion_client.suggestions_changed.connect(
             self._process_sensor_topic_suggestions
+        )
+        self.sensor_topic_suggestion_client.discovery_error_changed.connect(
+            self._process_sensor_topic_discovery_error
         )
         self.sensor_topic_suggestion_client.poll()
         self.sensor_attachment_client = SensorAttachmentClient(self.node)
