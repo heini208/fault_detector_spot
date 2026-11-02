@@ -1,6 +1,7 @@
 """Software-stop presentation never equates reset acceptance with recovery."""
 
 from concurrent.futures import Future
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -122,7 +123,7 @@ def test_repeated_stop_presentation_never_offers_reset_without_confirmation(clie
 
 
 def test_reset_api_reports_request_acceptance_without_claiming_completion():
-    harness = SimpleNamespace(application_controller=Mock())
+    harness = SimpleNamespace(application_controller=Mock(), _shutdown=Event(), _startup_unresolved={})
     harness.application_controller.reset_software_stop.return_value = "reset-request"
 
     response = ApplicationApiNode._reset_software_stop(
@@ -136,7 +137,7 @@ def test_reset_api_reports_request_acceptance_without_claiming_completion():
 
 
 def test_reset_api_preserves_missing_stop_confirmation_failure():
-    harness = SimpleNamespace(application_controller=Mock())
+    harness = SimpleNamespace(application_controller=Mock(), _shutdown=Event(), _startup_unresolved={})
     harness.application_controller.reset_software_stop.side_effect = RuntimeError("Base stop remains unconfirmed")
 
     response = ApplicationApiNode._reset_software_stop(

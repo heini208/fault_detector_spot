@@ -620,3 +620,159 @@ def test_absolute_base_retry_uses_odom_pose_without_relative_resolution():
     # A new execution does not share a mutable target with the command envelope.
     command.offset.pose.position.x = 99.0
     assert built[0].target.pose.position.x == 3.0
+
+
+def test_shutdown_base_waits_for_late_action_and_fresh_body_pose():
+    from action_msgs.msg import GoalStatus
+    from fault_detector_spot.navigation.base_pose_source import BasePoseSample
+    from fault_detector_spot.shared.geometry.models import PoseData
+
+    clock = ManualClock()
+    send = ManualFuture()
+    result = ManualFuture()
+    source = SimpleNamespace(sample=lambda: BasePoseSample(
+        0.0, 0.0, 0.0, clock.now, PoseData.identity(),
+    ))
+    executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(), tf_listener=object(),
+        action_client=FakeActionClient(send), base_pose_source=source,
+        monotonic_clock=clock, ros_time_sec=clock,
+    )
+    executor._build_stand_goal = lambda: object()
+    executor.stand()
+    executor.begin_shutdown()
+    executor.begin_shutdown()
+    assert not executor.poll_shutdown()[0]
+    assert executor.stand().outcome is BaseMovementOutcome.BUSY
+    handle = FakeGoalHandle(result)
+    send.set_result(handle)
+    assert handle.cancel_calls >= 1
+    clock.now = 1.0
+    assert not executor.poll_shutdown()[0]
+    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    assert not executor.poll_shutdown()[0]
+    clock.now = 1.6
+    assert executor.poll_shutdown()[0]
+    executor.shutdown()
+    executor.shutdown()
+    assert executor.stand().outcome is BaseMovementOutcome.BUSY
+
+
+def test_idle_base_shutdown_requires_fresh_body_pose():
+    from fault_detector_spot.navigation.base_pose_source import BasePoseSample
+    from fault_detector_spot.shared.geometry.models import PoseData
+
+    clock = ManualClock()
+    source = SimpleNamespace(sample=lambda: BasePoseSample(
+        0.0, 0.0, 0.0, 0.0, PoseData.identity(),
+    ))
+    executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(), tf_listener=object(),
+        base_pose_source=source, monotonic_clock=clock, ros_time_sec=clock,
+    )
+    executor.begin_shutdown()
+    for value in (0.0, 0.5, 10.0):
+        clock.now = value
+        assert not executor.poll_shutdown()[0]
+    executor.shutdown(stop_unconfirmed=True)
+    assert not executor.execution_idle
+    executor.shutdown(stop_unconfirmed=True)
+
+
+def test_shutdown_revalidates_full_body_motion_after_prior_confirmation():
+    from fault_detector_spot.navigation.base_pose_source import BasePoseSample
+    from fault_detector_spot.shared.geometry.models import PoseData
+
+    clock = ManualClock()
+    height = [0.0]
+    def sample():
+        pose = PoseData.identity()
+        pose.position.z = height[0]
+        return BasePoseSample(0.0, 0.0, 0.0, clock.now, pose)
+    source = SimpleNamespace(sample=sample)
+    executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(), tf_listener=object(),
+        base_pose_source=source, monotonic_clock=clock, ros_time_sec=clock,
+    )
+    executor.begin_shutdown()
+    clock.now = 0.1
+    assert not executor.poll_shutdown()[0]
+    clock.now = 0.7
+    assert executor.poll_shutdown()[0]
+    assert executor.execution_idle
+
+    # Planar feedback is unchanged, but vertical body motion revokes proof.
+    height[0] = 0.05
+    clock.now = 0.8
+    assert not executor.poll_shutdown()[0]
+    assert not executor.execution_idle
+    clock.now = 1.4
+    assert executor.poll_shutdown()[0]
+    source.sample = lambda: None
+    clock.now = 1.5
+    assert not executor.poll_shutdown()[0]
+    assert not executor.execution_idle
+
+
+def test_shutdown_velocity_invalidation_requires_new_settling_and_fences_inflight_poll():
+    from fault_detector_spot.navigation.base_pose_source import BasePoseSample
+    from fault_detector_spot.shared.geometry.models import PoseData
+
+    clock = ManualClock()
+    source = SimpleNamespace(sample=lambda: BasePoseSample(
+        0.0, 0.0, 0.0, clock.now, PoseData.identity(),
+    ))
+    executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(), tf_listener=object(),
+        base_pose_source=source, monotonic_clock=clock, ros_time_sec=clock,
+    )
+    executor.begin_shutdown()
+    clock.now = 0.1
+    assert not executor.poll_shutdown()[0]
+    clock.now = 0.7
+    assert executor.poll_shutdown()[0]
+
+    # Model velocity callback arrival while the polling owner reads TF.
+    def interrupted_sample():
+        executor.invalidate_shutdown_stop()
+        return BasePoseSample(0.0, 0.0, 0.0, clock.now, PoseData.identity())
+    source.sample = interrupted_sample
+    clock.now = 0.8
+    confirmed, detail = executor.poll_shutdown()
+    assert not confirmed
+    assert "invalidated" in detail
+    assert not executor.execution_idle
+    source.sample = lambda: BasePoseSample(0.0, 0.0, 0.0, clock.now, PoseData.identity())
+    assert not executor.poll_shutdown()[0]  # Same-stamp evidence is too old.
+    clock.now = 0.9
+    assert not executor.poll_shutdown()[0]
+    clock.now = 1.5
+    assert executor.poll_shutdown()[0]
+
+
+def test_confirmed_shutdown_authorization_survives_child_state_source_teardown():
+    from unittest.mock import Mock
+    from fault_detector_spot.navigation.base_pose_source import BasePoseSample
+    from fault_detector_spot.shared.geometry.models import PoseData
+
+    clock = ManualClock()
+    source = SimpleNamespace(sample=lambda: BasePoseSample(
+        0.0, 0.0, 0.0, clock.now, PoseData.identity(),
+    ))
+    executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(), tf_listener=object(),
+        base_pose_source=source, monotonic_clock=clock, ros_time_sec=clock,
+    )
+    executor.begin_shutdown()
+    clock.now = 0.1
+    assert not executor.poll_shutdown()[0]
+    clock.now = 0.7
+    assert executor.poll_shutdown()[0]
+    # The coordinator freezes this confirmed outcome before stopping children.
+    source.sample = Mock(side_effect=AssertionError("Child state source is gone"))
+    clock.now = 10.0
+    executor.shutdown(stop_confirmed=True)
+    executor.shutdown(stop_confirmed=True)
+    source.sample.assert_not_called()
+    assert executor.execution_idle
+    assert executor.stand().outcome is BaseMovementOutcome.BUSY

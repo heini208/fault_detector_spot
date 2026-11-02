@@ -467,9 +467,15 @@ class ProbeReferenceCaptureCoordinator:
             synchronizer.suspend()
 
     def _destroy_synchronizers(self):
-        """Destroy retained subscriptions after the executor has drained."""
-        self._release_synchronizers(self._synchronizers)
-        for synchronizer in self._synchronizers.values():
+        """Release each retained subscription independently and retry failures."""
+        errors = []
+        for key, synchronizer in tuple(self._synchronizers.items()):
+            failed = False
+            try:
+                synchronizer.suspend()
+            except Exception as error:
+                errors.append(str(error))
+                failed = True
             for attribute in (
                 "rgb_subscription",
                 "depth_subscription",
@@ -482,8 +488,17 @@ class ProbeReferenceCaptureCoordinator:
                     None,
                 )
                 if subscription is not None:
-                    self.node.destroy_subscription(subscription)
-        self._synchronizers.clear()
+                    try:
+                        self.node.destroy_subscription(subscription)
+                    except Exception as error:
+                        errors.append(str(error))
+                        failed = True
+                    else:
+                        setattr(synchronizer, attribute, None)
+            if not failed:
+                self._synchronizers.pop(key, None)
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
     def _validate_configuration(self):
         if self.queue_size < 1:
@@ -522,13 +537,23 @@ class ProbeReferenceCaptureCoordinator:
         self._shutdown.set()
 
     def close(self):
-        """Release ROS resources after application executor shutdown."""
+        """Release ROS resources after confirmation or explicit timeout."""
         self.request_shutdown()
-        self._destroy_synchronizers()
+        errors = []
+        try:
+            self._destroy_synchronizers()
+        except Exception as error:
+            errors.append(error)
         listener = self.tf_listener
         if listener is not None and hasattr(listener, "unregister"):
-            listener.unregister()
-        self.tf_listener = None
+            try:
+                listener.unregister()
+            except Exception as error:
+                errors.append(error)
+            else:
+                self.tf_listener = None
+        if errors:
+            raise RuntimeError("; ".join(str(error) for error in errors))
 
 
 __all__ = [

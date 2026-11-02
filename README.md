@@ -310,9 +310,10 @@ that previous instance reports `STOP_UNCONFIRMED` and blocks recovery motion.
 There is no automatic reset or release based on an empty replacement ledger;
 physical ownership must be resolved outside this protocol before a new session
 can safely resume. This protocol covers execution-process restart and transient
-client disconnection; it does not persist command ownership across an application
-API process restart. The UI retains pending work and displays uncertainty when
-application updates disappear.
+client disconnection. Individual command history is not restored after an
+application API process restart; the persistent shutdown markers described
+below fence unresolved sessions. The UI retains pending work and displays
+uncertainty when application updates disappear.
 
 These states, execution identities/sequences, idle evidence, stop fences, status queries,
 `SoftwareStopState` and `ResetSoftwareStop` are part of `fault_detector_msgs`.
@@ -358,6 +359,30 @@ the gripper and is excluded from recording/playback. The former **Reset State**
 operation and intent value 6 are retired; callers must request reset and recovery
 separately. The former zero-velocity-only stop intent (value 7) is also retired;
 callers must use the confirmed software-stop protocol.
+
+Shutdown closes command admission and pauses tree dispatch before requesting
+arm, base, Nav2, setup and acquisition cancellation. The callback executor,
+guard monitors, state subscriptions and stop clients remain available until
+terminal action state and fresh physical-stop evidence are confirmed. The
+confirmation deadline defaults to 10 seconds; independent cleanup has a further
+20-second budget. Both are configured by `shutdown.confirmation_timeout_sec`
+and `shutdown.cleanup_timeout_sec` in `config/command_lifecycle.yaml`.
+
+A deadline reports **stop-unconfirmed** for each unresolved resource before
+recordings, child runtimes and ROS resources are finalized. Failed cleanup
+remains retryable. Unresolved ownership is retained in
+`$ROS_HOME/fault_detector_spot/shutdown/<owner>.json` (default ROS home: `~/.ros`).
+Each process also durably creates `<owner>.active` before admitting work and
+removes its own marker only after confirmed shutdown and successful cleanup.
+This keeps restart admission blocked even if writing the detailed timeout
+record fails. Marker creation failure prevents admission.
+The next startup exposes that uncertainty and blocks motion and software reset.
+An empty new executor or a later successful shutdown cannot clear it. Recovery
+requires independently verifying termination of the prior actions and fresh
+physical stopping, then reconciling only those resource names through
+`StopUnconfirmedStore.clear_confirmed()` before restarting; there is no automatic
+reconciliation or UI reset bypass. An uncleared session marker is represented by
+the resource name `active_session` and requires the same independent proof.
 
 ---
 

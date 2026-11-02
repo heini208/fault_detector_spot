@@ -487,7 +487,11 @@ def test_guard_error_cancels_and_shutdown_disables_queued_monitor_callback():
     assert handle.cancel_calls == 1
     assert executor.poll().outcome is Outcome.RUNNING
     assert "feedback unavailable" in executor.poll().detail
-    executor.shutdown()
+    with pytest.raises(RuntimeError, match="stop unconfirmed"):
+        executor.shutdown()
+    executor._node.destroy_timer.assert_not_called()
+    executor.shutdown(stop_unconfirmed=True)
+    assert not executor.execution_idle
     executor._node.destroy_timer.assert_called_once_with(timer)
     timer.callback()
     assert handle.cancel_calls == 1
@@ -618,3 +622,89 @@ def test_invalid_velocity_handoff_limits_are_rejected(quiet, timeout):
             Mock(), Mock(), Mock(), Mock(),
             velocity_quiet_sec=quiet, velocity_release_timeout_sec=timeout,
         )
+
+
+def test_shutdown_keeps_callbacks_for_delayed_acceptance_and_fresh_stop():
+    executor, arm, base, client, send, clock, pose, _ = rig()
+    timer = attach_monitor(executor)
+    prepare(executor, arm, base, pose)
+    executor.begin_shutdown()
+    executor.begin_shutdown()
+    assert executor.navigate(pose).outcome is Outcome.FAILURE
+    assert not executor.poll_shutdown()[0]
+    with pytest.raises(RuntimeError, match="stop unconfirmed"):
+        executor.shutdown()
+    executor._node.destroy_timer.assert_not_called()
+    client.destroy.assert_not_called()
+
+    result = ManualFuture()
+    handle = FakeGoalHandle(result)
+    send.set_result(handle)
+    assert handle.cancel_calls == 1
+    assert not executor.poll_shutdown()[0]
+    result.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    timer.callback()
+    assert not executor.poll_shutdown()[0]
+    for value in (0.31, 0.41, 1.01):
+        clock.now = value
+        timer.callback()
+    assert executor.poll_shutdown()[0]
+    executor.shutdown()
+    executor.shutdown()
+    client.destroy.assert_called_once()
+    executor._node.destroy_timer.assert_called_once_with(timer)
+
+
+@pytest.mark.parametrize("missing", ["acceptance", "result", "physical_feedback"])
+def test_shutdown_timeout_never_certifies_missing_nav2_evidence(missing):
+    executor, arm, base, client, send, clock, pose, _ = rig()
+    timer = attach_monitor(executor)
+    prepare(executor, arm, base, pose)
+    result = ManualFuture()
+    if missing != "acceptance":
+        send.set_result(FakeGoalHandle(result))
+    if missing == "physical_feedback":
+        result.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+        base.base_pose_source.sample = lambda: None
+    executor.begin_shutdown()
+    for value in (0.0, 1.0, 10.0):
+        clock.now = value
+        timer.callback()
+        assert not executor.poll_shutdown()[0]
+    executor.shutdown(stop_unconfirmed=True)
+    executor.shutdown(stop_unconfirmed=True)
+    assert not executor.execution_idle
+    client.destroy.assert_called_once()
+
+
+def test_shutdown_retries_failed_nav2_cleanup_and_releases_independent_handles():
+    executor, _, _, client, _, _, _, _ = rig()
+    timer = attach_monitor(executor)
+    executor._monitor_timer = timer
+    subscription = object()
+    executor._velocity_subscription = subscription
+    executor._node.destroy_timer.side_effect = [RuntimeError("timer cleanup failed"), None]
+    executor._node.destroy_subscription = Mock()
+    with pytest.raises(RuntimeError, match="timer cleanup failed"):
+        executor.shutdown()
+    executor._node.destroy_subscription.assert_called_once_with(subscription)
+    client.destroy.assert_called_once()
+    assert executor._monitor_timer is timer
+    executor.shutdown()
+    executor.shutdown()
+    assert executor._node.destroy_timer.call_count == 2
+    executor._node.destroy_subscription.assert_called_once()
+    client.destroy.assert_called_once()
+
+
+def test_shutdown_navigation_does_not_poll_preparation_owned_by_coordinator():
+    executor, arm, _, _, _, _, pose, _ = rig()
+    executor.navigate(pose)
+    executor.begin_shutdown()
+    arm.active = True
+    arm._shutdown_started = True
+    arm.poll = Mock(side_effect=AssertionError("Coordinator owns preparation polling"))
+    assert not executor.poll_shutdown()[0]
+    arm.poll.assert_not_called()
+    arm.active = False
+    assert executor.poll_shutdown()[0]

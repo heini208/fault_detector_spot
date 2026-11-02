@@ -93,6 +93,7 @@ def test_orientation_allows_delayed_capture_time_transform():
     executor.tf_listener = SimpleNamespace(lookup_a_tform_b=lookup)
     executor._monotonic_clock = lambda: now[0]
     executor._active = False
+    executor._shutdown_started = False
     executor.guarded_probe = lambda builder, **kwargs: builder
     hand_to_probe = Pose()
     hand_to_probe.orientation.w = 1.0
@@ -126,6 +127,7 @@ def test_orientation_tf_retry_times_out_and_new_command_starts_fresh():
     executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
     executor._monotonic_clock = lambda: now[0]
     executor._active = False
+    executor._shutdown_started = False
     executor.guarded_probe = lambda builder, **kwargs: builder
     executor.surface_source = SimpleNamespace(
         surface_normal=lambda **kwargs: SimpleNamespace(

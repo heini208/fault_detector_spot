@@ -21,10 +21,92 @@ class CommandStatusLedger:
         self._status_sequence = 0
         self._activated = False
         self._foreign_targets = set()
+        self._restored_shutdown_targets = set()
+        self._closing = False
+        self._shutdown_result = None
 
     def activate(self):
         with self._lock:
-            self._activated = True
+            if not self._closing:
+                self._activated = True
+
+    def restore_shutdown_unconfirmed(self, resources):
+        """Fence prior process work that new execution owners cannot confirm."""
+        with self._lock:
+            for resource, detail in resources.items():
+                request_id = f"shutdown:{resource}"
+                self._foreign_targets.add(request_id)
+                self._restored_shutdown_targets.add(request_id)
+                self._fenced.add(request_id)
+                status = self.unknown_status(request_id, detail)
+                status.state = CommandStatus.STATE_STOP_UNCONFIRMED
+                self._statuses[request_id] = status
+            if resources:
+                self._stopping = True
+
+    def close_admission(self):
+        """Fence ingress while callback resources remain available to stop."""
+        with self._lock:
+            if self._closing:
+                return
+            self._closing = True
+            self._activated = False
+            self._stopping = True
+            self._active_stop_id = None
+            for request_id, status in self._statuses.items():
+                if not status.execution_idle:
+                    self._fenced.add(request_id)
+                    if request_id not in self._foreign_targets:
+                        status.state = CommandStatus.STATE_STOP_REQUESTED
+                        status.detail = "Shutdown requested; waiting for terminal actions and physical stop evidence"
+                        status.buffered_command_count = 0
+
+    def report_shutdown_result(self, unresolved):
+        """Apply only the shutdown coordinator's complete owner evidence."""
+        with self._lock:
+            self.close_admission()
+            if self._shutdown_result is None:
+                self._shutdown_result = dict(unresolved)
+            unresolved = self._shutdown_result
+            confirmed = not unresolved and not self._foreign_targets
+            detail = ("Shutdown stop confirmed by all execution owners" if confirmed else
+                      "Shutdown stop-unconfirmed; reconciliation is required: " +
+                      "; ".join(f"{name}: {reason}" for name, reason in unresolved.items()))
+            for request_id in self._fenced:
+                status = self._statuses[request_id]
+                if status.execution_idle or request_id in self._foreign_targets:
+                    continue
+                status.state = (CommandStatus.STATE_STOP_CONFIRMED if confirmed else
+                                CommandStatus.STATE_STOP_UNCONFIRMED)
+                status.detail = detail
+                status.execution_idle = confirmed
+                status.buffered_command_count = 0
+                status.retry_safe = False
+                status.continuation_safe = False
+            return [deepcopy(self._statuses[key]) for key in sorted(self._fenced)]
+
+    def join_shutdown_stop(self, request):
+        """Join existing shutdown proof without submitting another stop workflow."""
+        with self._lock:
+            self.close_admission()
+            if request.request_id in self._statuses:
+                return [deepcopy(self._statuses[request.request_id])]
+            self.request_stop(request)
+            self._active_stop_id = None
+            self._statuses[request.request_id].command_id = request.command.command_id.value
+            if self._shutdown_result is not None:
+                return self.report_shutdown_result(self._shutdown_result)
+            return [deepcopy(self._statuses[key]) for key in sorted(self._fenced)]
+
+    def shutdown_ownership_status(self):
+        """New local idle owners cannot certify a foreign request's termination."""
+        with self._lock:
+            # Restored persistent resources have their own coordinator entries.
+            # Repeating those here would recursively duplicate marker details.
+            foreign = sorted(self._foreign_targets - self._restored_shutdown_targets)
+            return not foreign, "; ".join(
+                f"{key}: {self._statuses[key].detail}" for key in foreign
+            ) or "All retained request ownership belongs to this execution instance"
 
     def outgoing_status(self, message):
         """Sequence each actual publication or fresh query reply, not tree ticks."""
@@ -67,11 +149,12 @@ class CommandStatusLedger:
             reset = request.command.command_id is CommandID.RESET_SOFTWARE_STOP
             reset_ready = (self._stopping and not self._foreign_targets
                            and all(item.execution_idle for item in self._statuses.values()))
-            blocked = ((self._stopping and not emergency and not reset)
+            blocked = (self._closing or (self._stopping and not emergency and not reset)
                        or (reset and not reset_ready))
             if blocked:
                 message.state = CommandStatus.STATE_FAILED
-                message.detail = ("Reset requires a latched, confirmed software stop"
+                message.detail = ("Shutdown has closed command admission" if self._closing else
+                                  "Reset requires a latched, confirmed software stop"
                                   if reset else
                                   "Software stop is latched; this request was not executed")
                 message.execution_idle = True
@@ -171,7 +254,7 @@ class CommandStatusLedger:
     def reset_stop(self, request_id, reset_resources, *, clear_admission=None):
         """Clear admission only after retained and freshly measured idle proof."""
         with self._lock:
-            if (not self._stopping or self._foreign_targets
+            if (self._closing or not self._stopping or self._foreign_targets
                     or any(not item.execution_idle for key, item in self._statuses.items()
                            if key != request_id)):
                 return False, "Software stop ownership is unresolved; reset remains blocked"
@@ -199,6 +282,11 @@ class CommandStatusLedger:
                 status = self.unknown_status(request_id, "Execution instance changed; prior work is unresolved")
             else:
                 status = self.query(request_id)
+                if not request_id and self._foreign_targets:
+                    status.state = CommandStatus.STATE_STOP_UNCONFIRMED
+                    status.detail = "Prior shutdown stop-unconfirmed; reconciliation is required: " + "; ".join(
+                        self._statuses[key].detail for key in sorted(self._foreign_targets)
+                    )
             unresolved = sorted(key for key, value in self._statuses.items()
                                 if not value.execution_idle)
             accepting = self._activated and not self._stopping and not unresolved

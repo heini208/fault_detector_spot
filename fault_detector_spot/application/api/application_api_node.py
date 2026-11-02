@@ -5,7 +5,8 @@ from fault_detector_spot.application.api.probe_point_execution_api import ProbeP
 
 from dataclasses import dataclass, field
 import os
-from threading import RLock
+import sys
+from threading import Event, RLock
 from typing import Dict, Optional
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.task import Future
+from rclpy.signals import SignalHandlerOptions
 from ament_index_python.packages import get_package_share_directory
 
 from fault_detector_spot.application.api.sensor_attachment_api import (
@@ -104,6 +106,13 @@ from fault_detector_spot.navigation.setup.navigation_setup_state_source import (
 )
 from fault_detector_spot.inspection.measurement import MeasurementRepository
 from fault_detector_spot.application.commanding.command_lifecycle import CommandLifecycleConfig
+from fault_detector_spot.application.api.shutdown_callbacks import (
+    ShutdownCallbackActivity, tracked_shutdown_callback,
+)
+from fault_detector_spot.shared.ros.shutdown_coordinator import (
+    ShutdownCoordinator, shutdown_signals,
+)
+from fault_detector_spot.shared.persistence.shutdown_state import StopUnconfirmedStore
 
 
 _TERMINAL_STATES = frozenset({
@@ -130,6 +139,22 @@ class ApplicationApiNode(Node):
         super().__init__("application_api")
         startup_settings()
         self._lock = RLock()
+        self._shutdown = Event()
+        self._shutdown_callbacks = ShutdownCallbackActivity()
+        self._shutdown_coordinator = None
+        self._shutdown_lock = RLock()
+        self._shutdown_stop_request = ""
+        self._shutdown_store = StopUnconfirmedStore(owner="application_api")
+        self._startup_unresolved = self._shutdown_store.load()
+        # A failed marker write must prevent motion admission from starting.
+        if not self._shutdown_store.begin_session():
+            self._startup_unresolved.update(self._shutdown_store.load())
+            self._startup_unresolved.setdefault(
+                "application_api/active_session",
+                "Application API did not acquire its shutdown session; reconciliation is required",
+            )
+        self.declare_parameter("shutdown.confirmation_timeout_sec", 10.0)
+        self.declare_parameter("shutdown.cleanup_timeout_sec", 20.0)
         self._executions: Dict[str, _OperationExecution] = {}
         self._callback_group = ReentrantCallbackGroup()
         lifecycle = CommandLifecycleConfig.from_node(self)
@@ -369,8 +394,12 @@ class ApplicationApiNode(Node):
             self._reset_software_stop,
             callback_group=self._callback_group,
         )
+        if self._startup_unresolved:
+            self.application_controller.emergency_stop("startup_reconciliation")
 
     def _accept_operation(self, goal_request):
+        if self._shutdown.is_set():
+            return GoalResponse.REJECT
         try:
             self.application_controller.validate_operation(
                 intent=goal_request.intent,
@@ -397,8 +426,11 @@ class ApplicationApiNode(Node):
             self._request_execution_cancellation(execution)
         return CancelResponse.ACCEPT
 
+    @tracked_shutdown_callback
     async def _execute_operation(self, goal_handle):
         goal = goal_handle.request
+        if self._shutdown.is_set():
+            return self._abort_preparation(goal_handle, "Application is shutting down")
         try:
             operation = self.application_controller.prepare_operation(
                 intent=goal.intent,
@@ -508,6 +540,10 @@ class ApplicationApiNode(Node):
 
     def _reset_software_stop(self, request, response):
         try:
+            if self._shutdown.is_set():
+                raise RuntimeError("Application is shutting down")
+            if self._startup_unresolved:
+                raise RuntimeError("Prior shutdown stop-unconfirmed; reconciliation is required")
             request_id = self.application_controller.reset_software_stop(
                 request.client_id
             )
@@ -555,7 +591,7 @@ class ApplicationApiNode(Node):
         message.status_sequence = status.status_sequence
         return message
 
-    def _failure_state(self, execution, detail):
+    def _failure_state(self, execution, detail, *, public_state=ApplicationCommandState.STATE_FAILED):
         message = ApplicationCommandState()
         message.header.stamp = self.get_clock().now().to_msg()
         operation = execution.operation
@@ -563,7 +599,7 @@ class ApplicationApiNode(Node):
         message.client_id = operation.request.client_id
         message.context_id = operation.request.context_id
         message.intent = operation.intent
-        message.state = ApplicationCommandState.STATE_FAILED
+        message.state = public_state
         message.detail = detail
         self._state_publisher.publish(message)
         return message
@@ -595,56 +631,154 @@ class ApplicationApiNode(Node):
         return values[state]
 
     def request_shutdown(self):
-        """Release setup callbacks before waiting for the executor to drain."""
-        self.navigation_setup_api.request_shutdown()
-        self.probe_setup_motion_api.request_shutdown()
-        self.probe_reference_capture_api.request_shutdown()
-        self.probe_refinement_finalization_api.request_shutdown()
+        """Request the existing owners' stop without removing their transport."""
+        with self._shutdown_lock:
+            if not self._shutdown_stop_request:
+                self._shutdown_stop_request = self.application_controller.emergency_stop(
+                    "application_shutdown",
+                )
+
+    def _command_shutdown_status(self):
+        status = self.command_controller.software_stop_status
+        return (
+            bool(self._shutdown_stop_request and status.request_id == self._shutdown_stop_request
+                 and status.latched and status.stop_confirmed),
+            status.detail,
+        )
+
+    def _report_shutdown_unconfirmed(self, unresolved):
+        detail = "; ".join(f"{name}: {reason}" for name, reason in unresolved.items())
+        errors = []
+        try:
+            self._shutdown_store.record({name: reason for name, reason in unresolved.items()
+                                         if not name.startswith("prior shutdown/")})
+        except Exception as error:
+            errors.append(f"persist shutdown uncertainty: {error}")
+        try:
+            self.get_logger().error(f"Application shutdown stop-unconfirmed: {detail}")
+        except Exception as error:
+            errors.append(f"log shutdown uncertainty: {error}")
+        # Finish public actions explicitly without inventing a physical stop.
+        with self._lock:
+            for execution in tuple(self._executions.values()):
+                if execution.finished.done():
+                    continue
+                try:
+                    state = self._failure_state(
+                        execution, f"Shutdown stop-unconfirmed: {detail}",
+                        public_state=ApplicationCommandState.STATE_STOP_UNCONFIRMED,
+                    )
+                except Exception as error:
+                    errors.append(f"publish shutdown uncertainty: {error}")
+                    state = ApplicationCommandState(
+                        state=ApplicationCommandState.STATE_STOP_UNCONFIRMED,
+                        detail=f"Shutdown stop-unconfirmed: {detail}",
+                    )
+                execution.state = state
+                execution.finished.set_result(state)
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+    def _confirm_shutdown_persistence(self):
+        coordinator = self._shutdown_coordinator
+        if self._startup_unresolved or coordinator.unresolved:
+            return  # Retain this session's marker for explicit reconciliation.
+        errors = {name: detail for name, detail in coordinator.cleanup_errors.items()
+                  if name != "confirm shutdown persistence"}
+        if errors:
+            raise RuntimeError("Shutdown session retained until failed cleanup is retried")
+        self._shutdown_store.confirm_session()
+
+    def shutdown(self, executor=None):
+        """Keep callbacks and state owners available through bounded confirmation."""
+        with self._shutdown_lock:
+            if self._shutdown_coordinator is None:
+                setup_owners = {
+                    name: getattr(self, name) for name in (
+                        "probe_reference_capture_api", "probe_refinement_finalization_api",
+                        "probe_setup_motion_api", "probe_setup_api", "navigation_setup_api",
+                    )
+                }
+                admission = {"application": self._shutdown.set}
+                admission.update({name: owner.request_shutdown for name, owner in setup_owners.items()})
+                confirmations = {
+                    "commands": self._command_shutdown_status,
+                    "acquisition": self.sensor_acquisition_coordinator.shutdown_status,
+                    "operations": self._shutdown_callbacks.status,
+                }
+                confirmations.update({name: owner._shutdown_callbacks.status
+                                      for name, owner in setup_owners.items()})
+                for name, detail in self._startup_unresolved.items():
+                    confirmations[f"prior shutdown/{name}"] = lambda detail=detail: (
+                        False, f"Prior shutdown requires reconciliation: {detail}",
+                    )
+                cleanup = {
+                    "recording": lambda: self.sensor_acquisition_coordinator.close(
+                        stop_unconfirmed=bool(self._shutdown_coordinator.unresolved),
+                    ),
+                }
+                for name in (
+                    "probe_reference_capture_api", "probe_refinement_finalization_api",
+                    "probe_setup_motion_api", "probe_setup_api", "navigation_setup_api",
+                    "probe_point_execution_api", "sensor_acquisition_command_handler",
+                    "sensor_acquisition_api", "sensor_attachment_api", "sensor_registry_api",
+                ):
+                    cleanup[name] = getattr(self, name).close
+                cleanup.update({
+                    "request_preparer": lambda: self.command_controller.remove_request_preparer(
+                        self.sensor_attachment_controller.prepare_request,
+                    ),
+                    "status_listener": lambda: self.application_controller.remove_status_listener(
+                        self._handle_application_status,
+                    ),
+                    "application_controller": self.application_controller.close,
+                    "command_transport": self.command_transport.close,
+                    "probe_setup_state": self.probe_setup_motion_state.close,
+                    "navigation_setup_state": self.navigation_setup_state.close,
+                    "operation_server": self._operation_server.destroy,
+                    "node": super().destroy_node,
+                })
+                if executor is not None:
+                    cleanup["executor"] = lambda: executor.shutdown(timeout_sec=1.0)
+                    cleanup["ros"] = rclpy.try_shutdown
+                cleanup["confirm shutdown persistence"] = self._confirm_shutdown_persistence
+                self._shutdown_coordinator = ShutdownCoordinator(
+                    close_admission=admission,
+                    request_stop={"commands": self.request_shutdown,
+                                  "acquisition": self.sensor_acquisition_coordinator.request_shutdown},
+                    confirmations=confirmations,
+                    cleanup=cleanup,
+                    progress=(lambda timeout: executor.spin_once(timeout_sec=timeout))
+                    if executor is not None else Event().wait,
+                    report_unconfirmed=self._report_shutdown_unconfirmed,
+                    timeout_sec=float(self.get_parameter("shutdown.confirmation_timeout_sec").value),
+                    cleanup_timeout_sec=float(self.get_parameter("shutdown.cleanup_timeout_sec").value),
+                )
+        return self._shutdown_coordinator.close()
 
     def destroy_node(self):
-        self.probe_reference_capture_api.close()
-        self.probe_refinement_finalization_api.close()
-        self.probe_setup_motion_api.close()
-        self.probe_setup_api.close()
-        self.navigation_setup_api.close()
-        self.probe_point_execution_api.close()
-        self.sensor_acquisition_command_handler.close()
-        self.sensor_acquisition_api.close()
-        self.sensor_acquisition_coordinator.close()
-        self.sensor_attachment_api.close()
-        self.sensor_registry_api.close()
-        self.command_controller.remove_request_preparer(
-            self.sensor_attachment_controller.prepare_request
-        )
-        self.application_controller.remove_status_listener(
-            self._handle_application_status
-        )
-        self.application_controller.close()
-        self.command_transport.close()
-        self.probe_setup_motion_state.close()
-        self.navigation_setup_state.close()
-        self._operation_server.destroy()
-        return super().destroy_node()
+        return self.shutdown()
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = ApplicationApiNode()
-    executor = MultiThreadedExecutor(num_threads=4)
-    executor.add_node(node)
-    try:
-        executor.spin()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.request_shutdown()
+    with shutdown_signals() as stopping:
+        rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
         try:
-            executor.shutdown()
+            node = ApplicationApiNode()
+        except Exception:
+            rclpy.try_shutdown()
+            raise
+        executor = MultiThreadedExecutor(num_threads=4)
+        executor.add_node(node)
+        try:
+            while rclpy.ok() and not stopping.is_set():
+                executor.spin_once(timeout_sec=0.1)
+        except KeyboardInterrupt:
+            pass
         finally:
-            try:
-                node.destroy_node()
-            finally:
-                rclpy.try_shutdown()
+            report = node.shutdown(executor)
+            if report.cleanup_errors:
+                print(f"Application shutdown cleanup incomplete: {report.cleanup_errors}", file=sys.stderr)
 
 
 if __name__ == "__main__":

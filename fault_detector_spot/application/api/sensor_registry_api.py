@@ -1,5 +1,7 @@
 """Expose application-owned sensor definition registry through ROS."""
 
+from fault_detector_spot.application.api.shutdown_callbacks import release_resources
+
 from threading import RLock
 
 from fault_detector_msgs.msg import (
@@ -303,12 +305,14 @@ class SensorRegistryApi:
 
     def close(self):
         """Destroy sensor registry ROS resources."""
-        self.node.destroy_service(self._add_service)
-        self.node.destroy_service(self._update_service)
-        self.node.destroy_service(self._delete_service)
-        self.node.destroy_service(self._upload_mesh_service)
-        self.node.destroy_service(self._get_mesh_service)
-        self.node.destroy_publisher(self._publisher)
+        release_resources(self, {
+            "add_service": lambda: self.node.destroy_service(self._add_service),
+            "update_service": lambda: self.node.destroy_service(self._update_service),
+            "delete_service": lambda: self.node.destroy_service(self._delete_service),
+            "upload_mesh_service": lambda: self.node.destroy_service(self._upload_mesh_service),
+            "get_mesh_service": lambda: self.node.destroy_service(self._get_mesh_service),
+            "publisher": lambda: self.node.destroy_publisher(self._publisher),
+        })
 
 
 __all__ = ["SensorRegistryApi"]

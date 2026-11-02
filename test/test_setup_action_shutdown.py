@@ -10,6 +10,7 @@ import pytest
 from fault_detector_spot.application.api import application_api_node
 from fault_detector_spot.application.api.navigation_setup_api import NavigationSetupApi
 from fault_detector_spot.application.api.probe_setup_motion_api import ProbeSetupMotionApi
+from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
 from fault_detector_spot.application.coordinators import (
     probe_reference_capture_coordinator as capture_module,
 )
@@ -28,6 +29,7 @@ def test_active_setup_action_exits_without_terminal_feedback(api_type):
     api = api_type.__new__(api_type)
     api._lock = RLock()
     api._shutdown = Event()
+    api._shutdown_callbacks = ShutdownCallbackActivity()
     api._executions = {}
     api._early_states = {}
     api.coordinator = Mock()
@@ -112,30 +114,51 @@ def test_capture_signal_preserves_resources_until_callback_drain(monkeypatch):
     assert node.destroy_subscription.call_count == 4
 
 
-def test_main_signals_before_drain_and_destroys_afterward(monkeypatch):
+def test_main_uses_ordered_shutdown_before_ros_teardown(monkeypatch):
     events = []
     node = Mock()
-    node.request_shutdown.side_effect = lambda: events.append("signal")
-    node.destroy_node.side_effect = lambda: events.append("destroy")
+    def shutdown(executor):
+        events.extend(["ordered_shutdown", "ros"])
+        return SimpleNamespace(cleanup_errors={})
+    node.shutdown.side_effect = shutdown
     executor = Mock()
-    executor.spin.side_effect = KeyboardInterrupt
-    executor.shutdown.side_effect = lambda: events.append("drain")
+    executor.spin_once.side_effect = KeyboardInterrupt
     monkeypatch.setattr(application_api_node, "ApplicationApiNode", lambda: node)
     monkeypatch.setattr(application_api_node, "MultiThreadedExecutor", lambda **kw: executor)
     monkeypatch.setattr(application_api_node.rclpy, "init", Mock())
+    monkeypatch.setattr(application_api_node.rclpy, "ok", lambda: True)
     monkeypatch.setattr(application_api_node.rclpy, "try_shutdown", lambda: events.append("ros"))
     application_api_node.main()
-    assert events == ["signal", "drain", "destroy", "ros"]
+    assert events == ["ordered_shutdown", "ros"]
+    node.shutdown.assert_called_once_with(executor)
+    assert application_api_node.rclpy.init.call_args.kwargs["signal_handler_options"] == (
+        application_api_node.SignalHandlerOptions.NO
+    )
 
 
-def test_node_signals_every_blocking_setup_owner():
-    owners = {
-        name: Mock() for name in (
-            "navigation_setup_api", "probe_setup_motion_api",
-            "probe_reference_capture_api", "probe_refinement_finalization_api",
-        )
-    }
-    application_api_node.ApplicationApiNode.request_shutdown(SimpleNamespace(**owners))
-    for owner in owners.values():
-        owner.request_shutdown.assert_called_once_with()
-        owner.close.assert_not_called()
+def test_node_requests_stop_idempotently_through_the_command_controller():
+    node = SimpleNamespace(_shutdown_stop_request="", _shutdown_lock=RLock(), application_controller=Mock())
+    node.application_controller.emergency_stop.return_value = "shutdown-stop"
+    application_api_node.ApplicationApiNode.request_shutdown(node)
+    application_api_node.ApplicationApiNode.request_shutdown(node)
+    node.application_controller.emergency_stop.assert_called_once_with("application_shutdown")
+
+
+def test_capture_cleanup_continues_after_subscription_error_and_retries_only_failure(monkeypatch):
+    listener = Mock(spec=['unregister'])
+    monkeypatch.setattr(capture_module.tf2_ros, 'Buffer', Mock())
+    monkeypatch.setattr(capture_module.tf2_ros, 'TransformListener', Mock(return_value=listener))
+    node = Mock(spec=['create_subscription', 'destroy_subscription'])
+    subscriptions = [object() for _ in range(4)]
+    node.create_subscription.side_effect = subscriptions
+    node.destroy_subscription.side_effect = [RuntimeError('subscription busy'), True, True, True, True]
+    capture = ProbeReferenceCaptureCoordinator(node, Mock(), Mock(), Mock())
+    capture._create_synchronizers(((0, 'hand'),))
+    with pytest.raises(RuntimeError, match='subscription busy'):
+        capture.close()
+    assert node.destroy_subscription.call_count == 4
+    listener.unregister.assert_called_once()
+    capture.close()
+    assert node.destroy_subscription.call_count == 5
+    assert node.destroy_subscription.call_args.args[0] is subscriptions[0]
+    listener.unregister.assert_called_once()

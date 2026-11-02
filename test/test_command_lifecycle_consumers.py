@@ -12,6 +12,7 @@ from fault_detector_spot.application.api.application_api_node import Application
 from fault_detector_spot.application.api.navigation_setup_api import NavigationSetupApi, _NavigationExecution
 from fault_detector_spot.application.api.probe_setup_motion_api import ProbeSetupMotionApi, _ProbeMotionExecution
 from fault_detector_spot.application.api.probe_point_execution_api import ProbePointExecutionApi
+from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.controllers.command_controller import CommandControllerState
 from fault_detector_spot.application.coordinators.probe_refinement_finalization_coordinator import (
@@ -88,6 +89,7 @@ def test_api_action_waits_for_confirmed_stop_and_publishes_uncertainty(kind):
 def test_probe_action_confirmed_stop_uses_valid_ros_terminal_transition(cancel_requested):
     api = ProbeSetupMotionApi.__new__(ProbeSetupMotionApi)
     api._shutdown = Event()
+    api._shutdown_callbacks = ShutdownCallbackActivity()
     api._lock = RLock()
     api._executions = {}
     api._motion_request = Mock()

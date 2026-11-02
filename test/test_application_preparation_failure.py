@@ -1,6 +1,7 @@
 """Preparation errors must terminate accepted actions without dispatching."""
 
 import asyncio
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -12,6 +13,7 @@ from fault_detector_msgs.msg import ApplicationCommandState, OperationalIntent
 from fault_detector_spot.application.api.application_api_node import (
     ApplicationApiNode,
 )
+from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
 from fault_detector_spot.application.controllers.application_controller import (
     ApplicationController,
 )
@@ -40,6 +42,8 @@ def test_saved_probe_preparation_failure_aborts_with_correlated_state(
     controller.probe_setup_coordinator.saved_probe_command.side_effect = error
     stamp = Time(sec=12)
     node = ApiHarness(
+        _shutdown=Event(),
+        _shutdown_callbacks=ShutdownCallbackActivity(),
         application_controller=controller,
         _executions={},
         _state_publisher=Mock(),

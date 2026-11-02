@@ -80,18 +80,35 @@ class HelperInitializer(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
     def close(self):
-        """Close shared ROS entities that are not tree children."""
-        try:
-            if self.rtabmap_runtime is not None:
-                self.rtabmap_runtime.close()
-        finally:
+        """Retry incomplete cleanup and continue releasing independent owners."""
+        errors = []
+        for name, release in self.cleanup_operations().items():
             try:
-                if self.lidar_adapter_runtime is not None:
-                    self.lidar_adapter_runtime.close()
-            finally:
-                try:
-                    if self.tag_state_source is not None:
-                        self.tag_state_source.destroy()
-                        self.tag_state_source = None
-                finally:
-                    self.robot_command_resources.close()
+                release()
+            except Exception as exception:
+                errors.append(f"{name}: {exception}")
+        try:
+            self.robot_command_resources.close()
+        except Exception as exception:
+            errors.append(f"robot command resources: {exception}")
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+    def cleanup_operations(self):
+        """Expose child runtimes separately for bounded ordered teardown."""
+        operations = {}
+        for name, method in (("rtabmap_runtime", "close"),
+                             ("lidar_adapter_runtime", "close"),
+                             ("tag_state_source", "destroy")):
+            resource = getattr(self, name)
+            if resource is None:
+                continue
+
+            def release(name=name, resource=resource, method=method):
+                result = getattr(resource, method)()
+                if result is False:
+                    raise RuntimeError(f"{name} cleanup reported incomplete")
+                if getattr(self, name) is resource:
+                    setattr(self, name, None)
+            operations[name] = release
+        return operations

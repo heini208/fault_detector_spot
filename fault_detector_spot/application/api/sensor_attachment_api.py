@@ -1,5 +1,7 @@
 """Expose authoritative sensor attachment state through ROS services."""
 
+from fault_detector_spot.application.api.shutdown_callbacks import release_resources
+
 from fault_detector_msgs.msg import SensorAttachmentState as StateMessage
 from fault_detector_msgs.srv import (
     ConfirmSensorAttachment,
@@ -140,10 +142,12 @@ class SensorAttachmentApi:
 
     def close(self):
         """Destroy sensor attachment ROS resources."""
-        self.node.destroy_service(self._select_service)
-        self.node.destroy_service(self._confirm_service)
-        self.node.destroy_service(self._read_service)
-        self.node.destroy_publisher(self._publisher)
+        release_resources(self, {
+            "select_service": lambda: self.node.destroy_service(self._select_service),
+            "confirm_service": lambda: self.node.destroy_service(self._confirm_service),
+            "read_service": lambda: self.node.destroy_service(self._read_service),
+            "publisher": lambda: self.node.destroy_publisher(self._publisher),
+        })
 
 
 __all__ = ["SensorAttachmentApi"]

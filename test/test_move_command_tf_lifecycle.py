@@ -43,19 +43,29 @@ def test_behavior_tree_uses_one_robot_command_resource_owner():
 
 
 def test_shared_robot_command_resources_have_explicit_teardown():
-    resources = _read(
-        "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "robot_command_resources.py"
-    )
-    close = _method_source(resources, "close")
-    assert "arm_executors" in close
-    assert "base_executors" in close
-    assert "tf_listener.shutdown" in close
-    assert "arm_contact_telemetry.close" in close
-    assert "arm_state_source.destroy" in close
-    assert "arm_joint_state_source.destroy" in close
-    assert "posture_state_source.destroy" in close
-    assert "client.destroy" in close
+    from unittest.mock import Mock
+    from fault_detector_spot.application.behaviour_tree.behaviours.robot_command_resources import RobotCommandResources
+
+    resources = RobotCommandResources()
+    expected = []
+    for field, method in (
+        ("_tf_listener", "shutdown"), ("_arm_contact_telemetry", "close"),
+        ("_arm_state_source", "destroy"), ("_arm_joint_state_source", "destroy"),
+        ("_posture_state_source", "destroy"),
+    ):
+        owner = Mock()
+        setattr(resources, field, owner)
+        expected.append(getattr(owner, method))
+    arm, base, client = Mock(), Mock(), Mock()
+    resources._arm_movement_executors[""] = arm
+    resources._base_movement_executors[""] = base
+    resources._clients[""] = client
+    expected.extend((arm.shutdown, base.shutdown, client.destroy))
+    resources.report_shutdown_confirmed()
+    resources.close()
+    resources.close()
+    for release in expected:
+        release.assert_called_once()
 
 
 def test_movement_preparation_exceptions_fail_the_behaviour():

@@ -248,6 +248,8 @@ class BaseMovementExecutor(MovementExecutor):
         self._stationary_stand_stamp = None
         self._cancellation_terminal_update = None
         self._cancellation_complete = False
+        self._shutdown_stop_invalidation = None
+        self._shutdown_stop_seen = None
 
     def absolute(self, command) -> BaseMovementUpdate:
         """Execute a frozen odom target through the same readiness and verifier."""
@@ -265,7 +267,7 @@ class BaseMovementExecutor(MovementExecutor):
 
     def tag(self, command) -> BaseMovementUpdate:
         """Start an SE2 base movement relative to a live visible tag."""
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
         semantic_command = deepcopy(command)
         def build_initial_plan():
@@ -282,7 +284,7 @@ class BaseMovementExecutor(MovementExecutor):
 
     def prepare_for_navigation(self) -> BaseMovementUpdate:
         """Complete walking-height readiness before dispatching a Nav2 goal."""
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
         self._active = True
         self._operation = _BaseOperation.PREPARE
@@ -291,7 +293,7 @@ class BaseMovementExecutor(MovementExecutor):
 
     def stand(self) -> BaseMovementUpdate:
         """Stand at zero offset and restore the commanded-height estimate."""
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
         self._operation = _BaseOperation.STAND
         self._set_phase(_BasePhase.EXECUTING_STAND)
@@ -299,7 +301,7 @@ class BaseMovementExecutor(MovementExecutor):
 
     def finish_walking(self) -> BaseMovementUpdate:
         """Replace finished navigation with a stand and confirm physical settling."""
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
         self._active = True
         self._operation = _BaseOperation.FINISH_WALKING
@@ -313,7 +315,7 @@ class BaseMovementExecutor(MovementExecutor):
 
     def change_height(self, body_height_m: float) -> BaseMovementUpdate:
         """Adjust height and restore any heading drift at the requested height."""
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
         height = validate_body_height(body_height_m)
         self.height_readiness.require_reset()
@@ -346,7 +348,7 @@ class BaseMovementExecutor(MovementExecutor):
 
     def sit(self) -> BaseMovementUpdate:
         """Start Spot's native sit command directly."""
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
         self._operation = _BaseOperation.SIT
         self._set_phase(_BasePhase.EXECUTING_SIT)
@@ -385,6 +387,42 @@ class BaseMovementExecutor(MovementExecutor):
         self._stop_confirmation_verifier = BaseStopVerifier(
             self.goal_verification_config, self._monotonic_clock(),
         )
+
+    def begin_shutdown(self):
+        """Close admission and retain pose/action sources until stopping settles."""
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+        self._stop_unconfirmed = True
+        self.request_cancel()
+        self.begin_stop_confirmation()
+
+    def invalidate_shutdown_stop(self):
+        """Fence physical proof after velocity traffic without changing workflow."""
+        if self._shutdown_started and not self._closed:
+            # The subscription callback only publishes an immutable boundary.
+            # The polling owner alone replaces and advances its verifier.
+            self._shutdown_stop_invalidation = (object(), self._ros_time_sec())
+            self._stop_unconfirmed = True
+
+    def poll_shutdown(self):
+        """Keep shutdown bounded by advancing only nonblocking stop checks."""
+        self.begin_shutdown()
+        if self._closed:
+            return self.execution_idle, "Base shutdown already finalized"
+        invalidation = self._shutdown_stop_invalidation
+        if invalidation is not self._shutdown_stop_seen:
+            self._stop_confirmation_stamp = invalidation[1]
+            self._stop_confirmation_verifier = BaseStopVerifier(
+                self.goal_verification_config, self._monotonic_clock(),
+            )
+            self._shutdown_stop_seen = invalidation
+        confirmed, detail = self.poll_stop_confirmation()
+        if invalidation is not self._shutdown_stop_invalidation:
+            confirmed, detail = False, "Base velocity traffic invalidated stop evidence"
+        if not confirmed:
+            self._stop_unconfirmed = True
+        return confirmed, detail
 
     def poll_stop_confirmation(self):
         """Return proof only after action termination and post-stop settling."""
@@ -466,7 +504,7 @@ class BaseMovementExecutor(MovementExecutor):
         semantic_tag_command=None,
     ) -> BaseMovementUpdate:
         """Start one movement whose plan is resolved after readiness."""
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
         if not callable(plan_builder):
             raise TypeError("Base movement requires a plan builder")

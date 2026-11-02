@@ -1,6 +1,11 @@
 """Expose probe authoring through typed ROS service interfaces."""
 
+from fault_detector_spot.application.api.shutdown_callbacks import (
+    ShutdownCallbackActivity, tracked_shutdown_callback, release_resources,
+)
+
 from uuid import uuid4
+from threading import Event
 
 from fault_detector_msgs.msg import (
     ProbeSetupIntent,
@@ -39,6 +44,8 @@ class ProbeSetupApi:
         state_adapter: ProbeSetupStateAdapter,
         preview_source,
     ):
+        self._shutdown = Event()
+        self._shutdown_callbacks = ShutdownCallbackActivity()
         self.node = node
         self.coordinator = coordinator
         self.state_publisher = state_publisher
@@ -125,11 +132,14 @@ class ProbeSetupApi:
             ),
         }
 
+    @tracked_shutdown_callback
     def _execute(self, request, response):
         goal = request
         operation = int(goal.intent.operation)
         context = None
         try:
+            if self._shutdown.is_set():
+                raise RuntimeError("Application is shutting down")
             required_client_id(goal.client_id)
             self._validate_operation(operation)
             if operation == ProbeSetupIntent.OPERATION_OPEN:
@@ -368,12 +378,17 @@ class ProbeSetupApi:
         if int(operation) not in supported:
             raise ValueError(f"Unsupported probe setup operation: {operation}")
 
+    def request_shutdown(self):
+        self._shutdown.set()
+
     def close(self) -> None:
         """Destroy transport resources owned by this API."""
-        self.coordinator.remove_state_listener(self._publish_external_motion_state)
-        self.node.destroy_service(self._execute_service)
-        self.node.destroy_service(self._close_service)
-        self.node.destroy_service(self._preview_service)
+        release_resources(self, {
+            "state_listener": lambda: self.coordinator.remove_state_listener(self._publish_external_motion_state),
+            "execute_service": lambda: self.node.destroy_service(self._execute_service),
+            "close_service": lambda: self.node.destroy_service(self._close_service),
+            "preview_service": lambda: self.node.destroy_service(self._preview_service),
+        })
 
 
 __all__ = ["ProbeSetupApi"]

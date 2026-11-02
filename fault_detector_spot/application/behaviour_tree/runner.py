@@ -2,6 +2,7 @@
 
 import sys
 import time
+from threading import Lock
 from typing import Callable
 
 import py_trees
@@ -12,6 +13,12 @@ from py_trees.common import ComparisonExpression
 from py_trees.decorators import EternalGuard, StatusToBlackboard
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.signals import SignalHandlerOptions
+
+from fault_detector_spot.shared.ros.shutdown_coordinator import (
+    ShutdownCoordinator, shutdown_signals,
+)
+from fault_detector_spot.shared.persistence.shutdown_state import StopUnconfirmedStore
 
 from fault_detector_spot.shared.persistence.basic_settings import startup_settings
 
@@ -118,10 +125,40 @@ def read_parameter(node, name, default):
     return node.get_parameter(name).value
 
 
+class _TreeDispatch:
+    """Fence queued timer callbacks and retain already-running tick ownership."""
+
+    def __init__(self, tick):
+        self._tick = tick
+        self._lock = Lock()
+        self._paused = False
+        self._active = 0
+
+    def tick(self):
+        with self._lock:
+            if self._paused:
+                return
+            self._active += 1
+        try:
+            return self._tick()
+        finally:
+            with self._lock:
+                self._active -= 1
+
+    def pause(self):
+        with self._lock:
+            self._paused = True
+
+    def status(self):
+        with self._lock:
+            return self._active == 0, f"{self._active} behavior-tree ticks awaiting completion"
+
+
 def start_tree_ticking(tree, period_ms=50.0):
+    tree._shutdown_dispatch = _TreeDispatch(tree.tick)
     tree.timer = tree.node.create_timer(
         period_ms / 1000.0,
-        tree.tick,
+        tree._shutdown_dispatch.tick,
         clock=Clock(clock_type=ClockType.STEADY_TIME),
     )
     return tree.timer
@@ -657,67 +694,152 @@ def build_navigate_to_goal_pose_tree(
     return sequence
 
 
+def make_shutdown_coordinator(node, tree, executor):
+    """Keep ROS callbacks and execution evidence alive through confirmation."""
+    helper = helper_initializer
+    resources = helper.robot_command_resources if helper is not None else None
+    subscribers = ([item for item in tree.root.iterate()
+                    if isinstance(item, CommandSubscriber)] if tree is not None else [])
+    admission = {}
+    if resources is not None:
+        # Freeze submissions and resource lookup before taking teardown
+        # snapshots. This operation does not wait for an execution owner.
+        resources.close_admission()
+        admission["motion submissions"] = resources.close_admission
+    for index, subscriber in enumerate(subscribers):
+        admission[f"command admission/{index}"] = subscriber.close_admission
+    if tree is not None:
+        dispatch = getattr(tree, "_shutdown_dispatch", None)
+        if dispatch is not None:
+            # A timer callback already queued in the executor must also be
+            # fenced, even before the timer-cancel operation is serviced.
+            dispatch.pause()
+        def pause_dispatch():
+            timer = getattr(tree, "timer", None)
+            if timer is not None:
+                timer.cancel()
+        admission["tree dispatch"] = pause_dispatch
+
+    requests, confirmations, cleanup = {}, {}, {}
+    for index, subscriber in enumerate(subscribers):
+        confirmations[f"prior ownership/{index}"] = subscriber.shutdown_ownership_status
+    if tree is not None and dispatch is not None:
+        confirmations["tree dispatch"] = dispatch.status
+    retained = ({name: detail for subscriber in subscribers
+                 for name, detail in subscriber.startup_unresolved.items()}
+                if subscribers else StopUnconfirmedStore(owner="bt_runner").load())
+    for name, detail in retained.items():
+        confirmations[f"prior shutdown/{name}"] = lambda detail=detail: (False, detail)
+    if resources is not None:
+        requests["command sources"] = resources.begin_shutdown
+        confirmations["command sources"] = resources.poll_shutdown
+        for name, owner in resources.shutdown_owners().items():
+            requests[name] = owner.begin_shutdown
+            confirmations[name] = owner.poll_shutdown
+
+    def report_unconfirmed(unresolved):
+        if resources is not None:
+            resources.report_shutdown_unconfirmed()
+        errors = []
+        try:
+            node.get_logger().error(f"Shutdown stop-unconfirmed; reconciliation required: {unresolved}")
+        except Exception as error:
+            errors.append(str(error))
+        if subscribers:
+            for subscriber in subscribers:
+                try:
+                    subscriber.report_shutdown_result(unresolved)
+                except Exception as error:
+                    errors.append(str(error))
+        else:
+            StopUnconfirmedStore(owner="bt_runner").record({
+                name: detail for name, detail in unresolved.items()
+                if not name.startswith("prior shutdown/")
+            })
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+    def report_confirmed():
+        if not coordinator.unresolved:
+            if resources is not None:
+                resources.report_shutdown_confirmed()
+            for subscriber in subscribers:
+                subscriber.report_shutdown_result({})
+
+    cleanup["publish shutdown result"] = report_confirmed
+    if helper is not None:
+        cleanup.update(helper.cleanup_operations())
+        cleanup.update(resources.cleanup_operations())
+    if tree is not None:
+        cleanup["behavior tree"] = lambda: tree.shutdown(destroy_node=False)
+    cleanup["callback executor"] = lambda: executor.shutdown(timeout_sec=1.0)
+    cleanup["ROS node"] = node.destroy_node
+    cleanup["ROS context"] = rclpy.try_shutdown
+    def confirm_sessions():
+        if coordinator.unresolved:
+            return
+        if any(name != "confirm shutdown session" for name in coordinator.cleanup_errors):
+            raise RuntimeError("Shutdown session retained until all resource cleanup completes")
+        for subscriber in subscribers:
+            if not subscriber.confirm_shutdown_session():
+                raise RuntimeError("Shutdown session still owns unresolved work")
+    cleanup["confirm shutdown session"] = confirm_sessions
+    coordinator = ShutdownCoordinator(
+        close_admission=admission, request_stop=requests,
+        confirmations=confirmations, cleanup=cleanup,
+        progress=lambda timeout: executor.spin_once(timeout_sec=timeout),
+        report_unconfirmed=report_unconfirmed,
+        timeout_sec=float(read_parameter(node, "shutdown.confirmation_timeout_sec", 10.0)),
+        cleanup_timeout_sec=float(read_parameter(node, "shutdown.cleanup_timeout_sec", 20.0)),
+    )
+    return coordinator
+
+
 def main(args=None):
     started = time.monotonic()
     startup_settings()
-    rclpy.init(args=args)
-    node = rclpy.create_node("bt_driver")
-    node.get_logger().info(
-        f"BT node initialized in {time.monotonic() - started:.3f}s"
-    )
-    root = create_root(node)
-    node.get_logger().info(
-        f"BT root constructed at +{time.monotonic() - started:.3f}s"
-    )
-    tree = py_trees_ros.trees.BehaviourTree(
-        root=root,
-        unicode_tree_debug=False,
-    )
-
-    try:
-        tree.setup(
-            node=node,
-            timeout=15.0,
-        )
-    except py_trees_ros.exceptions.TimedOutError as exception:
-        node.get_logger().error(
-            f"Behavior tree setup failed: {exception}"
-        )
+    with shutdown_signals() as shutdown_requested:
+        # ROS's default signal handler invalidates the context before finally,
+        # which would make action results and stop-service replies unavailable.
+        rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+        node = rclpy.create_node("bt_driver")
+        executor = MultiThreadedExecutor(num_threads=2)
+        executor.add_node(node)
+        tree = None
+        failed = False
         try:
-            close_helper_container()
+            root = create_root(node)
+            tree = py_trees_ros.trees.BehaviourTree(root=root, unicode_tree_debug=False)
+            tree.setup(node=node, timeout=15.0)
+            resources = get_helper_container(node).robot_command_resources
+            resources.prepare_stop(node)
+            if not shutdown_requested.is_set():
+                for behaviour in root.iterate():
+                    if isinstance(behaviour, CommandSubscriber):
+                        behaviour.activate()
+                start_tree_ticking(tree)
+                node.get_logger().info(
+                    f"BT command consumer ready at +{time.monotonic() - started:.3f}s"
+                )
+            while not shutdown_requested.is_set() and rclpy.ok():
+                executor.spin_once(timeout_sec=0.1)
+        except KeyboardInterrupt:
+            pass
+        except py_trees_ros.exceptions.TimedOutError as exception:
+            failed = True
+            node.get_logger().error(f"Behavior tree setup failed: {exception}")
         finally:
-            try:
-                tree.shutdown()
-            finally:
-                rclpy.try_shutdown()
-        sys.exit(1)
-
-    start_tree_ticking(tree)
-
-    executor = MultiThreadedExecutor(num_threads=2)
-    executor.add_node(tree.node)
-    try:
-        get_helper_container(node).robot_command_resources.prepare_stop(node)
-        for behaviour in root.iterate():
-            if isinstance(behaviour, CommandSubscriber):
-                behaviour.activate()
-        node.get_logger().info(
-            f"BT command consumer ready at +{time.monotonic() - started:.3f}s"
-        )
-        executor.spin()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        try:
-            executor.shutdown()
-        finally:
-            try:
-                close_helper_container()
-            finally:
-                try:
-                    tree.shutdown()
-                finally:
-                    rclpy.try_shutdown()
+            coordinator = make_shutdown_coordinator(node, tree, executor)
+            report = coordinator.close()
+            if report.cleanup_errors:
+                # The ROS logger may already be destroyed; retain a diagnostic
+                # even after context shutdown, and preserve helpers for retry.
+                print(f"Shutdown cleanup incomplete: {report.cleanup_errors}", file=sys.stderr)
+            if report.confirmed and not report.cleanup_errors:
+                global helper_initializer
+                helper_initializer = None
+        if failed:
+            sys.exit(1)
 
 
 if __name__ == "__main__":

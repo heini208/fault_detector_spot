@@ -279,3 +279,24 @@ def test_setup_status_is_owned_only_by_setup_coordinator():
 
     assert application_statuses == []
     assert setup_statuses[-1].operation == operation
+
+
+def test_close_retries_failed_setup_owner_and_releases_independent_owners():
+    from unittest.mock import Mock
+    commands = FakeCommandController()
+    controller = ApplicationController(commands)
+    probe = Mock()
+    navigation = Mock()
+    probe.close.side_effect = [RuntimeError('capture resource busy'), None]
+    controller.probe_setup_coordinator = probe
+    controller.navigation_setup_coordinator = navigation
+    with pytest.raises(RuntimeError, match='capture resource busy'):
+        controller.close()
+    navigation.close.assert_called_once()
+    assert controller.navigation_setup_coordinator is None
+    assert controller.probe_setup_coordinator is probe
+    assert not commands.listeners
+    controller.close()
+    assert controller.probe_setup_coordinator is None
+    assert probe.close.call_count == 2
+    navigation.close.assert_called_once()

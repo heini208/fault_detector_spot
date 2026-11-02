@@ -219,6 +219,7 @@ def generate_launch_description():
             sigterm_timeout="45.0",
             sigkill_timeout="5.0",
             parameters=[
+                command_lifecycle_config,
                 tag_sensing_config,
                 close_surface_config,
                 arm_motion_config,
@@ -235,6 +236,8 @@ def generate_launch_description():
             executable="application_api",
             name="application_api",
             output="screen",
+            sigterm_timeout="45.0",
+            sigkill_timeout="5.0",
             parameters=[
                 command_lifecycle_config,
                 tag_sensing_config,

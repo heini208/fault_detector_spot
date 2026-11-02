@@ -1,6 +1,7 @@
 """Validate reference-capture shutdown and transport ownership."""
 
 import inspect
+from unittest.mock import Mock
 
 from fault_detector_spot.application.api.application_api_node import (
     ApplicationApiNode,
@@ -15,10 +16,15 @@ from fault_detector_spot.ui.ros.probe_setup_client import ProbeSetupClient
 
 
 def test_reference_capture_api_shutdown_stops_work_before_destroying_server():
-    source = inspect.getsource(ProbeReferenceCaptureApi.close)
-    assert source.index("capture_coordinator.close()") < source.index(
-        "_action_server.destroy()"
-    )
+    events = []
+    api = ProbeReferenceCaptureApi.__new__(ProbeReferenceCaptureApi)
+    api.capture_coordinator = Mock()
+    api._action_server = Mock()
+    api.capture_coordinator.close.side_effect = lambda: events.append("capture")
+    api._action_server.destroy.side_effect = lambda: events.append("action")
+    api.close()
+    api.close()
+    assert events == ["capture", "action"]
 
 
 def test_reference_capture_coordinator_shutdown_interrupts_waits():
@@ -30,9 +36,10 @@ def test_reference_capture_coordinator_shutdown_interrupts_waits():
     assert "unregister" in source
 
 
-def test_application_api_node_destroys_reference_capture_api():
-    source = inspect.getsource(ApplicationApiNode.destroy_node)
-    assert "probe_reference_capture_api.close()" in source
+def test_application_api_node_destroy_uses_the_ordered_shutdown_owner():
+    node = Mock()
+    assert ApplicationApiNode.destroy_node(node) is node.shutdown.return_value
+    node.shutdown.assert_called_once_with()
 
 
 def test_probe_setup_client_blocks_close_while_capture_is_active():

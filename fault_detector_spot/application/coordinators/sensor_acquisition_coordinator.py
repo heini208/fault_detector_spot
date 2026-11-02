@@ -76,11 +76,14 @@ class SensorAcquisitionState:
 class _Session:
     recording: MeasurementRecording
     sources: list = field(default_factory=list)
+    stopped_sources: set = field(default_factory=set)
     ready_channels: set = field(default_factory=set)
     required_channels: frozenset = frozenset()
     physical_channels: frozenset = frozenset()
     client: object = None
     head_started: bool = False
+    start_pending: bool = False
+    stop_generation: int = 0
     deadline: float = 0.0
     final_state: MeasurementCompletionState = (
         MeasurementCompletionState.COMPLETE
@@ -112,9 +115,10 @@ class SensorAcquisitionCoordinator:
         self.callback_group = ReentrantCallbackGroup()
         self._lock = RLock()
         self._software_stop = Event()
+        self._shutdown = Event()
         self._listeners = []
         self._session = None
-        # ROS entities live until node destruction, after executor shutdown.
+        # ROS entities survive cancellation until stop confirmation or timeout.
         self._subscriptions = {}
         self._clients = {}
         self._tf_buffer = None
@@ -252,6 +256,7 @@ class SensorAcquisitionCoordinator:
                     return self._state
                 if physical:
                     self._stop_confirmed = False
+                    session.start_pending = True
                     self._call_head(session, True, self._head_started)
                 else:
                     session.head_started = True
@@ -303,26 +308,40 @@ class SensorAcquisitionCoordinator:
                                  "Recording attempt failed")
             return self._state
 
-    def close(self):
-        """Release active resources during application shutdown."""
+    def request_shutdown(self):
+        """Close admission and request stopping while replies remain usable."""
+        self._shutdown.set()
+        self.latch_software_stop()
+        self.stop(cancelled=True)
+
+    def shutdown_status(self):
         with self._lock:
-            if self._session is not None:
-                session = self._session
-                if (
-                    session.client is not None
-                    and session.client.service_is_ready()
-                ):
-                    try:
-                        session.client.call_async(self._request(False))
-                    except Exception as exception:
-                        self._report_error(exception)
-                self._finish(
-                    session,
-                    MeasurementCompletionState.CANCELLED,
-                    "Application shutdown cancelled acquisition",
-                )
+            return self.recording_stopped, self._state.detail
+
+    def close(self, *, stop_unconfirmed=False):
+        """Finalize after confirmation or an explicitly reported deadline."""
+        self._shutdown.set()
+        self.latch_software_stop()
+        with self._lock:
+            if self._session is not None and not stop_unconfirmed:
+                raise RuntimeError("Sensor acquisition stop confirmation is still pending")
+            errors = []
+            try:
+                if self._session is not None:
+                    self._finish(
+                        self._session,
+                        MeasurementCompletionState.FAILED,
+                        "Application shutdown stop-unconfirmed; sensor reconciliation required",
+                    )
+            except Exception as error:
+                errors.append(error)
             self._listeners.clear()
-            self._timer.cancel()
+            try:
+                self._timer.cancel()
+            except Exception as error:
+                errors.append(error)
+            if errors:
+                raise errors[0]
 
     def _create_sources(self, session, definition, request):
         geometry = any(
@@ -377,7 +396,16 @@ class SensorAcquisitionCoordinator:
         with self._lock:
             if self._session is not session:
                 return
+            session.start_pending = False
             success, detail = self._response(future)
+            if self._state.status is SensorAcquisitionStatus.STOPPING:
+                # An earlier stop reply cannot cover a delayed start reply.
+                # Confirm a fresh stop after this start request has resolved.
+                try:
+                    self._request_head_stop(session)
+                except Exception as exception:
+                    self._finish(session, MeasurementCompletionState.FAILED, str(exception))
+                return
             if not success:
                 self._begin_stop(
                     session,
@@ -410,8 +438,10 @@ class SensorAcquisitionCoordinator:
                 session.final_state = final_state
                 session.final_detail = detail
             return
-        for source in session.sources:
-            source.stop()
+        errors = self._stop_sources(session)
+        if errors:
+            final_state = MeasurementCompletionState.FAILED
+            detail = f"Recording sources could not stop: {'; '.join(errors)}"
         session.final_state = final_state
         session.final_detail = detail
         self._set_state(
@@ -424,7 +454,7 @@ class SensorAcquisitionCoordinator:
             return
         session.deadline = time.monotonic() + self.STOP_TIMEOUT_SEC
         try:
-            self._call_head(session, False, self._head_stopped)
+            self._request_head_stop(session)
         except Exception as exception:
             self._finish(
                 session,
@@ -432,11 +462,20 @@ class SensorAcquisitionCoordinator:
                 str(exception),
             )
 
-    def _head_stopped(self, session, future):
+    def _request_head_stop(self, session):
+        session.stop_generation += 1
+        generation = session.stop_generation
+        self._call_head(session, False, lambda current, future: self._head_stopped(
+            current, generation, future,
+        ))
+
+    def _head_stopped(self, session, generation, future):
         with self._lock:
-            if self._session is not session:
+            if self._session is not session or generation != session.stop_generation:
                 return
             success, detail = self._response(future)
+            if success and session.start_pending:
+                return
             self._stop_confirmed = success
             final_state = session.final_state
             if not success:
@@ -481,8 +520,12 @@ class SensorAcquisitionCoordinator:
         if self.software_stop_latched and final_state is MeasurementCompletionState.COMPLETE:
             final_state = MeasurementCompletionState.CANCELLED
             detail = "Software stop cancelled acquisition"
-        for source in session.sources:
-            source.stop()
+        errors = self._stop_sources(session)
+        if errors:
+            self._timer.cancel()
+            self._set_state(SensorAcquisitionStatus.FAILED,
+                            detail=f"Recording sources could not stop: {'; '.join(errors)}")
+            raise RuntimeError(self._state.detail)
         try:
             finalized = self.measurements.finalize(
                 session.recording,
@@ -501,6 +544,10 @@ class SensorAcquisitionCoordinator:
                 )
             final_state = finalized.completion_state
         except Exception as exception:
+            if self._shutdown.is_set():
+                self._set_state(SensorAcquisitionStatus.FAILED,
+                                detail=f"Failed to finalize measurement: {exception}")
+                raise
             final_state = MeasurementCompletionState.FAILED
             detail = f"Failed to finalize measurement: {exception}"
         self._timer.cancel()
@@ -511,6 +558,20 @@ class SensorAcquisitionCoordinator:
             else SensorAcquisitionStatus.IDLE
         )
         self._set_state(status, detail=detail)
+
+    @staticmethod
+    def _stop_sources(session):
+        errors = []
+        for index, source in enumerate(session.sources):
+            if index in session.stopped_sources:
+                continue
+            try:
+                source.stop()
+            except Exception as error:
+                errors.append(f"source {index}: {error}")
+            else:
+                session.stopped_sources.add(index)
+        return errors
 
     def _sensor_client(self, sensor_id, physical_channels):
         if not physical_channels:

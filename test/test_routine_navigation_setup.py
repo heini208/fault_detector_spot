@@ -1,6 +1,7 @@
 """Routine navigation assignments cross setup, persistence, and ROS state."""
 
 from types import SimpleNamespace
+from threading import Event
 from unittest.mock import Mock
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
 from fault_detector_msgs.srv import ExecuteProbeSetup
 from fault_detector_spot.application.api.probe_setup_api import ProbeSetupApi
+from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
 from fault_detector_spot.inspection.setup.probe_setup_state_adapter import ProbeSetupStateAdapter
 from fault_detector_spot.mapping.model.models import Waypoint
 from fault_detector_spot.mapping.repository.map_repository import MapRepository
@@ -27,6 +29,8 @@ def navigation_setup(tmp_path):
         )
     state = create_selected_routine(probe, probe.open_context("probe-ui").context)
     api = ProbeSetupApi.__new__(ProbeSetupApi)
+    api._shutdown = Event()
+    api._shutdown_callbacks = ShutdownCallbackActivity()
     api.coordinator = probe
     api.state_adapter = ProbeSetupStateAdapter(FakeClock())
     api.state_publisher = Mock()

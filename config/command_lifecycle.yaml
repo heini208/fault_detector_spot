@@ -6,3 +6,6 @@
     command.reconciliation_interval_sec: 1.0
     command.query_timeout_sec: 2.0
     command.poll_period_sec: 0.1
+    # Callback processing remains available throughout stop confirmation.
+    shutdown.confirmation_timeout_sec: 10.0
+    shutdown.cleanup_timeout_sec: 20.0

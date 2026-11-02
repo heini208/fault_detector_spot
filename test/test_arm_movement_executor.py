@@ -1928,3 +1928,109 @@ def test_recovered_tag_collision_allows_playback_retry(monkeypatch):
     assert result.retry_safe
     assert result.retry_target is None  # Tag retry resolves the live tag again.
     assert not corrections
+
+
+def shutdown_arm_rig(monkeypatch):
+    from unittest.mock import Mock
+    from fault_detector_spot.manipulation.guarded_probe_monitor import GuardedProbeMonitor
+
+    capture_builder(monkeypatch)
+    clock = ManualClock()
+    stop_client = FakeArmStopServiceClient()
+    stop_client.destroy = Mock()
+    executor, client = executor_with_client(
+        FakeTransformer({("body", "hand"): transform("body", "hand")}),
+        arm_stop_service_client=stop_client, monotonic_clock=clock,
+    )
+    executor._owns_arm_stop_service_client = True
+    timer = SimpleNamespace(cancel=Mock(), reset=Mock())
+    def create_timer(_period, callback, **_options):
+        timer.callback = callback
+        return timer
+    node = SimpleNamespace(create_timer=create_timer, destroy_timer=Mock())
+    executor._guarded_probe_monitor = GuardedProbeMonitor(
+        node, executor.arm_state_source, executor.guarded_probe_execution,
+    )
+    return executor, client, stop_client, clock, node, timer
+
+
+def test_shutdown_arm_preserves_monitor_until_late_action_and_fresh_stop(monkeypatch):
+    executor, client, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
+    # Use a direct gripper goal so this test exercises action shutdown without
+    # involving preparation or collision planning.
+    assert executor.close_gripper().outcome is ArmMovementOutcome.RUNNING
+    executor.begin_shutdown()
+    executor.begin_shutdown()
+    assert not executor.poll_shutdown()[0]
+    with pytest.raises(RuntimeError, match="stop unconfirmed"):
+        executor.shutdown()
+    node.destroy_timer.assert_not_called()
+    stop.destroy.assert_not_called()
+    assert executor.stow().outcome is ArmMovementOutcome.BUSY
+    handle = FakeGoalHandle()
+    client.send_future.set_result(handle)
+    assert handle.cancel_count >= 1
+    stop.future.set_result(SimpleNamespace(success=True))
+    timer.callback()
+    assert not executor.poll_shutdown()[0]
+    handle.result_future.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    for index in range(1, 30):
+        clock.now = index * 0.1
+        executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
+        timer.callback()
+        if executor.poll_shutdown()[0]:
+            break
+    assert executor.poll_shutdown()[0]
+    executor.shutdown()
+    executor.shutdown()
+    node.destroy_timer.assert_called_once_with(timer)
+    stop.destroy.assert_called_once()
+    assert executor.close_gripper().outcome is ArmMovementOutcome.BUSY
+
+
+@pytest.mark.parametrize("missing", ["acceptance", "result", "stop_reply", "physical_feedback"])
+def test_shutdown_arm_retains_uncertainty_for_missing_evidence(monkeypatch, missing):
+    executor, client, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
+    executor.close_gripper()
+    handle = FakeGoalHandle()
+    if missing != "acceptance":
+        client.send_future.set_result(handle)
+    executor.begin_shutdown()
+    if missing not in {"acceptance", "result"}:
+        handle.result_future.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    if missing != "stop_reply":
+        stop.future.set_result(SimpleNamespace(success=True))
+    for value in (0.0, 0.4, 1.0, 10.0):
+        clock.now = value
+        if missing != "physical_feedback":
+            executor.arm_state_source.velocity = hand_velocity_sample(clock.now)
+        timer.callback()
+        assert not executor.poll_shutdown()[0]
+    node.destroy_timer.assert_not_called()
+    executor.shutdown(stop_unconfirmed=True)
+    executor.shutdown(stop_unconfirmed=True)
+    assert not executor.execution_idle
+    node.destroy_timer.assert_called_once()
+    stop.destroy.assert_called_once()
+
+
+def test_idle_arm_shutdown_requires_new_stop_evidence_and_retryable_cleanup(monkeypatch):
+    executor, _, stop, clock, node, timer = shutdown_arm_rig(monkeypatch)
+    executor.begin_shutdown()
+    assert not executor.poll_shutdown()[0]
+    stop.future.set_result(SimpleNamespace(success=True))
+    timer.callback()
+    for value in (0.1, 0.6):
+        clock.now = value
+        executor.arm_state_source.velocity = hand_velocity_sample(value)
+        timer.callback()
+    assert executor.poll_shutdown()[0]
+    node.destroy_timer.side_effect = [RuntimeError("guard cleanup failed"), None]
+    with pytest.raises(RuntimeError, match="guard cleanup failed"):
+        executor.shutdown()
+    stop.destroy.assert_called_once()
+    assert executor._guarded_probe_monitor is not None
+    executor.shutdown()
+    executor.shutdown()
+    assert node.destroy_timer.call_count == 2
+    stop.destroy.assert_called_once()

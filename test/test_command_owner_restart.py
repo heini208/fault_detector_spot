@@ -73,7 +73,8 @@ def test_restart_never_adopts_delayed_dispatch_or_reports_old_request_idle():
     result = query(restarted, request.request_id, previous.status_ledger.execution_instance_id)
     assert result.status.execution_instance_id == restarted.status_ledger.execution_instance_id
     assert result.status.state == CommandStatus.STATE_UNKNOWN and not result.status.execution_idle
-    assert result.unresolved_request_ids == []
+    assert result.unresolved_request_ids == ["shutdown:bt_runner/active_session"]
+    assert not result.accepting_commands
     assert not restarted.pending_msgs and not restarted.blackboard.command_buffer
 
 

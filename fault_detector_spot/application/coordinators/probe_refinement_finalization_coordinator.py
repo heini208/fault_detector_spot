@@ -354,14 +354,16 @@ class ProbeRefinementFinalizationCoordinator:
 
     def close(self):
         """Detach finalization status observation."""
-        self.coordinator.remove_motion_status_listener(
-            self._receive_motion_status
-        )
-        with self._lock:
-            waiters = tuple(self._waiters.values())
-            self._waiters.clear()
-        for waiter in waiters:
-            waiter.event.set()
+        try:
+            self.coordinator.remove_motion_status_listener(
+                self._receive_motion_status
+            )
+        finally:
+            with self._lock:
+                waiters = tuple(self._waiters.values())
+                self._waiters.clear()
+            for waiter in waiters:
+                waiter.event.set()
 
 
 __all__ = [

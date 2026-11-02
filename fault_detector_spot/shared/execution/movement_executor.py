@@ -77,6 +77,8 @@ class MovementExecutor:
         self._settlement_lock = RLock()
         self._submitted_goals = []
         self._stop_unconfirmed = False
+        self._shutdown_started = False
+        self._closed = False
 
     @property
     def active(self) -> bool:
@@ -202,11 +204,24 @@ class MovementExecutor:
     def _cancellation_goal_finished(self):
         self._reset_operation()
 
-    def shutdown(self) -> None:
-        self.cancel()
+    def shutdown(self, *, stop_unconfirmed=False, stop_confirmed=False) -> None:
+        """Release this owner only after confirmation or reported expiry."""
+        if stop_confirmed and stop_unconfirmed:
+            raise ValueError("Shutdown cannot be both confirmed and unconfirmed")
+        self.begin_shutdown()
+        if not stop_unconfirmed and not stop_confirmed:
+            confirmed, detail = self.poll_shutdown()
+            if not confirmed:
+                raise RuntimeError(f"{self._movement_title} stop unconfirmed: {detail}")
+        elif stop_unconfirmed:
+            self._stop_unconfirmed = True
+        # Coordinator authorization refers to its completed confirmation
+        # phase. Child teardown may subsequently remove fresh state sources;
+        # finalization must not begin a second confirmation phase.
+        self._closed = True
 
     def _start_goal(self, goal_builder):
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
 
         self._active = True
@@ -214,6 +229,11 @@ class MovementExecutor:
         return self._submit_goal(goal_builder)
 
     def _submit_goal(self, goal_builder):
+        if self._shutdown_started:
+            return self._new_update(
+                self.OUTCOME_TYPE.BUSY,
+                f"{self._movement_title} shutdown has closed motion admission",
+            )
         if self.action_client is None:
             return self._finish(
                 self.OUTCOME_TYPE.EXECUTION_ERROR,
@@ -467,7 +487,9 @@ class MovementExecutor:
     def _busy_update(self):
         return self._new_update(
             self.OUTCOME_TYPE.BUSY,
-            f"Another {self.MOVEMENT_NAME} movement is already active",
+            (f"{self._movement_title} shutdown has closed motion admission"
+             if self._shutdown_started
+             else f"Another {self.MOVEMENT_NAME} movement is already active"),
         )
 
     def _new_update(self, outcome, detail: str):

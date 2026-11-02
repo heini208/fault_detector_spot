@@ -149,10 +149,47 @@ class RobotCommandResources:
         self._last_velocity_at = None
         self._stop_requested_at = None
         self._velocity_quiet_sec = 0.5
+        self._closing = False
+        self._shutdown_unconfirmed = False
+        self._shutdown_confirmed = False
+
+    def close_admission(self):
+        """Fence late submissions before tree dispatch is paused."""
+        self._closing = True
+        # Shutdown never resets this latch. Avoid waiting behind a reset's
+        # workflow locks before the coordinator can start its deadline.
+        self._software_stop.set()
+
+    def shutdown_owners(self):
+        """Snapshot the existing owners; do not create resources at teardown."""
+        owners = {f"arm/{name or 'default'}": owner
+                  for name, owner in self._arm_movement_executors.copy().items()}
+        owners.update({f"base/{name or 'default'}": owner
+                       for name, owner in self._base_movement_executors.copy().items()})
+        if self._waypoint_executor is not None:
+            owners["nav2"] = self._waypoint_executor
+        return owners
+
+    def begin_shutdown(self):
+        self.close_admission()
+        self._stop_requested_at = self._monotonic_clock()
+        if self._velocity_publisher is not None:
+            self._velocity_publisher.publish(Twist())
+
+    def poll_shutdown(self):
+        return self.stop_sources_quiet(), "Waiting for base velocity command sources to become quiet"
+
+    def report_shutdown_unconfirmed(self):
+        """Permit teardown only after the coordinator has reported uncertainty."""
+        self._shutdown_unconfirmed = True
+
+    def report_shutdown_confirmed(self):
+        """Authorize finalization using the coordinator's complete stop proof."""
+        self._shutdown_confirmed = True
 
     @property
     def stop_latched(self):
-        return self._software_stop.is_set()
+        return self._closing or self._software_stop.is_set()
 
     def _invalidate_stop_proof(self):
         self._stop_confirmed = False
@@ -161,6 +198,9 @@ class RobotCommandResources:
         """Create stop resources before advertising command readiness."""
         self.get_arm_movement_executor(node)
         self.get_base_movement_executor(node)
+        # Dispatch must never lazily construct a physical owner after the
+        # shutdown snapshot. This creates only a client and state subscription.
+        self.get_waypoint_navigation_executor(node)
         if self._velocity_publisher is None:
             self._velocity_publisher = node.create_publisher(Twist, "cmd_vel", 10)
             self._velocity_subscription = node.create_subscription(
@@ -170,6 +210,8 @@ class RobotCommandResources:
 
     def _receive_velocity(self, _message):
         self._last_velocity_at = self._monotonic_clock()
+        for owner in tuple(self._base_movement_executors.values()):
+            owner.invalidate_shutdown_stop()
 
     def stop_sources_quiet(self):
         if self._stop_requested_at is None:
@@ -270,6 +312,8 @@ class RobotCommandResources:
 
     def reset_software_stop(self, clear_ledger_latch):
         """A reset changes admission only; it never submits movement."""
+        if self._closing:
+            return False, "Shutdown has closed motion admission"
         if not self._stop_confirmed or not self.execution_idle() or not self.stop_sources_quiet():
             return False, "Software stop is not confirmed; reset remains blocked"
         for executor in self._stop_bases:
@@ -360,7 +404,7 @@ class RobotCommandResources:
                     node,
                     wait_for_server=False,
                 )
-                client = _StopAwareActionClient(client, self._software_stop.is_set, self._invalidate_stop_proof)
+                client = _StopAwareActionClient(client, lambda: self.stop_latched, self._invalidate_stop_proof)
                 self._clients[action_ns] = client
             return client
 
@@ -528,7 +572,7 @@ class RobotCommandResources:
                     self.get_base_movement_executor(node),
                     _StopAwareActionClient(
                         ActionClient(node, NavigateToPose, "/navigate_to_pose"),
-                        self._software_stop.is_set, self._invalidate_stop_proof,
+                        lambda: self.stop_latched, self._invalidate_stop_proof,
                     ),
                     stamp_now=lambda: node.get_clock().now().to_msg(),
                     node=node,
@@ -603,107 +647,68 @@ class RobotCommandResources:
                     )
             return executor
 
-    def close(self):
-        """Destroy every ROS entity owned by this resource container."""
-        with self._lock:
-            node = self._node
-            tf_listener = self._tf_listener
-            arm_state_source = self._arm_state_source
-            arm_joint_state_source = self._arm_joint_state_source
-            arm_contact_telemetry = self._arm_contact_telemetry
-            probe_surface_source = self._probe_surface_source
-            posture_state_source = self._posture_state_source
-            moveit_arm_planner = self._moveit_arm_planner
-            moveit_scene_refresh = self._moveit_scene_refresh
-            arm_collision_control = self._arm_collision_control
-            arm_executors = tuple(
-                self._arm_movement_executors.values()
-            )
-            base_executors = tuple(
-                self._base_movement_executors.values()
-            )
-            waypoint_executor = self._waypoint_executor
-            velocity_subscription = self._velocity_subscription
-            velocity_publisher = self._velocity_publisher
-            self._velocity_subscription = None
-            self._velocity_publisher = None
-            self._waypoint_executor = None
-            clients = tuple(self._clients.values())
-            self._tf_listener = None
-            self._arm_state_source = None
-            self._arm_joint_state_source = None
-            self._arm_contact_telemetry = None
-            self._probe_surface_source = None
-            self._posture_state_source = None
-            self._arm_motion_speed_policy = None
-            self._moveit_arm_planner = None
-            self._moveit_scene_refresh = None
-            self._arm_collision_control = None
-            self._arm_movement_executors.clear()
-            self._base_movement_executors.clear()
-            self._clients.clear()
-            self._node = None
+    def cleanup_operations(self):
+        """Retain each handle until its cleanup succeeds, independently."""
+        operations = {}
 
-        resources = []
-        if velocity_subscription is not None:
-            resources.append(("base velocity subscription", lambda: node.destroy_subscription(velocity_subscription)))
-        if velocity_publisher is not None:
-            resources.append(("base stop publisher", lambda: node.destroy_publisher(velocity_publisher)))
-        if moveit_scene_refresh is not None:
-            resources.append(("MoveIt scene refresh", moveit_scene_refresh.destroy))
-        if waypoint_executor is not None:
-            resources.append(("waypoint executor", waypoint_executor.shutdown))
-        resources.extend(
-            ("arm movement executor", executor.shutdown)
-            for executor in arm_executors
-        )
-        resources.extend(
-            ("base movement executor", executor.shutdown)
-            for executor in base_executors
-        )
-        if moveit_arm_planner is not None:
-            resources.append(
-                ("MoveIt arm planner", moveit_arm_planner.destroy)
-            )
-        if arm_collision_control is not None:
-            resources.append(("arm collision control", arm_collision_control.destroy))
-        if probe_surface_source is not None:
-            resources.append(
-                ("probe surface source", probe_surface_source.destroy)
-            )
-        if tf_listener is not None:
-            resources.append(
-                ("TF listener", tf_listener.shutdown)
-            )
-        if arm_contact_telemetry is not None:
-            resources.append(
-                ("arm contact telemetry", arm_contact_telemetry.close)
-            )
-        if arm_state_source is not None:
-            resources.append(
-                ("arm state source", arm_state_source.destroy)
-            )
-        if arm_joint_state_source is not None:
-            resources.append(
-                ("arm joint state source", arm_joint_state_source.destroy)
-            )
-        if posture_state_source is not None:
-            resources.append(
-                ("posture state source", posture_state_source.destroy)
-            )
-        resources.extend(
-            ("RobotCommand action client", client.destroy)
-            for client in clients
-        )
-        for resource_name, destroy in resources:
+        def attribute(name, method):
+            resource = getattr(self, name)
+            if resource is None:
+                return
+
+            def release():
+                result = method(resource)
+                if result is False:
+                    raise RuntimeError(f"{name} cleanup reported incomplete")
+                if getattr(self, name) is resource:
+                    setattr(self, name, None)
+            operations[name] = release
+
+        def executor_cleanup(owner):
+            return owner.shutdown(stop_unconfirmed=self._shutdown_unconfirmed,
+                                  stop_confirmed=self._shutdown_confirmed)
+
+        attribute('_waypoint_executor', executor_cleanup)
+        for collection_name in ('_arm_movement_executors', '_base_movement_executors'):
+            collection = getattr(self, collection_name)
+            for name, owner in tuple(collection.items()):
+                def release(collection=collection, name=name, owner=owner):
+                    executor_cleanup(owner)
+                    if collection.get(name) is owner:
+                        del collection[name]
+                operations[f"{collection_name}/{name or 'default'}"] = release
+        attribute('_moveit_scene_refresh', lambda resource: resource.destroy())
+        attribute('_moveit_arm_planner', lambda resource: resource.destroy())
+        attribute('_arm_collision_control', lambda resource: resource.destroy())
+        attribute('_probe_surface_source', lambda resource: resource.destroy())
+        attribute('_arm_contact_telemetry', lambda resource: resource.close())
+        attribute('_arm_state_source', lambda resource: resource.destroy())
+        attribute('_arm_joint_state_source', lambda resource: resource.destroy())
+        attribute('_posture_state_source', lambda resource: resource.destroy())
+        attribute('_tf_listener', lambda resource: resource.shutdown())
+        attribute('_velocity_subscription', lambda resource: self._node.destroy_subscription(resource))
+        attribute('_velocity_publisher', lambda resource: self._node.destroy_publisher(resource))
+        for name, client in tuple(self._clients.items()):
+            def release(name=name, client=client):
+                client.destroy()
+                if self._clients.get(name) is client:
+                    del self._clients[name]
+            operations[f"action_client/{name}"] = release
+        return operations
+
+    def close(self):
+        """Release independent resources and retain failures for another close."""
+        if (self.shutdown_owners()
+                and not (self._shutdown_confirmed or self._shutdown_unconfirmed)):
+            raise RuntimeError("Ordered shutdown confirmation or explicit timeout is required before teardown")
+        errors = []
+        for name, release in self.cleanup_operations().items():
             try:
-                destroy()
+                release()
             except Exception as exception:
-                if node is not None:
-                    node.get_logger().warning(
-                        f"Could not close shared {resource_name}: "
-                        f"{exception}"
-                    )
+                errors.append(f"{name}: {exception}")
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
     @staticmethod
     def _positive_parameter(node, name: str, default: float) -> float:
@@ -717,6 +722,8 @@ class RobotCommandResources:
         return value
 
     def _bind_node(self, node):
+        if self._closing:
+            raise RuntimeError("Shutdown has closed robot resource admission")
         if node is None:
             raise RuntimeError(
                 "RobotCommandResources requires a ROS node"

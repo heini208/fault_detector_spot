@@ -2,6 +2,8 @@
 
 import time
 
+from fault_detector_spot.application.api.shutdown_callbacks import release_resources
+
 from fault_detector_spot.inspection.setup.stable_tag_pose import TagObservationUnavailable
 
 from fault_detector_msgs.srv import ProbePointExecutionStep
@@ -156,7 +158,9 @@ class ProbePointExecutionApi:
                 self.acquisition.stop()
 
     def close(self):
-        self.controller.remove_status_listener(self._command_status)
-        self.acquisition.remove_state_listener(self._acquisition_state)
-        self.node.destroy_timer(self._timer)
-        self.node.destroy_service(self._service)
+        release_resources(self, {
+            "command_listener": lambda: self.controller.remove_status_listener(self._command_status),
+            "acquisition_listener": lambda: self.acquisition.remove_state_listener(self._acquisition_state),
+            "timer": lambda: self.node.destroy_timer(self._timer),
+            "service": lambda: self.node.destroy_service(self._service),
+        })

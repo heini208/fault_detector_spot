@@ -1,5 +1,9 @@
 """Expose probe setup motion through one typed ROS action."""
 
+from fault_detector_spot.application.api.shutdown_callbacks import (
+    ShutdownCallbackActivity, tracked_shutdown_callback, release_resources,
+)
+
 from dataclasses import dataclass, field
 from threading import Event, RLock
 from uuid import uuid4
@@ -63,6 +67,7 @@ class ProbeSetupMotionApi:
         self._lock = RLock()
         self._executions = {}
         self._shutdown = Event()
+        self._shutdown_callbacks = ShutdownCallbackActivity()
         self._callback_group = ReentrantCallbackGroup()
         self._action_server = ActionServer(
             node,
@@ -89,6 +94,7 @@ class ProbeSetupMotionApi:
     def _accept_cancel(_goal_handle):
         return CancelResponse.ACCEPT
 
+    @tracked_shutdown_callback
     def _execute(self, goal_handle):
         goal = goal_handle.request
         if self._shutdown.is_set():
@@ -319,10 +325,15 @@ class ProbeSetupMotionApi:
 
     def close(self) -> None:
         """Destroy the motion action and detach status observation."""
-        self.coordinator.remove_motion_status_listener(self._receive_status)
-        self._action_server.destroy()
-        with self._lock:
-            self._executions.clear()
+        def clear_executions():
+            with self._lock:
+                self._executions.clear()
+
+        release_resources(self, {
+            "motion_listener": lambda: self.coordinator.remove_motion_status_listener(self._receive_status),
+            "action_server": self._action_server.destroy,
+            "executions": clear_executions,
+        })
 
 
 __all__ = ["ProbeSetupMotionApi"]

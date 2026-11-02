@@ -449,7 +449,7 @@ class ArmMovementExecutor(MovementExecutor):
 
     def _commanded_pose(self, command, absolute, speed, force_threshold_n):
         with self._execution_lock:
-            if self.active:
+            if self.active or self._shutdown_started:
                 return self._busy_update()
             self._retry_target = None
             return self._start_commanded_pose(command, absolute, speed, force_threshold_n)
@@ -558,7 +558,7 @@ class ArmMovementExecutor(MovementExecutor):
             raise ValueError("Probe checkpoint must be expressed in odom")
         pose_to_pose_data(checkpoint.target.pose).validate()
         with self._execution_lock:
-            if self.active:
+            if self.active or self._shutdown_started:
                 return self._busy_update()
             target = ResolvedProbeTarget(deepcopy(checkpoint.target), checkpoint.sensor_id)
             self._tag_accuracy = {
@@ -599,7 +599,7 @@ class ArmMovementExecutor(MovementExecutor):
                 force_threshold_n,
             )
         with self._execution_lock:
-            if self.active:
+            if self.active or self._shutdown_started:
                 return self._busy_update()
             tolerance = float(command.tag_position_tolerance_m)
             if not math.isfinite(tolerance) or tolerance <= 0:
@@ -625,7 +625,7 @@ class ArmMovementExecutor(MovementExecutor):
     def _start_precision_movement(self, command, resolve_target, speed, force_threshold_n):
         """Use the existing post-motion verifier for an opt-in frozen odom goal."""
         with self._execution_lock:
-            if self.active:
+            if self.active or self._shutdown_started:
                 return self._busy_update()
             if type(command.precision_mode) is not bool:
                 raise ValueError("Precision mode must be a boolean")
@@ -903,7 +903,7 @@ class ArmMovementExecutor(MovementExecutor):
                 ArmMovementOutcome.EXECUTION_ERROR,
                 "Surface orientation source is not configured",
             )
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
 
         started_at = self._monotonic_clock()
@@ -993,7 +993,7 @@ class ArmMovementExecutor(MovementExecutor):
         conversion and dispatch, with up to two replans before any execution.
         """
         with self._execution_lock:
-            if self.active:
+            if self.active or self._shutdown_started:
                 return self._busy_update()
             if type(ignore_environment_collisions) is not bool:
                 raise TypeError("Environment collision bypass must be a boolean")
@@ -1070,7 +1070,7 @@ class ArmMovementExecutor(MovementExecutor):
         """Ensure the arm is deployed, then start one probe operation."""
         if not callable(start_probe):
             raise TypeError("Ready probe requires a callable probe starter")
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
 
         self._active = True
@@ -1097,6 +1097,8 @@ class ArmMovementExecutor(MovementExecutor):
         """
         if type(ignore_environment_collisions) is not bool:
             raise TypeError("Environment collision bypass must be a boolean")
+        if self._shutdown_started:
+            return self._busy_update()
         continuing = _continuation is self._probe_continuation
         if self.active:
             if not continuing or any((
@@ -1391,7 +1393,7 @@ class ArmMovementExecutor(MovementExecutor):
         speed=None,
     ) -> ArmMovementUpdate:
         """Move to the fixed body-frame ready pose at the configured ready speed."""
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
         self._active = True
         self._operation = _ArmOperation.PREPARE
@@ -1403,7 +1405,7 @@ class ArmMovementExecutor(MovementExecutor):
     def toggle_gripper(self) -> ArmMovementUpdate:
         """Toggle toward the opposite endpoint of the measured opening."""
         with self._execution_lock:
-            if self.active:
+            if self.active or self._shutdown_started:
                 return self._busy_update()
             percentage = (
                 self.arm_state_source.gripper_open_percentage()
@@ -1420,7 +1422,7 @@ class ArmMovementExecutor(MovementExecutor):
     def close_gripper(self) -> ArmMovementUpdate:
         """Request closing explicitly without guessing the current position."""
         with self._execution_lock:
-            if self.active:
+            if self.active or self._shutdown_started:
                 return self._busy_update()
             return self._start_gripper(0.0)
 
@@ -1430,7 +1432,7 @@ class ArmMovementExecutor(MovementExecutor):
 
     def stow(self) -> ArmMovementUpdate:
         """Return to the fixed ready pose and confirm stop before native stow."""
-        if self.active:
+        if self.active or self._shutdown_started:
             return self._busy_update()
         self._active = True
         self._operation = _ArmOperation.STOW
@@ -1439,7 +1441,7 @@ class ArmMovementExecutor(MovementExecutor):
     def confirm_stop(self) -> ArmMovementUpdate:
         """Issue a stop and require fresh stationary feedback before recovery."""
         with self._execution_lock:
-            if self.active:
+            if self.active or self._shutdown_started:
                 return self._busy_update()
             self._active = True
             self._operation = _ArmOperation.CONFIRM_STOP
@@ -1587,6 +1589,8 @@ class ArmMovementExecutor(MovementExecutor):
 
     def _cancellation_goal_finished(self):
         with self._execution_lock:
+            if self._closed:
+                return
             self._cancel_goal_done = True
             # A late goal acceptance could follow the first stop request.
             # Confirm another stop after the action has actually terminated.
@@ -1610,6 +1614,8 @@ class ArmMovementExecutor(MovementExecutor):
 
     def _cancel_stop_finished(self, update):
         with self._execution_lock:
+            if self._closed:
+                return
             if update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED and self._cancel_goal_done:
                 self._stop_unconfirmed = False
                 self._reset_operation()
@@ -1620,20 +1626,72 @@ class ArmMovementExecutor(MovementExecutor):
             else:
                 self._cancellation_detail = update.detail
 
-    def shutdown(self) -> None:
+    def begin_shutdown(self):
+        """Close admission while retaining action callbacks and the stop monitor."""
+        # The action cancellation request must not wait behind planning or a
+        # workflow lock; the locked lifecycle still owns all stop evidence.
+        if not self._shutdown_started:
+            self.request_cancel()
         with self._execution_lock:
-            super().shutdown()
+            if self._shutdown_started:
+                return
+            self._shutdown_started = True
+            # Even an idle owner needs fresh shutdown evidence. Older action
+            # delivery can also outlive the operation that submitted it.
+            self._shutdown_reconcile = True
+            self.cancel()
+
+    def poll_shutdown(self):
+        """Confirm action termination and physical stopping without blocking."""
+        with self._execution_lock:
+            self.begin_shutdown()
+            if self._closed:
+                return self.execution_idle, "Arm shutdown already finalized"
+            if self.active:
+                self.cancel()
+                update = self.poll()
+                if self.active:
+                    return False, update.detail
+            if not self.goals_settled():
+                return False, "Arm action termination is unconfirmed"
+            if self._shutdown_reconcile:
+                self._shutdown_reconcile = False
+                self._active = True
+                self._operation = _ArmOperation.CONFIRM_STOP
+                # Reuse cancellation's continuing stop monitor, so a missing
+                # reply remains unresolved until the coordinator's deadline.
+                self.cancel()
+                return False, self._cancellation_detail
+            if not self.execution_idle:
+                return False, self._cancellation_detail or "Arm physical stop is unconfirmed"
+            return True, "Arm action ended and physical stop confirmed"
+
+    def shutdown(self, *, stop_unconfirmed=False, stop_confirmed=False) -> None:
+        with self._execution_lock:
+            super().shutdown(
+                stop_unconfirmed=stop_unconfirmed, stop_confirmed=stop_confirmed,
+            )
+            errors = []
             if self._guarded_probe_monitor is not None:
-                self._guarded_probe_monitor.close()
+                try:
+                    self._guarded_probe_monitor.close()
+                except Exception as exception:
+                    errors.append(f"arm guard monitor: {exception}")
+                else:
+                    self._guarded_probe_monitor = None
             if (
                 self._owns_arm_stop_service_client
                 and self.arm_stop_service_client is not None
             ):
                 try:
                     self.arm_stop_service_client.destroy()
-                finally:
+                except Exception as exception:
+                    errors.append(f"arm stop client: {exception}")
+                else:
                     self.arm_stop_service_client = None
                     self._owns_arm_stop_service_client = False
+            if errors:
+                raise RuntimeError("; ".join(errors))
 
     def _resolve_tag_orientation_target(
         self,

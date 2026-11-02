@@ -106,6 +106,7 @@ def test_idle_refresh_checks_execution_even_when_planner_has_finished(factories)
     first.active = True
     assert not arm_is_idle()
 
+    resources.report_shutdown_unconfirmed()
     resources.close()
 
 

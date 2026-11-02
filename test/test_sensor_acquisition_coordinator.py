@@ -326,6 +326,13 @@ def test_software_stop_retains_interrupted_measurement_and_requests_shutdown_onc
     coordinator.stop(cancelled=True)
     assert not coordinator.recording_stopped
     assert [call.args[0].enabled for call in client.call_async.call_args_list] == [True, False]
+    if phase == "starting":
+        refreshed_stop = MagicMock()
+        client.call_async.side_effect = [refreshed_stop]
+        complete(started)
+        complete(stopped)  # Earlier stop response does not cover the late start.
+        assert not coordinator.recording_stopped
+        stopped = refreshed_stop
     complete(stopped)
 
     saved = repository.load(
@@ -383,7 +390,8 @@ def test_timeout_timer_survives_finish_and_is_reused(tmp_path):
     coordinator.start(request())
     assert node.create_timer.call_count == 1
     assert timer.reset.call_count == 2
-    coordinator.close()
+    coordinator.request_shutdown()
+    coordinator.close(stop_unconfirmed=True)
     callback()
     node.destroy_timer.assert_not_called()
 
@@ -443,3 +451,75 @@ def test_geometry_tf_listener_survives_recording_finalization(tmp_path, monkeypa
     buffer_factory.assert_called_once()
     listener.unregister.assert_not_called()
     node.destroy_subscription.assert_not_called()
+
+
+def test_shutdown_waits_for_delayed_start_and_a_fresh_stop_reply(tmp_path):
+    coordinator, _, node, client, started, stopped = make_coordinator(tmp_path)
+    refreshed = MagicMock()
+    client.call_async.side_effect = [started, stopped, refreshed]
+    coordinator.start(request())
+    coordinator.request_shutdown()
+    complete(stopped)
+    assert not coordinator.shutdown_status()[0]
+    node.destroy_client.assert_not_called()
+    node.destroy_subscription.assert_not_called()
+    complete(started)
+    assert not coordinator.shutdown_status()[0]
+    complete(refreshed)
+    assert coordinator.shutdown_status()[0]
+    coordinator.close()
+    assert [call.args[0].enabled for call in client.call_async.call_args_list] == [True, False, False]
+
+
+def test_shutdown_close_needs_confirmation_or_explicit_timeout(tmp_path):
+    coordinator, repository, node, _, started, _ = make_coordinator(tmp_path)
+    coordinator.start(request())
+    complete(started)
+    coordinator.request_shutdown()
+    with pytest.raises(RuntimeError, match='confirmation'):
+        coordinator.close()
+    assert coordinator._session is not None
+    coordinator.close(stop_unconfirmed=True)
+    assert not coordinator.recording_stopped
+    assert 'stop-unconfirmed' in coordinator.snapshot().detail
+    assert repository.load(object_id='motor_01', routine_id='magnetic_scan',
+                           probe_point_id='bearing_front', sensor_id='bmm150_probe',
+                           started_at_ns=START_NS).completion_state is MeasurementCompletionState.FAILED
+    coordinator.close(stop_unconfirmed=True)
+
+
+def test_shutdown_recording_finalization_can_retry_after_a_cleanup_error(tmp_path, monkeypatch):
+    coordinator, repository, _, _, started, _ = make_coordinator(tmp_path)
+    coordinator.start(request())
+    complete(started)
+    coordinator.request_shutdown()
+    finalize = repository.finalize
+    failing = MagicMock(side_effect=OSError('disk unavailable'))
+    monkeypatch.setattr(repository, 'finalize', failing)
+    with pytest.raises(OSError, match='disk unavailable'):
+        coordinator.close(stop_unconfirmed=True)
+    assert coordinator._session is not None
+    monkeypatch.setattr(repository, 'finalize', finalize)
+    coordinator.close(stop_unconfirmed=True)
+    assert coordinator._session is None
+    assert not coordinator.recording_stopped
+
+
+def test_recording_source_cleanup_error_does_not_block_head_stop_or_other_sources(tmp_path):
+    coordinator, _, _, client, started, stopped = make_coordinator(tmp_path)
+    coordinator.start(request())
+    complete(started)
+    source = MagicMock()
+    other = MagicMock()
+    source.stop.side_effect = [RuntimeError('source busy'), RuntimeError('source busy'), None]
+    coordinator._session.sources = [source, other]
+    coordinator.request_shutdown()
+    assert not client.call_async.call_args.args[0].enabled
+    other.stop.assert_called_once()
+    with pytest.raises(RuntimeError, match='source busy'):
+        complete(stopped)
+    assert coordinator._session is not None
+    coordinator.close(stop_unconfirmed=True)
+    assert coordinator._session is None
+    assert source.stop.call_count == 3
+    other.stop.assert_called_once()

@@ -1,5 +1,9 @@
 """Expose navigation setup through typed ROS action interfaces."""
 
+from fault_detector_spot.application.api.shutdown_callbacks import (
+    ShutdownCallbackActivity, tracked_shutdown_callback, release_resources,
+)
+
 from dataclasses import dataclass, field
 from threading import Event, RLock
 from uuid import uuid4
@@ -65,6 +69,7 @@ class NavigationSetupApi:
         self._lock = RLock()
         self._executions = {}
         self._shutdown = Event()
+        self._shutdown_callbacks = ShutdownCallbackActivity()
         self._early_states = {}
         self._pose_waiters = set()
         self._callback_group = ReentrantCallbackGroup()
@@ -149,6 +154,7 @@ class NavigationSetupApi:
     def _accept_cancel(_goal_handle):
         return CancelResponse.ACCEPT
 
+    @tracked_shutdown_callback
     async def _execute(self, goal_handle):
         goal = goal_handle.request
         if self._shutdown.is_set():
@@ -624,10 +630,12 @@ class NavigationSetupApi:
 
     def close(self) -> None:
         """Detach transport resources from the coordinator."""
-        self.coordinator.remove_status_listener(self._receive_status)
-        self.node.destroy_timer(self._runtime_timer)
-        self.node.destroy_subscription(self._runtime_subscription)
-        self._action_server.destroy()
+        release_resources(self, {
+            "status_listener": lambda: self.coordinator.remove_status_listener(self._receive_status),
+            "runtime_timer": lambda: self.node.destroy_timer(self._runtime_timer),
+            "runtime_subscription": lambda: self.node.destroy_subscription(self._runtime_subscription),
+            "action_server": self._action_server.destroy,
+        })
 
 
 __all__ = ["NavigationSetupApi"]

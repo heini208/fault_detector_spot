@@ -1,5 +1,7 @@
 """Publish the authoritative sensor acquisition state for all clients."""
 
+from fault_detector_spot.application.api.shutdown_callbacks import release_resources
+
 from fault_detector_msgs.msg import SensorAcquisitionState as StateMessage
 
 from fault_detector_spot.application.coordinators.sensor_acquisition_coordinator import (
@@ -43,8 +45,10 @@ class SensorAcquisitionApi:
 
     def close(self) -> None:
         """Release the state listener and ROS publisher."""
-        self.coordinator.remove_state_listener(self.publish_state)
-        self.node.destroy_publisher(self._publisher)
+        release_resources(self, {
+            "state_listener": lambda: self.coordinator.remove_state_listener(self.publish_state),
+            "publisher": lambda: self.node.destroy_publisher(self._publisher),
+        })
 
 
 __all__ = ["SensorAcquisitionApi"]

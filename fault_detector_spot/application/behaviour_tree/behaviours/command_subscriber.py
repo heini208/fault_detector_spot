@@ -1,7 +1,7 @@
 from fault_detector_spot.application.behaviour_tree.commands.move_to_pose_command import MoveToPoseCommand
 from typing import List, Optional
 from dataclasses import replace
-from threading import RLock
+from threading import Event, RLock
 
 from rclpy.callback_groups import ReentrantCallbackGroup
 
@@ -69,6 +69,7 @@ from fault_detector_spot.navigation.commands.base_to_tag_command import (
 )
 from fault_detector_spot.shared.ros.qos_profiles import COMMAND_REQUEST_QOS
 from fault_detector_spot.application.behaviour_tree.command_status_ledger import CommandStatusLedger
+from fault_detector_spot.shared.persistence.shutdown_state import StopUnconfirmedStore
 
 
 class CommandSubscriber(py_trees.behaviour.Behaviour):
@@ -82,6 +83,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         defer_subscription: bool = False,
         status_ledger=None,
         robot_command_resources=None,
+        shutdown_state_store=None,
     ):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
@@ -89,6 +91,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.status_topic = status_topic
         self.defer_subscription = defer_subscription
         self.robot_command_resources = robot_command_resources
+        self.shutdown_state_store = (shutdown_state_store if shutdown_state_store is not None
+                                     else StopUnconfirmedStore())
+        self.startup_unresolved = {}
+        self._admission_closed = Event()
         self._pending_lock = RLock()
         self._stop_ingress_lock = RLock()
         self._received_stop_ids = set()
@@ -168,6 +174,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         for _, request in pending:
             try:
                 with self._pending_lock:
+                    if self._admission_closed.is_set():
+                        continue
                     if (self.status_ledger.stop_latched
                             and request.command.command_id is not CommandID.RESET_SOFTWARE_STOP):
                         continue
@@ -197,6 +205,29 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         """Advertise command consumption only after the runner finishes setup."""
         if self.request_subscription is not None:
             return
+        self.startup_unresolved = self.shutdown_state_store.load()
+        try:
+            if not self.shutdown_state_store.begin_session():
+                self.startup_unresolved.update(self.shutdown_state_store.load())
+                self.startup_unresolved.setdefault(
+                    f"{self.shutdown_state_store.owner}/active_session",
+                    "Active-session ownership was not acquired; reconciliation is required",
+                )
+        except Exception:
+            self.close_admission()
+            if self.robot_command_resources is not None:
+                self.robot_command_resources.close_admission()
+            raise
+        unresolved = self.startup_unresolved
+        self.status_ledger.restore_shutdown_unconfirmed(unresolved)
+        if unresolved:
+            if self.robot_command_resources is not None:
+                self.robot_command_resources.latch_software_stop()
+            self.blackboard.estop_flag = True
+            self.node.get_logger().error(
+                "Prior shutdown stop-unconfirmed; motion admission requires reconciliation: "
+                + "; ".join(f"{name}: {detail}" for name, detail in unresolved.items())
+            )
         self.request_status_publisher = self.node.create_publisher(
             CommandStatus,
             self.status_topic,
@@ -216,6 +247,36 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             callback_group=self._request_callback_group,
         )
         self.status_ledger.activate()
+
+    def close_admission(self):
+        """Stop new tree work without destroying cancellation callbacks."""
+        self._admission_closed.set()
+        self.status_ledger.close_admission()
+        with self._pending_lock:
+            self.pending_msgs = []
+            if self.blackboard is not None:
+                self.blackboard.command_buffer.clear()
+                self.blackboard.estop_flag = True
+
+    def report_shutdown_result(self, unresolved):
+        """Retain timeout uncertainty before callback resources are released."""
+        messages = self.status_ledger.report_shutdown_result(unresolved)
+        try:
+            self.shutdown_state_store.record({
+                name: detail for name, detail in unresolved.items()
+                if not name.startswith("prior shutdown/")
+            })
+        finally:
+            for message in messages:
+                self._publish_status(message)
+
+    def shutdown_ownership_status(self):
+        return self.status_ledger.shutdown_ownership_status()
+
+    def confirm_shutdown_session(self):
+        if self.startup_unresolved or not self.shutdown_ownership_status()[0]:
+            return False
+        return self.shutdown_state_store.confirm_session()
 
     def _register_blackboard_keys(self):
         self.blackboard.register_key(
@@ -244,6 +305,19 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             detail = f"BT rejected command envelope: {exception}"
             self.logger.error(detail)
             self._publish_raw_request_failure(message, detail)
+            return
+
+        if self._admission_closed.is_set():
+            if self.is_estop_command(request.command):
+                for status in self.status_ledger.join_shutdown_stop(request):
+                    self._publish_status(status)
+                confirmed, detail = self.shutdown_ownership_status()
+                if not confirmed:
+                    # Foreign ownership may arrive after the coordinator's
+                    # final sweep while cleanup still services callbacks.
+                    self.shutdown_state_store.record({"prior ownership": detail})
+                return
+            self._publish_request_failure(request, "Shutdown has closed command admission")
             return
 
         emergency = self.is_estop_command(request.command)
@@ -286,6 +360,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         )
 
         with self._pending_lock:
+            if self._admission_closed.is_set():
+                return
             if self.status_ledger.stop_latched and request.command.command_id is not CommandID.RESET_SOFTWARE_STOP:
                 return
             self.pending_msgs.append((stamp, request))

@@ -54,6 +54,7 @@ class SensorAcquisitionCommandHandler:
         self._stop_requested = False
         self._execution_failure = ""
         self._closed = False
+        self._cleanup_done = set()
         self._timers = set()
         self._subscription = node.create_subscription(
             LiveInspectionObjectState,
@@ -203,17 +204,37 @@ class SensorAcquisitionCommandHandler:
         self.coordinator.latch_software_stop()
         with self._timer_lock:
             self._closed = True
-        self.coordinator.remove_state_listener(
-            self._handle_acquisition_state
-        )
-        self.controller.remove_status_listener(self._handle_command_status)
+        errors = []
+        for name, release in (
+            ("acquisition_listener", lambda: self.coordinator.remove_state_listener(
+                self._handle_acquisition_state)),
+            ("command_listener", lambda: self.controller.remove_status_listener(
+                self._handle_command_status)),
+            ("subscription", lambda: self.node.destroy_subscription(self._subscription)),
+        ):
+            if name in self._cleanup_done:
+                continue
+            try:
+                release()
+            except Exception as error:
+                errors.append(str(error))
+            else:
+                self._cleanup_done.add(name)
         with self._timer_lock:
             for timer in tuple(self._timers):
-                timer.cancel()
-                self.node.destroy_timer(timer)
-            self._timers.clear()
+                try:
+                    timer.cancel()
+                except Exception as error:
+                    errors.append(str(error))
+                try:
+                    self.node.destroy_timer(timer)
+                except Exception as error:
+                    errors.append(str(error))
+                else:
+                    self._timers.discard(timer)
         self._queued_queries.clear()
-        self.node.destroy_subscription(self._subscription)
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
     def _execute(self, request) -> None:
         if self.coordinator.software_stop_latched:

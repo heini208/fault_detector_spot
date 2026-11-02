@@ -487,7 +487,8 @@ def test_executor_wires_monitor_and_observes_its_terminal_result(monkeypatch):
         assert executor.poll().outcome is ArmMovementOutcome.CONTACT
         assert not executor.active
     finally:
-        executor.shutdown()
+        # This monitor test deliberately leaves the action response pending.
+        executor.shutdown(stop_unconfirmed=True)
     assert node.timer.destroyed
     assert not source._force_listeners
 

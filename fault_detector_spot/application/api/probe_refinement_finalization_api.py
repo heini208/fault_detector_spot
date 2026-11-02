@@ -1,5 +1,9 @@
 """Expose probe refinement finalization as one typed ROS action."""
 
+from fault_detector_spot.application.api.shutdown_callbacks import (
+    ShutdownCallbackActivity, tracked_shutdown_callback, release_resources,
+)
+
 from threading import Event
 from uuid import uuid4
 
@@ -32,6 +36,7 @@ class ProbeRefinementFinalizationApi:
         state_adapter,
     ):
         self._shutdown = Event()
+        self._shutdown_callbacks = ShutdownCallbackActivity()
         self.node = node
         self.coordinator = coordinator
         self.state_publisher = state_publisher
@@ -67,6 +72,7 @@ class ProbeRefinementFinalizationApi:
     def _accept_cancel(_goal_handle):
         return CancelResponse.ACCEPT
 
+    @tracked_shutdown_callback
     def _execute(self, goal_handle):
         goal = goal_handle.request
         request_id = str(uuid4())
@@ -301,8 +307,10 @@ class ProbeRefinementFinalizationApi:
 
     def close(self):
         """Destroy finalization transport and detach its runner."""
-        self.runner.close()
-        self._action_server.destroy()
+        release_resources(self, {
+            "runner": self.runner.close,
+            "action_server": self._action_server.destroy,
+        })
 
 
 __all__ = ["ProbeRefinementFinalizationApi"]

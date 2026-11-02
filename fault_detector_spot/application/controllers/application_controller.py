@@ -70,6 +70,7 @@ class ApplicationController:
         self._lock = RLock()
         self._operations: Dict[str, ApplicationOperation] = {}
         self._status_listeners = []
+        self._cleanup_done = set()
         self.command_controller.add_status_listener(
             self._handle_command_status
         )
@@ -245,19 +246,35 @@ class ApplicationController:
 
     def close(self) -> None:
         """Detach from the command controller."""
-        if self.probe_setup_coordinator is not None:
-            self.probe_setup_coordinator.close()
-            self.probe_setup_coordinator = None
-        if self.navigation_setup_coordinator is not None:
-            self.navigation_setup_coordinator.close()
-            self.navigation_setup_coordinator = None
-        self.setup_coordinator.close()
-        self.command_controller.remove_status_listener(
-            self._handle_command_status
-        )
+        errors = []
+        for name in ("probe_setup_coordinator", "navigation_setup_coordinator"):
+            owner = getattr(self, name)
+            if owner is not None:
+                try:
+                    owner.close()
+                except Exception as error:
+                    errors.append(f"{name}: {error}")
+                else:
+                    setattr(self, name, None)
+        for name, close in (
+            ("setup_coordinator", self.setup_coordinator.close),
+            ("status_listener", lambda: self.command_controller.remove_status_listener(
+                self._handle_command_status,
+            )),
+        ):
+            if name in self._cleanup_done:
+                continue
+            try:
+                close()
+            except Exception as error:
+                errors.append(f"{name}: {error}")
+            else:
+                self._cleanup_done.add(name)
         with self._lock:
             self._operations.clear()
         self._status_listeners.clear()
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
 
 __all__ = [
