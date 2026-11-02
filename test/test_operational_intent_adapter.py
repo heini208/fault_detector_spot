@@ -22,6 +22,21 @@ def test_translates_simple_operational_intent():
     assert command.command_id is CommandID.STAND_UP
 
 
+def test_legacy_reset_state_cannot_trigger_implicit_recovery_motion():
+    with pytest.raises(ValueError, match="retired"):
+        operational_intent_to_command(OperationalIntent(intent=6))
+
+
+def test_recovery_requires_collision_checks():
+    intent = OperationalIntent(intent=OperationalIntent.INTENT_RECOVER_ARM)
+
+    assert operational_intent_to_command(intent).command_id is CommandID.RECOVER_ARM
+
+    intent.ignore_environment_collisions = True
+    with pytest.raises(ValueError, match="collision checks"):
+        operational_intent_to_command(intent)
+
+
 def test_translates_sit_down_operational_intent():
     intent = OperationalIntent()
     intent.intent = OperationalIntent.INTENT_SIT_DOWN

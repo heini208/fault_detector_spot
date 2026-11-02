@@ -24,9 +24,6 @@ from fault_detector_spot.application.behaviour_tree.behaviours.helper_initialize
 from fault_detector_spot.application.behaviour_tree.behaviours.new_command_guard import (
     NewCommandGuard,
 )
-from fault_detector_spot.application.behaviour_tree.behaviours.reset_estop_flag import (
-    ResetEstopFlag,
-)
 from fault_detector_spot.application.behaviour_tree.behaviours.wait_for_duration import (
     WaitForDuration,
 )
@@ -72,9 +69,6 @@ from fault_detector_spot.mapping.behaviours.enable_localization import (
 from fault_detector_spot.mapping.behaviours.enable_slam import EnableSLAM
 from fault_detector_spot.mapping.behaviours.stop_mapping import StopMapping
 from fault_detector_spot.mapping.behaviours.swap_map import SwapMap
-from fault_detector_spot.navigation.behaviours.cancel_movement import (
-    PublishZeroVel,
-)
 from fault_detector_spot.navigation.behaviours.landmark_relocalizer import (
     LandmarkRelocalizer,
 )
@@ -147,7 +141,7 @@ def create_behavior_tree(node: rclpy.node.Node):
     )
     root.add_children([
         build_sensing_tree(node, status_ledger=status_ledger),
-        build_buffered_command_tree(node),
+        build_buffered_command_tree(node, status_ledger=status_ledger),
         build_publisher_tree(node, status_ledger=status_ledger),
     ])
     return root
@@ -193,9 +187,11 @@ def build_sensing_tree(node: rclpy.node.Node, *, status_ledger=None) -> py_trees
         "Sensing",
         policy=py_trees.common.ParallelPolicy.SuccessOnAll(),
     )
+    helpers = get_helper_container(node)
     cmd_sub = CommandSubscriber(
         name="UI Command Listener", defer_subscription=True,
         status_ledger=status_ledger,
+        robot_command_resources=helpers.robot_command_resources,
     )
     pose_sub = LastLocalizationPose(name="LastLocalizationPose")
     tag_scan_sequence = py_trees.composites.Sequence(
@@ -240,13 +236,13 @@ def build_sensing_tree(node: rclpy.node.Node, *, status_ledger=None) -> py_trees
 
 
 def build_buffered_command_tree(
-    node: rclpy.node.Node,
+    node: rclpy.node.Node, *, status_ledger=None,
 ) -> py_trees.behaviour.Behaviour:
     buffered_command_tree = py_trees.composites.Parallel(
         "BufferedCommandTree",
         policy=py_trees.common.ParallelPolicy.SuccessOnAll(),
     )
-    command_tree = build_repeat_guarded_cancelable_command_tree(node)
+    command_tree = build_repeat_guarded_cancelable_command_tree(node, status_ledger=status_ledger)
     buffer = CommandManager(name="CommandManager")
     buffered_command_tree.add_children([
         buffer,
@@ -285,7 +281,11 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     helper = get_helper_container(node)
     robot_command_resources = helper.robot_command_resources
     tag_state_source = helper.tag_state_source
+    from fault_detector_spot.manipulation.behaviours.recover_arm_behaviour import RecoverArmBehaviour
     specs = [
+        (CommandID.RECOVER_ARM, lambda n: RecoverArmBehaviour(
+            name="RecoverArm", robot_command_resources=robot_command_resources,
+        )),
         (CommandID.EXECUTE_PROBE_POINT, lambda n: ExecuteProbePoint(
             name="ExecuteProbePoint", tag_state_source=tag_state_source,
             robot_command_resources=robot_command_resources,
@@ -451,10 +451,6 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
             ),
         ),
         (
-            CommandID.STOP_BASE,
-            lambda n: PublishZeroVel(),
-        ),
-        (
             CommandID.START_SLAM,
             lambda n: EnableSLAM(rtabmap_runtime),
         ),
@@ -488,58 +484,29 @@ def build_command_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
 
 def build_cancelable_command_tree(
-    node: rclpy.node.Node,
+    node: rclpy.node.Node, *, status_ledger=None,
 ) -> py_trees.behaviour.Behaviour:
     cancel_check = match_command_checker(CommandID.EMERGENCY_CANCEL)
-    recovery_check = CheckBlackboardVariableValue(
+    stop_target_check = CheckBlackboardVariableValue(
         name="StopTargetsBelongToThisExecutionInstance",
         check=ComparisonExpression(
             variable="last_command",
             value=True,
             operator=lambda command, allowed: (
-                getattr(command, "stop_recovery_allowed", False) is allowed
+                getattr(command, "stop_confirmation_allowed", False) is allowed
             ),
         ),
     )
-    stop_base = PublishZeroVel(name="StopBase")
-    stop_mapping = StopMapping(
-        get_helper_container(node).rtabmap_runtime,
-        with_save=False,
-        name="ESTOP MAPPING",
-    )
-    robot_command_resources = (
-        get_helper_container(node).robot_command_resources
-    )
+    robot_command_resources = get_helper_container(node).robot_command_resources
     from fault_detector_spot.application.behaviour_tree.behaviours.confirm_robot_stop import ConfirmRobotStop
     confirm_stop = ConfirmRobotStop(robot_command_resources)
-    confirm_recovery_stop = ConfirmRobotStop(
-        robot_command_resources, name="ConfirmEmergencyRecoveryStop",
-    )
-    stow_cancel = StowArmBehaviour(
-        name="StowArmCancelBehaviour",
-        robot_command_resources=robot_command_resources,
-        preempt=True,
-    )
-    close_gripper = CloseGripperAction(
-        name="CloseGripperAction",
-        robot_command_resources=robot_command_resources,
-    )
-    reset_estop = ResetEstopFlag(name="ResetEStopFlag")
-
-    cancel_seq = py_trees.composites.Sequence(
-        "CancelSequence",
-        memory=True,
-    )
-    cancel_seq.add_children([
-        cancel_check,
-        recovery_check,
-        stop_base,
-        confirm_stop,
-        stop_mapping,
-        stow_cancel,
-        close_gripper,
-        confirm_recovery_stop,
-        reset_estop,
+    cancel_seq = py_trees.composites.Sequence("LatchedSoftwareStop", memory=True)
+    cancel_seq.add_children([cancel_check, stop_target_check, confirm_stop])
+    from fault_detector_spot.application.behaviour_tree.behaviours.reset_software_stop import ResetSoftwareStop
+    reset_seq = py_trees.composites.Sequence("ResetSoftwareStopSequence", memory=True)
+    reset_seq.add_children([
+        match_command_checker(CommandID.RESET_SOFTWARE_STOP),
+        ResetSoftwareStop(robot_command_resources, status_ledger),
     ])
     normal_tree = build_command_tree(node)
 
@@ -558,6 +525,7 @@ def build_cancelable_command_tree(
     )
     root.add_children([
         cancel_seq,
+        reset_seq,
         emergency_guard,
     ])
     return StatusToBlackboard(
@@ -580,10 +548,9 @@ def build_publisher_tree(
                 and not runtime.nav2_runtime.has_pending_operation())
 
     def stop_runtime_idle():
-        return (not runtime.is_running()
-                and not runtime.nav2_runtime.is_running()
-                and not runtime.has_pending_operation()
-                and not runtime.nav2_runtime.has_pending_operation())
+        # Mapping shutdown is not physical stop evidence. The owners cancel
+        # Nav2 and require velocity-source quiescence and stationary telemetry.
+        return helpers.robot_command_resources.stop_sources_quiet()
 
     cmd_pub = BufferStatusPublisher(
         name="CommandStatusPublisher", status_ledger=status_ledger,
@@ -606,14 +573,14 @@ def build_publisher_tree(
 
 
 def build_repeat_guarded_cancelable_command_tree(
-    node: rclpy.node.Node,
+    node: rclpy.node.Node, *, status_ledger=None,
 ) -> py_trees.behaviour.Behaviour:
     guard = NewCommandGuard(name="NewCommandGuard")
     guarded_sequence = py_trees.composites.Sequence(
         name="GuardedCommands",
         memory=True,
     )
-    cancelable_command_tree = build_cancelable_command_tree(node)
+    cancelable_command_tree = build_cancelable_command_tree(node, status_ledger=status_ledger)
     guarded_sequence.add_children([
         guard,
         cancelable_command_tree,
@@ -730,7 +697,7 @@ def main(args=None):
     executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(tree.node)
     try:
-        get_helper_container(node).robot_command_resources.get_action_client(node)
+        get_helper_container(node).robot_command_resources.prepare_stop(node)
         for behaviour in root.iterate():
             if isinstance(behaviour, CommandSubscriber):
                 behaviour.activate()

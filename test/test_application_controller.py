@@ -31,6 +31,7 @@ class FakeCommandController:
         self.submitted = []
         self.cancelled = []
         self.emergency_clients = []
+        self.reset_clients = []
 
     def add_status_listener(self, listener):
         self.listeners.append(listener)
@@ -49,6 +50,10 @@ class FakeCommandController:
     def cancel_all(self, client_id):
         self.emergency_clients.append(client_id)
         return "emergency-request"
+
+    def reset_software_stop(self, client_id):
+        self.reset_clients.append(client_id)
+        return "reset-request"
 
     def emit(self, request, state, **metadata):
         status = CommandControllerStatus(request=request, state=state, **metadata)
@@ -179,6 +184,33 @@ def test_emergency_stop_uses_validated_remote_client_identity():
 
     assert request_id == "emergency-request"
     assert command_controller.emergency_clients == ["operator-ui"]
+
+
+def test_software_stop_reset_is_explicit_and_does_not_submit_motion():
+    commands = FakeCommandController()
+    controller = ApplicationController(commands)
+
+    assert controller.reset_software_stop(" operator-ui ") == "reset-request"
+
+    assert commands.reset_clients == ["operator-ui"]
+    assert commands.submitted == []
+    assert commands.emergency_clients == []
+    with pytest.raises(ValueError):
+        controller.reset_software_stop(" ")
+
+
+def test_explicit_recovery_is_not_recorded_for_automatic_playback():
+    commands = FakeCommandController()
+    controller = ApplicationController(commands)
+    operation = controller.prepare_operation(
+        OperationalIntent(intent=OperationalIntent.INTENT_RECOVER_ARM), "operator-ui",
+    )
+
+    controller.submit(operation)
+
+    assert commands.submitted == [operation.request]
+    assert operation.request.command.command_id is CommandID.RECOVER_ARM
+    assert operation.request.recording_policy is RecordingPolicy.EXCLUDE
 
 
 def test_close_detaches_from_command_controller():

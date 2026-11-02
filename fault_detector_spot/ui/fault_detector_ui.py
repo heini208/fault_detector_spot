@@ -233,6 +233,7 @@ class Fault_Detector_UI(QWidget):
             landmark_feedback_label=self.landmark_feedback_label,
         )
         main_layout.addWidget(self.status_overview_panel)
+        main_layout.addLayout(self._make_software_stop_controls())
 
         self.tabs = QTabWidget()
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -704,7 +705,11 @@ class Fault_Detector_UI(QWidget):
         if hasattr(self, "estop_button"):
             return self.estop_button
 
-        self.estop_button = QPushButton("EMERGENCY STOP")
+        self.estop_button = QPushButton("SOFTWARE STOP")
+        self.estop_button.setToolTip(
+            "Latch application motion and request cancellation. "
+            "This software function is separate from the robot safety E-stop."
+        )
         self.estop_button.setStyleSheet(
             """
             QPushButton {
@@ -739,6 +744,29 @@ class Fault_Detector_UI(QWidget):
             self._make_estop_button(),
             alignment=Qt.AlignRight,
         )
+        return row
+
+    def _make_software_stop_controls(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        self.software_stop_label = QLabel("Software stop: awaiting state")
+        row.addWidget(self.software_stop_label)
+        row.addStretch()
+        self.reset_software_stop_button = QPushButton("Reset software stop")
+        self.reset_software_stop_button.setToolTip(
+            "Clear the latch only after every owner confirms stopping. "
+            "Reset does not move the robot or replay cancelled work."
+        )
+        self.reset_software_stop_button.setEnabled(False)
+        self.reset_software_stop_button.clicked.connect(self.handle_reset_software_stop)
+        row.addWidget(self.reset_software_stop_button)
+        self.recover_arm_button = QPushButton("Recover arm (stow)")
+        self.recover_arm_button.setToolTip(
+            "Request a separate recovery movement after reset. Requires confirmed "
+            "bare-hand attachment, fresh pose and collision checks."
+        )
+        self.recover_arm_button.setEnabled(False)
+        self.recover_arm_button.clicked.connect(self.handle_recover_arm)
+        row.addWidget(self.recover_arm_button)
         return row
 
     def add_manipulator_control_tab(self):
@@ -835,6 +863,12 @@ class Fault_Detector_UI(QWidget):
         )
         self.application_client.emergency_stop_finished.connect(
             self._process_emergency_stop_result
+        )
+        self.application_client.software_stop_state_changed.connect(
+            self._process_software_stop_state
+        )
+        self.application_client.software_stop_reset_finished.connect(
+            self._process_software_stop_reset_result
         )
         self.navigation_setup_client = NavigationSetupClient(
             self.node,
@@ -1186,10 +1220,34 @@ class Fault_Detector_UI(QWidget):
 
     def _process_emergency_stop_result(self, accepted, detail):
         prefix = (
-            "Emergency stop requested; awaiting stop confirmation"
-            if accepted else "Emergency stop unconfirmed"
+            "Software stop latched; awaiting stop confirmation"
+            if accepted else "Software stop unconfirmed"
         )
         self.status_label.setText(f"{prefix}: {detail}")
+
+    def _process_software_stop_state(self, state):
+        if state.latched:
+            status = "latched — stop confirmed" if state.stop_confirmed else "latched — stop unconfirmed"
+        else:
+            status = "clear"
+        self.software_stop_label.setText(f"Software stop: {status}")
+        self.software_stop_label.setToolTip(state.detail)
+        self.reset_software_stop_button.setEnabled(bool(state.latched and state.stop_confirmed))
+        self.recover_arm_button.setEnabled(not state.latched)
+
+    def _process_software_stop_reset_result(self, accepted, detail):
+        prefix = "Software-stop reset requested; awaiting owner confirmation" if accepted else "Software-stop reset rejected"
+        self.status_label.setText(f"{prefix}: {detail}")
+
+    def handle_reset_software_stop(self):
+        if self.application_client is None:
+            self._process_application_error("ROS is unavailable")
+            return None
+        self.status_label.setText("Requesting software-stop reset; no motion requested")
+        return self.application_client.reset_software_stop()
+
+    def handle_recover_arm(self):
+        return self.handle_simple_operation(OperationalIntent.INTENT_RECOVER_ARM)
 
     def _process_available_frames(self, msg: StringArray):
         self.available_frames = list(msg.names)
@@ -1215,7 +1273,7 @@ class Fault_Detector_UI(QWidget):
         if self.application_client is None:
             self._process_application_error("ROS is unavailable")
             return None
-        self.status_label.setText("Emergency stop requested")
+        self.status_label.setText("Software stop requested; motion remains blocked")
         return self.application_client.emergency_stop()
 
     def show_setup_unavailable(self, workflow):

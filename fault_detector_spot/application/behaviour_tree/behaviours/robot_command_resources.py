@@ -1,10 +1,15 @@
 """Own process-wide ROS resources used by Spot robot commands."""
 
-from threading import RLock
+from threading import Event, RLock
+from concurrent.futures import Future
+from types import SimpleNamespace
+import math
 import time
 
 from fault_detector_spot.navigation.walking_profile import WalkingProfiles
 
+from geometry_msgs.msg import Twist
+from rclpy.callback_groups import ReentrantCallbackGroup
 from spot_msgs.action import RobotCommand
 from synchros2.action_client import ActionClientWrapper
 from synchros2.tf_listener_wrapper import TFListenerWrapper
@@ -33,7 +38,7 @@ from fault_detector_spot.manipulation.arm_motion_speed import (
     ArmMotionSpeedPolicy,
 )
 from fault_detector_spot.manipulation.arm_movement_executor import (
-    ArmMovementExecutor,
+    ArmMovementExecutor, PLANNING_FRAME_MAX_AGE_SEC,
 )
 from fault_detector_spot.manipulation.arm_movement_result import ArmMovementOutcome
 from fault_detector_spot.manipulation.moveit_arm_planner import (
@@ -71,6 +76,43 @@ from fault_detector_spot.sensing.observations.tag_observation_stability import (
 )
 
 
+class _StopAwareActionClient:
+    """Fence late planning results at the last action submission boundary."""
+
+    def __init__(self, client, stopped, motion_started):
+        self._client = client
+        self._stopped = stopped
+        self._motion_started = motion_started
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+    def send_goal_async(self, *args, **kwargs):
+        if self._stopped():
+            # This request never reached the wire. Return definite rejection,
+            # not an exception that would correctly be treated as lost delivery.
+            rejected = Future()
+            rejected.set_result(SimpleNamespace(accepted=False))
+            return rejected
+        self._motion_started()
+        future = self._client.send_goal_async(*args, **kwargs)
+        # A stop can race the nonblocking send. Never let a late acceptance
+        # escape cancellation merely because the owner has not ticked again.
+        if future is not None:
+            def cancel_if_stopped(completed):
+                if not self._stopped():
+                    return
+                try:
+                    handle = completed.result()
+                    if handle is not None and handle.accepted:
+                        handle.cancel_goal_async()
+                except Exception:
+                    # The execution owner retains uncertain submission evidence.
+                    pass
+            future.add_done_callback(cancel_if_stopped)
+        return future
+
+
 class RobotCommandResources:
     """Share RobotCommand clients, TF, state, and movement executors."""
 
@@ -95,6 +137,152 @@ class RobotCommandResources:
         self._stop_bases = ()
         self._stop_retry_after = {}
         self._monotonic_clock = monotonic_clock
+        self._software_stop = Event()
+        self._latch_lock = RLock()
+        self._stop_generation = 0
+        self._reset_generation = None
+        self._stop_started = False
+        self._stop_confirmed = False
+        self._stop_request_error = ""
+        self._velocity_publisher = None
+        self._velocity_subscription = None
+        self._last_velocity_at = None
+        self._stop_requested_at = None
+        self._velocity_quiet_sec = 0.5
+
+    @property
+    def stop_latched(self):
+        return self._software_stop.is_set()
+
+    def _invalidate_stop_proof(self):
+        self._stop_confirmed = False
+
+    def prepare_stop(self, node):
+        """Create stop resources before advertising command readiness."""
+        self.get_arm_movement_executor(node)
+        self.get_base_movement_executor(node)
+        if self._velocity_publisher is None:
+            self._velocity_publisher = node.create_publisher(Twist, "cmd_vel", 10)
+            self._velocity_subscription = node.create_subscription(
+                Twist, "cmd_vel", self._receive_velocity, 10,
+                callback_group=ReentrantCallbackGroup(),
+            )
+
+    def _receive_velocity(self, _message):
+        self._last_velocity_at = self._monotonic_clock()
+
+    def stop_sources_quiet(self):
+        if self._stop_requested_at is None:
+            return False
+        boundary = self._stop_requested_at
+        if self._last_velocity_at is not None:
+            boundary = max(boundary, self._last_velocity_at)
+        return self._monotonic_clock() - boundary >= self._velocity_quiet_sec
+
+    def latch_software_stop(self):
+        """Fence a new operator stop without waiting for any execution owner."""
+        with self._latch_lock:
+            self._stop_generation += 1
+            self._software_stop.set()
+
+    def request_software_stop(self):
+        """Latch before touching any owner or ordinary resource/workflow lock."""
+        if not self.stop_latched:
+            self.latch_software_stop()
+        if self._stop_started:
+            return
+        self._stop_started = True
+        self._stop_confirmed = False
+        self._stop_requested_at = self._monotonic_clock()
+        self._stop_request_error = ""
+        # Resource construction is complete before command subscription starts.
+        # Read snapshots without waiting for the construction/workflow lock.
+        self._stop_arms = dict.fromkeys(tuple(self._arm_movement_executors.values()), False)
+        self._stop_bases = tuple(self._base_movement_executors.values())
+        self._stop_retry_after = {}
+        operations = []
+        if self._velocity_publisher is not None:
+            operations.append(lambda: self._velocity_publisher.publish(Twist()))
+        navigation = self._waypoint_executor
+        # First ask every active physical source to cancel through its async
+        # transport. A busy preparation lock in one owner must not delay the
+        # cancellation request reaching another owner.
+        owners = (*self._stop_arms, *self._stop_bases)
+        if navigation is not None:
+            owners = (navigation, *owners)
+        operations.extend(executor.request_cancel for executor in owners)
+        if navigation is not None:
+            operations.append(navigation.cancel)
+        operations.extend(executor.cancel for executor in self._stop_arms)
+        operations.extend(executor.begin_stop_confirmation for executor in self._stop_bases)
+        errors = []
+        for operation in operations:
+            try:
+                operation()
+            except Exception as exception:
+                errors.append(str(exception))
+        if errors:
+            self._stop_request_error = "; ".join(errors)
+
+    def begin_reset_confirmation(self):
+        """Demand new post-request telemetry before clearing an existing latch."""
+        if not self.stop_latched or not self._stop_confirmed:
+            return False
+        self._reset_generation = self._stop_generation
+        self._stop_confirmed = False
+        self._stop_arms = dict.fromkeys(tuple(self._arm_movement_executors.values()), False)
+        self._stop_bases = tuple(self._base_movement_executors.values())
+        self._stop_retry_after = {}
+        for executor in self._stop_bases:
+            executor.begin_stop_confirmation()
+        return True
+
+    def validate_recovery(self, node):
+        """Validate explicit recovery without moving or clearing the latch."""
+        from bosdyn.client.frame_helpers import BODY_FRAME_NAME
+        from fault_detector_spot.inspection.model.sensor_models import BARE_HAND_MOTION_ID
+        if self.stop_latched or not self._stop_confirmed or not self.execution_idle():
+            return False, "Recovery requires an explicitly reset, confirmed software stop"
+        if not self.stop_sources_quiet():
+            return False, "Base command sources are not quiet"
+        for executor in self._stop_bases:
+            confirmed, detail = executor.poll_stop_confirmation()
+            if not confirmed:
+                return False, detail
+        try:
+            source = self.get_probe_surface_source(node)
+            sensor_id, _revision = source.active_attachment()
+            if sensor_id != BARE_HAND_MOTION_ID:
+                return False, "Recovery stow requires confirmed bare hand; attached-sensor clearance is not proven"
+            if not self.get_arm_collision_control(node).state().enabled:
+                return False, "Recovery requires environment collision checking enabled"
+            arm = self.get_arm_movement_executor(node)
+            pose = arm.probe_motion_planner.current_hand_pose(BODY_FRAME_NAME)
+            stamp = pose.header.stamp.sec + pose.header.stamp.nanosec * 1e-9
+            age = node.get_clock().now().nanoseconds * 1e-9 - stamp
+            if not math.isfinite(age) or not 0.0 <= age <= PLANNING_FRAME_MAX_AGE_SEC:
+                return False, "Recovery requires a fresh measured arm pose"
+            from fault_detector_spot.shared.geometry.transforms import pose_to_pose_data
+            pose_to_pose_data(pose.pose).validate()
+        except Exception as exception:
+            return False, f"Recovery validation failed: {exception}"
+        return True, "Fresh stop, bare-hand attachment, pose and collision policy validated"
+
+    def reset_software_stop(self, clear_ledger_latch):
+        """A reset changes admission only; it never submits movement."""
+        if not self._stop_confirmed or not self.execution_idle() or not self.stop_sources_quiet():
+            return False, "Software stop is not confirmed; reset remains blocked"
+        for executor in self._stop_bases:
+            confirmed, detail = executor.poll_stop_confirmation()
+            if not confirmed:
+                return False, detail
+        with self._latch_lock:
+            if self._reset_generation != self._stop_generation:
+                return False, "A newer software stop superseded this reset"
+            clear_ledger_latch()
+            self._software_stop.clear()
+            self._stop_started = False
+        return True, "Software stop reset; discarded work will not replay"
 
     def execution_idle(self):
         """Use retained action evidence as well as operation ownership."""
@@ -108,19 +296,9 @@ class RobotCommandResources:
 
     def begin_stop_confirmation(self, node):
         """Request cancellation through the existing movement owners."""
-        self.get_arm_movement_executor(node)
-        self.get_base_movement_executor(node)
-        with self._lock:
-            self._stop_arms = dict.fromkeys(self._arm_movement_executors.values(), False)
-            self._stop_bases = tuple(self._base_movement_executors.values())
-            self._stop_retry_after = {}
-            navigation = self._waypoint_executor
-        if navigation is not None:
-            navigation.cancel()
-        for executor in self._stop_arms:
-            executor.cancel()
-        for executor in self._stop_bases:
-            executor.begin_stop_confirmation()
+        if not self._stop_started:
+            self.prepare_stop(node)
+        self.request_software_stop()
 
     def poll_stop_confirmation(self):
         """Wait for terminal actions and fresh physical stop evidence."""
@@ -132,6 +310,8 @@ class RobotCommandResources:
                 return False, update.detail
         if navigation is not None and not navigation.execution_idle:
             return False, "Nav2 action termination is unconfirmed"
+        if not self.stop_sources_quiet():
+            return False, "Waiting for all base velocity command sources to become quiet"
         for executor in self._stop_bases:
             confirmed, detail = executor.poll_stop_confirmation()
             if not confirmed:
@@ -158,7 +338,14 @@ class RobotCommandResources:
                 self._stop_retry_after[executor] = self._monotonic_clock() + 1.0
                 return False, update.detail
             del self._stop_arms[executor]
-        return self.execution_idle(), "All owned movements have confirmed stopping"
+        self._stop_confirmed = self.execution_idle()
+        if self._stop_confirmed:
+            # Request failures are uncertainty, not permanent proof of motion.
+            # Only later terminal action and fresh physical evidence reconcile
+            # them; neither elapsed time nor another request clears this record.
+            self._stop_request_error = ""
+            return True, "All owned movements have confirmed stopping; software stop remains latched"
+        return False, "Waiting for every execution owner to confirm idle"
 
     def get_action_client(self, node, robot_name: str = ""):
         """Return the single RobotCommand client for a robot namespace."""
@@ -173,6 +360,7 @@ class RobotCommandResources:
                     node,
                     wait_for_server=False,
                 )
+                client = _StopAwareActionClient(client, self._software_stop.is_set, self._invalidate_stop_proof)
                 self._clients[action_ns] = client
             return client
 
@@ -338,7 +526,10 @@ class RobotCommandResources:
                 self._waypoint_executor = WaypointNavigationExecutor(
                     self.get_arm_movement_executor(node),
                     self.get_base_movement_executor(node),
-                    ActionClient(node, NavigateToPose, "/navigate_to_pose"),
+                    _StopAwareActionClient(
+                        ActionClient(node, NavigateToPose, "/navigate_to_pose"),
+                        self._software_stop.is_set, self._invalidate_stop_proof,
+                    ),
                     stamp_now=lambda: node.get_clock().now().to_msg(),
                     node=node,
                 )
@@ -432,6 +623,10 @@ class RobotCommandResources:
                 self._base_movement_executors.values()
             )
             waypoint_executor = self._waypoint_executor
+            velocity_subscription = self._velocity_subscription
+            velocity_publisher = self._velocity_publisher
+            self._velocity_subscription = None
+            self._velocity_publisher = None
             self._waypoint_executor = None
             clients = tuple(self._clients.values())
             self._tf_listener = None
@@ -450,6 +645,10 @@ class RobotCommandResources:
             self._node = None
 
         resources = []
+        if velocity_subscription is not None:
+            resources.append(("base velocity subscription", lambda: node.destroy_subscription(velocity_subscription)))
+        if velocity_publisher is not None:
+            resources.append(("base stop publisher", lambda: node.destroy_publisher(velocity_publisher)))
         if moveit_scene_refresh is not None:
             resources.append(("MoveIt scene refresh", moveit_scene_refresh.destroy))
         if waypoint_executor is not None:

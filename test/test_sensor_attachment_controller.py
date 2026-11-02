@@ -63,6 +63,47 @@ def build_controller(tmp_path):
     return controller, repository, state_store, command_controller
 
 
+def recovery_request(**command_fields):
+    return CommandRequest.create(
+        command=SemanticCommand(command_id=CommandID.RECOVER_ARM, **command_fields),
+        client_id="operator-ui", origin=CommandOrigin.OPERATIONAL,
+        recording_policy=RecordingPolicy.EXCLUDE,
+    )
+
+
+def test_recovery_rechecks_confirmation_and_binds_current_bare_hand(tmp_path):
+    controller, _, _, _ = build_controller(tmp_path)
+    request = recovery_request()
+    with pytest.raises(RuntimeError, match="confirmation is pending"):
+        controller.prepare_request(request)
+
+    controller.confirm_sensor("", controller.snapshot().attachment_revision)
+
+    prepared = controller.prepare_request(request)
+    assert prepared.command.motion_sensor_id == BARE_HAND_MOTION_ID
+    assert not prepared.command.ignore_environment_collisions
+
+
+def test_recovery_refuses_attached_sensor_with_unproved_native_stow_clearance(tmp_path):
+    controller, repository, _, _ = build_controller(tmp_path)
+    repository.create(sensor_definition())
+    pending = controller.select_sensor("bmm150_01")
+    controller.confirm_sensor("bmm150_01", pending.attachment_revision)
+
+    with pytest.raises(RuntimeError, match="native stow clearance"):
+        controller.prepare_request(recovery_request())
+
+
+def test_recovery_refuses_collision_bypass_and_stale_attachment(tmp_path):
+    controller, _, _, _ = build_controller(tmp_path)
+    controller.confirm_sensor("", controller.snapshot().attachment_revision)
+
+    with pytest.raises(ValueError, match="collision checks"):
+        controller.prepare_request(recovery_request(ignore_environment_collisions=True))
+    with pytest.raises(RuntimeError, match="different attachment"):
+        controller.prepare_request(recovery_request(motion_sensor_id="bmm150_01"))
+
+
 def test_first_startup_requires_bare_hand_confirmation(tmp_path):
     controller, repository, state_store, _ = build_controller(tmp_path)
 

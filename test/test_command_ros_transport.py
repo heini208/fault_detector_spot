@@ -117,7 +117,7 @@ class FakeNode:
         self.publishers[topic] = publisher
         return publisher
 
-    def create_subscription(self, _message_type, topic, callback, _qos):
+    def create_subscription(self, _message_type, topic, callback, _qos, **kwargs):
         self.subscriptions[topic] = callback
         return SimpleNamespace(topic=topic)
 
@@ -478,3 +478,78 @@ def test_timed_out_query_is_replaced_and_its_late_reply_is_ignored():
         request_id=request.request_id, state=CommandStatus.STATE_SUCCEEDED, execution_idle=True,
     )))
     assert controller.active_request_id == request.request_id
+
+
+def test_stop_state_publishes_immediately_and_aggregates_acquisition_confirmation():
+    node = FakeNode()
+    controller = CommandController()
+    local = [False]
+    controller.configure_stop_participant(lambda key: None, lambda key: (local[0], "sensor active"))
+    transport = RosCommandTransport(node, controller)
+    snapshots = node.publishers["fault_detector/application/software_stop_state"].messages
+    assert snapshots[-1].status_sequence > 0 and not snapshots[-1].latched
+    stop_id = controller.cancel_all()
+    assert snapshots[-1].latched and not snapshots[-1].stop_confirmed
+    assert snapshots[-1].request_id == stop_id
+    controller.poll()
+    transport.handle_command_status(owner_status(request_id=stop_id,
+        state=CommandStatus.STATE_STOP_CONFIRMED, execution_idle=True,
+        software_stop_latched=True, software_stop_confirmed=True))
+    assert not snapshots[-1].stop_confirmed
+    local[0] = True
+    controller.poll()
+    assert snapshots[-1].latched and snapshots[-1].stop_confirmed
+    status = node.publishers["fault_detector/_internal/commands/status"].messages[-1]
+    assert status.software_stop_latched and status.software_stop_confirmed
+
+
+def test_reset_uses_fresh_latched_owner_readiness_and_never_local_dispatch():
+    now = [0.0]
+    node = FakeNode()
+    controller = CommandController(monotonic_clock=lambda: now[0])
+    transport = RosCommandTransport(node, controller, monotonic_clock=lambda: now[0])
+    local = []
+    transport.set_local_dispatch(lambda request: local.append(request) or True)
+    node.status_client.auto_discovery = False
+    stop_id = controller.cancel_all()
+    controller.poll()
+    transport.handle_command_status(owner_status(request_id=stop_id,
+        state=CommandStatus.STATE_STOP_CONFIRMED, execution_idle=True,
+        software_stop_latched=True, software_stop_confirmed=True))
+    reset_id = controller.reset_software_stop()
+    dispatch = node.publishers["fault_detector/_internal/commands/request"].messages
+    assert len(dispatch) == 1  # No fresh owner confirmation yet.
+    now[0] = 1.0
+    transport._poll()
+    discovery = next(future for request, future in reversed(node.status_client.calls) if not request.request_id)
+    discovery.set_result(query_response(owner_status(
+        software_stop_latched=True, software_stop_confirmed=True), accepting=False))
+    controller.poll()
+    assert dispatch[-1].request_id == reset_id
+    assert dispatch[-1].payload.command_id == CommandID.RESET_SOFTWARE_STOP.value
+    assert not transport._dispatch_consumer_ready()
+    assert local == []
+    assert controller.software_stop_status.latched
+    assert transport.handle_command_status(owner_status(request_id=reset_id,
+        state=CommandStatus.STATE_SUCCEEDED, execution_idle=True,
+        software_stop_latched=False, software_stop_confirmed=True))
+    snapshots = node.publishers["fault_detector/application/software_stop_state"].messages
+    assert not snapshots[-1].latched
+    assert snapshots[-1].request_id == stop_id
+    assert len(dispatch) == 2
+
+
+def test_reconnecting_to_latched_owner_latches_application_without_replaying_motion():
+    node = FakeNode(auto_discovery=False)
+    controller = CommandController()
+    RosCommandTransport(node, controller)
+    queued = make_request(CommandID.READY_ARM)
+    controller.submit(queued)
+    node.status_client.calls[-1][1].set_result(query_response(owner_status(
+        software_stop_latched=True, software_stop_confirmed=True), accepting=False))
+    assert controller.software_stop_status.latched
+    controller.poll()
+    assert controller.queued_request_ids == ()
+    dispatch = node.publishers["fault_detector/_internal/commands/request"].messages
+    assert [message.payload.command_id for message in dispatch] == [CommandID.EMERGENCY_CANCEL.value]
+    assert queued.request_id != dispatch[0].request_id

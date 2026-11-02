@@ -226,6 +226,24 @@ class WaypointNavigationExecutor:
     def cancelling(self):
         return self._phase is _Phase.CANCELLING
 
+    def request_cancel(self):
+        """Request goal cancellation before acquiring preparation/workflow locks."""
+        future = self._send_future
+        if future is None:
+            return
+
+        def cancel_accepted(completed):
+            try:
+                handle = completed.result()
+                if handle is not None and handle.accepted:
+                    handle.cancel_goal_async()
+            except Exception:
+                # Normal cancel/poll retains unresolved ownership and reports
+                # missing acceptance/results. This fast request proves no idle.
+                pass
+
+        future.add_done_callback(cancel_accepted)
+
     def cancel(self):
         with self._lock:
             self._retry_after_stop = False

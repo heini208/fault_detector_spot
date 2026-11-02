@@ -5,6 +5,9 @@ from fault_detector_spot.shared.persistence.basic_settings import parameter_over
 from dataclasses import dataclass, fields
 import math
 
+from fault_detector_spot.shared.geometry.models import PoseData
+from fault_detector_spot.shared.geometry.rotation import rotation_distance_rad
+
 
 @dataclass(frozen=True)
 class BaseGoalVerificationConfig:
@@ -209,7 +212,39 @@ class BaseGoalVerifier:
         self.settled_stamp = None
 
 
+class BaseStopVerifier(BaseGoalVerifier):
+    """Use the same freshness/settling window for all six body pose axes."""
+
+    def __init__(self, config, started_at):
+        super().__init__((0.0, 0.0, 0.0), config, started_at)
+        self.target = PoseData.identity()
+
+    @staticmethod
+    def sample_is_fresh(pose, stamp, ros_now, maximum_age_sec):
+        if not isinstance(pose, PoseData):
+            return False
+        try:
+            pose.validate()
+        except (TypeError, ValueError):
+            return False
+        return BaseGoalVerifier.sample_is_fresh(
+            (pose.position.x, pose.position.y, pose.position.z),
+            stamp, ros_now, maximum_age_sec,
+        )
+
+    @staticmethod
+    def errors(first, second):
+        return (
+            math.dist(
+                (first.position.x, first.position.y, first.position.z),
+                (second.position.x, second.position.y, second.position.z),
+            ),
+            rotation_distance_rad(first.orientation, second.orientation),
+        )
+
+
 __all__ = [
     "BaseGoalVerificationConfig",
     "BaseGoalVerifier",
+    "BaseStopVerifier",
 ]

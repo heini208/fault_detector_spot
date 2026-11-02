@@ -281,7 +281,8 @@ def test_stop_requires_both_original_and_stop_owner_confirmation(original_first)
     stop_id = controller.cancel_all()
     controller.poll()
     second = make_request(CommandID.STOW_ARM)
-    controller.submit(second)
+    with pytest.raises(CommandExecutionUnresolved, match="latched"):
+        controller.submit(second)
     # A start result or cancellation acceptance is not physical stop proof.
     controller.handle_execution_status(execution_status(first.request_id, CommandControllerState.SUCCEEDED))
     controller.handle_execution_status(execution_status(stop_id, CommandControllerState.SUCCEEDED))
@@ -291,7 +292,11 @@ def test_stop_requires_both_original_and_stop_owner_confirmation(original_first)
     controller.handle_execution_status(execution_status(ids[0], CommandControllerState.STOP_CONFIRMED, sequence=2))
     assert len(dispatched) == 2
     controller.handle_execution_status(execution_status(ids[1], CommandControllerState.STOP_CONFIRMED, sequence=2))
-    assert dispatched[-1] == second
+    assert len(dispatched) == 2
+    assert controller.software_stop_status.stop_confirmed
+    assert controller.software_stop_status.latched
+    with pytest.raises(CommandExecutionUnresolved, match="latched"):
+        controller.submit(second)
     assert all(status.execution_idle for status in states if status.state is CommandControllerState.STOP_CONFIRMED)
 
 
@@ -503,5 +508,6 @@ def test_repeated_cancel_is_idempotent_before_ack_during_stop_and_after_timeout(
         stop_id, CommandControllerState.STOP_CONFIRMED, sequence=2,
     ))
     assert not controller.active_request_id
-    assert controller.cancel_all() != stop_id
-    assert len(dispatched) == 3
+    assert controller.cancel_all() == stop_id
+    assert len(dispatched) == 2
+    assert controller.software_stop_status.latched

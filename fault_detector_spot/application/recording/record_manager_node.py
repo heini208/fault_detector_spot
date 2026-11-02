@@ -11,6 +11,7 @@ from fault_detector_msgs.msg import (
     CommandRecordControl,
     CommandRequest as CommandRequestMessage,
     CommandStatus,
+    SoftwareStopState,
     StringArray,
 )
 from rclpy.node import Node
@@ -80,6 +81,11 @@ class RecordManager(Node):
         self._next_skip_block = 1
         self._recording_skip_blocks = {}
         self._playback_had_skips = False
+        # A late-joining recorder needs authoritative admission state before
+        # issuing playback. Reset only permits a new explicit Play request.
+        self._software_stop_latched = True
+        self._software_stop_request_id = ""
+        self._software_stop_status_sequence = 0
 
         self.list_pub = self.create_publisher(
             StringArray,
@@ -136,6 +142,12 @@ class RecordManager(Node):
             "fault_detector/_internal/commands/status",
             self.handle_command_status,
             COMMAND_REQUEST_QOS,
+        )
+        self.create_subscription(
+            SoftwareStopState,
+            "fault_detector/application/software_stop_state",
+            self.handle_software_stop_state,
+            LATCHED_QOS,
         )
         self.publish_recordings_list()
         self.publish_recording_state()
@@ -316,8 +328,10 @@ class RecordManager(Node):
                 f"Rejected accepted command request: {exception}"
             )
             return False
-        if request.command.command_id in {CommandID.EMERGENCY_CANCEL, CommandID.ESTOP_STATE}:
-            self._finish_playback("Playback stopped by emergency command.", failed=True)
+        if request.command.command_id is CommandID.EMERGENCY_CANCEL:
+            # This topic has no stop-state sequence. Cancel playback promptly,
+            # but leave admission identity to the authoritative state topic.
+            self._finish_playback("Software stop cancelled playback; remaining commands discarded.", failed=True)
         if request.request_id in self._recorded_request_ids:
             return False
         if self.recording:
@@ -326,6 +340,9 @@ class RecordManager(Node):
         exclusion = (
             "inactive" if not self.recording else
             "finishing" if self._recording_stop_requested else
+            "excluded" if request.command.command_id in {
+                CommandID.EMERGENCY_CANCEL, CommandID.RESET_SOFTWARE_STOP, CommandID.RECOVER_ARM,
+            } else
             "excluded" if request.recording_policy is not RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE else
             "paused" if self.recording_paused else ""
         )
@@ -430,11 +447,18 @@ class RecordManager(Node):
         return True
 
     def play_recording(self, name: str):
+        if self._software_stop_latched:
+            self.get_logger().warning("Playback blocked while software stop is latched or its state is unknown.")
+            return
         if self._playback_request_id or self._playback_commands:
             self.get_logger().warning("Playback is already active.")
             return
         try:
             commands = self.repository.load_steps(name)
+            if any(step.command.command_id in {
+                CommandID.RESET_SOFTWARE_STOP, CommandID.RECOVER_ARM,
+            } for step in commands):
+                raise ValueError("Software stop reset and arm recovery require an explicit operator request")
         except (OSError, TypeError, ValueError) as exception:
             self.get_logger().error(
                 f"Could not load recording {name}: {exception}"
@@ -455,10 +479,14 @@ class RecordManager(Node):
         ):
             return False
         if message.state in (
-            CommandStatus.STATE_RUNNING,
-            CommandStatus.STATE_UNKNOWN,
             CommandStatus.STATE_STOP_REQUESTED,
             CommandStatus.STATE_STOP_UNCONFIRMED,
+        ):
+            self._finish_playback("Software stop cancelled playback; remaining commands discarded.", failed=True)
+            return True
+        if message.state in (
+            CommandStatus.STATE_RUNNING,
+            CommandStatus.STATE_UNKNOWN,
         ):
             return True
         # Only controller-confirmed outcomes can advance a recording. Retain
@@ -527,6 +555,9 @@ class RecordManager(Node):
         return False
 
     def _dispatch_next_playback_command(self):
+        if self._software_stop_latched:
+            self._latch_software_stop()
+            return
         if not self._playback_commands:
             self._finish_playback(
                 "Playback finished with skips." if self._playback_had_skips else "Playback finished."
@@ -538,6 +569,9 @@ class RecordManager(Node):
         self._dispatch_playback_step()
 
     def _dispatch_playback_step(self):
+        if self._software_stop_latched:
+            self._latch_software_stop()
+            return
         request = CommandRequest.create(
             command=self._playback_attempt_command,
             client_id="record_manager",
@@ -546,6 +580,28 @@ class RecordManager(Node):
         )
         self._playback_request_id = request.request_id
         self.command_submission_pub.publish(command_request_to_message(request))
+
+    def handle_software_stop_state(self, message):
+        """Follow controller admission; never continue an interrupted playlist."""
+        if message.status_sequence <= self._software_stop_status_sequence:
+            return
+        if (not message.latched and self._software_stop_request_id
+                and message.request_id != self._software_stop_request_id):
+            return
+        self._software_stop_status_sequence = message.status_sequence
+        if message.latched:
+            self._latch_software_stop(message.request_id)
+        else:
+            self._software_stop_latched = False
+
+    def _latch_software_stop(self, request_id=""):
+        self._software_stop_latched = True
+        if request_id:
+            self._software_stop_request_id = request_id
+        self._finish_playback(
+            "Software stop cancelled playback; remaining commands discarded.",
+            failed=True,
+        )
 
     def _finish_playback(self, message, failed=False):
         was_active = bool(

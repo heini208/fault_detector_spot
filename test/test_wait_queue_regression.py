@@ -3,7 +3,7 @@
 from collections import deque
 from types import SimpleNamespace
 
-from fault_detector_msgs.msg import CommandStatus
+from fault_detector_msgs.msg import CommandStatus, SoftwareStopState
 from py_trees.common import Status
 from std_msgs.msg import Bool
 
@@ -60,6 +60,8 @@ class FakeLogger:
 
 
 class RecordManagerHarness:
+    handle_software_stop_state = RecordManager.handle_software_stop_state
+    _latch_software_stop = RecordManager._latch_software_stop
     handle_playback_status = RecordManager.handle_playback_status
     _dispatch_next_playback_command = RecordManager._dispatch_next_playback_command
     _dispatch_playback_step = RecordManager._dispatch_playback_step
@@ -74,9 +76,13 @@ class RecordManagerHarness:
         self._playback_retries_left = 0
         self._playback_acquisition_active = False
         self._playback_had_skips = False
+        self._software_stop_latched = True
+        self._software_stop_request_id = ""
+        self._software_stop_status_sequence = 0
         self.command_submission_pub = FakePublisher()
         self.playback_state_pub = FakePublisher()
         self.logger = FakeLogger()
+        self.handle_software_stop_state(SoftwareStopState(latched=False, status_sequence=1))
 
     def get_logger(self):
         return self.logger

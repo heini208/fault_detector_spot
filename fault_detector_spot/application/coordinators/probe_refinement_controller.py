@@ -88,7 +88,8 @@ class ProbeRefinementController:
             return False
         if status.request.command.command_id not in {
             CommandID.READY_ARM, CommandID.STOW_ARM,
-            CommandID.STAND_UP, CommandID.SIT_DOWN, CommandID.ESTOP_STATE,
+            CommandID.STAND_UP, CommandID.SIT_DOWN, CommandID.RECOVER_ARM,
+            CommandID.EMERGENCY_CANCEL,
             CommandID.CHANGE_BODY_HEIGHT,
             CommandID.MOVE_ARM_RELATIVE, CommandID.MOVE_ARM_TO_TAG,
             CommandID.MOVE_ARM_TO_TAG_AND_WAIT, CommandID.FOLLOW_MOVE_TO_TAG_PATH,

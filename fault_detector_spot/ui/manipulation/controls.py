@@ -602,10 +602,6 @@ class ManipulationControls(UIControlHelper):
 
         for label, intent_id in [
             ("Gripper Toggle", OperationalIntent.INTENT_TOGGLE_GRIPPER),
-            (
-                "Reset State",
-                OperationalIntent.INTENT_RETURN_TO_ESTOP_STATE,
-            ),
         ]:
             btn = QPushButton(label)
             btn.clicked.connect(

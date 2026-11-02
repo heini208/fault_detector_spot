@@ -1,6 +1,9 @@
 from fault_detector_spot.application.behaviour_tree.commands.move_to_pose_command import MoveToPoseCommand
 from typing import List, Optional
 from dataclasses import replace
+from threading import RLock
+
+from rclpy.callback_groups import ReentrantCallbackGroup
 
 from fault_detector_spot.navigation.commands.change_body_height_command import (
     ChangeBodyHeightCommand,
@@ -78,12 +81,18 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         status_topic: str = "fault_detector/_internal/command_status",
         defer_subscription: bool = False,
         status_ledger=None,
+        robot_command_resources=None,
     ):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
         self.request_topic = request_topic
         self.status_topic = status_topic
         self.defer_subscription = defer_subscription
+        self.robot_command_resources = robot_command_resources
+        self._pending_lock = RLock()
+        self._stop_ingress_lock = RLock()
+        self._received_stop_ids = set()
+        self._request_callback_group = ReentrantCallbackGroup()
         self.blackboard = None
         self._combination_command_builders = {
             CommandID.MOVE_ARM_TO_TAG: self._move_to_tag,
@@ -98,9 +107,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.MOVE_ARM_RELATIVE: self._move_arm_command_with_offset,
             CommandID.MOVE_BASE_TO_TAG: self._move_base_to_tag,
             CommandID.MOVE_BASE_RELATIVE: self._move_base_with_offset,
-            CommandID.ESTOP_STATE: self._return_to_estop_state,
         }
         self._single_command_builders = {
+            CommandID.RESET_SOFTWARE_STOP: self._simple_command,
+            CommandID.RECOVER_ARM: self._simple_command,
             CommandID.EXECUTE_PROBE_POINT: self._probe_point_command,
             CommandID.STOW_ARM: self._simple_command,
             CommandID.READY_ARM: self._simple_command,
@@ -110,7 +120,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             CommandID.SIT_DOWN: self._simple_command,
             CommandID.TOGGLE_GRIPPER: self._simple_command,
             CommandID.CLOSE_GRIPPER: self._simple_command,
-            CommandID.STOP_BASE: self._simple_command,
             CommandID.STOP_MAPPING: self._simple_command,
             CommandID.WAIT_TIME: self._wait_command,
             CommandID.START_SLAM: self._map_command,
@@ -144,18 +153,25 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             )
 
     def update(self) -> py_trees.common.Status:
-        if not self.pending_msgs:
+        with self._pending_lock:
+            pending = self.pending_msgs
+            self.pending_msgs = []
+        if not pending:
             self.feedback_message = "No commands received yet"
             return py_trees.common.Status.SUCCESS
 
-        self.pending_msgs.sort(
+        pending.sort(
             key=lambda item: (item[0].sec, item[0].nanosec)
         )
 
         processed_count = 0
-        for _, request in self.pending_msgs:
+        for _, request in pending:
             try:
-                command_count = self.fire_request(request)
+                with self._pending_lock:
+                    if (self.status_ledger.stop_latched
+                            and request.command.command_id is not CommandID.RESET_SOFTWARE_STOP):
+                        continue
+                    command_count = self.fire_request(request)
                 processed_count += 1
                 detail = (
                     f"BT buffered {command_count} command step(s) "
@@ -174,7 +190,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
                 self.logger.error(f"Rejected command: {exception}")
                 self._publish_request_failure(request, str(exception))
 
-        self.pending_msgs.clear()
         self.feedback_message = f"Processed {processed_count} commands"
         return py_trees.common.Status.SUCCESS
 
@@ -198,6 +213,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             self.request_topic,
             self.append_request_to_buffer,
             COMMAND_REQUEST_QOS,
+            callback_group=self._request_callback_group,
         )
         self.status_ledger.activate()
 
@@ -230,11 +246,32 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             self._publish_raw_request_failure(message, detail)
             return
 
+        emergency = self.is_estop_command(request.command)
+        newly_latched = False
+        if emergency:
+            # This tiny identity lock is never acquired by normal workflows or
+            # ledger queries/reset. Fence motion before waiting for those locks.
+            with self._stop_ingress_lock:
+                if request.request_id not in self._received_stop_ids:
+                    self._received_stop_ids.add(request.request_id)
+                    newly_latched = True
+            if newly_latched:
+                if self.robot_command_resources is not None:
+                    self.robot_command_resources.latch_software_stop()
+                self.blackboard.estop_flag = True
+                if self.robot_command_resources is not None:
+                    self.robot_command_resources.request_software_stop()
+
         accepted, receipt = self.status_ledger.receive(
-            request, emergency=self.is_estop_command(request.command),
+            request, emergency=emergency,
         )
         if not accepted:
             self._publish_status(receipt)
+            return
+
+        if self.is_estop_command(request.command):
+            self.trigger_estop(request, already_latched=newly_latched)
+            self.logger.warning("Software stop latched immediately; this is not the robot safety E-stop.")
             return
 
         command_id = request.command.command_id.value
@@ -248,12 +285,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             f"{detail} [{request.request_id}]"
         )
 
-        if self.is_estop_command(request.command):
-            self.trigger_estop(request)
-            self.logger.warning("ESTOP triggered immediately.")
-            return
-
-        self.pending_msgs.append((stamp, request))
+        with self._pending_lock:
+            if self.status_ledger.stop_latched and request.command.command_id is not CommandID.RESET_SOFTWARE_STOP:
+                return
+            self.pending_msgs.append((stamp, request))
 
     def fire_request(
         self,
@@ -412,24 +447,28 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
     def is_estop_command(self, command: SemanticCommand) -> bool:
         return command.command_id == CommandID.EMERGENCY_CANCEL
 
-    def trigger_estop(self, request: CommandRequest[SemanticCommand]):
+    def trigger_estop(self, request: CommandRequest[SemanticCommand], *, already_latched=False):
         if request.execution_instance_id != self.status_ledger.execution_instance_id:
             return
-        recovery_allowed = self.status_ledger.request_stop(request)
-        self.blackboard.command_buffer.clear()
-        self.pending_msgs = []
+        if not already_latched and self.robot_command_resources is not None:
+            self.robot_command_resources.latch_software_stop()
+            self.robot_command_resources.request_software_stop()
+        confirmation_allowed = self.status_ledger.request_stop(request)
         self.blackboard.estop_flag = True
+        with self._pending_lock:
+            self.blackboard.command_buffer.clear()
+            self.pending_msgs = []
         command = ExecutionCommand(
             command_id=CommandID.EMERGENCY_CANCEL,
             stamp=self._create_command_stamp(),
             request_id=request.request_id,
         )
         command.stop_confirmed = False
-        command.stop_unconfirmed = not recovery_allowed
-        command.stop_recovery_allowed = recovery_allowed
+        command.stop_unconfirmed = not confirmation_allowed
+        command.stop_confirmation_allowed = confirmation_allowed
         self._apply_request_metadata(command, request)
         self.blackboard.command_buffer.append(command)
-        detail = "BT accepted emergency stop and replaced command buffer"
+        detail = "Software stop latched; cancellation requested and queued work discarded"
         self._publish_request_status(
             request,
             CommandStatus.STATE_STOP_REQUESTED,
@@ -616,25 +655,6 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             )
         )
         return commands
-
-    def _return_to_estop_state(
-        self,
-        command: SemanticCommand,
-    ) -> List[ExecutionCommand]:
-        return [
-            ExecutionCommand(
-                CommandID.STOP_BASE,
-                self._create_command_stamp(),
-            ),
-            ExecutionCommand(
-                CommandID.STOW_ARM,
-                self._create_command_stamp(),
-            ),
-            ExecutionCommand(
-                CommandID.CLOSE_GRIPPER,
-                self._create_command_stamp(),
-            ),
-        ]
 
     @staticmethod
     def _required_tag(command: SemanticCommand) -> SemanticTag:

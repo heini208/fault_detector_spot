@@ -5,6 +5,7 @@ from threading import RLock
 from uuid import uuid4
 
 from fault_detector_msgs.msg import CommandStatus
+from fault_detector_spot.application.commanding.command_ids import CommandID
 
 
 class CommandStatusLedger:
@@ -32,6 +33,11 @@ class CommandStatusLedger:
             self._status_sequence += 1
             result.execution_instance_id = self.execution_instance_id
             result.status_sequence = self._status_sequence
+            result.software_stop_latched = self._stopping
+            result.software_stop_confirmed = (
+                not self._foreign_targets and bool(self._fenced)
+                and all(status.execution_idle for status in self._statuses.values())
+            )
             return result
 
     def unknown_status(self, request_id, detail):
@@ -58,12 +64,19 @@ class CommandStatusLedger:
             message.command_id = request.command.command_id.value
             message.state = CommandStatus.STATE_RUNNING
             message.detail = "BT received command request"
-            if self._stopping and not emergency:
+            reset = request.command.command_id is CommandID.RESET_SOFTWARE_STOP
+            reset_ready = (self._stopping and not self._foreign_targets
+                           and all(item.execution_idle for item in self._statuses.values()))
+            blocked = ((self._stopping and not emergency and not reset)
+                       or (reset and not reset_ready))
+            if blocked:
                 message.state = CommandStatus.STATE_FAILED
-                message.detail = "Stop is pending; this request was not executed"
+                message.detail = ("Reset requires a latched, confirmed software stop"
+                                  if reset else
+                                  "Software stop is latched; this request was not executed")
                 message.execution_idle = True
             self._statuses[request.request_id] = deepcopy(message)
-            return not (self._stopping and not emergency), message
+            return not blocked, message
 
     def request_stop(self, request):
         """Install fences before acknowledging a stop, including unseen targets."""
@@ -147,9 +160,26 @@ class CommandStatusLedger:
                 status.continuation_safe = False
                 self._statuses[request_id] = status
                 confirmed.append(deepcopy(status))
-            self._stopping = False
             self._active_stop_id = None
             return confirmed
+
+    @property
+    def stop_latched(self):
+        with self._lock:
+            return self._stopping
+
+    def reset_stop(self, request_id, reset_resources, *, clear_admission=None):
+        """Clear admission only after retained and freshly measured idle proof."""
+        with self._lock:
+            if (not self._stopping or self._foreign_targets
+                    or any(not item.execution_idle for key, item in self._statuses.items()
+                           if key != request_id)):
+                return False, "Software stop ownership is unresolved; reset remains blocked"
+            def clear_latch():
+                if clear_admission is not None:
+                    clear_admission()
+                self._stopping = False
+            return reset_resources(clear_latch)
 
     def contains(self, request_id):
         with self._lock:

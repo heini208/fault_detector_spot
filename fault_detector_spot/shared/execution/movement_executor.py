@@ -425,6 +425,14 @@ class MovementExecutor:
         else:
             future.add_done_callback(cancel_when_accepted)
 
+    def request_cancel(self) -> None:
+        """Request action cancellation without waiting for execution workflow locks.
+
+        This does not release ownership or certify stopping. The ordinary
+        cancellation lifecycle still tracks terminal and physical stop evidence.
+        """
+        self._request_cancel()
+
     def _finish(self, outcome, detail: str):
         update = self._new_update(
             outcome,

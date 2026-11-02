@@ -4,7 +4,7 @@ from collections import deque
 import json
 
 import pytest
-from fault_detector_msgs.msg import CommandStatus
+from fault_detector_msgs.msg import CommandStatus, SoftwareStopState
 from std_msgs.msg import Bool
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
@@ -60,6 +60,8 @@ class FakeLogger:
 
 
 class RecordManagerHarness:
+    handle_software_stop_state = RecordManager.handle_software_stop_state
+    _latch_software_stop = RecordManager._latch_software_stop
     _adjacent_skip_block = RecordManager._adjacent_skip_block
     _publish_skip_state = RecordManager._publish_skip_state
     set_skip_block = RecordManager.set_skip_block
@@ -104,6 +106,9 @@ class RecordManagerHarness:
         self._next_skip_block = 1
         self._recording_skip_blocks = {}
         self._playback_had_skips = False
+        self._software_stop_latched = False
+        self._software_stop_request_id = ""
+        self._software_stop_status_sequence = 0
         self.recording_skip_pub = FakePublisher()
         self.recording_retries_pub = FakePublisher()
         self.command_submission_pub = FakePublisher()
@@ -729,13 +734,94 @@ def test_emergency_command_stops_retry_playback(tmp_path):
     assert not manager._playback_request_id
 
 
-@pytest.mark.parametrize("state", [
-    CommandStatus.STATE_UNKNOWN,
-    CommandStatus.STATE_STOP_REQUESTED,
-    CommandStatus.STATE_STOP_UNCONFIRMED,
-])
+def test_latched_stop_blocks_new_playback_and_reset_never_replays_discarded_work(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [RecordedStep(command), RecordedStep(command)])
+    manager.control("play", "session")
+    request_id = manager._playback_request_id
+    stop = SoftwareStopState(request_id="software-stop", latched=True,
+                             stop_confirmed=False, status_sequence=2)
+    manager.handle_software_stop_state(stop)
+    manager.handle_software_stop_state(stop)
+    manager.control("play", "session")
+    manager.handle_playback_status(terminal_status(request_id, CommandStatus.STATE_SUCCEEDED))
+    assert len(manager.command_submission_pub.messages) == 1
+    assert not manager._playback_commands
+
+    # A delayed initial state cannot clear a latch observed on another topic.
+    manager.handle_software_stop_state(SoftwareStopState(latched=False, status_sequence=3))
+    manager.control("play", "session")
+    assert len(manager.command_submission_pub.messages) == 1
+    manager.handle_software_stop_state(SoftwareStopState(
+        request_id="software-stop", latched=False, stop_confirmed=True, status_sequence=4,
+    ))
+    assert len(manager.command_submission_pub.messages) == 1
+    assert not manager._playback_request_id
+    assert not manager._playback_commands
+    manager.handle_software_stop_state(stop)  # Stale latched update cannot change current state.
+    manager.control("play", "session")
+    assert len(manager.command_submission_pub.messages) == 2
+
+
+def test_playback_waits_for_initial_authoritative_stop_state(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager._software_stop_latched = True
+    manager.repository.save("session", [RecordedStep(SemanticCommand(command_id=CommandID.STAND_UP))])
+    manager.control("play", "session")
+    manager.handle_software_stop_state(SoftwareStopState(latched=False, status_sequence=0))
+    manager.control("play", "session")
+    assert not manager.command_submission_pub.messages
+    manager.handle_software_stop_state(SoftwareStopState(latched=False, status_sequence=1))
+    manager.control("play", "session")
+    assert len(manager.command_submission_pub.messages) == 1
+
+
+def test_delayed_accepted_stop_cannot_replace_newer_authoritative_latch_or_reset(tmp_path):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.repository.save("session", [RecordedStep(SemanticCommand(command_id=CommandID.STAND_UP))])
+    old_stop = make_request(CommandID.EMERGENCY_CANCEL)
+    manager.handle_software_stop_state(SoftwareStopState(
+        request_id="new-stop", latched=True, status_sequence=10,
+    ))
+    manager.capture_request(command_request_to_message(old_stop))
+    manager.handle_software_stop_state(SoftwareStopState(
+        request_id=old_stop.request_id, latched=False, stop_confirmed=True, status_sequence=9,
+    ))
+    manager.control("play", "session")
+    assert not manager.command_submission_pub.messages
+    assert manager._software_stop_request_id == "new-stop"
+    manager.handle_software_stop_state(SoftwareStopState(
+        request_id="new-stop", latched=False, stop_confirmed=True, status_sequence=11,
+    ))
+    manager.capture_request(command_request_to_message(old_stop))
+    manager.control("play", "session")
+    assert len(manager.command_submission_pub.messages) == 1
+
+
+@pytest.mark.parametrize("command_id", [CommandID.RESET_SOFTWARE_STOP, CommandID.RECOVER_ARM])
+def test_reset_and_recovery_are_never_recorded_for_automatic_playback(command_id):
+    manager = RecordManagerHarness()
+    manager.recording = True
+    request = make_request(command_id)
+    assert not manager.capture_request(command_request_to_message(request))
+    manager.handle_recording_status(terminal_status(request.request_id, CommandStatus.STATE_SUCCEEDED))
+    assert not manager.temp_data
+    assert request.request_id not in manager._recording_commands
+
+
+@pytest.mark.parametrize("command_id", [CommandID.RESET_SOFTWARE_STOP, CommandID.RECOVER_ARM])
+def test_existing_recording_cannot_automate_reset_or_recovery(tmp_path, command_id):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.repository.save("session", [RecordedStep(SemanticCommand(command_id=command_id))])
+    manager.control("play", "session")
+    assert not manager.command_submission_pub.messages
+    assert not manager._playback_commands
+    assert "explicit operator request" in manager.logger.error_messages[-1]
+
+
 @pytest.mark.parametrize("idle", [False, True])
-def test_uncertain_playback_preserves_correlation_queue_and_retry_policy(tmp_path, state, idle):
+def test_uncertain_playback_preserves_correlation_queue_and_retry_policy(tmp_path, idle):
     manager = RecordingStorageHarness(tmp_path)
     command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
     manager.repository.save("session", [
@@ -745,7 +831,7 @@ def test_uncertain_playback_preserves_correlation_queue_and_retry_policy(tmp_pat
     request_id = manager._playback_request_id
     step = manager._playback_step
     queued = tuple(manager._playback_commands)
-    status = terminal_status(request_id, state, execution_idle=idle)
+    status = terminal_status(request_id, CommandStatus.STATE_UNKNOWN, execution_idle=idle)
     status.retry_safe = True
     status.continuation_safe = True
 
@@ -765,6 +851,29 @@ def test_uncertain_playback_preserves_correlation_queue_and_retry_policy(tmp_pat
     manager.handle_playback_status(succeeded)
     assert len(manager.command_submission_pub.messages) == 2
     assert manager._playback_request_id != request_id
+
+
+@pytest.mark.parametrize("state", [CommandStatus.STATE_STOP_REQUESTED,
+                                   CommandStatus.STATE_STOP_UNCONFIRMED])
+def test_stop_intent_discards_playback_and_late_success_cannot_resume(tmp_path, state):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [RecordedStep(command, 2, 1), RecordedStep(command)])
+    manager.control("play", "session")
+    request_id = manager._playback_request_id
+
+    assert manager.handle_playback_status(terminal_status(request_id, state, execution_idle=False))
+    for outcome in (CommandStatus.STATE_SUCCEEDED, CommandStatus.STATE_FAILED,
+                    CommandStatus.STATE_STOP_CONFIRMED):
+        late = terminal_status(request_id, outcome)
+        late.retry_safe = True
+        late.continuation_safe = True
+        manager.handle_playback_status(late)
+
+    assert not manager._playback_request_id
+    assert not manager._playback_commands
+    assert not manager.playback_state_pub.messages[-1].data
+    assert len(manager.command_submission_pub.messages) == 1
 
 
 @pytest.mark.parametrize("state", [
@@ -814,8 +923,7 @@ def test_acquisition_playback_flag_changes_only_after_confirmed_transition(tmp_p
     manager.control("play", "session")
     manager._playback_acquisition_active = active
     request_id = manager._playback_request_id
-    for state in (CommandStatus.STATE_UNKNOWN, CommandStatus.STATE_STOP_REQUESTED,
-                  CommandStatus.STATE_STOP_UNCONFIRMED, CommandStatus.STATE_SUCCEEDED):
+    for state in (CommandStatus.STATE_UNKNOWN, CommandStatus.STATE_SUCCEEDED):
         manager.handle_playback_status(terminal_status(request_id, state, execution_idle=False))
         assert manager._playback_acquisition_active is active
         assert manager._playback_request_id == request_id

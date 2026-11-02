@@ -64,7 +64,6 @@ Examples (non-exhaustive):
     - `MOVE_BASE_TO_TAG`
     - `MOVE_BASE_RELATIVE`
     - `STAND_UP`
-    - `STOP_BASE`
 - Mapping & Navigation:
     - `CREATE_MAP`
     - `DELETE_MAP`
@@ -79,10 +78,42 @@ Examples (non-exhaustive):
     - `DELETE_LANDMARK`
 - System:
     - `EMERGENCY_CANCEL`
-    - `ESTOP_STATE`
+    - `RESET_SOFTWARE_STOP`
+    - `RECOVER_ARM`
     - `WAIT_TIME`
 
 Refer to the [System Design](System_Design.md) Document’s **Available Commands** table and the [code](..%2Ffault_detector_spot%2Fbehaviour_tree%2Fcommands%2Fcommand_ids.py) for the precise set and semantics.
+
+### Software stop, reset and recovery
+
+`EMERGENCY_CANCEL` (`cancel_all`) latches normal command admission, discards queued
+commands and playback, and requests cancellation from the physical and acquisition
+owners. It performs no arm stow or gripper close and does not reset its latch.
+This software function is separate from the robot safety E-stop and does not
+command a motor-power cut.
+
+Use `fault_detector/application/emergency_stop` to request the software stop.
+Service acceptance acknowledges the request; confirmed stopping is reported on
+`fault_detector/application/software_stop_state` (`SoftwareStopState`). Missing
+owner confirmation keeps motion blocked. Base confirmation requires settled
+command sources and fresh stationary feedback; a zero `Twist` alone is insufficient.
+
+`RESET_SOFTWARE_STOP` (`reset_software_stop`) uses
+`fault_detector/application/reset_software_stop` (`ResetSoftwareStop`). It is
+admitted only after every owner confirms stopping and reopens admission only
+after the execution owner acknowledges reset. Reset requests no movement and
+never resumes discarded commands, playback or acquisition.
+
+`RECOVER_ARM` (`recover_arm`) is a separate operator action after reset, submitted
+through `OperationalIntent.INTENT_RECOVER_ARM`. It revalidates confirmed stopping,
+quiet base command sources, confirmed bare-hand attachment, a fresh measured arm
+pose and enabled environment collision policy before guarded stow. Attached-sensor
+recovery is rejected; recovery does not close the gripper and cannot be recorded
+or replayed automatically.
+
+The former `ESTOP_STATE` / `estop_state` identifier is retired and rejected,
+including in historical command examples or recordings. Use the explicit stop,
+reset and recovery operations above. See the [current software-stop workflow](../README.md#35-software-stop-operator-reset-and-arm-recovery).
 
 ---
 

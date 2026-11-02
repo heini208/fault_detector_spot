@@ -328,6 +328,21 @@ class SensorAttachmentController:
     ) -> CommandRequest[SemanticCommand]:
         """Bind or validate effective probe geometry at command admission."""
         command = request.command
+        if command.command_id is CommandID.RECOVER_ARM:
+            if command.ignore_environment_collisions:
+                raise ValueError("Arm recovery requires environment collision checks")
+            with self._lock:
+                attachment = self._motion_attachment_locked()
+                if attachment.has_sensor:
+                    raise RuntimeError(
+                        "Arm recovery requires a confirmed bare hand; native stow "
+                        "clearance is not established for an attached sensor"
+                    )
+                if command.motion_sensor_id and command.motion_sensor_id != BARE_HAND_MOTION_ID:
+                    raise RuntimeError("Arm recovery was prepared for a different attachment")
+                return replace(request, command=replace(
+                    command, motion_sensor_id=BARE_HAND_MOTION_ID,
+                ))
         requires_automatic_binding = (
             command.command_id in _AUTOMATIC_SENSOR_COMMANDS
         )

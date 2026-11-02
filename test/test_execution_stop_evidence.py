@@ -12,6 +12,8 @@ from fault_detector_spot.manipulation.arm_movement_executor import ArmMovementEx
 from fault_detector_spot.manipulation.arm_movement_result import ArmMovementOutcome, ArmMovementUpdate
 from fault_detector_spot.navigation.base_movement_executor import BaseMovementExecutor
 from fault_detector_spot.navigation.base_pose_source import BasePoseSample
+from fault_detector_spot.shared.geometry.models import PoseData, Vector3Data
+from fault_detector_spot.shared.geometry.rotation import quaternion_from_euler
 from test_base_movement_executor import FakeActionClient, FakeGoalHandle, ManualClock
 
 
@@ -28,9 +30,10 @@ def base_executor():
     return owner, sent, clock, source
 
 
-def stationary_sample(owner, clock, source, at, x=2.0, stamp=None):
+def stationary_sample(owner, clock, source, at, x=2.0, stamp=None, z=0.5, roll=0.0, pitch=0.0):
     clock.now = at
-    source.value = BasePoseSample(x, 3.0, 0.4, at if stamp is None else stamp)
+    body_pose = PoseData(Vector3Data(x, 3.0, z), quaternion_from_euler("xyz", [roll, pitch, 0.4]))
+    source.value = BasePoseSample(x, 3.0, 0.4, at if stamp is None else stamp, body_pose)
     return owner.poll_stop_confirmation()[0]
 
 
@@ -134,6 +137,8 @@ def resource_harness(monkeypatch):
     resources._base_movement_executors[""] = base
     monkeypatch.setattr(resources, "get_arm_movement_executor", lambda node: arm)
     monkeypatch.setattr(resources, "get_base_movement_executor", lambda node: base)
+    monkeypatch.setattr(resources, "prepare_stop", lambda node: None)
+    monkeypatch.setattr(resources, "stop_sources_quiet", lambda: True)
     return resources, arm, base, clock
 
 
@@ -196,3 +201,23 @@ def test_nav2_ambiguous_submission_is_never_nonexecution_evidence(failure):
     assert not owner.execution_idle
     assert owner.navigate(pose).outcome is WaypointNavigationOutcome.BUSY
     assert client.send_goal_async.call_count == 1
+
+
+@pytest.mark.parametrize("axis", ["z", "roll", "pitch"])
+def test_base_stop_requires_vertical_and_tilt_settling(axis):
+    owner, _, clock, source = base_executor()
+    owner.begin_stop_confirmation()
+    assert not stationary_sample(owner, clock, source, 0.1)
+    changed = {axis: 0.1 if axis != "z" else 0.6}
+    assert not stationary_sample(owner, clock, source, 0.7, **changed)
+    assert not stationary_sample(owner, clock, source, 0.9, **changed)
+    assert stationary_sample(owner, clock, source, 1.3, **changed)
+
+
+def test_base_stop_rejects_planar_only_feedback():
+    owner, _, clock, source = base_executor()
+    owner.begin_stop_confirmation()
+    for now in [0.1, 0.7, 1.3]:
+        clock.now = now
+        source.value = BasePoseSample(2.0, 3.0, 0.4, now)
+        assert not owner.poll_stop_confirmation()[0]

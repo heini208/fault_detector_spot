@@ -143,7 +143,10 @@ class ProbePointExecutionApi:
                 self._recording_state = "failed"
                 self._timer.cancel()
             elif state.status is SensorAcquisitionStatus.IDLE:
-                self._recording_state = "complete" if self._recording_state == "stopping" else "failed"
+                self._recording_state = (
+                    "complete" if self._recording_state == "stopping"
+                    and not self.acquisition.software_stop_latched else "failed"
+                )
                 self._timer.cancel()
 
     def _tick(self):

@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from fault_detector_msgs.msg import CommandStatus
 from fault_detector_msgs.srv import GetCommandStatus
 from py_trees.common import Status
@@ -10,7 +12,10 @@ from fault_detector_spot.application.behaviour_tree.behaviours.buffer_and_status
 from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import CommandSubscriber
 from fault_detector_spot.application.behaviour_tree.command_status_ledger import CommandStatusLedger
 from fault_detector_spot.application.commanding.command_ids import CommandID
-from fault_detector_spot.application.controllers.command_controller import CommandController, CommandControllerState
+from fault_detector_spot.application.controllers.command_controller import (
+    CommandController, CommandControllerState, SoftwareStopLatched,
+)
+from fault_detector_spot.application.behaviour_tree.behaviours.reset_software_stop import ResetSoftwareStop
 from fault_detector_spot.application.ros.command_transport import RosCommandTransport
 from test_command_ros_transport import FakeNode, FakePublisher, make_request
 
@@ -91,7 +96,8 @@ def test_stop_fences_a_delayed_original_and_confirms_each_lane_owner():
     stop_id = p.controller.cancel_all()
     p.controller.poll()
     later = make_request(CommandID.STOW_ARM)
-    p.controller.submit(later)
+    with pytest.raises(SoftwareStopLatched):
+        p.controller.submit(later)
     # Deliver stop before the original request, then deliver that motion late.
     p.subscriber.append_request_to_buffer(p.wire[1])
     p.subscriber.append_request_to_buffer(p.wire[0])
@@ -110,11 +116,55 @@ def test_stop_fences_a_delayed_original_and_confirms_each_lane_owner():
     p.publisher.update()
     confirmations = p.publisher.structured_status_pub.messages
     assert {status.request_id for status in confirmations} == {original.request_id, stop_id}
-    for index, status in enumerate(confirmations):
+    for status in confirmations:
         assert status.state == CommandStatus.STATE_STOP_CONFIRMED and status.execution_idle
         p.transport.handle_command_status(status)
-        assert len(p.wire) == (2 if index == 0 else 3)
+        assert len(p.wire) == 2
     p.transport._query_status("")
     complete_query(p)
     p.controller.poll()
+    assert not p.controller.active_request_id
+    assert p.controller.software_stop_status.latched
+    assert p.controller.software_stop_status.stop_confirmed
+    assert not p.transport._dispatch_consumer_ready()
+    with pytest.raises(SoftwareStopLatched):
+        p.controller.submit(later)
+
+    # The explicit nonmoving reset is admissible while normal discovery says no.
+    reset_id = p.controller.reset_software_stop("operator")
+    assert len(p.wire) == 3 and p.wire[-1].request_id == reset_id
+    p.subscriber.append_request_to_buffer(p.wire[-1])
+    p.subscriber.update()
+    reset_command = p.subscriber.blackboard.command_buffer.pop()
+    p.subscriber.blackboard.last_command = reset_command
+    proof = [False]
+    resources = SimpleNamespace(
+        begin_reset_confirmation=lambda: True,
+        poll_stop_confirmation=lambda: (proof[0], "fresh stop measurement"),
+        reset_software_stop=lambda clear: (clear() or True, "Reset without motion"),
+    )
+    reset = ResetSoftwareStop(resources, p.subscriber.status_ledger)
+    reset.blackboard = p.subscriber.blackboard
+    reset.initialise()
+    assert reset.update() is Status.RUNNING
+    assert p.controller.software_stop_status.latched
+    proof[0] = True
+    assert reset.update() is Status.SUCCESS
+    p.subscriber.blackboard.command_tree_status = Status.SUCCESS
+    p.publisher.update()
+    completed = p.publisher.structured_status_pub.messages[-1]
+    assert completed.request_id == reset_id and completed.execution_idle
+    assert not completed.software_stop_latched and completed.software_stop_confirmed
+    p.transport.handle_command_status(completed)
+    assert not p.controller.software_stop_status.latched
+    assert not p.controller.active_request_id
+    assert len(p.wire) == 3  # Clearing the latch never replays the rejected work.
+
+    p.subscriber.append_request_to_buffer(p.wire[0])
+    assert not p.subscriber.pending_msgs and not p.subscriber.blackboard.command_buffer
+    assert p.subscriber.request_status_publisher.messages[-1].state == CommandStatus.STATE_STOP_CONFIRMED
+    p.transport._query_status("")
+    complete_query(p)
+    p.controller.submit(later)
     assert p.controller.active_request_id == later.request_id
+    assert len(p.wire) == 4

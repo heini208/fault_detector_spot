@@ -8,6 +8,7 @@ from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
     CommandControllerState,
+    SoftwareStopLatched,
 )
 from test_command_controller import make_request, execution_status
 
@@ -15,7 +16,7 @@ from test_command_controller import make_request, execution_status
 @pytest.mark.parametrize("blocker", ["preparer", "accepted", "status", "idle"])
 def test_emergency_dispatch_does_not_wait_for_setup_work(blocker):
     entered, release = Event(), Event()
-    dispatched, states = [], []
+    dispatched, states, rejected = [], [], []
     controller = CommandController(dispatch_request=dispatched.append)
     controller.add_status_listener(states.append)
     request = make_request(CommandID.READY_ARM)
@@ -31,9 +32,14 @@ def test_emergency_dispatch_does_not_wait_for_setup_work(blocker):
         controller.add_accepted_listener(block)
     elif blocker == "status":
         controller.add_status_listener(block)
-    work = (lambda: controller.run_if_idle(block)) if blocker == "idle" else (
-        lambda: controller.submit(request)
-    )
+    def work():
+        if blocker == "idle":
+            controller.run_if_idle(block)
+        else:
+            try:
+                controller.submit(request)
+            except SoftwareStopLatched as exception:
+                rejected.append(exception)
     worker = Thread(target=work, daemon=True)
     worker.start()
     try:
@@ -43,13 +49,17 @@ def test_emergency_dispatch_does_not_wait_for_setup_work(blocker):
         stopper.start()
         assert stopped.wait(2), "Emergency waited for the setup lock/callback"
         assert [item.command.command_id for item in dispatched] == [CommandID.EMERGENCY_CANCEL]
+        assert controller.software_stop_status.latched
     finally:
         release.set()
         worker.join(3)
     stopper.join(3)
     controller.poll()
     assert [item.command.command_id for item in dispatched] == [CommandID.EMERGENCY_CANCEL]
-    if blocker != "idle":
+    if blocker == "preparer":
+        assert len(rejected) == 1
+        assert not controller.knows_request(request.request_id)
+    elif blocker != "idle":
         assert any(item.request_id == request.request_id and
                    item.state is CommandControllerState.CANCELLED for item in states)
 
@@ -101,8 +111,9 @@ def test_repeated_cancellation_reuses_one_pending_stop_before_bookkeeping():
     assert controller.active_request_id == first
     controller.handle_execution_status(execution_status(first, CommandControllerState.STOP_CONFIRMED))
     assert controller.active_request_id == ""
-    assert controller.cancel_all() != first
-    assert len(dispatched) == 2
+    assert controller.cancel_all() == first
+    assert len(dispatched) == 1
+    assert controller.software_stop_status.latched
 
 
 def test_duplicate_emergency_is_idempotent_after_completion():

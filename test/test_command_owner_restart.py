@@ -121,7 +121,7 @@ def test_foreign_stop_target_blocks_recovery_and_cannot_be_confirmed_by_new_empt
                    stop_execution_instance_ids=(owner.status_ledger.execution_instance_id, "prior-owner"))
     owner.append_request_to_buffer(wire(stop, owner))
     command = owner.blackboard.command_buffer[0]
-    assert not command.stop_recovery_allowed and command.stop_unconfirmed
+    assert not command.stop_confirmation_allowed and command.stop_unconfirmed
     assert owner.request_status_publisher.messages[-1].state == CommandStatus.STATE_STOP_UNCONFIRMED
     owner.append_request_to_buffer(wire(current, owner))
     assert not owner.pending_msgs and owner.blackboard.command_buffer == [command]
@@ -135,7 +135,7 @@ def test_foreign_stop_target_blocks_recovery_and_cannot_be_confirmed_by_new_empt
         assert status.state == CommandStatus.STATE_STOP_UNCONFIRMED and not status.execution_idle
     following_stop = stop_request()
     owner.append_request_to_buffer(wire(following_stop, owner))
-    assert not owner.blackboard.command_buffer[0].stop_recovery_allowed
+    assert not owner.blackboard.command_buffer[0].stop_confirmation_allowed
 
 
 @pytest.mark.parametrize("completed", [False, True])

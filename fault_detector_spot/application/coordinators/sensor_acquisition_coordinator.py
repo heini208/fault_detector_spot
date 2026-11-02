@@ -3,11 +3,12 @@
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from threading import RLock
+from threading import Event, RLock
 
 import tf2_ros
 from fault_detector_msgs.srv import SetSensorAcquisition
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.clock import Clock, ClockType
 from rclpy.qos import qos_profile_sensor_data
 from rosidl_runtime_py.utilities import get_message
 
@@ -110,6 +111,7 @@ class SensorAcquisitionCoordinator:
         self.error_handler = error_handler
         self.callback_group = ReentrantCallbackGroup()
         self._lock = RLock()
+        self._software_stop = Event()
         self._listeners = []
         self._session = None
         # ROS entities live until node destruction, after executor shutdown.
@@ -125,6 +127,7 @@ class SensorAcquisitionCoordinator:
             1.0 / self.GEOMETRY_RATE_HZ,
             self._tick,
             callback_group=self.callback_group,
+            clock=Clock(clock_type=ClockType.STEADY_TIME),
         )
         self._timer.cancel()
 
@@ -132,6 +135,24 @@ class SensorAcquisitionCoordinator:
     def execution_lock(self):
         """Serialize compound acquisition operations with sensor callbacks."""
         return self._lock
+
+    @property
+    def software_stop_latched(self):
+        return self._software_stop.is_set()
+
+    def latch_software_stop(self):
+        """Fence every acquisition entry immediately, without workflow locks."""
+        self._software_stop.set()
+
+    def reset_software_stop(self):
+        """Clear admission after the controller's cached shutdown proof.
+
+        While latched no new session can start. Checking the stopped fields
+        directly keeps this callback independent of acquisition workflow locks.
+        """
+        if self._session is not None or not self._stop_confirmed:
+            raise RuntimeError("Sensor acquisition stop is unconfirmed")
+        self._software_stop.clear()
 
     @property
     def recording_stopped(self):
@@ -159,6 +180,8 @@ class SensorAcquisitionCoordinator:
             raise TypeError("Expected SensorAcquisitionRequest")
         request.validate()
         with self._lock:
+            if self.software_stop_latched:
+                raise RuntimeError("Software stop is latched; sensor acquisition admission is blocked")
             if self._session is not None:
                 raise RuntimeError("Sensor acquisition is already active")
             if not self._stop_confirmed:
@@ -215,10 +238,18 @@ class SensorAcquisitionCoordinator:
                     "Starting sensor acquisition",
                 )
                 self._create_sources(session, definition, request)
+                if self.software_stop_latched:
+                    self._finish(session, MeasurementCompletionState.CANCELLED,
+                                 "Software stop cancelled acquisition before sensor startup")
+                    return self._state
                 for source in session.sources:
                     source.start()
                 session.deadline = time.monotonic() + self.START_TIMEOUT_SEC
                 self._timer.reset()
+                if self.software_stop_latched:
+                    self._finish(session, MeasurementCompletionState.CANCELLED,
+                                 "Software stop cancelled acquisition before sensor startup")
+                    return self._state
                 if physical:
                     self._stop_confirmed = False
                     self._call_head(session, True, self._head_started)
@@ -236,8 +267,13 @@ class SensorAcquisitionCoordinator:
             return self._state
 
     def stop(self, *, cancelled=False):
-        """Stop acquisition and wait for the sensor-head acknowledgement."""
+        """Stop samples and finalize only after sensor-head acknowledgement.
+
+        A software stop aborts the measurement, retaining its samples and
+        cancelled metadata. A previously failed attempt stays failed.
+        """
         with self._lock:
+            cancelled = cancelled or self.software_stop_latched
             if self._session is None:
                 if self._state.status is SensorAcquisitionStatus.FAILED and self._stop_confirmed:
                     return self._set_state(SensorAcquisitionStatus.IDLE)
@@ -247,7 +283,10 @@ class SensorAcquisitionCoordinator:
                 if self._state.status is SensorAcquisitionStatus.RECORDING and not cancelled
                 else MeasurementCompletionState.CANCELLED
             )
-            self._begin_stop(self._session, final_state, "Recording stopped")
+            self._begin_stop(
+                self._session, final_state,
+                "Software stop cancelled acquisition" if cancelled else "Recording stopped",
+            )
             return self._state
 
     def abort_recording(self):
@@ -363,6 +402,13 @@ class SensorAcquisitionCoordinator:
 
     def _begin_stop(self, session, final_state, detail):
         if self._state.status is SensorAcquisitionStatus.STOPPING:
+            # A later software stop cannot turn an interrupted measurement into
+            # a successful one, or hide a failure already being finalized.
+            if (final_state is MeasurementCompletionState.FAILED
+                    or (final_state is MeasurementCompletionState.CANCELLED
+                        and session.final_state is MeasurementCompletionState.COMPLETE)):
+                session.final_state = final_state
+                session.final_detail = detail
             return
         for source in session.sources:
             source.stop()
@@ -432,6 +478,9 @@ class SensorAcquisitionCoordinator:
     def _finish(self, session, final_state, detail):
         if self._session is not session:
             return
+        if self.software_stop_latched and final_state is MeasurementCompletionState.COMPLETE:
+            final_state = MeasurementCompletionState.CANCELLED
+            detail = "Software stop cancelled acquisition"
         for source in session.sources:
             source.stop()
         try:

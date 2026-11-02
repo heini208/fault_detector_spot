@@ -12,7 +12,7 @@ from uuid import uuid4
 import rclpy
 from fault_detector_msgs.action import ExecuteOperation
 from fault_detector_msgs.msg import ApplicationCommandState, ProbeSetupState
-from fault_detector_msgs.srv import CancelOperation, EmergencyStop
+from fault_detector_msgs.srv import CancelOperation, EmergencyStop, ResetSoftwareStop
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -266,6 +266,11 @@ class ApplicationApiNode(Node):
             self.sensor_acquisition_command_handler.dispatch,
             query_status=self.sensor_acquisition_command_handler.query_status,
         )
+        self.command_controller.configure_stop_participant(
+            self.sensor_acquisition_command_handler.request_software_stop,
+            self.sensor_acquisition_command_handler.software_stop_status,
+            reset=self.sensor_acquisition_command_handler.reset_software_stop,
+        )
         self.probe_setup_motion_state = (
             probe_setup_motion_state_source.ProbeSetupMotionStateSource(self)
         )
@@ -356,6 +361,12 @@ class ApplicationApiNode(Node):
             EmergencyStop,
             "fault_detector/application/emergency_stop",
             self._emergency_stop,
+            callback_group=self._callback_group,
+        )
+        self._reset_software_stop_service = self.create_service(
+            ResetSoftwareStop,
+            "fault_detector/application/reset_software_stop",
+            self._reset_software_stop,
             callback_group=self._callback_group,
         )
 
@@ -492,7 +503,21 @@ class ApplicationApiNode(Node):
             return response
         response.accepted = True
         response.request_id = request_id
-        response.detail = "Emergency stop accepted"
+        response.detail = "Software stop latched; stop confirmation remains pending"
+        return response
+
+    def _reset_software_stop(self, request, response):
+        try:
+            request_id = self.application_controller.reset_software_stop(
+                request.client_id
+            )
+        except (TypeError, ValueError, RuntimeError) as exception:
+            response.accepted = False
+            response.detail = str(exception)
+            return response
+        response.accepted = True
+        response.request_id = request_id
+        response.detail = "Software-stop reset requested; awaiting owner confirmation. No motion or replay requested."
         return response
 
     def _handle_application_status(

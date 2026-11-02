@@ -64,10 +64,7 @@ _INTENT_COMMAND_IDS = {
     OperationalIntent.INTENT_STOW_ARM: CommandID.STOW_ARM,
     OperationalIntent.INTENT_TOGGLE_GRIPPER: CommandID.TOGGLE_GRIPPER,
     OperationalIntent.INTENT_CLOSE_GRIPPER: CommandID.CLOSE_GRIPPER,
-    OperationalIntent.INTENT_RETURN_TO_ESTOP_STATE: (
-        CommandID.ESTOP_STATE
-    ),
-    OperationalIntent.INTENT_STOP_BASE: CommandID.STOP_BASE,
+    OperationalIntent.INTENT_RECOVER_ARM: CommandID.RECOVER_ARM,
     OperationalIntent.INTENT_MOVE_ARM_TO_TAG: (
         CommandID.MOVE_ARM_TO_TAG
     ),
@@ -195,6 +192,11 @@ def operational_intent_to_command(
         raise TypeError(
             "Expected an OperationalIntent message"
         )
+    if int(intent.intent) == 6:
+        raise ValueError(
+            "The legacy reset-state intent is retired. Reset the software stop "
+            "and request arm recovery as separate operations."
+        )
     try:
         command_id = _INTENT_COMMAND_IDS[int(intent.intent)]
     except (KeyError, TypeError, ValueError) as exception:
@@ -202,6 +204,9 @@ def operational_intent_to_command(
             "Unsupported operational intent: "
             f"{intent.intent!r}"
         ) from exception
+
+    if command_id is CommandID.RECOVER_ARM and intent.ignore_environment_collisions:
+        raise ValueError("Arm recovery requires environment collision checks")
 
     if (intent.intent == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
             and intent.override_target_surface_distance):

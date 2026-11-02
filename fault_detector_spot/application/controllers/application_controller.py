@@ -9,6 +9,7 @@ from fault_detector_msgs.msg import OperationalIntent
 from fault_detector_spot.application.commanding.client_identity import (
     required_client_id,
 )
+from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
@@ -110,7 +111,9 @@ class ApplicationController:
             context_id=context_id.strip(),
             origin=CommandOrigin.OPERATIONAL,
             recording_policy=(
-                RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
+                RecordingPolicy.EXCLUDE
+                if command.command_id is CommandID.RECOVER_ARM
+                else RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE
             ),
         )
         operation = ApplicationOperation(
@@ -160,8 +163,14 @@ class ApplicationController:
         return self.command_controller.cancel(request_id)
 
     def emergency_stop(self, client_id: str) -> str:
-        """Cancel all queued and active commands immediately."""
+        """Latch the software stop and cancel queued and active commands."""
         return self.command_controller.cancel_all(
+            required_client_id(client_id)
+        )
+
+    def reset_software_stop(self, client_id: str) -> str:
+        """Request a confirmed, motion-free reset without replaying commands."""
+        return self.command_controller.reset_software_stop(
             required_client_id(client_id)
         )
 

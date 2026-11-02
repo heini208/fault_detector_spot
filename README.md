@@ -276,10 +276,11 @@ an unavailable query service, and a terminal status without `execution_idle`
 confirmation all keep the lane occupied. Setup changes and playback cannot
 continue through this uncertainty.
 
-Emergency acceptance means `STOP_REQUESTED`. The original request remains
+Software-stop acceptance means `STOP_REQUESTED`. The original request remains
 associated with the lane, and `STOP_UNCONFIRMED` means the required stop evidence
 is still missing. Only `STOP_CONFIRMED` from the execution owner releases the
-stop barrier. Each interrupted request must also be confirmed stopped. Emergency
+execution barrier; the software-stop latch remains set until an explicit reset.
+Each interrupted request must also be confirmed stopped. Stop
 envelopes fence the affected request identities so delayed or duplicate delivery
 cannot restart them. Duplicate normal requests return retained owner status
 without running again. Recordings wait for confirmed outcomes; playback does
@@ -299,8 +300,8 @@ acknowledgement 3 s, heartbeat 5 s, reconciliation interval 1 s, query timeout
 A healthy long operation can run indefinitely while queries keep answering.
 Missing heartbeats enter `UNKNOWN` and reject new normal requests. Previously
 queued work stays held; reconnecting to the same owner reconciles its retained
-status without replaying motion. Repeated cancellation reuses its pending stop
-request instead of starting another recovery sequence.
+status without replaying motion. Repeated cancellation reuses its stop request
+and remains latched, including after stopping has been confirmed.
 
 A replacement execution process cannot certify that the previous process's
 request finished. The original request stays bound to the previous instance,
@@ -313,10 +314,50 @@ client disconnection; it does not persist command ownership across an applicatio
 API process restart. The UI retains pending work and displays uncertainty when
 application updates disappear.
 
-These states, execution identities/sequences, idle evidence, stop fences and status queries
-are part of `fault_detector_msgs`. Rebuild **both** `fault_detector_msgs` and
+These states, execution identities/sequences, idle evidence, stop fences, status queries,
+`SoftwareStopState` and `ResetSoftwareStop` are part of `fault_detector_msgs`.
+Rebuild **both** `fault_detector_msgs` and
 `fault_detector_spot` after updating these changes, then source the new install.
 Old and new message installations must not be mixed.
+
+### 3.5 Software stop, operator reset and arm recovery
+
+The UI's **SOFTWARE STOP** latches application admission, cancels pending playback
+and queued commands, and requests cancellation from the physical and sensor
+acquisition owners. This application function is separate from the robot safety
+E-stop. The retained `fault_detector/application/emergency_stop` service invokes
+this software stop; acceptance confirms the request, not a stationary robot.
+Stop admission does not wait for mapping shutdown or ordinary setup workflow
+locks. The stop path does not stow the arm, close the gripper or clear its latch.
+
+Base confirmation requires the owned Spot and Nav2 actions to settle, velocity
+command sources to become quiet, and fresh stationary feedback. Publishing a zero
+`Twist` alone is not stop confirmation. Missing feedback, unresolved owner
+history, failed cancellation or unconfirmed acquisition shutdown keeps the
+software stop latched and blocks motion. An interrupted measurement retains its
+captured data and cancelled or failed metadata; it is not promoted to a successful
+measurement, and reset does not restart acquisition.
+
+The UI displays the authoritative aggregate on
+`fault_detector/application/software_stop_state` (`SoftwareStopState`). The
+latched topic carries the stop request ID, latch and confirmation flags, detail
+and a sequence number. A **Reset software stop** request uses
+`fault_detector/application/reset_software_stop` (`ResetSoftwareStop`) and is
+admitted only after every owner confirms stopping. Reset is itself confirmed by
+the execution owner before admission reopens. It requests no movement, discards
+no unresolved ownership, and never replays cancelled work. A new stop during a
+pending reset supersedes that reset.
+
+**Recover arm (stow)** is a separate operator action after reset, submitted
+through the normal command controller as `OperationalIntent.INTENT_RECOVER_ARM`.
+It revalidates confirmed stopping, quiet base command sources, current confirmed
+bare-hand attachment, a fresh measured arm pose and enabled environment collision
+checks before stowing. Recovery with an attached sensor is rejected because
+native stow clearance for that sensor is not established. Recovery does not close
+the gripper and is excluded from recording/playback. The former **Reset State**
+operation and intent value 6 are retired; callers must request reset and recovery
+separately. The former zero-velocity-only stop intent (value 7) is also retired;
+callers must use the confirmed software-stop protocol.
 
 ---
 

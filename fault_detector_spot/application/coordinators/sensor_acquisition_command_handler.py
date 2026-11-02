@@ -37,6 +37,13 @@ class SensorAcquisitionCommandHandler:
         self.coordinator = coordinator
         self.execution_instance_id = str(uuid4())
         self._lock = RLock()
+        self._timer_lock = RLock()
+        self._software_stop_lock = RLock()
+        self._software_stop_request_id = ""
+        self._software_stop_started = False
+        self._software_stop_confirmed = False
+        self._software_stop_failure = ""
+        self._software_stop_detail = "No software stop requested"
         self._status_sequence = 0
         self._state_revision = 0
         self._terminal_statuses = {}
@@ -61,6 +68,8 @@ class SensorAcquisitionCommandHandler:
         """Schedule a supported command and report whether it was handled."""
         if request.command.command_id not in self.COMMAND_IDS:
             return False
+        if self.coordinator.software_stop_latched:
+            raise RuntimeError("Software stop is latched; sensor acquisition admission is blocked")
         self.controller.bind_execution_owner(request.request_id, self.execution_instance_id)
         with self._lock:
             if self._closed:
@@ -72,6 +81,70 @@ class SensorAcquisitionCommandHandler:
             self._execution_failure = ""
         self._schedule_once(lambda: self._execute(request))
         return True
+
+    def request_software_stop(self, stop_request_id):
+        """Latch immediately; abort acquisition on its own callback group.
+
+        This path takes neither the coordinator workflow lock nor the handler's
+        ordinary command lock. A completed start command can still own a live
+        measurement, so the participant is independent of pending commands.
+        """
+        if not isinstance(stop_request_id, str) or not stop_request_id:
+            raise ValueError("Software stop request identity is required")
+        with self._software_stop_lock:
+            self.coordinator.latch_software_stop()
+            if self._software_stop_request_id == stop_request_id:
+                return
+            self._software_stop_request_id = stop_request_id
+            self._software_stop_started = False
+            self._software_stop_confirmed = False
+            self._software_stop_failure = ""
+            self._software_stop_detail = "Sensor acquisition stop requested; shutdown is unconfirmed"
+        self._schedule_once(lambda: self._stop_software_acquisition(stop_request_id))
+
+    def software_stop_status(self, stop_request_id):
+        """Read cached proof without waiting for acquisition or persistence."""
+        with self._software_stop_lock:
+            if stop_request_id != self._software_stop_request_id:
+                return False, "Sensor acquisition has no stop confirmation for this request"
+            return self._software_stop_confirmed, self._software_stop_detail
+
+    def reset_software_stop(self):
+        """Clear admission only after the controller confirms all stop owners."""
+        with self._software_stop_lock:
+            if not self.coordinator.software_stop_latched:
+                return
+            if not self._software_stop_confirmed:
+                raise RuntimeError("Sensor acquisition stop is unconfirmed")
+            self.coordinator.reset_software_stop()
+            self._software_stop_request_id = ""
+            self._software_stop_started = False
+            self._software_stop_confirmed = False
+            self._software_stop_detail = "Software stop reset; acquisition remains stopped"
+
+    def _stop_software_acquisition(self, stop_request_id):
+        with self.coordinator.execution_lock:
+            with self._software_stop_lock:
+                if (self._software_stop_request_id != stop_request_id
+                        or not self.coordinator.software_stop_latched):
+                    return
+                self._software_stop_started = True
+            with self._lock:
+                if self._closed:
+                    return
+                if self._pending_request is not None:
+                    self._stop_requested = True
+                    self._state_revision += 1
+            try:
+                self.coordinator.stop(cancelled=True)
+            except Exception as exception:
+                with self._software_stop_lock:
+                    self._software_stop_failure = str(exception)
+                    self._software_stop_detail = f"Sensor acquisition stop is unconfirmed: {exception}"
+                with self._lock:
+                    self._execution_failure = str(exception)
+                    self._state_revision += 1
+        self._process_acquisition_state()
 
     def query_status(self, request_id):
         """Schedule a fresh owner observation without starting or stopping work."""
@@ -107,7 +180,7 @@ class SensorAcquisitionCommandHandler:
         timer = None
 
         def execute_once():
-            with self._lock:
+            with self._timer_lock:
                 timer.cancel()
                 self.node.destroy_timer(timer)
                 self._timers.discard(timer)
@@ -115,7 +188,7 @@ class SensorAcquisitionCommandHandler:
                     return
             callback()
 
-        with self._lock:
+        with self._timer_lock:
             if self._closed:
                 return
             timer = self.node.create_timer(
@@ -127,20 +200,24 @@ class SensorAcquisitionCommandHandler:
             self._timers.add(timer)
 
     def close(self) -> None:
-        with self._lock:
+        self.coordinator.latch_software_stop()
+        with self._timer_lock:
             self._closed = True
         self.coordinator.remove_state_listener(
             self._handle_acquisition_state
         )
         self.controller.remove_status_listener(self._handle_command_status)
-        for timer in tuple(self._timers):
-            timer.cancel()
-            self.node.destroy_timer(timer)
-        self._timers.clear()
+        with self._timer_lock:
+            for timer in tuple(self._timers):
+                timer.cancel()
+                self.node.destroy_timer(timer)
+            self._timers.clear()
         self._queued_queries.clear()
         self.node.destroy_subscription(self._subscription)
 
     def _execute(self, request) -> None:
+        if self.coordinator.software_stop_latched:
+            return
         if self.controller.active_request_id != request.request_id:
             return
         with self._lock:
@@ -156,7 +233,7 @@ class SensorAcquisitionCommandHandler:
         with self.coordinator.execution_lock:
             with self._lock:
                 if (self._pending_request is not request or self._stop_requested
-                        or self._closed):
+                        or self._closed or self.coordinator.software_stop_latched):
                     return
                 self._execution_started = True
                 try:
@@ -221,6 +298,14 @@ class SensorAcquisitionCommandHandler:
         with self.coordinator.execution_lock:
             state = self.coordinator.snapshot()
             stopped = self.coordinator.recording_stopped
+            with self._software_stop_lock:
+                if self._software_stop_request_id and self._software_stop_started:
+                    self._software_stop_confirmed = stopped
+                    self._software_stop_detail = (
+                        "Sensor acquisition shutdown confirmed; software stop remains latched"
+                        if stopped else "Sensor acquisition stop is unconfirmed: "
+                        f"{self._software_stop_failure or state.detail}"
+                    )
             with self._lock:
                 request = self._pending_request
                 stopping = self._stop_requested
@@ -277,6 +362,8 @@ class SensorAcquisitionCommandHandler:
         self._schedule_once(lambda: self._stop_pending_request(request))
 
     def _stop_pending_request(self, request):
+        if self.coordinator.software_stop_latched:
+            return  # The global stop participant owns this cancellation.
         with self.coordinator.execution_lock:
             with self._lock:
                 if self._pending_request is not request or self._closed:

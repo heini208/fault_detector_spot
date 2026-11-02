@@ -63,3 +63,25 @@ def test_emergency_service_acknowledgement_does_not_claim_stopping_finished(appl
     assert "awaiting stop confirmation" in harness.status_label.text()
     Fault_Detector_UI._process_emergency_stop_result(harness, False, "Transport unavailable")
     assert "unconfirmed" in harness.status_label.text()
+
+
+def test_stop_button_distinguishes_software_stop_from_robot_safety_estop(application):
+    class StopHarness(QWidget):
+        _make_estop_button = Fault_Detector_UI._make_estop_button
+
+        def __init__(self):
+            super().__init__()
+            self.requests = 0
+
+        def handle_emergency_stop(self):
+            self.requests += 1
+
+    harness = StopHarness()
+    button = harness._make_estop_button()
+
+    assert button.text() == "SOFTWARE STOP"
+    assert "robot safety E-stop" in button.toolTip()
+    button.click()
+    button.click()
+    assert harness.requests == 2
+    assert harness._make_estop_button() is button

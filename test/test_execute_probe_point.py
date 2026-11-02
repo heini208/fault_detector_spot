@@ -295,7 +295,7 @@ def api():
     value._request = SimpleNamespace(request_id="current", command=command())
     value.controller = SimpleNamespace(active_request_id="current")
     value._timer = Mock()
-    value.acquisition = Mock(recording_stopped=True)
+    value.acquisition = Mock(recording_stopped=True, software_stop_latched=False)
     value._recording_state = "starting"
     value._deadline = None
     value._detail = ""
@@ -330,6 +330,16 @@ def test_failed_sensor_stop_is_not_complete():
     value._recording_state = "stopping"
     value._acquisition_state(SimpleNamespace(status=Acquisition.FAILED, detail="stop timeout"))
     assert value._recording_state == "failed"
+
+
+def test_software_stop_during_recording_completion_cannot_report_a_successful_measurement():
+    value = api()
+    value._recording_state = "stopping"
+    value.acquisition.software_stop_latched = True
+    value._acquisition_state(SimpleNamespace(status=Acquisition.IDLE, detail="Software stop cancelled acquisition"))
+    assert value._recording_state == "failed"
+    assert "cancelled" in value._detail
+    value._timer.cancel.assert_called_once()
 
 
 @pytest.mark.parametrize("bypass", [False, True])

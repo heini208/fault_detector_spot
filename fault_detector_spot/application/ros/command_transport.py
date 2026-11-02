@@ -10,6 +10,7 @@ from fault_detector_spot.application.commanding.command_lifecycle import Command
 from fault_detector_msgs.msg import (
     CommandRequest as CommandRequestMessage,
     CommandStatus,
+    SoftwareStopState,
 )
 from fault_detector_msgs.srv import GetCommandStatus
 
@@ -23,7 +24,7 @@ from fault_detector_spot.application.ros.command_request_adapter import (
     command_request_from_message,
     command_request_to_message,
 )
-from fault_detector_spot.shared.ros.qos_profiles import COMMAND_REQUEST_QOS
+from fault_detector_spot.shared.ros.qos_profiles import COMMAND_REQUEST_QOS, LATCHED_QOS
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.ros.semantic_command_adapter import (
     semantic_command_from_message, semantic_command_to_message,
@@ -62,6 +63,8 @@ class RosCommandTransport:
         self._remote_status_sequence = 0
         self._remote_query_sequence = 0
         self._remote_accepting_commands = False
+        self._remote_stop_latched = False
+        self._remote_stop_confirmed = False
         self._last_discovery = None
         self._request_instances = {}
         self.node = node
@@ -89,6 +92,9 @@ class RosCommandTransport:
             controller_status_topic,
             10,
         )
+        self._software_stop_publisher = node.create_publisher(
+            SoftwareStopState, "fault_detector/application/software_stop_state", LATCHED_QOS,
+        )
         self._submission_subscription = node.create_subscription(
             CommandRequestMessage,
             submission_topic,
@@ -108,10 +114,12 @@ class RosCommandTransport:
         )
         self.controller.add_accepted_listener(self._publish_accepted)
         self.controller.add_status_listener(self._publish_controller_status)
+        self.controller.add_software_stop_listener(self._publish_software_stop)
         self.controller.configure_dispatch(
             self._dispatch,
             self._dispatch_consumer_ready,
             emergency_ready=self._emergency_consumer_ready,
+            reset_ready=self._reset_consumer_ready,
         )
         self.controller.configure_reconciliation(self._query_status)
         self._discover_owner()
@@ -181,6 +189,8 @@ class RosCommandTransport:
                 execution_idle=message.execution_idle,
                 execution_instance_id=message.execution_instance_id,
                 status_sequence=message.status_sequence,
+                software_stop_latched=message.software_stop_latched,
+                software_stop_confirmed=message.software_stop_confirmed,
             ),
             receipt_monotonic=received_at,
         )
@@ -191,6 +201,7 @@ class RosCommandTransport:
         self.controller.clear_dispatch()
         self.controller.remove_accepted_listener(self._publish_accepted)
         self.controller.remove_status_listener(self._publish_controller_status)
+        self.controller.remove_software_stop_listener(self._publish_software_stop)
         cancel = getattr(self._poll_timer, "cancel", None)
         if callable(cancel):
             cancel()
@@ -210,7 +221,7 @@ class RosCommandTransport:
                 stop_execution_instance_ids=tuple(owner for _, owner in targets),
             ))
             return
-        if self._local_dispatch is not None:
+        if request.command.command_id is not CommandID.RESET_SOFTWARE_STOP and self._local_dispatch is not None:
             # Scheduling may raise after work starts; retain that local ownership.
             self._local_request_ids.add(request.request_id)
             if self._local_dispatch(request):
@@ -299,6 +310,8 @@ class RosCommandTransport:
             self._remote_status_sequence = 0
             self._remote_query_sequence = 0
             self._remote_accepting_commands = False
+            self._remote_stop_latched = False
+            self._remote_stop_confirmed = False
             self.controller.execution_owner_changed(previous, instance)
         if status.status_sequence > self._remote_query_sequence:
             self._remote_query_sequence = status.status_sequence
@@ -308,6 +321,9 @@ class RosCommandTransport:
             self._remote_accepting_commands = bool(
                 response.accepting_commands and not response.unresolved_request_ids
             )
+            self._remote_stop_latched = status.software_stop_latched
+            self._remote_stop_confirmed = status.software_stop_confirmed
+            self.controller.observe_owner_software_stop(self._remote_stop_latched, self._remote_stop_confirmed)
         # A deadline-valid query can arrive after a newer topic snapshot. It is
         # still live owner evidence, but must not replace newer global occupancy;
         # the controller independently rejects older state for the same request.
@@ -333,6 +349,16 @@ class RosCommandTransport:
             command_request_to_message(request)
         )
 
+    def _publish_software_stop(self, status):
+        message = SoftwareStopState()
+        message.header.stamp = self.node.get_clock().now().to_msg()
+        message.request_id = status.request_id
+        message.latched = status.latched
+        message.stop_confirmed = status.stop_confirmed
+        message.detail = status.detail
+        message.status_sequence = status.status_sequence
+        self._software_stop_publisher.publish(message)
+
     def _publish_controller_status(
         self,
         status: CommandControllerStatus,
@@ -349,6 +375,9 @@ class RosCommandTransport:
         message.retry_safe = status.retry_safe
         message.continuation_safe = status.continuation_safe
         message.execution_idle = status.execution_idle
+        stop = self.controller.software_stop_status
+        message.software_stop_latched = stop.latched
+        message.software_stop_confirmed = stop.stop_confirmed
         if status.retry_command is not None:
             message.has_retry_command = True
             message.retry_command = semantic_command_to_message(status.retry_command)
@@ -378,6 +407,16 @@ class RosCommandTransport:
     def _dispatch_consumer_ready(self) -> bool:
         return bool(
             self._remote_accepting_commands and self._remote_last_receipt is not None
+            and self._monotonic_clock() - self._remote_last_receipt < self._heartbeat_timeout_sec
+            and self._emergency_consumer_ready()
+        )
+
+    def _reset_consumer_ready(self) -> bool:
+        # Reset is the one nonmotion command admitted by a latched owner.
+        # The owner revalidates physical stopping when executing the reset.
+        return bool(
+            self._remote_stop_latched and self._remote_stop_confirmed
+            and self._remote_last_receipt is not None
             and self._monotonic_clock() - self._remote_last_receipt < self._heartbeat_timeout_sec
             and self._emergency_consumer_ready()
         )

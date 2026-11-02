@@ -6,6 +6,7 @@ test/test_command_lifecycle_config.py
 test/test_command_state_order.py
 test/test_command_dispatch_readiness.py
 test/test_emergency_stop_priority.py
+test/test_software_stop_controller.py
 
 # Geometry, models, settings, and persistence.
 test/test_rotation_geometry.py

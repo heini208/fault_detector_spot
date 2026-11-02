@@ -206,17 +206,6 @@ class BaseMovementControls(UIControlHelper):
             self.ui, getattr(self.ui, "posture_state_source", None)
         )
         row.addWidget(self.posture_button)
-        for label, cid in [
-            (
-                "Reset State",
-                OperationalIntent.INTENT_RETURN_TO_ESTOP_STATE,
-            ),
-        ]:
-            btn = QPushButton(label)
-            btn.clicked.connect(
-                lambda _, c=cid: self.ui.handle_simple_operation(c)
-            )
-            row.addWidget(btn)
         return row
 
     # ---------------------- Logic ----------------------

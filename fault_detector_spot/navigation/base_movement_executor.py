@@ -31,6 +31,7 @@ from fault_detector_spot.navigation.base_correction_policy import (
 from fault_detector_spot.navigation.base_goal_verifier import (
     BaseGoalVerifier,
     BaseGoalVerificationConfig,
+    BaseStopVerifier,
 )
 from fault_detector_spot.navigation.base_motion_planner import (
     BaseMotionPlanner,
@@ -381,8 +382,8 @@ class BaseMovementExecutor(MovementExecutor):
         """Cancel owned motion and require fresh stationary pose evidence."""
         self.cancel()
         self._stop_confirmation_stamp = self._ros_time_sec()
-        self._stop_confirmation_verifier = BaseGoalVerifier(
-            (0.0, 0.0, 0.0), self.goal_verification_config, self._monotonic_clock(),
+        self._stop_confirmation_verifier = BaseStopVerifier(
+            self.goal_verification_config, self._monotonic_clock(),
         )
 
     def poll_stop_confirmation(self):
@@ -395,7 +396,7 @@ class BaseMovementExecutor(MovementExecutor):
         if not self.goals_settled():
             return False, "Base action termination is unconfirmed"
         sample = self.base_pose_source.sample()
-        pose = sample.planar_pose if sample is not None else None
+        pose = sample.body_pose if sample is not None else None
         stamp = sample.stamp_sec if sample is not None else None
         if stamp is None or stamp <= self._stop_confirmation_stamp:
             pose = None

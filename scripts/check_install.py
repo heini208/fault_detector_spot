@@ -45,14 +45,24 @@ else:
         manifest = Path(get_package_share_directory(package)) / 'package.xml'
         assert ET.parse(manifest).findtext('version') == '5.0.1', package
     from fault_detector_msgs.action import ExecuteOperation
-    from fault_detector_msgs.msg import SensorHeadGeometry, CommandRequest, CommandStatus
-    from fault_detector_msgs.srv import EmergencyStop, GetCommandStatus
+    from fault_detector_msgs.msg import (SensorHeadGeometry, CommandRequest,
+                                        CommandStatus, OperationalIntent, SoftwareStopState)
+    from fault_detector_msgs.srv import EmergencyStop, GetCommandStatus, ResetSoftwareStop
     from rclpy.type_support import check_for_type_support
     for interface in (SensorHeadGeometry, EmergencyStop, ExecuteOperation,
-                      CommandRequest, CommandStatus, GetCommandStatus):
+                      CommandRequest, CommandStatus, GetCommandStatus,
+                      OperationalIntent, SoftwareStopState, ResetSoftwareStop):
         check_for_type_support(interface)
     CommandRequest(execution_instance_id='install-check', stop_execution_instance_ids=[])
-    CommandStatus(execution_instance_id='install-check', status_sequence=1)
+    CommandStatus(execution_instance_id='install-check', status_sequence=1,
+                  software_stop_latched=True, software_stop_confirmed=False)
+    SoftwareStopState(request_id='install-check', latched=True,
+                      stop_confirmed=False, status_sequence=1)
+    ResetSoftwareStop.Request(client_id='install-check')
+    ResetSoftwareStop.Response(accepted=True, request_id='install-check', detail='Requested')
+    assert OperationalIntent.INTENT_RECOVER_ARM == 36
+    assert not hasattr(OperationalIntent, 'INTENT_RETURN_TO_ESTOP_STATE')
+    assert not hasattr(OperationalIntent, 'INTENT_STOP_BASE')
     GetCommandStatus.Request(request_id='', execution_instance_id='')
 for name, module in tuple(sys.modules.items()):
     package = name.split('.')[0]

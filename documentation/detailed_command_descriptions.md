@@ -11,7 +11,6 @@
    - [MOVE_ARM_RELATIVE](#movearmrelative)
 3. [Navigation & Mobility Commands](#navigation--mobility-commands)
    - [STAND_UP](#standup)
-   - [STOP_BASE](#stopbase)
    - [MOVE_TO_WAYPOINT](#movetowaypoint)
    - [MOVE_BASE_TO_TAG](#movebasetotag)
    - [MOVE_BASE_RELATIVE](#movebaserelative)
@@ -30,7 +29,8 @@
 6. [System & Utility Commands](#system--utility-commands)
    - [WAIT_TIME](#waittime)
    - [EMERGENCY_CANCEL](#emergencycancel)
-   - [ESTOP_STATE](#estopstate)
+   - [RESET_SOFTWARE_STOP](#resetsoftwarestop)
+   - [RECOVER_ARM](#recoverarm)
 
 ---
 
@@ -131,14 +131,10 @@
 - **Feedback:** `RUNNING` during transition, `SUCCESS` when standing.
 - **Errors:** Fails if the robot cannot stand or is obstructed.
 
-### STOP_BASE
-- **Category:** Navigation
-- **Description:** Immediately stops the robot base by publishing zero velocity commands.
-- **Parameters:** None.
-- **Preconditions:** None.
-- **Effects:** `cmd_vel` is set to linear: 0.0, angular: 0.0.
-- **Feedback:** Always returns `SUCCESS`.
-- **Errors:** None.
+The former `STOP_BASE` command and public intent 7 are retired. Use the
+[latched software stop](#emergencycancel), which cancels command owners and
+requires fresh stationary feedback. Publishing one zero velocity message did
+not establish that the base had stopped.
 
 ### MOVE_TO_WAYPOINT
 - **Category:** Navigation
@@ -160,7 +156,7 @@
 - **Preconditions:** Tag must be visible to the robot cameras.
 - **Effects:** Robot drives to position itself relative to the tag.
 - **Obstacle Avoidance:** If an obstacle (e.g., a person) enters the robot's path or the target zone, the robot will actively avoid collision and subsequently attempt to return to the target path.
-  - **Note:** If this automatic recovery is not desired (i.e., you want the robot to stop immediately upon obstruction), use the `ESTOP_STATE` command to disable motion.
+  - **Software stop:** Use `EMERGENCY_CANCEL` to latch admission and request cancellation. Motion remains blocked until stopping is confirmed and an operator explicitly resets the latch. This is separate from the robot safety E-stop.
 - **Feedback:** "Moving base to tag {id}".
 - **Errors:** Fails if tag is not visible.
 
@@ -174,7 +170,7 @@
 - **Preconditions:** Nav/Locomotion system active.
 - **Effects:** Robot moves by the delta specified.
 - **Obstacle Avoidance:** If an obstacle (e.g., a person) enters the robot's path or the target zone, the robot will actively avoid collision and subsequently attempt to return to the target path.
-  - **Note:** If this automatic recovery is not desired (i.e., you want the robot to stop immediately upon obstruction), use the `ESTOP_STATE` command to disable motion.
+  - **Software stop:** Use `EMERGENCY_CANCEL` to latch admission and request cancellation. Motion remains blocked until stopping is confirmed and an operator explicitly resets the latch. This is separate from the robot safety E-stop.
 - **Feedback:** "Executing relative base move".
 - **Errors:** Fails if path is blocked.
 
@@ -305,20 +301,37 @@
 - **Errors:** None.
 
 ### EMERGENCY_CANCEL
+
 - **Category:** System
-- **Description:** Triggers a high-priority cancellation of all active movements and behaviors.
+- **Description:** Latches the application software stop (`cancel_all`), separately from the robot safety E-stop.
 - **Parameters:** None.
 - **Preconditions:** None.
-- **Effects:** Stops base, arms, and resets behavior tree state.
-- **Feedback:** "Emergency Cancel Triggered".
-- **Errors:** None.
+- **Effects:** Blocks normal admission, discards queued commands and playback, and requests cancellation from physical and sensor acquisition owners. Repeated requests remain latched. The stop path does not stow the arm, close the gripper, cut motor power or reset the latch. Interrupted measurements retain their samples and cancelled or failed metadata.
+- **Feedback:** `STOP_REQUESTED`, `STOP_UNCONFIRMED` or `STOP_CONFIRMED`; the aggregate latch and stop evidence are published as `SoftwareStopState` on `fault_detector/application/software_stop_state`.
+- **Errors:** Missing or failed cancellation acknowledgement, unresolved ownership or missing stationary feedback keeps motion blocked. A single zero `Twist` is not proof of stopping.
+- **Public interface:** `fault_detector/application/emergency_stop`; service acceptance confirms the request, not physical stopping.
 
-### ESTOP_STATE
+### RESET_SOFTWARE_STOP
+
 - **Category:** System
-- **Description:** Toggles or checks the software E-Stop state of the robot.
-- **Parameters:**
-  - `state` (string/bool): "SET" or "RELEASE".
-- **Preconditions:** None.
-- **Effects:** Cuts motor power or allows power depending on state.
-- **Feedback:** "E-Stop Set" or "E-Stop Released".
-- **Errors:** None.
+- **Description:** Explicitly resets the software stop after confirmed stopping (`reset_software_stop`).
+- **Parameters:** None.
+- **Preconditions:** Every physical and acquisition owner has confirmed stopping; unresolved ownership prevents reset.
+- **Effects:** Reopens normal command admission only after the execution owner acknowledges reset. It requests no movement and never replays discarded commands, playback or acquisition. A new stop supersedes an in-flight reset.
+- **Feedback:** The authoritative `SoftwareStopState` reports the cleared latch after confirmation.
+- **Public interface:** `fault_detector/application/reset_software_stop` (`ResetSoftwareStop`).
+
+### RECOVER_ARM
+
+- **Category:** System
+- **Description:** Performs a separately requested, guarded arm stow after software-stop reset (`recover_arm`).
+- **Parameters:** None.
+- **Preconditions:** Confirmed stopping, reset software-stop latch, quiet base command sources, confirmed bare-hand attachment, a fresh measured arm pose and enabled environment collision policy are revalidated.
+- **Effects:** Stows the arm without closing the gripper. Recovery is excluded from recording and automatic playback.
+- **Errors:** Recovery with an attached sensor is rejected because its native-stow clearance has not been established. Missing stop, attachment, pose or collision-policy evidence rejects recovery.
+- **Public interface:** `OperationalIntent.INTENT_RECOVER_ARM` through the normal application command controller.
+
+The former `ESTOP_STATE` / `estop_state` identifier and implicit reset-and-recovery
+operation are retired and rejected. Historical command examples or recordings
+containing obsolete identifiers must be updated to the supported explicit
+operations; they are not automatically translated into motion.

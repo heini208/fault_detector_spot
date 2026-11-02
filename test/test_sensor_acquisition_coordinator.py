@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import SensorAcquisitionState as StateMessage
 from nav_msgs.msg import Odometry
@@ -164,6 +165,63 @@ def test_offline_head_skips_without_creating_files(tmp_path):
     node.destroy_client.assert_not_called()
 
 
+def test_latched_software_stop_blocks_every_coordinator_start_entry(tmp_path):
+    coordinator, _, _, client, _, _ = make_coordinator(tmp_path)
+    coordinator.latch_software_stop()
+    with pytest.raises(RuntimeError, match="Software stop is latched"):
+        coordinator.start(request())
+    assert not client.call_async.called
+    assert not tuple(tmp_path.rglob("metadata.json"))
+    coordinator.reset_software_stop()
+    assert coordinator.start(request()).status is SensorAcquisitionStatus.STARTING
+
+
+def test_software_stop_during_preparation_prevents_sensor_start_and_retains_cancelled_metadata(
+    tmp_path, monkeypatch,
+):
+    coordinator, repository, _, client, _, _ = make_coordinator(tmp_path)
+    create_sources = coordinator._create_sources
+
+    def stop_during_preparation(*args):
+        create_sources(*args)
+        coordinator.latch_software_stop()
+
+    monkeypatch.setattr(coordinator, "_create_sources", stop_during_preparation)
+    coordinator.start(request())
+
+    assert coordinator.recording_stopped
+    assert coordinator.software_stop_latched
+    assert not client.call_async.called
+    saved = repository.load(
+        object_id="motor_01", routine_id="magnetic_scan", probe_point_id="bearing_front",
+        sensor_id="bmm150_probe", started_at_ns=START_NS,
+    )
+    assert saved.completion_state is MeasurementCompletionState.CANCELLED
+    assert saved.sample_counts["magnetic_field"] == 0
+
+
+@pytest.mark.parametrize("ordinary_stop_started", [False, True])
+def test_latch_alone_preserves_cancelled_metadata_when_head_ack_overtakes_abort_callback(
+    tmp_path, ordinary_stop_started,
+):
+    coordinator, repository, _, _, started, stopped = make_coordinator(tmp_path)
+    coordinator.start(request())
+    complete(started)
+    coordinator._session.sources[0]._receive_message(MagneticField())
+    if ordinary_stop_started:
+        coordinator.stop()
+    coordinator.latch_software_stop()
+    if not ordinary_stop_started:
+        coordinator.stop()  # A timer can request ordinary completion before the abort callback runs.
+    complete(stopped)
+    saved = repository.load(
+        object_id="motor_01", routine_id="magnetic_scan", probe_point_id="bearing_front",
+        sensor_id="bmm150_probe", started_at_ns=START_NS,
+    )
+    assert saved.completion_state is MeasurementCompletionState.CANCELLED
+    assert saved.sample_counts["magnetic_field"] == 1
+
+
 def test_sample_write_failure_is_preserved_through_source_and_stop(tmp_path, monkeypatch):
     coordinator, repository, node, client, started, stopped = make_coordinator(tmp_path)
     coordinator.start(request())
@@ -250,6 +308,63 @@ def test_failed_sensor_stop_cannot_be_cleared_to_allow_a_retry(tmp_path):
     assert coordinator.stop().status is SensorAcquisitionStatus.FAILED
     with pytest.raises(RuntimeError, match="stop is unconfirmed"):
         coordinator.start(request())
+
+
+@pytest.mark.parametrize("phase", ["starting", "recording", "stopping", "failed"])
+def test_software_stop_retains_interrupted_measurement_and_requests_shutdown_once(tmp_path, phase):
+    coordinator, repository, _, client, started, stopped = make_coordinator(tmp_path)
+    coordinator.start(request())
+    if phase != "starting":
+        complete(started)
+        coordinator._session.sources[0]._receive_message(MagneticField())
+    if phase == "stopping":
+        coordinator.stop()
+    elif phase == "failed":
+        coordinator.abort_recording()
+
+    coordinator.stop(cancelled=True)
+    coordinator.stop(cancelled=True)
+    assert not coordinator.recording_stopped
+    assert [call.args[0].enabled for call in client.call_async.call_args_list] == [True, False]
+    complete(stopped)
+
+    saved = repository.load(
+        object_id="motor_01", routine_id="magnetic_scan",
+        probe_point_id="bearing_front", sensor_id="bmm150_probe", started_at_ns=START_NS,
+    )
+    assert saved.completion_state is (
+        MeasurementCompletionState.FAILED if phase == "failed"
+        else MeasurementCompletionState.CANCELLED
+    )
+    assert saved.sample_counts["magnetic_field"] == (0 if phase == "starting" else 1)
+    assert coordinator.recording_stopped
+
+
+@pytest.mark.parametrize("ros_nanoseconds", [START_NS, 0, START_NS * 2])
+def test_software_stop_timeout_uses_monotonic_time_and_retains_failed_metadata(
+    tmp_path, monkeypatch, ros_nanoseconds,
+):
+    from rclpy.clock import ClockType
+    from fault_detector_spot.application.coordinators import sensor_acquisition_coordinator as module
+
+    now = [100.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    coordinator, repository, node, _, _, _ = make_coordinator(tmp_path)
+    assert node.create_timer.call_args.kwargs["clock"].clock_type == ClockType.STEADY_TIME
+    coordinator.start(request())
+    coordinator.stop(cancelled=True)
+    node.get_clock.return_value.now.return_value.nanoseconds = ros_nanoseconds
+    now[0] += coordinator.STOP_TIMEOUT_SEC
+    coordinator._tick()
+
+    assert not coordinator.recording_stopped
+    assert coordinator.snapshot().status is SensorAcquisitionStatus.FAILED
+    assert "Timed out" in coordinator.snapshot().detail
+    saved = repository.load(
+        object_id="motor_01", routine_id="magnetic_scan",
+        probe_point_id="bearing_front", sensor_id="bmm150_probe", started_at_ns=START_NS,
+    )
+    assert saved.completion_state is MeasurementCompletionState.FAILED
 
 
 def test_timeout_timer_survives_finish_and_is_reused(tmp_path):

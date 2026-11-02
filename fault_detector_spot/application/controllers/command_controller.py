@@ -72,6 +72,19 @@ class CommandExecutionStatus:
     execution_idle: bool = False
     execution_instance_id: str = ""
     status_sequence: int = 0
+    software_stop_latched: bool = False
+    software_stop_confirmed: bool = False
+
+
+@dataclass(frozen=True)
+class SoftwareStopStatus:
+    """Application-owned latch; confirmation aggregates all execution owners."""
+
+    request_id: str = ""
+    latched: bool = False
+    stop_confirmed: bool = False
+    detail: str = "Software stop is clear"
+    status_sequence: int = 0
 
 
 class DuplicateCommandRequest(ValueError):
@@ -80,6 +93,10 @@ class DuplicateCommandRequest(ValueError):
 
 class CommandExecutionUnresolved(ValueError):
     """Normal admission is blocked until the retained execution is reconciled."""
+
+
+class SoftwareStopLatched(CommandExecutionUnresolved):
+    """Operator reset is required even after all owners confirm stopping."""
 
 
 class UnknownCommandRequest(LookupError):
@@ -144,6 +161,14 @@ class CommandController:
         self._public_status_sequence = 0
         self._last_queue_status = {}
         self._current_cancel_request_id = None
+        self._software_stop = SoftwareStopStatus(status_sequence=1)
+        self._software_stop_listeners = []
+        self._last_stop_publication = monotonic_clock()
+        self._owner_stop_confirmed = False
+        self._stop_participant = None
+        self._participant_stop_confirmed = True
+        self._participant_stop_detail = ""
+        self._reset_request_id = None
         self._queue: Deque[CommandRequest[SemanticCommand]] = deque()
         self._active: Optional[CommandRequest[SemanticCommand]] = None
         self._listeners: List[StatusListener] = []
@@ -160,6 +185,7 @@ class CommandController:
         self._dispatch_request = dispatch_request
         self._dispatch_ready = dispatch_ready
         self._dispatch_emergency_ready = dispatch_ready
+        self._dispatch_reset_ready = dispatch_ready
         self._listener_error_handler = listener_error_handler
 
     @property
@@ -182,6 +208,67 @@ class CommandController:
         with self._emergency_lock:
             return request_id in self._known_request_ids or request_id in self._emergency_request_ids
 
+    @property
+    def software_stop_status(self):
+        with self._emergency_lock:
+            return self._software_stop
+
+    def add_software_stop_listener(self, listener):
+        """Listeners must be nonblocking; stop admission bypasses workflow locks."""
+        if not callable(listener):
+            raise TypeError("Software stop listener must be callable")
+        with self._emergency_lock:
+            if listener not in self._software_stop_listeners:
+                self._software_stop_listeners.append(listener)
+            self._call_listener(listener, self._software_stop)
+
+    def remove_software_stop_listener(self, listener):
+        with self._emergency_lock:
+            if listener in self._software_stop_listeners:
+                self._software_stop_listeners.remove(listener)
+
+    def configure_stop_participant(self, request_stop, query_status, *, reset=None):
+        """Include the existing acquisition owner, including an ongoing recording."""
+        if not callable(request_stop) or not callable(query_status) or (reset is not None and not callable(reset)):
+            raise TypeError("Stop participant callbacks must be callable")
+        with self._emergency_lock:
+            self._stop_participant = (request_stop, query_status, reset)
+            if self._software_stop.latched:
+                self._participant_stop_confirmed = False
+                request_stop(self._current_cancel_request_id)
+
+    def observe_owner_software_stop(self, latched, confirmed=None):
+        """Reconnecting to a latched execution process cannot silently clear it."""
+        if latched and not self.software_stop_status.latched:
+            self.cancel_all(client_id="execution_owner_reconciliation")
+        if confirmed is False:
+            with self._lock:
+                self._owner_stop_confirmed = False
+                for stop in self._stops.values():
+                    stop["owner_confirmed"] = False
+                self._refresh_stop_confirmation_locked()
+
+    def _publish_software_stop_locked(self, *, latched=None, confirmed=None, detail=None):
+        previous = self._software_stop
+        self._software_stop = SoftwareStopStatus(
+            request_id=self._current_cancel_request_id or previous.request_id,
+            latched=previous.latched if latched is None else latched,
+            stop_confirmed=previous.stop_confirmed if confirmed is None else confirmed,
+            detail=previous.detail if detail is None else detail,
+            status_sequence=previous.status_sequence + 1,
+        )
+        self._last_stop_publication = self._monotonic_clock()
+        for listener in tuple(self._software_stop_listeners):
+            self._call_listener(listener, self._software_stop)
+
+    def reset_software_stop(self, client_id="command_controller"):
+        """Request a separately acknowledged, nonmoving owner reset."""
+        return self.submit(CommandRequest.create(
+            SemanticCommand(command_id=CommandID.RESET_SOFTWARE_STOP),
+            client_id=client_id, origin=CommandOrigin.SYSTEM,
+            recording_policy=RecordingPolicy.EXCLUDE,
+        ))
+
     def bind_execution_owner(self, request_id: str, execution_instance_id: str) -> None:
         """Bind before submission; do not take the setup lock on the stop path."""
         if not isinstance(execution_instance_id, str) or not execution_instance_id.strip():
@@ -201,6 +288,10 @@ class CommandController:
         with self._lock:
             with self._emergency_lock:
                 self._retired_execution_instances.add(previous_instance)
+                if self._software_stop.latched:
+                    self._owner_stop_confirmed = False
+                    self._publish_software_stop_locked(confirmed=False,
+                        detail="Execution owner restarted; prior stop evidence is unresolved")
             self._reconcile_emergencies_locked()
             detail = (f"Execution owner changed from {previous_instance} to {current_instance}; "
                       "previous ownership is unresolved, motion admission remains blocked")
@@ -212,6 +303,7 @@ class CommandController:
                 self._emit_locked(self._active, self._active_state, detail)
             for stop in self._stops.values():
                 if self._request_execution_instances.get(stop["request"].request_id) == previous_instance:
+                    stop["owner_confirmed"] = False
                     stop["state"] = CommandControllerState.STOP_UNCONFIRMED
                     self._emit_locked(stop["request"], stop["state"], detail)
 
@@ -220,6 +312,7 @@ class CommandController:
         dispatch_request: DispatchCallback,
         dispatch_ready: Optional[DispatchReady] = None,
         emergency_ready: Optional[DispatchReady] = None,
+        reset_ready: Optional[DispatchReady] = None,
     ) -> None:
         """Attach the execution transport used for future dispatches."""
         if not callable(dispatch_request):
@@ -228,10 +321,13 @@ class CommandController:
             raise TypeError("Dispatch readiness callback must be callable")
         if emergency_ready is not None and not callable(emergency_ready):
             raise TypeError("Emergency readiness callback must be callable")
+        if reset_ready is not None and not callable(reset_ready):
+            raise TypeError("Reset readiness callback must be callable")
         with self._lock:
             self._dispatch_request = dispatch_request
             self._dispatch_ready = dispatch_ready
             self._dispatch_emergency_ready = emergency_ready if emergency_ready is not None else dispatch_ready
+            self._dispatch_reset_ready = reset_ready if reset_ready is not None else dispatch_ready
             self._dispatch_next_locked()
 
     def configure_reconciliation(self, query_status) -> None:
@@ -247,6 +343,7 @@ class CommandController:
             self._dispatch_request = None
             self._dispatch_ready = None
             self._dispatch_emergency_ready = None
+            self._dispatch_reset_ready = None
             self._reconcile_request = None
 
     def add_status_listener(self, listener: StatusListener) -> None:
@@ -298,7 +395,8 @@ class CommandController:
         if not isinstance(busy_message, str) or not busy_message.strip():
             raise ValueError("Busy-lane message must not be empty")
         with self._lock:
-            if self._active is not None or self._queue or self._stops or self._pending_emergencies:
+            if (self._active is not None or self._queue or self._stops or self._pending_emergencies
+                    or (self._software_stop.latched and not self._software_stop.stop_confirmed)):
                 raise RuntimeError(busy_message.strip())
             return action()
 
@@ -306,13 +404,36 @@ class CommandController:
         normalized = self._normalize_request(request)
         if self._is_emergency(normalized):
             return self._submit_emergency(normalized)
+        resetting = normalized.command.command_id is CommandID.RESET_SOFTWARE_STOP
+        with self._emergency_lock:
+            if self._software_stop.latched and not resetting:
+                raise SoftwareStopLatched("Software stop is latched; explicit reset is required before motion")
         with self._lock:
+            if resetting:
+                self._refresh_stop_confirmation_locked()
+                with self._emergency_lock:
+                    if self._reset_request_id is not None:
+                        return self._reset_request_id
+                    if not self._software_stop.latched:
+                        raise ValueError("Software stop is already clear")
+                    if not self._software_stop.stop_confirmed or self._active is not None or self._stops or self._pending_emergencies:
+                        raise CommandExecutionUnresolved("Software stop reset requires confirmed stopping from every owner")
+                    if normalized.request_id in self._known_request_ids or normalized.request_id in self._emergency_request_ids:
+                        raise DuplicateCommandRequest(f"Duplicate request ID: {normalized.request_id}")
+                    # Reserve while validating, so a concurrent stop can veto
+                    # this reset even before ordinary admission callbacks run.
+                    self._reset_request_id = normalized.request_id
             if self._active_state in {CommandControllerState.UNKNOWN, CommandControllerState.STOP_UNCONFIRMED} or any(
                 stop["state"] is CommandControllerState.STOP_UNCONFIRMED for stop in self._stops.values()
             ):
                 raise CommandExecutionUnresolved("Execution ownership is unresolved; normal commands are not admitted")
-            normalized = self._prepare_request_locked(normalized)
+            if not resetting:
+                normalized = self._prepare_request_locked(normalized)
             with self._emergency_lock:
+                if self._software_stop.latched and not resetting:
+                    raise SoftwareStopLatched("Software stop interrupted command admission")
+                if resetting and self._reset_request_id != normalized.request_id:
+                    raise SoftwareStopLatched("A newer software stop interrupted reset admission")
                 if (
                     normalized.request_id in self._known_request_ids
                     or normalized.request_id in self._emergency_request_ids
@@ -337,6 +458,9 @@ class CommandController:
             for request in tuple(self._queue):
                 if request.request_id == normalized_id:
                     self._queue.remove(request)
+                    with self._emergency_lock:
+                        if request.request_id == self._reset_request_id:
+                            self._reset_request_id = None
                     self._emit_locked(
                         request,
                         CommandControllerState.CANCELLED,
@@ -395,7 +519,7 @@ class CommandController:
             self._reconcile_emergencies_locked()
             if status.request_id not in self._stops and (
                 self._active is None or status.request_id != self._active.request_id
-            ):
+            ) and not (self._software_stop.latched and status.request_id == self._current_cancel_request_id):
                 return False
             with self._emergency_lock:
                 expected = self._request_execution_instances.get(status.request_id)
@@ -416,15 +540,16 @@ class CommandController:
                 confirmed = (
                     status.state is CommandControllerState.STOP_CONFIRMED
                     and status.execution_idle and status.buffered_command_count == 0
+                    and not expired
                 )
                 if confirmed:
-                    del self._stops[status.request_id]
-                    self._forget_dispatch_locked(status.request_id)
-                    self._emit_locked(stop["request"], CommandControllerState.STOP_CONFIRMED,
-                                      status.detail, execution_idle=True)
-                    self._complete_cancellation_locked()
+                    stop["owner_confirmed"] = True
+                    self._owner_stop_confirmed = True
+                    self._refresh_stop_confirmation_locked()
                     self._dispatch_next_locked()
                 else:
+                    stop["owner_confirmed"] = False
+                    self._owner_stop_confirmed = False
                     state = (CommandControllerState.STOP_REQUESTED
                              if status.state in {CommandControllerState.RUNNING,
                                                  CommandControllerState.STOP_REQUESTED}
@@ -434,6 +559,18 @@ class CommandController:
                     stop["state"] = state
                     self._emit_locked(stop["request"], state, status.detail or
                                       "Stop is not yet confirmed by the execution owner")
+                    self._refresh_stop_confirmation_locked()
+                return True
+            if self._software_stop.latched and status.request_id == self._current_cancel_request_id:
+                # Keep querying the confirmed stop while latched. Its proof can
+                # be revoked by a new owner observation or loss of liveness.
+                self._owner_stop_confirmed = bool(
+                    status.state is CommandControllerState.STOP_CONFIRMED
+                    and status.execution_idle and status.buffered_command_count == 0
+                    and status.software_stop_latched and status.software_stop_confirmed
+                    and not expired
+                )
+                self._refresh_stop_confirmation_locked()
                 return True
             if self._active is None or status.request_id != self._active.request_id:
                 return False
@@ -449,6 +586,31 @@ class CommandController:
             if terminal and status.execution_idle and status.buffered_command_count == 0 and (
                 not stopping or status.state is CommandControllerState.STOP_CONFIRMED
             ):
+                if request.command.command_id is CommandID.RESET_SOFTWARE_STOP:
+                    with self._emergency_lock:
+                        reset_succeeded = (
+                            status.state is CommandControllerState.SUCCEEDED
+                            and request.request_id == self._reset_request_id
+                            and not status.software_stop_latched and status.software_stop_confirmed
+                            and self._participant_stop_confirmed and not self._pending_emergencies
+                        )
+                        if reset_succeeded and self._stop_participant is not None and self._stop_participant[2] is not None:
+                            try:
+                                self._stop_participant[2]()
+                            except Exception as exception:
+                                reset_succeeded = False
+                                self._participant_stop_confirmed = False
+                                self._participant_stop_detail = f"Acquisition reset is unconfirmed: {exception}"
+                        if reset_succeeded:
+                            previous_stop = self._current_cancel_request_id
+                            self._current_cancel_request_id = None
+                            self._forget_dispatch_locked(previous_stop)
+                            self._publish_software_stop_locked(latched=False, confirmed=True,
+                                detail="Software stop reset confirmed; no motion was started")
+                        elif status.state is CommandControllerState.SUCCEEDED:
+                            status = replace(status, state=CommandControllerState.FAILED,
+                                detail="Software stop remains latched: reset proof is incomplete")
+                        self._reset_request_id = None
                 self._active = None
                 self._active_state = None
                 self._active_acknowledged = False
@@ -493,8 +655,12 @@ class CommandController:
             self._check_liveness_locked()
             self._poll_stops_locked()
             self._query_owners_locked()
+            self._refresh_stop_confirmation_locked()
             self._dispatch_next_locked()
             self._publish_queue_heartbeats_locked()
+            with self._emergency_lock:
+                if self._monotonic_clock() - self._last_stop_publication >= self._reconciliation_interval_sec:
+                    self._publish_software_stop_locked()
 
     def _publish_queue_heartbeats_locked(self):
         """Confirm queue ownership without claiming that execution has started."""
@@ -509,17 +675,55 @@ class CommandController:
     def _forget_dispatch_locked(self, request_id):
         with self._emergency_lock:
             self._unresolved_dispatch_ids.discard(request_id)
+            if self._software_stop.latched and request_id == self._current_cancel_request_id:
+                return
         self._last_reconciled.pop(request_id, None)
         self._last_execution_receipt.pop(request_id, None)
         self._last_execution_sequence.pop(request_id, None)
 
     def _complete_cancellation_locked(self):
+        self._refresh_stop_confirmation_locked()
+
+    def _refresh_stop_confirmation_locked(self):
+        completed_stops = []
         with self._emergency_lock:
-            if self._active is None and not self._stops and not self._pending_emergencies:
-                self._current_cancel_request_id = None
+            if not self._software_stop.latched:
+                return
+            if self._stop_participant is not None:
+                try:
+                    confirmed, detail = self._stop_participant[1](self._current_cancel_request_id)
+                    self._participant_stop_confirmed = bool(confirmed)
+                    self._participant_stop_detail = detail
+                except Exception as exception:
+                    self._participant_stop_confirmed = False
+                    self._participant_stop_detail = f"Acquisition stopping is unconfirmed: {exception}"
+            if self._participant_stop_confirmed:
+                for request_id, stop in tuple(self._stops.items()):
+                    if stop.get("owner_confirmed"):
+                        del self._stops[request_id]
+                        self._forget_dispatch_locked(request_id)
+                        completed_stops.append(stop["request"])
+            confirmed = bool(self._owner_stop_confirmed and self._participant_stop_confirmed
+                and not self._stops and not self._pending_emergencies
+                and (self._active is None or self._active.request_id == self._reset_request_id))
+            detail = ("Stopping confirmed; software stop remains latched until explicit reset" if confirmed
+                      else self._participant_stop_detail if not self._participant_stop_confirmed
+                      else "Software stop latched; execution ownership or physical stopping is unconfirmed")
+            if confirmed != self._software_stop.stop_confirmed or detail != self._software_stop.detail:
+                self._publish_software_stop_locked(confirmed=confirmed, detail=detail)
+        # Ordinary listeners can acquire workflow locks. Never hold the stop
+        # admission lock while delivering their notifications.
+        for request in completed_stops:
+            self._emit_locked(request, CommandControllerState.STOP_CONFIRMED,
+                "Robot and acquisition owners confirmed stopping; software stop remains latched",
+                execution_idle=True)
 
     def _check_liveness_locked(self):
         now = self._monotonic_clock()
+        if self._software_stop.latched:
+            last = self._last_execution_receipt.get(self._current_cancel_request_id)
+            if last is not None and now - last >= self._heartbeat_timeout_sec:
+                self._owner_stop_confirmed = False
         if self._active is not None and self._active_acknowledged:
             last = self._last_execution_receipt.get(self._active.request_id)
             if last is not None and now - last >= self._heartbeat_timeout_sec:
@@ -535,6 +739,8 @@ class CommandController:
             last = self._last_execution_receipt.get(stop["request"].request_id)
             if (last is not None and now - last >= self._heartbeat_timeout_sec
                     and stop["state"] is not CommandControllerState.STOP_UNCONFIRMED):
+                stop["owner_confirmed"] = False
+                self._owner_stop_confirmed = False
                 stop["state"] = CommandControllerState.STOP_UNCONFIRMED
                 self._emit_locked(stop["request"], stop["state"],
                                   "Stop owner liveness expired; stopping remains unconfirmed")
@@ -544,6 +750,9 @@ class CommandController:
             return
         now = self._monotonic_clock()
         request_ids = list(self._stops)
+        if (self._software_stop.latched and self._current_cancel_request_id
+                and self._current_cancel_request_id not in request_ids):
+            request_ids.append(self._current_cancel_request_id)
         if self._active is not None:
             request_ids.append(self._active.request_id)
         for request_id in request_ids:
@@ -609,10 +818,11 @@ class CommandController:
             f"{self._ack_timeout_sec:.1f} s; execution is unknown, lane retained",
         )
 
-    def _dispatch_consumer_ready_locked(self, *, emergency=False) -> bool:
+    def _dispatch_consumer_ready_locked(self, *, emergency=False, resetting=False) -> bool:
         if self._dispatch_request is None:
             return False
-        ready = self._dispatch_emergency_ready if emergency else self._dispatch_ready
+        ready = (self._dispatch_reset_ready if resetting else
+                 self._dispatch_emergency_ready if emergency else self._dispatch_ready)
         if ready is None:
             return True
         try:
@@ -624,7 +834,10 @@ class CommandController:
     def _dispatch_next_locked(self) -> None:
         if self._active is not None or self._stops or self._pending_emergencies or not self._queue:
             return
-        if not self._dispatch_consumer_ready_locked():
+        resetting = self._queue[0].command.command_id is CommandID.RESET_SOFTWARE_STOP
+        if self._software_stop.latched and not resetting:
+            return
+        if not self._dispatch_consumer_ready_locked(resetting=resetting):
             return
         self._active = self._queue.popleft()
         self._active_state = CommandControllerState.QUEUED
@@ -639,12 +852,23 @@ class CommandController:
                 return request.request_id
             if request.request_id in self._known_request_ids:
                 raise DuplicateCommandRequest(f"Duplicate request ID: {request.request_id}")
-            if self._current_cancel_request_id is not None:
+            if self._current_cancel_request_id is not None and self._reset_request_id is None:
                 return self._current_cancel_request_id
             targets = tuple(sorted(self._unresolved_dispatch_ids))
             request = replace(request, stop_request_ids=targets,
                               stop_execution_instance_ids=tuple(self._request_execution_instances.get(key, "") for key in targets))
             self._current_cancel_request_id = request.request_id
+            self._reset_request_id = None
+            self._owner_stop_confirmed = False
+            self._participant_stop_confirmed = self._stop_participant is None
+            self._participant_stop_detail = "Waiting for acquisition abort confirmation"
+            self._publish_software_stop_locked(latched=True, confirmed=False,
+                detail="Software stop latched; cancellation requested, stopping is unconfirmed")
+            if self._stop_participant is not None:
+                try:
+                    self._stop_participant[0](request.request_id)
+                except Exception as exception:
+                    self._participant_stop_detail = f"Acquisition stop request is unconfirmed: {exception}"
             self._emergency_request_ids.add(request.request_id)
             self._emergency_feedback[request.request_id] = []
             sent_at = None
@@ -675,7 +899,7 @@ class CommandController:
                     self._active = None
                     self._active_state = None
                 self._stops[request.request_id] = {
-                    "request": request, "sent_at": sent_at, "acknowledged": False,
+                    "request": request, "sent_at": sent_at, "acknowledged": False, "owner_confirmed": False,
                     "state": CommandControllerState.STOP_UNCONFIRMED if error else CommandControllerState.STOP_REQUESTED,
                 }
                 self._last_reconciled[request.request_id] = self._monotonic_clock()
@@ -722,7 +946,8 @@ class CommandController:
             raise RuntimeError("Command dispatch transport is not configured")
         try:
             with self._emergency_lock:
-                if self._pending_emergencies:
+                if self._pending_emergencies or (self._software_stop.latched
+                        and request.command.command_id is not CommandID.RESET_SOFTWARE_STOP):
                     return
                 self._active_dispatched_monotonic = self._monotonic_clock()
                 self._last_reconciled[request.request_id] = self._active_dispatched_monotonic
@@ -815,4 +1040,6 @@ __all__ = [
     "CommandExecutionStatus",
     "DuplicateCommandRequest",
     "UnknownCommandRequest",
+    "SoftwareStopStatus",
+    "SoftwareStopLatched",
 ]

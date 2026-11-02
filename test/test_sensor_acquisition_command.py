@@ -1,6 +1,6 @@
 """Focused checks for recordable sensor acquisition commands."""
 
-from threading import RLock
+from threading import Event, RLock, Thread
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -21,6 +21,7 @@ from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
     CommandControllerState,
     CommandExecutionStatus,
+    SoftwareStopLatched,
 )
 from fault_detector_spot.application.coordinators.sensor_acquisition_command_handler import (
     SensorAcquisitionCommandHandler,
@@ -108,6 +109,15 @@ class FakeCoordinator:
         self.start_calls = []
         self.start_error = None
         self.stop_error = None
+        self.software_stop_latched = False
+
+    def latch_software_stop(self):
+        self.software_stop_latched = True
+
+    def reset_software_stop(self):
+        if not self.recording_stopped:
+            raise RuntimeError("Sensor acquisition stop is unconfirmed")
+        self.software_stop_latched = False
 
     def add_state_listener(self, listener):
         self.listeners.append(listener)
@@ -162,6 +172,114 @@ def rig(command_id=CommandID.START_SENSOR_RECORDING, *, stopped=False):
     handler = SensorAcquisitionCommandHandler(node, controller, coordinator)
     return SimpleNamespace(request=request, node=node, controller=controller,
                            coordinator=coordinator, handler=handler)
+
+
+def test_global_software_stop_aborts_measurement_after_start_command_completed():
+    env = rig()
+    env.handler.dispatch(env.request)
+    env.node.drain()
+    env.coordinator.set_state(SensorAcquisitionStatus.RECORDING, stopped=False)
+    env.node.drain()
+    assert env.handler._pending_request is None
+    assert env.controller.statuses[-1].state is CommandControllerState.SUCCEEDED
+
+    env.handler.request_software_stop("global-stop")
+    env.handler.request_software_stop("global-stop")
+    assert env.handler.software_stop_status("global-stop")[0] is False
+    assert not env.coordinator.stop_calls
+    env.node.drain()
+    assert env.coordinator.stop_calls == [True]
+    assert not env.handler.software_stop_status("global-stop")[0]
+    with pytest.raises(RuntimeError, match="unconfirmed"):
+        env.handler.reset_software_stop()
+
+    env.coordinator.set_state(SensorAcquisitionStatus.IDLE, stopped=True)
+    env.node.drain()
+    assert env.handler.software_stop_status("global-stop")[0]
+    with pytest.raises(RuntimeError, match="latched"):
+        env.handler.dispatch(env.request)
+    env.handler.reset_software_stop()
+    env.node.drain()
+    assert len(env.coordinator.start_calls) == 1
+    assert env.coordinator.stop_calls == [True]
+    assert not env.handler.software_stop_status("old-stop")[0]
+
+
+def test_software_stop_admission_and_cached_query_do_not_wait_for_workflow_locks():
+    env = rig()
+    held = Event()
+    release = Event()
+    completed = Event()
+
+    def hold_workflow():
+        with env.coordinator.execution_lock, env.handler._lock:
+            held.set()
+            release.wait(3.0)
+
+    def request_stop():
+        env.handler.request_software_stop("global-stop")
+        assert not env.handler.software_stop_status("global-stop")[0]
+        completed.set()
+
+    holder = Thread(target=hold_workflow)
+    stopper = Thread(target=request_stop)
+    holder.start()
+    assert held.wait(1.0)
+    try:
+        stopper.start()
+        assert completed.wait(1.0), "Software stop waited for a workflow lock"
+    finally:
+        release.set()
+        holder.join(2.0)
+        stopper.join(2.0)
+    env.node.drain()
+    assert env.coordinator.stop_calls == [True]
+
+
+def test_software_stop_fences_scheduled_acquisition_without_starting_or_replaying_it():
+    env = rig(stopped=True)
+    env.handler.dispatch(env.request)
+    env.handler.request_software_stop("global-stop")
+    env.node.drain()
+    assert not env.coordinator.start_calls
+    assert env.coordinator.stop_calls == [True]
+    assert env.handler.software_stop_status("global-stop")[0]
+    assert env.controller.statuses[-1].state is CommandControllerState.STOP_CONFIRMED
+    env.handler.reset_software_stop()
+    env.node.drain()
+    assert not env.coordinator.start_calls
+
+
+def test_global_software_stop_failure_remains_latched_without_duplicate_head_requests():
+    env = rig()
+    env.coordinator.stop_error = RuntimeError("head service unavailable")
+    env.handler.request_software_stop("global-stop")
+    env.node.drain()
+    for _ in range(3):
+        env.handler.request_software_stop("global-stop")
+        confirmed, detail = env.handler.software_stop_status("global-stop")
+        assert not confirmed
+        assert "head service unavailable" in detail
+        with pytest.raises(RuntimeError, match="unconfirmed"):
+            env.handler.reset_software_stop()
+    env.node.drain()
+    assert env.coordinator.stop_calls == [True]
+
+
+def test_new_stop_during_reset_supersedes_old_cached_confirmation_without_starting_work():
+    env = rig(stopped=True)
+    env.handler.request_software_stop("first-stop")
+    env.node.drain()
+    assert env.handler.software_stop_status("first-stop")[0]
+    env.handler.request_software_stop("second-stop")
+    assert not env.handler.software_stop_status("first-stop")[0]
+    assert not env.handler.software_stop_status("second-stop")[0]
+    env.node.drain()
+    assert env.handler.software_stop_status("second-stop")[0]
+    assert not env.coordinator.start_calls
+    env.handler.reset_software_stop()
+    env.node.drain()
+    assert not env.coordinator.start_calls
 
 
 @pytest.mark.parametrize("offline", [False, True])
@@ -371,11 +489,13 @@ def test_controller_waits_for_both_local_acquisition_and_emergency_stop_proofs(w
             dispatched.append(request)
 
     controller.configure_dispatch(dispatch)
+    controller.configure_stop_participant(
+        handler.request_software_stop, handler.software_stop_status,
+        reset=handler.reset_software_stop,
+    )
     controller.add_status_listener(statuses.append)
     controller.submit(env.request)
     node.drain()
-    stop_id = controller.cancel_all()
-    controller.poll()
     next_request = CommandRequest.create(
         command=SemanticCommand(CommandID.STAND_UP),
         client_id="test",
@@ -383,6 +503,8 @@ def test_controller_waits_for_both_local_acquisition_and_emergency_stop_proofs(w
         recording_policy=RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE,
     )
     controller.submit(next_request)
+    stop_id = controller.cancel_all()
+    controller.poll()
     node.drain()
     assert coordinator.stop_calls == [True]
     assert controller.active_request_id == env.request.request_id
@@ -404,11 +526,19 @@ def test_controller_waits_for_both_local_acquisition_and_emergency_stop_proofs(w
                      else (confirm_local_stop, confirm_wire_stop))
     first()
     assert [request.request_id for request in dispatched] == [stop_id]
-    assert controller.queued_request_ids == (next_request.request_id,)
+    assert controller.queued_request_ids == ()
     second()
+    controller.poll()
 
-    assert [request.request_id for request in dispatched] == [stop_id, next_request.request_id]
-    assert controller.active_request_id == next_request.request_id
+    assert [request.request_id for request in dispatched] == [stop_id]
+    assert controller.software_stop_status.latched
+    assert controller.software_stop_status.stop_confirmed
+    with pytest.raises(SoftwareStopLatched):
+        controller.submit(CommandRequest.create(
+            command=SemanticCommand(CommandID.STAND_UP), client_id="test",
+            origin=CommandOrigin.OPERATIONAL,
+            recording_policy=RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE,
+        ))
     stopped = [status for status in statuses
                if status.request_id == env.request.request_id
                and status.state is CommandControllerState.STOP_CONFIRMED]

@@ -252,16 +252,17 @@ def test_stop_timeout_retains_running_guard_then_accepts_late_physical_confirmat
     assert not command.stop_unconfirmed and len(starts) == 1
 
 
-@pytest.mark.parametrize("recovery_allowed", [False, True])
-def test_emergency_tree_proves_stop_before_and_after_recovery_motion(monkeypatch, recovery_allowed):
+@pytest.mark.parametrize("confirmation_allowed", [False, True])
+def test_software_stop_tree_never_moves_or_clears_latch(monkeypatch, confirmation_allowed):
     from fault_detector_spot.application.behaviour_tree import runner
 
     monkeypatch.setattr(py_trees.blackboard.Blackboard, "storage", {})
-    command = SimpleNamespace(command_id=CommandID.EMERGENCY_CANCEL, stop_recovery_allowed=recovery_allowed)
+    command = SimpleNamespace(command_id=CommandID.EMERGENCY_CANCEL,
+                              stop_confirmation_allowed=confirmation_allowed)
     py_trees.blackboard.Blackboard.set("last_command", command)
     py_trees.blackboard.Blackboard.set("estop_flag", True)
     events = []
-    confirmations = iter([False, True, False, True])
+    confirmations = iter([False, True])
     resources = SimpleNamespace(
         begin_stop_confirmation=lambda node: events.append("confirm"),
         poll_stop_confirmation=lambda: (next(confirmations), "measured stop"),
@@ -275,7 +276,6 @@ def test_emergency_tree_proves_stop_before_and_after_recovery_motion(monkeypatch
             return Status.SUCCESS
 
     monkeypatch.setattr(runner, "match_command_checker", lambda command_id: Completed("match"))
-    monkeypatch.setattr(runner, "PublishZeroVel", lambda **kwargs: Completed("zero_velocity"))
     monkeypatch.setattr(runner, "StopMapping", lambda *args, **kwargs: Completed("stop_mapping"))
     monkeypatch.setattr(runner, "StowArmBehaviour", lambda **kwargs: Completed("stow"))
     monkeypatch.setattr(runner, "CloseGripperAction", lambda **kwargs: Completed("close"))
@@ -285,19 +285,13 @@ def test_emergency_tree_proves_stop_before_and_after_recovery_motion(monkeypatch
     for leaf in sequence.children:
         leaf.setup(node=object())
     sequence.tick_once()
-    if not recovery_allowed:
+    if not confirmation_allowed:
         assert sequence.status is Status.FAILURE
         assert events == ["match"]
-        assert py_trees.blackboard.Blackboard.get("estop_flag")
-        return
-    assert sequence.status is Status.RUNNING
-    assert events == ["match", "zero_velocity", "confirm"]
-    sequence.tick_once()
-    assert sequence.status is Status.RUNNING
-    assert events == ["match", "zero_velocity", "confirm", "stop_mapping", "stow", "close", "confirm"]
+    else:
+        assert sequence.status is Status.RUNNING
+        assert events == ["match", "confirm"]
+        sequence.tick_once()
+        assert sequence.status is Status.SUCCESS and command.stop_confirmed
+        assert events == ["match", "confirm"]
     assert py_trees.blackboard.Blackboard.get("estop_flag")
-    assert not command.stop_confirmed
-    sequence.tick_once()
-    assert sequence.status is Status.SUCCESS
-    assert command.stop_confirmed
-    assert not py_trees.blackboard.Blackboard.get("estop_flag")
