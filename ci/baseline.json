@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "source_commit": "4cdace340fbe298524b858fb733550952cad86b6",
+  "source_kind": "clean git archive, before Step 5 test/CI changes",
+  "source_archive_sha256": "3c46456bf50a056289faf96012a1daa7b19d5e4707cfd9483aa52c87a04bec00",
+  "fault_detector_msgs_commit": "648911b76bb97ccd668497b5c0fc9dd28384dda0",
+  "environment": {
+    "os": "Ubuntu 22.04.5 amd64",
+    "ros_distribution": "humble",
+    "python": "3.10.12",
+    "provisioning": "existing developer dependency underlay; not a fresh container",
+    "python_versions": {
+      "pytest": "7.3.1",
+      "numpy": "1.21.5",
+      "scipy": "1.8.0",
+      "PyQt5": "5.15.6",
+      "PyYAML": "6.0.2",
+      "bosdyn-api": "5.0.1",
+      "bosdyn-client": "5.0.1",
+      "bosdyn-core": "5.0.1",
+      "bosdyn-mission": "5.0.1"
+    },
+    "spot_wrapper_commit": "8a2cbbd6295cc4c549af4a02d7a19618558c15be",
+    "spot_wrapper_patch": "ci/patches/spot-wrapper-posture.patch",
+    "spot_wrapper_patch_sha256": "a6428e4269b315ecf8f74b6c5eb5b34627e83f9dce6eeebba59d25a9a9601db6",
+    "source_dependencies": {
+      "apriltag": {
+        "commit": "0e16a12dd380fd607e4afd54712ee9b1ffb9ec8f",
+        "status": [
+          "?? test/__pycache__/"
+        ],
+        "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "apriltag_msgs": {
+        "commit": "62a272ac06c7e17da4f2e23de02030c3163e74db",
+        "status": [],
+        "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "apriltag_ros": {
+        "commit": "6071e2fae440c12d80ddbbf0b2d18aeacf64c417",
+        "status": [
+          "?? .idea/"
+        ],
+        "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rtabmap": {
+        "commit": "e321999b1527047dbf52f32d4ad290ff3492ac30",
+        "status": [],
+        "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "rtabmap_ros": {
+        "commit": "2eef2b3231090f0a5cc2e092fd993166157cdd64",
+        "status": [
+          "?? CMakeCache.txt",
+          "?? CMakeFiles/",
+          "?? CPackConfig.cmake",
+          "?? CPackSourceConfig.cmake",
+          "?? Makefile",
+          "?? RTABMapConfig.cmake",
+          "?? RTABMapConfigVersion.cmake",
+          "?? RTABMapTargets.cmake",
+          "?? RTABMap_coreTargets.cmake",
+          "?? RTABMap_guiTargets.cmake",
+          "?? RTABMap_utiliteTargets.cmake",
+          "?? app/",
+          "?? bin/",
+          "?? build/",
+          "?? cmake_install.cmake",
+          "?? cmake_uninstall.cmake",
+          "?? corelib/",
+          "?? examples/",
+          "?? guilib/",
+          "?? install/",
+          "?? install_manifest.txt",
+          "?? log/",
+          "?? tools/",
+          "?? utilite/"
+        ],
+        "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "spot_ros2": {
+        "commit": "77160178c644bd3ce7175e0ab027ee8a8a529088",
+        "status": [
+          " M spot_driver/spot_driver/spot_ros2.py",
+          " M spot_wrapper",
+          "?? ros_utilities/"
+        ],
+        "tracked_patch_sha256": "9cddc9f68be39835fdbc3bbf86479bb859476a2f817c5cf92e1f6f05d4202606"
+      },
+      "synchros2": {
+        "commit": "1186d4cfe87b33fc621a40569e37a336ef0187cb",
+        "status": [],
+        "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "spot_description": {
+        "commit": "156d1802bfb117f219dbfce7597d283d5fabc968",
+        "status": [],
+        "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "spot_wrapper": {
+        "commit": "8a2cbbd6295cc4c549af4a02d7a19618558c15be",
+        "status": [
+          " M spot_wrapper/wrapper.py"
+        ],
+        "tracked_patch_sha256": "a6428e4269b315ecf8f74b6c5eb5b34627e83f9dce6eeebba59d25a9a9601db6"
+      },
+      "spot_moveit_config": {
+        "commit": "75c167591187a293555cde3c73e26295e6c80ac2",
+        "status": [],
+        "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  },
+  "command": "QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m pytest -p no:rerunfailures -q test --ignore=test/test_preview_executor_responsiveness.py",
+  "results": {
+    "passed": 4054,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1
+  },
+  "scope": "complete offline suite, including architecture checks; not node-start integration testing",
+  "dispositions": [
+    {
+      "test": "test/test_copyright.py::test_copyright",
+      "status": "existing skip",
+      "reason": "Template per-file copyright-header audit is deferred; license metadata is checked during installation."
+    },
+    {
+      "test": "test/test_preview_executor_responsiveness.py",
+      "status": "excluded from offline jobs",
+      "reason": "Creates ROS nodes. Requires separately authorized integration execution."
+    },
+    {
+      "check": "repository-wide formatting and PEP 257",
+      "status": "deferred by cleanup scope",
+      "reason": "F and syntax errors are enforced; safety and architecture assertions are retained."
+    }
+  ],
+  "evidence_sha256": {
+    "results.xml": "30e66047ab122a138131ae61f4c64a4b83c9e86e44ee054b09cfcc2623da577c",
+    "results.log": "1cbae6285b3ca805f06b033d46d107ff8f183f98f636534e494c6d9b85579354"
+  },
+  "hosted_ci_status": "Not run: workflow added locally; no Git push or remote execution authorized."
+}

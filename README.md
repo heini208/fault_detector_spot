@@ -207,6 +207,65 @@ matches the static-error scope of `ruff check --select F fault_detector_spot
 launch`, with syntax checks included. Repository-wide formatting and docstring
 style are deferred to a separate cleanup; the template PEP 257 gate is removed.
 
+### 3.3 Automated baseline
+
+The [baseline workflow](.github/workflows/baseline.yml) has two independent jobs:
+
+- **Pure domain:** Python 3.10.12 in an isolated virtual environment, Ruff F,
+  and the explicit [pure test list](ci/pure-tests.txt). The runner rejects ROS
+  and Qt imports even if they are installed; forbidden imports fail rather than
+  becoming skipped tests. It covers controllers, geometry, settings, persistence,
+  and architecture rules.
+- **Humble/Qt:** a fresh Ubuntu 22.04 container, ROS 2 Humble, pinned source
+  dependencies, a copied build of `fault_detector_msgs` and this package,
+  installed-entry-point/data checks, Ruff F, and the complete offline suite with
+  Qt offscreen. It includes the real public-arm routing and stale UI feedback
+  tests, as well as the dedicated force-guard and cancellation suites.
+
+Source commits are pinned in [humble.repos](ci/humble.repos), vendor release
+assets are checksum-verified, and Python dependencies are pinned in
+`ci/requirements-*.txt`. The existing Spot wrapper posture fix is captured in
+[spot-wrapper-posture.patch](ci/patches/spot-wrapper-posture.patch) against its
+pinned upstream revision. The driver-contract tests require that patch; a local
+uncommitted driver checkout is not a CI prerequisite. ROS/Ubuntu apt packages
+remain distribution-resolved. Each run records their exact versions, Python
+package locations, source revisions and working-tree hashes, including resolved
+source dependencies from the micro-ROS build. Apt repositories can change;
+these records make that drift visible rather than claiming a frozen apt image.
+
+The jobs upload logs, JUnit results, build/import evidence and environment
+manifests even on failure. The initial [baseline record](ci/baseline.json)
+identifies the exact clean application commit and explicitly accounts for the
+existing copyright-header skip and node-start integration exclusion. It was
+measured on the developer's supported Humble environment. A first successful
+hosted run is still required to validate fresh dependency provisioning; a local
+build using existing dependencies does not establish that result.
+
+Run the pure job locally without sourcing ROS:
+
+```bash
+python3 -m venv /tmp/fault-detector-pure
+/tmp/fault-detector-pure/bin/python -I -m pip install -r ci/requirements-pure.txt
+/tmp/fault-detector-pure/bin/python -I -m ruff check --select F fault_detector_spot launch
+/tmp/fault-detector-pure/bin/python -I ci/run_pure_tests.py -q
+```
+
+After sourcing the declared Humble dependencies, run the build/import/offline
+job using a new build directory. `CI_PYTHON` defaults to `/usr/bin/python3` and
+can select an isolated Python 3.10 environment. Install
+`ci/requirements-humble.txt` and the pinned, patched wrapper into that interpreter;
+user-site packages are intentionally disabled. CI provisioning performs those
+steps automatically:
+
+```bash
+bash ci/run_humble.sh ../fault_detector_msgs /tmp/fault-detector-build /tmp/fault-detector-results
+```
+
+`ci/provision_humble.sh` installs system packages and is intended for disposable
+CI containers only. Neither job starts ROS nodes. The immediate-baseline fixture
+in `test_arm_movement_executor.py` is limited to that module; dedicated baseline,
+contact-policy and guarded-execution tests retain their real safety behavior.
+
 ---
 
 ## 4. Launching the System

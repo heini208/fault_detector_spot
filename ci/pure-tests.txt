@@ -1,0 +1,26 @@
+# Pure controllers and runtime-settings isolation.
+test/test_runtime_settings_isolation.py
+test/test_pure_import_boundaries.py
+test/test_command_controller.py
+test/test_command_dispatch_readiness.py
+
+# Geometry, models, settings, and persistence.
+test/test_rotation_geometry.py
+test/test_sensor_geometry.py
+test/test_surface_plane_geometry.py
+test/test_active_sensor_probe_geometry.py
+test/test_inspection_models.py
+test/test_inspection_model_contract.py
+test/test_sensor_models.py
+test/test_inspection_repositories.py
+test/test_sensor_repository.py
+test/test_recording_repository.py
+test/test_measurement_repository.py
+test/test_settings_persistence.py
+test/test_sensor_mesh_store.py
+test/test_sensor_attachment_state_store.py
+
+# Static architecture boundaries do not import their ROS or Qt owners.
+test/test_shared_layer_dependencies.py
+test/test_arm_guard_boundary.py
+test/test_inspection_ui_command_state_cleanup.py

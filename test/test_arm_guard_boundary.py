@@ -46,27 +46,6 @@ def _method_source(source, method_name):
     return body
 
 
-def test_application_arm_entries_route_through_guarded_probe():
-    source = _source(EXECUTOR)
-
-    for method_name in ("relative", "absolute"):
-        assert "self._commanded_pose(" in _method_source(source, method_name)
-    assert "self._start_commanded_pose(" in _method_source(source, "_commanded_pose")
-
-    for method_name in (
-        "_start_commanded_pose",
-        "_start_precision_movement",
-        "pose",
-        "probe_pose",
-        "tag_probe",
-        "probe_relative",
-        "orient_to_surface",
-        "orient_to_tag",
-    ):
-        method = _method_source(source, method_name)
-        assert "self.guarded_probe(" in method
-
-
 def test_guarded_probe_reuses_ready_probe_readiness():
     source = _source(EXECUTOR)
     guarded = _method_source(source, "guarded_probe")

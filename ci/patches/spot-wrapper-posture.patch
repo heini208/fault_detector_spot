@@ -1,0 +1,27 @@
+diff --git a/spot_wrapper/wrapper.py b/spot_wrapper/wrapper.py
+index fb295c7..9b020e4 100644
+--- a/spot_wrapper/wrapper.py
++++ b/spot_wrapper/wrapper.py
+@@ -1442,12 +1442,21 @@ class SpotWrapper:
+         self, robot_command: robot_command_pb2.RobotCommand, duration: float = MAX_COMMAND_DURATION
+     ) -> typing.Tuple[bool, str, typing.Optional[int]]:
+         end_time = now_sec() + duration
+-        return self._robot_command(
++        response = self._robot_command(
+             robot_command,
+             end_time_secs=end_time,
+             timesync_endpoint=self._robot.time_sync.endpoint,
+         )
+ 
++        if response[0]:
++            mobility = robot_command.synchronized_command.mobility_command
++            if mobility.HasField("stand_request") or mobility.HasField("sit_request"):
++                self.is_standing = False
++                self.is_sitting = False
++                self.last_stand_command = response[2] if mobility.HasField("stand_request") else None
++                self.last_sit_command = response[2] if mobility.HasField("sit_request") else None
++        return response
++
+     def manipulation_command(self, request):
+         end_time = now_sec() + MAX_COMMAND_DURATION
+         return self._manipulation_request(

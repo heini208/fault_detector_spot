@@ -1,0 +1,36 @@
+# Source dependencies for Ubuntu 22.04 / ROS 2 Humble CI.
+# spot_ros2 is used only for spot_msgs; the driver is not built or started.
+# spot_wrapper requires the adjacent patches/spot-wrapper-posture.patch.
+repositories:
+  fault_detector_msgs:
+    type: git
+    url: https://github.com/heini208/fault_detector_msgs.git
+    version: 648911b76bb97ccd668497b5c0fc9dd28384dda0
+  spot_moveit_config:
+    type: git
+    url: https://github.com/heini208/spot_moveit_config.git
+    version: 75c167591187a293555cde3c73e26295e6c80ac2
+  spot_ros2:
+    type: git
+    url: https://github.com/rai-opensource/spot_ros2.git
+    version: 77160178c644bd3ce7175e0ab027ee8a8a529088
+  spot_description:
+    type: git
+    url: https://github.com/rai-opensource/spot_description.git
+    version: 156d1802bfb117f219dbfce7597d283d5fabc968
+  synchros2:
+    type: git
+    url: https://github.com/rai-opensource/synchros2.git
+    version: 1186d4cfe87b33fc621a40569e37a336ef0187cb
+  spot_wrapper:
+    type: git
+    url: https://github.com/rai-opensource/spot_wrapper.git
+    version: 8a2cbbd6295cc4c549af4a02d7a19618558c15be
+  micro_ros_agent:
+    type: git
+    url: https://github.com/micro-ROS/micro-ROS-Agent.git
+    version: 4d6b873a06b8f5d67ed4faec04b8d76c2c7efdb7
+  micro_ros_msgs:
+    type: git
+    url: https://github.com/micro-ROS/micro_ros_msgs.git
+    version: 100bf269e78da3fe0a58f6531ebe47d6991bd9ab

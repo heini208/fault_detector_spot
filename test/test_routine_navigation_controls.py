@@ -1,6 +1,7 @@
 """Routine navigation uses saved server assignments and queued operations."""
 
 from concurrent.futures import Future
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -289,6 +290,107 @@ def test_launch_and_move_queue_from_saved_assignments_despite_unsaved_drafts(con
     controls.handle_application_state(state)
     assert len(nav._operation_contexts) == 1
     assert nav.handle_set_map()
+
+
+@pytest.mark.parametrize("command_state", [
+    ApplicationCommandState.STATE_RUNNING,
+    ApplicationCommandState.STATE_SUCCEEDED,
+    ApplicationCommandState.STATE_FAILED,
+    ApplicationCommandState.STATE_CANCELLED,
+])
+def test_command_feedback_cannot_complete_authoritative_probe_setup(controls, command_state):
+    state = navigation_state()
+    controls.apply_setup_state(state)
+    nav = controls.routine_navigation_controls
+    assert nav.handle_launch_map()
+    context = controls.ui.execute_operation.call_args.kwargs["context_id"]
+
+    state.state = ProbeSetupState.STATE_RUNNING
+    state.motion_pending = True
+    state.detail = "Probe setup motion in progress"
+    controls.apply_setup_state(state)
+    snapshot = deepcopy(state)
+    setup_status = controls.ui.status_label.text()
+    feedback = ApplicationCommandState(
+        context_id=context, state=command_state,
+        intent=OperationalIntent.INTENT_LAUNCH_ROUTINE_MAP,
+        detail="Navigation command feedback", buffered_command_count=0,
+    )
+
+    controls.handle_application_state(feedback)
+
+    assert nav.status_label.text() == feedback.detail
+    assert controls._probe_setup_state == snapshot
+    assert controls.ui.status_label.text() == setup_status
+    assert not nav.launch_map_button.isEnabled()
+    assert not nav.move_to_waypoint_button.isEnabled()
+    assert not nav.map_dropdown.isEnabled()
+    assert controls.ui.requests == []
+    controls.ui.execute_operation.assert_called_once()
+
+
+@pytest.mark.parametrize("scope_field", ["selected_object_id", "selected_routine_id"])
+def test_previous_selection_command_feedback_preserves_current_navigation_status(controls, scope_field):
+    state = navigation_state()
+    controls.apply_setup_state(state)
+    nav = controls.routine_navigation_controls
+    assert nav.handle_launch_map()
+    old_context = controls.ui.execute_operation.call_args.kwargs["context_id"]
+    setattr(state, scope_field, "other")
+    collection = state.object_ids if scope_field == "selected_object_id" else state.routine_ids
+    collection.append("other")
+    controls.apply_setup_state(state)
+    assert nav.handle_move_to_waypoint()
+    current_context = controls.ui.execute_operation.call_args.kwargs["context_id"]
+    current_status = nav.status_label.text()
+    snapshot = deepcopy(state)
+
+    for command_state in (ApplicationCommandState.STATE_RUNNING, ApplicationCommandState.STATE_FAILED):
+        controls.handle_application_state(ApplicationCommandState(
+            context_id=old_context, state=command_state,
+            intent=OperationalIntent.INTENT_LAUNCH_ROUTINE_MAP,
+            detail="Feedback for the previous selection",
+        ))
+        assert nav.status_label.text() == current_status
+        assert controls._probe_setup_state == snapshot
+        assert current_context in nav._operation_contexts
+    assert old_context not in nav._operation_contexts
+
+    controls.handle_application_state(ApplicationCommandState(
+        context_id=current_context, state=ApplicationCommandState.STATE_RUNNING,
+        intent=OperationalIntent.INTENT_MOVE_TO_ROUTINE_WAYPOINT,
+        detail="Current waypoint movement is running",
+    ))
+    assert nav.status_label.text() == "Current waypoint movement is running"
+
+
+@pytest.mark.parametrize("stale_context", ["unrelated", "completed"])
+def test_unrelated_or_completed_feedback_cannot_replace_active_status(controls, stale_context):
+    controls.apply_setup_state(navigation_state())
+    nav = controls.routine_navigation_controls
+    assert nav.handle_launch_map()
+    completed_context = controls.ui.execute_operation.call_args.kwargs["context_id"]
+    controls.handle_application_state(ApplicationCommandState(
+        context_id=completed_context, state=ApplicationCommandState.STATE_SUCCEEDED,
+        intent=OperationalIntent.INTENT_LAUNCH_ROUTINE_MAP,
+    ))
+    assert completed_context not in nav._operation_contexts
+    assert nav.handle_move_to_waypoint()
+    current_context = controls.ui.execute_operation.call_args.kwargs["context_id"]
+    current_status = nav.status_label.text()
+
+    controls.handle_application_state(ApplicationCommandState(
+        context_id=completed_context if stale_context == "completed" else "unrelated-operation",
+        state=ApplicationCommandState.STATE_FAILED,
+        intent=OperationalIntent.INTENT_LAUNCH_ROUTINE_MAP,
+        detail="Late or unrelated failure",
+    ))
+
+    assert nav.status_label.text() == current_status
+    assert set(nav._operation_contexts) == {current_context}
+    assert nav.launch_map_button.isEnabled()
+    assert nav.move_to_waypoint_button.isEnabled()
+    assert controls.ui.requests == []
 
 
 @pytest.mark.parametrize("field", ["refinement_active", "motion_pending", "queued", "running"])

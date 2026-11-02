@@ -1,0 +1,108 @@
+name: Automated baseline
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: baseline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pure-domain:
+    name: Pure domain / Python 3.10
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.10.12'
+      - name: Install isolated test dependencies
+        run: |
+          python -m venv "$RUNNER_TEMP/pure-venv"
+          "$RUNNER_TEMP/pure-venv/bin/python" -I -m pip install -r ci/requirements-pure.txt
+      - name: Record environment and check static errors
+        run: |
+          "$RUNNER_TEMP/pure-venv/bin/python" -I ci/record_environment.py --output "$RUNNER_TEMP/pure-results"
+          "$RUNNER_TEMP/pure-venv/bin/python" -I -m ruff check --select F fault_detector_spot launch | tee "$RUNNER_TEMP/pure-results/ruff.log"
+      - name: Test without ROS or Qt
+        run: |
+          "$RUNNER_TEMP/pure-venv/bin/python" -I ci/run_pure_tests.py -q \
+            -o "cache_dir=$RUNNER_TEMP/pure-results/cache" \
+            --basetemp="$RUNNER_TEMP/pure-results/tmp" \
+            --junitxml="$RUNNER_TEMP/pure-results/results.xml" | tee "$RUNNER_TEMP/pure-results/tests.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: pure-domain-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/pure-results/*.json
+            ${{ runner.temp }}/pure-results/*.txt
+            ${{ runner.temp }}/pure-results/*.log
+            ${{ runner.temp }}/pure-results/*.xml
+          if-no-files-found: error
+
+  humble-qt:
+    name: Humble / Qt / copied install
+    runs-on: ubuntu-22.04
+    container: ubuntu:22.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      ROS_DISTRO: humble
+      QT_QPA_PLATFORM: offscreen
+      PYTHONNOUSERSITE: '1'
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Bootstrap clean Ubuntu container
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates git python3 python3-pip sudo
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: ros-tooling/setup-ros@2b7b7e10fd30ff131dfb33248ddd71c5ba31dd30 # 0.7.15
+      - name: Install Humble base
+        run: apt-get install -y ros-humble-ros-base
+      - name: Provision pinned dependencies
+        run: |
+          mkdir -p "$RUNNER_TEMP/humble-results"
+          bash ci/provision_humble.sh "$RUNNER_TEMP/dependencies" |& tee "$RUNNER_TEMP/humble-results/provision.log"
+      - name: Build both packages, verify imports, and run offline suite
+        run: |
+          source /opt/ros/humble/setup.bash
+          source "$RUNNER_TEMP/dependencies/install/local_setup.bash"
+          bash ci/run_humble.sh "$RUNNER_TEMP/dependencies/src/fault_detector_msgs" \
+            "$RUNNER_TEMP/application-build" "$RUNNER_TEMP/humble-results"
+      - name: Preserve dependency manifest
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/humble-results"
+          if [[ -d "$RUNNER_TEMP/dependencies/evidence" ]]; then
+            cp -a "$RUNNER_TEMP/dependencies/evidence" "$RUNNER_TEMP/humble-results/dependencies"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: humble-qt-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/humble-results/*.json
+            ${{ runner.temp }}/humble-results/*.txt
+            ${{ runner.temp }}/humble-results/*.log
+            ${{ runner.temp }}/humble-results/*.xml
+            ${{ runner.temp }}/humble-results/dependencies/
+            ${{ runner.temp }}/humble-results/colcon/
+          if-no-files-found: error
