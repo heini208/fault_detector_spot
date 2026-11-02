@@ -4,6 +4,14 @@ from glob import glob
 from setuptools import find_packages, setup
 
 package_name = 'fault_detector_spot'
+
+
+def source_glob(pattern):
+    # Colcon executes setup.py through a build-space symlink. Discover data in
+    # the source tree so obsolete build files cannot re-enter the installation.
+    return glob(pattern, root_dir=os.path.dirname(os.path.realpath(__file__)))
+
+
 setup(
     name=package_name,
     version='0.0.0',
@@ -13,10 +21,10 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml', 'LICENSE']),
         (os.path.join('share', package_name, 'launch'),
-            glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
-        ('share/' + package_name + '/config', glob('config/*.yaml')),
-        ('share/' + package_name + '/config', glob('config/*.rviz')),
-        ('share/' + package_name + '/config', glob('config/*.xml')),
+            source_glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
+        ('share/' + package_name + '/config', source_glob('config/*.yaml')),
+        ('share/' + package_name + '/config', source_glob('config/*.rviz')),
+        ('share/' + package_name + '/config', source_glob('config/*.xml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
