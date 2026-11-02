@@ -434,6 +434,8 @@ class NavigationSetupApi:
             status.detail,
             status.request_id,
         )
+        state.execution_instance_id = status.execution_instance_id
+        state.status_sequence = status.status_sequence
         self._state_publisher.publish(state)
         if not status.request_id:
             return

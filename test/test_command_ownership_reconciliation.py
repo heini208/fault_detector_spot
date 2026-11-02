@@ -17,11 +17,12 @@ from test_command_ros_transport import FakeNode, FakePublisher, make_request
 
 def pipeline():
     now, proof = [0.0], [False]
-    node, ledger = FakeNode(), CommandStatusLedger()
+    node, ledger = FakeNode(auto_discovery=False), CommandStatusLedger()
+    ledger.activate()
     controller = CommandController(monotonic_clock=lambda: now[0])
     states = []
     controller.add_status_listener(states.append)
-    transport = RosCommandTransport(node, controller)
+    transport = RosCommandTransport(node, controller, monotonic_clock=lambda: now[0])
     subscriber = CommandSubscriber(status_ledger=ledger)
     subscriber.node = node
     subscriber.blackboard = SimpleNamespace(command_buffer=[], estop_flag=False,
@@ -32,6 +33,8 @@ def pipeline():
     publisher.node = node
     publisher.blackboard = subscriber.blackboard
     publisher.structured_status_pub = FakePublisher()
+    discovery, future = node.status_client.calls[-1]
+    future.set_result(subscriber.query_status(discovery, GetCommandStatus.Response()))
     return SimpleNamespace(now=now, proof=proof, node=node, controller=controller, states=states,
                            transport=transport, subscriber=subscriber, publisher=publisher,
                            wire=node.publishers['fault_detector/_internal/commands/request'].messages)
@@ -55,7 +58,7 @@ def test_lost_receipts_duplicate_delivery_and_lost_terminal_only_advance_after_o
     # Drop every receipt. The controller retains ownership and queries, without replay.
     p.now[0] = 4.0
     p.controller.poll()
-    assert p.states[-1].state is CommandControllerState.UNKNOWN
+    assert next(status for status in reversed(p.states) if status.request_id == first.request_id).state is CommandControllerState.UNKNOWN
     assert len(p.wire) == 1
     complete_query(p)
     assert p.controller.active_request_id == first.request_id
@@ -111,4 +114,7 @@ def test_stop_fences_a_delayed_original_and_confirms_each_lane_owner():
         assert status.state == CommandStatus.STATE_STOP_CONFIRMED and status.execution_idle
         p.transport.handle_command_status(status)
         assert len(p.wire) == (2 if index == 0 else 3)
+    p.transport._query_status("")
+    complete_query(p)
+    p.controller.poll()
     assert p.controller.active_request_id == later.request_id

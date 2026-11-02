@@ -491,6 +491,16 @@ def build_cancelable_command_tree(
     node: rclpy.node.Node,
 ) -> py_trees.behaviour.Behaviour:
     cancel_check = match_command_checker(CommandID.EMERGENCY_CANCEL)
+    recovery_check = CheckBlackboardVariableValue(
+        name="StopTargetsBelongToThisExecutionInstance",
+        check=ComparisonExpression(
+            variable="last_command",
+            value=True,
+            operator=lambda command, allowed: (
+                getattr(command, "stop_recovery_allowed", False) is allowed
+            ),
+        ),
+    )
     stop_base = PublishZeroVel(name="StopBase")
     stop_mapping = StopMapping(
         get_helper_container(node).rtabmap_runtime,
@@ -522,6 +532,7 @@ def build_cancelable_command_tree(
     )
     cancel_seq.add_children([
         cancel_check,
+        recovery_check,
         stop_base,
         confirm_stop,
         stop_mapping,

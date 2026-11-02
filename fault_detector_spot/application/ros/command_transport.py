@@ -3,6 +3,10 @@
 from dataclasses import replace
 import time
 
+from rclpy.clock import Clock, ClockType
+
+from fault_detector_spot.application.commanding.command_lifecycle import CommandLifecycleConfig
+
 from fault_detector_msgs.msg import (
     CommandRequest as CommandRequestMessage,
     CommandStatus,
@@ -39,12 +43,31 @@ class RosCommandTransport:
         controller_status_topic="fault_detector/_internal/commands/status",
         status_topic="fault_detector/_internal/command_status",
         poll_period_sec=0.1,
+        query_timeout_sec=2.0,
+        monotonic_clock=time.monotonic,
     ):
         if not isinstance(controller, CommandController):
             raise TypeError("Expected a CommandController")
+        limits = CommandLifecycleConfig(poll_period_sec=poll_period_sec,
+                                        query_timeout_sec=query_timeout_sec)
+        if not callable(monotonic_clock):
+            raise TypeError("Monotonic clock must be callable")
+        self._monotonic_clock = monotonic_clock
+        self._query_timeout_sec = limits.query_timeout_sec
+        self._heartbeat_timeout_sec = controller.lifecycle_limits.heartbeat_timeout_sec
+        self._reconciliation_interval_sec = controller.lifecycle_limits.reconciliation_interval_sec
+        self._remote_instance_id = ""
+        self._retired_instances = set()
+        self._remote_last_receipt = None
+        self._remote_status_sequence = 0
+        self._remote_query_sequence = 0
+        self._remote_accepting_commands = False
+        self._last_discovery = None
+        self._request_instances = {}
         self.node = node
         self.controller = controller
         self._local_dispatch = None
+        self._local_query_status = None
         self._local_request_ids = set()
         self._status_queries = {}
         self._closed = False
@@ -79,22 +102,28 @@ class RosCommandTransport:
             10,
         )
         self._poll_timer = node.create_timer(
-            float(poll_period_sec),
-            self.controller.poll,
+            limits.poll_period_sec,
+            self._poll,
+            clock=Clock(clock_type=ClockType.STEADY_TIME),
         )
         self.controller.add_accepted_listener(self._publish_accepted)
         self.controller.add_status_listener(self._publish_controller_status)
         self.controller.configure_dispatch(
             self._dispatch,
             self._dispatch_consumer_ready,
+            emergency_ready=self._emergency_consumer_ready,
         )
         self.controller.configure_reconciliation(self._query_status)
+        self._discover_owner()
 
-    def set_local_dispatch(self, dispatch) -> None:
+    def set_local_dispatch(self, dispatch, *, query_status=None) -> None:
         """Set the optional in-process command handler."""
         if dispatch is not None and not callable(dispatch):
             raise TypeError("Local dispatch must be callable")
+        if query_status is not None and not callable(query_status):
+            raise TypeError("Local status query must be callable")
         self._local_dispatch = dispatch
+        self._local_query_status = query_status
 
     def submit_message(self, message: CommandRequestMessage) -> bool:
         """Validate one ROS submission before it enters the command queue."""
@@ -108,8 +137,16 @@ class RosCommandTransport:
 
     def handle_command_status(self, message: CommandStatus) -> bool:
         """Translate behavior-tree feedback into controller feedback."""
-        if message.request_id in self._local_request_ids:
+        received_at = self._monotonic_clock()
+        if (self._closed or message.request_id in self._local_request_ids
+                or not self._remote_instance_id
+                or message.execution_instance_id != self._remote_instance_id
+                or message.status_sequence <= self._remote_status_sequence):
             return False
+        self._remote_status_sequence = message.status_sequence
+        return self._apply_execution_status(message, received_at)
+
+    def _apply_execution_status(self, message, received_at):
         values = {
             CommandStatus.STATE_RUNNING: CommandControllerState.RUNNING,
             CommandStatus.STATE_SUCCEEDED: CommandControllerState.SUCCEEDED,
@@ -142,7 +179,10 @@ class RosCommandTransport:
                 retry_command=retry_command,
                 continuation_safe=message.continuation_safe,
                 execution_idle=message.execution_idle,
-            )
+                execution_instance_id=message.execution_instance_id,
+                status_sequence=message.status_sequence,
+            ),
+            receipt_monotonic=received_at,
         )
 
     def close(self) -> None:
@@ -162,52 +202,124 @@ class RosCommandTransport:
 
     def _dispatch(self, request) -> None:
         if request.command.command_id is CommandID.EMERGENCY_CANCEL:
-            self._publish_dispatch(replace(request, stop_request_ids=tuple(
-                request_id for request_id in request.stop_request_ids
-                if request_id not in self._local_request_ids
-            )))
+            targets = [(key, owner) for key, owner in zip(
+                request.stop_request_ids, request.stop_execution_instance_ids,
+            ) if key not in self._local_request_ids]
+            self._publish_dispatch(replace(
+                request, stop_request_ids=tuple(key for key, _ in targets),
+                stop_execution_instance_ids=tuple(owner for _, owner in targets),
+            ))
             return
         if self._local_dispatch is not None:
-            # Keep ownership local even when a local submission raises after
-            # scheduling work. A BT reply cannot certify that work stopped.
+            # Scheduling may raise after work starts; retain that local ownership.
             self._local_request_ids.add(request.request_id)
             if self._local_dispatch(request):
                 return
             self._local_request_ids.discard(request.request_id)
         self._publish_dispatch(request)
 
+    def _poll(self):
+        if self._closed:
+            return
+        self._discover_owner()
+        self.controller.poll()
+
+    def _discover_owner(self):
+        now = self._monotonic_clock()
+        if self._last_discovery is None or now - self._last_discovery >= self._reconciliation_interval_sec:
+            self._last_discovery = now
+            try:
+                self._query_status("")
+            except Exception as exception:
+                # Discovery failures must not prevent command deadlines ticking.
+                self.node.get_logger().error(f"Execution owner discovery failed: {exception}")
+
     def _query_status(self, request_id):
-        """Recover lost owner feedback without republishing a motion request."""
-        if self._closed or request_id in self._local_request_ids:
+        """Fresh query replies are heartbeats; queries never resend commands."""
+        if self._closed:
+            return
+        if request_id in self._local_request_ids:
+            if self._local_query_status is not None:
+                self._local_query_status(request_id)
             return
         pending = self._status_queries.get(request_id)
-        now = time.monotonic()
+        now = self._monotonic_clock()
         if pending is not None:
-            if now - pending[1] < 3.0:
+            if now - pending[1] < self._query_timeout_sec:
                 return
             self._status_client.remove_pending_request(pending[0])
             self._status_queries.pop(request_id, None)
         if not self._status_client.service_is_ready():
             return
-        future = self._status_client.call_async(GetCommandStatus.Request(request_id=request_id))
+        expected_instance = self._request_instances.get(request_id, "")
+        future = self._status_client.call_async(GetCommandStatus.Request(
+            request_id=request_id, execution_instance_id=expected_instance,
+        ))
         self._status_queries[request_id] = (future, now)
 
         def completed(result_future):
+            received_at = self._monotonic_clock()
             current = self._status_queries.get(request_id)
-            if current is None or current[0] is not result_future:
+            if self._closed or current is None or current[0] is not result_future:
                 return
             self._status_queries.pop(request_id, None)
+            # A late queued reply is not evidence that the owner is alive now.
+            if received_at - current[1] >= self._query_timeout_sec:
+                return
             try:
                 response = result_future.result()
-                if response.status.request_id == request_id:
-                    self.handle_command_status(response.status)
+                status = response.status
+                if status.request_id != request_id or not self._observe_owner(response, received_at):
+                    return
+                if request_id:
+                    self._apply_execution_status(status, received_at)
             except Exception as exception:
                 self.node.get_logger().error(f"Command status query failed: {exception}")
 
         future.add_done_callback(completed)
 
+    def _observe_owner(self, response, received_at):
+        """Only a fresh service response may establish or replace an owner."""
+        status = response.status
+        instance = status.execution_instance_id
+        if not instance or instance in self._retired_instances or status.status_sequence <= 0:
+            return False
+        previous = self._remote_instance_id
+        if previous != instance:
+            # Replies begun before this observation cannot establish boot order.
+            # Invalidate them, including replies from an intermediate restart we
+            # have not seen, and challenge the current owner afresh next time.
+            pending = tuple(self._status_queries.values())
+            self._status_queries.clear()
+            for future, _ in pending:
+                self._status_client.remove_pending_request(future)
+            if previous:
+                self._retired_instances.add(previous)
+            self._remote_instance_id = instance
+            self._remote_status_sequence = 0
+            self._remote_query_sequence = 0
+            self._remote_accepting_commands = False
+            self.controller.execution_owner_changed(previous, instance)
+        if status.status_sequence > self._remote_query_sequence:
+            self._remote_query_sequence = status.status_sequence
+            self._remote_last_receipt = received_at
+        if status.status_sequence > self._remote_status_sequence:
+            self._remote_status_sequence = status.status_sequence
+            self._remote_accepting_commands = bool(
+                response.accepting_commands and not response.unresolved_request_ids
+            )
+        # A deadline-valid query can arrive after a newer topic snapshot. It is
+        # still live owner evidence, but must not replace newer global occupancy;
+        # the controller independently rejects older state for the same request.
+        return True
+
     def _publish_dispatch(self, request) -> None:
-        message = command_request_to_message(request)
+        instance = self._remote_instance_id
+        if not instance:
+            raise RuntimeError("Execution owner has not been discovered")
+        self.controller.bind_execution_owner(request.request_id, instance)
+        self._request_instances[request.request_id] = instance
+        message = command_request_to_message(replace(request, execution_instance_id=instance))
         message.header.stamp = self.node.get_clock().now().to_msg()
         self._dispatch_publisher.publish(message)
         self._log_info(
@@ -228,6 +340,8 @@ class RosCommandTransport:
         message = CommandStatus()
         message.header.stamp = self.node.get_clock().now().to_msg()
         message.request_id = status.request_id
+        message.execution_instance_id = status.execution_instance_id
+        message.status_sequence = status.status_sequence
         message.command_id = status.request.command.command_id.value
         message.state = self._controller_status_state(status.state)
         message.detail = status.detail or status.state.value
@@ -262,6 +376,18 @@ class RosCommandTransport:
         self._controller_status_publisher.publish(status)
 
     def _dispatch_consumer_ready(self) -> bool:
+        return bool(
+            self._remote_accepting_commands and self._remote_last_receipt is not None
+            and self._monotonic_clock() - self._remote_last_receipt < self._heartbeat_timeout_sec
+            and self._emergency_consumer_ready()
+        )
+
+    def _emergency_consumer_ready(self) -> bool:
+        # Loss of the query channel must not prevent an explicit stop attempt.
+        # Dispatch still targets the discovered instance; a replacement rejects
+        # that envelope and neither instance can release the old lane by silence.
+        if not self._remote_instance_id:
+            return False
         get_count = getattr(
             self._dispatch_publisher,
             "get_subscription_count",

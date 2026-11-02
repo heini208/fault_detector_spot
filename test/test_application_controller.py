@@ -50,8 +50,8 @@ class FakeCommandController:
         self.emergency_clients.append(client_id)
         return "emergency-request"
 
-    def emit(self, request, state):
-        status = CommandControllerStatus(request=request, state=state)
+    def emit(self, request, state, **metadata):
+        status = CommandControllerStatus(request=request, state=state, **metadata)
         for listener in tuple(self.listeners):
             listener(status)
 
@@ -105,10 +105,14 @@ def test_status_is_exposed_with_application_operation_identity():
     command_controller.emit(
         operation.request,
         CommandControllerState.RUNNING,
+        execution_instance_id="owner-a",
+        status_sequence=7,
     )
 
     assert statuses[-1].operation == operation
     assert statuses[-1].state is CommandControllerState.RUNNING
+    assert statuses[-1].execution_instance_id == "owner-a"
+    assert statuses[-1].status_sequence == 7
 
 
 def test_uncertain_operation_retains_cancellation_ownership_until_confirmed_stop():

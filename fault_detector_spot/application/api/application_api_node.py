@@ -103,6 +103,7 @@ from fault_detector_spot.navigation.setup.navigation_setup_state_source import (
     NavigationSetupStateSource,
 )
 from fault_detector_spot.inspection.measurement import MeasurementRepository
+from fault_detector_spot.application.commanding.command_lifecycle import CommandLifecycleConfig
 
 
 _TERMINAL_STATES = frozenset({
@@ -131,7 +132,11 @@ class ApplicationApiNode(Node):
         self._lock = RLock()
         self._executions: Dict[str, _OperationExecution] = {}
         self._callback_group = ReentrantCallbackGroup()
+        lifecycle = CommandLifecycleConfig.from_node(self)
         self.command_controller = CommandController(
+            ack_timeout_sec=lifecycle.ack_timeout_sec,
+            heartbeat_timeout_sec=lifecycle.heartbeat_timeout_sec,
+            reconciliation_interval_sec=lifecycle.reconciliation_interval_sec,
             listener_error_handler=(
                 lambda exception: self.get_logger().error(
                     f"Command controller listener failed: {exception}"
@@ -141,6 +146,8 @@ class ApplicationApiNode(Node):
         self.command_transport = RosCommandTransport(
             self,
             self.command_controller,
+            query_timeout_sec=lifecycle.query_timeout_sec,
+            poll_period_sec=lifecycle.poll_period_sec,
         )
         self.application_controller = ApplicationController(
             self.command_controller
@@ -256,7 +263,8 @@ class ApplicationApiNode(Node):
             )
         )
         self.command_transport.set_local_dispatch(
-            self.sensor_acquisition_command_handler.dispatch
+            self.sensor_acquisition_command_handler.dispatch,
+            query_status=self.sensor_acquisition_command_handler.query_status,
         )
         self.probe_setup_motion_state = (
             probe_setup_motion_state_source.ProbeSetupMotionStateSource(self)
@@ -518,6 +526,8 @@ class ApplicationApiNode(Node):
         message.state = self._public_state(status.state)
         message.detail = status.detail or status.state.value
         message.buffered_command_count = status.buffered_command_count
+        message.execution_instance_id = status.execution_instance_id
+        message.status_sequence = status.status_sequence
         return message
 
     def _failure_state(self, execution, detail):

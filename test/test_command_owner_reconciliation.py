@@ -27,7 +27,13 @@ def consumer():
     return result
 
 
-def wire(request):
+def wire(request, owner):
+    instance = owner.status_ledger.execution_instance_id
+    request = replace(request, execution_instance_id=request.execution_instance_id or instance,
+                      stop_execution_instance_ids=tuple(
+                          item or instance for item in
+                          (request.stop_execution_instance_ids or ("",) * len(request.stop_request_ids))
+                      ))
     return command_request_to_message(request)
 
 
@@ -36,15 +42,16 @@ def stop_request(*targets):
                    stop_request_ids=tuple(targets))
 
 
-def read_status(owner, request_id):
-    return owner.query_status(GetCommandStatus.Request(request_id=request_id),
+def read_status(owner, request_id, expected_instance=None):
+    expected = owner.status_ledger.execution_instance_id if expected_instance is None else expected_instance
+    return owner.query_status(GetCommandStatus.Request(request_id=request_id, execution_instance_id=expected),
                               GetCommandStatus.Response()).status
 
 
 def test_duplicate_receipt_and_query_do_not_buffer_or_execute_twice():
     owner = consumer()
     request = semantic_request(CommandID.STAND_UP, "operator")
-    message = wire(request)
+    message = wire(request, owner)
     owner.append_request_to_buffer(message)
     owner.append_request_to_buffer(message)
     assert len(owner.pending_msgs) == 1
@@ -63,7 +70,7 @@ def test_duplicate_receipt_and_query_do_not_buffer_or_execute_twice():
 def test_malformed_duplicate_replays_existing_evidence_without_false_failure(state):
     owner = consumer()
     request = semantic_request(CommandID.STAND_UP, "operator")
-    message = wire(request)
+    message = wire(request, owner)
     owner.append_request_to_buffer(message)
     status = read_status(owner, request.request_id)
     status.state = state
@@ -80,7 +87,7 @@ def test_malformed_duplicate_replays_existing_evidence_without_false_failure(sta
 def test_rejected_new_envelope_is_correlated_nonexecution_evidence():
     owner = consumer()
     request = semantic_request(CommandID.STAND_UP, "operator")
-    message = wire(request)
+    message = wire(request, owner)
     message.client_id = ""
     owner.append_request_to_buffer(message)
     status = read_status(owner, request.request_id)
@@ -93,7 +100,7 @@ def test_rejected_new_envelope_is_correlated_nonexecution_evidence():
 def test_unknown_request_or_restarted_owner_never_claims_idle():
     owner = consumer()
     request = semantic_request(CommandID.STAND_UP, "operator")
-    owner.append_request_to_buffer(wire(request))
+    owner.append_request_to_buffer(wire(request, owner))
     restarted = consumer()
     status = read_status(restarted, request.request_id)
     assert status.state == CommandStatus.STATE_UNKNOWN
@@ -104,16 +111,19 @@ def test_unknown_request_or_restarted_owner_never_claims_idle():
 def test_lost_terminal_delivery_is_recoverable_by_query_and_duplicate():
     owner = consumer()
     request = semantic_request(CommandID.WAIT_TIME, "operator")
-    owner.append_request_to_buffer(wire(request))
+    owner.append_request_to_buffer(wire(request, owner))
     publisher = behavior(Status.SUCCESS, request.command.command_id.value)
     publisher.status_ledger = owner.status_ledger
     publisher.execution_idle = lambda: True
     publisher.blackboard.last_command.request_id = request.request_id
     publisher.update()  # Drop this publication as if transport lost it.
-    owner.append_request_to_buffer(wire(request))
+    owner.append_request_to_buffer(wire(request, owner))
     status = read_status(owner, request.request_id)
     assert status.state == CommandStatus.STATE_SUCCEEDED and status.execution_idle
-    assert owner.request_status_publisher.messages[-1] == status
+    replay = owner.request_status_publisher.messages[-1]
+    assert replay.request_id == status.request_id and replay.state == status.state
+    assert replay.execution_idle and replay.execution_instance_id == status.execution_instance_id
+    assert replay.status_sequence < status.status_sequence
     status.execution_idle = False
     assert read_status(owner, request.request_id).execution_idle  # Query returns a snapshot.
 
@@ -149,11 +159,11 @@ def test_stop_fences_delayed_motion_and_confirms_all_interrupted_identities():
     owner = consumer()
     received = semantic_request(CommandID.STAND_UP, "operator")
     delayed = semantic_request(CommandID.STAND_UP, "operator")
-    owner.append_request_to_buffer(wire(received))
+    owner.append_request_to_buffer(wire(received, owner))
     stop = stop_request(received.request_id, delayed.request_id)
-    owner.append_request_to_buffer(wire(stop))
+    owner.append_request_to_buffer(wire(stop, owner))
     assert not owner.pending_msgs
-    owner.append_request_to_buffer(wire(delayed))
+    owner.append_request_to_buffer(wire(delayed, owner))
     assert not owner.pending_msgs
     assert read_status(owner, delayed.request_id).state == CommandStatus.STATE_STOP_REQUESTED
     publisher = stop_publisher(owner, stop)
@@ -164,7 +174,7 @@ def test_stop_fences_delayed_motion_and_confirms_all_interrupted_identities():
     for request in (received, delayed, stop):
         status = read_status(owner, request.request_id)
         assert status.state == CommandStatus.STATE_STOP_CONFIRMED and status.execution_idle
-        owner.append_request_to_buffer(wire(request))
+        owner.append_request_to_buffer(wire(request, owner))
     assert not owner.pending_msgs and not owner.blackboard.command_buffer
 
 
@@ -172,7 +182,7 @@ def test_stop_fences_delayed_motion_and_confirms_all_interrupted_identities():
 def test_emergency_never_infers_confirmation_from_tree_success(missing_proof):
     owner = consumer()
     request = stop_request()
-    owner.append_request_to_buffer(wire(request))
+    owner.append_request_to_buffer(wire(request, owner))
     publisher = stop_publisher(owner, request)
     if missing_proof == "motion":
         publisher.execution_idle = lambda: False
@@ -189,10 +199,10 @@ def test_emergency_never_infers_confirmation_from_tree_success(missing_proof):
 def test_previous_stop_cannot_confirm_a_new_stop_buffered_during_its_completion():
     owner = consumer()
     first = stop_request()
-    owner.append_request_to_buffer(wire(first))
+    owner.append_request_to_buffer(wire(first, owner))
     publisher = stop_publisher(owner, first)
     second = stop_request(first.request_id)
-    owner.append_request_to_buffer(wire(second))
+    owner.append_request_to_buffer(wire(second, owner))
     publisher.update()
     assert read_status(owner, second.request_id).state == CommandStatus.STATE_STOP_REQUESTED
     assert not read_status(owner, first.request_id).execution_idle
@@ -206,17 +216,17 @@ def test_previous_stop_cannot_confirm_a_new_stop_buffered_during_its_completion(
 
 def test_cached_previous_stop_confirmation_cannot_release_a_new_stop():
     ledger = CommandStatusLedger()
-    first = stop_request()
+    first = replace(stop_request(), execution_instance_id=ledger.execution_instance_id)
     ledger.request_stop(first)
     proof = CommandStatus(request_id=first.request_id,
                           state=CommandStatus.STATE_STOP_CONFIRMED, execution_idle=True)
     ledger.confirm_stop(proof)
-    second = stop_request()
+    second = replace(stop_request(), execution_instance_id=ledger.execution_instance_id)
     ledger.request_stop(second)
     assert ledger.confirm_stop(proof) == []
     assert not ledger.query(second.request_id).execution_idle
     ordinary = semantic_request(CommandID.STAND_UP, "operator")
-    accepted, result = ledger.receive(ordinary)
+    accepted, result = ledger.receive(replace(ordinary, execution_instance_id=ledger.execution_instance_id))
     assert not accepted and result.execution_idle  # Never entered the buffer.
 
 
@@ -242,11 +252,12 @@ def test_stop_timeout_retains_running_guard_then_accepts_late_physical_confirmat
     assert not command.stop_unconfirmed and len(starts) == 1
 
 
-def test_emergency_tree_proves_stop_before_and_after_recovery_motion(monkeypatch):
+@pytest.mark.parametrize("recovery_allowed", [False, True])
+def test_emergency_tree_proves_stop_before_and_after_recovery_motion(monkeypatch, recovery_allowed):
     from fault_detector_spot.application.behaviour_tree import runner
 
     monkeypatch.setattr(py_trees.blackboard.Blackboard, "storage", {})
-    command = SimpleNamespace(command_id=CommandID.EMERGENCY_CANCEL)
+    command = SimpleNamespace(command_id=CommandID.EMERGENCY_CANCEL, stop_recovery_allowed=recovery_allowed)
     py_trees.blackboard.Blackboard.set("last_command", command)
     py_trees.blackboard.Blackboard.set("estop_flag", True)
     events = []
@@ -274,6 +285,11 @@ def test_emergency_tree_proves_stop_before_and_after_recovery_motion(monkeypatch
     for leaf in sequence.children:
         leaf.setup(node=object())
     sequence.tick_once()
+    if not recovery_allowed:
+        assert sequence.status is Status.FAILURE
+        assert events == ["match"]
+        assert py_trees.blackboard.Blackboard.get("estop_flag")
+        return
     assert sequence.status is Status.RUNNING
     assert events == ["match", "zero_velocity", "confirm"]
     sequence.tick_once()

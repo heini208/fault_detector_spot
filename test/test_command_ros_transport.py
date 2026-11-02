@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 from concurrent.futures import Future
+from itertools import count
 
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import CommandStatus
@@ -25,6 +26,21 @@ from fault_detector_spot.application.ros.command_request_adapter import (
 from fault_detector_spot.application.ros.command_transport import (
     RosCommandTransport,
 )
+
+
+OWNER_INSTANCE = "test-bt-owner"
+_sequences = count(1)
+
+
+def owner_status(**kwargs):
+    return CommandStatus(execution_instance_id=OWNER_INSTANCE,
+                         status_sequence=next(_sequences), **kwargs)
+
+
+def query_response(status, *, accepting=None):
+    return SimpleNamespace(status=status,
+                           accepting_commands=status.execution_idle if accepting is None else accepting,
+                           unresolved_request_ids=[] if status.execution_idle or accepting else [status.request_id])
 
 
 class FakePublisher:
@@ -61,7 +77,8 @@ class FakeLogger:
 
 
 class FakeStatusClient:
-    def __init__(self):
+    def __init__(self, auto_discovery=True):
+        self.auto_discovery = auto_discovery
         self.ready = True
         self.calls = []
         self.removed = []
@@ -72,6 +89,8 @@ class FakeStatusClient:
     def call_async(self, request):
         future = Future()
         self.calls.append((request, future))
+        if not request.request_id and self.auto_discovery:
+            future.set_result(query_response(owner_status(), accepting=True))
         return future
 
     def remove_pending_request(self, future):
@@ -79,12 +98,12 @@ class FakeStatusClient:
 
 
 class FakeNode:
-    def __init__(self):
+    def __init__(self, auto_discovery=True):
         self.publishers = {}
         self.subscriptions = {}
         self.timers = []
         self.logger = FakeLogger()
-        self.status_client = FakeStatusClient()
+        self.status_client = FakeStatusClient(auto_discovery)
 
     def create_client(self, _service_type, _service_name):
         return self.status_client
@@ -102,8 +121,9 @@ class FakeNode:
         self.subscriptions[topic] = callback
         return SimpleNamespace(topic=topic)
 
-    def create_timer(self, _period, callback):
+    def create_timer(self, _period, callback, *, clock):
         timer = FakeTimer(callback)
+        timer.clock = clock
         self.timers.append(timer)
         return timer
 
@@ -177,7 +197,7 @@ def test_bt_status_is_translated_back_to_controller_feedback():
     controller.submit(first)
     controller.submit(second)
 
-    running = CommandStatus()
+    running = owner_status()
     running.request_id = first.request_id
     running.state = CommandStatus.STATE_RUNNING
     running.buffered_command_count = 1
@@ -188,7 +208,7 @@ def test_bt_status_is_translated_back_to_controller_feedback():
     assert states[-1].state is CommandControllerState.RUNNING
     assert controller.active_request_id == first.request_id
 
-    succeeded = CommandStatus()
+    succeeded = owner_status()
     succeeded.request_id = first.request_id
     succeeded.state = CommandStatus.STATE_SUCCEEDED
     succeeded.execution_idle = True
@@ -206,7 +226,7 @@ def test_execution_retry_permission_survives_controller_transport():
     RosCommandTransport(node, controller)
     request = make_request(CommandID.MOVE_TO_WAYPOINT)
     controller.submit(request)
-    failed = CommandStatus(request_id=request.request_id,
+    failed = owner_status(request_id=request.request_id,
                            state=CommandStatus.STATE_FAILED, retry_safe=True, execution_idle=True)
     node.subscriptions["fault_detector/_internal/command_status"](failed)
     status = node.publishers["fault_detector/_internal/commands/status"].messages[-1]
@@ -220,7 +240,7 @@ def test_safe_continuation_permission_survives_controller_transport():
     RosCommandTransport(node, controller)
     request = make_request(CommandID.MOVE_TO_WAYPOINT)
     controller.submit(request)
-    failed = CommandStatus(request_id=request.request_id,
+    failed = owner_status(request_id=request.request_id,
                            state=CommandStatus.STATE_FAILED, continuation_safe=True, execution_idle=True)
     node.subscriptions["fault_detector/_internal/command_status"](failed)
     status = node.publishers["fault_detector/_internal/commands/status"].messages[-1]
@@ -331,7 +351,7 @@ def test_failure_replacement_survives_controller_transport_and_invalid_payload_b
         request = make_request(CommandID.WAIT_TIME)
         transport.submit_message(command_request_to_message(request))
         replacement = SemanticCommand(CommandID.WAIT_TIME, wait_time=3.0)
-        failure = CommandStatus(request_id=request.request_id, state=CommandStatus.STATE_FAILED,
+        failure = owner_status(request_id=request.request_id, state=CommandStatus.STATE_FAILED,
                                 retry_safe=True, has_retry_command=True, execution_idle=True,
                                 retry_command=semantic_command_to_message(replacement))
         if invalid:
@@ -376,7 +396,7 @@ def test_read_only_reconciliation_recovers_lost_terminal_without_resending():
     assert query.request_id == first.request_id
     dispatch = node.publishers["fault_detector/_internal/commands/request"].messages
     assert len(dispatch) == 1
-    future.set_result(SimpleNamespace(status=CommandStatus(
+    future.set_result(query_response(owner_status(
         request_id=first.request_id, state=CommandStatus.STATE_SUCCEEDED, execution_idle=True,
     )))
     assert controller.active_request_id == second.request_id
@@ -386,19 +406,19 @@ def test_read_only_reconciliation_recovers_lost_terminal_without_resending():
 def test_unavailable_query_and_missing_owner_history_retain_lane():
     now = [0.0]
     node = FakeNode()
-    node.status_client.ready = False
     controller = CommandController(monotonic_clock=lambda: now[0])
-    RosCommandTransport(node, controller)
+    RosCommandTransport(node, controller, monotonic_clock=lambda: now[0])
+    node.status_client.ready = False
     request = make_request(CommandID.READY_ARM)
     controller.submit(request)
     now[0] = 4.0
     controller.poll()
-    assert not node.status_client.calls
+    assert len(node.status_client.calls) == 1  # Initial owner discovery.
     assert controller.active_request_id == request.request_id
     node.status_client.ready = True
     now[0] = 8.0
     controller.poll()
-    node.status_client.calls[-1][1].set_result(SimpleNamespace(status=CommandStatus(
+    node.status_client.calls[-1][1].set_result(query_response(owner_status(
         request_id=request.request_id, state=CommandStatus.STATE_UNKNOWN,
     )))
     assert controller.active_request_id == request.request_id
@@ -417,7 +437,7 @@ def test_bt_stop_cannot_confirm_a_locally_owned_request():
     wire_stop = node.publishers["fault_detector/_internal/commands/request"].messages[-1]
     assert wire_stop.request_id == stop_id
     assert request.request_id not in wire_stop.stop_request_ids
-    assert not transport.handle_command_status(CommandStatus(
+    assert not transport.handle_command_status(owner_status(
         request_id=request.request_id, state=CommandStatus.STATE_STOP_CONFIRMED, execution_idle=True,
     ))
     assert controller.active_request_id == request.request_id
@@ -434,19 +454,18 @@ def test_query_failure_and_wrong_correlation_never_release_lane():
     assert controller.active_request_id == request.request_id
 
     transport._query_status(request.request_id)
-    node.status_client.calls[-1][1].set_result(SimpleNamespace(status=CommandStatus(
+    node.status_client.calls[-1][1].set_result(query_response(owner_status(
         request_id=make_request(CommandID.READY_ARM).request_id,
         state=CommandStatus.STATE_SUCCEEDED, execution_idle=True,
     )))
     assert controller.active_request_id == request.request_id
 
 
-def test_timed_out_query_is_replaced_and_its_late_reply_is_ignored(monkeypatch):
+def test_timed_out_query_is_replaced_and_its_late_reply_is_ignored():
     now = [0.0]
-    monkeypatch.setattr("fault_detector_spot.application.ros.command_transport.time.monotonic", lambda: now[0])
     node = FakeNode()
     controller = CommandController()
-    transport = RosCommandTransport(node, controller)
+    transport = RosCommandTransport(node, controller, monotonic_clock=lambda: now[0])
     request = make_request(CommandID.READY_ARM)
     controller.submit(request)
     transport._query_status(request.request_id)
@@ -454,8 +473,8 @@ def test_timed_out_query_is_replaced_and_its_late_reply_is_ignored(monkeypatch):
     now[0] = 4.0
     transport._query_status(request.request_id)
     assert node.status_client.removed == [old]
-    assert len(node.status_client.calls) == 2
-    old.set_result(SimpleNamespace(status=CommandStatus(
+    assert len(node.status_client.calls) == 3
+    old.set_result(query_response(owner_status(
         request_id=request.request_id, state=CommandStatus.STATE_SUCCEEDED, execution_idle=True,
     )))
     assert controller.active_request_id == request.request_id

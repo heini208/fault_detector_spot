@@ -17,6 +17,7 @@ from fault_detector_spot.navigation.ros.landmark_feedback import (
 )
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS, LATCHED_QOS
 from fault_detector_spot.ui.ros.setup_state_order import SetupStateOrder
+from fault_detector_spot.ui.ros.command_state_order import CommandStateOrder
 
 
 _RUNTIME_OPERATIONS = frozenset({
@@ -41,6 +42,7 @@ class NavigationSetupClient(QObject):
         self.context_id = ""
         self._last_state_fingerprint = None
         self._state_order = SetupStateOrder()
+        self._command_state_order = CommandStateOrder()
         self._last_map_names = []
         self._goal_handles = {}
         self._action_request_ids = {}
@@ -177,6 +179,8 @@ class NavigationSetupClient(QObject):
             return
         if self.context_id and state.context_id != self.context_id:
             return
+        if not self._command_state_order.accept(state):
+            return False
         if state.state in {
             state.STATE_SUCCEEDED, state.STATE_FAILED, state.STATE_CANCELLED,
             state.STATE_STOP_CONFIRMED,

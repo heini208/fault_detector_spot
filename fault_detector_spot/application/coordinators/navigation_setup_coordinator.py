@@ -73,6 +73,8 @@ class NavigationSetupStatus:
     state: CommandControllerState
     detail: str
     snapshot: NavigationSetupSnapshot
+    execution_instance_id: str = ""
+    status_sequence: int = 0
 
 
 @dataclass
@@ -621,6 +623,8 @@ class NavigationSetupCoordinator:
                 state=status.state,
                 detail=status.detail,
                 snapshot=current,
+                execution_instance_id=status.execution_instance_id,
+                status_sequence=status.status_sequence,
             )
         )
 

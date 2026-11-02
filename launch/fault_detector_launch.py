@@ -66,6 +66,7 @@ def generate_launch_description():
     )
 
     landmark_localization_config = os.path.join(pkg, "config", "landmark_localization.yaml")
+    command_lifecycle_config = os.path.join(pkg, "config", "command_lifecycle.yaml")
 
     close_surface_config = os.path.join(
         pkg,
@@ -202,6 +203,7 @@ def generate_launch_description():
             name="fault_detector_ui",
             output="screen",
             parameters=[
+                command_lifecycle_config,
                 tag_sensing_config,
                 {
                     "use_sim_time": use_sim_time,
@@ -234,6 +236,7 @@ def generate_launch_description():
             name="application_api",
             output="screen",
             parameters=[
+                command_lifecycle_config,
                 tag_sensing_config,
                 landmark_localization_config,
                 {

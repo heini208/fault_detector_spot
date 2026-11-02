@@ -79,6 +79,8 @@ class ProbeSetupMotionStatus:
     state: CommandControllerState
     detail: str
     snapshot: ProbeSetupSnapshot
+    execution_instance_id: str = ""
+    status_sequence: int = 0
 
 
 class ProbeSetupCoordinator:
@@ -1166,6 +1168,8 @@ class ProbeSetupCoordinator:
                 state=status.state,
                 detail=status.detail,
                 snapshot=snapshot,
+                execution_instance_id=status.execution_instance_id,
+                status_sequence=status.status_sequence,
             )
         )
 

@@ -33,13 +33,15 @@ def client(request, monkeypatch):
     return value, received, message_type
 
 
-def state(message_type, revision, code, request="request", context="context"):
+def state(message_type, revision, code, request="request", context="context", owner="", sequence=0):
     message = message_type()
     message.client_id = "ui"
     message.context_id = context
     message.request_id = request
     message.revision = revision
     message.state = code
+    message.execution_instance_id = owner
+    message.status_sequence = sequence
     return message
 
 
@@ -78,7 +80,7 @@ def test_closed_context_cannot_be_resurrected_and_new_context_resets_revision(cl
     adapter._receive_state(old)
     assert adapter.context_id == ""
     assert received == [old]
-    new = state(message_type, 1, message_type.STATE_READY, context="new-context")
+    new = state(message_type, 1, message_type.STATE_READY, request="new-request", context="new-context")
     adapter._receive_state(new)
     assert adapter.context_id == "new-context"
     assert received == [old, new]
@@ -230,3 +232,16 @@ def test_navigation_open_ready_result_releases_pending_close_guard(monkeypatch):
     assert not adapter._goal_handles
     adapter.close()
     adapter._close_client.call_async.assert_called_once()
+
+
+def test_stale_owner_or_sequence_cannot_release_pending_setup_guard(pending_action):
+    adapter, local_id, handles, methods, message_type = pending_action
+    running = state(message_type, 3, message_type.STATE_RUNNING, owner="owner-a", sequence=10)
+    getattr(adapter, methods[2])(local_id, SimpleNamespace(feedback=SimpleNamespace(state=running)))
+    for owner, sequence in (("owner-b", 11), ("owner-a", 9), ("", 12)):
+        stopped = state(message_type, 4, message_type.STATE_STOP_CONFIRMED, owner=owner, sequence=sequence)
+        assert adapter._emit_state(stopped) is False
+        assert local_id in handles
+    stopped = state(message_type, 4, message_type.STATE_STOP_CONFIRMED, owner="owner-a", sequence=11)
+    assert adapter._emit_state(stopped)
+    assert local_id not in handles

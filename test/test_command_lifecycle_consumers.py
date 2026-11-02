@@ -64,18 +64,21 @@ def test_api_action_waits_for_confirmed_stop_and_publishes_uncertainty(kind):
         message_type = ProbeSetupState
     harness._executions = {"request": execution}
 
-    for state in (
+    for sequence, state in enumerate((
         CommandControllerState.UNKNOWN,
         CommandControllerState.STOP_REQUESTED,
         CommandControllerState.STOP_UNCONFIRMED,
         CommandControllerState.STOP_CONFIRMED,
-    ):
+    ), start=1):
         receive(SimpleNamespace(
             operation=operation, request_id="request", operation_code=0,
             state=state, detail=state.value, buffered_command_count=1,
             motion=SimpleNamespace(kind=ProbeMotionKind.MOVE_SAFE_APPROACH), snapshot=object(),
+            execution_instance_id="owner-a", status_sequence=sequence,
         ))
         assert publisher.publish.call_args.args[0].state == getattr(message_type, "STATE_" + state.name)
+        assert publisher.publish.call_args.args[0].execution_instance_id == "owner-a"
+        assert publisher.publish.call_args.args[0].status_sequence == sequence
         assert finished() is (state is CommandControllerState.STOP_CONFIRMED)
         assert harness._executions["request"] is execution
     assert goal.publish_feedback.call_count == 4

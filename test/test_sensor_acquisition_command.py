@@ -2,8 +2,10 @@
 
 from threading import RLock
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
+from rclpy.clock import ClockType
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
@@ -30,8 +32,9 @@ from fault_detector_spot.application.coordinators.sensor_acquisition_coordinator
 
 
 class FakeTimer:
-    def __init__(self, callback):
+    def __init__(self, callback, clock):
         self.callback = callback
+        self.clock = clock
         self.cancelled = False
 
     def cancel(self):
@@ -46,11 +49,14 @@ class FakeNode:
         return object()
 
     def create_timer(self, period, callback, **kwargs):
-        timer = FakeTimer(callback)
+        timer = FakeTimer(callback, kwargs["clock"])
         self.timers.append(timer)
         return timer
 
     def destroy_timer(self, timer):
+        pass
+
+    def destroy_subscription(self, subscription):
         pass
 
     def drain(self):
@@ -65,9 +71,16 @@ class FakeController:
         self.active_request_id = request_id
         self.statuses = []
         self.listeners = []
+        self.owners = {}
+
+    def bind_execution_owner(self, request_id, instance_id):
+        self.owners[request_id] = instance_id
 
     def add_status_listener(self, listener):
         self.listeners.append(listener)
+
+    def remove_status_listener(self, listener):
+        self.listeners.remove(listener)
 
     def handle_execution_status(self, status):
         self.statuses.append(status)
@@ -92,11 +105,15 @@ class FakeCoordinator:
         self.state = start_state
         self.recording_stopped = stopped
         self.stop_calls = []
+        self.start_calls = []
         self.start_error = None
         self.stop_error = None
 
     def add_state_listener(self, listener):
         self.listeners.append(listener)
+
+    def remove_state_listener(self, listener):
+        self.listeners.remove(listener)
 
     def snapshot(self):
         return self.state
@@ -109,6 +126,7 @@ class FakeCoordinator:
                 listener(self.state)
 
     def start(self, request):
+        self.start_calls.append(request)
         self.request = request
         if self.start_error is not None:
             raise self.start_error
@@ -155,9 +173,8 @@ def test_start_command_waits_for_recording_or_completes_offline_skip(offline):
     assert env.coordinator.request.object_id == ""
     assert env.coordinator.request.object_pose_execution is not None
     if not offline:
-        assert [status.state for status in env.controller.statuses] == [
-            CommandControllerState.RUNNING,
-        ]
+        assert all(status.state is CommandControllerState.RUNNING
+                   for status in env.controller.statuses)
         env.coordinator.set_state(SensorAcquisitionStatus.RECORDING, stopped=False)
         env.node.drain()
     assert env.controller.statuses[-1].state is CommandControllerState.SUCCEEDED
@@ -294,6 +311,8 @@ def test_coordinator_callback_reports_only_after_releasing_owner_locks():
         return report(status)
 
     env.controller.handle_execution_status = assert_unlocked
+    env.handler.query_status(env.request.request_id)
+    env.node.drain()
     env.coordinator.set_state(SensorAcquisitionStatus.RECORDING, stopped=False)
     assert env.controller.statuses[-1].state is CommandControllerState.RUNNING
     env.node.drain()
@@ -348,6 +367,7 @@ def test_controller_waits_for_both_local_acquisition_and_emergency_stop_proofs(w
 
     def dispatch(request):
         if not handler.dispatch(request):
+            controller.bind_execution_owner(request.request_id, "test-bt-instance")
             dispatched.append(request)
 
     controller.configure_dispatch(dispatch)
@@ -372,6 +392,8 @@ def test_controller_waits_for_both_local_acquisition_and_emergency_stop_proofs(w
             request_id=stop_id,
             state=CommandControllerState.STOP_CONFIRMED,
             execution_idle=True,
+            execution_instance_id="test-bt-instance",
+            status_sequence=1,
         ))
 
     def confirm_local_stop():
@@ -392,3 +414,160 @@ def test_controller_waits_for_both_local_acquisition_and_emergency_stop_proofs(w
                and status.state is CommandControllerState.STOP_CONFIRMED]
     assert len(stopped) == 1
     assert stopped[0].execution_idle
+
+
+@pytest.mark.parametrize("command_id", [CommandID.START_SENSOR_RECORDING,
+                                       CommandID.STOP_SENSOR_RECORDING])
+def test_local_queries_report_fresh_same_owner_status_without_repeating_work(command_id):
+    env = rig(command_id)
+    env.handler.dispatch(env.request)
+    assert env.controller.owners == {env.request.request_id: env.handler.execution_instance_id}
+    assert not env.coordinator.start_calls and not env.coordinator.stop_calls
+    assert all(timer.clock.clock_type == ClockType.STEADY_TIME for timer in env.node.timers)
+    env.node.drain()
+    start_count, stop_count = len(env.coordinator.start_calls), len(env.coordinator.stop_calls)
+    first = env.controller.statuses[-1]
+    env.coordinator.state = SensorAcquisitionState(
+        env.coordinator.state.status, detail="Waiting for sensor acknowledgement",
+    )
+
+    for _ in range(2):
+        env.handler.query_status(env.request.request_id)
+        assert env.controller.statuses[-1] is first
+        env.node.drain()
+        current = env.controller.statuses[-1]
+        assert current.request_id == first.request_id
+        assert current.state is CommandControllerState.RUNNING
+        assert current.detail == env.coordinator.snapshot().detail
+        assert not current.execution_idle
+        assert current.execution_instance_id == first.execution_instance_id
+        assert current.status_sequence > first.status_sequence
+        first = current
+
+    assert len(env.coordinator.start_calls) == start_count
+    assert len(env.coordinator.stop_calls) == stop_count
+    assert len(env.coordinator.start_calls) + len(env.coordinator.stop_calls) == 1
+
+
+def test_status_query_can_acknowledge_scheduled_work_without_starting_it():
+    env = rig()
+    env.handler.dispatch(env.request)
+    startup = env.node.timers.pop()
+    env.handler.query_status(env.request.request_id)
+    env.node.drain()
+    status = env.controller.statuses[-1]
+    assert status.state is CommandControllerState.RUNNING
+    assert status.detail == "Sensor acquisition command scheduled; awaiting execution"
+    assert not status.execution_idle
+    assert not env.coordinator.start_calls and not env.coordinator.stop_calls
+    startup.callback()
+    env.node.drain()
+    assert len(env.coordinator.start_calls) == 1
+
+
+def test_repeated_queries_and_stop_intent_do_not_repeat_cancellation_or_hide_failure():
+    env = rig()
+    env.handler.dispatch(env.request)
+    env.node.drain()
+    env.controller.request_stop()
+    env.controller.request_stop()
+    env.node.drain()
+    assert env.coordinator.stop_calls == [True]
+    env.coordinator.set_state(SensorAcquisitionStatus.FAILED, stopped=False,
+                              detail="Timed out waiting for the sensor to stop")
+    env.node.drain()
+    previous = env.controller.statuses[-1]
+    for _ in range(3):
+        env.controller.request_stop()
+        env.handler.query_status(env.request.request_id)
+        env.node.drain()
+        current = env.controller.statuses[-1]
+        assert current.state is CommandControllerState.STOP_UNCONFIRMED
+        assert current.detail == previous.detail
+        assert current.status_sequence > previous.status_sequence
+        assert not current.execution_idle
+        previous = current
+    assert env.coordinator.stop_calls == [True]
+    assert env.handler._pending_request is env.request
+
+
+def test_terminal_query_replays_original_evidence_with_fresh_sequence():
+    env = rig(stopped=True)
+    env.handler.dispatch(env.request)
+    env.node.drain()
+    completed = env.controller.statuses[-1]
+    assert completed.state is CommandControllerState.SUCCEEDED
+    assert env.handler._pending_request is None
+    env.coordinator.set_state(SensorAcquisitionStatus.RECORDING, stopped=False)
+    env.node.drain()
+    env.handler.query_status(env.request.request_id)
+    env.node.drain()
+    replay = env.controller.statuses[-1]
+    assert replay.request_id == completed.request_id
+    assert replay.execution_instance_id == completed.execution_instance_id
+    assert replay.status_sequence > completed.status_sequence
+    assert replay.state is completed.state and replay.execution_idle
+    assert replay.detail == completed.detail
+    assert len(env.coordinator.start_calls) == 1
+    assert not env.coordinator.stop_calls
+
+
+def test_new_handler_has_distinct_identity_and_no_old_terminal_evidence():
+    first = rig(stopped=True)
+    first.handler.dispatch(first.request)
+    first.node.drain()
+    restarted = rig()
+    assert UUID(first.handler.execution_instance_id) != UUID(restarted.handler.execution_instance_id)
+    restarted.handler.query_status(first.request.request_id)
+    restarted.node.drain()
+    status = restarted.controller.statuses[-1]
+    assert status.request_id == first.request.request_id
+    assert status.execution_instance_id == restarted.handler.execution_instance_id
+    assert status.state is CommandControllerState.UNKNOWN
+    assert not status.execution_idle
+    assert not restarted.coordinator.start_calls and not restarted.coordinator.stop_calls
+
+
+def test_local_query_is_coalesced_and_close_suppresses_pending_feedback():
+    env = rig()
+    env.handler.dispatch(env.request)
+    env.node.drain()
+    previous = tuple(env.controller.statuses)
+    for _ in range(3):
+        env.handler.query_status(env.request.request_id)
+    assert len(env.node.timers) == 1
+    assert env.node.timers[0].clock.clock_type == ClockType.STEADY_TIME
+    env.handler.close()
+    env.node.drain()
+    env.handler.query_status(env.request.request_id)
+    env.node.drain()
+    assert tuple(env.controller.statuses) == previous
+    assert not env.node.timers
+    assert not env.coordinator.stop_calls
+
+
+def test_superseded_query_snapshot_cannot_emit_a_newer_running_receipt(monkeypatch):
+    env = rig()
+    env.handler.dispatch(env.request)
+    env.node.drain()
+    finish = env.handler._finish
+    interrupted = False
+
+    def fail_before_reporting_snapshot(request_id, state, detail, **kwargs):
+        nonlocal interrupted
+        if not interrupted and state is CommandControllerState.RUNNING:
+            interrupted = True
+            env.coordinator.set_state(SensorAcquisitionStatus.FAILED, stopped=False,
+                                      detail="Sensor transition failed")
+            env.handler._process_acquisition_state()
+        return finish(request_id, state, detail, **kwargs)
+
+    monkeypatch.setattr(env.handler, "_finish", fail_before_reporting_snapshot)
+    previous_count = len(env.controller.statuses)
+    env.handler.query_status(env.request.request_id)
+    env.node.drain()
+    reports = env.controller.statuses[previous_count:]
+    assert reports
+    assert all(status.state is CommandControllerState.UNKNOWN for status in reports)
+    assert all(not status.execution_idle for status in reports)
+    assert len(env.coordinator.start_calls) == 1

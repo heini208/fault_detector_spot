@@ -266,7 +266,7 @@ CI containers only. Neither job starts ROS nodes. The immediate-baseline fixture
 in `test_arm_movement_executor.py` is limited to that module; dedicated baseline,
 contact-policy and guarded-execution tests retain their real safety behavior.
 
-### 3.4 Command uncertainty and stop confirmation
+### 3.4 Command liveness, uncertainty and stop confirmation
 
 An acknowledgement timeout or uncertain submission leaves the original request
 in `UNKNOWN` and retains its command lane. The controller queries the execution
@@ -285,7 +285,35 @@ cannot restart them. Duplicate normal requests return retained owner status
 without running again. Recordings wait for confirmed outcomes; playback does
 not retry or skip an unknown or unconfirmed request.
 
-These states, the explicit idle evidence, the stop fences, and the status query
+Fresh status-query replies also act as owner heartbeats after acknowledgement.
+Each execution process has a unique instance ID, and each reply/publication has
+an increasing sequence. The transport discovers the owner and its occupancy
+before dispatch, binds requests to that instance, and rejects stale feedback.
+Liveness uses local monotonic receipt time and steady timers; paused or jumping
+ROS time does not extend the deadline. Sensor acquisition timestamps retain their
+existing ROS-time validity rules.
+
+`config/command_lifecycle.yaml` supplies positive finite `command.*` limits:
+acknowledgement 3 s, heartbeat 5 s, reconciliation interval 1 s, query timeout
+2 s, and polling period 0.1 s. The application API and UI load these parameters.
+A healthy long operation can run indefinitely while queries keep answering.
+Missing heartbeats enter `UNKNOWN` and reject new normal requests. Previously
+queued work stays held; reconnecting to the same owner reconciles its retained
+status without replaying motion. Repeated cancellation reuses its pending stop
+request instead of starting another recovery sequence.
+
+A replacement execution process cannot certify that the previous process's
+request finished. The original request stays bound to the previous instance,
+and its late feedback is rejected after replacement is observed. A stop targeting
+that previous instance reports `STOP_UNCONFIRMED` and blocks recovery motion.
+There is no automatic reset or release based on an empty replacement ledger;
+physical ownership must be resolved outside this protocol before a new session
+can safely resume. This protocol covers execution-process restart and transient
+client disconnection; it does not persist command ownership across an application
+API process restart. The UI retains pending work and displays uncertainty when
+application updates disappear.
+
+These states, execution identities/sequences, idle evidence, stop fences and status queries
 are part of `fault_detector_msgs`. Rebuild **both** `fault_detector_msgs` and
 `fault_detector_spot` after updating these changes, then source the new install.
 Old and new message installations must not be mixed.

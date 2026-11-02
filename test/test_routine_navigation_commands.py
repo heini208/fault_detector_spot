@@ -79,6 +79,7 @@ def rig(tmp_path):
         routine=routine, repository=repository, maps=maps, database=database,
         artifacts=artifacts, app=app, controller=controller,
         dispatched=dispatched, states=states,
+        status_sequence=0,
     )
 
 
@@ -183,9 +184,12 @@ def submit(rig, operation):
 
 
 def succeed(rig, operation):
+    rig.status_sequence += 1
     rig.controller.handle_execution_status(CommandExecutionStatus(
         request_id=operation.request_id, state=CommandControllerState.SUCCEEDED,
         execution_idle=True,
+        execution_instance_id="routine-navigation-test-owner",
+        status_sequence=rig.status_sequence,
     ))
 
 

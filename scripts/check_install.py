@@ -45,11 +45,15 @@ else:
         manifest = Path(get_package_share_directory(package)) / 'package.xml'
         assert ET.parse(manifest).findtext('version') == '5.0.1', package
     from fault_detector_msgs.action import ExecuteOperation
-    from fault_detector_msgs.msg import SensorHeadGeometry
-    from fault_detector_msgs.srv import EmergencyStop
+    from fault_detector_msgs.msg import SensorHeadGeometry, CommandRequest, CommandStatus
+    from fault_detector_msgs.srv import EmergencyStop, GetCommandStatus
     from rclpy.type_support import check_for_type_support
-    for interface in (SensorHeadGeometry, EmergencyStop, ExecuteOperation):
+    for interface in (SensorHeadGeometry, EmergencyStop, ExecuteOperation,
+                      CommandRequest, CommandStatus, GetCommandStatus):
         check_for_type_support(interface)
+    CommandRequest(execution_instance_id='install-check', stop_execution_instance_ids=[])
+    CommandStatus(execution_instance_id='install-check', status_sequence=1)
+    GetCommandStatus.Request(request_id='', execution_instance_id='')
 for name, module in tuple(sys.modules.items()):
     package = name.split('.')[0]
     if package in prefixes and getattr(module, '__file__', None):

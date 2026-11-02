@@ -27,7 +27,7 @@ class FakeNode:
         return FakeLogger()
 
 
-def wire_request(command_id):
+def wire_request(command_id, instance):
     request = CommandRequest.create(
         command=SemanticCommand(command_id=command_id),
         client_id="test_client",
@@ -37,6 +37,7 @@ def wire_request(command_id):
         ),
     )
     message = command_request_to_message(request)
+    message.execution_instance_id = instance
     message.header.stamp.sec = 42
     return message
 
@@ -45,8 +46,9 @@ def test_same_transport_timestamp_keeps_distinct_semantic_requests():
     subscriber = CommandSubscriber()
     subscriber.node = FakeNode()
 
-    subscriber.append_request_to_buffer(wire_request(CommandID.STAND_UP))
-    subscriber.append_request_to_buffer(wire_request(CommandID.STOW_ARM))
+    instance = subscriber.status_ledger.execution_instance_id
+    subscriber.append_request_to_buffer(wire_request(CommandID.STAND_UP, instance))
+    subscriber.append_request_to_buffer(wire_request(CommandID.STOW_ARM, instance))
 
     assert len(subscriber.pending_msgs) == 2
     assert all(

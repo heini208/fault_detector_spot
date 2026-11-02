@@ -107,7 +107,7 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             else:
                 messages = [structured_status]
             for message in messages:
-                self.structured_status_pub.publish(message)
+                self.structured_status_pub.publish(self.status_ledger.outgoing_status(message))
             self.last_structured_status = signature
             if structured_status.request_id:
                 self._log_info(

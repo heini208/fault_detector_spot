@@ -54,6 +54,8 @@ class ApplicationOperationStatus:
     state: CommandControllerState
     detail: str
     buffered_command_count: int
+    execution_instance_id: str = ""
+    status_sequence: int = 0
 
 
 class ApplicationController:
@@ -218,6 +220,8 @@ class ApplicationController:
             state=status.state,
             detail=status.detail or status.state.value,
             buffered_command_count=status.buffered_command_count,
+            execution_instance_id=status.execution_instance_id,
+            status_sequence=status.status_sequence,
         )
         for listener in tuple(self._status_listeners):
             listener(application_status)

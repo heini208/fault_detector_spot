@@ -1,6 +1,7 @@
 """Tests for moving to a routine's saved base position."""
 
 import math
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -208,6 +209,7 @@ def test_cancellation_drops_saved_height_after_base_movement():
         origin=CommandOrigin.OPERATIONAL,
         recording_policy=RecordingPolicy.INCLUDE_IF_RECORDING_ACTIVE,
     )
+    cancel = replace(cancel, execution_instance_id=subscriber.status_ledger.execution_instance_id)
     subscriber.trigger_estop(cancel)
 
     manager.update()

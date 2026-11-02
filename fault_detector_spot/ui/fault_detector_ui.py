@@ -40,6 +40,7 @@ from .navigation.controls import NavigationControls
 from .navigation.landmark_feedback import LandmarkFeedbackLabel
 from .recording.controls import RecordingControls
 from .ros.application_client import ApplicationClient
+from fault_detector_spot.application.commanding.command_lifecycle import CommandLifecycleConfig
 from .ros.micro_ros_agent_status_client import MicroRosAgentStatusClient
 from .ros.navigation_setup_client import NavigationSetupClient
 from .ros.probe_setup_client import ProbeSetupClient
@@ -771,7 +772,9 @@ class Fault_Detector_UI(QWidget):
         self.tabs.addTab(self.sensor_controls, "Sensor Mounts")
 
     def init_ros_communication(self):
-        self.application_client = ApplicationClient(self.node)
+        self.application_client = ApplicationClient(
+            self.node, lifecycle=CommandLifecycleConfig.from_node(self.node),
+        )
         self.micro_ros_agent_status_client = MicroRosAgentStatusClient(
             self.node
         )
@@ -1200,10 +1203,8 @@ class Fault_Detector_UI(QWidget):
         if self.application_client is None:
             self._process_application_error("ROS is unavailable")
             return None
-        local_id = self.application_client.execute(intent, context_id)
-        if local_id is not None:
-            self.status_label.setText("Operational request submitted")
-        return local_id
+        self.status_label.setText("Submitting operational request")
+        return self.application_client.execute(intent, context_id)
 
     def handle_simple_operation(self, intent_id):
         intent = OperationalIntent()

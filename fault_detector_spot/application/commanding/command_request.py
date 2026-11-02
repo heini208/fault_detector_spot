@@ -73,6 +73,8 @@ class CommandRequest(Generic[CommandT]):
     recording_policy: RecordingPolicy
     command: CommandT
     stop_request_ids: tuple[str, ...] = ()
+    execution_instance_id: str = ""
+    stop_execution_instance_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         request_id = validate_request_id(self.request_id)
@@ -96,9 +98,18 @@ class CommandRequest(Generic[CommandT]):
         object.__setattr__(self, "context_id", context_id)
         object.__setattr__(self, "origin", origin)
         object.__setattr__(self, "recording_policy", recording_policy)
-        object.__setattr__(self, "stop_request_ids", tuple(
-            dict.fromkeys(validate_request_id(value) for value in self.stop_request_ids)
+        targets = tuple(validate_request_id(value) for value in self.stop_request_ids)
+        if len(set(targets)) != len(targets):
+            raise ValueError("Stop request identities must be unique")
+        object.__setattr__(self, "stop_request_ids", targets)
+        object.__setattr__(self, "execution_instance_id", _optional_text(
+            self.execution_instance_id, "Execution instance ID",
         ))
+        instances = tuple(_optional_text(value, "Stop execution instance ID")
+                          for value in self.stop_execution_instance_ids)
+        if instances and len(instances) != len(self.stop_request_ids):
+            raise ValueError("Stop identities and execution instances must be aligned")
+        object.__setattr__(self, "stop_execution_instance_ids", instances)
 
     @classmethod
     def create(

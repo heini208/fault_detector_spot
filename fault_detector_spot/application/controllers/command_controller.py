@@ -3,11 +3,13 @@
 from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
+from math import isfinite
 from threading import RLock
 import time
 from typing import Callable, Deque, List, Optional, Tuple
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.commanding.command_lifecycle import CommandLifecycleConfig
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
     CommandRequest,
@@ -48,6 +50,8 @@ class CommandControllerStatus:
     continuation_safe: bool = False
     retry_command: SemanticCommand | None = None
     execution_idle: bool = False
+    execution_instance_id: str = ""
+    status_sequence: int = 0
 
     @property
     def request_id(self) -> str:
@@ -66,10 +70,16 @@ class CommandExecutionStatus:
     continuation_safe: bool = False
     retry_command: SemanticCommand | None = None
     execution_idle: bool = False
+    execution_instance_id: str = ""
+    status_sequence: int = 0
 
 
 class DuplicateCommandRequest(ValueError):
     """Raised when a request identity has already been accepted."""
+
+
+class CommandExecutionUnresolved(ValueError):
+    """Normal admission is blocked until the retained execution is reconciled."""
 
 
 class UnknownCommandRequest(LookupError):
@@ -97,6 +107,8 @@ class CommandController:
         monotonic_clock: Callable[[], float] = time.monotonic,
         ack_timeout_sec: float = 3.0,
         listener_error_handler: Optional[ListenerErrorHandler] = None,
+        heartbeat_timeout_sec: float = 5.0,
+        reconciliation_interval_sec: float = 1.0,
     ):
         if dispatch_request is not None and not callable(dispatch_request):
             raise TypeError("Dispatch callback must be callable")
@@ -104,8 +116,10 @@ class CommandController:
             raise TypeError("Dispatch readiness callback must be callable")
         if not callable(monotonic_clock):
             raise TypeError("Monotonic clock must be callable")
-        if ack_timeout_sec <= 0.0:
-            raise ValueError("Acknowledgement timeout must be positive")
+        limits = CommandLifecycleConfig(
+            ack_timeout_sec=ack_timeout_sec, heartbeat_timeout_sec=heartbeat_timeout_sec,
+            reconciliation_interval_sec=reconciliation_interval_sec,
+        )
         if (
             listener_error_handler is not None
             and not callable(listener_error_handler)
@@ -123,6 +137,13 @@ class CommandController:
         self._active_state = None
         self._reconcile_request = None
         self._last_reconciled = {}
+        self._request_execution_instances = {}
+        self._retired_execution_instances = set()
+        self._last_execution_receipt = {}
+        self._last_execution_sequence = {}
+        self._public_status_sequence = 0
+        self._last_queue_status = {}
+        self._current_cancel_request_id = None
         self._queue: Deque[CommandRequest[SemanticCommand]] = deque()
         self._active: Optional[CommandRequest[SemanticCommand]] = None
         self._listeners: List[StatusListener] = []
@@ -131,10 +152,14 @@ class CommandController:
         self._known_request_ids = set()
         self._active_acknowledged = False
         self._active_dispatched_monotonic = None
-        self._ack_timeout_sec = float(ack_timeout_sec)
+        self._ack_timeout_sec = limits.ack_timeout_sec
+        self.lifecycle_limits = limits
+        self._heartbeat_timeout_sec = limits.heartbeat_timeout_sec
+        self._reconciliation_interval_sec = limits.reconciliation_interval_sec
         self._monotonic_clock = monotonic_clock
         self._dispatch_request = dispatch_request
         self._dispatch_ready = dispatch_ready
+        self._dispatch_emergency_ready = dispatch_ready
         self._listener_error_handler = listener_error_handler
 
     @property
@@ -157,19 +182,56 @@ class CommandController:
         with self._emergency_lock:
             return request_id in self._known_request_ids or request_id in self._emergency_request_ids
 
+    def bind_execution_owner(self, request_id: str, execution_instance_id: str) -> None:
+        """Bind before submission; do not take the setup lock on the stop path."""
+        if not isinstance(execution_instance_id, str) or not execution_instance_id.strip():
+            raise ValueError("Execution instance identity is required")
+        with self._emergency_lock:
+            previous = self._request_execution_instances.get(request_id)
+            if previous is not None and previous != execution_instance_id:
+                raise ValueError("An unresolved request cannot change execution instance")
+            if execution_instance_id in self._retired_execution_instances:
+                raise ValueError("Execution instance has retired")
+            self._request_execution_instances[request_id] = execution_instance_id
+
+    def execution_owner_changed(self, previous_instance: str, current_instance: str) -> None:
+        """A freshly queried replacement cannot inherit unresolved execution."""
+        if not previous_instance or previous_instance == current_instance:
+            return
+        with self._lock:
+            with self._emergency_lock:
+                self._retired_execution_instances.add(previous_instance)
+            self._reconcile_emergencies_locked()
+            detail = (f"Execution owner changed from {previous_instance} to {current_instance}; "
+                      "previous ownership is unresolved, motion admission remains blocked")
+            if self._active is not None and self._request_execution_instances.get(self._active.request_id) == previous_instance:
+                self._active_state = (CommandControllerState.STOP_UNCONFIRMED
+                                      if self._active_state in {CommandControllerState.STOP_REQUESTED,
+                                                                CommandControllerState.STOP_UNCONFIRMED}
+                                      else CommandControllerState.UNKNOWN)
+                self._emit_locked(self._active, self._active_state, detail)
+            for stop in self._stops.values():
+                if self._request_execution_instances.get(stop["request"].request_id) == previous_instance:
+                    stop["state"] = CommandControllerState.STOP_UNCONFIRMED
+                    self._emit_locked(stop["request"], stop["state"], detail)
+
     def configure_dispatch(
         self,
         dispatch_request: DispatchCallback,
         dispatch_ready: Optional[DispatchReady] = None,
+        emergency_ready: Optional[DispatchReady] = None,
     ) -> None:
         """Attach the execution transport used for future dispatches."""
         if not callable(dispatch_request):
             raise TypeError("Dispatch callback must be callable")
         if dispatch_ready is not None and not callable(dispatch_ready):
             raise TypeError("Dispatch readiness callback must be callable")
+        if emergency_ready is not None and not callable(emergency_ready):
+            raise TypeError("Emergency readiness callback must be callable")
         with self._lock:
             self._dispatch_request = dispatch_request
             self._dispatch_ready = dispatch_ready
+            self._dispatch_emergency_ready = emergency_ready if emergency_ready is not None else dispatch_ready
             self._dispatch_next_locked()
 
     def configure_reconciliation(self, query_status) -> None:
@@ -184,6 +246,7 @@ class CommandController:
         with self._lock:
             self._dispatch_request = None
             self._dispatch_ready = None
+            self._dispatch_emergency_ready = None
             self._reconcile_request = None
 
     def add_status_listener(self, listener: StatusListener) -> None:
@@ -244,6 +307,10 @@ class CommandController:
         if self._is_emergency(normalized):
             return self._submit_emergency(normalized)
         with self._lock:
+            if self._active_state in {CommandControllerState.UNKNOWN, CommandControllerState.STOP_UNCONFIRMED} or any(
+                stop["state"] is CommandControllerState.STOP_UNCONFIRMED for stop in self._stops.values()
+            ):
+                raise CommandExecutionUnresolved("Execution ownership is unresolved; normal commands are not admitted")
             normalized = self._prepare_request_locked(normalized)
             with self._emergency_lock:
                 if (
@@ -299,8 +366,13 @@ class CommandController:
         )
         return self.submit(request)
 
-    def handle_execution_status(self, status: CommandExecutionStatus) -> bool:
+    def handle_execution_status(self, status: CommandExecutionStatus, *, receipt_monotonic=None) -> bool:
         """Apply correlated owner evidence, never infer stopping from silence."""
+        received_at = self._monotonic_clock()
+        if receipt_monotonic is not None:
+            if isinstance(receipt_monotonic, bool) or not isfinite(receipt_monotonic):
+                raise ValueError("Receipt time must be a finite monotonic reading")
+            received_at = min(received_at, receipt_monotonic)
         if not isinstance(status, CommandExecutionStatus):
             raise TypeError("Expected a CommandExecutionStatus")
         if status.state not in {
@@ -310,15 +382,37 @@ class CommandController:
             CommandControllerState.STOP_CONFIRMED, CommandControllerState.STOP_UNCONFIRMED,
         }:
             return False
+        if (not isinstance(status.execution_instance_id, str) or not status.execution_instance_id
+                or not isinstance(status.status_sequence, int) or isinstance(status.status_sequence, bool)
+                or status.status_sequence <= 0):
+            return False
         with self._emergency_lock:
             feedback = self._emergency_feedback.get(status.request_id)
             if feedback is not None:
-                feedback.append(status)
+                feedback.append((status, received_at))
                 return True
         with self._lock:
             self._reconcile_emergencies_locked()
+            if status.request_id not in self._stops and (
+                self._active is None or status.request_id != self._active.request_id
+            ):
+                return False
+            with self._emergency_lock:
+                expected = self._request_execution_instances.get(status.request_id)
+                if status.execution_instance_id in self._retired_execution_instances or (
+                    expected is not None and status.execution_instance_id != expected
+                ):
+                    return False
+                if expected is None:
+                    self._request_execution_instances[status.request_id] = status.execution_instance_id
+            if status.status_sequence <= self._last_execution_sequence.get(status.request_id, 0):
+                return False
+            self._last_execution_sequence[status.request_id] = status.status_sequence
+            self._last_execution_receipt[status.request_id] = received_at
+            expired = self._monotonic_clock() - received_at >= self._heartbeat_timeout_sec
             stop = self._stops.get(status.request_id)
             if stop is not None:
+                stop["acknowledged"] = True
                 confirmed = (
                     status.state is CommandControllerState.STOP_CONFIRMED
                     and status.execution_idle and status.buffered_command_count == 0
@@ -328,11 +422,13 @@ class CommandController:
                     self._forget_dispatch_locked(status.request_id)
                     self._emit_locked(stop["request"], CommandControllerState.STOP_CONFIRMED,
                                       status.detail, execution_idle=True)
+                    self._complete_cancellation_locked()
                     self._dispatch_next_locked()
                 else:
                     state = (CommandControllerState.STOP_REQUESTED
                              if status.state in {CommandControllerState.RUNNING,
                                                  CommandControllerState.STOP_REQUESTED}
+                             and not expired
                              and stop["state"] is not CommandControllerState.STOP_UNCONFIRMED
                              else CommandControllerState.STOP_UNCONFIRMED)
                     stop["state"] = state
@@ -364,6 +460,7 @@ class CommandController:
                     continuation_safe=status.state is CommandControllerState.FAILED and status.continuation_safe,
                     retry_command=status.retry_command if status.state is CommandControllerState.FAILED else None,
                 )
+                self._complete_cancellation_locked()
                 self._dispatch_next_locked()
                 return True
             if stopping:
@@ -376,8 +473,13 @@ class CommandController:
                 state = CommandControllerState.UNKNOWN
             else:
                 state = status.state
+            if expired and state in {CommandControllerState.RUNNING, CommandControllerState.STOP_REQUESTED}:
+                state = (CommandControllerState.STOP_UNCONFIRMED if stopping
+                         else CommandControllerState.UNKNOWN)
             self._active_state = state
             detail = status.detail
+            if expired:
+                detail += "; owner observation is no longer live, ownership remains unresolved"
             if terminal and state in {CommandControllerState.UNKNOWN, CommandControllerState.STOP_UNCONFIRMED}:
                 detail += "; execution owner has not confirmed this request stopped"
             self._emit_locked(request, state, detail)
@@ -388,14 +490,54 @@ class CommandController:
         with self._lock:
             self._reconcile_emergencies_locked()
             self._check_acknowledgement_locked()
+            self._check_liveness_locked()
             self._poll_stops_locked()
             self._query_owners_locked()
             self._dispatch_next_locked()
+            self._publish_queue_heartbeats_locked()
+
+    def _publish_queue_heartbeats_locked(self):
+        """Confirm queue ownership without claiming that execution has started."""
+        now = self._monotonic_clock()
+        interval = min(self._reconciliation_interval_sec, self._heartbeat_timeout_sec / 2.0)
+        for request in tuple(self._queue):
+            if (request in self._queue
+                    and now - self._last_queue_status.get(request.request_id, now) >= interval):
+                self._emit_locked(request, CommandControllerState.QUEUED,
+                                  self._queued_detail_locked(request))
 
     def _forget_dispatch_locked(self, request_id):
         with self._emergency_lock:
             self._unresolved_dispatch_ids.discard(request_id)
         self._last_reconciled.pop(request_id, None)
+        self._last_execution_receipt.pop(request_id, None)
+        self._last_execution_sequence.pop(request_id, None)
+
+    def _complete_cancellation_locked(self):
+        with self._emergency_lock:
+            if self._active is None and not self._stops and not self._pending_emergencies:
+                self._current_cancel_request_id = None
+
+    def _check_liveness_locked(self):
+        now = self._monotonic_clock()
+        if self._active is not None and self._active_acknowledged:
+            last = self._last_execution_receipt.get(self._active.request_id)
+            if last is not None and now - last >= self._heartbeat_timeout_sec:
+                state = (CommandControllerState.STOP_UNCONFIRMED
+                         if self._active_state in {CommandControllerState.STOP_REQUESTED,
+                                                   CommandControllerState.STOP_UNCONFIRMED}
+                         else CommandControllerState.UNKNOWN)
+                if self._active_state is not state:
+                    self._active_state = state
+                    self._emit_locked(self._active, state,
+                                      "Execution owner liveness expired; ownership is unresolved and motion admission is blocked")
+        for stop in self._stops.values():
+            last = self._last_execution_receipt.get(stop["request"].request_id)
+            if (last is not None and now - last >= self._heartbeat_timeout_sec
+                    and stop["state"] is not CommandControllerState.STOP_UNCONFIRMED):
+                stop["state"] = CommandControllerState.STOP_UNCONFIRMED
+                self._emit_locked(stop["request"], stop["state"],
+                                  "Stop owner liveness expired; stopping remains unconfirmed")
 
     def _query_owners_locked(self):
         if self._reconcile_request is None:
@@ -406,7 +548,7 @@ class CommandController:
             request_ids.append(self._active.request_id)
         for request_id in request_ids:
             previous = self._last_reconciled.get(request_id, now)
-            if now - previous < self._ack_timeout_sec:
+            if now - previous < self._reconciliation_interval_sec:
                 continue
             self._last_reconciled[request_id] = now
             try:
@@ -432,6 +574,8 @@ class CommandController:
             recording_policy=request.recording_policy,
             command=request.command,
             stop_request_ids=request.stop_request_ids,
+            execution_instance_id=request.execution_instance_id,
+            stop_execution_instance_ids=request.stop_execution_instance_ids,
         )
 
     def _prepare_request_locked(
@@ -465,13 +609,14 @@ class CommandController:
             f"{self._ack_timeout_sec:.1f} s; execution is unknown, lane retained",
         )
 
-    def _dispatch_consumer_ready_locked(self) -> bool:
+    def _dispatch_consumer_ready_locked(self, *, emergency=False) -> bool:
         if self._dispatch_request is None:
             return False
-        if self._dispatch_ready is None:
+        ready = self._dispatch_emergency_ready if emergency else self._dispatch_ready
+        if ready is None:
             return True
         try:
-            return bool(self._dispatch_ready())
+            return bool(ready())
         except Exception as exception:
             self._handle_listener_error(exception)
             return False
@@ -490,16 +635,23 @@ class CommandController:
     def _submit_emergency(self, request) -> str:
         """Publish stop intent before touching setup state; poll does bookkeeping."""
         with self._emergency_lock:
-            if request.request_id in self._known_request_ids or request.request_id in self._emergency_request_ids:
+            if request.request_id in self._emergency_request_ids:
+                return request.request_id
+            if request.request_id in self._known_request_ids:
                 raise DuplicateCommandRequest(f"Duplicate request ID: {request.request_id}")
-            request = replace(request, stop_request_ids=tuple(sorted(self._unresolved_dispatch_ids)))
+            if self._current_cancel_request_id is not None:
+                return self._current_cancel_request_id
+            targets = tuple(sorted(self._unresolved_dispatch_ids))
+            request = replace(request, stop_request_ids=targets,
+                              stop_execution_instance_ids=tuple(self._request_execution_instances.get(key, "") for key in targets))
+            self._current_cancel_request_id = request.request_id
             self._emergency_request_ids.add(request.request_id)
             self._emergency_feedback[request.request_id] = []
             sent_at = None
             error = ""
             try:
                 callback = self._dispatch_request
-                ready = self._dispatch_ready
+                ready = self._dispatch_emergency_ready
                 if callback is not None and (ready is None or ready()):
                     sent_at = self._monotonic_clock()
                     self._unresolved_dispatch_ids.add(request.request_id)
@@ -523,7 +675,7 @@ class CommandController:
                     self._active = None
                     self._active_state = None
                 self._stops[request.request_id] = {
-                    "request": request, "sent_at": sent_at,
+                    "request": request, "sent_at": sent_at, "acknowledged": False,
                     "state": CommandControllerState.STOP_UNCONFIRMED if error else CommandControllerState.STOP_REQUESTED,
                 }
                 self._last_reconciled[request.request_id] = self._monotonic_clock()
@@ -538,14 +690,14 @@ class CommandController:
                                   "Stop requested; waiting for execution-owner confirmation")
             self._emit_locked(request, self._stops[request.request_id]["state"], error or
                               "Stop requested; waiting for execution-owner confirmation")
-            for status in feedback:
-                self.handle_execution_status(status)
+            for status, received_at in feedback:
+                self.handle_execution_status(status, receipt_monotonic=received_at)
 
     def _poll_stops_locked(self):
         now = self._monotonic_clock()
         for stop in tuple(self._stops.values()):
             request = stop["request"]
-            if stop["sent_at"] is None and self._dispatch_consumer_ready_locked():
+            if stop["sent_at"] is None and self._dispatch_consumer_ready_locked(emergency=True):
                 # Only a stop that has never reached the transport may be sent.
                 stop["sent_at"] = now
                 try:
@@ -555,7 +707,7 @@ class CommandController:
                 except Exception as exception:
                     stop["state"] = CommandControllerState.STOP_UNCONFIRMED
                     self._emit_locked(request, stop["state"], f"Stop submission is unconfirmed: {exception}")
-            if (stop["sent_at"] is not None and now - stop["sent_at"] >= self._ack_timeout_sec
+            if (not stop["acknowledged"] and stop["sent_at"] is not None and now - stop["sent_at"] >= self._ack_timeout_sec
                     and stop["state"] is not CommandControllerState.STOP_UNCONFIRMED
                     and request.request_id in self._stops):
                 stop["state"] = CommandControllerState.STOP_UNCONFIRMED
@@ -588,6 +740,8 @@ class CommandController:
                               f"Dispatched {request.command.command_id.value} to behavior tree; waiting for BT receipt")
 
     def _queued_detail_locked(self, request) -> str:
+        if self._active_state in {CommandControllerState.UNKNOWN, CommandControllerState.STOP_UNCONFIRMED}:
+            return "Queued; waiting for unresolved execution ownership to be reconciled"
         if self._active is not None:
             return (
                 "Queued behind active request "
@@ -616,6 +770,11 @@ class CommandController:
         retry_command: SemanticCommand | None = None,
         execution_idle: bool = False,
     ) -> None:
+        if state is CommandControllerState.QUEUED:
+            self._last_queue_status[request.request_id] = self._monotonic_clock()
+        else:
+            self._last_queue_status.pop(request.request_id, None)
+        self._public_status_sequence += 1
         status = CommandControllerStatus(
             request=request,
             state=state,
@@ -625,6 +784,8 @@ class CommandController:
             continuation_safe=continuation_safe,
             retry_command=retry_command,
             execution_idle=execution_idle,
+            execution_instance_id=self._request_execution_instances.get(request.request_id, ""),
+            status_sequence=self._public_status_sequence,
         )
         for listener in tuple(self._listeners):
             self._call_listener(listener, status)
@@ -650,6 +811,7 @@ __all__ = [
     "CommandController",
     "CommandControllerState",
     "CommandControllerStatus",
+    "CommandExecutionUnresolved",
     "CommandExecutionStatus",
     "DuplicateCommandRequest",
     "UnknownCommandRequest",

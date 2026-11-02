@@ -99,6 +99,8 @@ def execution_success(request_id):
         request_id=request_id,
         state=CommandControllerState.SUCCEEDED,
         execution_idle=True,
+        execution_instance_id="wait-test-owner",
+        status_sequence=1,
         buffered_command_count=0,
     )
 

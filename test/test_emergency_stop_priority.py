@@ -8,7 +8,6 @@ from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
     CommandControllerState,
-    DuplicateCommandRequest,
 )
 from test_command_controller import make_request, execution_status
 
@@ -91,29 +90,31 @@ def test_early_emergency_feedback_is_preserved_until_reconciliation():
     assert states[-1].state is CommandControllerState.STOP_CONFIRMED
 
 
-def test_repeated_emergencies_dispatch_before_bookkeeping():
+def test_repeated_cancellation_reuses_one_pending_stop_before_bookkeeping():
     dispatched = []
     controller = CommandController(dispatch_request=dispatched.append)
     first = controller.cancel_all()
     second = controller.cancel_all()
-    assert [request.request_id for request in dispatched] == [first, second]
+    assert first == second
+    assert [request.request_id for request in dispatched] == [first]
     controller.poll()
-    assert controller.active_request_id == first
-    assert dispatched[-1].stop_request_ids == (first,)
-    controller.handle_execution_status(execution_status(second, CommandControllerState.STOP_CONFIRMED))
     assert controller.active_request_id == first
     controller.handle_execution_status(execution_status(first, CommandControllerState.STOP_CONFIRMED))
     assert controller.active_request_id == ""
+    assert controller.cancel_all() != first
+    assert len(dispatched) == 2
 
 
-def test_duplicate_emergency_is_not_sent_twice():
+def test_duplicate_emergency_is_idempotent_after_completion():
     dispatched = []
     controller = CommandController(dispatch_request=dispatched.append)
     request = make_request(CommandID.EMERGENCY_CANCEL)
-    controller.submit(request)
-    with pytest.raises(DuplicateCommandRequest):
-        controller.submit(request)
+    assert controller.submit(request) == request.request_id
+    controller.poll()
+    controller.handle_execution_status(execution_status(request.request_id, CommandControllerState.STOP_CONFIRMED))
+    assert controller.submit(request) == request.request_id
     assert len(dispatched) == 1
+    assert controller.active_request_id == ""
 
 
 def test_emergency_transport_failure_is_reported_without_releasing_old_work():
@@ -126,7 +127,7 @@ def test_emergency_transport_failure_is_reported_without_releasing_old_work():
         raise RuntimeError("Transport unavailable")
 
     controller.configure_dispatch(fail, lambda: False)
-    controller._dispatch_ready = lambda: True
+    controller.configure_dispatch(fail, lambda: False, emergency_ready=lambda: True)
     stop_id = controller.cancel_all()
     controller.poll()
     assert controller.queued_request_ids == ()
@@ -136,7 +137,7 @@ def test_emergency_transport_failure_is_reported_without_releasing_old_work():
     assert "Transport unavailable" in states[-1].detail
 
 
-def test_second_stop_bypasses_blocked_cancellation_bookkeeping():
+def test_repeated_stop_returns_without_waiting_for_blocked_bookkeeping():
     entered, release, stopped = Event(), Event(), Event()
     dispatched = []
     controller = CommandController(dispatch_request=dispatched.append)
@@ -161,7 +162,6 @@ def test_second_stop_bypasses_blocked_cancellation_bookkeeping():
         assert stopped.wait(2)
         assert [request.command.command_id for request in dispatched] == [
             CommandID.READY_ARM,
-            CommandID.EMERGENCY_CANCEL,
             CommandID.EMERGENCY_CANCEL,
         ]
     finally:

@@ -132,6 +132,7 @@ def queue_rig(tmp_path):
         state_source=state_source,
         dispatched=dispatched,
         states=states,
+        status_sequence=0,
     )
 
 
@@ -153,9 +154,12 @@ def submit(rig, intent_id, point_id=""):
 
 
 def succeed(rig, operation, remaining_steps=0, detail=""):
+    rig.status_sequence += 1
     assert rig.commands.handle_execution_status(CommandExecutionStatus(
         request_id=operation.request_id,
         state=CommandControllerState.SUCCEEDED,
+        execution_instance_id="saved-probe-test-owner",
+        status_sequence=rig.status_sequence,
         execution_idle=True,
         buffered_command_count=remaining_steps,
         detail=detail,
@@ -261,10 +265,13 @@ def test_execute_and_record_holds_following_work_until_execution_completes(queue
     following = submit(rig, OperationalIntent.INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH)
 
     for detail in ("Moving to probe", "Recording measurement", "Retracting probe"):
+        rig.status_sequence += 1
         assert rig.commands.handle_execution_status(CommandExecutionStatus(
             operation.request_id,
             CommandControllerState.RUNNING,
             detail,
+            execution_instance_id="saved-probe-test-owner",
+            status_sequence=rig.status_sequence,
         ))
         assert dispatched_ids(rig) == [operation.request_id]
         assert rig.commands.queued_request_ids == (following.request_id,)

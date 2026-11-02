@@ -1,6 +1,7 @@
 """Recovered contact feedback reaches skip handling through the status pipeline."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 from fault_detector_msgs.msg import CommandStatus
 
 import pytest
@@ -8,6 +9,7 @@ from builtin_interfaces.msg import Time
 from py_trees.common import Status
 
 from fault_detector_spot.application.behaviour_tree.behaviours.movement_behaviour import MovementBehaviour
+from fault_detector_spot.application.behaviour_tree.command_status_ledger import CommandStatusLedger
 from fault_detector_spot.application.behaviour_tree.commands.execution_command import ExecutionCommand
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.semantic_command import SemanticCommand
@@ -36,8 +38,14 @@ def test_collision_feedback_retries_then_skips_only_after_recovery(tmp_path, com
         RecordedStep(SemanticCommand(CommandID.WAIT_TIME, wait_time=2.0), 0, 2),
     ])
     manager.control("play", "collision")
-    node = FakeNode()
+    node = FakeNode(auto_discovery=False)
+    ledger = CommandStatusLedger()
+    ledger.activate()
     transport = RosCommandTransport(node, CommandController())
+    status, accepting, unresolved = ledger.query_snapshot("", "")
+    node.status_client.calls[-1][1].set_result(SimpleNamespace(
+        status=status, accepting_commands=accepting, unresolved_request_ids=unresolved,
+    ))
 
     class ContactMovement(MovementBehaviour):
         RETRY_POSE_COMMAND_ID = CommandID.MOVE_ARM_TO_POSE
@@ -73,6 +81,7 @@ def test_collision_feedback_retries_then_skips_only_after_recovery(tmp_path, com
         request = command_request_from_message(submission)
         assert transport.submit_message(submission)
         publisher = behavior(Status.FAILURE, request.command.command_id.value)
+        publisher.status_ledger = ledger
         # This fixture exercises the real guard rather than an action executor:
         # only its successful stop-and-recovery result is nonexecution evidence.
         publisher.execution_idle = lambda: result.retry_safe or result.continuation_safe
@@ -84,7 +93,8 @@ def test_collision_feedback_retries_then_skips_only_after_recovery(tmp_path, com
         movement.result = result
         movement.initialise()
         assert movement.update() is Status.FAILURE
-        assert transport.handle_command_status(publisher.get_structured_status_message())
+        publisher.update()
+        assert transport.handle_command_status(publisher.structured_status_pub.messages[-1])
         status = node.publishers["fault_detector/_internal/commands/status"].messages[-1]
         assert status.continuation_safe is recovered
         assert manager.handle_playback_status(status)

@@ -53,6 +53,8 @@ class SetupOperationStatus:
     state: CommandControllerState
     detail: str
     buffered_command_count: int
+    execution_instance_id: str = ""
+    status_sequence: int = 0
 
 
 ContextListener = Callable[[SetupContextEvent], None]
@@ -387,6 +389,8 @@ class SetupCoordinator:
             buffered_command_count=(
                 status.buffered_command_count
             ),
+            execution_instance_id=status.execution_instance_id,
+            status_sequence=status.status_sequence,
         )
         with self._lock:
             listeners = tuple(

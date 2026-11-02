@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+from fault_detector_msgs.srv import GetCommandStatus
 
 from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
     CommandSubscriber,
@@ -24,9 +25,16 @@ def test_deferred_consumer_is_advertised_only_after_activation():
     consumer = CommandSubscriber(defer_subscription=True)
     consumer.setup(node=node)
     assert consumer.request_topic not in node.subscriptions
+    assert not node.services
+    assert not consumer.query_status(GetCommandStatus.Request(), GetCommandStatus.Response()).accepting_commands
     consumer.activate()
     subscription = consumer.request_subscription
     assert consumer.request_topic in node.subscriptions
+    discovery = node.services["fault_detector/_internal/commands/get_status"](
+        GetCommandStatus.Request(), GetCommandStatus.Response(),
+    )
+    assert discovery.accepting_commands
+    assert discovery.status.execution_instance_id == consumer.status_ledger.execution_instance_id
     consumer.activate()
     assert consumer.request_subscription is subscription
 

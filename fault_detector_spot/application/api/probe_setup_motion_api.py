@@ -156,6 +156,8 @@ class ProbeSetupMotionApi:
             request_id=status.request_id,
             motion_operation=self._motion_operation(status.motion.kind),
         )
+        state.execution_instance_id = status.execution_instance_id
+        state.status_sequence = status.status_sequence
         self.state_publisher.publish(state)
         with self._lock:
             execution = self._executions.get(status.request_id)

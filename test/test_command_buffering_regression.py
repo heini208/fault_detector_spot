@@ -25,10 +25,12 @@ def _request(command_id):
     )
 
 
-def _status(request_id, state, buffered=0, detail=""):
+def _status(request_id, state, buffered=0, detail="", *, sequence=1):
     return CommandExecutionStatus(
         request_id=request_id,
         state=state,
+        execution_instance_id="buffer-test-owner",
+        status_sequence=sequence,
         execution_idle=state in {CommandControllerState.SUCCEEDED, CommandControllerState.FAILED, CommandControllerState.CANCELLED},
         buffered_command_count=buffered,
         detail=detail,
@@ -66,6 +68,7 @@ def test_semantic_requests_remain_fifo_buffered():
             first.request_id,
             CommandControllerState.SUCCEEDED,
             buffered=1,
+            sequence=2,
         )
     )
 
@@ -77,6 +80,7 @@ def test_semantic_requests_remain_fifo_buffered():
             first.request_id,
             CommandControllerState.SUCCEEDED,
             buffered=0,
+            sequence=3,
         )
     )
 
@@ -85,7 +89,7 @@ def test_semantic_requests_remain_fifo_buffered():
     assert controller.queued_request_ids == (third.request_id,)
 
     controller.handle_execution_status(
-        _status(second.request_id, CommandControllerState.SUCCEEDED)
+        _status(second.request_id, CommandControllerState.SUCCEEDED, sequence=4)
     )
 
     assert dispatched == [first, second, third]

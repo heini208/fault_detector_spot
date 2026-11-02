@@ -199,6 +199,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             self.append_request_to_buffer,
             COMMAND_REQUEST_QOS,
         )
+        self.status_ledger.activate()
 
     def _register_blackboard_keys(self):
         self.blackboard.register_key(
@@ -213,6 +214,13 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.blackboard.estop_flag = False
 
     def append_request_to_buffer(self, message):
+        if getattr(message, "execution_instance_id", "") != self.status_ledger.execution_instance_id:
+            request_id = getattr(message, "request_id", "")
+            self._publish_status(self.status_ledger.unknown_status(
+                request_id if isinstance(request_id, str) else "",
+                "Dispatch targets another execution instance; execution is unresolved",
+            ))
+            return
         try:
             request = command_request_from_message(message)
             stamp = message.header.stamp
@@ -226,8 +234,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             request, emergency=self.is_estop_command(request.command),
         )
         if not accepted:
-            if self.request_status_publisher is not None:
-                self.request_status_publisher.publish(receipt)
+            self._publish_status(receipt)
             return
 
         command_id = request.command.command_id.value
@@ -406,7 +413,9 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         return command.command_id == CommandID.EMERGENCY_CANCEL
 
     def trigger_estop(self, request: CommandRequest[SemanticCommand]):
-        self.status_ledger.request_stop(request)
+        if request.execution_instance_id != self.status_ledger.execution_instance_id:
+            return
+        recovery_allowed = self.status_ledger.request_stop(request)
         self.blackboard.command_buffer.clear()
         self.pending_msgs = []
         self.blackboard.estop_flag = True
@@ -416,7 +425,8 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             request_id=request.request_id,
         )
         command.stop_confirmed = False
-        command.stop_unconfirmed = False
+        command.stop_unconfirmed = not recovery_allowed
+        command.stop_recovery_allowed = recovery_allowed
         self._apply_request_metadata(command, request)
         self.blackboard.command_buffer.append(command)
         detail = "BT accepted emergency stop and replaced command buffer"
@@ -454,11 +464,18 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         if state == CommandStatus.STATE_FAILED:
             # Translation failed before any step entered the execution buffer.
             message.execution_idle = True
-        self.request_status_publisher.publish(self.status_ledger.record(message))
+        self._publish_status(self.status_ledger.record(message))
+
+    def _publish_status(self, message):
+        if self.request_status_publisher is not None:
+            self.request_status_publisher.publish(self.status_ledger.outgoing_status(message))
 
     def query_status(self, request, response):
         """Return retained owner evidence; this never submits or resumes work."""
-        response.status = self.status_ledger.query(request.request_id)
+        (response.status, response.accepting_commands,
+         response.unresolved_request_ids) = self.status_ledger.query_snapshot(
+            request.request_id, request.execution_instance_id,
+        )
         return response
 
     def _publish_request_failure(self, request, detail):
@@ -484,10 +501,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         status.buffered_command_count = 0
         existing = self.status_ledger.query(request_id)
         if self.status_ledger.contains(request_id):
-            self.request_status_publisher.publish(existing)
+            self._publish_status(existing)
             return
         status.execution_idle = True
-        self.request_status_publisher.publish(self.status_ledger.record(status))
+        self._publish_status(self.status_ledger.record(status))
 
     def _create_command_stamp(self):
         return self.node.get_clock().now().to_msg()

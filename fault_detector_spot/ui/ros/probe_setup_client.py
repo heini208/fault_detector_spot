@@ -24,6 +24,7 @@ from rclpy.action import ActionClient
 
 from fault_detector_spot.shared.ros.qos_profiles import APPLICATION_STATE_QOS
 from fault_detector_spot.ui.ros.setup_state_order import SetupStateOrder
+from fault_detector_spot.ui.ros.command_state_order import CommandStateOrder
 
 
 def preloaded_reference_view_ids(state):
@@ -54,6 +55,7 @@ class ProbeSetupClient(QObject):
         self.context_id = ""
         self._last_state_fingerprint = None
         self._state_order = SetupStateOrder()
+        self._command_state_order = CommandStateOrder()
         self._pending_request_id = ""
         self._motion_goal_handles = {}
         self._finalization_goal_handles = {}
@@ -370,6 +372,8 @@ class ProbeSetupClient(QObject):
             return
         if self.context_id and state.context_id != self.context_id:
             return
+        if not self._command_state_order.accept(state):
+            return False
         if state.state in {
             state.STATE_SUCCEEDED, state.STATE_FAILED, state.STATE_CANCELLED,
             state.STATE_STOP_CONFIRMED,
