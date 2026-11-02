@@ -1386,6 +1386,51 @@ Checkout execution reads the checkout's config; installed execution reads
 updated through the normal package installation workflow. Other configuration
 files are unaffected by this arm-motion refactor.
 
+### Guard diagnostic timing
+
+The offline regression budget is **50 ms** for a force callback and for its
+stop-request dispatch, matching the guard monitor's existing 50 ms period.
+This budget was chosen before measurement. It covers local software dispatch;
+it does not establish a deployed ROS scheduling bound or physical stopping time.
+
+Raw contact logging uses one writer and a bounded queue (256 records by default).
+Callbacks enqueue without waiting for storage; a full queue drops the incoming
+record and increments `ArmContactTelemetry.diagnostics['dropped_samples']`.
+File creation, JSON encoding, writes and flushes run in the writer. Storage
+errors disable raw logging and retain `last_error`. Closing drains for at most
+one second by default and reports a timeout while retaining the writer for a
+later cleanup retry. Dropped diagnostics cannot be treated as a complete trace.
+
+`GuardedProbeMonitor.diagnostics` returns a copied snapshot with the monitor
+period, callback duration and delay, observation age, request/context IDs,
+attachment revision, sensor ID, movement sequence, phase and stop-confirmation
+state. Force delay/age use the locally received force timestamp, including any
+wait for the execution lock; they do not measure sensor/network age. Timer delay
+uses the expected callback time. `stop_requested_at` records local dispatch,
+separately from stop acceptance and physical confirmation. These snapshots
+remain available when raw logging is disabled or fails.
+
+On 2026-11-02, five isolated trials per case used the real state source, monitor,
+guard and telemetry with fake ROS interfaces. Each delayed-storage case injected
+100 ms into file open, write or flush. Maximum times in milliseconds were:
+
+| Storage case | Previous callback / stop dispatch | Current callback / stop dispatch |
+| --- | ---: | ---: |
+| Logging disabled | 0.257 / 0.249 | 0.274 / 0.188 |
+| Logging enabled | 0.615 / 0.606 | 0.392 / 0.304 |
+| Delayed open | 103.500 / 103.460 | 0.271 / 0.164 |
+| Delayed write | 102.295 / 102.242 | 0.578 / 0.388 |
+| Delayed flush | 102.594 / 102.530 | 0.482 / 0.382 |
+| Failing open/write/flush (worst) | 0.593 / 0.585 | 0.364 / 0.220 |
+| Observation exception | 0.150 / 0.142 | 0.312 / 0.269 |
+
+The delayed cases exceeded the declared budget before decoupling storage.
+Afterward, the maximum observed dispatch delay was 0.035 ms and observation age
+was 0.046 ms. The tests in `test/test_guard_diagnostic_timing.py` also hold storage
+blocked until after force-stop or cancellation dispatch, saturate the queue,
+and inject diagnostic failures. No robot, ROS executor, or live node was started;
+hardware and deployed-load timing remain separate validation work.
+
 ### Body height
 
 Select a body-height offset with the slider, then press **Change Height** to

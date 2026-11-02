@@ -170,7 +170,56 @@ class GuardedProbeExecution:
         self.contact_telemetry = contact_telemetry
         self._monotonic_clock = monotonic_clock
         self.lock = execution_lock if execution_lock is not None else RLock()
+        self._diagnostic_context = {
+            "request_id": "", "context_id": "", "sensor_id": None,
+            "attachment_revision": None,
+        }
+        self._diagnostics = {}
         self.reset()
+
+    @property
+    def diagnostics(self):
+        """Return the latest diagnostic event without exposing mutable state."""
+        with self.lock:
+            snapshot = dict(self._diagnostics)
+            if self.contact_telemetry is not None:
+                snapshot["telemetry"] = getattr(self.contact_telemetry, "diagnostics", {})
+            return snapshot
+
+    def set_diagnostic_context(self, **context):
+        """Copy correlation metadata; it never participates in motion decisions."""
+        with self.lock:
+            self._diagnostic_context.update(context)
+
+    def record_diagnostic_event(self, event, **values):
+        """Keep a readable snapshot even when optional raw diagnostics fail."""
+        now = self._monotonic_clock()
+        if self._terminal_update is not None and self._terminal_update.outcome is ArmMovementOutcome.STOP_UNCONFIRMED:
+            stop_state = "unconfirmed"
+        elif self._stop_confirmed_at is not None:
+            stop_state = "confirmed"
+        elif self._stop_accepted_at is not None:
+            stop_state = ("unconfirmed" if now - self._stop_accepted_at + 1e-9 >= self._stop_timeout_sec
+                          else "confirming")
+        elif self._stop_requested_at is not None:
+            stop_state = "requested"
+        else:
+            stop_state = "not_requested"
+        self._diagnostics.update(self._diagnostic_context)
+        self._diagnostics.update(
+            event=event, observed_at=now,
+            movement_sequence=self._telemetry_movement_sequence,
+            phase=self._phase.value if self._phase is not None else "terminal",
+            stop_confirmation_state=stop_state,
+            stop_requested_at=self._stop_requested_at,
+            stop_confirmed_at=self._stop_confirmed_at,
+            **values,
+        )
+        try:
+            if self.contact_telemetry is not None:
+                self.contact_telemetry.record_event(self.diagnostics)
+        except Exception:
+            pass
 
     @property
     def active(self) -> bool:
@@ -189,6 +238,7 @@ class GuardedProbeExecution:
                     "Guarded probe movement requires a plan builder",
                 )
             self.reset()
+            self._diagnostics.clear()
             if retreat_distance_m is not None:
                 self._retreat_distance_override_m = float(retreat_distance_m)
                 if (not math.isfinite(self._retreat_distance_override_m)
@@ -272,6 +322,8 @@ class GuardedProbeExecution:
             self._stop_then_retreat = False
             self._stop_then_baseline = False
             self._stop_accepted_at = None
+            self._stop_requested_at = None
+            self._stop_confirmed_at = None
             self._stop_stable_since = None
             self._stop_last_velocity_received_at = None
             self._continue_stop_confirmation = False
@@ -416,6 +468,7 @@ class GuardedProbeExecution:
             return update
         self._phase = _Phase.MOVING
         update = self._start_motion(plan)
+        self.record_diagnostic_event("motion_started")
         if update.outcome is ArmMovementOutcome.RUNNING:
             return update
         return self._terminal(update.outcome, update.detail)
@@ -455,6 +508,7 @@ class GuardedProbeExecution:
         )
         self._phase = _Phase.MOVING
         update = self._start_motion(plan)
+        self.record_diagnostic_event("motion_started")
         if update.outcome is ArmMovementOutcome.RUNNING:
             return update
         return self._terminal(update.outcome, update.detail)
@@ -637,6 +691,11 @@ class GuardedProbeExecution:
         )
 
         if force_delta.total_n >= self.hard_force_delta_limit_n:
+            update = self._begin_contact(
+                "Hard force safety limit reached from total end-effector "
+                f"force delta {force_delta.total_n:.2f} N at or above "
+                f"{self.hard_force_delta_limit_n:.2f} N"
+            )
             self._observe_contact_telemetry(
                 observed_at=now,
                 plan=plan,
@@ -649,11 +708,7 @@ class GuardedProbeExecution:
                 authoritative_decision="hard_force_limit",
                 self_motion_suppressed=False,
             )
-            return self._begin_contact(
-                "Hard force safety limit reached from total end-effector "
-                f"force delta {force_delta.total_n:.2f} N at or above "
-                f"{self.hard_force_delta_limit_n:.2f} N"
-            )
+            return update
 
         threshold_n = self._force_threshold_n
         if threshold_n is None:
@@ -696,6 +751,28 @@ class GuardedProbeExecution:
             else:
                 authoritative_decision = "force_candidate"
 
+        update = None
+        if self._force_contact_count >= self.force_contact_policy.consecutive_samples:
+            if plan.translational_motion:
+                detail = (
+                    "Contact detected from opposing end-effector force delta "
+                    f"{force_delta.opposing_n:.2f} N exceeding motion "
+                    f"threshold {threshold_n:.2f} N at "
+                    f"{plan.linear_speed_mps:.4f} m/s linear, "
+                    f"{plan.angular_speed_rad_s:.4f} rad/s angular; "
+                    f"peak opposing {self._peak_opposing_force_delta_n:.2f} N, "
+                    f"peak total {self._peak_total_force_delta_n:.2f} N"
+                )
+            else:
+                detail = (
+                    "Contact detected from total end-effector force delta "
+                    f"{force_delta.total_n:.2f} N exceeding orientation "
+                    f"threshold {threshold_n:.2f} N at "
+                    f"{plan.angular_speed_rad_s:.4f} rad/s angular; "
+                    f"peak total {self._peak_total_force_delta_n:.2f} N"
+                )
+            update = self._begin_contact(detail)
+
         self._observe_contact_telemetry(
             observed_at=now,
             plan=plan,
@@ -709,31 +786,7 @@ class GuardedProbeExecution:
             self_motion_suppressed=self_motion_suppressed,
         )
 
-        if (
-            self._force_contact_count
-            < self.force_contact_policy.consecutive_samples
-        ):
-            return None
-
-        if plan.translational_motion:
-            detail = (
-                "Contact detected from opposing end-effector force delta "
-                f"{force_delta.opposing_n:.2f} N exceeding motion "
-                f"threshold {threshold_n:.2f} N at "
-                f"{plan.linear_speed_mps:.4f} m/s linear, "
-                f"{plan.angular_speed_rad_s:.4f} rad/s angular; "
-                f"peak opposing {self._peak_opposing_force_delta_n:.2f} N, "
-                f"peak total {self._peak_total_force_delta_n:.2f} N"
-            )
-        else:
-            detail = (
-                "Contact detected from total end-effector force delta "
-                f"{force_delta.total_n:.2f} N exceeding orientation "
-                f"threshold {threshold_n:.2f} N at "
-                f"{plan.angular_speed_rad_s:.4f} rad/s angular; "
-                f"peak total {self._peak_total_force_delta_n:.2f} N"
-            )
-        return self._begin_contact(detail)
+        return update
 
     def _rotation_is_moving(self) -> bool:
         try:
@@ -978,7 +1031,11 @@ class GuardedProbeExecution:
         self._stop_then_baseline = bool(then_baseline)
 
         self._phase = _Phase.ARM_STOPPING
+        self._stop_requested_at = self._monotonic_clock()
+        self._stop_accepted_at = None
+        self._stop_confirmed_at = None
         update = self._start_stop()
+        self.record_diagnostic_event("stop_requested")
         if update.outcome is ArmMovementOutcome.RUNNING:
             return ArmMovementUpdate(
                 ArmMovementOutcome.RUNNING,
@@ -1016,6 +1073,7 @@ class GuardedProbeExecution:
         self._stop_accepted_at = self._monotonic_clock()
         self._stop_stable_since = None
         self._stop_last_velocity_received_at = None
+        self.record_diagnostic_event("stop_accepted")
         return ArmMovementUpdate(
             ArmMovementOutcome.RUNNING,
             "ArmStopCommand accepted; confirming physical stop",
@@ -1088,6 +1146,8 @@ class GuardedProbeExecution:
         )
 
     def _complete_arm_stop(self) -> ArmMovementUpdate:
+        self._stop_confirmed_at = self._monotonic_clock()
+        self.record_diagnostic_event("stop_confirmed")
         if self._stop_then_baseline:
             self._stop_then_baseline = False
             # Refresh measured start geometry after stopping. start() on the
@@ -1238,6 +1298,7 @@ class GuardedProbeExecution:
         )
         self._phase = None
         self._terminal_update = update
+        self.record_diagnostic_event("terminal", outcome=outcome.value)
         return update
 
     @staticmethod

@@ -1834,6 +1834,13 @@ class ArmMovementExecutor(MovementExecutor):
                 "Guarded probe movement has no pending target",
             )
         self._next_probe_cartesian_path = self._guarded_cartesian_path
+        try:
+            sensor_id, revision = self.surface_source.active_attachment()
+        except Exception:
+            sensor_id, revision = None, None
+        self.guarded_probe_execution.set_diagnostic_context(
+            sensor_id=sensor_id, attachment_revision=revision,
+        )
         owner = self._guarded_probe_monitor or self.guarded_probe_execution
         options = {}
         if self._guarded_retreat_distance_m is not None:

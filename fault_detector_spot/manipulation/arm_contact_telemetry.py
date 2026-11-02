@@ -514,7 +514,7 @@ class ArmContactTelemetry:
         return 2.0 * math.acos(dot)
 
     def record_event(self, event) -> None:
-        """Queue a copied, scalar diagnostic snapshot alongside observations."""
+        """Queue a copied diagnostic snapshot alongside observations."""
         self._enqueue_raw(dict(event))
 
     def _enqueue_raw(self, payload) -> None:

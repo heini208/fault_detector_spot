@@ -1,5 +1,7 @@
 """Schedule guarded execution independently of Behavior Tree polling."""
 
+import time
+
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.clock import Clock, ClockType
 
@@ -17,11 +19,15 @@ class GuardedProbeMonitor:
     idle monitors keep one cancelled timer but schedule no work.
     """
 
-    def __init__(self, node, arm_state_source, execution):
+    PERIOD_SEC = 0.05
+
+    def __init__(self, node, arm_state_source, execution, monotonic_clock=time.monotonic):
         """Keep dependencies without adding work to the ROS executor."""
         self._node = node
         self._source = arm_state_source
         self._execution = execution
+        self._clock = monotonic_clock
+        self._next_timer_at = None
         self._closed = False
         self._generation = 0
         self._timer = None
@@ -32,6 +38,10 @@ class GuardedProbeMonitor:
             "No guarded probe movement is active",
         )
         self._callback_group = MutuallyExclusiveCallbackGroup()
+
+    @property
+    def diagnostics(self):
+        return self._execution.diagnostics
 
     def start(self, plan_builder, force_threshold_n=None, retreat_distance_m=None):
         """Attach monitoring before starting the guarded operation."""
@@ -84,29 +94,54 @@ class GuardedProbeMonitor:
                     callback(update)
 
     def _observe_force(self, sample, generation):
+        started_at = self._clock()
         with self._execution.lock:
             if not self._closed and generation == self._generation:
+                observation_age = (None if sample is None else
+                                   max(0.0, self._clock() - sample.received_at))
                 # Delivery may have waited long enough to become stale.
                 if (
                     sample is not None
                     and self._source.hand_force_sample() is None
                 ):
                     sample = None
-                self._record(self._execution.observe_force_sample(sample))
+                update = self._execution.observe_force_sample(sample)
+                self._execution.record_diagnostic_event(
+                    "guard_callback", callback_kind="force",
+                    monitor_period_sec=self.PERIOD_SEC,
+                    observation_age_sec=observation_age,
+                    callback_delay_sec=observation_age,
+                    callback_duration_sec=max(0.0, self._clock() - started_at),
+                )
+                self._record(update)
 
     def _advance(self):
+        started_at = self._clock()
         with self._execution.lock:
             if self._closed:
                 return
             if self._execution.active:
-                self._record(self._execution.poll())
+                now = self._clock()
+                delay = max(0.0, now - self._next_timer_at)
+                self._next_timer_at += (int(delay / self.PERIOD_SEC) + 1) * self.PERIOD_SEC
+                received_at = self._execution._force_last_received_at
+                update = self._execution.poll()
+                self._execution.record_diagnostic_event(
+                    "guard_callback", callback_kind="timer",
+                    monitor_period_sec=self.PERIOD_SEC,
+                    observation_age_sec=(None if received_at is None else max(0.0, now - received_at)),
+                    callback_delay_sec=delay,
+                    callback_duration_sec=max(0.0, self._clock() - started_at),
+                )
+                self._record(update)
             else:
                 self.stop()
 
     def _start_timer(self):
+        self._next_timer_at = self._clock() + self.PERIOD_SEC
         if self._timer is None:
             self._timer = self._node.create_timer(
-                0.05,
+                self.PERIOD_SEC,
                 self._advance,
                 callback_group=self._callback_group,
                 clock=Clock(clock_type=ClockType.STEADY_TIME),

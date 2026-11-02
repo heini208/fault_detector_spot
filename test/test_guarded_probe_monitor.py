@@ -69,7 +69,7 @@ def monitored():
     guard = execution(source, driver, clock, lambda: deepcopy(current))
     telemetry = Telemetry()
     guard.contact_telemetry = telemetry
-    monitor = GuardedProbeMonitor(node, source, guard)
+    monitor = GuardedProbeMonitor(node, source, guard, monotonic_clock=clock)
     monitor.start(plan)
 
     def emit(
@@ -110,6 +110,7 @@ def confirm_physical_stop(monitored, first_sample_at):
 
 def test_fresh_samples_confirm_contact_before_any_bt_poll(monitored):
     m = monitored
+    assert m.monitor.diagnostics["event"] == "motion_started"
     m.emit(0.01)
     assert m.driver.stop_count == 0
     assert m.guard._force_contact_count == 1
@@ -123,6 +124,61 @@ def test_fresh_samples_confirm_contact_before_any_bt_poll(monitored):
     ]
     assert m.guard.poll().outcome is ArmMovementOutcome.RUNNING
     assert m.driver.stop_count == 1
+
+
+@pytest.mark.parametrize("force", [(-5.0, 2.0, 3.0), (-20.0, 2.0, 3.0)])
+def test_contact_stop_precedes_failing_diagnostics(monitored, force):
+    m = monitored
+    m.emit(0.01)
+    observed_stops = []
+
+    def fail_observation(**_values):
+        observed_stops.append((m.driver.cancel_count, m.driver.stop_count))
+        raise OSError("diagnostic storage failed")
+
+    def fail_event(_event):
+        raise OSError("diagnostic event failed")
+
+    m.telemetry.observe = fail_observation
+    m.telemetry.record_event = fail_event
+    m.emit(0.02, force=force)
+    assert observed_stops == [(1, 1)]
+    assert m.driver.stop_count == 1
+    assert m.monitor.diagnostics["stop_confirmation_state"] == "requested"
+    assert m.monitor.diagnostics["stop_requested_at"] == 0.02
+
+
+def test_cancel_and_confirmation_keep_correlated_diagnostics(monitored):
+    m = monitored
+    events = []
+    m.telemetry.record_event = events.append
+    m.guard.set_diagnostic_context(
+        request_id="request-a", context_id="context-a", sensor_id="probe-a",
+        attachment_revision=7,
+    )
+    m.clock.now = 0.01
+    m.monitor.cancel(None)
+    assert m.driver.stop_count == 1
+    m.driver.stop_updates.append(ArmMovementUpdate(ArmMovementOutcome.SUCCESS, "accepted"))
+    m.node.timer.callback()
+    confirm_physical_stop(m, 0.1)
+    snapshot = m.monitor.diagnostics
+    assert snapshot["stop_confirmation_state"] == "confirmed"
+    assert snapshot["request_id"] == "request-a"
+    assert snapshot["context_id"] == "context-a"
+    assert snapshot["sensor_id"] == "probe-a"
+    assert snapshot["attachment_revision"] == 7
+    assert snapshot["monitor_period_sec"] == 0.05
+    snapshot["request_id"] = "mutated"
+    assert m.monitor.diagnostics["request_id"] == "request-a"
+    assert any(event["event"] == "stop_confirmed" for event in events)
+    m.guard.set_diagnostic_context(request_id="request-b", context_id="context-b")
+    assert m.monitor.diagnostics["request_id"] == "request-a"
+    assert m.monitor.diagnostics["context_id"] == "context-a"
+    m.monitor.start(plan)
+    assert m.monitor.diagnostics["request_id"] == "request-b"
+    assert "callback_duration_sec" not in m.monitor.diagnostics
+    assert "outcome" not in m.monitor.diagnostics
 
 
 def test_poll_does_not_make_a_contact_decision(monitored, monkeypatch):
@@ -414,6 +470,7 @@ def test_stop_submission_failure_is_latched_before_bt_poll(monitored):
     assert not m.guard.active
     result = m.guard.poll()
     assert result.outcome is ArmMovementOutcome.STOP_UNCONFIRMED
+    assert m.monitor.diagnostics["stop_confirmation_state"] == "unconfirmed"
     assert 'service unavailable' in result.detail
     m.node.timer.callback()
     assert m.guard.poll() is result
@@ -447,6 +504,7 @@ def test_executor_wires_monitor_and_observes_its_terminal_result(monkeypatch):
     stop_client = FakeArmStopServiceClient()
     executor, _ = executor_with_client(
         tf, arm_state_source=source, arm_stop_service_client=stop_client,
+        surface_source=SimpleNamespace(active_attachment=lambda: ("hand", 7)),
         force_baseline_sampler=ImmediateBaseline(),
         force_contact_policy=FixedForcePolicy(), config=ArmMotionParameters(),
         monotonic_clock=clock,
@@ -461,6 +519,8 @@ def test_executor_wires_monitor_and_observes_its_terminal_result(monkeypatch):
     try:
         started = executor.guarded_probe(target, 'hand')
         assert started.outcome is ArmMovementOutcome.RUNNING
+        assert executor.guarded_probe_execution.diagnostics["sensor_id"] == "hand"
+        assert executor.guarded_probe_execution.diagnostics["attachment_revision"] == 7
         assert (
             executor.guarded_probe_execution.lock is executor._execution_lock
         )
@@ -521,6 +581,7 @@ def test_cancellation_keeps_observing_after_stop_timeout_without_bt_poll(monitor
 
     assert m.monitor.poll().outcome is ArmMovementOutcome.RUNNING
     assert 'continuing physical stop confirmation' in m.monitor.poll().detail
+    assert m.monitor.diagnostics["stop_confirmation_state"] == "unconfirmed"
     assert m.guard.active
     assert not m.node.timer.cancelled
     assert not completed
@@ -532,6 +593,7 @@ def test_cancellation_keeps_observing_after_stop_timeout_without_bt_poll(monitor
     assert m.node.timer.cancelled
     assert m.driver.stop_count == 1
     assert not m.guard.active
+    assert m.monitor.diagnostics["stop_confirmation_state"] == "confirmed"
 
 
 def test_cancellation_requires_new_stable_interval_after_velocity_goes_stale(monitored):

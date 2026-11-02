@@ -59,6 +59,25 @@ def test_ready_and_stow_share_arm_movement_behaviour():
     assert issubclass(StowArmBehaviour, ArmMovementBehaviour)
 
 
+def test_arm_action_copies_request_correlation_without_relabeling_active_motion():
+    contexts = []
+    action = ReadyArmBehaviour(robot_command_resources=object())
+    action.executor = SimpleNamespace(
+        active=False,
+        guarded_probe_execution=SimpleNamespace(
+            set_diagnostic_context=lambda **context: contexts.append(context),
+        ),
+    )
+    action.blackboard = blackboard("request-a")
+    action.blackboard.last_command.context_id = "context-a"
+    action.initialise()
+    assert contexts == [{"request_id": "request-a", "context_id": "context-a"}]
+    action.executor.active = True
+    action.blackboard.last_command.request_id = "stop-request"
+    action.initialise()
+    assert len(contexts) == 1
+
+
 def test_ready_action_only_starts_prepare_then_polls():
     executor = FakeExecutor(
         ArmMovementUpdate(
