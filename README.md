@@ -181,6 +181,24 @@ claim additionally requires a fresh Ubuntu 22.04/Humble environment provisioned
 with the prerequisites above. An existing developer underlay can mask missing
 dependencies and is not sufficient evidence for that claim.
 
+### 3.2 Offline tests and settings isolation
+
+`test/conftest.py` assigns a temporary `ROS_HOME` before collection and a fresh
+runtime directory for each test, including its subprocesses. Tests use the
+application defaults unless they explicitly save their own settings. Startup
+settings caches are cleared between tests; the user's settings and runtime files
+are not read or modified. The shared fixture does not import ROS or Qt.
+
+After sourcing the required dependencies, run the offline suite with:
+
+```bash
+QT_QPA_PLATFORM=offscreen python3 -m pytest -q test \
+  --ignore=test/test_preview_executor_responsiveness.py
+```
+
+The excluded preview integration test creates ROS nodes and is run separately
+when node startup is authorized.
+
 ---
 
 ## 4. Launching the System
