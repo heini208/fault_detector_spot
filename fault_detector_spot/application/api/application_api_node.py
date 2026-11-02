@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import os
 import sys
 from threading import Event, RLock
-from typing import Dict, Optional
+from typing import Dict
 from uuid import uuid4
 
 import rclpy
@@ -113,6 +113,7 @@ from fault_detector_spot.shared.ros.shutdown_coordinator import (
     ShutdownCoordinator, shutdown_signals,
 )
 from fault_detector_spot.shared.persistence.shutdown_state import StopUnconfirmedStore
+from fault_detector_spot.application.api.async_operation import OperationAdmission
 
 
 _TERMINAL_STATES = frozenset({
@@ -128,8 +129,8 @@ class _OperationExecution:
     goal_handle: object
     operation: ApplicationOperation
     finished: Future = field(default_factory=Future)
-    state: Optional[ApplicationCommandState] = None
-    cancellation_requested: bool = False
+    submitted: bool = False
+    cancellation_sent: bool = False
 
 
 class ApplicationApiNode(Node):
@@ -155,6 +156,7 @@ class ApplicationApiNode(Node):
             )
         self.declare_parameter("shutdown.confirmation_timeout_sec", 10.0)
         self.declare_parameter("shutdown.cleanup_timeout_sec", 20.0)
+        self._operation_admission = OperationAdmission(limit=1)
         self._executions: Dict[str, _OperationExecution] = {}
         self._callback_group = ReentrantCallbackGroup()
         lifecycle = CommandLifecycleConfig.from_node(self)
@@ -225,6 +227,7 @@ class ApplicationApiNode(Node):
         self.navigation_setup_api = NavigationSetupApi(
             self,
             self.application_controller.navigation_setup_coordinator,
+            admission=self._operation_admission,
         )
         self.declare_parameter("inspection.object_root", "")
         self.declare_parameter("sensor.root", "")
@@ -330,6 +333,7 @@ class ApplicationApiNode(Node):
             self.probe_setup_state_publisher,
             self.probe_setup_state_adapter,
             ProbeReferencePreviewSource(reference_repository),
+            admission=self._operation_admission,
         )
         self.probe_reference_capture_coordinator = (
             ProbeReferenceCaptureCoordinator(
@@ -347,12 +351,14 @@ class ApplicationApiNode(Node):
             self.probe_reference_capture_coordinator,
             self.probe_setup_state_publisher,
             self.probe_setup_state_adapter,
+            admission=self._operation_admission,
         )
         self.probe_setup_motion_api = ProbeSetupMotionApi(
             self,
             self.application_controller.probe_setup_coordinator,
             self.probe_setup_state_publisher,
             self.probe_setup_state_adapter,
+            admission=self._operation_admission,
         )
         self.probe_refinement_finalization_api = (
             ProbeRefinementFinalizationApi(
@@ -360,6 +366,7 @@ class ApplicationApiNode(Node):
                 self.application_controller.probe_setup_coordinator,
                 self.probe_setup_state_publisher,
                 self.probe_setup_state_adapter,
+                admission=self._operation_admission,
             )
         )
         self._state_publisher = self.create_publisher(
@@ -410,9 +417,12 @@ class ApplicationApiNode(Node):
                 f"Rejected operational intent: {exception}"
             )
             return GoalResponse.REJECT
-        return GoalResponse.ACCEPT
+        return (GoalResponse.ACCEPT if self._operation_admission.reserve(
+            id(goal_request), context_id=goal_request.context_id.strip(), lane="physical",
+        ) else GoalResponse.REJECT)
 
     def _accept_cancellation(self, goal_handle):
+        self._operation_admission.cancel(id(goal_handle.request))
         with self._lock:
             execution = next(
                 (
@@ -428,9 +438,25 @@ class ApplicationApiNode(Node):
 
     @tracked_shutdown_callback
     async def _execute_operation(self, goal_handle):
+        key = id(goal_handle.request)
+        if not self._operation_admission.claim(key):
+            try:
+                return self._abort_preparation(goal_handle, "Operational lane is busy or closing")
+            finally:
+                self._operation_admission.release_pending(key)
+        try:
+            return await self._execute_admitted_operation(goal_handle)
+        finally:
+            self._operation_admission.release(key)
+
+    async def _execute_admitted_operation(self, goal_handle):
         goal = goal_handle.request
         if self._shutdown.is_set():
             return self._abort_preparation(goal_handle, "Application is shutting down")
+        if (goal_handle.is_cancel_requested
+                or self._operation_admission.cancel_requested(id(goal))):
+            return self._abort_preparation(goal_handle, "Operation cancelled before dispatch",
+                                           cancelled=goal_handle.is_cancel_requested)
         try:
             operation = self.application_controller.prepare_operation(
                 intent=goal.intent,
@@ -448,20 +474,22 @@ class ApplicationApiNode(Node):
         try:
             self.application_controller.submit(operation)
         except Exception as exception:
-            state = self._failure_state(execution, str(exception))
-            execution.state = state
-            if not execution.finished.done():
-                execution.finished.set_result(state)
+            with self._lock:
+                if not execution.finished.done():
+                    state = self._failure_state(execution, str(exception))
+                    execution.finished.set_result(state)
+        with self._lock:
+            execution.submitted = True
 
-        if goal_handle.is_cancel_requested:
+        if (goal_handle.is_cancel_requested
+                or self._operation_admission.cancel_requested(id(goal))):
             self._request_execution_cancellation(execution)
 
-        await execution.finished
-
-        state = execution.state or self._failure_state(
-            execution,
-            "Operation ended without a terminal state",
-        )
+        try:
+            state = await execution.finished
+        finally:
+            with self._lock:
+                self._executions.pop(operation.request_id, None)
         result = ExecuteOperation.Result()
         result.state = state
         if state.state == ApplicationCommandState.STATE_SUCCEEDED:
@@ -476,11 +504,9 @@ class ApplicationApiNode(Node):
             goal_handle.canceled()
         else:
             goal_handle.abort()
-        with self._lock:
-            self._executions.pop(operation.request_id, None)
         return result
 
-    def _abort_preparation(self, goal_handle, detail):
+    def _abort_preparation(self, goal_handle, detail, *, cancelled=False):
         """Report preparation failure before a command request exists."""
         goal = goal_handle.request
         state = ApplicationCommandState()
@@ -489,25 +515,38 @@ class ApplicationApiNode(Node):
         state.client_id = goal.client_id.strip()
         state.context_id = goal.context_id.strip()
         state.intent = int(goal.intent.intent)
-        state.state = ApplicationCommandState.STATE_FAILED
+        state.state = (ApplicationCommandState.STATE_CANCELLED if cancelled
+                       else ApplicationCommandState.STATE_FAILED)
         state.detail = detail
         self._state_publisher.publish(state)
         result = ExecuteOperation.Result()
         result.state = state
-        goal_handle.abort()
+        if cancelled:
+            goal_handle.canceled()
+        else:
+            goal_handle.abort()
         return result
 
     def _request_execution_cancellation(self, execution):
-        if execution.cancellation_requested:
-            return
-        execution.cancellation_requested = True
+        with self._lock:
+            if (not execution.submitted or execution.cancellation_sent
+                    or execution.finished.done()):
+                return
+            execution.cancellation_sent = True
         try:
             self.application_controller.cancel(
                 execution.operation.request.client_id,
                 execution.operation.request_id,
             )
         except UnknownCommandRequest:
-            pass
+            with self._lock:
+                execution.cancellation_sent = False
+        except Exception as exception:
+            # A failed cancellation transport does not finish the physical
+            # request. Keep its callback and admission until owner completion.
+            with self._lock:
+                execution.cancellation_sent = False
+            self.get_logger().error(f"Cancellation failed; stop unconfirmed: {exception}")
 
     def _cancel_operation(self, request, response):
         try:
@@ -561,20 +600,26 @@ class ApplicationApiNode(Node):
         status: ApplicationOperationStatus,
     ) -> None:
         state = self._state_message(status)
-        self._state_publisher.publish(state)
         with self._lock:
             execution = self._executions.get(
                 status.operation.request_id
             )
-        if execution is None:
+            active = execution is not None and not execution.finished.done()
+            if active:
+                if status.state in _TERMINAL_STATES:
+                    execution.finished.set_result(state)
+        try:
+            self._state_publisher.publish(state)
+        except Exception as exception:
+            self.get_logger().error(f"Operational state publication failed: {exception}")
+        if not active:
             return
-        execution.state = state
         feedback = ExecuteOperation.Feedback()
         feedback.state = state
-        execution.goal_handle.publish_feedback(feedback)
-        if status.state in _TERMINAL_STATES:
-            if not execution.finished.done():
-                execution.finished.set_result(state)
+        try:
+            execution.goal_handle.publish_feedback(feedback)
+        except Exception as exception:
+            self.get_logger().error(f"Operational feedback publication failed: {exception}")
 
     def _state_message(self, status):
         message = ApplicationCommandState()
@@ -638,6 +683,10 @@ class ApplicationApiNode(Node):
                     "application_shutdown",
                 )
 
+    def _close_operation_admission(self):
+        self._shutdown.set()
+        self._operation_admission.close()
+
     def _command_shutdown_status(self):
         status = self.command_controller.software_stop_status
         return (
@@ -674,7 +723,6 @@ class ApplicationApiNode(Node):
                         state=ApplicationCommandState.STATE_STOP_UNCONFIRMED,
                         detail=f"Shutdown stop-unconfirmed: {detail}",
                     )
-                execution.state = state
                 execution.finished.set_result(state)
         if errors:
             raise RuntimeError("; ".join(errors))
@@ -699,12 +747,13 @@ class ApplicationApiNode(Node):
                         "probe_setup_motion_api", "probe_setup_api", "navigation_setup_api",
                     )
                 }
-                admission = {"application": self._shutdown.set}
+                admission = {"application": self._close_operation_admission}
                 admission.update({name: owner.request_shutdown for name, owner in setup_owners.items()})
                 confirmations = {
                     "commands": self._command_shutdown_status,
                     "acquisition": self.sensor_acquisition_coordinator.shutdown_status,
                     "operations": self._shutdown_callbacks.status,
+                    "accepted operations": self._operation_admission.shutdown_status,
                 }
                 confirmations.update({name: owner._shutdown_callbacks.status
                                       for name, owner in setup_owners.items()})

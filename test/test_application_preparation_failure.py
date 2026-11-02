@@ -14,6 +14,7 @@ from fault_detector_spot.application.api.application_api_node import (
     ApplicationApiNode,
 )
 from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
+from fault_detector_spot.application.api.async_operation import OperationAdmission
 from fault_detector_spot.application.controllers.application_controller import (
     ApplicationController,
 )
@@ -21,6 +22,7 @@ from fault_detector_spot.application.controllers.application_controller import (
 
 class ApiHarness(SimpleNamespace):
     _execute_operation = ApplicationApiNode._execute_operation
+    _execute_admitted_operation = ApplicationApiNode._execute_admitted_operation
     _abort_preparation = ApplicationApiNode._abort_preparation
 
 
@@ -43,6 +45,7 @@ def test_saved_probe_preparation_failure_aborts_with_correlated_state(
     stamp = Time(sec=12)
     node = ApiHarness(
         _shutdown=Event(),
+        _operation_admission=OperationAdmission(),
         _shutdown_callbacks=ShutdownCallbackActivity(),
         application_controller=controller,
         _executions={},
@@ -58,7 +61,10 @@ def test_saved_probe_preparation_failure_aborts_with_correlated_state(
     goal.intent.object_id = "motor"
     goal.intent.routine_id = "scan"
     goal.intent.probe_point_id = "point1"
-    handle = Mock(request=goal)
+    handle = Mock(request=goal, is_cancel_requested=False)
+    assert node._operation_admission.reserve(
+        id(goal), context_id=goal.context_id.strip(), lane="physical",
+    )
 
     result = asyncio.run(node._execute_operation(handle))
 

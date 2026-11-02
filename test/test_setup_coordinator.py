@@ -31,6 +31,9 @@ class FakeCommandController:
     def __init__(self):
         self.listeners = []
         self.submitted = []
+        self.cancelled = []
+        self.active_request_id = ""
+        self.queued_request_ids = ()
 
     def add_status_listener(self, listener):
         self.listeners.append(listener)
@@ -41,6 +44,10 @@ class FakeCommandController:
     def submit(self, request):
         self.submitted.append(request)
         return request.request_id
+
+    def cancel(self, request_id):
+        self.cancelled.append(request_id)
+        return request_id
 
     def emit(self, request, state, detail=""):
         status = CommandControllerStatus(
@@ -193,12 +200,7 @@ def test_context_listeners_receive_only_their_own_results():
         navigation,
         command(CommandID.START_SLAM),
     )
-    probe_operation = coordinator.prepare_command(
-        probe,
-        command(CommandID.READY_ARM),
-    )
     coordinator.submit(navigation_operation)
-    coordinator.submit(probe_operation)
 
     controller.emit(
         navigation_operation.request,
@@ -210,6 +212,10 @@ def test_context_listeners_receive_only_their_own_results():
     ]
     assert probe_statuses == []
 
+    controller.emit(navigation_operation.request, CommandControllerState.SUCCEEDED)
+    probe_operation = coordinator.prepare_command(probe, command(CommandID.READY_ARM))
+    coordinator.submit(probe_operation)
+
     controller.emit(
         probe_operation.request,
         CommandControllerState.SUCCEEDED,
@@ -220,7 +226,7 @@ def test_context_listeners_receive_only_their_own_results():
     ]
 
 
-def test_advancing_context_rejects_delayed_results():
+def test_advancing_context_cannot_discard_pending_ownership():
     controller = FakeCommandController()
     coordinator = SetupCoordinator(controller)
     context = coordinator.open_context(
@@ -232,16 +238,18 @@ def test_advancing_context_rejects_delayed_results():
     operation = coordinator.prepare_command(context, command())
     coordinator.submit(operation)
 
-    coordinator.advance_context(context)
+    with pytest.raises(RuntimeError, match="active operation"):
+        coordinator.advance_context(context)
     controller.emit(
         operation.request,
         CommandControllerState.SUCCEEDED,
     )
 
-    assert statuses == []
+    assert [status.state for status in statuses] == [CommandControllerState.SUCCEEDED]
+    assert coordinator.advance_context(context).revision == 1
 
 
-def test_closing_context_invalidates_pending_callbacks():
+def test_closing_context_preserves_terminal_callback_and_cancels_once():
     controller = FakeCommandController()
     coordinator = SetupCoordinator(controller)
     context = coordinator.open_context(
@@ -254,13 +262,22 @@ def test_closing_context_invalidates_pending_callbacks():
     coordinator.submit(operation)
 
     coordinator.close_context(context)
+    coordinator.close_context(context)
+    assert controller.cancelled == [operation.request_id]
+    assert coordinator.is_context_closing(context)
+    assert coordinator.is_current(context)
+    with pytest.raises(RuntimeError, match="admission is closed"):
+        coordinator.prepare_command(context, command())
     controller.emit(
         operation.request,
         CommandControllerState.SUCCEEDED,
     )
 
-    assert statuses == []
+    assert [status.state for status in statuses] == [CommandControllerState.SUCCEEDED]
+    controller.emit(operation.request, CommandControllerState.SUCCEEDED)
+    assert len(statuses) == 1
     assert not coordinator.is_current(context)
+    assert coordinator.is_context_closing(context)
     with pytest.raises(StaleSetupContext):
         coordinator.require_current(context)
 
@@ -293,3 +310,167 @@ def test_close_invalidates_contexts_and_detaches_status_listener():
     assert controller.listeners == []
     assert coordinator.contexts == ()
     assert not coordinator.is_current(context)
+
+
+def test_setup_admission_bounds_prepared_and_submitted_physical_lane():
+    controller = FakeCommandController()
+    coordinator = SetupCoordinator(controller)
+    first = coordinator.open_context(CommandOrigin.PROBE_SETUP, "first")
+    second = coordinator.open_context(CommandOrigin.NAVIGATION_SETUP, "second")
+    operation = coordinator.prepare_command(first, command())
+    for submit in (False, True):
+        if submit:
+            coordinator.submit(operation)
+        for context in (first, second):
+            with pytest.raises(RuntimeError, match="physical lane"):
+                coordinator.prepare_command(context, command())
+        with pytest.raises(RuntimeError, match="Busy"):
+            coordinator.require_command_lane_idle("Busy")
+    controller.emit(operation.request, CommandControllerState.CANCELLED)
+    assert coordinator.prepare_command(second, command()).context == second
+
+
+def test_concurrent_setup_admission_has_one_physical_lane_owner():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    coordinator = SetupCoordinator(FakeCommandController())
+    contexts = [coordinator.open_context(CommandOrigin.PROBE_SETUP, name)
+                for name in ("first", "second")]
+    barrier = Barrier(2)
+
+    def prepare(context):
+        barrier.wait(timeout=5)
+        try:
+            coordinator.prepare_command(context, command())
+            return True
+        except RuntimeError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        assert sorted(workers.map(prepare, contexts)) == [False, True]
+
+
+def test_close_before_submit_cancels_exactly_once_without_dispatch():
+    controller = FakeCommandController()
+    coordinator = SetupCoordinator(controller)
+    context = coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe")
+    results = []
+    coordinator.add_operation_listener(context, results.append)
+    operation = coordinator.prepare_command(context, command())
+
+    coordinator.close_context(context)
+    coordinator.close_context(context)
+
+    assert [status.state for status in results] == [CommandControllerState.CANCELLED]
+    assert controller.submitted == controller.cancelled == []
+    with pytest.raises(ValueError, match="not prepared"):
+        coordinator.submit(operation)
+
+
+def test_close_during_submit_yields_until_command_can_be_cancelled():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    controller = FakeCommandController()
+    coordinator = SetupCoordinator(controller)
+    context = coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe")
+    statuses = []
+    coordinator.add_operation_listener(context, statuses.append)
+    operation = coordinator.prepare_command(context, command())
+    entered, release = Event(), Event()
+    original_submit = controller.submit
+
+    def delayed_submit(request):
+        entered.set()
+        assert release.wait(5)
+        return original_submit(request)
+
+    controller.submit = delayed_submit
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        pending = workers.submit(coordinator.submit, operation)
+        assert entered.wait(5)
+        try:
+            coordinator.close()
+            assert coordinator.is_current(context)
+            assert controller.listeners
+            assert controller.cancelled == []
+        finally:
+            release.set()
+        assert pending.result(timeout=5) == operation.request_id
+    assert controller.cancelled == [operation.request_id]
+    controller.emit(operation.request, CommandControllerState.STOP_UNCONFIRMED)
+    assert coordinator.is_current(context)
+    controller.emit(operation.request, CommandControllerState.STOP_CONFIRMED)
+    assert not coordinator.is_current(context)
+    assert controller.listeners == []
+    assert [status.state for status in statuses] == [
+        CommandControllerState.STOP_UNCONFIRMED, CommandControllerState.STOP_CONFIRMED,
+    ]
+
+
+def test_close_retries_cancellation_error_without_releasing_ownership():
+    controller = FakeCommandController()
+    coordinator = SetupCoordinator(controller)
+    context = coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe")
+    operation = coordinator.prepare_command(context, command())
+    coordinator.submit(operation)
+    original_cancel = controller.cancel
+
+    def fail_cancel(_request_id):
+        raise RuntimeError("Transport unavailable")
+
+    controller.cancel = fail_cancel
+    with pytest.raises(RuntimeError, match="Transport unavailable"):
+        coordinator.close()
+    assert coordinator.is_current(context)
+    assert controller.listeners
+    controller.cancel = original_cancel
+    coordinator.close()
+    assert controller.cancelled == [operation.request_id]
+    controller.emit(operation.request, CommandControllerState.CANCELLED)
+    assert coordinator.contexts == ()
+
+
+def test_deferred_cancel_failure_does_not_become_false_submission_failure():
+    controller = FakeCommandController()
+    coordinator = SetupCoordinator(controller)
+    context = coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe")
+    operation = coordinator.prepare_command(context, command())
+    statuses = []
+    coordinator.add_operation_listener(context, statuses.append)
+
+    def submit(request):
+        controller.submitted.append(request)
+        coordinator.close_context(context)
+
+    def cancel(_request_id):
+        raise RuntimeError("Stop transport unavailable")
+
+    controller.submit, controller.cancel = submit, cancel
+    assert coordinator.submit(operation) == operation.request_id
+    assert coordinator.is_current(context)
+    assert [status.state for status in statuses] == [CommandControllerState.STOP_UNCONFIRMED]
+    with pytest.raises(RuntimeError, match="Busy"):
+        coordinator.require_command_lane_idle("Busy")
+    controller.emit(operation.request, CommandControllerState.STOP_CONFIRMED)
+    assert statuses[-1].state is CommandControllerState.STOP_CONFIRMED
+    assert not coordinator.is_current(context)
+
+
+def test_terminal_notification_keeps_lane_reserved_until_context_update_finishes():
+    controller = FakeCommandController()
+    coordinator = SetupCoordinator(controller)
+    context = coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe")
+    operation = coordinator.prepare_command(context, command())
+    coordinator.submit(operation)
+    updated = []
+
+    def finish(_status):
+        with pytest.raises(RuntimeError, match="physical lane"):
+            coordinator.prepare_command(context, command())
+        updated.append(coordinator.advance_context(context))
+
+    coordinator.add_operation_listener(context, finish)
+    controller.emit(operation.request, CommandControllerState.SUCCEEDED)
+    assert coordinator.prepare_command(updated[0], command()).context == updated[0]

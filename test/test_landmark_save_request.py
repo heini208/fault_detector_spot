@@ -11,6 +11,7 @@ from std_msgs.msg import String
 
 from fault_detector_spot.application.api.navigation_setup_api import NavigationSetupApi
 from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
+from fault_detector_spot.application.api.async_operation import OperationAdmission
 from fault_detector_spot.navigation.landmark_observations import LandmarkObservationPending
 from test_command_request_correlation import FakeClock
 from test_navigation_setup_coordinator import coordinator, map_pose
@@ -102,6 +103,8 @@ def api_rig(rig, *, operation=NavigationSetupIntent.OPERATION_ADD_VISIBLE_TAG_LA
     api._shutdown = Event()
     api._shutdown_callbacks = ShutdownCallbackActivity()
     api._pose_waiters = set()
+    api._executions = {}
+    api._admission = OperationAdmission(limit=1)
     api._state_publisher = Mock()
     api._callback_group = object()
     goal = ExecuteNavigationSetup.Goal(
@@ -112,6 +115,8 @@ def api_rig(rig, *, operation=NavigationSetupIntent.OPERATION_ADD_VISIBLE_TAG_LA
         ),
     )
     handle = Mock(request=goal, is_cancel_requested=False)
+    from rclpy.action import GoalResponse
+    assert api._accept(goal) == GoalResponse.ACCEPT
     coroutine = api._execute(handle)
     waiting = coroutine.send(None)  # Waiting yields; no executor thread sleeps.
     assert waiting in api._pose_waiters

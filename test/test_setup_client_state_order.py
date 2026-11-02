@@ -154,7 +154,7 @@ def pending_action(request, monkeypatch):
 
 
 @pytest.mark.parametrize("phase", [0, 1], ids=["goal-response", "result"])
-def test_ambiguous_setup_response_keeps_busy_until_correlated_owner_confirmation(pending_action, phase):
+def test_ambiguous_setup_response_keeps_ownership_while_close_requests_cancellation(pending_action, phase):
     adapter, local_id, handles, methods, message_type = pending_action
     uncertain, rejected, close_results = [], [], []
     adapter.request_uncertain.connect(uncertain.append)
@@ -163,8 +163,8 @@ def test_ambiguous_setup_response_keeps_busy_until_correlated_owner_confirmation
     feedback = lambda code: SimpleNamespace(feedback=SimpleNamespace(
         state=state(message_type, 3, code),
     ))
-    # Feedback establishes the server identity; a lost action response does not
-    # erase it or release the client's close guard.
+    # Feedback establishes the server identity; close requests cancellation
+    # without pretending a lost action response established a terminal state.
     getattr(adapter, methods[2])(local_id, feedback(message_type.STATE_RUNNING))
     failed = Mock()
     failed.result.side_effect = RuntimeError("response lost")
@@ -172,9 +172,10 @@ def test_ambiguous_setup_response_keeps_busy_until_correlated_owner_confirmation
     assert uncertain == ["response lost"]
     assert not rejected
     assert local_id in handles
-    assert adapter.close() is None
-    adapter._close_client.call_async.assert_not_called()
-    assert close_results[-1][0] is False
+    assert adapter.close() is not None
+    adapter._close_client.call_async.assert_called_once()
+    assert close_results == []
+    assert adapter.close_pending
 
     adapter._receive_state(state(message_type, 3, message_type.STATE_STOP_CONFIRMED, request="other"))
     assert local_id in handles
@@ -186,6 +187,41 @@ def test_ambiguous_setup_response_keeps_busy_until_correlated_owner_confirmation
     assert local_id not in handles
     adapter.close()
     adapter._close_client.call_async.assert_called_once()
+
+
+def test_context_close_keeps_delayed_acceptance_callbacks_until_result(pending_action):
+    adapter, local_id, handles, methods, message_type = pending_action
+    pending = adapter.close()
+    assert pending is adapter.close()
+    goal = Mock(accepted=True)
+    future = Mock()
+    future.result.return_value = goal
+    getattr(adapter, methods[0])(local_id, future)
+    adapter.close()
+    assert adapter.close_pending
+    closed = Mock()
+    closed.result.return_value = SimpleNamespace(closed=True, detail="Close requested")
+    adapter._receive_close(closed)
+    assert adapter.close_pending
+    stopped = state(message_type, 3, message_type.STATE_CANCELLED)
+    result = Mock()
+    result.result.return_value = SimpleNamespace(result=SimpleNamespace(state=stopped))
+    getattr(adapter, methods[1])(local_id, result)
+    assert local_id not in handles
+    assert not adapter.close_pending
+
+
+def test_close_retires_a_context_received_after_the_close_request(client):
+    adapter, _, message_type = client
+    adapter.context_id = ""
+    adapter.open()
+    adapter._close_client.call_async.reset_mock()
+    assert adapter.close() is None
+    assert adapter.close_pending
+    ready = state(message_type, 1, message_type.STATE_READY)
+    adapter._receive_state(ready)
+    adapter._close_client.call_async.assert_called_once()
+    assert adapter._close_client.call_async.call_args.args[0].context_id == "context"
 
 
 def test_explicit_setup_goal_rejection_releases_only_its_pending_guard(pending_action):

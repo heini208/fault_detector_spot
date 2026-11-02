@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+from math import isfinite
+from time import monotonic
 from threading import Event, RLock
 
 from fault_detector_spot.application.controllers.command_controller import (
@@ -53,11 +55,20 @@ class _MotionWaiter:
 class ProbeRefinementFinalizationCoordinator:
     """Execute approval, persistence, and two-stage retraction."""
 
-    def __init__(self, coordinator, poll_sec: float = 0.05):
-        if poll_sec <= 0.0:
-            raise ValueError("Finalization polling interval must be positive")
+    def __init__(
+        self,
+        coordinator,
+        poll_sec: float = 0.05,
+        motion_timeout_sec: float = 120.0,
+        cancellation_timeout_sec: float = 5.0,
+    ):
+        for value in (poll_sec, motion_timeout_sec, cancellation_timeout_sec):
+            if not isfinite(value) or value <= 0.0:
+                raise ValueError("Finalization timeouts must be finite and positive")
         self.coordinator = coordinator
         self.poll_sec = float(poll_sec)
+        self.motion_timeout_sec = float(motion_timeout_sec)
+        self.cancellation_timeout_sec = float(cancellation_timeout_sec)
         self._lock = RLock()
         self._waiters = {}
         self._shutdown = Event()
@@ -91,178 +102,78 @@ class ProbeRefinementFinalizationCoordinator:
             spec.save_requested,
         )
 
-        if cancel_requested():
-            snapshot = self._fail(
-                context_id,
-                client_id,
-                request_id,
-                "Probe finalization was cancelled before retraction",
-            )
-            self._emit(
-                state_changed,
-                FinalizationPhase.RECOVERY_REQUIRED,
-                saved,
-                snapshot,
-            )
-            return snapshot, saved, FinalizationPhase.RECOVERY_REQUIRED
-
-        if spec.save_requested:
-            self._emit(
-                state_changed,
-                FinalizationPhase.APPROVING,
-                saved,
-                snapshot,
-            )
-            context = self.coordinator.context(context_id, client_id)
-            snapshot = (
-                self.coordinator.approve_probe_geometry_for_finalization(
+        try:
+            self._require_running(cancel_requested)
+            if spec.save_requested:
+                self._emit(
+                    state_changed, FinalizationPhase.APPROVING, saved, snapshot,
+                )
+                context = self.coordinator.context(context_id, client_id)
+                snapshot = self.coordinator.approve_probe_geometry_for_finalization(
+                    context, request_id,
+                )
+                self._require_running(cancel_requested)
+                self._emit(
+                    state_changed, FinalizationPhase.SAVING, saved, snapshot,
+                )
+                context = self.coordinator.context(context_id, client_id)
+                snapshot = self.coordinator.save_probe_point_for_finalization(
                     context,
                     request_id,
+                    spec.probe_point_id,
+                    spec.probe_point_display_name,
+                    spec.position_tolerance_m,
+                    spec.orientation_tolerance_rad,
+                    spec.measurement_duration_sec,
                 )
-            )
-            self._emit(
-                state_changed,
-                FinalizationPhase.SAVING,
-                saved,
-                snapshot,
-            )
+                saved = True
+
+            for phase, kind in (
+                (FinalizationPhase.RETRACTING_TO_ALIGNED,
+                 ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH),
+                (FinalizationPhase.RETRACTING_TO_SAFE,
+                 ProbeMotionKind.MOVE_SAFE_APPROACH),
+            ):
+                self._emit(state_changed, phase, saved, snapshot)
+                self._require_running(cancel_requested)
+                status = self._execute_retraction(
+                    context_id,
+                    client_id,
+                    request_id,
+                    kind,
+                    cancel_requested,
+                    spec.position_tolerance_m,
+                    spec.orientation_tolerance_rad,
+                )
+                if status.state is not CommandControllerState.SUCCEEDED:
+                    raise RuntimeError(status.detail or "Mandatory retraction failed")
+                context = self.coordinator.context(context_id, client_id)
+                snapshot = self.coordinator.snapshot(context)
+
             context = self.coordinator.context(context_id, client_id)
-            snapshot = self.coordinator.save_probe_point_for_finalization(
-                context,
-                request_id,
-                spec.probe_point_id,
-                spec.probe_point_display_name,
-                spec.position_tolerance_m,
-                spec.orientation_tolerance_rad,
-                spec.measurement_duration_sec,
-            )
-            saved = True
-
-        phase = FinalizationPhase.RETRACTING_TO_ALIGNED
-        self._emit(state_changed, phase, saved, snapshot)
-        try:
-            status = self._execute_retraction(
-                context_id,
-                client_id,
-                request_id,
-                ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
-                cancel_requested,
-                spec.position_tolerance_m,
-                spec.orientation_tolerance_rad,
-            )
-        except Exception:
-            if saved:
-                return self._complete_saved_after_retraction_failure(
-                    context_id,
-                    client_id,
-                    request_id,
-                    state_changed,
-                )
-            raise
-        if status.state is not CommandControllerState.SUCCEEDED:
-            detail = status.detail or "Aligned retraction failed"
-            if saved:
-                return self._complete_saved_after_retraction_failure(
-                    context_id,
-                    client_id,
-                    request_id,
-                    state_changed,
-                )
+            snapshot = self.coordinator.complete_finalization(context, request_id)
+        except Exception as exception:
+            # A persisted point is durable even when cancellation, disconnection,
+            # or retraction fails. Keep its refinement and mandatory recovery.
             snapshot = self._fail(
-                context_id,
-                client_id,
-                request_id,
-                detail,
+                context_id, client_id, request_id, str(exception),
             )
+            saved = saved or bool(getattr(
+                getattr(snapshot, "refinement", None), "saved", False,
+            ))
             self._emit(
-                state_changed,
-                FinalizationPhase.RECOVERY_REQUIRED,
-                saved,
-                snapshot,
+                state_changed, FinalizationPhase.RECOVERY_REQUIRED, saved, snapshot,
             )
             return snapshot, saved, FinalizationPhase.RECOVERY_REQUIRED
 
-        phase = FinalizationPhase.RETRACTING_TO_SAFE
-        context = self.coordinator.context(context_id, client_id)
-        snapshot = self.coordinator.snapshot(context)
-        self._emit(state_changed, phase, saved, snapshot)
-        try:
-            status = self._execute_retraction(
-                context_id,
-                client_id,
-                request_id,
-                ProbeMotionKind.MOVE_SAFE_APPROACH,
-                cancel_requested,
-                spec.position_tolerance_m,
-                spec.orientation_tolerance_rad,
-            )
-        except Exception:
-            if saved:
-                return self._complete_saved_after_retraction_failure(
-                    context_id,
-                    client_id,
-                    request_id,
-                    state_changed,
-                )
-            raise
-        if status.state is not CommandControllerState.SUCCEEDED:
-            detail = status.detail or "Safe retraction failed"
-            if saved:
-                return self._complete_saved_after_retraction_failure(
-                    context_id,
-                    client_id,
-                    request_id,
-                    state_changed,
-                )
-            snapshot = self._fail(
-                context_id,
-                client_id,
-                request_id,
-                detail,
-            )
-            self._emit(
-                state_changed,
-                FinalizationPhase.RECOVERY_REQUIRED,
-                saved,
-                snapshot,
-            )
-            return snapshot, saved, FinalizationPhase.RECOVERY_REQUIRED
-
-        context = self.coordinator.context(context_id, client_id)
-        snapshot = self.coordinator.complete_finalization(
-            context,
-            request_id,
-        )
-        self._emit(
-            state_changed,
-            FinalizationPhase.COMPLETE,
-            saved,
-            snapshot,
-        )
+        self._emit(state_changed, FinalizationPhase.COMPLETE, saved, snapshot)
         return snapshot, saved, FinalizationPhase.COMPLETE
 
-    def _complete_saved_after_retraction_failure(
-        self,
-        context_id,
-        client_id,
-        request_id,
-        state_changed,
-    ):
-        context = self.coordinator.context(context_id, client_id)
-        snapshot = (
-            self.coordinator
-            .complete_saved_finalization_after_retraction_failure(
-                context,
-                request_id,
-            )
-        )
-        self._emit(
-            state_changed,
-            FinalizationPhase.COMPLETE,
-            True,
-            snapshot,
-        )
-        return snapshot, True, FinalizationPhase.COMPLETE
+    def _require_running(self, cancel_requested):
+        if self._shutdown.is_set():
+            raise RuntimeError("Application shutdown interrupted retraction")
+        if cancel_requested():
+            raise RuntimeError("Probe finalization was cancelled; retraction is required")
 
     def _execute_retraction(
         self,
@@ -276,6 +187,7 @@ class ProbeRefinementFinalizationCoordinator:
     ):
         if self._shutdown.is_set():
             raise RuntimeError("Application is shutting down")
+        self._require_running(cancel_requested)
         context = self.coordinator.context(context_id, client_id)
         operation = self.coordinator.prepare_motion(
             context,
@@ -287,44 +199,45 @@ class ProbeRefinementFinalizationCoordinator:
             ),
             finalization_request_id=finalization_request_id,
         )
-        if self._shutdown.is_set():
-            raise RuntimeError("Application is shutting down")
         waiter = _MotionWaiter()
         with self._lock:
             self._waiters[operation.request_id] = waiter
         try:
+            if self._shutdown.is_set() or cancel_requested():
+                # Preparation reserves command ownership. Cancel that reservation
+                # before submission when close/cancel arrived during preparation.
+                self.coordinator.cancel_motion(context, operation.request_id)
+                raise RuntimeError(
+                    "Probe finalization cancelled during preparation; retraction is required"
+                )
             self.coordinator.submit_motion(operation)
-        except Exception:
+            deadline = monotonic() + self.motion_timeout_sec
+            cancellation_deadline = None
+            while not waiter.event.is_set():
+                stopping = self._shutdown.is_set()
+                timed_out = monotonic() >= deadline
+                if stopping or cancel_requested() or timed_out:
+                    if cancellation_deadline is None:
+                        # Retain command ownership until its actual terminal
+                        # status; this waiter never manufactures a stopped state.
+                        cancellation_deadline = (
+                            monotonic() + self.cancellation_timeout_sec
+                        )
+                        self.coordinator.cancel_motion(context, operation.request_id)
+                    if stopping:
+                        raise RuntimeError("Application shutdown interrupted retraction")
+                    if monotonic() >= cancellation_deadline:
+                        raise RuntimeError(
+                            "Retraction stop unconfirmed after cancellation deadline; "
+                            "recovery is required"
+                        )
+                waiter.event.wait(self.poll_sec)
+            if waiter.status is None:
+                raise RuntimeError("Retraction completed without a correlated status")
+            return waiter.status
+        finally:
             with self._lock:
                 self._waiters.pop(operation.request_id, None)
-            raise
-
-        cancellation_sent = False
-        while not waiter.event.wait(self.poll_sec):
-            if self._shutdown.is_set():
-                with self._lock:
-                    self._waiters.pop(operation.request_id, None)
-                raise RuntimeError("Application shutdown interrupted retraction")
-            if cancel_requested() and not cancellation_sent:
-                cancellation_sent = True
-                try:
-                    context = self.coordinator.context(
-                        context_id,
-                        client_id,
-                    )
-                    self.coordinator.cancel_motion(
-                        context,
-                        operation.request_id,
-                    )
-                except LookupError:
-                    pass
-        with self._lock:
-            self._waiters.pop(operation.request_id, None)
-        if waiter.status is None:
-            raise RuntimeError(
-                "Retraction completed without a correlated status"
-            )
-        return waiter.status
 
     def _fail(self, context_id, client_id, request_id, detail):
         context = self.coordinator.context(context_id, client_id)
@@ -337,7 +250,7 @@ class ProbeRefinementFinalizationCoordinator:
     def _receive_motion_status(self, status):
         with self._lock:
             waiter = self._waiters.get(status.request_id)
-            if waiter is None:
+            if waiter is None or waiter.event.is_set():
                 return
             waiter.status = status
             if status.state in _TERMINAL_STATES:

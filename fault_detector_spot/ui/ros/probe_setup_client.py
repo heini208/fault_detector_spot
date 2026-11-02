@@ -57,6 +57,9 @@ class ProbeSetupClient(QObject):
         self._state_order = SetupStateOrder()
         self._command_state_order = CommandStateOrder()
         self._pending_request_id = ""
+        self._closing = False
+        self._destroyed = False
+        self._close_future = None
         self._motion_goal_handles = {}
         self._finalization_goal_handles = {}
         self._capture_goal_handles = {}
@@ -103,6 +106,9 @@ class ProbeSetupClient(QObject):
 
     def open(self):
         """Open one server-owned probe setup context."""
+        if self._closing and self.close_pending:
+            return None
+        self._closing = False
         intent = ProbeSetupIntent()
         intent.operation = ProbeSetupIntent.OPERATION_OPEN
         return self._send(intent, "")
@@ -116,6 +122,9 @@ class ProbeSetupClient(QObject):
 
     def execute_motion(self, intent: ProbeSetupMotionIntent):
         """Submit one single-step setup movement in the current context."""
+        if self._closing or self._destroyed:
+            self.request_rejected.emit("Probe setup is closing")
+            return None
         if not isinstance(intent, ProbeSetupMotionIntent):
             raise TypeError("Expected a ProbeSetupMotionIntent message")
         if not self.context_id:
@@ -158,6 +167,9 @@ class ProbeSetupClient(QObject):
         """Request server-owned persistence and mandatory retraction."""
         if not isinstance(save_requested, bool):
             raise TypeError("Save requested flag must be a boolean")
+        if self._closing or self._destroyed:
+            self.request_rejected.emit("Probe setup is closing")
+            return None
         if not self.context_id:
             self.request_rejected.emit("Probe setup context is not open")
             return None
@@ -208,6 +220,9 @@ class ProbeSetupClient(QObject):
         replace_existing=False,
     ):
         """Request server-owned synchronized reference capture."""
+        if self._closing or self._destroyed:
+            self.request_rejected.emit("Probe setup is closing")
+            return None
         camera_ids = tuple(str(value).strip() for value in reference_camera_ids)
         if len(camera_ids) != 3:
             raise ValueError("Exactly three reference camera slots are required")
@@ -248,19 +263,11 @@ class ProbeSetupClient(QObject):
         return local_id
 
     def close(self):
-        """Close the current server-owned probe setup context."""
+        """Cancel active requests and ask the server to retire their context."""
+        self._closing = True
+        if self._close_future is not None:
+            return self._close_future
         if not self.context_id:
-            return None
-        if (
-            self._pending_request_id
-            or self._motion_goal_handles
-            or self._finalization_goal_handles
-            or self._capture_goal_handles
-        ):
-            self.close_finished.emit(
-                False,
-                "Probe setup operation is still in progress",
-            )
             return None
         if not self._close_client.service_is_ready():
             self.close_finished.emit(
@@ -271,9 +278,20 @@ class ProbeSetupClient(QObject):
         request = CloseSetup.Request()
         request.client_id = self.client_id
         request.context_id = self.context_id
-        future = self._close_client.call_async(request)
+        try:
+            future = self._close_client.call_async(request)
+        except Exception as exception:
+            self.close_finished.emit(False, str(exception))
+            return None
+        self._close_future = future
         future.add_done_callback(self._receive_close)
         return future
+
+    @property
+    def close_pending(self):
+        return bool(self.context_id or self._pending_request_id
+                    or self._motion_goal_handles or self._finalization_goal_handles
+                    or self._capture_goal_handles)
 
     def request_preview(self, reference_view_id: str):
         """Request one selected context's read-only RGB preview."""
@@ -334,6 +352,9 @@ class ProbeSetupClient(QObject):
     def _send(self, intent, context_id):
         if not isinstance(intent, ProbeSetupIntent):
             raise TypeError("Expected a ProbeSetupIntent message")
+        if self._closing or self._destroyed:
+            self.request_rejected.emit("Probe setup is closing")
+            return None
         if self._pending_request_id:
             self.request_rejected.emit(
                 "A probe setup transaction is already in progress"
@@ -388,6 +409,8 @@ class ProbeSetupClient(QObject):
             return False
         if state.context_id:
             self.context_id = state.context_id
+            if self._closing:
+                self.close()
         fingerprint = (
             state.request_id,
             int(state.state),
@@ -403,6 +426,7 @@ class ProbeSetupClient(QObject):
         return True
 
     def _receive_close(self, future):
+        self._close_future = None
         try:
             response = future.result()
         except Exception as exception:
@@ -551,6 +575,10 @@ class ProbeSetupClient(QObject):
 
     def destroy(self):
         """Destroy client-side ROS resources owned by this adapter."""
+        if self._destroyed:
+            return
+        self.close()
+        self._destroyed = True
         self.node.destroy_timer(self._preview_retry_timer)
         self.node.destroy_client(self._execute_client)
         self.node.destroy_client(self._close_client)

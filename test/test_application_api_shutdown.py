@@ -10,6 +10,7 @@ from fault_detector_msgs.msg import ApplicationCommandState
 
 from fault_detector_spot.application.api.application_api_node import ApplicationApiNode
 from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
+from fault_detector_spot.application.api.async_operation import OperationAdmission
 
 
 SETUP = (
@@ -22,6 +23,7 @@ def make_node(monkeypatch, timeout=0.1):
     node = ApplicationApiNode.__new__(ApplicationApiNode)
     node._lock = RLock()
     node._shutdown = Event()
+    node._operation_admission = OperationAdmission()
     node._shutdown_callbacks = ShutdownCallbackActivity()
     node._shutdown_coordinator = None
     node._shutdown_lock = RLock()
@@ -98,7 +100,7 @@ def test_missing_owner_reply_and_terminal_result_report_individual_resources(mon
     report = node.shutdown(executor)
     assert not report.confirmed
     assert set(report.unresolved) >= {'commands', 'operations', 'acquisition'}
-    assert execution.state.state == ApplicationCommandState.STATE_STOP_UNCONFIRMED
+    assert execution.finished.result().state == ApplicationCommandState.STATE_STOP_UNCONFIRMED
     assert execution.finished.done()
     node._shutdown_store.record.assert_called_once_with(report.unresolved)
     node.sensor_acquisition_coordinator.close.assert_called_once_with(stop_unconfirmed=True)
@@ -130,8 +132,46 @@ def test_late_operation_and_reset_are_rejected_after_admission_closes(monkeypatc
     node.application_controller.reset_software_stop.assert_not_called()
 
 
-def test_fresh_idle_owners_do_not_clear_retained_shutdown_uncertainty(monkeypatch):
+def test_accepted_action_keeps_callbacks_available_before_execute_begins(monkeypatch):
+    node, executor = make_node(monkeypatch)
+    node.command_controller.software_stop_status.stop_confirmed = True
+    goal = SimpleNamespace(context_id='context')
+    handle = Mock(request=goal)
+    node._abort_preparation = Mock(return_value='terminal')
+    assert node._operation_admission.reserve(id(goal), context_id='context', lane='physical')
+
+    def progress(timeout_sec):
+        if not node._shutdown.is_set() or node._abort_preparation.called:
+            return
+        executor.shutdown.assert_not_called()
+        callback = node._execute_operation(handle)
+        import pytest
+        with pytest.raises(StopIteration) as completed:
+            callback.send(None)
+        assert completed.value.value == 'terminal'
+
+    executor.spin_once.side_effect = progress
+    report = node.shutdown(executor)
+    assert report.confirmed
+    node._abort_preparation.assert_called_once()
+    assert node._operation_admission.shutdown_status()[0]
+
+
+def test_missing_accepted_callback_is_bounded_and_explicitly_unconfirmed(monkeypatch):
     node, executor = make_node(monkeypatch, timeout=0.02)
+    node.command_controller.software_stop_status.stop_confirmed = True
+    assert node._operation_admission.reserve('pending', context_id='context', lane='physical')
+    report = node.shutdown(executor)
+    assert not report.confirmed
+    assert 'accepted operations' in report.unresolved
+    executor.shutdown.assert_called_once()
+    node._shutdown_store.confirm_session.assert_not_called()
+
+
+def test_fresh_idle_owners_do_not_clear_retained_shutdown_uncertainty(monkeypatch):
+    # This tests retained uncertainty, not thread scheduling latency. Allow all
+    # independent owner callbacks to run before asserting only prior uncertainty.
+    node, executor = make_node(monkeypatch, timeout=1.0)
     node._startup_unresolved = {'bt_runner/arm': 'Goal result missing'}
     node.command_controller.software_stop_status.stop_confirmed = True
     report = node.shutdown(executor)
@@ -149,7 +189,7 @@ def test_publication_error_does_not_lose_durable_uncertainty_or_action_result(mo
     assert not report.confirmed
     node._shutdown_store.record.assert_called_once_with(report.unresolved)
     assert execution.finished.done()
-    assert execution.state.state == ApplicationCommandState.STATE_STOP_UNCONFIRMED
+    assert execution.finished.result().state == ApplicationCommandState.STATE_STOP_UNCONFIRMED
     assert 'report stop-unconfirmed' in report.cleanup_errors
     executor.shutdown.assert_called_once()
 

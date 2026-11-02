@@ -13,6 +13,7 @@ from fault_detector_spot.application.api.navigation_setup_api import NavigationS
 from fault_detector_spot.application.api.probe_setup_motion_api import ProbeSetupMotionApi, _ProbeMotionExecution
 from fault_detector_spot.application.api.probe_point_execution_api import ProbePointExecutionApi
 from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
+from fault_detector_spot.application.api.async_operation import OperationAdmission
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.controllers.command_controller import CommandControllerState
 from fault_detector_spot.application.coordinators.probe_refinement_finalization_coordinator import (
@@ -41,15 +42,18 @@ def test_api_action_waits_for_confirmed_stop_and_publishes_uncertainty(kind):
         finished = execution.finished.done
         message_type = ApplicationCommandState
     elif kind == "navigation":
-        execution = _NavigationExecution(goal, "request", object(), 0)
+        execution = _NavigationExecution(goal, "request", object())
         harness._public_state = NavigationSetupApi._public_state
         harness._state = lambda snapshot, operation, code, detail, request_id: NavigationSetupState(
             state=code, detail=detail, request_id=request_id,
         )
         harness._early_states = {}
         harness.node = Mock()
+        harness._update_execution = lambda execution, state: NavigationSetupApi._update_execution(
+            harness, execution, state,
+        )
         receive = lambda status: NavigationSetupApi._receive_status(harness, status)
-        finished = execution.finished.is_set
+        finished = execution.finished.done
         message_type = NavigationSetupState
     else:
         execution = _ProbeMotionExecution(goal, "request", object())
@@ -61,7 +65,7 @@ def test_api_action_waits_for_confirmed_stop_and_publishes_uncertainty(kind):
             ProbeSetupState(state=code, detail=detail, request_id=kwargs["request_id"])
         )
         receive = lambda status: ProbeSetupMotionApi._receive_status(harness, status)
-        finished = execution.finished.is_set
+        finished = execution.finished.done
         message_type = ProbeSetupState
     harness._executions = {"request": execution}
 
@@ -92,19 +96,28 @@ def test_probe_action_confirmed_stop_uses_valid_ros_terminal_transition(cancel_r
     api._shutdown_callbacks = ShutdownCallbackActivity()
     api._lock = RLock()
     api._executions = {}
+    api._admission = OperationAdmission(limit=1)
     api._motion_request = Mock()
     api.coordinator = Mock()
     operation = SimpleNamespace(request_id="request")
     api.coordinator.prepare_motion.return_value = operation
-    goal = Mock(is_cancel_requested=cancel_requested)
+    goal = Mock(is_cancel_requested=False)
+    goal.request.context_id = "context"
+    goal.request.client_id = "client"
 
     def stop_confirmed(_operation):
+        goal.is_cancel_requested = cancel_requested
         execution = api._executions["request"]
         execution.state = ProbeSetupState(state=ProbeSetupState.STATE_STOP_CONFIRMED)
-        execution.finished.set()
+        execution.finished.set_result(execution.state)
 
     api.coordinator.submit_motion.side_effect = stop_confirmed
-    result = api._execute(goal)
+    from rclpy.action import GoalResponse
+    assert api._accept(goal.request) == GoalResponse.ACCEPT
+    coroutine = api._execute(goal)
+    with pytest.raises(StopIteration) as completed:
+        coroutine.send(None)
+    result = completed.value.value
 
     assert result.state.state == ProbeSetupState.STATE_STOP_CONFIRMED
     assert goal.canceled.call_count == int(cancel_requested)

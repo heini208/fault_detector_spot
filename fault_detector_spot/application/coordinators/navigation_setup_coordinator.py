@@ -132,6 +132,7 @@ class NavigationSetupCoordinator:
         self._lock = RLock()
         self._operations = SetupOperationRegistry()
         self._closing_contexts = set()
+        self._closed = False
         self._active_map = ""
         self._mode = MODE_NONE
         self._runtime_observation = None
@@ -139,6 +140,8 @@ class NavigationSetupCoordinator:
 
     def open_context(self, client_id: str) -> NavigationSetupSnapshot:
         """Open one navigation setup context for a remote client."""
+        if self._closed:
+            raise RuntimeError("Navigation setup admission is closed")
         context = self.setup_coordinator.open_context(
             CommandOrigin.NAVIGATION_SETUP,
             client_id,
@@ -177,20 +180,28 @@ class NavigationSetupCoordinator:
     def close_context(self, context: SetupContextSnapshot) -> None:
         """Close one navigation setup context."""
         with self._lock:
+            if not any(item.context_id == context.context_id
+                       for item in self.setup_coordinator.contexts):
+                return
             self.setup_coordinator.require_current(context)
             if (self._pose_save is not None
                     and self._pose_save.context.context_id == context.context_id):
                 self.finish_pose_save(self._pose_save)
             self._closing_contexts.add(context.context_id)
             request_ids = self._operations.request_ids_for(context)
+        first_error = None
         for request_id in request_ids:
             try:
                 self.setup_coordinator.cancel_operation(context, request_id)
             except LookupError:
                 pass
+            except Exception as exception:
+                first_error = first_error or exception
         with self._lock:
             if not self._operations.has_context(context):
                 self._finish_context_close(context)
+        if first_error is not None:
+            raise first_error
 
     def _finish_context_close(self, context):
         self._closing_contexts.discard(context.context_id)
@@ -526,16 +537,6 @@ class NavigationSetupCoordinator:
                 if context.context_id in self._closing_contexts:
                     self._finish_context_close(context)
             raise
-        with self._lock:
-            closing = (
-                context.context_id in self._closing_contexts
-                and self._operations.get(operation.request_id) is not None
-            )
-        if closing:
-            try:
-                self.setup_coordinator.cancel_operation(context, operation.request_id)
-            except LookupError:
-                pass
         return operation
 
     def _runtime_command(self, command_id, map_name):
@@ -579,20 +580,22 @@ class NavigationSetupCoordinator:
         self._operations.remove_listener(listener)
 
     def close(self) -> None:
-        """Close all owned contexts and discard specialized state."""
+        """Close admission and keep callbacks until each cancellation settles."""
+        self._closed = True
         contexts = self.setup_coordinator.contexts_for(
             CommandOrigin.NAVIGATION_SETUP
         )
+        first_error = None
         for context in contexts:
             if self.setup_coordinator.is_current(context):
-                self.close_context(context)
-        with self._lock:
-            # Full coordinator shutdown releases contexts after requesting stops.
-            for context in self.setup_coordinator.contexts_for(
-                CommandOrigin.NAVIGATION_SETUP
-            ):
-                self._finish_context_close(context)
+                try:
+                    self.close_context(context)
+                except Exception as exception:
+                    first_error = first_error or exception
+        if not self._operations.has_operations():
             self._operations.clear()
+        if first_error is not None:
+            raise first_error
 
     def _handle_operation_status(self, status: SetupOperationStatus) -> None:
         with self._lock:
@@ -627,6 +630,8 @@ class NavigationSetupCoordinator:
                 status_sequence=status.status_sequence,
             )
         )
+        if self._closed and not self._operations.has_operations():
+            self._operations.clear()
 
     def _apply_runtime_success(
         self,
@@ -659,6 +664,8 @@ class NavigationSetupCoordinator:
         return map_id
 
     def _require_idle(self, context: SetupContextSnapshot) -> None:
+        if self._closed or context.context_id in self._closing_contexts:
+            raise RuntimeError("Navigation setup context is closing")
         if self._operations.has_operations() or self._pose_save is not None:
             raise RuntimeError(
                 "Navigation setup already has an active operation"

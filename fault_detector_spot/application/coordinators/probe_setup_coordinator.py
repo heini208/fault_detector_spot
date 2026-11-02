@@ -58,6 +58,10 @@ from fault_detector_spot.navigation.body_height import validate_body_height
 def _serialized_transaction(method):
     @wraps(method)
     def wrapped(self, context, *args, **kwargs):
+        if method.__name__ == "close_context":
+            with self._lock:
+                if context.context_id not in self._drafts:
+                    return None
         with self._context_lock(context):
             # Abort must reach its cancellation path during motion or recovery.
             # It checks for active finalization before discarding the draft.
@@ -131,6 +135,10 @@ class ProbeSetupCoordinator:
         )
         self._drafts = {}
         self._context_locks = {}
+        self._closing_contexts = set()
+        self._ending_refinements = set()
+        self._closed = False
+        self._close_cleanup_running = False
         self._state_listeners = []
         setup_coordinator.add_command_status_listener(self._handle_external_command_status)
 
@@ -233,6 +241,8 @@ class ProbeSetupCoordinator:
 
     def open_context(self, client_id: str) -> ProbeSetupSnapshot:
         """Open one independent server-owned probe setup draft."""
+        if self._closed:
+            raise RuntimeError("Probe setup admission is closed")
         context = self.setup_coordinator.open_context(
             CommandOrigin.PROBE_SETUP,
             client_id,
@@ -272,11 +282,11 @@ class ProbeSetupCoordinator:
 
     @_serialized_transaction
     def close_context(self, context: SetupContextSnapshot) -> None:
-        """Close one probe draft and invalidate delayed callers."""
+        """Cancel one draft, retaining motion ownership through its result."""
         draft = self._draft(context)
-        request_ids = (
-            self.refinement_controller.request_ids_for(context)
-        )
+        self._closing_contexts.add(context.context_id)
+        request_ids = self.refinement_controller.request_ids_for(context)
+        first_error = None
         for request_id in request_ids:
             try:
                 self.setup_coordinator.cancel_operation(
@@ -285,14 +295,28 @@ class ProbeSetupCoordinator:
                 )
             except LookupError:
                 pass
+            except Exception as exception:
+                first_error = first_error or exception
+        self._finish_context_close(draft)
+        if first_error is not None:
+            raise first_error
+
+    def _finish_context_close(self, draft):
+        context_id = draft.context.context_id
+        if (context_id not in self._closing_contexts
+                or self.refinement_controller.has_context(draft.context)
+                or self.finalization_controller.active_request_id(draft.context)):
+            return
         self.refinement_controller.abort(draft)
         with self._lock:
-            self._drafts.pop(draft.context.context_id, None)
-            self._context_locks.pop(draft.context.context_id, None)
-        self.refinement_controller.discard_context(draft.context)
+            self._drafts.pop(context_id, None)
+            self._context_locks.pop(context_id, None)
+            self._closing_contexts.discard(context_id)
+            self._ending_refinements.discard(context_id)
         self.finalization_controller.discard_context(draft.context)
         if self.setup_coordinator.is_current(draft.context):
             self.setup_coordinator.close_context(draft.context)
+        self._finish_close()
 
     @_serialized_transaction
     def snapshot(
@@ -772,7 +796,7 @@ class ProbeSetupCoordinator:
             raise RuntimeError(
                 "Probe point finalization is already in progress"
             )
-
+        self._ending_refinements.add(context.context_id)
         for request_id in self.refinement_controller.request_ids_for(
             context
         ):
@@ -783,8 +807,16 @@ class ProbeSetupCoordinator:
                 )
             except LookupError:
                 pass
+        if self.refinement_controller.has_context(draft.context):
+            return self.snapshot(draft.context)
+        # A synchronous terminal callback may already have completed the abort.
+        if context.context_id not in self._ending_refinements:
+            return self.snapshot(draft.context)
+        self._finish_refinement_abort(draft)
+        return self._advance(draft)
 
-        self.refinement_controller.discard_context(context)
+    def _finish_refinement_abort(self, draft):
+        self._ending_refinements.discard(draft.context.context_id)
         self.refinement_controller.abort(draft)
         draft.pre_approach_path.clear()
         draft.final_probe_path.clear()
@@ -797,7 +829,6 @@ class ProbeSetupCoordinator:
         )
         draft.dirty = False
         draft.validation_error = ""
-        return self._advance(draft)
 
     def require_physical_lane_idle(
         self,
@@ -820,6 +851,12 @@ class ProbeSetupCoordinator:
     def is_current(self, context: SetupContextSnapshot) -> bool:
         """Return whether a probe context snapshot is still current."""
         return self.setup_coordinator.is_current(context)
+
+    def is_context_closing(self, context: SetupContextSnapshot) -> bool:
+        """Expose cancellation even while terminal callbacks retain the draft."""
+        with self._lock:
+            return (self._closed or context.context_id in self._closing_contexts
+                    or self.setup_coordinator.is_context_closing(context))
 
     def uses_setup_coordinator(self, coordinator: SetupCoordinator) -> bool:
         """Return whether this facade uses the supplied shared coordinator."""
@@ -903,22 +940,9 @@ class ProbeSetupCoordinator:
                 draft,
                 request_id,
             )
-            return self._advance(draft)
-
-    def complete_saved_finalization_after_retraction_failure(
-        self,
-        context: SetupContextSnapshot,
-        request_id: str,
-    ) -> ProbeSetupSnapshot:
-        with self._context_lock(context):
-            self.setup_coordinator.require_current(context)
-            draft = self._selected_draft(context)
-            self.finalization_controller.complete_saved_after_retraction_failure(
-                context,
-                draft,
-                request_id,
-            )
-            return self._advance(draft)
+            snapshot = self._advance(draft)
+            self._finish_context_close(draft)
+            return snapshot
 
     def fail_finalization(
         self,
@@ -936,7 +960,13 @@ class ProbeSetupCoordinator:
                 request_id,
                 detail,
             )
-            return self._advance(draft)
+            # An unconfirmed motion still owns this revision. Preserve its
+            # terminal correlation while exposing the saved/recovery outcome.
+            snapshot = (self.snapshot(draft.context)
+                        if self.refinement_controller.has_context(draft.context)
+                        else self._advance(draft))
+            self._finish_context_close(draft)
+            return snapshot
 
     @_serialized_transaction
     def add_pathing_point(self, context, name, position_tolerance_m=.01,
@@ -1117,17 +1147,45 @@ class ProbeSetupCoordinator:
     def close(self) -> None:
         """Close every probe context owned by this coordinator."""
         with self._lock:
+            self._closed = True
             contexts = tuple(
                 draft.context
                 for draft in self._drafts.values()
             )
+        first_error = None
         for context in contexts:
             if self.setup_coordinator.is_current(context):
-                self.close_context(context)
-        self.setup_coordinator.remove_command_status_listener(self._handle_external_command_status)
-        self._state_listeners.clear()
-        self.refinement_controller.clear()
-        self.finalization_controller.clear()
+                try:
+                    self.close_context(context)
+                except Exception as exception:
+                    first_error = first_error or exception
+        self._finish_close()
+        if first_error is not None:
+            raise first_error
+
+    def _finish_close(self):
+        with self._lock:
+            if not self._closed or self._drafts or self._close_cleanup_running:
+                return
+            self._close_cleanup_running = True
+        first_error = None
+        try:
+            for cleanup in (
+                lambda: self.setup_coordinator.remove_command_status_listener(
+                    self._handle_external_command_status),
+                self._state_listeners.clear,
+                self.refinement_controller.clear,
+                self.finalization_controller.clear,
+            ):
+                try:
+                    cleanup()
+                except Exception as exception:
+                    first_error = first_error or exception
+        finally:
+            with self._lock:
+                self._close_cleanup_running = False
+        if first_error is not None:
+            raise first_error
 
     def _handle_operation_status(
         self,
@@ -1158,20 +1216,26 @@ class ProbeSetupCoordinator:
                 if handled is None:
                     return
                 motion, status = handled
+                if context.context_id in self._ending_refinements:
+                    self._finish_refinement_abort(draft)
                 snapshot = self._advance(draft)
         else:
             snapshot = self.snapshot(context)
-        self.refinement_controller.emit(
-            ProbeSetupMotionStatus(
-                request_id=status.operation.request_id,
-                motion=motion,
-                state=status.state,
-                detail=status.detail,
-                snapshot=snapshot,
-                execution_instance_id=status.execution_instance_id,
-                status_sequence=status.status_sequence,
+        try:
+            self.refinement_controller.emit(
+                ProbeSetupMotionStatus(
+                    request_id=status.operation.request_id,
+                    motion=motion,
+                    state=status.state,
+                    detail=status.detail,
+                    snapshot=snapshot,
+                    execution_instance_id=status.execution_instance_id,
+                    status_sequence=status.status_sequence,
+                )
             )
-        )
+        finally:
+            if terminal:
+                self._finish_context_close(draft)
 
     def _require_idle(
         self,
@@ -1179,6 +1243,10 @@ class ProbeSetupCoordinator:
         finalization_request_id: str = "",
     ) -> None:
         with self._lock:
+            if self._closed or context.context_id in self._closing_contexts:
+                raise RuntimeError("Probe setup context is closing")
+            if context.context_id in self._ending_refinements:
+                raise RuntimeError("Probe refinement cancellation is still pending")
             draft = self._drafts.get(context.context_id)
             active_finalization = (
                 self.finalization_controller.active_request_id(

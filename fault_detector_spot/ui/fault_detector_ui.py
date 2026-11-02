@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import signal
 import sys
+import time
 from pathlib import Path
 
 from fault_detector_spot.navigation.posture_state_source import PostureStateSource
@@ -1282,6 +1283,29 @@ class Fault_Detector_UI(QWidget):
         return False
 
     def closeEvent(self, event):
+        setup_clients = tuple(client for client in (
+            self.probe_setup_client, self.navigation_setup_client,
+        ) if client is not None)
+        if not hasattr(self, "_setup_close_deadline"):
+            self._setup_close_deadline = time.monotonic() + 2.0
+            self._setup_close_retry_scheduled = False
+            self.navigation_setup_timer.stop()
+            self.probe_setup_timer.stop()
+            for client in setup_clients:
+                client.close()
+        pending = tuple(client for client in setup_clients if client.close_pending)
+        if pending and time.monotonic() < self._setup_close_deadline:
+            # Keep the Qt-driven ROS spin active for delayed acceptance, cancel
+            # replies and terminal results without blocking the GUI thread.
+            event.ignore()
+            if not self._setup_close_retry_scheduled:
+                self._setup_close_retry_scheduled = True
+                QTimer.singleShot(20, self._retry_setup_close)
+            return
+        for client in pending:
+            client.request_uncertain.emit(
+                "Setup close deadline expired; cancellation or stop remains unconfirmed"
+            )
         self.manipulation_controls.destroy()
         routine_arm_controls = self.inspection_controls.routine_arm_movement_controls
         if routine_arm_controls is not None:
@@ -1291,10 +1315,8 @@ class Fault_Detector_UI(QWidget):
         self.navigation_setup_timer.stop()
         self.probe_setup_timer.stop()
         if self.probe_setup_client is not None:
-            self.probe_setup_client.close()
             self.probe_setup_client.destroy()
         if self.navigation_setup_client is not None:
-            self.navigation_setup_client.close()
             self.navigation_setup_client.destroy()
         if self.sensor_registry_client is not None:
             self.sensor_registry_client.destroy()
@@ -1311,6 +1333,10 @@ class Fault_Detector_UI(QWidget):
         if self.application_client is not None:
             self.application_client.destroy()
         event.accept()
+
+    def _retry_setup_close(self):
+        self._setup_close_retry_scheduled = False
+        self.close()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

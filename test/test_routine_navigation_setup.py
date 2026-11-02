@@ -9,6 +9,7 @@ import pytest
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
 from fault_detector_msgs.srv import ExecuteProbeSetup
 from fault_detector_spot.application.api.probe_setup_api import ProbeSetupApi
+from fault_detector_spot.application.api.async_operation import OperationAdmission
 from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
 from fault_detector_spot.inspection.setup.probe_setup_state_adapter import ProbeSetupStateAdapter
 from fault_detector_spot.mapping.model.models import Waypoint
@@ -31,6 +32,7 @@ def navigation_setup(tmp_path):
     api = ProbeSetupApi.__new__(ProbeSetupApi)
     api._shutdown = Event()
     api._shutdown_callbacks = ShutdownCallbackActivity()
+    api._admission = OperationAdmission()
     api.coordinator = probe
     api.state_adapter = ProbeSetupStateAdapter(FakeClock())
     api.state_publisher = Mock()

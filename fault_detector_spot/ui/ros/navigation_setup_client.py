@@ -48,6 +48,8 @@ class NavigationSetupClient(QObject):
         self._action_request_ids = {}
         self._last_landmark_event_id = None
         self._destroyed = False
+        self._closing = False
+        self._close_future = None
         self._action_client = ActionClient(
             node,
             ExecuteNavigationSetup,
@@ -82,6 +84,9 @@ class NavigationSetupClient(QObject):
 
     def open(self):
         """Open a navigation setup context when the server is ready."""
+        if self._closing and self.close_pending:
+            return None
+        self._closing = False
         intent = NavigationSetupIntent()
         intent.operation = NavigationSetupIntent.OPERATION_OPEN
         return self._send(intent, "")
@@ -96,11 +101,11 @@ class NavigationSetupClient(QObject):
         return self._send(intent, self.context_id)
 
     def close(self):
-        """Close the current server-owned navigation setup context."""
+        """Cancel active requests and retire the server-owned context."""
+        self._closing = True
+        if self._close_future is not None:
+            return self._close_future
         if not self.context_id:
-            return None
-        if self._goal_handles:
-            self.close_finished.emit(False, "Navigation setup operation is still in progress")
             return None
         if not self._close_client.service_is_ready():
             self.close_finished.emit(
@@ -111,13 +116,25 @@ class NavigationSetupClient(QObject):
         request = CloseSetup.Request()
         request.client_id = self.client_id
         request.context_id = self.context_id
-        future = self._close_client.call_async(request)
+        try:
+            future = self._close_client.call_async(request)
+        except Exception as exception:
+            self.close_finished.emit(False, str(exception))
+            return None
+        self._close_future = future
         future.add_done_callback(self._receive_close)
         return future
+
+    @property
+    def close_pending(self):
+        return bool(self.context_id or self._goal_handles)
 
     def _send(self, intent, context_id):
         if not isinstance(intent, NavigationSetupIntent):
             raise TypeError("Expected a NavigationSetupIntent message")
+        if self._closing or self._destroyed:
+            self.request_rejected.emit("Navigation setup is closing")
+            return None
         if not self._action_client.server_is_ready():
             return None
         goal = ExecuteNavigationSetup.Goal()
@@ -194,6 +211,8 @@ class NavigationSetupClient(QObject):
             return False
         if state.context_id:
             self.context_id = state.context_id
+            if self._closing:
+                self.close()
 
         operation = int(state.operation)
         if state.map_names:
@@ -227,6 +246,7 @@ class NavigationSetupClient(QObject):
         self._emit_state(state)
 
     def _receive_close(self, future):
+        self._close_future = None
         try:
             response = future.result()
         except Exception as exception:
@@ -241,6 +261,9 @@ class NavigationSetupClient(QObject):
 
     def destroy(self):
         """Destroy client-side ROS entities owned by this adapter."""
+        if self._destroyed:
+            return
+        self.close()
         self._destroyed = True
         self._action_client.destroy()
         self.node.destroy_client(self._close_client)

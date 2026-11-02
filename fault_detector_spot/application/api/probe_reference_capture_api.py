@@ -12,6 +12,8 @@ from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 
+from fault_detector_spot.application.api.workflow_worker import deliver_update, run_in_worker
+
 from fault_detector_spot.application.commanding.client_identity import (
     required_client_id,
 )
@@ -38,9 +40,12 @@ class ProbeReferenceCaptureApi:
         capture_coordinator,
         state_publisher,
         state_adapter,
+        *,
+        admission,
     ):
         self._shutdown = Event()
         self._shutdown_callbacks = ShutdownCallbackActivity()
+        self._admission = admission
         self.node = node
         self.probe_setup_coordinator = probe_setup_coordinator
         self.capture_coordinator = capture_coordinator
@@ -68,43 +73,51 @@ class ProbeReferenceCaptureApi:
             )
         except (TypeError, ValueError):
             return GoalResponse.REJECT
-        return GoalResponse.ACCEPT
+        return (GoalResponse.ACCEPT if self._admission.reserve(
+            (self, id(goal_request)), context_id=goal_request.context_id, lane="physical",
+        ) else GoalResponse.REJECT)
 
-    @staticmethod
-    def _accept_cancel(_goal_handle):
+    def _accept_cancel(self, goal_handle):
+        self._admission.cancel((self, id(goal_handle.request)))
         return CancelResponse.ACCEPT
 
     @tracked_shutdown_callback
-    def _execute(self, goal_handle):
+    async def _execute(self, goal_handle):
         goal = goal_handle.request
         request_id = uuid4().hex
         context = None
-        try:
+        key = (self, id(goal))
+
+        def capture(worker_cancelled):
+            nonlocal context
+            if worker_cancelled() or self._shutdown.is_set() or goal_handle.is_cancel_requested:
+                raise ReferenceCaptureCancelled("Reference capture cancelled before execution")
             context = self.probe_setup_coordinator.context(
-                goal.context_id,
-                goal.client_id,
+                goal.context_id, goal.client_id,
             )
             spec = ProbeReferenceCaptureSpec(
-                reference_camera_ids=tuple(
-                    goal.reference_camera_ids
-                ),
+                reference_camera_ids=tuple(goal.reference_camera_ids),
                 replace_existing=bool(goal.replace_existing),
             )
-            snapshot = self.capture_coordinator.run(
+            def cancelled():
+                return (worker_cancelled() or self._shutdown.is_set()
+                        or goal_handle.is_cancel_requested
+                        or self.probe_setup_coordinator.is_context_closing(context))
+
+            return self.capture_coordinator.run(
                 context,
                 request_id,
                 spec,
-                cancel_requested=lambda: goal_handle.is_cancel_requested,
-                state_changed=lambda phase, attempt, current: (
-                    self._publish_feedback(
-                        goal_handle,
-                        phase,
-                        attempt,
-                        current,
-                        request_id,
-                    )
+                cancel_requested=cancelled,
+                state_changed=lambda phase, attempt, current: self._publish_feedback(
+                    goal_handle, phase, attempt, current, request_id,
                 ),
             )
+
+        try:
+            if self._shutdown.is_set():
+                raise RuntimeError("Application is shutting down")
+            snapshot = await run_in_worker(self._admission, key, capture)
         except ReferenceCaptureCancelled as exception:
             state = self._terminal_state(
                 goal,
@@ -113,7 +126,10 @@ class ProbeReferenceCaptureApi:
                 ProbeSetupState.STATE_CANCELLED,
                 str(exception),
             )
-            goal_handle.canceled()
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+            else:
+                goal_handle.abort()
             return self._result(state)
         except Exception as exception:
             state = self._terminal_state(
@@ -125,6 +141,8 @@ class ProbeReferenceCaptureApi:
             )
             goal_handle.abort()
             return self._result(state)
+        finally:
+            self._admission.release_pending(key)
 
         state = self.state_adapter.message(
             snapshot,
@@ -133,7 +151,7 @@ class ProbeReferenceCaptureApi:
             "Reference dataset capture completed",
             request_id=request_id,
         )
-        self.state_publisher.publish(state)
+        deliver_update(self.node, self.state_publisher.publish, state)
         goal_handle.succeed()
         return self._result(state)
 
@@ -152,12 +170,12 @@ class ProbeReferenceCaptureApi:
             phase.value.replace("_", " "),
             request_id=request_id,
         )
-        self.state_publisher.publish(state)
+        deliver_update(self.node, self.state_publisher.publish, state)
         feedback = CaptureProbeReferenceViews.Feedback()
         feedback.phase = self._phase_code(phase)
         feedback.attempt = int(attempt)
         feedback.state = state
-        goal_handle.publish_feedback(feedback)
+        deliver_update(self.node, goal_handle.publish_feedback, feedback)
 
     def _terminal_state(
         self,
@@ -188,7 +206,7 @@ class ProbeReferenceCaptureApi:
             state.state = state_code
             state.detail = detail
             state.validation_error = detail
-        self.state_publisher.publish(state)
+        deliver_update(self.node, self.state_publisher.publish, state)
         return state
 
     @staticmethod
@@ -222,10 +240,11 @@ class ProbeReferenceCaptureApi:
 
     def close(self):
         """Stop capture work and destroy its action transport."""
-        release_resources(self, {
+        resources = {
             "capture_coordinator": self.capture_coordinator.close,
             "action_server": self._action_server.destroy,
-        })
+        }
+        release_resources(self, resources)
 
 
 __all__ = ["ProbeReferenceCaptureApi"]

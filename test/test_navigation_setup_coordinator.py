@@ -434,7 +434,7 @@ def test_concurrent_request_cannot_enter_between_validation_and_registration(tmp
     assert boundary.submitted == [operation.request]
 
 
-def test_close_during_dispatch_keeps_reservation_and_cancels_after_submit(tmp_path, monkeypatch):
+def test_close_before_dispatch_cancels_prepared_request_without_motion(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
 
@@ -458,20 +458,24 @@ def test_close_during_dispatch_keeps_reservation_and_cancels_after_submit(tmp_pa
         assert entered.wait(5)
         try:
             navigation.close_context(owner)
-            with pytest.raises(RuntimeError, match="active operation"):
-                navigation.select_map(other, "plant")
+            assert navigation.select_map(other, "plant").active_map == "plant"
         finally:
             release.set()
-        operation = pending.result(timeout=5)
-    assert boundary.cancelled == [operation.request_id]
-    boundary.emit(operation.request, CommandControllerState.CANCELLED)
-    assert navigation.select_map(other, "plant").active_map == "plant"
+        with pytest.raises(ValueError, match="not prepared"):
+            pending.result(timeout=5)
+    assert boundary.cancelled == []
+    assert boundary.submitted == []
 
 
-def test_coordinator_shutdown_releases_deferred_contexts(tmp_path):
+def test_coordinator_shutdown_retains_context_until_terminal_result(tmp_path):
     navigation, boundary, owner, other, operation = pending_swap(tmp_path)
     navigation.close()
+    navigation.close()
     assert boundary.cancelled == [operation.request_id]
+    assert navigation.setup_coordinator.contexts == (owner,)
+    boundary.emit(operation.request, CommandControllerState.STOP_UNCONFIRMED)
+    assert navigation.setup_coordinator.contexts == (owner,)
+    boundary.emit(operation.request, CommandControllerState.CANCELLED)
     assert navigation.setup_coordinator.contexts == ()
 
 

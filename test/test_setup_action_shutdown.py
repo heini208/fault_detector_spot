@@ -11,6 +11,7 @@ from fault_detector_spot.application.api import application_api_node
 from fault_detector_spot.application.api.navigation_setup_api import NavigationSetupApi
 from fault_detector_spot.application.api.probe_setup_motion_api import ProbeSetupMotionApi
 from fault_detector_spot.application.api.shutdown_callbacks import ShutdownCallbackActivity
+from fault_detector_spot.application.api.async_operation import OperationAdmission
 from fault_detector_spot.application.coordinators import (
     probe_reference_capture_coordinator as capture_module,
 )
@@ -31,7 +32,9 @@ def test_active_setup_action_exits_without_terminal_feedback(api_type):
     api._shutdown = Event()
     api._shutdown_callbacks = ShutdownCallbackActivity()
     api._executions = {}
+    api._admission = OperationAdmission(limit=1)
     api._early_states = {}
+    api._runtime_submissions = 0
     api.coordinator = Mock()
     api._abort = Mock(return_value="aborted")
     api._motion_request = Mock()
@@ -39,6 +42,8 @@ def test_active_setup_action_exits_without_terminal_feedback(api_type):
     operation = SimpleNamespace(request_id="request")
     goal = Mock(is_cancel_requested=False)
     goal.request.intent.operation = 1
+    goal.request.context_id = "context"
+    goal.request.client_id = "client"
 
     if api_type is NavigationSetupApi:
         api._pose_waiters = set()
@@ -49,22 +54,27 @@ def test_active_setup_action_exits_without_terminal_feedback(api_type):
         # START_MAPPING is a runtime operation supported by this API.
         from fault_detector_msgs.msg import NavigationSetupIntent
         goal.request.intent.operation = NavigationSetupIntent.OPERATION_START_MAPPING
-        call = lambda: api._execute_runtime(goal, object(), goal.request.intent)
+        call = lambda: api._execute(goal)
     else:
         api.coordinator.prepare_motion.return_value = operation
         api.coordinator.submit_motion.side_effect = lambda op: entered.set()
         call = lambda: api._execute(goal)
 
-    with ThreadPoolExecutor(max_workers=1) as worker:
-        future = worker.submit(call)
-        try:
-            assert entered.wait(1)
-            api.request_shutdown()
-            assert future.result(timeout=1) == "aborted"
-            assert not api._executions
-            assert "shutdown" in api._abort.call_args.args[2].lower()
-        finally:
-            api.request_shutdown()
+    from rclpy.action import GoalResponse
+    assert api._accept(goal.request) == GoalResponse.ACCEPT
+    coroutine = call()
+    waiting = coroutine.send(None)
+    assert entered.is_set()
+    assert not waiting.done()
+    api.request_shutdown()
+    api.request_shutdown()
+    with pytest.raises(StopIteration) as completed:
+        coroutine.send(None)
+    assert completed.value.value == "aborted"
+    assert not api._executions
+    assert "shutdown" in api._abort.call_args.args[2].lower()
+    assert "stop unconfirmed" in api._abort.call_args.args[2].lower()
+    api._abort.assert_called_once()
 
 
 def test_retraction_wait_exits_without_command_feedback():

@@ -602,10 +602,18 @@ class ProbeRefinementController:
     def clear(self) -> None:
         self._operations.clear()
         with self.state_lock:
-            reservations = tuple(self._attachment_reservations.values())
-            self._attachment_reservations.clear()
-        for reservation in reservations:
-            reservation.release()
+            reservations = tuple(self._attachment_reservations.items())
+        first_error = None
+        for draft_id, reservation in reservations:
+            try:
+                reservation.release()
+            except Exception as exception:
+                first_error = first_error or exception
+            else:
+                with self.state_lock:
+                    self._attachment_reservations.pop(draft_id, None)
+        if first_error is not None:
+            raise first_error
 
     def require_physical_lane_idle(self) -> None:
         self.setup_coordinator.require_command_lane_idle(
@@ -947,11 +955,13 @@ class ProbeRefinementController:
 
     def _release_attachment(self, draft) -> bool:
         with self.state_lock:
-            reservation = self._attachment_reservations.pop(
-                id(draft),
-                None,
-            )
-        return reservation.release() if reservation is not None else False
+            reservation = self._attachment_reservations.get(id(draft))
+        if reservation is None:
+            return False
+        result = reservation.release()
+        with self.state_lock:
+            self._attachment_reservations.pop(id(draft), None)
+        return result
 
     def _motion_state_source(self):
         if self.motion_state_source is None:

@@ -80,7 +80,8 @@ class FakeCommandController:
         self.listeners.append(listener)
 
     def remove_status_listener(self, listener):
-        self.listeners.remove(listener)
+        if listener in self.listeners:
+            self.listeners.remove(listener)
 
     def submit(self, request):
         self.submitted.append(request)
@@ -1097,3 +1098,53 @@ def test_closing_context_releases_refinement_attachment(tmp_path):
     probe.close_context(state.context)
 
     assert attachment_controller.active_reservations == 0
+
+
+@pytest.mark.parametrize("close_kind", ["context", "coordinator", "abort"])
+def test_close_keeps_probe_motion_and_attachment_until_terminal(tmp_path, close_kind):
+    probe, commands = coordinator(tmp_path)
+    state = create_selected_routine(probe, probe.open_context("probe-ui").context)
+    state = probe.begin_refinement(state.context, fully_custom=True)
+    operation = probe.prepare_motion(
+        state.context, ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH),
+    )
+    probe.submit_motion(operation)
+    statuses = []
+    cancellations = []
+    commands.cancel = lambda request_id: cancellations.append(request_id) or request_id
+    probe.add_motion_status_listener(statuses.append)
+    attachment = probe.refinement_controller.sensor_attachment_controller
+
+    def close():
+        if close_kind == "coordinator":
+            probe.close()
+        elif close_kind == "context":
+            probe.close_context(state.context)
+        else:
+            probe.end_refinement(state.context)
+
+    close()
+    close()
+    assert cancellations == [operation.request_id]
+    assert probe.refinement_controller.has_context(state.context)
+    assert attachment.active_reservations == 1
+    with pytest.raises(RuntimeError, match="closing|cancellation"):
+        probe.prepare_motion(state.context, ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH))
+    for code in (CommandControllerState.STOP_UNCONFIRMED, CommandControllerState.STOP_CONFIRMED):
+        for listener in tuple(commands.listeners):
+            listener(CommandControllerStatus(request=operation.request, state=code))
+        if code is CommandControllerState.STOP_UNCONFIRMED:
+            assert probe.refinement_controller.has_context(state.context)
+            assert attachment.active_reservations == 1
+    assert [status.state for status in statuses] == [
+        CommandControllerState.STOP_UNCONFIRMED, CommandControllerState.STOP_CONFIRMED,
+    ]
+    assert attachment.active_reservations == 0
+    assert not probe.refinement_controller.has_context(state.context)
+    if close_kind != "abort":
+        with pytest.raises(LookupError):
+            probe.context(state.context.context_id, "probe-ui")
+        close()
+    else:
+        context = probe.context(state.context.context_id, "probe-ui")
+        assert probe.snapshot(context).refinement is None

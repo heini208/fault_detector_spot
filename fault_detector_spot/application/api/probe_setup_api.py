@@ -3,6 +3,7 @@
 from fault_detector_spot.application.api.shutdown_callbacks import (
     ShutdownCallbackActivity, tracked_shutdown_callback, release_resources,
 )
+from fault_detector_spot.application.api.async_operation import OperationAdmission
 
 from uuid import uuid4
 from threading import Event
@@ -43,6 +44,7 @@ class ProbeSetupApi:
         state_publisher,
         state_adapter: ProbeSetupStateAdapter,
         preview_source,
+        admission=None,
     ):
         self._shutdown = Event()
         self._shutdown_callbacks = ShutdownCallbackActivity()
@@ -51,6 +53,7 @@ class ProbeSetupApi:
         self.state_publisher = state_publisher
         self.state_adapter = state_adapter
         self.preview_source = preview_source
+        self._admission = admission or OperationAdmission()
         self._callback_group = ReentrantCallbackGroup()
         # Bulk image requests must not fill every executor worker and starve
         # the live tag, camera, TF, and runtime-heartbeat subscriptions.
@@ -137,6 +140,7 @@ class ProbeSetupApi:
         goal = request
         operation = int(goal.intent.operation)
         context = None
+        reservation = None
         try:
             if self._shutdown.is_set():
                 raise RuntimeError("Application is shutting down")
@@ -149,6 +153,16 @@ class ProbeSetupApi:
                     goal.context_id,
                     goal.client_id,
                 )
+                if operation == ProbeSetupIntent.OPERATION_END_REFINEMENT:
+                    self._admission.cancel_context(context.context_id)
+                else:
+                    reservation = ("probe-metadata", uuid4().hex)
+                    if not self._admission.reserve(
+                        reservation, context_id=context.context_id,
+                    ):
+                        raise RuntimeError("Probe setup context already has an active operation")
+                    if not self._admission.claim(reservation):
+                        raise RuntimeError("Probe setup transaction was cancelled before execution")
                 snapshot = self._handlers[operation](
                     context,
                     goal.intent,
@@ -160,6 +174,9 @@ class ProbeSetupApi:
                 context,
             )
             return response
+        finally:
+            if reservation is not None:
+                self._admission.release(reservation)
         state = self._success_state(snapshot, operation)
         self.state_publisher.publish(state)
         response.state = state
@@ -304,19 +321,21 @@ class ProbeSetupApi:
     def _end_refinement(self, context, _intent):
         return self.coordinator.end_refinement(context)
 
+    @tracked_shutdown_callback
     def _close(self, request, response):
         try:
             context = self.coordinator.context(
                 request.context_id,
                 request.client_id,
             )
+            self._admission.cancel_context(context.context_id)
             self.coordinator.close_context(context)
         except (TypeError, ValueError, LookupError, RuntimeError) as exception:
             response.closed = False
             response.detail = str(exception)
             return response
         response.closed = True
-        response.detail = "Probe setup closed"
+        response.detail = "Probe setup close requested; active operations are cancelling"
         return response
 
     def _preview(self, request, response):

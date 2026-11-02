@@ -70,6 +70,12 @@ class SetupCoordinator:
         self._contexts: Dict[str, SetupContextSnapshot] = {}
         self._prepared: Dict[str, SetupOperation] = {}
         self._operations: Dict[str, SetupOperation] = {}
+        self._completing: Dict[str, SetupOperation] = {}
+        self._closing_contexts = set()
+        self._cancel_sent = set()
+        self._dispatching = {}  # request ID -> cancellation requested during submit
+        self._closed = False
+        self._listener_attached = True
         self._context_listeners = []
         self._operation_listeners: Dict[str, list] = {}
         self._command_controller.add_status_listener(
@@ -136,6 +142,8 @@ class SetupCoordinator:
             revision=0,
         )
         with self._lock:
+            if self._closed:
+                raise RuntimeError("Setup coordinator admission is closed")
             self._contexts[context.context_id] = context
         self._emit_context(
             context,
@@ -149,9 +157,8 @@ class SetupCoordinator:
     ) -> SetupContextSnapshot:
         with self._lock:
             self._require_current_locked(context)
-            self._discard_context_requests_locked(
-                context.context_id
-            )
+            if self._requests_for_context_locked(context.context_id):
+                raise RuntimeError("Setup context still owns an active operation")
             updated = SetupContextSnapshot(
                 context_id=context.context_id,
                 client_id=context.client_id,
@@ -179,20 +186,22 @@ class SetupCoordinator:
         self,
         context: SetupContextSnapshot,
     ) -> None:
+        """Cancel owned work and retain its callbacks until terminal completion."""
         with self._lock:
+            if context.context_id not in self._contexts:
+                return
             self._require_current_locked(context)
-            self._contexts.pop(context.context_id)
-            self._discard_context_requests_locked(
-                context.context_id
-            )
-            self._operation_listeners.pop(
-                context.context_id,
-                None,
-            )
-        self._emit_context(
-            context,
-            SetupContextLifecycle.CLOSED,
-        )
+            self._closing_contexts.add(context.context_id)
+            request_ids = self._requests_for_context_locked(context.context_id)
+        first_error = None
+        for request_id in request_ids:
+            try:
+                self.cancel_operation(context, request_id)
+            except Exception as exception:
+                first_error = first_error or exception
+        self._finish_context_close(context.context_id)
+        if first_error is not None:
+            raise first_error
 
     def is_current(
         self,
@@ -203,6 +212,11 @@ class SetupCoordinator:
                 self._contexts.get(context.context_id)
                 == context
             )
+
+    def is_context_closing(self, context) -> bool:
+        with self._lock:
+            return (self._closed or context.context_id in self._closing_contexts
+                    or context.context_id not in self._contexts)
 
     def require_current(
         self,
@@ -221,6 +235,10 @@ class SetupCoordinator:
             raise TypeError("Expected a SemanticCommand")
         with self._lock:
             self._require_current_locked(context)
+            if self._closed or context.context_id in self._closing_contexts:
+                raise RuntimeError("Setup context admission is closed")
+            if self._prepared or self._operations or self._completing:
+                raise RuntimeError("Setup physical lane already has an active operation")
             request = CommandRequest.create(
                 command=command,
                 client_id=context.client_id,
@@ -251,6 +269,7 @@ class SetupCoordinator:
                 operation.request_id
             ] = operation
             self._prepared.pop(operation.request_id)
+            self._dispatching[operation.request_id] = False
         try:
             self._command_controller.submit(operation.request)
         except Exception:
@@ -259,7 +278,18 @@ class SetupCoordinator:
                     operation.request_id,
                     None,
                 )
+                self._dispatching.pop(operation.request_id, None)
+            self._finish_context_close(operation.context.context_id)
             raise
+        with self._lock:
+            cancel = self._dispatching.pop(operation.request_id, False)
+        if cancel:
+            try:
+                self._cancel_submitted(operation.request_id)
+            except Exception:
+                # Cancellation failure is reported as STOP_UNCONFIRMED below.
+                # Submission succeeded: callers must retain its ownership.
+                pass
         return operation.request_id
 
     def add_command_status_listener(self, listener) -> None:
@@ -280,6 +310,9 @@ class SetupCoordinator:
             raise ValueError(
                 "Command-lane admission detail must not be empty"
             )
+        with self._lock:
+            if self._prepared or self._operations or self._completing:
+                raise RuntimeError(message)
         queued_message = queued_detail.strip() or message
         if self._command_controller.active_request_id:
             raise RuntimeError(message)
@@ -296,11 +329,53 @@ class SetupCoordinator:
         with self._lock:
             self._require_current_locked(context)
             operation = self._operations.get(normalized)
-            if operation is None or operation.context != context:
+            prepared = self._prepared.get(normalized)
+            if prepared is not None and prepared.context == context:
+                self._prepared.pop(normalized)
+                self._completing[normalized] = prepared
+            elif operation is None or operation.context != context:
                 raise LookupError(
                     f"Unknown setup operation: {normalized}"
                 )
-        return self._command_controller.cancel(normalized)
+            else:
+                if normalized in self._dispatching:
+                    self._dispatching[normalized] = True
+                    return normalized
+        if prepared is not None:
+            try:
+                self._emit_operation_status(SetupOperationStatus(
+                    operation=prepared,
+                    state=CommandControllerState.CANCELLED,
+                    detail="Cancelled before command dispatch",
+                    buffered_command_count=0,
+                ))
+            finally:
+                with self._lock:
+                    self._completing.pop(normalized, None)
+                self._finish_context_close(context.context_id)
+            return normalized
+        return self._cancel_submitted(normalized)
+
+    def _cancel_submitted(self, request_id):
+        with self._lock:
+            if request_id not in self._operations or request_id in self._cancel_sent:
+                return request_id
+            self._cancel_sent.add(request_id)
+        try:
+            return self._command_controller.cancel(request_id)
+        except Exception as exception:
+            with self._lock:
+                self._cancel_sent.discard(request_id)
+                operation = self._operations.get(request_id)
+            if operation is None:
+                return request_id
+            self._emit_operation_status(SetupOperationStatus(
+                operation=operation,
+                state=CommandControllerState.STOP_UNCONFIRMED,
+                detail=f"Setup cancellation is unconfirmed: {exception}",
+                buffered_command_count=0,
+            ))
+            raise
 
     def add_context_listener(
         self,
@@ -359,6 +434,10 @@ class SetupCoordinator:
         self,
         status: CommandControllerStatus,
     ) -> None:
+        terminal = status.state in {
+            CommandControllerState.SUCCEEDED, CommandControllerState.FAILED,
+            CommandControllerState.CANCELLED, CommandControllerState.STOP_CONFIRMED,
+        }
         with self._lock:
             operation = self._operations.get(
                 status.request_id
@@ -370,16 +449,14 @@ class SetupCoordinator:
                 )
                 == operation.context
             )
-            if status.state in {
-                CommandControllerState.SUCCEEDED,
-                CommandControllerState.FAILED,
-                CommandControllerState.CANCELLED,
-                CommandControllerState.STOP_CONFIRMED,
-            }:
+            if terminal:
+                if current:
+                    self._completing[status.request_id] = operation
                 self._operations.pop(
                     status.request_id,
                     None,
                 )
+                self._cancel_sent.discard(status.request_id)
         if not current:
             return
         setup_status = SetupOperationStatus(
@@ -392,15 +469,51 @@ class SetupCoordinator:
             execution_instance_id=status.execution_instance_id,
             status_sequence=status.status_sequence,
         )
+        try:
+            self._emit_operation_status(setup_status)
+        finally:
+            if terminal:
+                with self._lock:
+                    self._completing.pop(status.request_id, None)
+            self._finish_context_close(operation.context.context_id)
+
+    def _emit_operation_status(self, status):
         with self._lock:
-            listeners = tuple(
-                self._operation_listeners.get(
-                    operation.context.context_id,
-                    (),
-                )
-            )
+            listeners = tuple(self._operation_listeners.get(
+                status.operation.context.context_id, (),
+            ))
+        first_error = None
         for listener in listeners:
-            listener(setup_status)
+            try:
+                listener(status)
+            except Exception as exception:
+                first_error = first_error or exception
+        if first_error is not None:
+            raise first_error
+
+    def _finish_context_close(self, context_id):
+        with self._lock:
+            if (context_id not in self._closing_contexts
+                    or self._requests_for_context_locked(context_id)
+                    or any(item.context.context_id == context_id
+                           for item in self._completing.values())):
+                return
+            context = self._contexts.pop(context_id, None)
+            self._closing_contexts.discard(context_id)
+            self._operation_listeners.pop(context_id, None)
+        if context is not None:
+            self._emit_context(context, SetupContextLifecycle.CLOSED)
+        self._finish_close()
+
+    def _finish_close(self):
+        with self._lock:
+            if not self._closed or self._contexts:
+                return
+            if self._listener_attached:
+                self._command_controller.remove_status_listener(self._handle_command_status)
+                self._listener_attached = False
+            self._context_listeners.clear()
+            self._operation_listeners.clear()
 
     def _emit_context(
         self,
@@ -433,22 +546,10 @@ class SetupCoordinator:
                 f"{context.context_id}"
             )
 
-    def _discard_context_requests_locked(
-        self,
-        context_id: str,
-    ) -> None:
-        self._prepared = {
-            request_id: operation
-            for request_id, operation
-            in self._prepared.items()
-            if operation.context.context_id != context_id
-        }
-        self._operations = {
-            request_id: operation
-            for request_id, operation
-            in self._operations.items()
-            if operation.context.context_id != context_id
-        }
+    def _requests_for_context_locked(self, context_id):
+        return tuple(request_id for requests in (self._prepared, self._operations)
+                     for request_id, operation in requests.items()
+                     if operation.context.context_id == context_id)
 
     def _add_listener(self, listeners, listener) -> None:
         if not callable(listener):
@@ -467,22 +568,18 @@ class SetupCoordinator:
             return tuple(listeners)
 
     def close(self) -> None:
-        self._command_controller.remove_status_listener(
-            self._handle_command_status
-        )
         with self._lock:
+            self._closed = True
             contexts = tuple(self._contexts.values())
-            self._contexts.clear()
-            self._prepared.clear()
-            self._operations.clear()
+        first_error = None
         for context in contexts:
-            self._emit_context(
-                context,
-                SetupContextLifecycle.CLOSED,
-            )
-        with self._lock:
-            self._context_listeners.clear()
-            self._operation_listeners.clear()
+            try:
+                self.close_context(context)
+            except Exception as exception:
+                first_error = first_error or exception
+        self._finish_close()
+        if first_error is not None:
+            raise first_error
 
 
 __all__ = [

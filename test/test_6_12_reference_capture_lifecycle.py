@@ -42,11 +42,6 @@ def test_application_api_node_destroy_uses_the_ordered_shutdown_owner():
     node.shutdown.assert_called_once_with()
 
 
-def test_probe_setup_client_blocks_close_while_capture_is_active():
-    source = inspect.getsource(ProbeSetupClient.close)
-    assert "_capture_goal_handles" in source
-
-
 def test_probe_setup_transactions_are_not_blocked_during_capture():
     source = inspect.getsource(ProbeSetupClient._send)
     assert "_capture_goal_handles" not in source

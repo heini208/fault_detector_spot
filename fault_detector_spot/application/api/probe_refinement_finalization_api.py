@@ -12,6 +12,8 @@ from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 
+from fault_detector_spot.application.api.workflow_worker import deliver_update, run_in_worker
+
 from fault_detector_spot.application.commanding.client_identity import (
     required_client_id,
 )
@@ -34,9 +36,12 @@ class ProbeRefinementFinalizationApi:
         coordinator,
         state_publisher,
         state_adapter,
+        *,
+        admission,
     ):
         self._shutdown = Event()
         self._shutdown_callbacks = ShutdownCallbackActivity()
+        self._admission = admission
         self.node = node
         self.coordinator = coordinator
         self.state_publisher = state_publisher
@@ -66,14 +71,16 @@ class ProbeRefinementFinalizationApi:
             FinalizeProbeRefinement.Goal.MODE_RETRACT_WITHOUT_SAVING,
         }:
             return GoalResponse.REJECT
-        return GoalResponse.ACCEPT
+        return (GoalResponse.ACCEPT if self._admission.reserve(
+            (self, id(goal_request)), context_id=goal_request.context_id, lane="physical",
+        ) else GoalResponse.REJECT)
 
-    @staticmethod
-    def _accept_cancel(_goal_handle):
+    def _accept_cancel(self, goal_handle):
+        self._admission.cancel((self, id(goal_handle.request)))
         return CancelResponse.ACCEPT
 
     @tracked_shutdown_callback
-    def _execute(self, goal_handle):
+    async def _execute(self, goal_handle):
         goal = goal_handle.request
         request_id = str(uuid4())
         spec = ProbeRefinementFinalizationSpec(
@@ -89,32 +96,45 @@ class ProbeRefinementFinalizationApi:
         )
         saved = False
         phase = FinalizationPhase.RECOVERY_REQUIRED
-        try:
-            context = self.coordinator.context(
-                goal.context_id,
-                goal.client_id,
-            )
-            snapshot, saved, phase = self.runner.run(
+        snapshot = None
+        key = (self, id(goal))
+
+        def progress(value, was_saved, current):
+            nonlocal saved, snapshot
+            # Preserve committed data even if later feedback transport fails.
+            saved = saved or was_saved
+            snapshot = current
+            self._publish_feedback(goal_handle, value, saved, current, request_id)
+
+        def finalize(worker_cancelled):
+            if worker_cancelled() or self._shutdown.is_set() or goal_handle.is_cancel_requested:
+                raise RuntimeError("Probe finalization cancelled before execution")
+            context = self.coordinator.context(goal.context_id, goal.client_id)
+
+            def cancelled():
+                return (worker_cancelled() or self._shutdown.is_set()
+                        or goal_handle.is_cancel_requested
+                        or self.coordinator.is_context_closing(context))
+
+            return self.runner.run(
                 context,
                 request_id,
                 spec,
-                cancel_requested=lambda: goal_handle.is_cancel_requested,
-                state_changed=lambda value, was_saved, current: (
-                    self._publish_feedback(
-                        goal_handle,
-                        value,
-                        was_saved,
-                        current,
-                        request_id,
-                    )
-                ),
+                cancel_requested=cancelled,
+                state_changed=progress,
             )
+
+        try:
+            if self._shutdown.is_set():
+                raise RuntimeError("Application is shutting down")
+            snapshot, saved, phase = await run_in_worker(self._admission, key, finalize)
         except Exception as exception:
             snapshot = self._fail_active(
-                goal,
-                request_id,
-                str(exception),
-            )
+                goal, request_id, str(exception),
+            ) or snapshot
+            saved = saved or bool(getattr(
+                getattr(snapshot, "refinement", None), "saved", False,
+            ))
             return self._abort(
                 goal_handle,
                 goal,
@@ -123,6 +143,8 @@ class ProbeRefinementFinalizationApi:
                 snapshot,
                 str(exception),
             )
+        finally:
+            self._admission.release_pending(key)
 
         cancelled = bool(goal_handle.is_cancel_requested)
         state_code = self._terminal_state_code(phase, cancelled)
@@ -137,7 +159,7 @@ class ProbeRefinementFinalizationApi:
             detail,
             request_id,
         )
-        self.state_publisher.publish(state)
+        deliver_update(self.node, self.state_publisher.publish, state)
         result = FinalizeProbeRefinement.Result()
         result.probe_point_saved = saved
         result.state = state
@@ -174,12 +196,12 @@ class ProbeRefinementFinalizationApi:
             detail,
             request_id,
         )
-        self.state_publisher.publish(state)
+        deliver_update(self.node, self.state_publisher.publish, state)
         feedback = FinalizeProbeRefinement.Feedback()
         feedback.phase = self._phase_code(phase)
         feedback.probe_point_saved = saved
         feedback.state = state
-        goal_handle.publish_feedback(feedback)
+        deliver_update(self.node, goal_handle.publish_feedback, feedback)
 
     def _fail_active(self, goal, request_id, detail):
         try:
@@ -233,7 +255,12 @@ class ProbeRefinementFinalizationApi:
             state.state = state_code
             state.detail = detail
             state.validation_error = detail
-        self.state_publisher.publish(state)
+        if saved:
+            # Even if the context or its last snapshot is no longer available,
+            # failure after persistence must not hide the recovery obligation.
+            state.refinement_recovery_required = True
+            state.refinement_recovery_message = detail
+        deliver_update(self.node, self.state_publisher.publish, state)
         result = FinalizeProbeRefinement.Result()
         result.probe_point_saved = saved
         result.state = state
@@ -307,10 +334,11 @@ class ProbeRefinementFinalizationApi:
 
     def close(self):
         """Destroy finalization transport and detach its runner."""
-        release_resources(self, {
+        resources = {
             "runner": self.runner.close,
             "action_server": self._action_server.destroy,
-        })
+        }
+        release_resources(self, resources)
 
 
 __all__ = ["ProbeRefinementFinalizationApi"]

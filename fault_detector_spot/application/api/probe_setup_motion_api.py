@@ -1,5 +1,6 @@
 """Expose probe setup motion through one typed ROS action."""
 
+from fault_detector_spot.application.api.async_operation import OperationAdmission
 from fault_detector_spot.application.api.shutdown_callbacks import (
     ShutdownCallbackActivity, tracked_shutdown_callback, release_resources,
 )
@@ -16,6 +17,7 @@ from fault_detector_msgs.msg import (
 )
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.task import Future
 
 from fault_detector_spot.application.commanding.client_identity import (
     required_client_id,
@@ -45,9 +47,9 @@ class _ProbeMotionExecution:
     goal_handle: object
     request_id: str
     context: object
-    finished: Event = field(default_factory=Event)
-    state: object = None
-    cancellation_requested: bool = False
+    finished: Future = field(default_factory=Future)
+    cancellation_sent: bool = False
+    submitted: bool = False
 
 
 class ProbeSetupMotionApi:
@@ -59,6 +61,7 @@ class ProbeSetupMotionApi:
         coordinator: ProbeSetupCoordinator,
         state_publisher,
         state_adapter: ProbeSetupStateAdapter,
+        admission=None,
     ):
         self.node = node
         self.coordinator = coordinator
@@ -66,6 +69,7 @@ class ProbeSetupMotionApi:
         self.state_adapter = state_adapter
         self._lock = RLock()
         self._executions = {}
+        self._admission = admission or OperationAdmission(limit=1)
         self._shutdown = Event()
         self._shutdown_callbacks = ShutdownCallbackActivity()
         self._callback_group = ReentrantCallbackGroup()
@@ -88,17 +92,60 @@ class ProbeSetupMotionApi:
             self._motion_request(goal_request.intent)
         except (TypeError, ValueError):
             return GoalResponse.REJECT
+        if not self._admission.reserve(
+            id(goal_request), context_id=goal_request.context_id.strip(),
+            lane="physical",
+        ):
+            return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
-    @staticmethod
-    def _accept_cancel(_goal_handle):
+    def _accept_cancel(self, goal_handle):
+        self._admission.cancel(id(goal_handle.request))
+        with self._lock:
+            execution = next((
+                candidate for candidate in self._executions.values()
+                if candidate.goal_handle is goal_handle
+            ), None)
+        if execution is not None:
+            self._request_execution_cancellation(execution)
         return CancelResponse.ACCEPT
 
+    def _request_execution_cancellation(self, execution):
+        with self._lock:
+            if (not execution.submitted or execution.cancellation_sent
+                    or (execution.finished.done() and execution.finished.exception() is None)):
+                return
+            execution.cancellation_sent = True
+        try:
+            self.coordinator.cancel_motion(execution.context, execution.request_id)
+        except LookupError:
+            pass
+
     @tracked_shutdown_callback
-    def _execute(self, goal_handle):
+    async def _execute(self, goal_handle):
+        goal = goal_handle.request
+        key = id(goal)
+        if not self._admission.claim(key):
+            detail = ("Application is shutting down" if self._shutdown.is_set()
+                      else "Operation admission is missing, cancelled, or already executing")
+            try:
+                return self._abort(goal_handle, goal, detail)
+            finally:
+                self._admission.release_pending(key)
+        try:
+            return await self._execute_admitted(goal_handle)
+        finally:
+            self._admission.release(key)
+
+    async def _execute_admitted(self, goal_handle):
         goal = goal_handle.request
         if self._shutdown.is_set():
             return self._abort(goal_handle, goal, "Application is shutting down")
+        if (goal_handle.is_cancel_requested
+                or self._admission.cancel_requested(id(goal))):
+            return self._abort(
+                goal_handle, goal, "Probe motion cancelled before dispatch", cancelled=True,
+            )
         try:
             context = self.coordinator.context(
                 goal.context_id,
@@ -116,35 +163,36 @@ class ProbeSetupMotionApi:
         with self._lock:
             self._executions[operation.request_id] = execution
         try:
-            self.coordinator.submit_motion(operation)
+            try:
+                if not execution.finished.done():
+                    if (goal_handle.is_cancel_requested
+                            or self._admission.cancel_requested(id(goal))):
+                        execution.cancellation_sent = True
+                        self.coordinator.cancel_motion(context, operation.request_id)
+                    else:
+                        self.coordinator.submit_motion(operation)
+            except Exception:
+                if not execution.finished.done():
+                    raise
+            with self._lock:
+                execution.submitted = True
+            if self._shutdown.is_set():
+                self._request_execution_cancellation(execution)
+                if not execution.finished.done():
+                    raise RuntimeError("Application shutdown interrupted probe motion; stop unconfirmed")
+            if (goal_handle.is_cancel_requested
+                    or self._admission.cancel_requested(id(goal))):
+                self._request_execution_cancellation(execution)
+            state = await execution.finished
         except Exception as exception:
+            return self._abort(goal_handle, goal, str(exception))
+        finally:
             with self._lock:
                 self._executions.pop(operation.request_id, None)
-            return self._abort(goal_handle, goal, str(exception))
-        while not execution.finished.wait(0.05):
-            if self._shutdown.is_set():
-                with self._lock:
-                    self._executions.pop(operation.request_id, None)
-                return self._abort(goal_handle, goal, "Application shutdown interrupted probe motion")
-            if (
-                goal_handle.is_cancel_requested
-                and not execution.cancellation_requested
-            ):
-                execution.cancellation_requested = True
-                try:
-                    self.coordinator.cancel_motion(
-                        context,
-                        operation.request_id,
-                    )
-                except LookupError:
-                    pass
-        with self._lock:
-            self._executions.pop(operation.request_id, None)
-        result = ExecuteProbeSetupMotion.Result()
-        result.state = execution.state
-        if execution.state.state == ProbeSetupState.STATE_SUCCEEDED:
+        result = ExecuteProbeSetupMotion.Result(state=state)
+        if state.state == ProbeSetupState.STATE_SUCCEEDED:
             goal_handle.succeed()
-        elif execution.state.state in {
+        elif state.state in {
             ProbeSetupState.STATE_CANCELLED,
             ProbeSetupState.STATE_STOP_CONFIRMED,
         } and goal_handle.is_cancel_requested:
@@ -164,24 +212,31 @@ class ProbeSetupMotionApi:
         )
         state.execution_instance_id = status.execution_instance_id
         state.status_sequence = status.status_sequence
-        self.state_publisher.publish(state)
         with self._lock:
             execution = self._executions.get(status.request_id)
-        if execution is None:
-            return
-        execution.state = state
-        feedback = ExecuteProbeSetupMotion.Feedback()
-        feedback.state = state
-        execution.goal_handle.publish_feedback(feedback)
-        if status.state in {
-            CommandControllerState.SUCCEEDED,
-            CommandControllerState.FAILED,
-            CommandControllerState.CANCELLED,
-            CommandControllerState.STOP_CONFIRMED,
-        }:
-            execution.finished.set()
+            if execution is not None and not execution.finished.done():
+                if status.state in {
+                    CommandControllerState.SUCCEEDED,
+                    CommandControllerState.FAILED,
+                    CommandControllerState.CANCELLED,
+                    CommandControllerState.STOP_CONFIRMED,
+                }:
+                    execution.finished.set_result(state)
+            else:
+                execution = None
+        try:
+            self.state_publisher.publish(state)
+        except Exception as exception:
+            self.node.get_logger().error(f"Probe motion state publication failed: {exception}")
+        if execution is not None:
+            feedback = ExecuteProbeSetupMotion.Feedback(state=state)
+            try:
+                execution.goal_handle.publish_feedback(feedback)
+            except Exception as exception:
+                self.node.get_logger().error(f"Probe motion feedback publication failed: {exception}")
 
-    def _abort(self, goal_handle, goal, detail):
+    def _abort(self, goal_handle, goal, detail, *, cancelled=False):
+        state_code = (ProbeSetupState.STATE_CANCELLED if cancelled else ProbeSetupState.STATE_FAILED)
         try:
             context = self.coordinator.context(
                 goal.context_id,
@@ -191,7 +246,7 @@ class ProbeSetupMotionApi:
             state = self.state_adapter.message(
                 snapshot,
                 ProbeSetupIntent.OPERATION_UNSPECIFIED,
-                ProbeSetupState.STATE_FAILED,
+                state_code,
                 detail,
                 motion_operation=int(goal.intent.operation),
             )
@@ -202,13 +257,16 @@ class ProbeSetupMotionApi:
             state.client_id = goal.client_id.strip()
             state.context_id = goal.context_id.strip()
             state.motion_operation = int(goal.intent.operation)
-            state.state = ProbeSetupState.STATE_FAILED
+            state.state = state_code
             state.detail = detail
             state.validation_error = detail
         self.state_publisher.publish(state)
         result = ExecuteProbeSetupMotion.Result()
         result.state = state
-        goal_handle.abort()
+        if cancelled and goal_handle.is_cancel_requested:
+            goal_handle.canceled()
+        else:
+            goal_handle.abort()
         return result
 
     @staticmethod
@@ -322,6 +380,23 @@ class ProbeSetupMotionApi:
     def request_shutdown(self) -> None:
         """Release action waits without destroying resources used by callbacks."""
         self._shutdown.set()
+        self._admission.close()
+        with self._lock:
+            executions = tuple(self._executions.values())
+        errors = []
+        for execution in executions:
+            try:
+                self._request_execution_cancellation(execution)
+            except Exception as exception:
+                errors.append(str(exception))
+            finally:
+                with self._lock:
+                    if not execution.finished.done():
+                        execution.finished.set_exception(RuntimeError(
+                            "Application shutdown interrupted probe motion; stop unconfirmed"
+                        ))
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
     def close(self) -> None:
         """Destroy the motion action and detach status observation."""

@@ -1,5 +1,6 @@
 """Expose navigation setup through typed ROS action interfaces."""
 
+from fault_detector_spot.application.api.async_operation import OperationAdmission
 from fault_detector_spot.application.api.shutdown_callbacks import (
     ShutdownCallbackActivity, tracked_shutdown_callback, release_resources,
 )
@@ -47,6 +48,12 @@ _RUNTIME_OPERATIONS = {
     ),
     NavigationSetupIntent.OPERATION_STOP_MAPPING: CommandID.STOP_MAPPING,
 }
+_TERMINAL_STATES = {
+    NavigationSetupState.STATE_SUCCEEDED,
+    NavigationSetupState.STATE_FAILED,
+    NavigationSetupState.STATE_CANCELLED,
+    NavigationSetupState.STATE_STOP_CONFIRMED,
+}
 
 
 @dataclass
@@ -54,23 +61,23 @@ class _NavigationExecution:
     goal_handle: object
     request_id: str
     context: object
-    operation_code: int
-    finished: Event = field(default_factory=Event)
-    state: object = None
+    finished: Future = field(default_factory=Future)
     cancellation_requested: bool = False
 
 
 class NavigationSetupApi:
     """Own ROS transport for one navigation setup coordinator."""
 
-    def __init__(self, node, coordinator: NavigationSetupCoordinator):
+    def __init__(self, node, coordinator: NavigationSetupCoordinator, admission=None):
         self.node = node
         self.coordinator = coordinator
         self._lock = RLock()
         self._executions = {}
+        self._admission = admission or OperationAdmission(limit=1)
         self._shutdown = Event()
         self._shutdown_callbacks = ShutdownCallbackActivity()
         self._early_states = {}
+        self._runtime_submissions = 0
         self._pose_waiters = set()
         self._callback_group = ReentrantCallbackGroup()
         self._transaction_handlers = {
@@ -148,17 +155,59 @@ class NavigationSetupApi:
             self._validate_operation(goal_request.intent.operation)
         except (TypeError, ValueError):
             return GoalResponse.REJECT
+        if not self._admission.reserve(
+            id(goal_request), context_id=goal_request.context_id.strip(),
+            lane="physical",
+        ):
+            return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
-    @staticmethod
-    def _accept_cancel(_goal_handle):
+    def _accept_cancel(self, goal_handle):
+        self._admission.cancel(id(goal_handle.request))
+        with self._lock:
+            execution = next((
+                candidate for candidate in self._executions.values()
+                if candidate.goal_handle is goal_handle
+            ), None)
+        if execution is not None:
+            self._request_execution_cancellation(execution)
         return CancelResponse.ACCEPT
+
+    def _request_execution_cancellation(self, execution):
+        with self._lock:
+            if execution.cancellation_requested or execution.finished.done():
+                return
+            execution.cancellation_requested = True
+        try:
+            self.coordinator.cancel(execution.context, execution.request_id)
+        except LookupError:
+            pass
 
     @tracked_shutdown_callback
     async def _execute(self, goal_handle):
         goal = goal_handle.request
+        key = id(goal)
+        if not self._admission.claim(key):
+            detail = ("Application is shutting down" if self._shutdown.is_set()
+                      else "Operation admission is missing, cancelled, or already executing")
+            try:
+                return self._abort(goal_handle, goal, detail)
+            finally:
+                self._admission.release_pending(key)
+        try:
+            return await self._execute_admitted(goal_handle)
+        finally:
+            self._admission.release(key)
+
+    async def _execute_admitted(self, goal_handle):
+        goal = goal_handle.request
         if self._shutdown.is_set():
             return self._abort(goal_handle, goal, "Application is shutting down")
+        if (goal_handle.is_cancel_requested
+                or self._admission.cancel_requested(id(goal))):
+            return self._abort(
+                goal_handle, goal, "Navigation setup cancelled before dispatch", cancelled=True,
+            )
         operation_code = int(goal.intent.operation)
         try:
             if operation_code == NavigationSetupIntent.OPERATION_OPEN:
@@ -174,6 +223,11 @@ class NavigationSetupApi:
             NavigationSetupIntent.OPERATION_ADD_CURRENT_WAYPOINT,
         }:
             return await self._execute_pose_save(goal_handle, context)
+        if operation_code in _RUNTIME_OPERATIONS:
+            try:
+                return await self._execute_runtime(goal_handle, context, goal.intent)
+            except Exception as exception:
+                return self._abort(goal_handle, goal, str(exception), context)
         return self._execute_in_context(goal_handle, goal, context)
 
     async def _execute_pose_save(self, goal_handle, context):
@@ -194,7 +248,8 @@ class NavigationSetupApi:
                 try:
                     if self._shutdown.is_set():
                         raise RuntimeError(f"Application shutdown interrupted {kind} saving")
-                    if goal_handle.is_cancel_requested:
+                    if (goal_handle.is_cancel_requested
+                            or self._admission.cancel_requested(id(goal))):
                         completed.set_result(None)
                         return
                     try:
@@ -239,7 +294,10 @@ class NavigationSetupApi:
                     request.request_id,
                 )
                 self._state_publisher.publish(state)
-                goal_handle.canceled()
+                if goal_handle.is_cancel_requested:
+                    goal_handle.canceled()
+                else:
+                    goal_handle.abort()
                 return ExecuteNavigationSetup.Result(state=state)
             return self._succeed(goal_handle, self._state(
                 snapshot, int(goal.intent.operation), NavigationSetupState.STATE_SUCCEEDED,
@@ -273,12 +331,6 @@ class NavigationSetupApi:
     def _execute_in_context(self, goal_handle, goal, context):
         operation_code = int(goal.intent.operation)
         try:
-            if operation_code in _RUNTIME_OPERATIONS:
-                return self._execute_runtime(
-                    goal_handle,
-                    context,
-                    goal.intent,
-                )
             snapshot = self._execute_transaction(context, goal.intent)
             return self._succeed(
                 goal_handle,
@@ -346,91 +398,74 @@ class NavigationSetupApi:
             intent.waypoint_name,
         )
 
-    def _execute_runtime(self, goal_handle, context, intent):
+    async def _execute_runtime(self, goal_handle, context, intent):
         operation_code = int(intent.operation)
-        operation = self.coordinator.submit_runtime_operation(
-            context=context,
-            operation_code=operation_code,
-            command_id=_RUNTIME_OPERATIONS[operation_code],
-            map_name=intent.map_name,
-        )
-        execution = _NavigationExecution(
-            goal_handle=goal_handle,
-            request_id=operation.request_id,
-            context=context,
-            operation_code=operation_code,
-        )
         with self._lock:
-            self._executions[operation.request_id] = execution
-            early_state = self._early_states.pop(
-                operation.request_id,
-                None,
-            )
-        if early_state is not None:
-            execution.state = early_state
-            feedback = ExecuteNavigationSetup.Feedback()
-            feedback.state = early_state
-            goal_handle.publish_feedback(feedback)
-            if early_state.state in {
-                NavigationSetupState.STATE_SUCCEEDED,
-                NavigationSetupState.STATE_FAILED,
-                NavigationSetupState.STATE_CANCELLED,
-                NavigationSetupState.STATE_STOP_CONFIRMED,
-            }:
-                execution.finished.set()
+            self._runtime_submissions += 1
         try:
-            self._wait_for_runtime_execution(execution)
-        except RuntimeError as exception:
+            operation = self.coordinator.submit_runtime_operation(
+                context=context,
+                operation_code=operation_code,
+                command_id=_RUNTIME_OPERATIONS[operation_code],
+                map_name=intent.map_name,
+            )
+            execution = _NavigationExecution(
+                goal_handle=goal_handle,
+                request_id=operation.request_id,
+                context=context,
+            )
+            with self._lock:
+                self._executions[operation.request_id] = execution
+                early_state = self._early_states.pop(operation.request_id, None)
+                if early_state is not None:
+                    self._update_execution(execution, early_state)
+        finally:
+            with self._lock:
+                self._runtime_submissions -= 1
+                if not self._runtime_submissions:
+                    self._early_states.clear()
+        try:
+            if self._shutdown.is_set():
+                self._request_execution_cancellation(execution)
+                if not execution.finished.done():
+                    raise RuntimeError("Application shutdown interrupted navigation setup; stop unconfirmed")
+            if (goal_handle.is_cancel_requested
+                    or self._admission.cancel_requested(id(goal_handle.request))):
+                self._request_execution_cancellation(execution)
+            state = await execution.finished
+            return self._runtime_result(goal_handle, state)
+        except Exception as exception:
+            return self._abort(goal_handle, goal_handle.request, str(exception), context, operation.request_id)
+        finally:
             with self._lock:
                 self._executions.pop(execution.request_id, None)
-            return self._abort(goal_handle, goal_handle.request, str(exception))
-        return self._runtime_result(execution)
 
-    def _wait_for_runtime_execution(self, execution):
-        goal_handle = execution.goal_handle
-        while not execution.finished.wait(0.05):
-            if self._shutdown.is_set():
-                raise RuntimeError("Application shutdown interrupted navigation setup")
-            if (
-                goal_handle.is_cancel_requested
-                and not execution.cancellation_requested
-            ):
-                execution.cancellation_requested = True
-                try:
-                    self.coordinator.cancel(
-                        execution.context,
-                        execution.request_id,
-                    )
-                except LookupError:
-                    pass
-
-    def _runtime_result(self, execution):
-        state = execution.state
-        with self._lock:
-            self._executions.pop(execution.request_id, None)
-        if state is None:
-            state = self._state(
-                self.coordinator.snapshot(execution.context),
-                execution.operation_code,
-                NavigationSetupState.STATE_FAILED,
-                "Runtime operation ended without a state",
-                execution.request_id,
-            )
-        result = ExecuteNavigationSetup.Result()
-        result.state = state
+    def _runtime_result(self, goal_handle, state):
+        result = ExecuteNavigationSetup.Result(state=state)
         if state.state == NavigationSetupState.STATE_SUCCEEDED:
-            execution.goal_handle.succeed()
+            goal_handle.succeed()
         elif (
             state.state in {
                 NavigationSetupState.STATE_CANCELLED,
                 NavigationSetupState.STATE_STOP_CONFIRMED,
             }
-            and execution.goal_handle.is_cancel_requested
+            and goal_handle.is_cancel_requested
         ):
-            execution.goal_handle.canceled()
+            goal_handle.canceled()
         else:
-            execution.goal_handle.abort()
+            goal_handle.abort()
         return result
+
+    def _update_execution(self, execution, state):
+        with self._lock:
+            if execution.finished.done():
+                return
+            if state.state in _TERMINAL_STATES:
+                execution.finished.set_result(state)
+        try:
+            execution.goal_handle.publish_feedback(ExecuteNavigationSetup.Feedback(state=state))
+        except Exception as exception:
+            self.node.get_logger().error(f"Navigation setup feedback publication failed: {exception}")
 
     def _receive_status(self, status: NavigationSetupStatus) -> None:
         state = self._state(
@@ -442,7 +477,21 @@ class NavigationSetupApi:
         )
         state.execution_instance_id = status.execution_instance_id
         state.status_sequence = status.status_sequence
-        self._state_publisher.publish(state)
+        with self._lock:
+            execution = self._executions.get(status.request_id)
+            if execution is None:
+                # Only submission can emit before the returned request is registered.
+                # Completed requests must not accumulate in this handoff buffer.
+                if status.request_id and self._runtime_submissions:
+                    previous = self._early_states.get(status.request_id)
+                    if previous is None or previous.state not in _TERMINAL_STATES:
+                        self._early_states[status.request_id] = state
+            else:
+                self._update_execution(execution, state)
+        try:
+            self._state_publisher.publish(state)
+        except Exception as exception:
+            self.node.get_logger().error(f"Navigation setup state publication failed: {exception}")
         if not status.request_id:
             return
         self.node.get_logger().info(
@@ -450,22 +499,6 @@ class NavigationSetupApi:
             f"{status.request_id}: {status.state.value}: "
             f"{status.detail}"
         )
-        with self._lock:
-            execution = self._executions.get(status.request_id)
-            if execution is None:
-                self._early_states[status.request_id] = state
-                return
-        execution.state = state
-        feedback = ExecuteNavigationSetup.Feedback()
-        feedback.state = state
-        execution.goal_handle.publish_feedback(feedback)
-        if status.state in {
-            CommandControllerState.SUCCEEDED,
-            CommandControllerState.FAILED,
-            CommandControllerState.CANCELLED,
-            CommandControllerState.STOP_CONFIRMED,
-        }:
-            execution.finished.set()
 
     def _close(self, request, response):
         try:
@@ -473,6 +506,7 @@ class NavigationSetupApi:
                 request.context_id,
                 request.client_id,
             )
+            self._admission.cancel_context(context.context_id)
             self.coordinator.close_context(context)
         except (TypeError, ValueError, LookupError) as exception:
             response.closed = False
@@ -489,7 +523,8 @@ class NavigationSetupApi:
         goal_handle.succeed()
         return result
 
-    def _abort(self, goal_handle, goal, detail, context=None, request_id=""):
+    def _abort(self, goal_handle, goal, detail, context=None, request_id="", *, cancelled=False):
+        state_code = (NavigationSetupState.STATE_CANCELLED if cancelled else NavigationSetupState.STATE_FAILED)
         snapshot = None
         if context is not None:
             try:
@@ -500,14 +535,17 @@ class NavigationSetupApi:
             state = self._state(
                 snapshot,
                 int(goal.intent.operation),
-                NavigationSetupState.STATE_FAILED,
+                state_code,
                 detail,
                 request_id,
             )
             self._state_publisher.publish(state)
             result = ExecuteNavigationSetup.Result()
             result.state = state
-            goal_handle.abort()
+            if cancelled and goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+            else:
+                goal_handle.abort()
             return result
         state = NavigationSetupState()
         state.header.stamp = self.node.get_clock().now().to_msg()
@@ -516,13 +554,16 @@ class NavigationSetupApi:
         state.context_id = goal.context_id.strip()
         state.revision = context.revision if context is not None else 0
         state.operation = int(goal.intent.operation)
-        state.state = NavigationSetupState.STATE_FAILED
+        state.state = state_code
         state.detail = detail
         state.runtime_error = "Runtime status unavailable"
         self._state_publisher.publish(state)
         result = ExecuteNavigationSetup.Result()
         result.state = state
-        goal_handle.abort()
+        if cancelled and goal_handle.is_cancel_requested:
+            goal_handle.canceled()
+        else:
+            goal_handle.abort()
         return result
 
     def _state(
@@ -623,10 +664,26 @@ class NavigationSetupApi:
     def request_shutdown(self) -> None:
         """Release action waits without destroying resources used by callbacks."""
         self._shutdown.set()
+        self._admission.close()
         with self._lock:
             for waiter in self._pose_waiters:
                 if not waiter.done():
                     waiter.set_exception(RuntimeError("Application shutdown interrupted navigation pose saving"))
+            executions = tuple(self._executions.values())
+        errors = []
+        for execution in executions:
+            try:
+                self._request_execution_cancellation(execution)
+            except Exception as exception:
+                errors.append(str(exception))
+            finally:
+                with self._lock:
+                    if not execution.finished.done():
+                        execution.finished.set_exception(RuntimeError(
+                            "Application shutdown interrupted navigation setup; stop unconfirmed"
+                        ))
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
     def close(self) -> None:
         """Detach transport resources from the coordinator."""

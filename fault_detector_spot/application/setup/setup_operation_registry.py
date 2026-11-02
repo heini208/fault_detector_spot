@@ -116,8 +116,14 @@ class SetupOperationRegistry(Generic[PayloadT]):
     def emit(self, value) -> None:
         with self._lock:
             listeners = tuple(self._listeners)
+        first_error = None
         for listener in listeners:
-            listener(value)
+            try:
+                listener(value)
+            except Exception as exception:
+                first_error = first_error or exception
+        if first_error is not None:
+            raise first_error
 
     def clear(self) -> None:
         with self._lock:
