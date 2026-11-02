@@ -191,6 +191,7 @@ class RecordManager(Node):
         # A pending outside command may still be recorded, splitting the old block.
         if any(self._recording_results.get(request_id) not in (
             CommandStatus.STATE_FAILED, CommandStatus.STATE_CANCELLED,
+            CommandStatus.STATE_STOP_CONFIRMED,
         ) for request_id in outside):
             return 0
         return self._last_skip_block
@@ -369,6 +370,7 @@ class RecordManager(Node):
             CommandStatus.STATE_SUCCEEDED: "added",
             CommandStatus.STATE_FAILED: "failed",
             CommandStatus.STATE_CANCELLED: "cancelled",
+            CommandStatus.STATE_STOP_CONFIRMED: "cancelled",
         }.get(self._recording_results.get(request_id), "pending")
         self._publish_recording_feedback(
             request_id, self._recording_commands[request_id].command_id.value, outcome,
@@ -405,7 +407,8 @@ class RecordManager(Node):
             CommandStatus.STATE_SUCCEEDED,
             CommandStatus.STATE_FAILED,
             CommandStatus.STATE_CANCELLED,
-        ):
+            CommandStatus.STATE_STOP_CONFIRMED,
+        ) or not message.execution_idle:
             return False
         if message.request_id in self._recording_results:
             return False
@@ -451,6 +454,17 @@ class RecordManager(Node):
             or message.request_id != self._playback_request_id
         ):
             return False
+        if message.state in (
+            CommandStatus.STATE_RUNNING,
+            CommandStatus.STATE_UNKNOWN,
+            CommandStatus.STATE_STOP_REQUESTED,
+            CommandStatus.STATE_STOP_UNCONFIRMED,
+        ):
+            return True
+        # Only controller-confirmed outcomes can advance a recording. Retain
+        # correlation and retry/acquisition state while execution is uncertain.
+        if not message.execution_idle:
+            return True
         if message.state == CommandStatus.STATE_SUCCEEDED:
             if self._playback_step is not None:
                 command_id = self._playback_attempt_command.command_id
@@ -464,6 +478,7 @@ class RecordManager(Node):
         if message.state in (
             CommandStatus.STATE_FAILED,
             CommandStatus.STATE_CANCELLED,
+            CommandStatus.STATE_STOP_CONFIRMED,
         ):
             detail = message.detail or "command did not succeed"
             replacement_valid = True
@@ -509,7 +524,7 @@ class RecordManager(Node):
                 failed=True,
             )
             return True
-        return message.state == CommandStatus.STATE_RUNNING
+        return False
 
     def _dispatch_next_playback_command(self):
         if not self._playback_commands:

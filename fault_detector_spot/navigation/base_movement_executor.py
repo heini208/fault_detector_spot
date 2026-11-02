@@ -355,6 +355,8 @@ class BaseMovementExecutor(MovementExecutor):
         """Cancel an active base command without releasing ownership early."""
         if not self.active:
             return
+        if self._send_goal_future is not None:
+            self._stop_unconfirmed = True
         if self._phase is _BasePhase.CANCELLING:
             self._cancellation_terminal_update = None
             if self._cancellation_complete:
@@ -374,6 +376,35 @@ class BaseMovementExecutor(MovementExecutor):
         self._goal_verifier = None
         self._set_phase(_BasePhase.CANCELLING)
         self._begin_cancellation()
+
+    def begin_stop_confirmation(self):
+        """Cancel owned motion and require fresh stationary pose evidence."""
+        self.cancel()
+        self._stop_confirmation_stamp = self._ros_time_sec()
+        self._stop_confirmation_verifier = BaseGoalVerifier(
+            (0.0, 0.0, 0.0), self.goal_verification_config, self._monotonic_clock(),
+        )
+
+    def poll_stop_confirmation(self):
+        """Return proof only after action termination and post-stop settling."""
+        if self.active:
+            self.cancel()
+            if self.active:
+                self.poll()
+                return False, "Waiting for base action cancellation"
+        if not self.goals_settled():
+            return False, "Base action termination is unconfirmed"
+        sample = self.base_pose_source.sample()
+        pose = sample.planar_pose if sample is not None else None
+        stamp = sample.stamp_sec if sample is not None else None
+        if stamp is None or stamp <= self._stop_confirmation_stamp:
+            pose = None
+        verifier = self._stop_confirmation_verifier
+        verifier.update(pose, stamp, self._ros_time_sec(), self._monotonic_clock())
+        if not verifier.settled:
+            return False, "Waiting for fresh stationary base feedback"
+        self._stop_unconfirmed = False
+        return True, "Base action ended and physical stop confirmed"
 
     def poll(self) -> BaseMovementUpdate:
         """Advance the active base operation without blocking."""
@@ -982,6 +1013,7 @@ class BaseMovementExecutor(MovementExecutor):
         return None
 
     def _begin_timeout_cancellation(self, outcome, detail):
+        self._stop_unconfirmed = True
         self._cancellation_terminal_update = BaseMovementUpdate(
             outcome,
             detail,
@@ -1188,6 +1220,9 @@ class BaseMovementExecutor(MovementExecutor):
         if outcome is BaseMovementOutcome.GOAL_REJECTED:
             # A rejected goal cannot have changed the height.
             self._pending_commanded_height_m = None
+        elif (outcome is not BaseMovementOutcome.SUCCESS and not safe
+              and self._send_goal_future is not None):
+            self._stop_unconfirmed = True
         result = super()._finish(outcome, detail)
         return replace(result, retry_safe=safe, retry_target=target)
 

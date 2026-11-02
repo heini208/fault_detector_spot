@@ -225,6 +225,7 @@ class ApplicationController:
             CommandControllerState.SUCCEEDED,
             CommandControllerState.FAILED,
             CommandControllerState.CANCELLED,
+            CommandControllerState.STOP_CONFIRMED,
         }:
             with self._lock:
                 self._operations.pop(status.request_id, None)

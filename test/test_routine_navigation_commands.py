@@ -185,6 +185,7 @@ def submit(rig, operation):
 def succeed(rig, operation):
     rig.controller.handle_execution_status(CommandExecutionStatus(
         request_id=operation.request_id, state=CommandControllerState.SUCCEEDED,
+        execution_idle=True,
     ))
 
 

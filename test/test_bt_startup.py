@@ -9,8 +9,18 @@ from fault_detector_spot.application.behaviour_tree.behaviours.command_subscribe
 from test_command_ros_transport import FakeNode
 
 
+class ConsumerNode(FakeNode):
+    def __init__(self):
+        super().__init__()
+        self.services = {}
+
+    def create_service(self, _service_type, name, callback):
+        self.services[name] = callback
+        return callback
+
+
 def test_deferred_consumer_is_advertised_only_after_activation():
-    node = FakeNode()
+    node = ConsumerNode()
     consumer = CommandSubscriber(defer_subscription=True)
     consumer.setup(node=node)
     assert consumer.request_topic not in node.subscriptions

@@ -1,6 +1,7 @@
 """Shared RobotCommand lifecycle for physical movement executors."""
 
 import math
+from threading import RLock
 import time
 
 from action_msgs.msg import GoalStatus
@@ -71,10 +72,52 @@ class MovementExecutor:
         self._goal_sent_monotonic = None
         self._result_started_monotonic = None
         self._pending_goal_builder = None
+        # Goal delivery can outlive the operation that submitted it. Keep this
+        # evidence across resets so a timeout cannot masquerade as idle.
+        self._settlement_lock = RLock()
+        self._submitted_goals = []
+        self._stop_unconfirmed = False
 
     @property
     def active(self) -> bool:
         return self._active
+
+    @property
+    def execution_idle(self) -> bool:
+        """Whether this owner has no active or possibly still-executing goal."""
+        return not self.active and not self._stop_unconfirmed and self.goals_settled()
+
+    def goals_settled(self) -> bool:
+        """Observe terminal action results without treating errors as evidence."""
+        with self._settlement_lock:
+            pending = []
+            for record in self._submitted_goals:
+                future, result_future = record
+                try:
+                    if future is None or not future.done():
+                        pending.append(record)
+                        continue
+                    handle = future.result()
+                    if handle is None:
+                        pending.append(record)
+                        continue
+                    if not handle.accepted:
+                        continue
+                    if result_future is None:
+                        result_future = handle.get_result_async()
+                        record[1] = result_future
+                    if result_future is None or not result_future.done():
+                        pending.append(record)
+                        continue
+                    if result_future.result().status not in {
+                        GoalStatus.STATUS_CANCELED, GoalStatus.STATUS_SUCCEEDED,
+                        GoalStatus.STATUS_ABORTED,
+                    }:
+                        pending.append(record)
+                except Exception:
+                    pending.append(record)
+            self._submitted_goals = pending
+            return not pending
 
     def poll(self):
         """Advance the active RobotCommand lifecycle without blocking."""
@@ -215,12 +258,16 @@ class MovementExecutor:
         try:
             future = self.action_client.send_goal_async(goal)
         except Exception as exception:
+            with self._settlement_lock:
+                self._submitted_goals.append([None, None])
             return self._finish(
                 self.OUTCOME_TYPE.EXECUTION_ERROR,
                 f"{self._movement_title} goal submission failed: "
                 f"{exception}",
             )
 
+        with self._settlement_lock:
+            self._submitted_goals.append([future, None])
         if future is None:
             return self._finish(
                 self.OUTCOME_TYPE.EXECUTION_ERROR,

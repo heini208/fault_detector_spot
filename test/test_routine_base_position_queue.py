@@ -78,6 +78,7 @@ def succeed(rig, operation, remaining_steps=0):
     rig.commands.handle_execution_status(CommandExecutionStatus(
         request_id=operation.request_id,
         state=CommandControllerState.SUCCEEDED,
+        execution_idle=True,
         buffered_command_count=remaining_steps,
     ))
 

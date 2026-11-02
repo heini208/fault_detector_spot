@@ -743,6 +743,9 @@ def test_goal_response_timeout_cancels_goal_if_accepted_late(
     handle = FakeGoalHandle()
     send_future.set_result(handle)
     assert handle.cancel_count == 1
+    handle.result_future.set_result(SimpleNamespace(status=GoalStatus.STATUS_CANCELED))
+    assert not executor.active
+    assert not executor.execution_idle  # Late action termination is not physical stop proof.
 
 
 @pytest.mark.parametrize("duration_sec", [30.0, 50.0])

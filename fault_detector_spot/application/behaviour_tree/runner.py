@@ -138,19 +138,22 @@ def create_root(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
 
 
 def create_behavior_tree(node: rclpy.node.Node):
+    from fault_detector_spot.application.behaviour_tree.command_status_ledger import CommandStatusLedger
+
+    status_ledger = CommandStatusLedger()
     root = py_trees.composites.Parallel(
         "FaultDetectorSpot",
         policy=py_trees.common.ParallelPolicy.SuccessOnAll(synchronise=False),
     )
     root.add_children([
-        build_sensing_tree(node),
+        build_sensing_tree(node, status_ledger=status_ledger),
         build_buffered_command_tree(node),
-        build_publisher_tree(node),
+        build_publisher_tree(node, status_ledger=status_ledger),
     ])
     return root
 
 
-def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
+def build_sensing_tree(node: rclpy.node.Node, *, status_ledger=None) -> py_trees.behaviour.Behaviour:
     tag_state_timeout_sec = float(
         read_parameter(
             node,
@@ -192,6 +195,7 @@ def build_sensing_tree(node: rclpy.node.Node) -> py_trees.behaviour.Behaviour:
     )
     cmd_sub = CommandSubscriber(
         name="UI Command Listener", defer_subscription=True,
+        status_ledger=status_ledger,
     )
     pose_sub = LastLocalizationPose(name="LastLocalizationPose")
     tag_scan_sequence = py_trees.composites.Sequence(
@@ -496,6 +500,11 @@ def build_cancelable_command_tree(
     robot_command_resources = (
         get_helper_container(node).robot_command_resources
     )
+    from fault_detector_spot.application.behaviour_tree.behaviours.confirm_robot_stop import ConfirmRobotStop
+    confirm_stop = ConfirmRobotStop(robot_command_resources)
+    confirm_recovery_stop = ConfirmRobotStop(
+        robot_command_resources, name="ConfirmEmergencyRecoveryStop",
+    )
     stow_cancel = StowArmBehaviour(
         name="StowArmCancelBehaviour",
         robot_command_resources=robot_command_resources,
@@ -514,9 +523,11 @@ def build_cancelable_command_tree(
     cancel_seq.add_children([
         cancel_check,
         stop_base,
+        confirm_stop,
         stop_mapping,
         stow_cancel,
         close_gripper,
+        confirm_recovery_stop,
         reset_estop,
     ])
     normal_tree = build_command_tree(node)
@@ -547,9 +558,26 @@ def build_cancelable_command_tree(
 
 def build_publisher_tree(
     node: rclpy.node.Node,
+    *, status_ledger=None,
 ) -> py_trees.behaviour.Behaviour:
-    cmd_pub = BufferStatusPublisher(name="CommandStatusPublisher")
     helpers = get_helper_container(node)
+    runtime = helpers.rtabmap_runtime
+
+    def execution_idle():
+        return (helpers.robot_command_resources.execution_idle()
+                and not runtime.has_pending_operation()
+                and not runtime.nav2_runtime.has_pending_operation())
+
+    def stop_runtime_idle():
+        return (not runtime.is_running()
+                and not runtime.nav2_runtime.is_running()
+                and not runtime.has_pending_operation()
+                and not runtime.nav2_runtime.has_pending_operation())
+
+    cmd_pub = BufferStatusPublisher(
+        name="CommandStatusPublisher", status_ledger=status_ledger,
+        execution_idle=execution_idle, stop_runtime_idle=stop_runtime_idle,
+    )
     init_pose_pub = LandmarkRelocalizer(
         helpers.rtabmap_runtime,
         tf_buffer=helpers.robot_command_resources.get_tf_listener(node).buffer,

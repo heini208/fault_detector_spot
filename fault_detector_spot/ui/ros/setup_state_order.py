@@ -17,7 +17,10 @@ class SetupStateOrder:
             self._revision = revision
             self._request_states.clear()
         previous = self._request_states.get(state.request_id)
-        terminal = {state.STATE_SUCCEEDED, state.STATE_FAILED, state.STATE_CANCELLED}
+        terminal = {
+            state.STATE_SUCCEEDED, state.STATE_FAILED,
+            state.STATE_CANCELLED, state.STATE_STOP_CONFIRMED,
+        }
         if previous in terminal and state.state not in terminal:
             return False
         if previous == state.STATE_RUNNING and state.state == state.STATE_QUEUED:

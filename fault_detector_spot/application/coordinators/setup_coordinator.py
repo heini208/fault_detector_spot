@@ -372,6 +372,7 @@ class SetupCoordinator:
                 CommandControllerState.SUCCEEDED,
                 CommandControllerState.FAILED,
                 CommandControllerState.CANCELLED,
+                CommandControllerState.STOP_CONFIRMED,
             }:
                 self._operations.pop(
                     status.request_id,

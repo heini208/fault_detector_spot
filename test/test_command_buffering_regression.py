@@ -29,6 +29,7 @@ def _status(request_id, state, buffered=0, detail=""):
     return CommandExecutionStatus(
         request_id=request_id,
         state=state,
+        execution_idle=state in {CommandControllerState.SUCCEEDED, CommandControllerState.FAILED, CommandControllerState.CANCELLED},
         buffered_command_count=buffered,
         detail=detail,
     )

@@ -17,6 +17,7 @@ _TERMINAL_STATES = frozenset({
     CommandControllerState.SUCCEEDED,
     CommandControllerState.FAILED,
     CommandControllerState.CANCELLED,
+    CommandControllerState.STOP_CONFIRMED,
 })
 
 

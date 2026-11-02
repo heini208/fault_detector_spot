@@ -98,6 +98,7 @@ def execution_success(request_id):
     return CommandExecutionStatus(
         request_id=request_id,
         state=CommandControllerState.SUCCEEDED,
+        execution_idle=True,
         buffered_command_count=0,
     )
 
@@ -107,6 +108,7 @@ def playback_success(request_id, buffered_command_count):
     message.request_id = request_id
     message.command_id = CommandID.WAIT_TIME.value
     message.state = CommandStatus.STATE_SUCCEEDED
+    message.execution_idle = True
     message.buffered_command_count = buffered_command_count
     return message
 

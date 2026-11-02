@@ -88,8 +88,8 @@ def test_saved_queue_actions_remain_blocked_during_setup_motion(application, fie
     assert not controls.saved_custom_probe_button.isEnabled()
 
 
-@pytest.mark.parametrize("failure", ["rejected", "goal_exception", "result_exception"])
-def test_operation_transport_error_releases_only_its_own_request(
+@pytest.mark.parametrize("failure", ["rejected", "goal_exception", "result_exception", "result_request_exception"])
+def test_only_explicit_rejection_releases_request_after_transport_error(
     application, monkeypatch, failure
 ):
     controls, _state = controls_with_points()
@@ -108,7 +108,7 @@ def test_operation_transport_error_releases_only_its_own_request(
         Mock(return_value=transport),
     )
     client = ApplicationClient(Mock(), "ui")
-    harness = SimpleNamespace(inspection_controls=controls)
+    harness = SimpleNamespace(inspection_controls=controls, status_label=controls.ui.status_label)
     client.operation_rejected.connect(
         lambda context, detail: Fault_Detector_UI._process_operation_rejected(
             harness, context, detail
@@ -116,21 +116,65 @@ def test_operation_transport_error_releases_only_its_own_request(
     )
     errors = []
     client.request_rejected.connect(errors.append)
+    uncertainties = []
+    client.operation_uncertain.connect(lambda context, detail: uncertainties.append((context, detail)))
+    client.operation_uncertain.connect(
+        lambda context, detail: Fault_Detector_UI._process_operation_uncertain(harness, context, detail)
+    )
+    client.state_changed.connect(controls.handle_application_state)
     assert client.execute(OperationalIntent(), second_context)
     if failure == "goal_exception":
         goal_response.set_exception(RuntimeError("Disconnected"))
     else:
         handle = Mock(accepted=failure != "rejected")
         handle.get_result_async.return_value = result_response
+        if failure == "result_request_exception":
+            handle.get_result_async.side_effect = RuntimeError("Disconnected")
         goal_response.set_result(handle)
         if failure == "result_exception":
             result_response.set_exception(RuntimeError("Disconnected"))
 
-    assert len(errors) == 1
-    assert list(controls._saved_probe_operation_contexts) == [first_context]
+    if failure == "rejected":
+        assert len(errors) == 1
+        assert uncertainties == []
+        assert list(controls._saved_probe_operation_contexts) == [first_context]
+    else:
+        assert errors == []
+        assert uncertainties == [(second_context, "Disconnected")]
+        assert list(controls._saved_probe_operation_contexts) == [first_context, second_context]
+        assert "outcome unknown" in harness.status_label.text()
+        assert "Outcome unknown" in controls.saved_probe_motion_status.text()
+        client._receive_state(ApplicationCommandState(
+            context_id=second_context, state=ApplicationCommandState.STATE_STOP_CONFIRMED,
+        ))
+        assert list(controls._saved_probe_operation_contexts) == [first_context]
+        assert "stop confirmed" in controls.saved_probe_motion_status.text()
     assert controls._routine_arm_pose_operation_contexts
     assert controls._base_position_operation_context
     assert not controls.delete_saved_probe_point_button.isEnabled()
     assert controls.saved_probe_action_buttons[
         OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
     ].isEnabled()
+
+
+@pytest.mark.parametrize("state_code", [
+    ApplicationCommandState.STATE_UNKNOWN,
+    ApplicationCommandState.STATE_STOP_REQUESTED,
+    ApplicationCommandState.STATE_STOP_UNCONFIRMED,
+])
+def test_saved_point_stays_locked_until_stop_is_confirmed(application, state_code):
+    controls, _state = controls_with_points()
+    controls.handle_saved_probe_motion(OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH)
+    context = controls.ui.execute_operation.call_args.kwargs["context_id"]
+
+    controls.handle_application_state(ApplicationCommandState(context_id=context, state=state_code))
+
+    assert context in controls._saved_probe_operation_contexts
+    assert not controls.delete_saved_probe_point_button.isEnabled()
+    assert "Movement completed" not in controls.saved_probe_motion_status.text()
+    controls.handle_application_state(ApplicationCommandState(
+        context_id=context, state=ApplicationCommandState.STATE_STOP_CONFIRMED,
+    ))
+    assert not controls._saved_probe_operation_contexts
+    assert controls.delete_saved_probe_point_button.isEnabled()
+    assert "stop confirmed" in controls.saved_probe_motion_status.text()

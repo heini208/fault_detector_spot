@@ -82,10 +82,17 @@ def test_actual_root_ticks_successful_sensing_and_publishing_during_command(monk
                 return py_trees.common.Status.RUNNING
             return py_trees.common.Status.SUCCESS
 
-    monkeypatch.setattr(runner, "build_sensing_tree", lambda node: CountTicks("sensing"))
+    ledgers = []
+
+    def sharing_ledger(name, status_ledger):
+        ledgers.append(status_ledger)
+        return CountTicks(name)
+
+    monkeypatch.setattr(runner, "build_sensing_tree", lambda node, status_ledger: sharing_ledger("sensing", status_ledger))
     monkeypatch.setattr(runner, "build_buffered_command_tree", lambda node: CountTicks("command"))
-    monkeypatch.setattr(runner, "build_publisher_tree", lambda node: CountTicks("publisher"))
+    monkeypatch.setattr(runner, "build_publisher_tree", lambda node, status_ledger: sharing_ledger("publisher", status_ledger))
     root = runner.create_behavior_tree(object())
+    assert len(ledgers) == 2 and ledgers[0] is ledgers[1]
     for _ in range(10):
         root.tick_once()
         assert root.status == py_trees.common.Status.RUNNING

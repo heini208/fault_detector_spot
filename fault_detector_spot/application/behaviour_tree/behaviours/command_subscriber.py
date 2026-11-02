@@ -65,6 +65,7 @@ from fault_detector_spot.navigation.commands.base_to_tag_command import (
     BaseToTagCommand,
 )
 from fault_detector_spot.shared.ros.qos_profiles import COMMAND_REQUEST_QOS
+from fault_detector_spot.application.behaviour_tree.command_status_ledger import CommandStatusLedger
 
 
 class CommandSubscriber(py_trees.behaviour.Behaviour):
@@ -76,6 +77,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         request_topic: str = "fault_detector/_internal/commands/request",
         status_topic: str = "fault_detector/_internal/command_status",
         defer_subscription: bool = False,
+        status_ledger=None,
     ):
         super().__init__(name)
         self.node: Optional[rclpy.node.Node] = None
@@ -124,9 +126,10 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         self.pending_msgs = []
         self.last_received_time = None
         self.process_delay_sec = 0.05
-        self._received_request_ids = set()
+        self.status_ledger = status_ledger if status_ledger is not None else CommandStatusLedger()
         self.request_status_publisher = None
         self.request_subscription = None
+        self.status_query_service = None
 
     def setup(self, **kwargs):
         try:
@@ -184,6 +187,12 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             self.status_topic,
             10,
         )
+        from fault_detector_msgs.srv import GetCommandStatus
+        self.status_query_service = self.node.create_service(
+            GetCommandStatus,
+            "fault_detector/_internal/commands/get_status",
+            self.query_status,
+        )
         self.request_subscription = self.node.create_subscription(
             CommandRequestMessage,
             self.request_topic,
@@ -213,15 +222,14 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             self._publish_raw_request_failure(message, detail)
             return
 
-        if request.request_id in self._received_request_ids:
-            detail = (
-                f"BT rejected duplicate request ID: {request.request_id}"
-            )
-            self.logger.error(detail)
-            self._publish_request_failure(request, detail)
+        accepted, receipt = self.status_ledger.receive(
+            request, emergency=self.is_estop_command(request.command),
+        )
+        if not accepted:
+            if self.request_status_publisher is not None:
+                self.request_status_publisher.publish(receipt)
             return
 
-        self._received_request_ids.add(request.request_id)
         command_id = request.command.command_id.value
         detail = f"BT received {command_id} request"
         self._publish_request_status(
@@ -398,6 +406,7 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         return command.command_id == CommandID.EMERGENCY_CANCEL
 
     def trigger_estop(self, request: CommandRequest[SemanticCommand]):
+        self.status_ledger.request_stop(request)
         self.blackboard.command_buffer.clear()
         self.pending_msgs = []
         self.blackboard.estop_flag = True
@@ -406,12 +415,14 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
             stamp=self._create_command_stamp(),
             request_id=request.request_id,
         )
+        command.stop_confirmed = False
+        command.stop_unconfirmed = False
         self._apply_request_metadata(command, request)
         self.blackboard.command_buffer.append(command)
         detail = "BT accepted emergency stop and replaced command buffer"
         self._publish_request_status(
             request,
-            CommandStatus.STATE_RUNNING,
+            CommandStatus.STATE_STOP_REQUESTED,
             detail,
             buffered_command_count=1,
         )
@@ -440,7 +451,15 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         message.state = state
         message.detail = detail
         message.buffered_command_count = int(buffered_command_count)
-        self.request_status_publisher.publish(message)
+        if state == CommandStatus.STATE_FAILED:
+            # Translation failed before any step entered the execution buffer.
+            message.execution_idle = True
+        self.request_status_publisher.publish(self.status_ledger.record(message))
+
+    def query_status(self, request, response):
+        """Return retained owner evidence; this never submits or resumes work."""
+        response.status = self.status_ledger.query(request.request_id)
+        return response
 
     def _publish_request_failure(self, request, detail):
         self._publish_request_status(
@@ -463,7 +482,12 @@ class CommandSubscriber(py_trees.behaviour.Behaviour):
         status.state = CommandStatus.STATE_FAILED
         status.detail = detail
         status.buffered_command_count = 0
-        self.request_status_publisher.publish(status)
+        existing = self.status_ledger.query(request_id)
+        if self.status_ledger.contains(request_id):
+            self.request_status_publisher.publish(existing)
+            return
+        status.execution_idle = True
+        self.request_status_publisher.publish(self.status_ledger.record(status))
 
     def _create_command_stamp(self):
         return self.node.get_clock().now().to_msg()

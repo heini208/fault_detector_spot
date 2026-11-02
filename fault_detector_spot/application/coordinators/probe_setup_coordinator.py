@@ -156,10 +156,14 @@ class ProbeSetupCoordinator:
             if status.request.context_id == context.context_id:
                 continue
             # A completed observation excursion verifies its own return pose.
-            # Failed/cancelled excursions cannot preserve reached-pose evidence.
+            # Failed, stopped, or uncertain excursions cannot preserve that evidence.
             if scoped_measurement and status.state not in {
                 CommandControllerState.FAILED,
                 CommandControllerState.CANCELLED,
+                CommandControllerState.UNKNOWN,
+                CommandControllerState.STOP_REQUESTED,
+                CommandControllerState.STOP_CONFIRMED,
+                CommandControllerState.STOP_UNCONFIRMED,
             }:
                 continue
             try:
@@ -1138,6 +1142,7 @@ class ProbeSetupCoordinator:
             CommandControllerState.SUCCEEDED,
             CommandControllerState.FAILED,
             CommandControllerState.CANCELLED,
+            CommandControllerState.STOP_CONFIRMED,
         }
         if terminal:
             with self._context_lock(context):

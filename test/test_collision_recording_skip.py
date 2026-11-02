@@ -1,6 +1,7 @@
 """Recovered contact feedback reaches skip handling through the status pipeline."""
 
 from dataclasses import replace
+from fault_detector_msgs.msg import CommandStatus
 
 import pytest
 from builtin_interfaces.msg import Time
@@ -72,6 +73,9 @@ def test_collision_feedback_retries_then_skips_only_after_recovery(tmp_path, com
         request = command_request_from_message(submission)
         assert transport.submit_message(submission)
         publisher = behavior(Status.FAILURE, request.command.command_id.value)
+        # This fixture exercises the real guard rather than an action executor:
+        # only its successful stop-and-recovery result is nonexecution evidence.
+        publisher.execution_idle = lambda: result.retry_safe or result.continuation_safe
         command = ExecutionCommand(request.command.command_id, Time(), request.request_id)
         command.semantic_command = request.command
         publisher.blackboard.last_command = command
@@ -92,5 +96,7 @@ def test_collision_feedback_retries_then_skips_only_after_recovery(tmp_path, com
         assert manager._playback_step.command.wait_time == 2.0
         assert len(manager.command_submission_pub.messages) == retries + 2
     else:
-        assert not manager._playback_request_id
+        assert status.state == CommandStatus.STATE_UNKNOWN
+        assert manager._playback_request_id == request.request_id
+        assert transport.controller.active_request_id == request.request_id
         assert len(manager.command_submission_pub.messages) == 1

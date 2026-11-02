@@ -138,7 +138,10 @@ class ProbeSetupMotionApi:
         result.state = execution.state
         if execution.state.state == ProbeSetupState.STATE_SUCCEEDED:
             goal_handle.succeed()
-        elif execution.state.state == ProbeSetupState.STATE_CANCELLED:
+        elif execution.state.state in {
+            ProbeSetupState.STATE_CANCELLED,
+            ProbeSetupState.STATE_STOP_CONFIRMED,
+        } and goal_handle.is_cancel_requested:
             goal_handle.canceled()
         else:
             goal_handle.abort()
@@ -166,6 +169,7 @@ class ProbeSetupMotionApi:
             CommandControllerState.SUCCEEDED,
             CommandControllerState.FAILED,
             CommandControllerState.CANCELLED,
+            CommandControllerState.STOP_CONFIRMED,
         }:
             execution.finished.set()
 
@@ -301,6 +305,10 @@ class ProbeSetupMotionApi:
             CommandControllerState.SUCCEEDED: ProbeSetupState.STATE_SUCCEEDED,
             CommandControllerState.FAILED: ProbeSetupState.STATE_FAILED,
             CommandControllerState.CANCELLED: ProbeSetupState.STATE_CANCELLED,
+            CommandControllerState.UNKNOWN: ProbeSetupState.STATE_UNKNOWN,
+            CommandControllerState.STOP_REQUESTED: ProbeSetupState.STATE_STOP_REQUESTED,
+            CommandControllerState.STOP_CONFIRMED: ProbeSetupState.STATE_STOP_CONFIRMED,
+            CommandControllerState.STOP_UNCONFIRMED: ProbeSetupState.STATE_STOP_UNCONFIRMED,
         }[state]
 
     def request_shutdown(self) -> None:

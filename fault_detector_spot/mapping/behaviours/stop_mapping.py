@@ -23,6 +23,8 @@ class StopMapping(py_trees.behaviour.Behaviour):
             if not (
                 self.helper.is_running()
                 or self.helper.nav2_runtime.is_running()
+                or self.helper.has_pending_operation()
+                or self.helper.nav2_runtime.has_pending_operation()
             ):
                 self.feedback_message = "Mapping runtime stopped"
                 return py_trees.common.Status.SUCCESS

@@ -689,6 +689,39 @@ def test_probe_motion_cancellation_keeps_context_state_correlated(tmp_path):
     )
 
 
+def test_probe_motion_retains_pending_geometry_until_confirmed_stop(tmp_path):
+    probe, commands = coordinator(tmp_path)
+    state = create_selected_routine(probe, probe.open_context("probe-ui").context)
+    state = probe.begin_refinement(state.context, fully_custom=True)
+    operation = probe.prepare_motion(
+        state.context, ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH),
+    )
+    statuses = []
+    probe.add_motion_status_listener(statuses.append)
+    probe.submit_motion(operation)
+    for code in (
+        CommandControllerState.UNKNOWN,
+        CommandControllerState.STOP_REQUESTED,
+        CommandControllerState.STOP_UNCONFIRMED,
+    ):
+        for listener in tuple(commands.listeners):
+            listener(CommandControllerStatus(request=operation.request, state=code))
+        assert statuses[-1].state is code
+        assert statuses[-1].snapshot.refinement.pending_motion.request_id == operation.request_id
+        with pytest.raises(RuntimeError, match="active motion"):
+            probe.prepare_motion(state.context, ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH))
+
+    for listener in tuple(commands.listeners):
+        listener(CommandControllerStatus(
+            request=operation.request, state=CommandControllerState.STOP_CONFIRMED,
+        ))
+
+    snapshot = statuses[-1].snapshot
+    assert statuses[-1].state is CommandControllerState.STOP_CONFIRMED
+    assert snapshot.refinement.pending_motion is None
+    assert snapshot.refinement.motion_states[RefinementStage.SAFE_APPROACH] is RefinementMotionState.FAILED
+
+
 def test_selected_definition_metadata_is_server_owned(tmp_path):
     probe, _ = coordinator(tmp_path)
     context = probe.open_context("probe-ui").context

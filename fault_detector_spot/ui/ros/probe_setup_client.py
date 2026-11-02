@@ -41,6 +41,7 @@ class ProbeSetupClient(QObject):
 
     state_changed = pyqtSignal(object)
     request_rejected = pyqtSignal(str)
+    request_uncertain = pyqtSignal(str)
     transaction_failed = pyqtSignal(int, str)
     close_finished = pyqtSignal(bool, str)
     preview_received = pyqtSignal(object)
@@ -57,6 +58,7 @@ class ProbeSetupClient(QObject):
         self._motion_goal_handles = {}
         self._finalization_goal_handles = {}
         self._capture_goal_handles = {}
+        self._action_request_ids = {}
         self._preview_generations = {}
         self._pending_preview_requests = {}
         self._execute_client = node.create_client(
@@ -129,6 +131,7 @@ class ProbeSetupClient(QObject):
         goal.context_id = self.context_id
         goal.intent = deepcopy(intent)
         local_id = uuid4().hex
+        self._motion_goal_handles[local_id] = None
         future = self._motion_client.send_goal_async(
             goal,
             feedback_callback=partial(
@@ -367,6 +370,16 @@ class ProbeSetupClient(QObject):
             return
         if self.context_id and state.context_id != self.context_id:
             return
+        if state.state in {
+            state.STATE_SUCCEEDED, state.STATE_FAILED, state.STATE_CANCELLED,
+            state.STATE_STOP_CONFIRMED,
+        }:
+            for local_id, request_id in tuple(self._action_request_ids.items()):
+                if request_id == state.request_id:
+                    self._motion_goal_handles.pop(local_id, None)
+                    self._finalization_goal_handles.pop(local_id, None)
+                    self._capture_goal_handles.pop(local_id, None)
+                    self._action_request_ids.pop(local_id, None)
         if not self._state_order.accept(state):
             return False
         if state.context_id:
@@ -422,35 +435,41 @@ class ProbeSetupClient(QObject):
         try:
             goal_handle = future.result()
         except Exception as exception:
-            self.request_rejected.emit(str(exception))
+            self.request_uncertain.emit(str(exception))
             return
         if not goal_handle.accepted:
+            self._motion_goal_handles.pop(local_id, None)
             self.request_rejected.emit("Probe setup motion was rejected")
             return
         self._motion_goal_handles[local_id] = goal_handle
-        result_future = goal_handle.get_result_async()
+        try:
+            result_future = goal_handle.get_result_async()
+        except Exception as exception:
+            self.request_uncertain.emit(str(exception))
+            return
         result_future.add_done_callback(
             partial(self._receive_motion_result, local_id)
         )
 
-    def _receive_motion_feedback(self, _local_id, feedback_message):
-        self._emit_state(feedback_message.feedback.state)
+    def _receive_motion_feedback(self, local_id, feedback_message):
+        state = feedback_message.feedback.state
+        self._action_request_ids[local_id] = state.request_id
+        self._emit_state(state)
 
     def _receive_motion_result(self, local_id, future):
-        self._motion_goal_handles.pop(local_id, None)
         try:
             result = future.result().result
         except Exception as exception:
-            self.request_rejected.emit(str(exception))
+            self.request_uncertain.emit(str(exception))
             return
+        self._action_request_ids[local_id] = result.state.request_id
         self._emit_state(result.state)
 
     def _receive_finalization_goal(self, local_id, future):
         try:
             goal_handle = future.result()
         except Exception as exception:
-            self._finalization_goal_handles.pop(local_id, None)
-            self.request_rejected.emit(str(exception))
+            self.request_uncertain.emit(str(exception))
             return
         if not goal_handle.accepted:
             self._finalization_goal_handles.pop(local_id, None)
@@ -459,33 +478,38 @@ class ProbeSetupClient(QObject):
             )
             return
         self._finalization_goal_handles[local_id] = goal_handle
-        result_future = goal_handle.get_result_async()
+        try:
+            result_future = goal_handle.get_result_async()
+        except Exception as exception:
+            self.request_uncertain.emit(str(exception))
+            return
         result_future.add_done_callback(
             partial(self._receive_finalization_result, local_id)
         )
 
     def _receive_finalization_feedback(
         self,
-        _local_id,
+        local_id,
         feedback_message,
     ):
-        self._emit_state(feedback_message.feedback.state)
+        state = feedback_message.feedback.state
+        self._action_request_ids[local_id] = state.request_id
+        self._emit_state(state)
 
     def _receive_finalization_result(self, local_id, future):
-        self._finalization_goal_handles.pop(local_id, None)
         try:
             result = future.result().result
         except Exception as exception:
-            self.request_rejected.emit(str(exception))
+            self.request_uncertain.emit(str(exception))
             return
+        self._action_request_ids[local_id] = result.state.request_id
         self._emit_state(result.state)
 
     def _receive_capture_goal(self, local_id, future):
         try:
             goal_handle = future.result()
         except Exception as exception:
-            self._capture_goal_handles.pop(local_id, None)
-            self.request_rejected.emit(str(exception))
+            self.request_uncertain.emit(str(exception))
             return
         if not goal_handle.accepted:
             self._capture_goal_handles.pop(local_id, None)
@@ -494,21 +518,27 @@ class ProbeSetupClient(QObject):
             )
             return
         self._capture_goal_handles[local_id] = goal_handle
-        result_future = goal_handle.get_result_async()
+        try:
+            result_future = goal_handle.get_result_async()
+        except Exception as exception:
+            self.request_uncertain.emit(str(exception))
+            return
         result_future.add_done_callback(
             partial(self._receive_capture_result, local_id)
         )
 
-    def _receive_capture_feedback(self, _local_id, feedback_message):
-        self._emit_state(feedback_message.feedback.state)
+    def _receive_capture_feedback(self, local_id, feedback_message):
+        state = feedback_message.feedback.state
+        self._action_request_ids[local_id] = state.request_id
+        self._emit_state(state)
 
     def _receive_capture_result(self, local_id, future):
-        self._capture_goal_handles.pop(local_id, None)
         try:
             result = future.result().result
         except Exception as exception:
-            self.request_rejected.emit(str(exception))
+            self.request_uncertain.emit(str(exception))
             return
+        self._action_request_ids[local_id] = result.state.request_id
         if (
             self._emit_state(result.state)
             and result.state.state == ProbeSetupState.STATE_SUCCEEDED
@@ -528,6 +558,7 @@ class ProbeSetupClient(QObject):
         self._motion_goal_handles.clear()
         self._finalization_goal_handles.clear()
         self._capture_goal_handles.clear()
+        self._action_request_ids.clear()
         self._pending_preview_requests.clear()
         self._preview_generations.clear()
 

@@ -131,7 +131,7 @@ def test_terminal_status_is_not_replaced_by_idle_guard_failure():
         command_id=CommandID.MOVE_ARM_TO_TAG,
         request_id=request_id,
     )
-    publisher = BufferStatusPublisher()
+    publisher = BufferStatusPublisher(execution_idle=lambda: True)
     publisher.node = SimpleNamespace(get_clock=lambda: FakeClock())
     publisher.blackboard = SimpleNamespace(
         command_buffer=[],

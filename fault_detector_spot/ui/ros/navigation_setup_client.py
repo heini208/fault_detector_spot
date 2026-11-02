@@ -30,6 +30,7 @@ class NavigationSetupClient(QObject):
 
     state_changed = pyqtSignal(object)
     request_rejected = pyqtSignal(str)
+    request_uncertain = pyqtSignal(str)
     close_finished = pyqtSignal(bool, str)
     landmark_feedback_received = pyqtSignal(object)
 
@@ -42,6 +43,7 @@ class NavigationSetupClient(QObject):
         self._state_order = SetupStateOrder()
         self._last_map_names = []
         self._goal_handles = {}
+        self._action_request_ids = {}
         self._last_landmark_event_id = None
         self._destroyed = False
         self._action_client = ActionClient(
@@ -95,6 +97,9 @@ class NavigationSetupClient(QObject):
         """Close the current server-owned navigation setup context."""
         if not self.context_id:
             return None
+        if self._goal_handles:
+            self.close_finished.emit(False, "Navigation setup operation is still in progress")
+            return None
         if not self._close_client.service_is_ready():
             self.close_finished.emit(
                 False,
@@ -118,6 +123,7 @@ class NavigationSetupClient(QObject):
         goal.context_id = context_id
         goal.intent = deepcopy(intent)
         local_id = uuid4().hex
+        self._goal_handles[local_id] = None
         future = self._action_client.send_goal_async(
             goal,
             feedback_callback=partial(
@@ -134,29 +140,36 @@ class NavigationSetupClient(QObject):
         try:
             goal_handle = future.result()
         except Exception as exception:
-            self.request_rejected.emit(str(exception))
+            self.request_uncertain.emit(str(exception))
             return
         if not goal_handle.accepted:
+            self._goal_handles.pop(local_id, None)
             self.request_rejected.emit(
                 "Navigation setup request was rejected"
             )
             return
         self._goal_handles[local_id] = goal_handle
-        result_future = goal_handle.get_result_async()
+        try:
+            result_future = goal_handle.get_result_async()
+        except Exception as exception:
+            self.request_uncertain.emit(str(exception))
+            return
         result_future.add_done_callback(
             partial(self._receive_result, local_id)
         )
 
-    def _receive_feedback(self, _local_id, feedback_message):
-        self._emit_state(feedback_message.feedback.state)
+    def _receive_feedback(self, local_id, feedback_message):
+        state = feedback_message.feedback.state
+        self._action_request_ids[local_id] = state.request_id
+        self._emit_state(state)
 
     def _receive_result(self, local_id, future):
-        self._goal_handles.pop(local_id, None)
         try:
             result = future.result().result
         except Exception as exception:
-            self.request_rejected.emit(str(exception))
+            self.request_uncertain.emit(str(exception))
             return
+        self._action_request_ids[local_id] = result.state.request_id
         self._emit_state(result.state)
 
     def _emit_state(self, state):
@@ -164,6 +177,15 @@ class NavigationSetupClient(QObject):
             return
         if self.context_id and state.context_id != self.context_id:
             return
+        if state.state in {
+            state.STATE_SUCCEEDED, state.STATE_FAILED, state.STATE_CANCELLED,
+            state.STATE_STOP_CONFIRMED,
+        } or (state.state == state.STATE_READY
+              and state.operation == NavigationSetupIntent.OPERATION_OPEN):
+            for local_id, request_id in tuple(self._action_request_ids.items()):
+                if request_id == state.request_id:
+                    self._goal_handles.pop(local_id, None)
+                    self._action_request_ids.pop(local_id, None)
         if not self._state_order.accept(state):
             return False
         if state.context_id:
@@ -221,6 +243,7 @@ class NavigationSetupClient(QObject):
         self.node.destroy_subscription(self._state_subscription)
         self.node.destroy_subscription(self._landmark_subscription)
         self._goal_handles.clear()
+        self._action_request_ids.clear()
 
 
 __all__ = ["NavigationSetupClient"]

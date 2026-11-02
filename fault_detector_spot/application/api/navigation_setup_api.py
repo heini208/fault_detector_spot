@@ -369,6 +369,7 @@ class NavigationSetupApi:
                 NavigationSetupState.STATE_SUCCEEDED,
                 NavigationSetupState.STATE_FAILED,
                 NavigationSetupState.STATE_CANCELLED,
+                NavigationSetupState.STATE_STOP_CONFIRMED,
             }:
                 execution.finished.set()
         try:
@@ -414,7 +415,10 @@ class NavigationSetupApi:
         if state.state == NavigationSetupState.STATE_SUCCEEDED:
             execution.goal_handle.succeed()
         elif (
-            state.state == NavigationSetupState.STATE_CANCELLED
+            state.state in {
+                NavigationSetupState.STATE_CANCELLED,
+                NavigationSetupState.STATE_STOP_CONFIRMED,
+            }
             and execution.goal_handle.is_cancel_requested
         ):
             execution.goal_handle.canceled()
@@ -451,6 +455,7 @@ class NavigationSetupApi:
             CommandControllerState.SUCCEEDED,
             CommandControllerState.FAILED,
             CommandControllerState.CANCELLED,
+            CommandControllerState.STOP_CONFIRMED,
         }:
             execution.finished.set()
 
@@ -593,6 +598,10 @@ class NavigationSetupApi:
             CommandControllerState.CANCELLED: (
                 NavigationSetupState.STATE_CANCELLED
             ),
+            CommandControllerState.UNKNOWN: NavigationSetupState.STATE_UNKNOWN,
+            CommandControllerState.STOP_REQUESTED: NavigationSetupState.STATE_STOP_REQUESTED,
+            CommandControllerState.STOP_CONFIRMED: NavigationSetupState.STATE_STOP_CONFIRMED,
+            CommandControllerState.STOP_UNCONFIRMED: NavigationSetupState.STATE_STOP_UNCONFIRMED,
         }[state]
 
     @staticmethod

@@ -115,7 +115,11 @@ class RoutineNavigationControls(QGroupBox):
         self._waypoint_names = tuple(state.routine_waypoint_names)
         self._setup_blocked = bool(
             state.refinement_active or state.motion_pending
-            or state.state in {ProbeSetupState.STATE_QUEUED, ProbeSetupState.STATE_RUNNING}
+            or state.state in {
+                ProbeSetupState.STATE_QUEUED, ProbeSetupState.STATE_RUNNING,
+                ProbeSetupState.STATE_UNKNOWN, ProbeSetupState.STATE_STOP_REQUESTED,
+                ProbeSetupState.STATE_STOP_UNCONFIRMED,
+            }
         )
         if scope_changed or selected_map == old_saved_map:
             selected_map = self._saved_map_name
@@ -129,6 +133,7 @@ class RoutineNavigationControls(QGroupBox):
                     ProbeSetupState.STATE_SUCCEEDED,
                     ProbeSetupState.STATE_FAILED,
                     ProbeSetupState.STATE_CANCELLED,
+                    ProbeSetupState.STATE_STOP_CONFIRMED,
                 }):
             self._pending_save = None
             if scope == pending[1]:
@@ -171,6 +176,14 @@ class RoutineNavigationControls(QGroupBox):
                 text, detail = "Runtime unavailable", state.runtime_error
             elif state.state == NavigationSetupState.STATE_UNSPECIFIED:
                 detail = "Navigation runtime status has not been confirmed."
+            elif runtime_operation and state.state in {
+                NavigationSetupState.STATE_UNKNOWN,
+                NavigationSetupState.STATE_STOP_REQUESTED,
+                NavigationSetupState.STATE_STOP_UNCONFIRMED,
+            }:
+                text, detail, color = (
+                    "Runtime unconfirmed", state.detail or "Waiting for runtime confirmation.", "#ef6c00",
+                )
             elif runtime_operation and state.state == NavigationSetupState.STATE_RUNNING:
                 text, detail, color = (
                     "Changing runtime", state.detail or "Navigation runtime is changing.", "#ef6c00",
@@ -329,6 +342,10 @@ class RoutineNavigationControls(QGroupBox):
         if scope == self._scope:
             self.status_label.setText(detail)
 
+    def handle_operation_uncertain(self, detail, context_id):
+        if self._operation_contexts.get(context_id) == self._scope:
+            self.status_label.setText(f"Outcome unknown; awaiting confirmation: {detail}")
+
     def handle_application_state(self, state):
         scope = self._operation_contexts.get(state.context_id)
         if scope is None:
@@ -340,6 +357,10 @@ class RoutineNavigationControls(QGroupBox):
             ApplicationCommandState.STATE_SUCCEEDED: "Navigation command completed.",
             ApplicationCommandState.STATE_FAILED: "Navigation command failed.",
             ApplicationCommandState.STATE_CANCELLED: "Navigation command cancelled.",
+            ApplicationCommandState.STATE_UNKNOWN: "Navigation command outcome unknown; reconciling.",
+            ApplicationCommandState.STATE_STOP_REQUESTED: "Navigation stop requested; awaiting confirmation.",
+            ApplicationCommandState.STATE_STOP_CONFIRMED: "Navigation stop confirmed.",
+            ApplicationCommandState.STATE_STOP_UNCONFIRMED: "Navigation stop unconfirmed.",
         }
         if scope == self._scope:
             self.status_label.setText(state.detail or labels.get(state.state, "Navigation command in progress."))
@@ -347,6 +368,7 @@ class RoutineNavigationControls(QGroupBox):
             ApplicationCommandState.STATE_SUCCEEDED,
             ApplicationCommandState.STATE_FAILED,
             ApplicationCommandState.STATE_CANCELLED,
+            ApplicationCommandState.STATE_STOP_CONFIRMED,
         }:
             self._operation_contexts.pop(state.context_id)
 

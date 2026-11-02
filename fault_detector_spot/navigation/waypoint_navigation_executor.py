@@ -86,10 +86,16 @@ class WaypointNavigationExecutor:
         self._goal_handle = None
         self._result_future = None
         self._sent_at = None
+        self._submission_uncertain = False
 
     @property
     def active(self):
         return self._phase is not None
+
+    @property
+    def execution_idle(self):
+        with self._lock:
+            return not self.active and not self._submission_uncertain
 
     def navigate(self, goal_pose):
         with self._lock:
@@ -99,7 +105,7 @@ class WaypointNavigationExecutor:
         if self._closed:
             return WaypointNavigationUpdate(WaypointNavigationOutcome.FAILURE,
                                             "Navigation executor is shut down")
-        if self.active or self.arm_executor.active or self.base_executor.active:
+        if not self.execution_idle or self.arm_executor.active or self.base_executor.active:
             return WaypointNavigationUpdate(WaypointNavigationOutcome.BUSY,
                                             "Waypoint or robot movement is already active")
         self._terminal_update = None
@@ -160,6 +166,9 @@ class WaypointNavigationExecutor:
         goal = NavigateToPose.Goal()
         goal.pose = deepcopy(self._goal_pose)
         goal.pose.header.stamp = self._stamp_now()
+        # Sending can fail after the server receives the goal. This latch is
+        # cleared only by rejection or a terminal result, never by _clear().
+        self._submission_uncertain = True
         self._send_future = self.action_client.send_goal_async(goal)
         if self._send_future is None:
             return self._failure("Nav2 returned no goal response future")
@@ -206,6 +215,7 @@ class WaypointNavigationExecutor:
             if result.status != GoalStatus.STATUS_SUCCEEDED:
                 return self._failure(f"Nav2 navigation failed with status {result.status}")
             self._cancel_terminal = True
+            self._submission_uncertain = False
             self._phase = _Phase.WAITING_FOR_VELOCITY_RELEASE
             self._velocity_release_started_at = self._clock()
             return self._poll_velocity_release()
@@ -229,7 +239,9 @@ class WaypointNavigationExecutor:
             if self._cancel_terminal:
                 return
             if self._send_future is None:
-                self._cancel_terminal = True
+                self._cancel_terminal = not self._submission_uncertain
+                if self._submission_uncertain:
+                    self._cancel_detail = "Nav2 goal delivery is unknown; stop unconfirmed"
                 return
             self._send_future.add_done_callback(self._cancel_accepted)
 
@@ -315,7 +327,11 @@ class WaypointNavigationExecutor:
                 return
             try:
                 handle = future.result()
-                if handle is None or not handle.accepted:
+                if handle is None:
+                    self._cancel_detail = "Nav2 goal response missing; stop unconfirmed"
+                    return
+                if not handle.accepted:
+                    self._submission_uncertain = False
                     self._cancel_terminal = True
                     return
                 self._goal_handle = handle
@@ -343,6 +359,7 @@ class WaypointNavigationExecutor:
                     }:
                         return self._running("Navigation result is not terminal; stop unconfirmed")
                     self._cancel_terminal = True
+                    self._submission_uncertain = False
                 if self._goal_handle is not None and self._goal_handle.accepted:
                     if not self._velocity_stream_is_quiet():
                         return self._running("Nav2 ended; waiting for velocity commands to stop")

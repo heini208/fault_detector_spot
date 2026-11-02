@@ -442,6 +442,7 @@ class FinalizingInspectionControls(InspectionControls):
             ApplicationCommandState.STATE_SUCCEEDED,
             ApplicationCommandState.STATE_FAILED,
             ApplicationCommandState.STATE_CANCELLED,
+            ApplicationCommandState.STATE_STOP_CONFIRMED,
         }:
             self._base_position_operation_context = ""
             if self._probe_setup_state is not None:
@@ -489,6 +490,7 @@ class FinalizingInspectionControls(InspectionControls):
             ApplicationCommandState.STATE_SUCCEEDED,
             ApplicationCommandState.STATE_FAILED,
             ApplicationCommandState.STATE_CANCELLED,
+            ApplicationCommandState.STATE_STOP_CONFIRMED,
         }:
             self._routine_arm_pose_operation_contexts.remove(status.context_id)
             if self._probe_setup_state is not None:
@@ -538,26 +540,42 @@ class FinalizingInspectionControls(InspectionControls):
         self.saved_probe_motion_status.setText(f"{point_id}: {detail}")
         self._refresh_saved_probe_actions()
 
+    def handle_operation_uncertain(self, detail, context_id):
+        """Report lost transport feedback without releasing motion ownership."""
+        text = f"Outcome unknown; awaiting confirmation: {detail}"
+        point_id = self._saved_probe_operation_contexts.get(context_id)
+        if point_id is not None:
+            self.saved_probe_motion_status.setText(f"{point_id}: {text}")
+        if (self._sensor_tip_distance_test_active
+                and context_id == self._sensor_tip_distance_context_id):
+            self.refinement_dialog.sensor_tip_distance_status_label.setText(text)
+        if self._surface_test_active and context_id == self._surface_move_context_id:
+            self.surface_distance_test_status_label.setText(text)
+        self.routine_navigation_controls.handle_operation_uncertain(detail, context_id)
+
     def _handle_saved_probe_status(self, status):
         if status.context_id not in self._saved_probe_operation_contexts:
             return
         point_id = self._saved_probe_operation_contexts[status.context_id]
-        detail = status.detail or (
-            "Movement queued"
-            if status.state == ApplicationCommandState.STATE_QUEUED
-            else "Movement in progress"
-        )
+        detail = status.detail or {
+            ApplicationCommandState.STATE_QUEUED: "Movement queued",
+            ApplicationCommandState.STATE_UNKNOWN: "Movement outcome unknown; reconciling",
+            ApplicationCommandState.STATE_STOP_REQUESTED: "Stop requested; awaiting confirmation",
+            ApplicationCommandState.STATE_STOP_UNCONFIRMED: "Stop unconfirmed",
+        }.get(status.state, "Movement in progress")
         self.saved_probe_motion_status.setText(f"{point_id}: {detail}")
         if status.state in {
             ApplicationCommandState.STATE_SUCCEEDED,
             ApplicationCommandState.STATE_FAILED,
             ApplicationCommandState.STATE_CANCELLED,
+            ApplicationCommandState.STATE_STOP_CONFIRMED,
         }:
             self._saved_probe_operation_contexts.pop(status.context_id)
             labels = {
                 ApplicationCommandState.STATE_SUCCEEDED: "Movement completed",
                 ApplicationCommandState.STATE_FAILED: "Movement failed",
                 ApplicationCommandState.STATE_CANCELLED: "Movement cancelled",
+                ApplicationCommandState.STATE_STOP_CONFIRMED: "Movement stop confirmed",
             }
             self.saved_probe_motion_status.setText(
                 f"{point_id}: " + labels[status.state]
@@ -1325,12 +1343,18 @@ class FinalizingInspectionControls(InspectionControls):
             return
         self._sensor_tip_distance_request_id = status.request_id
         self.refinement_dialog.sensor_tip_distance_status_label.setText(
-            status.detail.strip() or "Measuring sensor tip distance"
+            status.detail.strip() or {
+                ApplicationCommandState.STATE_UNKNOWN: "Measurement outcome unknown; reconciling",
+                ApplicationCommandState.STATE_STOP_REQUESTED: "Stop requested; awaiting confirmation",
+                ApplicationCommandState.STATE_STOP_CONFIRMED: "Measurement stop confirmed",
+                ApplicationCommandState.STATE_STOP_UNCONFIRMED: "Measurement stop unconfirmed",
+            }.get(status.state, "Measuring sensor tip distance")
         )
         if status.state in {
             ApplicationCommandState.STATE_SUCCEEDED,
             ApplicationCommandState.STATE_FAILED,
             ApplicationCommandState.STATE_CANCELLED,
+            ApplicationCommandState.STATE_STOP_CONFIRMED,
         }:
             self._sensor_tip_distance_test_active = False
             if status.state != ApplicationCommandState.STATE_SUCCEEDED:
@@ -1415,6 +1439,10 @@ class FinalizingInspectionControls(InspectionControls):
             ApplicationCommandState.STATE_SUCCEEDED: "Reached",
             ApplicationCommandState.STATE_FAILED: "Failed",
             ApplicationCommandState.STATE_CANCELLED: "Cancelled",
+            ApplicationCommandState.STATE_UNKNOWN: "Outcome unknown; reconciling",
+            ApplicationCommandState.STATE_STOP_REQUESTED: "Stop requested",
+            ApplicationCommandState.STATE_STOP_CONFIRMED: "Stop confirmed",
+            ApplicationCommandState.STATE_STOP_UNCONFIRMED: "Stop unconfirmed",
         }
         label = states.get(status.state, "Surface movement")
         detail = status.detail.strip()
@@ -1428,11 +1456,15 @@ class FinalizingInspectionControls(InspectionControls):
         elif status.state in {
             ApplicationCommandState.STATE_FAILED,
             ApplicationCommandState.STATE_CANCELLED,
+            ApplicationCommandState.STATE_STOP_CONFIRMED,
         }:
             self._surface_test_active = False
             self._surface_move_succeeded = False
             self._distance_failure_requires_retraction = (
-                status.state == ApplicationCommandState.STATE_CANCELLED
+                status.state in {
+                    ApplicationCommandState.STATE_CANCELLED,
+                    ApplicationCommandState.STATE_STOP_CONFIRMED,
+                }
                 or "surface recovery" in detail.lower()
             )
         self._update_save_probe_point_state()

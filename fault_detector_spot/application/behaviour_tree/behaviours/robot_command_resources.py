@@ -1,6 +1,7 @@
 """Own process-wide ROS resources used by Spot robot commands."""
 
 from threading import RLock
+import time
 
 from fault_detector_spot.navigation.walking_profile import WalkingProfiles
 
@@ -34,6 +35,7 @@ from fault_detector_spot.manipulation.arm_motion_speed import (
 from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementExecutor,
 )
+from fault_detector_spot.manipulation.arm_movement_result import ArmMovementOutcome
 from fault_detector_spot.manipulation.moveit_arm_planner import (
     MoveItArmPlanner,
 )
@@ -72,7 +74,7 @@ from fault_detector_spot.sensing.observations.tag_observation_stability import (
 class RobotCommandResources:
     """Share RobotCommand clients, TF, state, and movement executors."""
 
-    def __init__(self):
+    def __init__(self, monotonic_clock=time.monotonic):
         self._lock = RLock()
         self._node = None
         self._clients = {}
@@ -89,6 +91,74 @@ class RobotCommandResources:
         self._arm_movement_executors = {}
         self._base_movement_executors = {}
         self._waypoint_executor = None
+        self._stop_arms = {}
+        self._stop_bases = ()
+        self._stop_retry_after = {}
+        self._monotonic_clock = monotonic_clock
+
+    def execution_idle(self):
+        """Use retained action evidence as well as operation ownership."""
+        with self._lock:
+            executors = tuple(self._arm_movement_executors.values()) + tuple(
+                self._base_movement_executors.values()
+            )
+            navigation = self._waypoint_executor
+        return (all(executor.execution_idle for executor in executors)
+                and (navigation is None or navigation.execution_idle))
+
+    def begin_stop_confirmation(self, node):
+        """Request cancellation through the existing movement owners."""
+        self.get_arm_movement_executor(node)
+        self.get_base_movement_executor(node)
+        with self._lock:
+            self._stop_arms = dict.fromkeys(self._arm_movement_executors.values(), False)
+            self._stop_bases = tuple(self._base_movement_executors.values())
+            self._stop_retry_after = {}
+            navigation = self._waypoint_executor
+        if navigation is not None:
+            navigation.cancel()
+        for executor in self._stop_arms:
+            executor.cancel()
+        for executor in self._stop_bases:
+            executor.begin_stop_confirmation()
+
+    def poll_stop_confirmation(self):
+        """Wait for terminal actions and fresh physical stop evidence."""
+        navigation = self._waypoint_executor
+        if navigation is not None and navigation.active:
+            navigation.cancel()
+            update = navigation.poll()
+            if navigation.active:
+                return False, update.detail
+        if navigation is not None and not navigation.execution_idle:
+            return False, "Nav2 action termination is unconfirmed"
+        for executor in self._stop_bases:
+            confirmed, detail = executor.poll_stop_confirmation()
+            if not confirmed:
+                return False, detail
+        for executor, started in tuple(self._stop_arms.items()):
+            if not started:
+                if self._monotonic_clock() < self._stop_retry_after.get(executor, 0.0):
+                    return False, "Waiting to retry arm stop confirmation"
+                if executor.active:
+                    executor.cancel()
+                    update = executor.poll()
+                    if executor.active:
+                        return False, update.detail
+                if not executor.goals_settled():
+                    return False, "Arm action termination is unconfirmed"
+                update = executor.confirm_stop()
+                self._stop_arms[executor] = True
+            else:
+                update = executor.poll()
+            if update.outcome is ArmMovementOutcome.RUNNING:
+                return False, update.detail
+            if update.outcome is not ArmMovementOutcome.SUCCESS:
+                self._stop_arms[executor] = False
+                self._stop_retry_after[executor] = self._monotonic_clock() + 1.0
+                return False, update.detail
+            del self._stop_arms[executor]
+        return self.execution_idle(), "All owned movements have confirmed stopping"
 
     def get_action_client(self, node, robot_name: str = ""):
         """Return the single RobotCommand client for a robot namespace."""

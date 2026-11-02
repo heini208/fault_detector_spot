@@ -127,11 +127,12 @@ def make_request(
     )
 
 
-def terminal_status(request_id, state, command_id=""):
+def terminal_status(request_id, state, command_id="", execution_idle=True):
     message = CommandStatus()
     message.request_id = request_id
     message.command_id = command_id
     message.state = state
+    message.execution_idle = execution_idle
     return message
 
 
@@ -532,7 +533,8 @@ def test_stop_waits_for_outcomes_and_keeps_successes_in_accepted_order(tmp_path)
     assert not manager.command_submission_pub.messages
 
 
-@pytest.mark.parametrize("outcome", [CommandStatus.STATE_SUCCEEDED, CommandStatus.STATE_FAILED, CommandStatus.STATE_CANCELLED])
+@pytest.mark.parametrize("outcome", [CommandStatus.STATE_SUCCEEDED, CommandStatus.STATE_FAILED,
+                                     CommandStatus.STATE_CANCELLED, CommandStatus.STATE_STOP_CONFIRMED])
 def test_outcome_before_acceptance_and_duplicate_status(tmp_path, outcome):
     manager = RecordingStorageHarness(tmp_path)
     manager.control("start", "session")
@@ -584,6 +586,7 @@ def test_deferred_save_failure_can_be_retried(tmp_path, monkeypatch):
     (CommandStatus.STATE_SUCCEEDED, "added"),
     (CommandStatus.STATE_FAILED, "failed"),
     (CommandStatus.STATE_CANCELLED, "cancelled"),
+    (CommandStatus.STATE_STOP_CONFIRMED, "cancelled"),
 ])
 def test_recording_feedback_reports_confirmed_outcome(tmp_path, state, outcome):
     manager = RecordingStorageHarness(tmp_path)
@@ -724,6 +727,126 @@ def test_emergency_command_stops_retry_playback(tmp_path):
     manager.handle_playback_status(failed)
     assert len(manager.command_submission_pub.messages) == 1
     assert not manager._playback_request_id
+
+
+@pytest.mark.parametrize("state", [
+    CommandStatus.STATE_UNKNOWN,
+    CommandStatus.STATE_STOP_REQUESTED,
+    CommandStatus.STATE_STOP_UNCONFIRMED,
+])
+@pytest.mark.parametrize("idle", [False, True])
+def test_uncertain_playback_preserves_correlation_queue_and_retry_policy(tmp_path, state, idle):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [
+        RecordedStep(command, 2, 1), RecordedStep(command, 0, 1), RecordedStep(command),
+    ])
+    manager.control("play", "session")
+    request_id = manager._playback_request_id
+    step = manager._playback_step
+    queued = tuple(manager._playback_commands)
+    status = terminal_status(request_id, state, execution_idle=idle)
+    status.retry_safe = True
+    status.continuation_safe = True
+
+    assert manager.handle_playback_status(status)
+
+    assert manager._playback_request_id == request_id
+    assert manager._playback_step is step
+    assert tuple(manager._playback_commands) == queued
+    assert manager._playback_retries_left == 2
+    assert not manager._playback_had_skips
+    assert len(manager.command_submission_pub.messages) == 1
+    assert manager.playback_state_pub.messages[-1].data
+
+    # A later controller-confirmed success advances once using the same request.
+    succeeded = terminal_status(request_id, CommandStatus.STATE_SUCCEEDED)
+    manager.handle_playback_status(succeeded)
+    manager.handle_playback_status(succeeded)
+    assert len(manager.command_submission_pub.messages) == 2
+    assert manager._playback_request_id != request_id
+
+
+@pytest.mark.parametrize("state", [
+    CommandStatus.STATE_SUCCEEDED,
+    CommandStatus.STATE_FAILED,
+    CommandStatus.STATE_CANCELLED,
+    CommandStatus.STATE_STOP_CONFIRMED,
+])
+def test_playback_terminal_outcome_waits_for_execution_idle_proof(tmp_path, state):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=CommandID.MOVE_TO_WAYPOINT)
+    manager.repository.save("session", [RecordedStep(command, 2, 1), RecordedStep(command)])
+    manager.control("play", "session")
+    request_id = manager._playback_request_id
+    status = terminal_status(request_id, state, execution_idle=False)
+    status.retry_safe = True
+    status.continuation_safe = True
+    manager.handle_playback_status(status)
+
+    assert manager._playback_request_id == request_id
+    assert manager._playback_retries_left == 2
+    assert len(manager._playback_commands) == 1
+    assert not manager._playback_had_skips
+    assert len(manager.command_submission_pub.messages) == 1
+
+    status.execution_idle = True
+    manager.handle_playback_status(status)
+    if state in (CommandStatus.STATE_CANCELLED, CommandStatus.STATE_STOP_CONFIRMED):
+        assert not manager._playback_request_id
+        assert len(manager.command_submission_pub.messages) == 1
+        assert not manager._playback_had_skips
+    else:
+        assert manager._playback_request_id != request_id
+        assert len(manager.command_submission_pub.messages) == 2
+
+
+@pytest.mark.parametrize("command_id,active", [
+    (CommandID.START_SENSOR_RECORDING, False),
+    (CommandID.STOP_SENSOR_RECORDING, True),
+])
+def test_acquisition_playback_flag_changes_only_after_confirmed_transition(tmp_path, command_id, active):
+    manager = RecordingStorageHarness(tmp_path)
+    command = SemanticCommand(command_id=command_id)
+    manager.repository.save("session", [
+        RecordedStep(command), RecordedStep(SemanticCommand(CommandID.WAIT_TIME)),
+    ])
+    manager.control("play", "session")
+    manager._playback_acquisition_active = active
+    request_id = manager._playback_request_id
+    for state in (CommandStatus.STATE_UNKNOWN, CommandStatus.STATE_STOP_REQUESTED,
+                  CommandStatus.STATE_STOP_UNCONFIRMED, CommandStatus.STATE_SUCCEEDED):
+        manager.handle_playback_status(terminal_status(request_id, state, execution_idle=False))
+        assert manager._playback_acquisition_active is active
+        assert manager._playback_request_id == request_id
+    manager.handle_playback_status(terminal_status(request_id, CommandStatus.STATE_SUCCEEDED))
+    assert manager._playback_acquisition_active is not active
+    assert len(manager.command_submission_pub.messages) == 2
+
+
+@pytest.mark.parametrize("outcome", [CommandStatus.STATE_SUCCEEDED, CommandStatus.STATE_STOP_CONFIRMED])
+def test_recording_waits_through_uncertainty_and_finishes_on_confirmed_outcome(tmp_path, outcome):
+    manager = RecordingStorageHarness(tmp_path)
+    manager.control("start", "session")
+    request = make_request(CommandID.STAND_UP)
+    manager.capture_request(command_request_to_message(request))
+    manager.control("stop")
+    for state in (CommandStatus.STATE_UNKNOWN, CommandStatus.STATE_STOP_REQUESTED,
+                  CommandStatus.STATE_STOP_UNCONFIRMED, outcome):
+        manager.handle_command_status(terminal_status(request.request_id, state, execution_idle=False))
+        assert manager.recording
+        assert manager.recording_finishing_pub.messages[-1].data
+        assert request.request_id not in manager._recording_results
+        assert not manager.repository.path("session").exists()
+
+    confirmed = terminal_status(request.request_id, outcome)
+    manager.handle_command_status(confirmed)
+    manager.handle_command_status(confirmed)
+    assert not manager.recording
+    assert not manager.recording_finishing_pub.messages[-1].data
+    assert manager.repository.load("session") == (
+        [request.command] if outcome == CommandStatus.STATE_SUCCEEDED else []
+    )
 
 
 def test_skip_membership_is_captured_at_acceptance_and_adjacent_ids_stay_separate(tmp_path):

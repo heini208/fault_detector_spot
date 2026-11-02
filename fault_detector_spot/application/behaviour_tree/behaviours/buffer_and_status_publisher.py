@@ -1,4 +1,5 @@
 import math
+from copy import deepcopy
 
 from fault_detector_spot.application.ros.semantic_command_adapter import semantic_command_to_message
 
@@ -9,12 +10,15 @@ from spot_msgs.msg import PowerState
 from std_msgs.msg import Float32
 
 from fault_detector_spot.shared.ros.qos_profiles import LATCHED_QOS
+from fault_detector_spot.application.commanding.command_ids import CommandID
+from fault_detector_spot.application.behaviour_tree.command_status_ledger import CommandStatusLedger
 
 
 class BufferStatusPublisher(py_trees.behaviour.Behaviour):
     """Publish correlated command status and current robot battery percentage."""
 
-    def __init__(self, name: str = "CmdStatusPub"):
+    def __init__(self, name: str = "CmdStatusPub", *, status_ledger=None,
+                 execution_idle=None, stop_runtime_idle=None):
         super().__init__(name)
         self.blackboard = None
         self.last_structured_status = None
@@ -25,6 +29,10 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         self.latest_battery_percentage = None
         self.last_battery_percentage = None
         self.node = None
+        self.status_ledger = status_ledger if status_ledger is not None else CommandStatusLedger()
+        self.execution_idle = execution_idle
+        self.stop_runtime_idle = stop_runtime_idle
+        self._terminal_statuses = {}
 
     def setup(self, **kwargs) -> bool:
         self.node = kwargs["node"]
@@ -81,12 +89,25 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         structured_status = self.get_structured_status_message(
             buffered_request_count
         )
-        if self._follows_terminal_status(structured_status):
-            return Status.SUCCESS
-
+        if (structured_status.request_id
+                and structured_status.command_id != CommandID.EMERGENCY_CANCEL.value):
+            terminal = self._terminal_statuses.get(structured_status.request_id)
+            if terminal is not None:
+                structured_status = deepcopy(terminal)
+                structured_status.execution_idle = (
+                    buffered_request_count == 0 and self._idle_proven(self.execution_idle)
+                )
+            elif structured_status.state in (CommandStatus.STATE_SUCCEEDED, CommandStatus.STATE_FAILED):
+                self._terminal_statuses[structured_status.request_id] = deepcopy(structured_status)
+        structured_status = self.status_ledger.record(structured_status)
         signature = self._structured_status_signature(structured_status)
         if signature != self.last_structured_status:
-            self.structured_status_pub.publish(structured_status)
+            if structured_status.state == CommandStatus.STATE_STOP_CONFIRMED:
+                messages = self.status_ledger.confirm_stop(structured_status)
+            else:
+                messages = [structured_status]
+            for message in messages:
+                self.structured_status_pub.publish(message)
             self.last_structured_status = signature
             if structured_status.request_id:
                 self._log_info(
@@ -127,12 +148,6 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
         info = getattr(logger, "info", None)
         if callable(info):
             info(message)
-
-    def _follows_terminal_status(self, message):
-        return bool(
-            message.request_id
-            and message.request_id == self.last_terminal_request_id
-        )
 
     def get_structured_status_message(
         self,
@@ -196,7 +211,40 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
                 message.detail = "BT selected request; waiting for execution"
             else:
                 message.detail = "BT idle"
+        if message.command_id == CommandID.EMERGENCY_CANCEL.value:
+            confirmed = (
+                status == Status.SUCCESS
+                and bool(getattr(command, "stop_confirmed", False))
+                and self._idle_proven(self.execution_idle)
+                and self._idle_proven(self.stop_runtime_idle)
+                and buffered_command_count == 0
+                and not self.blackboard.command_buffer
+            )
+            message.execution_idle = confirmed
+            if confirmed:
+                message.state = CommandStatus.STATE_STOP_CONFIRMED
+                message.detail = "BT execution owners and runtimes confirmed stopped"
+            elif status == Status.FAILURE or getattr(command, "stop_unconfirmed", False):
+                message.state = CommandStatus.STATE_STOP_UNCONFIRMED
+            else:
+                message.state = CommandStatus.STATE_STOP_REQUESTED
+            message.retry_safe = False
+            message.continuation_safe = False
+        elif message.request_id:
+            if message.state in (CommandStatus.STATE_SUCCEEDED, CommandStatus.STATE_FAILED):
+                message.execution_idle = (
+                    buffered_command_count == 0 and self._idle_proven(self.execution_idle)
+                )
         return message
+
+    @staticmethod
+    def _idle_proven(check):
+        if check is None:
+            return False
+        try:
+            return bool(check())
+        except Exception:
+            return False
 
     def _current_failure_detail(self, request_id: str) -> str:
         try:
@@ -226,6 +274,7 @@ class BufferStatusPublisher(py_trees.behaviour.Behaviour):
             message.state,
             message.detail,
             message.buffered_command_count,
+            message.execution_idle,
             message.retry_safe,
             message.continuation_safe,
             message.has_retry_command,

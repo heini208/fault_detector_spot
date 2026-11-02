@@ -39,6 +39,7 @@ def test_failed_capture_does_not_reload_unchanged_previews():
     emitted = []
     client = SimpleNamespace(
         _capture_goal_handles={'request': object()},
+        _action_request_ids={},
         _emit_state=lambda state: emitted.append(state) or True,
         _refresh_reference_previews=refreshed.append,
     )

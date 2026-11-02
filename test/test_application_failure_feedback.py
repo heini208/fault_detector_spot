@@ -6,7 +6,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QMessageBox, QWidget
+from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox, QWidget
 
 from fault_detector_msgs.msg import ApplicationCommandState
 from fault_detector_spot.ui.fault_detector_ui import Fault_Detector_UI
@@ -53,3 +53,13 @@ def test_local_command_failure_opens_error_dialog(application, monkeypatch):
     FailureHarness()._show_local_command_failure(state, "INTERNAL")
 
     assert len(dialogs) == 1
+
+
+def test_emergency_service_acknowledgement_does_not_claim_stopping_finished(application):
+    harness = SimpleNamespace(status_label=QLabel())
+
+    Fault_Detector_UI._process_emergency_stop_result(harness, True, "Request accepted")
+
+    assert "awaiting stop confirmation" in harness.status_label.text()
+    Fault_Detector_UI._process_emergency_stop_result(harness, False, "Transport unavailable")
+    assert "unconfirmed" in harness.status_label.text()

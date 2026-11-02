@@ -44,6 +44,7 @@ _TERMINAL_STATES = {
     CommandControllerState.SUCCEEDED,
     CommandControllerState.FAILED,
     CommandControllerState.CANCELLED,
+    CommandControllerState.STOP_CONFIRMED,
 }
 _ORIENTATION_MOTION_KINDS = frozenset({
     ProbeMotionKind.ORIENT_TO_SURFACE,
@@ -81,6 +82,8 @@ class ProbeRefinementController:
             CommandControllerState.DISPATCHED, CommandControllerState.RUNNING,
             CommandControllerState.SUCCEEDED, CommandControllerState.FAILED,
             CommandControllerState.CANCELLED,
+            CommandControllerState.UNKNOWN, CommandControllerState.STOP_REQUESTED,
+            CommandControllerState.STOP_CONFIRMED, CommandControllerState.STOP_UNCONFIRMED,
         }:
             return False
         if status.request.command.command_id not in {

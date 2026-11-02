@@ -211,8 +211,10 @@ def test_measurement_behaviour_delegates_start_poll_and_cancellation(monkeypatch
 @pytest.mark.parametrize("state,invalidated", [
     ("DISPATCHED", False), ("RUNNING", False), ("SUCCEEDED", False),
     ("FAILED", True), ("CANCELLED", True),
+    ("UNKNOWN", True), ("STOP_REQUESTED", True),
+    ("STOP_CONFIRMED", True), ("STOP_UNCONFIRMED", True),
 ])
-def test_scoped_measurement_preserves_alignment_only_until_failure(state, invalidated):
+def test_scoped_measurement_invalidates_alignment_on_failure_stop_or_uncertainty(state, invalidated):
     from threading import RLock
     from fault_detector_spot.application.controllers.command_controller import CommandControllerState
     from fault_detector_spot.application.coordinators.probe_setup_coordinator import ProbeSetupCoordinator

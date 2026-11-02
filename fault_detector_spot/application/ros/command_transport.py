@@ -1,9 +1,13 @@
 """Connect the transport-independent command controller to ROS topics."""
 
+from dataclasses import replace
+import time
+
 from fault_detector_msgs.msg import (
     CommandRequest as CommandRequestMessage,
     CommandStatus,
 )
+from fault_detector_msgs.srv import GetCommandStatus
 
 from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
@@ -41,6 +45,12 @@ class RosCommandTransport:
         self.node = node
         self.controller = controller
         self._local_dispatch = None
+        self._local_request_ids = set()
+        self._status_queries = {}
+        self._closed = False
+        self._status_client = node.create_client(
+            GetCommandStatus, "fault_detector/_internal/commands/get_status",
+        )
         self._dispatch_publisher = node.create_publisher(
             CommandRequestMessage,
             dispatch_topic,
@@ -78,6 +88,7 @@ class RosCommandTransport:
             self._dispatch,
             self._dispatch_consumer_ready,
         )
+        self.controller.configure_reconciliation(self._query_status)
 
     def set_local_dispatch(self, dispatch) -> None:
         """Set the optional in-process command handler."""
@@ -97,11 +108,17 @@ class RosCommandTransport:
 
     def handle_command_status(self, message: CommandStatus) -> bool:
         """Translate behavior-tree feedback into controller feedback."""
+        if message.request_id in self._local_request_ids:
+            return False
         values = {
             CommandStatus.STATE_RUNNING: CommandControllerState.RUNNING,
             CommandStatus.STATE_SUCCEEDED: CommandControllerState.SUCCEEDED,
             CommandStatus.STATE_FAILED: CommandControllerState.FAILED,
             CommandStatus.STATE_CANCELLED: CommandControllerState.CANCELLED,
+            CommandStatus.STATE_UNKNOWN: CommandControllerState.UNKNOWN,
+            CommandStatus.STATE_STOP_REQUESTED: CommandControllerState.STOP_REQUESTED,
+            CommandStatus.STATE_STOP_CONFIRMED: CommandControllerState.STOP_CONFIRMED,
+            CommandStatus.STATE_STOP_UNCONFIRMED: CommandControllerState.STOP_UNCONFIRMED,
         }
         state = values.get(message.state)
         if state is None:
@@ -124,28 +141,70 @@ class RosCommandTransport:
                 retry_safe=retry_safe,
                 retry_command=retry_command,
                 continuation_safe=message.continuation_safe,
+                execution_idle=message.execution_idle,
             )
         )
 
     def close(self) -> None:
         """Detach controller callbacks owned by this ROS transport."""
+        self._closed = True
         self.controller.clear_dispatch()
         self.controller.remove_accepted_listener(self._publish_accepted)
         self.controller.remove_status_listener(self._publish_controller_status)
         cancel = getattr(self._poll_timer, "cancel", None)
         if callable(cancel):
             cancel()
+        pending = tuple(self._status_queries.values())
+        self._status_queries.clear()
+        for future, _ in pending:
+            self._status_client.remove_pending_request(future)
+        self.node.destroy_client(self._status_client)
 
     def _dispatch(self, request) -> None:
         if request.command.command_id is CommandID.EMERGENCY_CANCEL:
-            self._publish_dispatch(request)
+            self._publish_dispatch(replace(request, stop_request_ids=tuple(
+                request_id for request_id in request.stop_request_ids
+                if request_id not in self._local_request_ids
+            )))
             return
-        if (
-            self._local_dispatch is not None
-            and self._local_dispatch(request)
-        ):
-            return
+        if self._local_dispatch is not None:
+            # Keep ownership local even when a local submission raises after
+            # scheduling work. A BT reply cannot certify that work stopped.
+            self._local_request_ids.add(request.request_id)
+            if self._local_dispatch(request):
+                return
+            self._local_request_ids.discard(request.request_id)
         self._publish_dispatch(request)
+
+    def _query_status(self, request_id):
+        """Recover lost owner feedback without republishing a motion request."""
+        if self._closed or request_id in self._local_request_ids:
+            return
+        pending = self._status_queries.get(request_id)
+        now = time.monotonic()
+        if pending is not None:
+            if now - pending[1] < 3.0:
+                return
+            self._status_client.remove_pending_request(pending[0])
+            self._status_queries.pop(request_id, None)
+        if not self._status_client.service_is_ready():
+            return
+        future = self._status_client.call_async(GetCommandStatus.Request(request_id=request_id))
+        self._status_queries[request_id] = (future, now)
+
+        def completed(result_future):
+            current = self._status_queries.get(request_id)
+            if current is None or current[0] is not result_future:
+                return
+            self._status_queries.pop(request_id, None)
+            try:
+                response = result_future.result()
+                if response.status.request_id == request_id:
+                    self.handle_command_status(response.status)
+            except Exception as exception:
+                self.node.get_logger().error(f"Command status query failed: {exception}")
+
+        future.add_done_callback(completed)
 
     def _publish_dispatch(self, request) -> None:
         message = command_request_to_message(request)
@@ -175,6 +234,7 @@ class RosCommandTransport:
         message.buffered_command_count = status.buffered_command_count
         message.retry_safe = status.retry_safe
         message.continuation_safe = status.continuation_safe
+        message.execution_idle = status.execution_idle
         if status.retry_command is not None:
             message.has_retry_command = True
             message.retry_command = semantic_command_to_message(status.retry_command)
@@ -189,6 +249,8 @@ class RosCommandTransport:
         )
         if not request_id:
             return
+        if self.controller.knows_request(request_id):
+            return
         status = CommandStatus()
         status.header.stamp = self.node.get_clock().now().to_msg()
         status.request_id = request_id
@@ -196,6 +258,7 @@ class RosCommandTransport:
         status.state = CommandStatus.STATE_FAILED
         status.detail = detail
         status.buffered_command_count = 0
+        status.execution_idle = True
         self._controller_status_publisher.publish(status)
 
     def _dispatch_consumer_ready(self) -> bool:
@@ -233,6 +296,14 @@ class RosCommandTransport:
             return CommandStatus.STATE_FAILED
         if state is CommandControllerState.CANCELLED:
             return CommandStatus.STATE_CANCELLED
+        if state is CommandControllerState.UNKNOWN:
+            return CommandStatus.STATE_UNKNOWN
+        if state is CommandControllerState.STOP_REQUESTED:
+            return CommandStatus.STATE_STOP_REQUESTED
+        if state is CommandControllerState.STOP_CONFIRMED:
+            return CommandStatus.STATE_STOP_CONFIRMED
+        if state is CommandControllerState.STOP_UNCONFIRMED:
+            return CommandStatus.STATE_STOP_UNCONFIRMED
         raise ValueError(f"Unsupported controller state: {state}")
 
 

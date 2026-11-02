@@ -111,6 +111,25 @@ def test_status_is_exposed_with_application_operation_identity():
     assert statuses[-1].state is CommandControllerState.RUNNING
 
 
+def test_uncertain_operation_retains_cancellation_ownership_until_confirmed_stop():
+    commands = FakeCommandController()
+    controller = ApplicationController(commands)
+    operation = controller.prepare_operation(stand_intent(), "operator-ui")
+    controller.submit(operation)
+    for state in (
+        CommandControllerState.UNKNOWN,
+        CommandControllerState.STOP_REQUESTED,
+        CommandControllerState.STOP_UNCONFIRMED,
+    ):
+        commands.emit(operation.request, state)
+        assert controller.cancel("operator-ui", operation.request_id) == operation.request_id
+
+    commands.emit(operation.request, CommandControllerState.STOP_CONFIRMED)
+
+    with pytest.raises(UnknownCommandRequest):
+        controller.cancel("operator-ui", operation.request_id)
+
+
 def test_client_cannot_cancel_another_clients_operation():
     command_controller = FakeCommandController()
     controller = ApplicationController(command_controller)
@@ -224,4 +243,3 @@ def test_setup_status_is_owned_only_by_setup_coordinator():
 
     assert application_statuses == []
     assert setup_statuses[-1].operation == operation
-

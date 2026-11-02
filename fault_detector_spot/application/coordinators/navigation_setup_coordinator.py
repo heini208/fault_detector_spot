@@ -603,6 +603,7 @@ class NavigationSetupCoordinator:
                 CommandControllerState.SUCCEEDED,
                 CommandControllerState.FAILED,
                 CommandControllerState.CANCELLED,
+                CommandControllerState.STOP_CONFIRMED,
             }
             if terminal:
                 self._operations.pop(status.operation.request_id)

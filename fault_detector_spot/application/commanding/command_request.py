@@ -72,6 +72,7 @@ class CommandRequest(Generic[CommandT]):
     origin: CommandOrigin
     recording_policy: RecordingPolicy
     command: CommandT
+    stop_request_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         request_id = validate_request_id(self.request_id)
@@ -95,6 +96,9 @@ class CommandRequest(Generic[CommandT]):
         object.__setattr__(self, "context_id", context_id)
         object.__setattr__(self, "origin", origin)
         object.__setattr__(self, "recording_policy", recording_policy)
+        object.__setattr__(self, "stop_request_ids", tuple(
+            dict.fromkeys(validate_request_id(value) for value in self.stop_request_ids)
+        ))
 
     @classmethod
     def create(

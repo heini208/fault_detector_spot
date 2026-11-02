@@ -1611,6 +1611,7 @@ class ArmMovementExecutor(MovementExecutor):
     def _cancel_stop_finished(self, update):
         with self._execution_lock:
             if update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED and self._cancel_goal_done:
+                self._stop_unconfirmed = False
                 self._reset_operation()
             elif update.outcome is ArmMovementOutcome.TRAJECTORY_CANCELLED:
                 self._cancellation_detail = (
@@ -1934,6 +1935,19 @@ class ArmMovementExecutor(MovementExecutor):
         return self._finish_operation(outcome, detail)
 
     def _finish_operation(self, outcome, detail):
+        if outcome in {
+            ArmMovementOutcome.STOP_UNCONFIRMED,
+            ArmMovementOutcome.RETREAT_FAILED,
+            ArmMovementOutcome.RECOVERY_FAILED,
+            ArmMovementOutcome.GOAL_RESPONSE_TIMEOUT,
+        }:
+            self._stop_unconfirmed = True
+        elif (outcome is ArmMovementOutcome.RESULT_TIMEOUT
+              and self._operation != _ArmOperation.GUARDED_MOVEMENT):
+            self._stop_unconfirmed = True
+        elif (outcome is ArmMovementOutcome.SUCCESS
+              and self._operation == _ArmOperation.CONFIRM_STOP):
+            self._stop_unconfirmed = False
         target = deepcopy(self._retry_target)
         result = super()._finish(outcome, detail)
         return replace(result, retry_target=target if outcome is not ArmMovementOutcome.SUCCESS else None)

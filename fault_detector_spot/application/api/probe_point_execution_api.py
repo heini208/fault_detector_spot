@@ -51,7 +51,8 @@ class ProbePointExecutionApi:
                 self._deadline = None
             elif (self._request is not None and status.request_id == self._request.request_id
                   and status.state in {CommandControllerState.SUCCEEDED,
-                                       CommandControllerState.FAILED, CommandControllerState.CANCELLED}):
+                                       CommandControllerState.FAILED, CommandControllerState.CANCELLED,
+                                       CommandControllerState.STOP_CONFIRMED}):
                 self._timer.cancel()
                 if self._recording_state in {"starting", "recording", "stopping", "aborting"}:
                     self.acquisition.stop(cancelled=True)

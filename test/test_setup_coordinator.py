@@ -133,6 +133,33 @@ def test_setup_request_metadata_is_owned_by_coordinator():
     assert operation.request.command.command_id is CommandID.READY_ARM
 
 
+def test_uncertain_setup_motion_keeps_ownership_and_blocks_idle_admission():
+    controller = FakeCommandController()
+    controller.cancel = lambda request_id: request_id
+    controller.queued_request_ids = ()
+    coordinator = SetupCoordinator(controller)
+    context = coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe-ui")
+    operation = coordinator.prepare_command(context, command())
+    coordinator.submit(operation)
+    controller.active_request_id = operation.request_id
+    for state in (
+        CommandControllerState.UNKNOWN,
+        CommandControllerState.STOP_REQUESTED,
+        CommandControllerState.STOP_UNCONFIRMED,
+    ):
+        controller.emit(operation.request, state)
+        assert coordinator.cancel_operation(context, operation.request_id) == operation.request_id
+        with pytest.raises(RuntimeError, match="Busy"):
+            coordinator.require_command_lane_idle("Busy")
+
+    controller.active_request_id = ""
+    controller.emit(operation.request, CommandControllerState.STOP_CONFIRMED)
+
+    coordinator.require_command_lane_idle("Busy")
+    with pytest.raises(LookupError, match="Unknown setup operation"):
+        coordinator.cancel_operation(context, operation.request_id)
+
+
 def test_setup_coordinator_rejects_ros_or_untyped_command_payloads():
     coordinator = SetupCoordinator(FakeCommandController())
     context = coordinator.open_context(

@@ -27,6 +27,7 @@ def command_request_from_message(
         origin=message.origin,
         recording_policy=message.recording_policy,
         command=semantic_command_from_message(message.payload),
+        stop_request_ids=tuple(message.stop_request_ids),
     )
     return request
 
@@ -48,6 +49,7 @@ def command_request_to_message(
     message.origin = int(request.origin)
     message.recording_policy = int(request.recording_policy)
     message.payload = semantic_command_to_message(request.command)
+    message.stop_request_ids = list(request.stop_request_ids)
     return message
 
 

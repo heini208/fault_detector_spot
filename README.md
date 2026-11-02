@@ -266,6 +266,30 @@ CI containers only. Neither job starts ROS nodes. The immediate-baseline fixture
 in `test_arm_movement_executor.py` is limited to that module; dedicated baseline,
 contact-policy and guarded-execution tests retain their real safety behavior.
 
+### 3.4 Command uncertainty and stop confirmation
+
+An acknowledgement timeout or uncertain submission leaves the original request
+in `UNKNOWN` and retains its command lane. The controller queries the execution
+owner through `fault_detector/_internal/commands/get_status`; it never resends
+the motion. Late correlated feedback is still accepted. Missing owner history,
+an unavailable query service, and a terminal status without `execution_idle`
+confirmation all keep the lane occupied. Setup changes and playback cannot
+continue through this uncertainty.
+
+Emergency acceptance means `STOP_REQUESTED`. The original request remains
+associated with the lane, and `STOP_UNCONFIRMED` means the required stop evidence
+is still missing. Only `STOP_CONFIRMED` from the execution owner releases the
+stop barrier. Each interrupted request must also be confirmed stopped. Emergency
+envelopes fence the affected request identities so delayed or duplicate delivery
+cannot restart them. Duplicate normal requests return retained owner status
+without running again. Recordings wait for confirmed outcomes; playback does
+not retry or skip an unknown or unconfirmed request.
+
+These states, the explicit idle evidence, the stop fences, and the status query
+are part of `fault_detector_msgs`. Rebuild **both** `fault_detector_msgs` and
+`fault_detector_spot` after updating these changes, then source the new install.
+Old and new message installations must not be mixed.
+
 ---
 
 ## 4. Launching the System

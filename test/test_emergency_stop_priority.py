@@ -55,14 +55,15 @@ def test_emergency_dispatch_does_not_wait_for_setup_work(blocker):
                    item.state is CommandControllerState.CANCELLED for item in states)
 
 
-def test_stop_is_published_before_cancellation_listeners_run():
+def test_stop_is_published_before_stop_intent_listeners_run():
     dispatched = []
     controller = CommandController(dispatch_request=dispatched.append)
     controller.submit(make_request(CommandID.READY_ARM))
     observed = []
 
     def listener(status):
-        if status.state is CommandControllerState.CANCELLED:
+        if (status.state is CommandControllerState.STOP_REQUESTED
+                and status.request.command.command_id is not CommandID.EMERGENCY_CANCEL):
             observed.append(dispatched[-1].command.command_id)
 
     controller.add_status_listener(listener)
@@ -79,7 +80,7 @@ def test_early_emergency_feedback_is_preserved_until_reconciliation():
 
     def dispatch(request):
         assert controller.handle_execution_status(execution_status(
-            request.request_id, CommandControllerState.SUCCEEDED,
+            request.request_id, CommandControllerState.STOP_CONFIRMED,
         ))
 
     controller.configure_dispatch(dispatch)
@@ -87,7 +88,7 @@ def test_early_emergency_feedback_is_preserved_until_reconciliation():
     controller.poll()
     assert controller.active_request_id == ""
     assert states[-1].request_id == request_id
-    assert states[-1].state is CommandControllerState.SUCCEEDED
+    assert states[-1].state is CommandControllerState.STOP_CONFIRMED
 
 
 def test_repeated_emergencies_dispatch_before_bookkeeping():
@@ -97,7 +98,12 @@ def test_repeated_emergencies_dispatch_before_bookkeeping():
     second = controller.cancel_all()
     assert [request.request_id for request in dispatched] == [first, second]
     controller.poll()
-    assert controller.active_request_id == second
+    assert controller.active_request_id == first
+    assert dispatched[-1].stop_request_ids == (first,)
+    controller.handle_execution_status(execution_status(second, CommandControllerState.STOP_CONFIRMED))
+    assert controller.active_request_id == first
+    controller.handle_execution_status(execution_status(first, CommandControllerState.STOP_CONFIRMED))
+    assert controller.active_request_id == ""
 
 
 def test_duplicate_emergency_is_not_sent_twice():
@@ -124,9 +130,9 @@ def test_emergency_transport_failure_is_reported_without_releasing_old_work():
     stop_id = controller.cancel_all()
     controller.poll()
     assert controller.queued_request_ids == ()
-    assert controller.active_request_id == ""
+    assert controller.active_request_id == stop_id
     assert states[-1].request_id == stop_id
-    assert states[-1].state is CommandControllerState.FAILED
+    assert states[-1].state is CommandControllerState.STOP_UNCONFIRMED
     assert "Transport unavailable" in states[-1].detail
 
 
@@ -137,7 +143,7 @@ def test_second_stop_bypasses_blocked_cancellation_bookkeeping():
     controller.submit(make_request(CommandID.READY_ARM))
 
     def listener(status):
-        if status.state is CommandControllerState.CANCELLED:
+        if status.state is CommandControllerState.STOP_REQUESTED:
             entered.set()
             assert release.wait(3)
 
@@ -163,4 +169,4 @@ def test_second_stop_bypasses_blocked_cancellation_bookkeeping():
         bookkeeping.join(3)
     stopper.join(3)
     controller.poll()
-    assert controller.active_request_id == dispatched[-1].request_id
+    assert controller.active_request_id == dispatched[0].request_id

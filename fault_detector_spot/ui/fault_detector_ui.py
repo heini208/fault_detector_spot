@@ -827,6 +827,9 @@ class Fault_Detector_UI(QWidget):
         self.application_client.operation_rejected.connect(
             self._process_operation_rejected
         )
+        self.application_client.operation_uncertain.connect(
+            self._process_operation_uncertain
+        )
         self.application_client.emergency_stop_finished.connect(
             self._process_emergency_stop_result
         )
@@ -839,6 +842,9 @@ class Fault_Detector_UI(QWidget):
         )
         self.navigation_setup_client.request_rejected.connect(
             self._process_application_error
+        )
+        self.navigation_setup_client.request_uncertain.connect(
+            self._process_setup_uncertain
         )
         self.navigation_setup_client.landmark_feedback_received.connect(
             self.landmark_feedback_label.show_event, Qt.QueuedConnection,
@@ -855,6 +861,9 @@ class Fault_Detector_UI(QWidget):
         )
         self.probe_setup_client.request_rejected.connect(
             self._process_probe_setup_rejected
+        )
+        self.probe_setup_client.request_uncertain.connect(
+            self._process_setup_uncertain
         )
         self.probe_setup_client.transaction_failed.connect(
             self._process_probe_setup_transaction_failed
@@ -963,6 +972,10 @@ class Fault_Detector_UI(QWidget):
             ApplicationCommandState.STATE_SUCCEEDED: "SUCCEEDED",
             ApplicationCommandState.STATE_FAILED: "FAILED",
             ApplicationCommandState.STATE_CANCELLED: "CANCELLED",
+            ApplicationCommandState.STATE_UNKNOWN: "UNKNOWN / RECONCILING",
+            ApplicationCommandState.STATE_STOP_REQUESTED: "STOP REQUESTED",
+            ApplicationCommandState.STATE_STOP_CONFIRMED: "STOP CONFIRMED",
+            ApplicationCommandState.STATE_STOP_UNCONFIRMED: "STOP UNCONFIRMED",
         }
         intent_names = {
             value: name.removeprefix("INTENT_")
@@ -1015,6 +1028,12 @@ class Fault_Detector_UI(QWidget):
             controls.handle_sensor_tip_distance_rejected(detail, context_id)
             controls.routine_navigation_controls.handle_operation_rejected(detail, context_id)
 
+    def _process_operation_uncertain(self, context_id, detail):
+        self.status_label.setText(f"Operation outcome unknown; awaiting confirmation: {detail}")
+        controls = getattr(self, "inspection_controls", None)
+        if controls is not None:
+            controls.handle_operation_uncertain(detail, context_id)
+
     def _process_sensor_acquisition_state(self, state):
         self.set_sensor_acquisition_state(state)
 
@@ -1062,6 +1081,11 @@ class Fault_Detector_UI(QWidget):
         controls = getattr(self, "inspection_controls", None)
         if controls is not None:
             controls.handle_reference_start_rejected(detail)
+
+    def _process_setup_uncertain(self, detail):
+        self.status_label.setText(
+            f"Setup outcome unknown; awaiting confirmation: {detail}"
+        )
 
     def _process_probe_setup_transaction_failed(self, operation, detail):
         controls = getattr(self, "inspection_controls", None)
@@ -1158,7 +1182,10 @@ class Fault_Detector_UI(QWidget):
         return request_id
 
     def _process_emergency_stop_result(self, accepted, detail):
-        prefix = "Emergency stop accepted" if accepted else "Emergency stop failed"
+        prefix = (
+            "Emergency stop requested; awaiting stop confirmation"
+            if accepted else "Emergency stop unconfirmed"
+        )
         self.status_label.setText(f"{prefix}: {detail}")
 
     def _process_available_frames(self, msg: StringArray):

@@ -3,6 +3,7 @@ test/test_runtime_settings_isolation.py
 test/test_pure_import_boundaries.py
 test/test_command_controller.py
 test/test_command_dispatch_readiness.py
+test/test_emergency_stop_priority.py
 
 # Geometry, models, settings, and persistence.
 test/test_rotation_geometry.py

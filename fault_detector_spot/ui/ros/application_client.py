@@ -23,6 +23,7 @@ class ApplicationClient(QObject):
     state_changed = pyqtSignal(object)
     request_rejected = pyqtSignal(str)
     operation_rejected = pyqtSignal(str, str)
+    operation_uncertain = pyqtSignal(str, str)
     emergency_stop_finished = pyqtSignal(bool, str)
 
     def __init__(self, node, client_id=None):
@@ -114,13 +115,17 @@ class ApplicationClient(QObject):
         try:
             goal_handle = future.result()
         except Exception as exception:
-            self._reject_operation(context_id, str(exception))
+            self.operation_uncertain.emit(context_id, str(exception))
             return
         if not goal_handle.accepted:
             self._reject_operation(context_id, "Operational request was rejected")
             return
         self._goal_handles[local_id] = goal_handle
-        result_future = goal_handle.get_result_async()
+        try:
+            result_future = goal_handle.get_result_async()
+        except Exception as exception:
+            self.operation_uncertain.emit(context_id, str(exception))
+            return
         result_future.add_done_callback(
             partial(self._receive_result, local_id, context_id)
         )
@@ -133,7 +138,8 @@ class ApplicationClient(QObject):
         try:
             result = future.result().result
         except Exception as exception:
-            self._reject_operation(context_id, str(exception))
+            # Losing the result after dispatch does not prove execution ended.
+            self.operation_uncertain.emit(context_id, str(exception))
             return
         self._emit_state(result.state)
 

@@ -109,6 +109,7 @@ _TERMINAL_STATES = frozenset({
     CommandControllerState.SUCCEEDED,
     CommandControllerState.FAILED,
     CommandControllerState.CANCELLED,
+    CommandControllerState.STOP_CONFIRMED,
 })
 
 
@@ -415,7 +416,10 @@ class ApplicationApiNode(Node):
         if state.state == ApplicationCommandState.STATE_SUCCEEDED:
             goal_handle.succeed()
         elif (
-            state.state == ApplicationCommandState.STATE_CANCELLED
+            state.state in {
+                ApplicationCommandState.STATE_CANCELLED,
+                ApplicationCommandState.STATE_STOP_CONFIRMED,
+            }
             and goal_handle.is_cancel_requested
         ):
             goal_handle.canceled()
@@ -548,6 +552,10 @@ class ApplicationApiNode(Node):
             CommandControllerState.CANCELLED: (
                 ApplicationCommandState.STATE_CANCELLED
             ),
+            CommandControllerState.UNKNOWN: ApplicationCommandState.STATE_UNKNOWN,
+            CommandControllerState.STOP_REQUESTED: ApplicationCommandState.STATE_STOP_REQUESTED,
+            CommandControllerState.STOP_CONFIRMED: ApplicationCommandState.STATE_STOP_CONFIRMED,
+            CommandControllerState.STOP_UNCONFIRMED: ApplicationCommandState.STATE_STOP_UNCONFIRMED,
         }
         return values[state]
 
