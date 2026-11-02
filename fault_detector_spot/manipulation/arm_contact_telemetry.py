@@ -4,7 +4,8 @@ from dataclasses import asdict
 import json
 import math
 from pathlib import Path
-from threading import RLock
+from queue import Empty, Full, Queue
+from threading import Event, RLock, Thread
 import time
 
 from fault_detector_spot.manipulation.arm_contact_observation import (
@@ -36,6 +37,7 @@ class ArmContactTelemetry:
         raw_log_root=None,
         logger=None,
         config=None,
+        raw_queue_capacity=256,
     ):
         config = config if config is not None else ArmMotionParameters()
         raw_logging_enabled = config.get(
@@ -61,11 +63,27 @@ class ArmContactTelemetry:
         self._latest_observation = None
         self._last_error = ""
         self._raw_log_path = None
-        self._raw_log_file = None
+        if (isinstance(raw_queue_capacity, bool)
+                or not isinstance(raw_queue_capacity, int)
+                or raw_queue_capacity < 1):
+            raise ValueError("raw_queue_capacity must be a positive integer")
+        self._raw_queue = Queue(maxsize=raw_queue_capacity)
+        self._closing = Event()
+        self._dropped_samples = 0
+        self._writer = None
         self._previous_joint_received_at = None
         self._previous_joint_efforts_nm = None
         self._previous_observed_at = None
         self._previous_position_error_m = None
+        if self.raw_logging_enabled:
+            self._writer = Thread(
+                target=self._write_raw, name="arm-contact-telemetry", daemon=True,
+            )
+            try:
+                self._writer.start()
+            except Exception as exception:
+                self._writer = None
+                self._record_writer_error(exception)
 
     @classmethod
     def from_node(
@@ -92,6 +110,18 @@ class ArmContactTelemetry:
     def last_error(self) -> str:
         with self._lock:
             return self._last_error
+
+    @property
+    def diagnostics(self):
+        with self._lock:
+            return {
+                "dropped_samples": self._dropped_samples,
+                "queued_samples": self._raw_queue.qsize(),
+                "queue_capacity": self._raw_queue.maxsize,
+                "writer_active": self._writer is not None and self._writer.is_alive(),
+                "last_error": self._last_error,
+                "raw_logging_enabled": self.raw_logging_enabled,
+            }
 
     @property
     def raw_log_path(self):
@@ -301,7 +331,7 @@ class ArmContactTelemetry:
         with self._lock:
             self._latest_observation = observation
             self._observation_count += 1
-            self._write_raw_locked(observation)
+            self._enqueue_raw(observation)
         return observation
 
     @staticmethod
@@ -483,52 +513,73 @@ class ArmContactTelemetry:
         dot = min(1.0, max(0.0, dot))
         return 2.0 * math.acos(dot)
 
-    def _write_raw_locked(self, observation) -> None:
-        if not self.raw_logging_enabled:
-            return
-        try:
-            if self._raw_log_file is None:
-                self.raw_log_root.mkdir(parents=True, exist_ok=True)
-                self._raw_log_path = self.raw_log_root / (
-                    f"arm_contact_{time.time_ns()}.jsonl"
-                )
-                self._raw_log_file = self._raw_log_path.open(
-                    "a",
-                    encoding="utf-8",
-                )
-            payload = asdict(observation)
-            self._raw_log_file.write(
-                json.dumps(payload, separators=(",", ":")) + "\n"
-            )
-            self._raw_log_file.flush()
-        except Exception as exception:
-            self._last_error = str(exception)
-            self._disable_raw_logging_locked()
-            if self.logger is not None:
-                try:
-                    self.logger.warning(
-                        "Arm contact telemetry raw logging disabled: "
-                        f"{exception}"
-                    )
-                except Exception:
-                    pass
+    def record_event(self, event) -> None:
+        """Queue a copied, scalar diagnostic snapshot alongside observations."""
+        self._enqueue_raw(dict(event))
 
-    def _disable_raw_logging_locked(self) -> None:
-        raw_log_file = self._raw_log_file
-        self._raw_log_file = None
-        self.raw_logging_enabled = False
-        if raw_log_file is not None:
+    def _enqueue_raw(self, payload) -> None:
+        with self._lock:
+            if not self.raw_logging_enabled or self._closing.is_set():
+                return
             try:
-                raw_log_file.close()
+                self._raw_queue.put_nowait(payload)
+            except Full:
+                self._dropped_samples += 1
+
+    def _write_raw(self) -> None:
+        """Own all serialization and storage work; never hold the producer lock."""
+        raw_log_file = None
+        try:
+            while not self._closing.is_set() or not self._raw_queue.empty():
+                try:
+                    payload = self._raw_queue.get(timeout=0.05)
+                except Empty:
+                    continue
+                if raw_log_file is None:
+                    self.raw_log_root.mkdir(parents=True, exist_ok=True)
+                    path = self.raw_log_root / f"arm_contact_{time.time_ns()}.jsonl"
+                    with self._lock:
+                        self._raw_log_path = path
+                    raw_log_file = path.open("a", encoding="utf-8")
+                if isinstance(payload, ArmContactObservation):
+                    payload = asdict(payload)
+                raw_log_file.write(
+                    json.dumps(payload, separators=(",", ":")) + "\n"
+                )
+                raw_log_file.flush()
+        except Exception as exception:
+            with self._lock:
+                self.raw_logging_enabled = False
+                self._dropped_samples += 1
+                while not self._raw_queue.empty():
+                    self._raw_queue.get_nowait()
+                    self._dropped_samples += 1
+            self._record_writer_error(exception)
+        finally:
+            if raw_log_file is not None:
+                try:
+                    raw_log_file.close()
+                except Exception as exception:
+                    self._record_writer_error(exception)
+
+    def _record_writer_error(self, exception) -> None:
+        with self._lock:
+            self._last_error = str(exception)
+            self.raw_logging_enabled = False
+        if self.logger is not None:
+            try:
+                self.logger.warning(f"Arm contact telemetry raw logging disabled: {exception}")
             except Exception:
                 pass
 
-    def close(self) -> None:
+    def close(self, timeout_sec=1.0) -> None:
+        """Drain within a bounded deadline; a blocked writer remains retryable."""
         with self._lock:
-            raw_log_file = self._raw_log_file
-            self._raw_log_file = None
-        if raw_log_file is not None:
-            raw_log_file.close()
+            self._closing.set()
+        if self._writer is not None:
+            self._writer.join(timeout=max(0.0, float(timeout_sec)))
+            if self._writer.is_alive():
+                raise RuntimeError("Arm contact telemetry writer did not finish before timeout")
 
 
 __all__ = [

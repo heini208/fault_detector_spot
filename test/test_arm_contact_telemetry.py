@@ -2,6 +2,9 @@
 
 import json
 import math
+from pathlib import Path
+from threading import Event, Thread
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -266,5 +269,80 @@ def test_raw_logging_failure_is_fail_open(tmp_path):
 
     assert observation is telemetry.latest_observation()
     assert telemetry.observation_count == 1
+    telemetry.close()
     assert telemetry.last_error
+    assert not telemetry.raw_logging_enabled
+    assert telemetry.diagnostics["dropped_samples"] == 1
+
+
+def test_saturated_writer_drops_samples_and_close_is_bounded_and_retryable(tmp_path, monkeypatch):
+    entered, release = Event(), Event()
+    written = []
+
+    class SlowFile:
+        def write(self, value):
+            entered.set()
+            assert release.wait(2.0)
+            written.append(json.loads(value))
+
+        def flush(self):
+            pass
+
+        def close(self):
+            pass
+
+    telemetry = ArmContactTelemetry(
+        FakeArmStateSource(None), FakeJointStateSource(None),
+        raw_log_root=tmp_path, raw_logging_enabled=True, raw_queue_capacity=2,
+    )
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: SlowFile())
+    try:
+        event = {"event": "stop_requested", "request_id": "request-1"}
+        telemetry.record_event(event)
+        assert entered.wait(1.0)
+        event["request_id"] = "mutated"
+        for index in range(4):
+            telemetry.record_event({"sample": index})
+        assert telemetry.diagnostics["queued_samples"] == 2
+        assert telemetry.diagnostics["dropped_samples"] == 2
+        started = time.monotonic()
+        with pytest.raises(RuntimeError, match="writer did not finish"):
+            telemetry.close(timeout_sec=0.01)
+        assert time.monotonic() - started < 0.1
+        assert telemetry.diagnostics["writer_active"]
+        telemetry.record_event({"sample": "after close"})
+        assert telemetry.diagnostics["queued_samples"] == 2
+    finally:
+        release.set()
+        telemetry.close()
+    telemetry.close()
+    assert not telemetry.diagnostics["writer_active"]
+    assert written == [
+        {"event": "stop_requested", "request_id": "request-1"},
+        {"sample": 0}, {"sample": 1},
+    ]
+
+
+@pytest.mark.parametrize("capacity", [0, -1, True, 1.5])
+def test_raw_queue_requires_a_finite_positive_capacity(capacity):
+    with pytest.raises(ValueError, match="positive integer"):
+        ArmContactTelemetry(
+            FakeArmStateSource(None), FakeJointStateSource(None),
+            raw_queue_capacity=capacity,
+        )
+
+
+def test_writer_start_failure_disables_only_diagnostics(monkeypatch):
+    def fail(_thread):
+        raise RuntimeError("cannot start writer")
+
+    monkeypatch.setattr(Thread, "start", fail)
+    telemetry = ArmContactTelemetry(
+        FakeArmStateSource(None), FakeJointStateSource(None),
+        raw_logging_enabled=True,
+    )
+    telemetry.record_event({"event": "stop_requested"})
+    telemetry.close()
+    assert telemetry.last_error == "cannot start writer"
+    assert not telemetry.diagnostics["writer_active"]
     assert not telemetry.raw_logging_enabled
