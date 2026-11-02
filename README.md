@@ -45,7 +45,7 @@ For the full technical description, refer to the accompanying system design docu
 
 ### 2.1 ROS 2 & Robot
 
-- **ROS 2 Humble Hawksbill** (recommended)
+- **ROS 2 Humble Hawksbill on Ubuntu 22.04**, using the system Python 3.10
 - **Boston Dynamics Spot** with:
   - Spot SDK 5.0.1 (via `spot_ros2`)
   - Optional manipulator arm (required for manipulation functions)
@@ -57,7 +57,9 @@ You must have the following ROS 2 packages installed and sourced:
 
 - **Robot & Messages**
   - [`spot_ros2`](https://github.com/bdaiinstitute/spot_ros2) – official Spot ROS 2 driver
-  - `spot_msgs`, `bosdyn_msgs`, `spot_wrapper`, `spot_common`, `synchros2` (as required by `spot_ros2`)
+  - `spot_msgs`, `synchros2`, `bosdyn_api_msgs`, `bosdyn_spot_api_msgs`
+  - `spot_ros2` is the driver repository; its driver package is `spot_driver`.
+    The driver is provisioned separately and must be available for robot operation.
   - [`fault_detector_msgs`](https://github.com/heini208/fault_detector_msgs) – custom message definitions for this system
 
 - **Behaviour Trees**
@@ -69,44 +71,115 @@ You must have the following ROS 2 packages installed and sourced:
   - [`apriltag_ros`](https://github.com/christianrauch/apriltag_ros) (or [AprilRobotics/apriltag_ros](https://github.com/AprilRobotics/apriltag_ros))
 
 - **Mapping & Navigation**
-  - [`rtabmap_ros`](https://github.com/introlab/rtabmap_ros) (and `rtabmap_slam`, `rtabmap_sync`)
+  - [`rtabmap_ros`](https://github.com/introlab/rtabmap_ros): `rtabmap_slam`, `rtabmap_msgs`, `rtabmap_rviz_plugins`
   - [`nav2_bringup`](https://github.com/ros-planning/navigation2) and full Nav2 stack
 
 - **UI & Tools**
-  - `PyQt5` (Python package) – for GUI
+  - `python3-pyqt5` – GUI, installed through rosdep/apt
+  - `python3-numpy`, `python3-scipy`, `python3-yaml`, `python3-psutil`
   - `rviz2` – visualization
 
-Python dependencies (partial):
+The retained launches also require `spot_moveit_config`, `spot_description`,
+`moveit_ros_perception`, and `micro_ros_agent`. Provision the project's matching
+`spot_moveit_config` alongside the driver, and build the Humble micro-ROS Agent
+using the [micro-ROS setup instructions](https://github.com/micro-ROS/micro_ros_setup).
+These source packages are not supplied by cloning this repository.
+
+### 2.3 Vendor dependencies and rosdep
+
+Use the [Spot driver installation instructions](https://github.com/rai-opensource/spot_ros2#installation)
+for the SDK 5.0.1 driver revision, initialized submodules, and matching
+[bosdyn_msgs 5.0.1 bundle](https://github.com/rai-opensource/bosdyn_msgs/releases/tag/5.0.1).
+The SDK and generated ROS messages must use the same version. The application
+imports `bosdyn.api`, `bosdyn.client`, and `bosdyn.util`; their standard rosdep
+keys are `python3-bosdyn-api-pip`, `python3-bosdyn-client-pip`, and
+`python3-bosdyn-core-pip`. Those keys are unversioned, so install the supported
+versions before resolving the remaining dependencies:
 
 ```bash
-pip install PyQt5 psutil
+sudo -H /usr/bin/python3 -m pip install -r src/fault_detector_spot/requirements-humble-sdk.txt
 ```
 
-ROS dependencies are declared in [`package.xml`](package.xml); use `rosdep` to install what’s missing:
+This is the documented vendor pip prerequisite. NumPy, SciPy, PyQt5, PyYAML,
+and psutil use Ubuntu packages through [`package.xml`](package.xml).
+The vendor SDK must be available to system Python, matching the driver's
+installer; the offline check deliberately excludes user-site packages.
+Do not treat an empty local rosdep rule for a vendor package as installation
+evidence: check that `bosdyn_api_msgs` and `bosdyn_spot_api_msgs` are present in
+the ament index and match SDK 5.0.1. The installation check below verifies both.
+
+Source the dependency workspace before resolving this package's dependencies.
+Provide any unresolved source package in that workspace; do not ignore rosdep
+errors or add empty rules to hide missing packages.
 
 ```bash
-rosdep install --from-paths src --ignore-src -r -y
+rosdep install --from-paths src --ignore-src --rosdistro humble -y
 ```
+
+`lifecycle_msgs` and `pointcloud_to_laserscan` have no direct consumers in the
+retained application/launches. The former remains a dependency of ROS launch
+internals; the retired camera Nav2 launch is not part of this package.
+
+Driver-contract tests additionally use the `spot_wrapper` Python project from
+the driver's initialized submodule. Install that project as described by the
+driver instructions when running the full offline test suite.
 
 ---
 
 ## 3. Building the Package
 
-Assuming a ROS 2 workspace `~/ros2_ws`:
+Use a new workspace and a shell that has sourced Humble and the dependency
+workspace described above, but no previous `fault_detector_spot` or
+`fault_detector_msgs` installation:
 
 ```bash
+mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
 git clone https://github.com/heini208/fault_detector_spot.git
 git clone https://github.com/heini208/fault_detector_msgs.git
-# plus spot_ros2, rtabmap_ros, nav2, etc., if not already in your workspace
 
 cd ~/ros2_ws
-rosdep install --from-paths src --ignore-src -r -y
-colcon build
+sudo -H /usr/bin/python3 -m pip install -r src/fault_detector_spot/requirements-humble-sdk.txt
+rosdep install --from-paths src --ignore-src --rosdistro humble -y
+rosdep check --from-paths src --ignore-src --rosdistro humble
+colcon build --packages-select fault_detector_msgs fault_detector_spot
 source install/setup.bash
 ```
 
-Make sure the Spot SDK and `spot_ros2` setup instructions are followed as described in the [`spot_ros2` README](https://github.com/bdaiinstitute/spot_ros2).
+Both packages use version `0.0.0` while unreleased. Keep this package's version
+and description synchronized in `package.xml` and `setup.py`; bump versions
+deliberately for a release, not for each cleanup. This repository uses
+[Apache-2.0](LICENSE), also declared in both metadata files and installed under
+`share/fault_detector_spot/LICENSE`.
+
+### 3.1 Offline installation check
+
+Run the check from outside the source tree, after sourcing the new install:
+
+```bash
+cd /tmp
+python3 ~/ros2_ws/src/fault_detector_spot/scripts/check_install.py \
+  --prefix ~/ros2_ws/install/fault_detector_spot \
+  --messages-prefix ~/ros2_ws/install/fault_detector_msgs \
+  --source-tree ~/ros2_ws/src/fault_detector_spot
+```
+
+It imports every installed console entry point without calling `main`, verifies
+the generated interfaces and installed launch/configuration files, and rejects
+the retired Nav2 launch/gate. It does not start nodes. Launch descriptions can
+also be inspected without starting their processes:
+
+```bash
+ros2 launch fault_detector_spot fault_detector_launch.py --show-args
+ros2 launch fault_detector_spot nav2_lidar_launch.py --show-args
+ros2 launch fault_detector_spot lidar_rtab_mapping_launch.py --show-args
+ros2 launch fault_detector_spot lidar_frame_adapter_launch.py --show-args
+```
+
+A new build directory validates packaging, but a dependency-only installation
+claim additionally requires a fresh Ubuntu 22.04/Humble environment provisioned
+with the prerequisites above. An existing developer underlay can mask missing
+dependencies and is not sufficient evidence for that claim.
 
 ---
 
@@ -120,7 +193,6 @@ The **primary launch file** is `fault_detector_launch.py`, which starts:
 - `bt_runner` – main behaviour tree node
 - `apriltag_node` – AprilTag detection for hand camera (`apriltag_ros`)
 - `tag_observation_node` – tag fusion, TF resolution, and state publishing
-- `move_close_to_surface_node` – force-guarded surface approach action server
 - `record_manager` – command recording & playback node
 - `micro_ros_agent` – UDP bridge for ESP32 micro-ROS sensor mounts
 - `sensor_head_connection` – discovers acquisition endpoints and matches their

@@ -1,0 +1,7 @@
+# Keep the SDK aligned with the supported bosdyn_msgs 5.0.1 bundle.
+# Choreography packages are included by the standard bosdyn rosdep keys.
+bosdyn-api==5.0.1
+bosdyn-client==5.0.1
+bosdyn-core==5.0.1
+bosdyn-choreography-client==5.0.1
+bosdyn-choreography-protos==5.0.1

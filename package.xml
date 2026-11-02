@@ -2,33 +2,40 @@
 <package format="3">
   <name>fault_detector_spot</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>ROS 2 application for Spot inspection and probing</description>
   <maintainer email="mstemmeler@gmx.de">marcel</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache-2.0</license>
 
-  <depend>rclpy</depend>
-  <depend>builtin_interfaces</depend>
-  <depend>std_msgs</depend>
-  <depend>ament_cmake</depend>
-  <depend>geometry_msgs</depend>
-  <depend>rosidl_runtime_py</depend>
+  <buildtool_depend>python3-setuptools</buildtool_depend>
+
+  <exec_depend>python3-setuptools</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
+  <test_depend>nav_msgs</test_depend>
+  <test_depend>trajectory_msgs</test_depend>
   <exec_depend>python3-psutil</exec_depend>
-  <exec_depend>spot_ros2</exec_depend>
+  <exec_depend>python3-pyqt5</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-bosdyn-api-pip</exec_depend>
+  <exec_depend>python3-bosdyn-client-pip</exec_depend>
+  <exec_depend>python3-bosdyn-core-pip</exec_depend>
   <exec_depend>synchros2</exec_depend>
   <exec_depend>bosdyn_api_msgs</exec_depend>
   <exec_depend>bosdyn_spot_api_msgs</exec_depend>
-  <exec_depend>bosdyn_msgs</exec_depend>
   <exec_depend>spot_msgs</exec_depend>
-  <exec_depend>spot_wrapper</exec_depend>
-  <exec_depend>spot_common</exec_depend>
   <exec_depend>fault_detector_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
   <exec_depend>moveit_msgs</exec_depend>
   <exec_depend>moveit_ros_perception</exec_depend>
+  <exec_depend>moveit_ros_visualization</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>shape_msgs</exec_depend>
   <exec_depend>spot_moveit_config</exec_depend>
@@ -36,26 +43,29 @@
   <exec_depend>micro_ros_agent</exec_depend>
   <exec_depend>py_trees</exec_depend>
   <exec_depend>py_trees_ros</exec_depend>
-  <exec_depend>py_trees_ros_interfaces</exec_depend>
 
   <exec_depend>apriltag_ros</exec_depend>
   <exec_depend>apriltag_msgs</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
-  <exec_depend>rtabmap_ros</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>nav2_rviz_plugins</exec_depend>
   <exec_depend>rtabmap_slam</exec_depend>
   <exec_depend>rtabmap_msgs</exec_depend>
+  <exec_depend>rtabmap_rviz_plugins</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>diagnostic_msgs</exec_depend>
-  <exec_depend>message_filters</exec_depend>
   <exec_depend>image_geometry</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_ros_py</exec_depend>
+  <exec_depend>tf2_msgs</exec_depend>
   <exec_depend>tf2_geometry_msgs</exec_depend>
   <exec_depend>tf2_sensor_msgs</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
-  <exec_depend>rtabmap_odom</exec_depend>
-  <exec_depend>rtabmap_util</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
