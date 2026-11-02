@@ -93,8 +93,9 @@ def test_speed_reaches_executor_through_ros_and_bt():
     subscriber = CommandSubscriber()
     subscriber.node = SimpleNamespace(get_clock=lambda: FakeClock())
     internal = subscriber.fire_command_sequence(command)[0]
-    executor = object.__new__(ArmMovementExecutor)
-    executor.speed_policy = ArmMotionSpeedPolicy(default_speed=ArmMotionSpeed(.1, .4))
+    executor = ArmMovementExecutor(
+        object(), speed_policy=ArmMotionSpeedPolicy(default_speed=ArmMotionSpeed(.1, .4)),
+    )
     executor.probe_motion_planner = Mock(relative_command_is_noop=Mock(return_value=False))
     executor.guarded_probe = Mock()
     executor.relative(internal)

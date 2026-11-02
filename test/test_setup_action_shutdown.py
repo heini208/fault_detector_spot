@@ -10,6 +10,9 @@ import pytest
 from fault_detector_spot.application.api import application_api_node
 from fault_detector_spot.application.api.navigation_setup_api import NavigationSetupApi
 from fault_detector_spot.application.api.probe_setup_motion_api import ProbeSetupMotionApi
+from fault_detector_spot.application.coordinators import (
+    probe_reference_capture_coordinator as capture_module,
+)
 from fault_detector_spot.application.coordinators.probe_refinement_finalization_coordinator import (
     ProbeRefinementFinalizationCoordinator,
 )
@@ -90,16 +93,23 @@ def test_retraction_wait_exits_without_command_feedback():
     assert coordinator.submit_motion.call_count == 1
 
 
-def test_capture_signal_preserves_resources_until_callback_drain():
-    capture = ProbeReferenceCaptureCoordinator.__new__(ProbeReferenceCaptureCoordinator)
-    capture._shutdown = Event()
-    capture.tf_listener = Mock()
+def test_capture_signal_preserves_resources_until_callback_drain(monkeypatch):
+    listener = Mock(spec=["unregister"])
+    monkeypatch.setattr(capture_module.tf2_ros, "Buffer", Mock())
+    monkeypatch.setattr(
+        capture_module.tf2_ros, "TransformListener", Mock(return_value=listener)
+    )
+    node = Mock(spec=["create_subscription", "destroy_subscription"])
+    capture = ProbeReferenceCaptureCoordinator(node, Mock(), Mock(), Mock())
+    capture._create_synchronizers(((0, "hand"),))
     capture.request_shutdown()
     with pytest.raises(ReferenceCaptureCancelled, match="shutdown"):
         capture._check_cancel(lambda: False)
-    capture.tf_listener.unregister.assert_not_called()
+    listener.unregister.assert_not_called()
+    node.destroy_subscription.assert_not_called()
     capture.close()
-    capture.tf_listener.unregister.assert_called_once()
+    listener.unregister.assert_called_once()
+    assert node.destroy_subscription.call_count == 4
 
 
 def test_main_signals_before_drain_and_destroys_afterward(monkeypatch):

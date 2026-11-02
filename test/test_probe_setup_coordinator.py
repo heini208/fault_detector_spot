@@ -1,5 +1,6 @@
 """Tests for server-owned probe authoring and persistence."""
 
+import ast
 from dataclasses import replace
 import math
 from pathlib import Path
@@ -944,12 +945,32 @@ def test_pure_authoring_core_has_no_execution_command_dependency():
     paths = (
         package / "inspection/setup/probe_setup_context.py",
         package / "inspection/setup/probe_setup_geometry.py",
-        package / "application/coordinators/probe_setup_coordinator.py",
         package / "application/api/probe_setup_api.py",
     )
     source = "\n".join(path.read_text(encoding="utf-8") for path in paths)
-
     assert "CommandID" not in source
+
+    coordinator_source = (
+        package / "application/coordinators/probe_setup_coordinator.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(coordinator_source)
+    for method in ast.walk(tree):
+        if not isinstance(method, ast.FunctionDef):
+            continue
+        command_ids = {
+            node.attr for node in ast.walk(method)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "CommandID"
+        }
+        # The coordinator may correlate an observation's return to the saved
+        # pose, but command construction stays with the motion components.
+        if method.name == "_handle_external_command_status":
+            assert command_ids == {"MEASURE_SENSOR_TIP_DISTANCE"}
+        else:
+            assert not command_ids
+
+    source += coordinator_source
     assert "BasicCommand" not in source
     assert "ComplexCommand" not in source
     assert "ActionServer" not in source

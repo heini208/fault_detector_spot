@@ -129,7 +129,8 @@ def test_close_surface_uses_saved_distance_not_ui_values():
     intent = saved_intent(26)
     intent.target_surface_distance_m = 9.0
     command = saved_probe_command(intent, Mock(load=Mock(return_value=inspection_object())), None,
-                                  Mock(require_motion_attachment=Mock(return_value=sensor())), None)
+                                  Mock(require_motion_attachment=Mock(return_value=sensor())),
+                                  ProbeSetupMotionCommandFactory())
     assert command.command_id == CommandID.MOVE_CLOSE_TO_SURFACE
     assert command.target_surface_distance_m == 0.03
     assert command.aligned_preapproach_distance_m == 0.10
@@ -179,7 +180,8 @@ def test_close_distance_override_does_not_modify_saved_point(target):
     intent.override_target_surface_distance = True
     intent.target_surface_distance_m = target
     command = saved_probe_command(intent, Mock(load=Mock(return_value=definition)), None,
-                                  Mock(require_motion_attachment=Mock(return_value=sensor())), None)
+                                  Mock(require_motion_attachment=Mock(return_value=sensor())),
+                                  ProbeSetupMotionCommandFactory())
     assert command.target_surface_distance_m == target
     assert definition.routines[0].probe_points[0].target_surface_distance_m == 0.03
 

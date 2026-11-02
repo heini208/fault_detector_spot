@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from builtin_interfaces.msg import Time
 from fault_detector_msgs.msg import ProbeSetupMotionIntent
+from py_trees.blackboard import Blackboard
 from py_trees.common import Status
 
 from fault_detector_spot.application.api.probe_setup_motion_api import ProbeSetupMotionApi
@@ -173,7 +174,7 @@ def test_orientation_establishes_unsaved_alignment_and_enables_save(tmp_path):
     controls.refinement_dialog.hide()
 
 
-def test_orientation_behaviour_owns_execution_and_propagates_cancellation():
+def test_orientation_behaviour_owns_execution_and_propagates_cancellation(monkeypatch):
     from fault_detector_spot.manipulation.arm_movement_executor import ArmMovementOutcome, ArmMovementUpdate
     from fault_detector_spot.manipulation.behaviours.orient_sensor_tip_to_surface_behaviour import OrientSensorTipToSurfaceBehaviour
     from fault_detector_spot.manipulation.measure_sensor_tip_distance_execution import MeasureSensorTipDistanceConfig
@@ -190,7 +191,7 @@ def test_orientation_behaviour_owns_execution_and_propagates_cancellation():
         surface_source=object(), config=MeasureSensorTipDistanceConfig(),
     )
     behaviour.executor = SimpleNamespace(cancel=lambda: pytest.fail("Cancelled arm directly"))
-    behaviour._last_command = lambda: command
+    monkeypatch.setattr(Blackboard, "storage", {"/last_command": command})
     behaviour._execution = execution
     behaviour.initialise()
     assert behaviour.update() is Status.RUNNING

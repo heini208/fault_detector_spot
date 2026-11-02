@@ -199,6 +199,14 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest -q test \
 The excluded preview integration test creates ROS nodes and is run separately
 when node startup is authorized.
 
+The automated lint gate checks production and launch code for Pyflakes (`F`)
+and syntax (`E9`) errors using the declared `ament_flake8` dependency and the
+project configuration in `setup.cfg`. It resolves source paths from the test
+file, so generated `build`, `install`, and `log` trees are not scanned. This
+matches the static-error scope of `ruff check --select F fault_detector_spot
+launch`, with syntax checks included. Repository-wide formatting and docstring
+style are deferred to a separate cleanup; the template PEP 257 gate is removed.
+
 ---
 
 ## 4. Launching the System

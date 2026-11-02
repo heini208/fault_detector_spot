@@ -1,7 +1,6 @@
 """Tests for RGB-depth and timestamp-anchor matching."""
 
-from collections import deque
-from threading import Lock
+from unittest.mock import Mock
 
 from sensor_msgs.msg import CameraInfo, Image
 
@@ -11,19 +10,17 @@ from fault_detector_spot.inspection.setup.reference_view_input_synchronizer impo
 
 
 def make_synchronizer():
-    synchronizer = ReferenceViewInputSynchronizer.__new__(
-        ReferenceViewInputSynchronizer
+    synchronizer = ReferenceViewInputSynchronizer(
+        node=Mock(spec=["create_subscription"]),
+        rgb_topic="/camera/hand/image",
+        depth_topic="/depth_registered/hand/image",
+        rgb_camera_info_topic="/camera/hand/camera_info",
+        depth_camera_info_topic="/depth_registered/hand/camera_info",
+        maximum_timestamp_skew_sec=0.05,
+        collection_duration_sec=1.0,
     )
-    synchronizer._lock = Lock()
-    synchronizer._rgb_camera_info = CameraInfo()
-    synchronizer._depth_camera_info = CameraInfo()
-    synchronizer._input_sequence = 0
-    synchronizer._collection_history_size = 60
-    synchronizer._rgb_history = deque(maxlen=2)
-    synchronizer._depth_history = deque(maxlen=2)
-    synchronizer._maximum_timestamp_skew_nanoseconds = 50_000_000
-    synchronizer._collection_duration_nanoseconds = 1_000_000_000
-    synchronizer._collection = None
+    synchronizer._rgb_camera_info_callback(CameraInfo())
+    synchronizer._depth_camera_info_callback(CameraInfo())
     return synchronizer
 
 

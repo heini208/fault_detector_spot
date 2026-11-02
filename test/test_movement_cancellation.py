@@ -1,6 +1,5 @@
 """Cancellation retains ownership through action completion and physical stop."""
 
-from threading import RLock
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -45,19 +44,26 @@ def test_failed_result_future_does_not_confirm_stop():
 
 
 def test_arm_requires_terminal_goal_and_subsequent_physical_stop():
-    executor = ArmMovementExecutor.__new__(ArmMovementExecutor)
-    executor._execution_lock = RLock()
+    executor = ArmMovementExecutor(object(), monotonic_clock=lambda: 10.)
+    executor._active = True
+    executor._cancelling = True
     executor._cancel_goal_done = False
-    executor._reset_operation = Mock()
+    executor._reset_operation = Mock(wraps=executor._reset_operation)
     executor.guarded_probe_execution = Mock()
     executor._guarded_probe_monitor = Mock()
     stopped = ArmMovementUpdate(ArmMovementOutcome.TRAJECTORY_CANCELLED, "stopped")
     executor._cancel_stop_finished(stopped)
     executor._reset_operation.assert_not_called()
+    assert executor.active and executor.cancelling
     executor._cancellation_goal_finished()
-    executor._guarded_probe_monitor.cancel.assert_called_once()
+    executor._guarded_probe_monitor.cancel.assert_called_once_with(
+        executor._cancel_stop_finished, continue_after_timeout=True,
+    )
     executor._reset_operation.assert_not_called()
+    assert executor.active and executor.cancelling
     executor._cancel_stop_finished(ArmMovementUpdate(ArmMovementOutcome.STOP_UNCONFIRMED, "stale velocity"))
     executor._reset_operation.assert_not_called()
+    assert executor.active and executor.cancelling
     executor._cancel_stop_finished(stopped)
     executor._reset_operation.assert_called_once()
+    assert not executor.active and not executor.cancelling

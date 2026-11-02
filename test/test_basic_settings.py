@@ -150,11 +150,12 @@ def test_mode_defaults_select_existing_command_controls():
 
 
 @pytest.mark.parametrize('relative', [True, False])
-def test_precision_speed_reaches_existing_execution_path(monkeypatch, relative):
+def test_precision_speed_reaches_existing_execution_path(relative):
     from fault_detector_spot.manipulation.arm_movement_executor import ArmMovementExecutor
     from fault_detector_spot.manipulation.arm_motion_speed import ArmMotionSpeed, ArmMotionSpeedPolicy
-    executor = object.__new__(ArmMovementExecutor)
-    executor.speed_policy = ArmMotionSpeedPolicy(default_speed=ArmMotionSpeed(.08, .5))
+    executor = ArmMovementExecutor(
+        object(), speed_policy=ArmMotionSpeedPolicy(default_speed=ArmMotionSpeed(.08, .5)),
+    )
     executor.precision_speed = ArmMotionSpeed(.02, .1)
     captured = []
     executor._start_precision_movement = lambda command, resolve, speed, threshold: captured.append(speed)

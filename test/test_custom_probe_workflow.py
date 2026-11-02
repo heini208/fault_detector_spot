@@ -188,14 +188,18 @@ def test_saved_approach_travel_follows_global_policy_even_with_parent_bypass(ope
     tag.id = 2
     tag.pose.header.frame_id = "body"
     tag.pose.pose.orientation.w = 1.0
-    resolver = (routine_safe_approach_command if operation == "INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH"
-                else saved_probe_command)
-    command = resolver(
-        intent, Mock(load=Mock(return_value=inspection_object())),
-        Mock(reference_tag=Mock(return_value=tag)),
-        Mock(require_motion_attachment=Mock(return_value=sensor())),
-        ProbeSetupMotionCommandFactory(),
-    )
+    repository = Mock(load=Mock(return_value=inspection_object()))
+    attachments = Mock(require_motion_attachment=Mock(return_value=sensor()))
+    factory = ProbeSetupMotionCommandFactory()
+    if operation == "INTENT_MOVE_TO_ROUTINE_SAFE_APPROACH":
+        command = routine_safe_approach_command(
+            intent, repository, attachments, factory,
+        )
+    else:
+        command = saved_probe_command(
+            intent, repository, Mock(reference_tag=Mock(return_value=tag)),
+            attachments, factory,
+        )
     assert command.ignore_environment_collisions is False
 
 

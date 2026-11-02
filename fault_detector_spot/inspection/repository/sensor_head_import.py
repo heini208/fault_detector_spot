@@ -12,9 +12,12 @@ import zlib
 
 from fault_detector_spot.inspection.model.sensor_geometry import (
     MAX_COLLISION_BYTES,
-    MAX_MESH_TRIANGLES as MAX_MESH_TRIANGLES,
     SensorHeadGeometry,
     validate_collision_mesh,
+)
+# Public re-export; Humble's Pyflakes does not recognize same-name aliases.
+from fault_detector_spot.inspection.model.sensor_geometry import (  # noqa: F401
+    MAX_MESH_TRIANGLES as MAX_MESH_TRIANGLES,
 )
 from fault_detector_spot.shared.geometry.models import (
     PoseData,

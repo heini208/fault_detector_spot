@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from fault_detector_msgs.msg import ApplicationCommandState, OperationalIntent
+from py_trees.blackboard import Blackboard
 from py_trees.common import Status
 
 from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import CommandSubscriber
@@ -173,7 +174,7 @@ def test_success_from_another_request_cannot_complete_running_test():
     assert controls._sensor_tip_distance_test_active
 
 
-def test_measurement_behaviour_delegates_start_poll_and_cancellation():
+def test_measurement_behaviour_delegates_start_poll_and_cancellation(monkeypatch):
     from fault_detector_spot.manipulation.behaviours.measure_sensor_tip_distance_behaviour import (
         MeasureSensorTipDistanceBehaviour,
     )
@@ -194,7 +195,7 @@ def test_measurement_behaviour_delegates_start_poll_and_cancellation():
         surface_source=object(), config=MeasureSensorTipDistanceConfig(),
     )
     behaviour.executor = object()
-    behaviour._last_command = lambda: command
+    monkeypatch.setattr(Blackboard, "storage", {"/last_command": command})
     behaviour._execution = execution
     behaviour.initialise()
     assert behaviour.update() is Status.RUNNING

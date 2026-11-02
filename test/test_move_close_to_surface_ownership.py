@@ -21,11 +21,15 @@ def source(relative):
 
 def test_probe_setup_motion_excludes_close_surface_execution():
     assert {kind.value for kind in ProbeMotionKind} == {
+        "adjust_pathing_pose",
+        "move_pathing_point",
+        "move_pre_approach_path",
         "move_safe_approach",
         "move_aligned_preapproach",
         "adjust_safe_approach",
         "adjust_aligned_preapproach",
         "orient_to_surface",
+        "orient_sensor_tip_to_surface",
         "orient_to_tag",
     }
 

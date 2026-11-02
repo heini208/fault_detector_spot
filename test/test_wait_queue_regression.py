@@ -25,6 +25,7 @@ from fault_detector_spot.application.controllers.command_controller import (
     CommandExecutionStatus,
 )
 from fault_detector_spot.application.recording.record_manager_node import RecordManager
+from fault_detector_spot.application.recording.recorded_step import RecordedStep
 
 
 class FakeClock:
@@ -61,12 +62,18 @@ class FakeLogger:
 class RecordManagerHarness:
     handle_playback_status = RecordManager.handle_playback_status
     _dispatch_next_playback_command = RecordManager._dispatch_next_playback_command
+    _dispatch_playback_step = RecordManager._dispatch_playback_step
     _finish_playback = RecordManager._finish_playback
 
     def __init__(self):
         self._playback_commands = deque()
         self._playback_request_id = ""
         self._playback_name = ""
+        self._playback_step = None
+        self._playback_attempt_command = None
+        self._playback_retries_left = 0
+        self._playback_acquisition_active = False
+        self._playback_had_skips = False
         self.command_submission_pub = FakePublisher()
         self.playback_state_pub = FakePublisher()
         self.logger = FakeLogger()
@@ -188,14 +195,14 @@ def test_controller_status_reports_semantic_queue_depth():
 def test_playback_advances_on_controller_success_even_with_queue_depth():
     manager = RecordManagerHarness()
     manager._playback_commands = deque([
-        SemanticCommand(
+        RecordedStep(SemanticCommand(
             command_id=CommandID.WAIT_TIME,
             wait_time=1.0,
-        ),
-        SemanticCommand(
+        )),
+        RecordedStep(SemanticCommand(
             command_id=CommandID.WAIT_TIME,
             wait_time=1.0,
-        ),
+        )),
     ])
     manager._playback_name = "two_waits"
 
