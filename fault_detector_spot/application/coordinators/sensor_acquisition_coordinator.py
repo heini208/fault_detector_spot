@@ -115,7 +115,6 @@ class SensorAcquisitionCoordinator:
         self.callback_group = ReentrantCallbackGroup()
         self._lock = RLock()
         self._software_stop = Event()
-        self._shutdown = Event()
         self._listeners = []
         self._session = None
         # ROS entities survive cancellation until stop confirmation or timeout.
@@ -310,7 +309,6 @@ class SensorAcquisitionCoordinator:
 
     def request_shutdown(self):
         """Close admission and request stopping while replies remain usable."""
-        self._shutdown.set()
         self.latch_software_stop()
         self.stop(cancelled=True)
 
@@ -320,7 +318,6 @@ class SensorAcquisitionCoordinator:
 
     def close(self, *, stop_unconfirmed=False):
         """Finalize after confirmation or an explicitly reported deadline."""
-        self._shutdown.set()
         self.latch_software_stop()
         with self._lock:
             if self._session is not None and not stop_unconfirmed:
@@ -544,12 +541,10 @@ class SensorAcquisitionCoordinator:
                 )
             final_state = finalized.completion_state
         except Exception as exception:
-            if self._shutdown.is_set():
-                self._set_state(SensorAcquisitionStatus.FAILED,
-                                detail=f"Failed to finalize measurement: {exception}")
-                raise
-            final_state = MeasurementCompletionState.FAILED
-            detail = f"Failed to finalize measurement: {exception}"
+            # Retain the session so stop/shutdown can retry persistence cleanup.
+            self._set_state(SensorAcquisitionStatus.FAILED,
+                            detail=f"Failed to finalize measurement: {exception}")
+            raise
         self._timer.cancel()
         self._session = None
         status = (

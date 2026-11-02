@@ -23,7 +23,7 @@ class _OpenRecording:
     recording: MeasurementRecording
     channel_files: Dict[str, TextIO]
     sample_counts: Dict[str, int]
-    sample_write_failed: bool = False
+    failed: bool = False
 
 
 class MeasurementRepository:
@@ -141,7 +141,7 @@ class MeasurementRepository:
                 raise OSError("Incomplete measurement sample write")
         except Exception:
             # Later successful samples must not erase an earlier data loss.
-            context.sample_write_failed = True
+            context.failed = True
             raise
         context.sample_counts[channel_id] += 1
 
@@ -149,8 +149,9 @@ class MeasurementRepository:
         """Flush and synchronize all open channel files."""
         context = self._require_open(recording)
         for channel_file in context.channel_files.values():
-            channel_file.flush()
-            os.fsync(channel_file.fileno())
+            if not channel_file.closed:
+                channel_file.flush()
+                os.fsync(channel_file.fileno())
 
     def finalize(
         self,
@@ -158,11 +159,12 @@ class MeasurementRepository:
         completion_state: MeasurementCompletionState,
         finished_at_ns: int,
     ) -> MeasurementRecording:
-        """Close channel files and atomically publish final metadata."""
+        """Close channels and publish metadata, retaining ownership for retries."""
         if completion_state == MeasurementCompletionState.RECORDING:
             raise ValueError("Final completion state must be terminal")
         context = self._require_open(recording)
-        if context.sample_write_failed:
+        context.failed |= completion_state == MeasurementCompletionState.FAILED
+        if context.failed:
             completion_state = MeasurementCompletionState.FAILED
         finalized = replace(
             recording,
@@ -172,22 +174,32 @@ class MeasurementRepository:
         )
         finalized.validate()
 
+        errors = []
         try:
             self.flush(recording)
+        except Exception as error:
+            errors.append(error)
         finally:
             for channel_file in context.channel_files.values():
-                channel_file.close()
-            self._open_recordings.pop(recording.identity, None)
+                try:
+                    channel_file.close()
+                except Exception as error:
+                    errors.append(error)
+        if errors:
+            context.failed = True
+            raise errors[0]
 
         content = json.dumps(
             finalized.to_dict(),
             indent=2,
             ensure_ascii=False,
         )
-        atomic_write_text(
-            self.get_metadata_path(finalized),
-            content + "\n",
-        )
+        try:
+            atomic_write_text(self.get_metadata_path(finalized), content + "\n")
+        except Exception:
+            context.failed = True
+            raise
+        self._open_recordings.pop(recording.identity, None)
         return finalized
 
     def load(
@@ -230,7 +242,7 @@ class MeasurementRepository:
         return recording
 
     def is_open(self, recording: MeasurementRecording) -> bool:
-        """Return whether this repository owns live files for recording."""
+        """Return whether the recording still needs samples or finalization."""
         return recording.identity in self._open_recordings
 
     def _require_open(
@@ -330,7 +342,8 @@ class MeasurementRepository:
         try:
             with path.open("x", encoding="utf-8") as metadata_file:
                 created = True
-                metadata_file.write(content + "\n")
+                if metadata_file.write(content + "\n") != len(content) + 1:
+                    raise OSError("Incomplete measurement metadata write")
                 metadata_file.flush()
                 os.fsync(metadata_file.fileno())
         except Exception:

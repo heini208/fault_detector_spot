@@ -1,6 +1,7 @@
 """Own authoritative physical inspection sensor attachment state."""
 
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import Enum
 from threading import RLock
@@ -78,7 +79,7 @@ class SensorAttachmentState:
 
 
 class MotionAttachmentReservation:
-    """Own one explicitly released immutable attachment snapshot."""
+    """Retain attachment geometry until explicitly released."""
 
     def __init__(self, controller, attachment):
         self._controller = controller
@@ -87,8 +88,8 @@ class MotionAttachmentReservation:
 
     @property
     def attachment(self) -> MotionAttachmentSnapshot:
-        """Return geometry frozen when the reservation was acquired."""
-        return self._attachment
+        """Return an independent copy of the reserved geometry."""
+        return deepcopy(self._attachment)
 
     @property
     def released(self) -> bool:

@@ -44,12 +44,13 @@ def atomic_write_text(path: Path, content: str) -> None:
             "w",
             encoding="utf-8",
         ) as temporary_file:
-            temporary_file.write(content)
+            if temporary_file.write(content) != len(content):
+                raise OSError(f"Incomplete write for {path.name}")
             temporary_file.flush()
             os.fsync(temporary_file.fileno())
 
         os.replace(temporary_name, path)
-    except Exception:
+    except BaseException:
         try:
             os.unlink(temporary_name)
         except FileNotFoundError:

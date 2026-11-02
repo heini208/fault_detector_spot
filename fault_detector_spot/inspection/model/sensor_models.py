@@ -128,14 +128,19 @@ class SensorChannel:
         """Create a channel from serialized YAML data."""
         if not isinstance(data, dict):
             raise ValueError("sensor channel must be an object")
-        return cls(
-            channel_id=str(data["channel_id"]),
-            topic=str(data["topic"]),
-            message_type=str(data["message_type"]),
+        for field in ("channel_id", "topic", "message_type"):
+            if field not in data:
+                raise ValueError(f"Sensor channel requires '{field}'")
+        channel = cls(
+            channel_id=data["channel_id"],
+            topic=data["topic"],
+            message_type=data["message_type"],
             source_kind=SensorChannelSource(
                 data.get("source_kind", SensorChannelSource.ROS_TOPIC.value)
             ),
         )
+        channel.validate()
+        return channel
 
     def validate(self) -> None:
         """Validate persistent identity and source-specific configuration."""
@@ -209,12 +214,15 @@ class SensorDefinition:
         """Create a definition from serialized YAML data."""
         if not isinstance(data, dict):
             raise ValueError("sensor definition must be an object")
+        for field in ("sensor_id", "display_name", "hand_to_probe"):
+            if field not in data:
+                raise ValueError(f"Sensor definition requires '{field}'")
         raw_channels = data.get("channels", ())
         if not isinstance(raw_channels, (list, tuple)):
             raise ValueError("sensor channels must be an array")
-        return cls(
-            sensor_id=str(data["sensor_id"]),
-            display_name=str(data["display_name"]),
+        definition = cls(
+            sensor_id=data["sensor_id"],
+            display_name=data["display_name"],
             hand_to_probe=PoseData.from_dict(data["hand_to_probe"]),
             channels=tuple(
                 SensorChannel.from_dict(channel)
@@ -225,6 +233,8 @@ class SensorDefinition:
                 if data.get("head_geometry") is not None else None
             ),
         )
+        definition.validate()
+        return definition
 
     def validate(self) -> None:
         """Validate sensor identity and hand-to-probe transform."""
@@ -233,6 +243,8 @@ class SensorDefinition:
                 "Sensor ID 'hand' is reserved for the robot hand frame"
             )
         sensor_probe_frame(self.sensor_id)
+        if not isinstance(self.display_name, str):
+            raise TypeError("Sensor display name must be a string")
         if not self.display_name.strip():
             raise ValueError("Sensor display name must not be empty")
         if self.display_name != self.display_name.strip():
@@ -278,7 +290,7 @@ class SensorDefinition:
 
 @dataclass(frozen=True)
 class MotionAttachmentSnapshot:
-    """Freeze effective hand-to-probe geometry for one motion workflow."""
+    """Copy workflow geometry; nested head placement remains caller-mutable."""
 
     sensor_id: str
     display_name: str
@@ -314,7 +326,7 @@ class MotionAttachmentSnapshot:
         definition: SensorDefinition,
         attachment_revision: int,
     ) -> "MotionAttachmentSnapshot":
-        """Freeze one validated physical sensor definition."""
+        """Copy one validated definition without retaining its mutable geometry."""
         definition.validate()
         position = definition.hand_to_probe.position
         orientation = definition.hand_to_probe.orientation

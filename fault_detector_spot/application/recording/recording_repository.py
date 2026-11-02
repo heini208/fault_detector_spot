@@ -8,7 +8,8 @@ from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
 )
 from fault_detector_spot.application.recording.semantic_command_codec import (
-    deserialize_recorded_command,
+    RECORDING_SCHEMA_VERSION,
+    deserialize_recorded_steps,
     serialize_recorded_command,
 )
 from fault_detector_spot.application.recording.recorded_step import RecordedStep, validate_skip_blocks
@@ -19,7 +20,7 @@ from fault_detector_spot.shared.persistence.file_storage import (
 
 
 class RecordingRepository:
-    """Store named command sequences in the existing JSON recording format."""
+    """Store versioned command sequences; migrate legacy data only in memory."""
 
     def __init__(self, root: str | Path) -> None:
         """Create the recording directory if it does not exist."""
@@ -40,11 +41,12 @@ class RecordingRepository:
         steps = [value if isinstance(value, RecordedStep) else RecordedStep(value) for value in commands]
         validate_skip_blocks(steps)
         document = {
+            'schema_version': RECORDING_SCHEMA_VERSION,
             'commands': [
                 self._serialize_step(step) for step in steps
             ],
         }
-        content = json.dumps(document, indent=2) + '\n'
+        content = json.dumps(document, indent=2, allow_nan=False) + '\n'
         atomic_write_text(path, content)
 
     def load(self, name: str) -> list[SemanticCommand]:
@@ -52,21 +54,9 @@ class RecordingRepository:
         return [step.command for step in self.load_steps(name)]
 
     def load_steps(self, name: str) -> list[RecordedStep]:
-        """Read playback policy; existing recordings default to no playback retries."""
+        """Read commands and playback policy without rewriting legacy files."""
         content = self.path(name).read_text(encoding='utf-8')
-        document = json.loads(content)
-        if not isinstance(document, dict) or not isinstance(document.get('commands'), list):
-            raise ValueError('Recording commands must be a list in an object')
-        steps = []
-        for entry in document['commands']:
-            if not isinstance(entry, dict):
-                raise TypeError('Recorded command must be an object')
-            data = dict(entry)
-            retries = data.pop('playback_retries', 0)
-            block = data.pop('skip_block', 0)
-            steps.append(RecordedStep(deserialize_recorded_command(data), retries, block))
-        validate_skip_blocks(steps)
-        return steps
+        return deserialize_recorded_steps(json.loads(content))
 
     @staticmethod
     def _serialize_step(value):

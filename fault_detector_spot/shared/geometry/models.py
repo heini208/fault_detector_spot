@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict
 
+from fault_detector_spot.shared.persistence.scalars import require_number
+
 
 def _require_dict(data: Any, field_name: str) -> Dict[str, Any]:
     if not isinstance(data, dict):
@@ -23,9 +25,9 @@ class Vector3Data:
     def from_dict(cls, data: Dict[str, Any]) -> "Vector3Data":
         data = _require_dict(data, "vector")
         return cls(
-            x=float(data["x"]),
-            y=float(data["y"]),
-            z=float(data["z"]),
+            x=require_number(data.get("x"), "Vector x"),
+            y=require_number(data.get("y"), "Vector y"),
+            z=require_number(data.get("z"), "Vector z"),
         )
 
     @classmethod
@@ -33,11 +35,8 @@ class Vector3Data:
         return cls(x=0.0, y=0.0, z=0.0)
 
     def validate(self) -> None:
-        if not all(
-            math.isfinite(value)
-            for value in (self.x, self.y, self.z)
-        ):
-            raise ValueError("Vector contains a non-finite value")
+        for axis in ("x", "y", "z"):
+            require_number(getattr(self, axis), f"Vector {axis}")
 
     def to_dict(self) -> Dict[str, float]:
         return {"x": self.x, "y": self.y, "z": self.z}
@@ -56,10 +55,10 @@ class QuaternionData:
     def from_dict(cls, data: Dict[str, Any]) -> "QuaternionData":
         data = _require_dict(data, "quaternion")
         return cls(
-            x=float(data["x"]),
-            y=float(data["y"]),
-            z=float(data["z"]),
-            w=float(data["w"]),
+            x=require_number(data.get("x"), "Quaternion x"),
+            y=require_number(data.get("y"), "Quaternion y"),
+            z=require_number(data.get("z"), "Quaternion z"),
+            w=require_number(data.get("w"), "Quaternion w"),
         )
 
     @classmethod
@@ -68,10 +67,8 @@ class QuaternionData:
 
     def validate(self) -> None:
         values = (self.x, self.y, self.z, self.w)
-        if not all(math.isfinite(value) for value in values):
-            raise ValueError(
-                "Quaternion contains a non-finite value"
-            )
+        for axis in ("x", "y", "z", "w"):
+            require_number(getattr(self, axis), f"Quaternion {axis}")
         norm = math.sqrt(sum(value ** 2 for value in values))
         if not math.isclose(norm, 1.0, abs_tol=1e-3):
             raise ValueError("Quaternion must be normalized")
@@ -96,9 +93,9 @@ class PoseData:
     def from_dict(cls, data: Dict[str, Any]) -> "PoseData":
         data = _require_dict(data, "pose")
         return cls(
-            position=Vector3Data.from_dict(data["position"]),
+            position=Vector3Data.from_dict(data.get("position")),
             orientation=QuaternionData.from_dict(
-                data["orientation"]
+                data.get("orientation")
             ),
         )
 
@@ -118,5 +115,4 @@ class PoseData:
             "position": self.position.to_dict(),
             "orientation": self.orientation.to_dict(),
         }
-
 

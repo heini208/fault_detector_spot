@@ -19,6 +19,7 @@ test/test_sensor_models.py
 test/test_inspection_repositories.py
 test/test_sensor_repository.py
 test/test_recording_repository.py
+test/test_persistence_failure_recovery.py
 test/test_measurement_repository.py
 test/test_settings_persistence.py
 test/test_sensor_mesh_store.py

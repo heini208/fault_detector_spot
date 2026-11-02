@@ -523,3 +523,35 @@ def test_recording_source_cleanup_error_does_not_block_head_stop_or_other_source
     assert coordinator._session is None
     assert source.stop.call_count == 3
     other.stop.assert_called_once()
+
+
+def test_normal_finalization_failure_remains_owned_until_shutdown_retry(tmp_path, monkeypatch):
+    from fault_detector_spot.shared.persistence import file_storage
+
+    coordinator, repository, _, _, started, stopped = make_coordinator(tmp_path)
+    coordinator.start(request())
+    complete(started)
+    active = coordinator._session.recording
+    path = repository.get_metadata_path(active)
+    original = path.read_bytes()
+
+    def fail_replace(*_args):
+        raise OSError('disk unavailable')
+
+    coordinator.stop()
+    with monkeypatch.context() as patch:
+        patch.setattr(file_storage.os, 'replace', fail_replace)
+        with pytest.raises(OSError, match='disk unavailable'):
+            complete(stopped)
+    assert coordinator._session is not None
+    assert repository.is_open(active)
+    assert path.read_bytes() == original
+    assert coordinator.snapshot().status is SensorAcquisitionStatus.FAILED
+
+    coordinator.request_shutdown()
+    assert coordinator.shutdown_status()[0]
+    coordinator.close()
+    assert not repository.is_open(active)
+    assert repository.load(object_id='motor_01', routine_id='magnetic_scan',
+                           probe_point_id='bearing_front', sensor_id='bmm150_probe',
+                           started_at_ns=START_NS).completion_state is MeasurementCompletionState.FAILED

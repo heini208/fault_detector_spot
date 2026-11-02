@@ -59,7 +59,7 @@ def test_pose_data_to_pose_validates_source_data():
         orientation=QuaternionData.identity(),
     )
 
-    with pytest.raises(ValueError, match="Vector contains a non-finite"):
+    with pytest.raises(ValueError, match="Vector x contains a non-finite"):
         pose_data_to_pose(data)
 
 

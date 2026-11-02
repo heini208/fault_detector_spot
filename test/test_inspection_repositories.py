@@ -249,7 +249,7 @@ def test_object_repository_rejects_old_format(tmp_path):
     path = ObjectRepository(tmp_path).get_object_path("motor_a")
     path.parent.mkdir(parents=True)
     path.write_text("id: motor_a\ntag_id: 23\n", encoding="utf-8")
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="routines"):
         ObjectRepository(tmp_path).load("motor_a")
 
 

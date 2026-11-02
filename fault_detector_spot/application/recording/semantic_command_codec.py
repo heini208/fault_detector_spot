@@ -8,6 +8,13 @@ from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
 )
+from fault_detector_spot.application.recording.recorded_step import (
+    RecordedStep, validate_skip_blocks,
+)
+from fault_detector_spot.shared.persistence.scalars import require_number
+
+
+RECORDING_SCHEMA_VERSION = 1
 
 
 _TRANSIENT_FIELDS = {
@@ -20,35 +27,61 @@ _TRANSIENT_FIELDS = {
 def serialize_recorded_command(command: SemanticCommand) -> dict:
     if not isinstance(command, SemanticCommand):
         raise TypeError("Recorded command must be a SemanticCommand")
-    return _serialize_dataclass(command)
+    data = _serialize_dataclass(command)
+    _deserialize_dataclass(SemanticCommand, data)
+    return data
 
 
-def deserialize_recorded_command(data: dict) -> SemanticCommand:
+def deserialize_recorded_command(data: dict, *, legacy: bool = True) -> SemanticCommand:
+    """Decode an unversioned command, or strictly decode a current-schema entry."""
     data = dict(_object(data, "Recorded command"))
-    # Saved path recordings used the single-pose command before paths had an ID.
-    if data.get("command_id") == CommandID.MOVE_ARM_TO_TAG.value and data.get("pre_approach_offsets"):
-        data["command_id"] = CommandID.FOLLOW_MOVE_TO_TAG_PATH.value
-    # Recordings predating per-command profiles retain configured defaults.
-    data.setdefault("retries", 0)
-    data.setdefault("ignore_environment_collisions", False)
-    data.setdefault("walking_profile", "")
-    data.setdefault("body_height_m", 0.0)
-    data.setdefault("tag_position_tolerance_m", 0.01)
-    data.setdefault("precision_mode", False)
-    data.setdefault("precision_orientation_tolerance_rad", math.radians(2.0))
-    data.setdefault("pre_approach_tolerances_m", [])
-    data.setdefault("pre_approach_speed_scales", [])
-    data.setdefault("pre_approach_precision_modes", [])
+    if legacy:
+        # Saved paths used the single-pose command before paths had their own ID.
+        if data.get("command_id") == CommandID.MOVE_ARM_TO_TAG.value and data.get("pre_approach_offsets"):
+            data["command_id"] = CommandID.FOLLOW_MOVE_TO_TAG_PATH.value
+        # These fixed defaults preserve the meaning of unversioned recordings.
+        data.setdefault("retries", 0)
+        data.setdefault("ignore_environment_collisions", False)
+        data.setdefault("walking_profile", "")
+        data.setdefault("body_height_m", 0.0)
+        data.setdefault("tag_position_tolerance_m", 0.01)
+        data.setdefault("precision_mode", False)
+        data.setdefault("precision_orientation_tolerance_rad", math.radians(2.0))
+        data.setdefault("pre_approach_tolerances_m", [])
+        data.setdefault("pre_approach_speed_scales", [])
+        data.setdefault("pre_approach_precision_modes", [])
     return _deserialize_dataclass(SemanticCommand, data)
 
 
 def deserialize_recording(document) -> List[SemanticCommand]:
+    return [step.command for step in deserialize_recorded_steps(document)]
+
+
+def deserialize_recorded_steps(document) -> list[RecordedStep]:
+    """Read versions 0 (unversioned legacy) and 1 without modifying the document."""
     if not isinstance(document, dict):
         raise ValueError("Recording must be an object")
+    version = document.get("schema_version", 0)
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise ValueError("Recording schema_version must be an integer")
+    if version not in (0, RECORDING_SCHEMA_VERSION):
+        raise ValueError(f"Unsupported recording schema_version {version}; supported versions are 0 and 1")
     entries = document.get("commands")
     if not isinstance(entries, list):
         raise ValueError("Recording commands must be a list")
-    return [deserialize_recorded_command(entry) for entry in entries]
+    steps = []
+    for index, entry in enumerate(entries):
+        try:
+            data = dict(_object(entry, "Recorded command"))
+            retries = data.pop("playback_retries", 0)
+            block = data.pop("skip_block", 0)
+            steps.append(RecordedStep(
+                deserialize_recorded_command(data, legacy=version == 0), retries, block,
+            ))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Recording command {index + 1}: {error}") from error
+    validate_skip_blocks(steps)
+    return steps
 
 
 def _serialize_dataclass(value) -> dict:
@@ -247,7 +280,7 @@ def _deserialize_value(annotation, value, label):
             or not isinstance(value, (int, float))
         ):
             raise TypeError(f"{label} must be a number")
-        return float(value)
+        return float(require_number(value, label))
 
     if annotation is type(None):
         if value is not None:

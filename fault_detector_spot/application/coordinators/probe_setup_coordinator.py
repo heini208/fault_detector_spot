@@ -323,7 +323,7 @@ class ProbeSetupCoordinator:
         self,
         context: SetupContextSnapshot,
     ) -> ProbeSetupSnapshot:
-        """Build an immutable snapshot from draft and repository state."""
+        """Copy draft and repository state without sharing mutable geometry."""
         draft = self._draft(context)
         object_ids = tuple(self.object_repository.list_object_ids())
         (

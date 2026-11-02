@@ -1,4 +1,4 @@
-"""Internal probe draft and immutable public snapshots."""
+"""Internal probe draft and copied public snapshots."""
 
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -80,7 +80,7 @@ class ProbeSetupDraft:
 
 @dataclass(frozen=True)
 class ProbeSetupSnapshot:
-    """Expose one isolated immutable probe authoring snapshot."""
+    """Expose a draft copy with frozen fields and independent mutable geometry."""
 
     context: SetupContextSnapshot
     selected_object_id: str

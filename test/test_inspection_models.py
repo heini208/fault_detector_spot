@@ -9,11 +9,14 @@ from fault_detector_spot.inspection.model.models import (
     InspectionObject,
     InspectionRoutine,
     ProbePoint,
+    PreApproachPathPoint,
     ReferenceTag,
     ReferenceView,
 )
 from fault_detector_spot.shared.geometry.models import (
     PoseData,
+    QuaternionData,
+    Vector3Data,
 )
 from fault_detector_spot.mapping.model.models import (
     MapDefinition,
@@ -124,8 +127,8 @@ def test_routine_base_body_height_accepts_stationary_height_bounds(height):
 def test_routine_base_body_height_rejects_invalid_saved_height(height):
     serialized = make_routine().to_dict()
     serialized["base_body_height_m"] = height
-    routine = InspectionRoutine.from_dict(serialized)
     with pytest.raises(ValueError, match="Body height"):
+        routine = InspectionRoutine.from_dict(serialized)
         routine.validate()
 
 
@@ -209,7 +212,7 @@ def test_probe_point_rejects_invalid_approved_pose():
 def test_incomplete_probe_point_format_is_rejected(field_name):
     serialized = make_probe().to_dict()
     serialized.pop(field_name)
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError):
         ProbePoint.from_dict(serialized)
 
 
@@ -218,7 +221,7 @@ def test_old_nominal_probe_pose_format_is_rejected():
     serialized["probe_pose_object"] = PoseData.identity().to_dict()
     serialized.pop("aligned_preapproach_pose_object")
 
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="pose"):
         ProbePoint.from_dict(serialized)
 
 
@@ -252,7 +255,7 @@ def test_non_normalized_quaternion_is_rejected():
 
 
 def test_old_object_format_is_rejected():
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="routines"):
         InspectionObject.from_dict({"id": "motor_a", "tag_id": 23})
 
 
@@ -281,5 +284,78 @@ def test_map_validates_internal_and_external_references():
 def test_routine_without_any_reference_tag_is_rejected():
     serialized = make_object().to_dict()
     serialized["routines"][0].pop("reference_tag")
-    with pytest.raises(KeyError, match="reference_tag"):
+    with pytest.raises(ValueError, match="reference_tag"):
         InspectionObject.from_dict(serialized)
+
+
+@pytest.mark.parametrize("value", [True, 1.0, 1.5, "1", None])
+@pytest.mark.parametrize("model, data, field", [
+    (ImagePoint, {"u": 1, "v": 2}, "u"),
+    (ReferenceTag, {"tag_id": 1, "tag_family": "36h11"}, "tag_id"),
+    (ReferenceView, make_routine().reference_views[0].to_dict(), "slot_index"),
+])
+def test_persisted_integer_fields_are_not_coerced(model, data, field, value):
+    with pytest.raises(ValueError, match="integer"):
+        model.from_dict({**data, field: value})
+
+
+@pytest.mark.parametrize("value", [True, 12, None, "", " "])
+@pytest.mark.parametrize("model, data, field", [
+    (ReferenceTag, {"tag_id": 1, "tag_family": "36h11"}, "tag_family"),
+    (ReferenceView, make_routine().reference_views[0].to_dict(), "controlled_frame"),
+    (ProbePoint, make_probe().to_dict(), "probe_point_id"),
+    (InspectionRoutine, make_routine().to_dict(), "display_name"),
+    (InspectionObject, make_object().to_dict(), "object_id"),
+])
+def test_persisted_text_fields_are_not_coerced(model, data, field, value):
+    with pytest.raises(ValueError, match="must be text|must not be empty"):
+        model.from_dict({**data, field: value})
+
+
+@pytest.mark.parametrize("value", [True, "0.1", None, float("nan"), float("inf")])
+@pytest.mark.parametrize("field", [
+    "target_surface_distance_m", "aligned_preapproach_distance_m",
+    "position_tolerance_m", "orientation_tolerance_rad", "measurement_duration_sec",
+    "pre_approach_speed_scale", "final_probe_speed_scale", "final_position_tolerance_m",
+])
+def test_persisted_probe_numbers_are_not_coerced(field, value):
+    with pytest.raises(ValueError, match="finite"):
+        ProbePoint.from_dict({**make_probe().to_dict(), field: value})
+
+
+@pytest.mark.parametrize("model, data, field", [
+    (ImagePoint, {"u": 1, "v": 2}, "u"),
+    (ReferenceTag, {"tag_id": 1, "tag_family": "36h11"}, "tag_family"),
+    (InspectionRoutine, make_routine().to_dict(), "routine_id"),
+    (ProbePoint, make_probe().to_dict(), "measurement_duration_sec"),
+])
+def test_missing_required_scalars_report_the_expected_type(model, data, field):
+    incomplete = {key: value for key, value in data.items() if key != field}
+    with pytest.raises(ValueError, match="must be"):
+        model.from_dict(incomplete)
+
+
+@pytest.mark.parametrize("value", [True, "0.1", None, float("nan"), float("inf")])
+@pytest.mark.parametrize("model", [Vector3Data, QuaternionData])
+def test_persisted_geometry_rejects_invalid_numbers(model, value):
+    with pytest.raises(ValueError, match="finite"):
+        model.from_dict({"x": value, "y": 0, "z": 0, "w": 1})
+
+
+@pytest.mark.parametrize("model", [ImagePoint(True, 0), ReferenceTag(True, "36h11")])
+def test_programmatic_integer_fields_do_not_accept_booleans(model):
+    with pytest.raises(ValueError, match="integer"):
+        model.validate()
+
+
+def test_legacy_optional_probe_and_path_defaults_are_preserved():
+    data = make_probe().to_dict()
+    for field in (
+        "pre_approach_speed_scale", "final_probe_speed_scale",
+        "final_position_tolerance_m", "pre_approach_path", "final_probe_path",
+    ):
+        data.pop(field)
+    restored = ProbePoint.from_dict(data)
+    assert restored == make_probe()
+    path = PreApproachPathPoint.from_dict({"name": "approach", "pose_object": PoseData.identity().to_dict()})
+    assert path == PreApproachPathPoint("approach", PoseData.identity())

@@ -228,3 +228,73 @@ def test_sample_failure_survives_later_success_and_finalization(
     metadata = json.loads(repository.get_metadata_path(active).read_text())
     assert metadata["completion_state"] == "failed"
     assert not repository.is_open(active)
+
+
+@pytest.mark.parametrize("field", ["object_id", "routine_id", "probe_point_id", "sensor_id"])
+@pytest.mark.parametrize("value", [None, True, 1, 1.5])
+def test_measurement_identity_is_not_coerced(field, value):
+    document = recording().to_dict()
+    document[field] = value
+    with pytest.raises((TypeError, ValueError), match="ID"):
+        MeasurementRecording.from_dict(document)
+    del document[field]
+    with pytest.raises((TypeError, ValueError), match="ID"):
+        MeasurementRecording.from_dict(document)
+
+
+@pytest.mark.parametrize("failure", ["metadata", "flush", "close"])
+def test_finalization_failure_preserves_metadata_and_can_retry(tmp_path, monkeypatch, failure):
+    from fault_detector_spot.shared.persistence import file_storage
+
+    repository = MeasurementRepository(tmp_path)
+    active = repository.create(recording())
+    repository.append_sample(active, "magnetic_field", {"value": 1.0})
+    path = repository.get_metadata_path(active)
+    original = path.read_bytes()
+    streams = repository._open_recordings[active.identity].channel_files
+
+    def fail(*_args):
+        raise OSError("storage unavailable")
+
+    with monkeypatch.context() as patch:
+        if failure == "metadata":
+            patch.setattr(file_storage.os, "replace", fail)
+        else:
+            patch.setattr(streams["magnetic_field"], failure, fail)
+        with pytest.raises(OSError, match="storage unavailable"):
+            repository.finalize(active, MeasurementCompletionState.COMPLETE, STARTED_AT_NS + 1)
+
+    assert path.read_bytes() == original
+    assert repository.is_open(active)
+    assert streams["temperature"].closed  # Independent channels still release.
+    finalized = repository.finalize(active, MeasurementCompletionState.COMPLETE, STARTED_AT_NS + 1)
+    assert finalized.completion_state is MeasurementCompletionState.FAILED
+    assert finalized.sample_counts["magnetic_field"] == 1
+    assert json.loads(path.read_text())["completion_state"] == finalized.completion_state.value
+    assert all(stream.closed for stream in streams.values())
+    assert not repository.is_open(active)
+
+
+def test_partial_initial_metadata_is_removed_before_retry(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    repository = MeasurementRepository(tmp_path)
+    active = recording()
+    path = repository.get_metadata_path(active)
+    open_file = Path.open
+
+    def partial_metadata_open(current, *args, **kwargs):
+        stream = open_file(current, *args, **kwargs)
+        if current == path:
+            write = stream.write
+            monkeypatch.setattr(stream, "write", lambda content: write(content[:3]))
+        return stream
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", partial_metadata_open)
+        with pytest.raises(OSError, match="Incomplete measurement metadata"):
+            repository.create(active)
+    assert not path.exists()
+    assert not list(path.parent.glob("*.jsonl"))
+    repository.create(active)
+    repository.finalize(active, MeasurementCompletionState.CANCELLED, STARTED_AT_NS)

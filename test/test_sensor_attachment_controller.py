@@ -1,5 +1,7 @@
 """Tests for authoritative physical sensor attachment state."""
 
+from dataclasses import replace
+
 import pytest
 
 from fault_detector_spot.application.commanding.command_ids import CommandID
@@ -15,6 +17,7 @@ from fault_detector_spot.application.controllers.command_controller import (
     CommandController,
 )
 from fault_detector_spot.application.controllers.sensor_attachment_controller import (
+    MotionAttachmentReservation,
     SensorAttachmentController,
     SensorAttachmentStatus,
 )
@@ -25,7 +28,14 @@ from fault_detector_spot.shared.geometry.models import (
 )
 from fault_detector_spot.inspection.model.sensor_models import (
     BARE_HAND_MOTION_ID,
+    MotionAttachmentSnapshot,
     SensorDefinition,
+)
+from fault_detector_spot.inspection.model.sensor_geometry import (
+    MOUNTING_TEMPLATE_ID,
+    MOUNTING_TEMPLATE_REVISION,
+    REFERENCE_MODEL_FINGERPRINT,
+    SensorHeadGeometry,
 )
 from fault_detector_spot.inspection.repository.sensor_attachment_state_store import (
     PersistedSensorAttachmentSelection,
@@ -401,6 +411,27 @@ def test_confirmed_geometry_snapshot_is_independent(tmp_path):
     refreshed = controller.require_motion_attachment()
 
     assert refreshed.hand_to_probe_position[0] == pytest.approx(0.2)
+
+
+def test_reserved_head_geometry_is_isolated_from_definition_and_callers():
+    definition = replace(sensor_definition(), head_geometry=SensorHeadGeometry(
+        collision_sha256="a" * 64, collision_byte_count=284,
+        hand_to_geometry=PoseData.identity(),
+        mounting_template_id=MOUNTING_TEMPLATE_ID,
+        mounting_template_revision=MOUNTING_TEMPLATE_REVISION,
+        reference_model_fingerprint=REFERENCE_MODEL_FINGERPRINT,
+        mounting_template_verified=False,
+    ))
+    reservation = MotionAttachmentReservation(
+        None, MotionAttachmentSnapshot.from_definition(definition, 1),
+    )
+    definition.head_geometry.hand_to_geometry.position.x = 1.0
+    returned = reservation.attachment
+    assert returned.head_geometry.hand_to_geometry.position.x == 0.0
+    returned.head_geometry.hand_to_geometry.position.x = 99.0
+
+    assert reservation.attachment.head_geometry.hand_to_geometry.position.x == 0.0
+    assert definition.head_geometry.hand_to_geometry.position.x == 1.0
 
 
 @pytest.mark.parametrize("command_id", [CommandID.MOVE_ARM_TO_TAG, CommandID.FOLLOW_MOVE_TO_TAG_PATH])

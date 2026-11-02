@@ -93,25 +93,25 @@ class MeasurementRecording:
         """Restore and validate persisted measurement metadata."""
         if not isinstance(data, dict):
             raise ValueError("measurement metadata must be an object")
-        raw_channels = data["configured_channels"]
+        raw_channels = data.get("configured_channels")
         if not isinstance(raw_channels, list):
             raise ValueError("configured channels must be an array")
-        raw_counts = data["sample_counts"]
+        raw_counts = data.get("sample_counts")
         if not isinstance(raw_counts, dict):
             raise ValueError("sample counts must be an object")
         recording = cls(
-            object_id=str(data["object_id"]),
-            routine_id=str(data["routine_id"]),
-            probe_point_id=str(data["probe_point_id"]),
-            sensor_id=str(data["sensor_id"]),
-            attachment_revision=data["attachment_revision"],
-            started_at_ns=data["started_at_ns"],
+            object_id=data.get("object_id"),
+            routine_id=data.get("routine_id"),
+            probe_point_id=data.get("probe_point_id"),
+            sensor_id=data.get("sensor_id"),
+            attachment_revision=data.get("attachment_revision"),
+            started_at_ns=data.get("started_at_ns"),
             configured_channels=tuple(
                 SensorChannel.from_dict(channel)
                 for channel in raw_channels
             ),
             completion_state=MeasurementCompletionState(
-                data["completion_state"]
+                data.get("completion_state")
             ),
             sample_counts=dict(raw_counts),
             finished_at_ns=data.get("finished_at_ns"),

@@ -1,12 +1,16 @@
 """Map-independent inspection object models."""
 
-import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from fault_detector_spot.navigation.body_height import validate_body_height
 from fault_detector_spot.shared.geometry.models import PoseData
 from fault_detector_spot.shared.persistence.file_storage import validate_storage_name
+from fault_detector_spot.shared.persistence.scalars import (
+    require_integer,
+    require_number,
+    require_text as _require_text,
+)
 
 from fault_detector_spot.inspection.sensing import (
     surface_distance_validation as _surface_distance_validation,
@@ -33,11 +37,6 @@ def _require_list(data: Any, field_name: str) -> List[Any]:
     return data
 
 
-def _require_text(value: str, field_name: str) -> None:
-    if not value.strip():
-        raise ValueError(f"{field_name} must not be empty")
-
-
 @dataclass
 class ImagePoint:
     """Persisted source pixel selected in a reference image."""
@@ -48,9 +47,14 @@ class ImagePoint:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ImagePoint":
         data = _require_dict(data, "reference_pixel")
-        return cls(u=int(data["u"]), v=int(data["v"]))
+        return cls(
+            u=require_integer(data.get("u"), "Reference pixel u"),
+            v=require_integer(data.get("v"), "Reference pixel v"),
+        )
 
     def validate(self) -> None:
+        require_integer(self.u, "Reference pixel u")
+        require_integer(self.v, "Reference pixel v")
         if self.u < 0 or self.v < 0:
             raise ValueError(
                 "Reference pixel coordinates must not be negative"
@@ -71,11 +75,12 @@ class ReferenceTag:
     def from_dict(cls, data: Dict[str, Any]) -> "ReferenceTag":
         data = _require_dict(data, "reference_tag")
         return cls(
-            tag_id=int(data["tag_id"]),
-            tag_family=str(data["tag_family"]),
+            tag_id=require_integer(data.get("tag_id"), "Tag ID"),
+            tag_family=_require_text(data.get("tag_family"), "Tag family"),
         )
 
     def validate(self) -> None:
+        require_integer(self.tag_id, "Tag ID")
         if self.tag_id < 0:
             raise ValueError("Tag ID must not be negative")
         _require_text(self.tag_family, "Tag family")
@@ -104,17 +109,19 @@ class ReferenceView:
         dataset_path = data.get("reference_dataset_path")
         return cls(
             controlled_frame_pose_object=PoseData.from_dict(
-                data["controlled_frame_pose_object"]
+                data.get("controlled_frame_pose_object")
             ),
-            controlled_frame=str(data["controlled_frame"]),
+            controlled_frame=_require_text(
+                data.get("controlled_frame"), "Reference view controlled frame"
+            ),
             reference_dataset_path=(
-                str(dataset_path)
+                _require_text(dataset_path, "Reference dataset path")
                 if dataset_path is not None
                 else None
             ),
-            view_id=str(data["view_id"]),
-            camera_id=str(data["camera_id"]),
-            slot_index=int(data["slot_index"]),
+            view_id=_require_text(data.get("view_id"), "Reference view ID"),
+            camera_id=_require_text(data.get("camera_id"), "Reference camera ID"),
+            slot_index=require_integer(data.get("slot_index"), "Reference view slot"),
         )
 
     def validate(self) -> None:
@@ -123,13 +130,8 @@ class ReferenceView:
             self.controlled_frame,
             "Reference view controlled frame",
         )
-        if (
-            self.reference_dataset_path is not None
-            and not self.reference_dataset_path.strip()
-        ):
-            raise ValueError(
-                "Reference dataset path must not be empty"
-            )
+        if self.reference_dataset_path is not None:
+            _require_text(self.reference_dataset_path, "Reference dataset path")
         identity = (
             self.view_id,
             self.camera_id,
@@ -196,15 +198,17 @@ class PreApproachPathPoint:
             raise ValueError("Pathing point precision mode must be a boolean")
         validate_arm_speed_scale(self.arm_speed_scale)
         self.pose_object.validate()
-        if not math.isfinite(self.position_tolerance_m) or self.position_tolerance_m <= 0:
+        require_number(self.position_tolerance_m, "Pathing point tolerance")
+        if self.position_tolerance_m <= 0:
             raise ValueError("Pathing point tolerance must be positive and finite")
 
     @classmethod
     def from_dict(cls, data):
         data = _require_dict(data, "pre_approach_path_point")
-        point = cls(str(data["name"]), PoseData.from_dict(data["pose_object"]),
-                    float(data.get("position_tolerance_m", .01)),
-                    float(data.get("arm_speed_scale", 1.0)),
+        point = cls(_require_text(data.get("name"), "Pathing point name"),
+                    PoseData.from_dict(data.get("pose_object")),
+                    data.get("position_tolerance_m", .01),
+                    data.get("arm_speed_scale", 1.0),
                     data.get("precision_mode", False))
         point.validate()
         return point
@@ -250,10 +254,17 @@ class ProbePoint:
             fully_custom=data.get("fully_custom", False),
             final_probe_pose_object=(PoseData.from_dict(data["final_probe_pose_object"])
                                      if data.get("final_probe_pose_object") is not None else None),
-            final_probe_path=[PreApproachPathPoint.from_dict(p) for p in data.get("final_probe_path", [])],
-            pre_approach_speed_scale=float(data.get("pre_approach_speed_scale", 1.0)),
-            final_probe_speed_scale=float(data.get("final_probe_speed_scale", .2)),
-            final_position_tolerance_m=float(data.get("final_position_tolerance_m", .01)),
+            final_probe_path=[PreApproachPathPoint.from_dict(p) for p in
+                              _require_list(data.get("final_probe_path", []), "final_probe_path")],
+            pre_approach_speed_scale=require_number(
+                data.get("pre_approach_speed_scale", 1.0), "Pre-approach speed scale"
+            ),
+            final_probe_speed_scale=require_number(
+                data.get("final_probe_speed_scale", .2), "Final probe speed scale"
+            ),
+            final_position_tolerance_m=require_number(
+                data.get("final_position_tolerance_m", .01), "Final pose tolerance"
+            ),
             aligned_precision_mode=data.get("aligned_precision_mode", False),
             final_precision_mode=data.get("final_precision_mode", False),
             pre_approach_path=[
@@ -262,25 +273,25 @@ class ProbePoint:
                     data.get("pre_approach_path", []), "pre_approach_path"
                 )
             ],
-            probe_point_id=str(data["probe_point_id"]),
-            display_name=str(data["display_name"]),
+            probe_point_id=_require_text(data.get("probe_point_id"), "Probe point ID"),
+            display_name=_require_text(data.get("display_name"), "Probe point display name"),
             aligned_preapproach_pose_object=PoseData.from_dict(
-                data["aligned_preapproach_pose_object"]
+                data.get("aligned_preapproach_pose_object")
             ),
-            target_surface_distance_m=float(
-                data["target_surface_distance_m"]
+            target_surface_distance_m=require_number(
+                data.get("target_surface_distance_m"), "Target surface distance"
             ),
-            position_tolerance_m=float(
-                data["position_tolerance_m"]
+            position_tolerance_m=require_number(
+                data.get("position_tolerance_m"), "Position tolerance"
             ),
-            orientation_tolerance_rad=float(
-                data["orientation_tolerance_rad"]
+            orientation_tolerance_rad=require_number(
+                data.get("orientation_tolerance_rad"), "Orientation tolerance"
             ),
-            measurement_duration_sec=float(
-                data["measurement_duration_sec"]
+            measurement_duration_sec=require_number(
+                data.get("measurement_duration_sec"), "Measurement duration"
             ),
-            aligned_preapproach_distance_m=float(
-                data["aligned_preapproach_distance_m"]
+            aligned_preapproach_distance_m=require_number(
+                data.get("aligned_preapproach_distance_m"), "Aligned pre-approach distance"
             ),
             reference_pixel=(
                 ImagePoint.from_dict(pixel)
@@ -288,7 +299,7 @@ class ProbePoint:
                 else None
             ),
             reference_view_id=(
-                str(reference_view_id)
+                _require_text(reference_view_id, "Probe point reference view ID")
                 if reference_view_id is not None
                 else None
             ),
@@ -306,7 +317,8 @@ class ProbePoint:
         validate_arm_speed_scale(self.final_probe_speed_scale)
         if type(self.aligned_precision_mode) is not bool or type(self.final_precision_mode) is not bool:
             raise ValueError("Probe point precision modes must be booleans")
-        if not math.isfinite(self.final_position_tolerance_m) or self.final_position_tolerance_m <= 0:
+        require_number(self.final_position_tolerance_m, "Final pose tolerance")
+        if self.final_position_tolerance_m <= 0:
             raise ValueError("Final pose tolerance must be positive and finite")
         if self.fully_custom:
             if self.final_probe_pose_object is None:
@@ -315,20 +327,15 @@ class ProbePoint:
         for point in (*self.pre_approach_path, *self.final_probe_path):
             point.validate()
         self.aligned_preapproach_pose_object.validate()
-        numeric_values = (
-            self.target_surface_distance_m,
-            self.position_tolerance_m,
-            self.orientation_tolerance_rad,
-            self.measurement_duration_sec,
-            self.aligned_preapproach_distance_m,
+        numeric_fields = (
+            (self.target_surface_distance_m, "Target surface distance"),
+            (self.position_tolerance_m, "Position tolerance"),
+            (self.orientation_tolerance_rad, "Orientation tolerance"),
+            (self.measurement_duration_sec, "Measurement duration"),
+            (self.aligned_preapproach_distance_m, "Aligned pre-approach distance"),
         )
-        if not all(
-            math.isfinite(value)
-            for value in numeric_values
-        ):
-            raise ValueError(
-                "Probe point contains a non-finite numeric value"
-            )
+        for value, label in numeric_fields:
+            require_number(value, label)
         if self.position_tolerance_m <= 0.0:
             raise ValueError(
                 "Position tolerance must be positive"
@@ -430,28 +437,30 @@ class InspectionRoutine:
             "inspection_routine",
         )
         probe_points = _require_list(
-            data["probe_points"],
+            data.get("probe_points"),
             "probe_points",
         )
         reference_views = _require_list(
-            data["reference_views"],
+            data.get("reference_views"),
             "reference_views",
         )
         return cls(
-            routine_id=str(data["routine_id"]),
-            display_name=str(data["display_name"]),
+            routine_id=_require_text(data.get("routine_id"), "Routine ID"),
+            display_name=_require_text(data.get("display_name"), "Routine display name"),
             reference_tag=ReferenceTag.from_dict(
-                data["reference_tag"]
+                data.get("reference_tag")
             ),
             base_position=(
                 PoseData.from_dict(data["base_position"])
                 if data.get("base_position") is not None
                 else None
             ),
-            base_body_height_m=float(data.get("base_body_height_m", 0.0)),
+            base_body_height_m=require_number(data.get("base_body_height_m", 0.0), "Body height"),
             map_id=data.get("map_id", ""),
             waypoint_id=data.get("waypoint_id", ""),
-            safe_approach_position_tolerance_m=float(data.get("safe_approach_position_tolerance_m", .1)),
+            safe_approach_position_tolerance_m=require_number(
+                data.get("safe_approach_position_tolerance_m", .1), "Safe approach tolerance"
+            ),
             safe_approach_pose_object=(
                 PoseData.from_dict(data["safe_approach_pose_object"])
                 if data.get("safe_approach_pose_object") is not None
@@ -474,7 +483,7 @@ class InspectionRoutine:
             "Routine display name",
         )
         self.reference_tag.validate()
-        validate_body_height(self.base_body_height_m)
+        validate_body_height(require_number(self.base_body_height_m, "Body height"))
         for value, label in (
             (self.map_id, "Routine map ID"),
             (self.waypoint_id, "Routine waypoint ID"),
@@ -487,7 +496,8 @@ class InspectionRoutine:
             validate_storage_name(self.map_id, "Routine map ID")
         if self.waypoint_id and not self.map_id:
             raise ValueError("Routine waypoint requires a map")
-        if not math.isfinite(self.safe_approach_position_tolerance_m) or self.safe_approach_position_tolerance_m <= 0:
+        require_number(self.safe_approach_position_tolerance_m, "Safe approach tolerance")
+        if self.safe_approach_position_tolerance_m <= 0:
             raise ValueError("Safe approach tolerance must be positive and finite")
         if self.safe_approach_pose_object is not None:
             self.safe_approach_pose_object.validate()
@@ -642,12 +652,12 @@ class InspectionObject:
             "inspection_object",
         )
         routines = _require_list(
-            data["routines"],
+            data.get("routines"),
             "routines",
         )
         return cls(
-            object_id=str(data["object_id"]),
-            display_name=str(data["display_name"]),
+            object_id=_require_text(data.get("object_id"), "Inspection object ID"),
+            display_name=_require_text(data.get("display_name"), "Inspection object display name"),
             routines=[
                 InspectionRoutine.from_dict(routine)
                 for routine in routines
@@ -699,5 +709,6 @@ class InspectionObject:
 
 def validate_arm_speed_scale(value):
     """Limit authored motion speed to the configured arm speed."""
-    if isinstance(value, bool) or not math.isfinite(value) or not 0 < value <= 1:
+    require_number(value, "Arm speed")
+    if not 0 < value <= 1:
         raise ValueError("Arm speed must be greater than 0% and at most 100%")

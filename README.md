@@ -386,6 +386,38 @@ the resource name `active_session` and requires the same independent proof.
 
 ---
 
+### 3.6 Persisted data and snapshot ownership
+
+Command recordings saved by `RecordingRepository` contain `schema_version: 1`.
+Files without a version (or with version `0`) use the legacy reader; other
+versions fail explicitly. Loading never rewrites the source file. An explicit
+save writes version 1, preserving execution retries, playback retries, skip
+blocks, and command geometry. Migration fixtures live in `test/fixtures/recordings`.
+
+The legacy migration retains the existing defaults for absent retry, collision,
+walking-profile, body-height, tolerance, precision, and path-option fields. It
+maps legacy `move_to_tag` commands with pre-approach offsets to
+`follow_move_to_tag_path`. Missing playback retries and skip blocks default to
+zero in both formats. Version 1 requires the complete command fields and does
+not infer a different command from its payload. Transient attachment identity
+remains excluded so playback binds the currently confirmed attachment.
+
+AprilTag IDs and pixel coordinates require integers, excluding booleans;
+numeric values must be finite numbers, and required names/string IDs must be text.
+Numeric strings, fractional IDs, and values such as `null` converted to a name
+are malformed input, not supported legacy variants. Existing optional defaults
+in inspection and sensor definitions remain supported.
+
+Writes retain the previous valid file until a complete temporary file is
+synchronized and replaced. Partial writes and interrupted replacements fail
+without publishing the temporary content. Measurement sample failures remain
+latched in failed metadata; failed final metadata replacement can be retried.
+
+Probe setup snapshots and motion attachment snapshots contain independent
+copies of nested geometry. Their frozen outer dataclasses do not make every
+nested object immutable. Consumers may modify their own copies; reservation
+access also returns a copy, so those edits cannot alter retained server state.
+
 ## 4. Launching the System
 
 ### 4.1 Real robot (Fault Detector Spot stack)

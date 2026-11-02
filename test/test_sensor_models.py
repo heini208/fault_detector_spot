@@ -47,6 +47,40 @@ def test_sensor_definition_round_trip_and_derived_frame():
     assert sensor_probe_frame("bmm150_01") == "bmm150_01_probe"
 
 
+@pytest.mark.parametrize("field", ["sensor_id", "display_name"])
+@pytest.mark.parametrize("value", [123, True, None, [], {}])
+def test_sensor_definition_decoding_rejects_nontext_fields(field, value):
+    data = SensorDefinition("probe", "Probe", PoseData.identity()).to_dict()
+    data[field] = value
+
+    with pytest.raises(TypeError, match="must be a string"):
+        SensorDefinition.from_dict(data)
+
+
+@pytest.mark.parametrize("field", ["channel_id", "topic", "message_type"])
+@pytest.mark.parametrize("value", [123, True, None, [], {}])
+def test_channel_decoding_rejects_nontext_fields(field, value):
+    data = SensorChannel("field", "/field", "std_msgs/msg/Float64").to_dict()
+    data[field] = value
+
+    with pytest.raises(TypeError, match="must be a string"):
+        SensorChannel.from_dict(data)
+
+
+@pytest.mark.parametrize("model,fields", [
+    (SensorDefinition("probe", "Probe", PoseData.identity()),
+     ("sensor_id", "display_name", "hand_to_probe")),
+    (SensorChannel("field", "/field", "std_msgs/msg/Float64"),
+     ("channel_id", "topic", "message_type")),
+])
+def test_sensor_decoding_identifies_missing_required_fields(model, fields):
+    for field in fields:
+        data = model.to_dict()
+        del data[field]
+        with pytest.raises(ValueError, match=f"requires '{field}'"):
+            type(model).from_dict(data)
+
+
 def test_sensor_definition_round_trips_geometry_separately_from_tip():
     geometry = SensorHeadGeometry(
         collision_sha256="a" * 64,

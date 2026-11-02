@@ -1,0 +1,73 @@
+{
+  "commands": [
+    {
+      "command_id": "move_to_tag",
+      "tag": {
+        "id": 7,
+        "pose": {
+          "frame_id": "odom",
+          "stamp_sec": 0,
+          "stamp_nanosec": 0,
+          "position": {
+            "x": 1.0,
+            "y": 2.0,
+            "z": 0.5
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
+          }
+        }
+      },
+      "offset": {
+        "frame_id": "tag_7",
+        "stamp_sec": 0,
+        "stamp_nanosec": 0,
+        "position": {
+          "x": 0.1,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "orientation": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 1.0
+        }
+      },
+      "orientation_mode": "relative_to_tag",
+      "wait_time": 1.25,
+      "target_surface_distance_m": 0.0,
+      "surface_tolerance_m": 0.0,
+      "aligned_preapproach_distance_m": 0.0,
+      "map_name": "",
+      "waypoint_name": "",
+      "inspection": {
+        "object_id": "",
+        "routine_id": "",
+        "probe_point_id": ""
+      },
+      "arm_speed_scale": 0.5,
+      "pre_approach_offsets": [
+        {
+          "frame_id": "tag_7",
+          "stamp_sec": 0,
+          "stamp_nanosec": 0,
+          "position": {
+            "x": 0.2,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "orientation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
+          }
+        }
+      ]
+    }
+  ]
+}
