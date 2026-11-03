@@ -239,7 +239,9 @@ def test_leaving_probe_stage_invalidates_surface_success(wizard, completed_befor
     assert not controls.approve_and_retract_button.isEnabled()
 
 
-@pytest.mark.parametrize("context_change", ["replaced", "closed"])
+@pytest.mark.parametrize("context_change", [
+    "replaced", "closed", "replaced_custom", "closed_custom",
+])
 def test_setup_change_clears_measurement_without_refresh(wizard, monkeypatch, context_change):
     controls, state, *_ = wizard
     assert controls.handle_test_surface_distance()
@@ -256,7 +258,8 @@ def test_setup_change_clears_measurement_without_refresh(wizard, monkeypatch, co
 
     # Snapshot handling must discard stale correlation before rendering runs.
     monkeypatch.setattr(controls, "_refresh_refinement_dialog", lambda: None)
-    if context_change == "replaced":
+    state.fully_custom = context_change.endswith("_custom")
+    if context_change.startswith("replaced"):
         state.context_id = "another-setup"
     else:
         state.refinement_active = False
@@ -265,12 +268,44 @@ def test_setup_change_clears_measurement_without_refresh(wizard, monkeypatch, co
     assert not controls._sensor_tip_distance_test_active
     assert controls._sensor_tip_distance_context_id == ""
     assert controls._sensor_tip_distance_request_id == ""
-    if context_change == "closed":
-        assert not controls._surface_test_active
-        assert not controls._surface_move_succeeded
-        assert controls._surface_move_target_m is None
-        assert controls._surface_move_context_id == ""
+    assert not controls._surface_test_active
+    assert not controls._surface_move_succeeded
+    assert controls._surface_move_target_m is None
+    assert controls._surface_move_context_id == ""
 
     feedback.state = ApplicationCommandState.STATE_FAILED
     controls.handle_application_state(feedback)
     assert not controls._distance_failure_requires_retraction
+
+
+def test_replaced_setup_ignores_late_surface_cancellation(wizard):
+    controls, state, *_ = wizard
+    assert controls.handle_test_surface_distance()
+    state.context_id = "another-setup"
+    controls.apply_setup_state(state)
+
+    controls.handle_application_state(status(ApplicationCommandState.STATE_CANCELLED))
+
+    assert not controls._distance_failure_requires_retraction
+    assert not controls._surface_test_active
+    assert controls._surface_move_context_id == ""
+
+
+def test_pause_and_resume_preserve_successful_surface_move(wizard):
+    controls, *_ = wizard
+    assert controls.handle_test_surface_distance()
+    controls.handle_application_state(status())
+    presentation = controls._refinement_presentation
+    dialog = controls.refinement_dialog
+    assert dialog.next_button.isEnabled()
+
+    assert dialog.close()
+    assert not dialog.isVisible()
+    assert controls.resume_refinement_dialog()
+
+    assert controls._refinement_presentation is presentation
+    assert controls._surface_move_succeeded
+    assert dialog.isVisible()
+    assert dialog.next_button.isEnabled()
+    assert controls.handle_refinement_next()
+    assert dialog.is_summary_page()

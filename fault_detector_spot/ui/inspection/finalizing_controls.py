@@ -43,13 +43,8 @@ class FinalizingInspectionControls(InspectionControls):
     def __init__(self, ui):
         self._reference_start_pending = False
         self._reference_start_error = ""
-        self._sensor_tip_distance_test_active = False
-        self._sensor_tip_distance_context_id = ""
-        self._sensor_tip_distance_request_id = ""
-        self._surface_test_active = False
-        self._surface_move_succeeded = False
-        self._surface_move_target_m = None
-        self._surface_move_context_id = ""
+        self._reset_sensor_tip_distance_tracking()
+        self._reset_surface_move_tracking()
         self._refinement_emergency_stop_requested = False
         self._reference_preview_cache = {}
         self._reference_view_id_by_camera = {}
@@ -57,8 +52,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._abort_refinement_after_start = False
         self._base_position_operation_context = ""
         self._routine_arm_pose_operation_contexts = set()
-        self._probe_finalization_point_id = ""
-        self._probe_finalization_scope = None
+        self._clear_pending_probe_finalization()
         super().__init__(ui)
         self.move_to_base_position_button.clicked.connect(
             self.handle_move_to_base_position
@@ -69,6 +63,23 @@ class FinalizingInspectionControls(InspectionControls):
         self.alignment_step_status_label.setWordWrap(True)
         self.refinement_dialog.attach_workflow_controls()
         self._configure_probe_point_entry_ui()
+
+    def _reset_sensor_tip_distance_tracking(self):
+        """Forget measurement feedback that no longer belongs to this setup."""
+        self._sensor_tip_distance_test_active = False
+        self._sensor_tip_distance_context_id = ""
+        self._sensor_tip_distance_request_id = ""
+
+    def _reset_surface_move_tracking(self):
+        """Forget the surface movement and its previously verified result."""
+        self._surface_test_active = False
+        self._surface_move_succeeded = False
+        self._surface_move_target_m = None
+        self._surface_move_context_id = ""
+
+    def _clear_pending_probe_finalization(self):
+        self._probe_finalization_point_id = ""
+        self._probe_finalization_scope = None
 
     def _configure_probe_point_entry_ui(self):
         """Build the probe-point controls in their execution tab."""
@@ -882,8 +893,7 @@ class FinalizingInspectionControls(InspectionControls):
             self.saved_probe_controls.select_after_finalization(
                 scope[0], scope[1], point_id,
             )
-        self._probe_finalization_point_id = ""
-        self._probe_finalization_scope = None
+        self._clear_pending_probe_finalization()
         self._refinement_emergency_stop_requested = False
         result = super()._finish_refinement_workflow_close()
         self.start_probe_refinement_button.setText(
@@ -1258,23 +1268,24 @@ class FinalizingInspectionControls(InspectionControls):
                 label.setToolTip(text)
 
     def _synchronize_refinement_presentation(self, presentation):
-        """Discard measurement state that no longer belongs to refinement."""
-        if not self._custom_probe_mode():
-            state = self._probe_setup_state
-            if (presentation is None or (
-                self._sensor_tip_distance_context_id and state is not None
+        """Discard stale operation tracking before rendering a setup snapshot."""
+        state = self._probe_setup_state
+        if presentation is None:
+            self._reset_sensor_tip_distance_tracking()
+            self._reset_surface_move_tracking()
+        elif state is not None:
+            if (
+                self._sensor_tip_distance_context_id
                 and not self._sensor_tip_distance_context_id.startswith(
                     state.context_id + "/measure-sensor-tip-distance/"
                 )
-            )):
-                self._sensor_tip_distance_test_active = False
-                self._sensor_tip_distance_context_id = ""
-                self._sensor_tip_distance_request_id = ""
-            if presentation is None:
-                self._surface_test_active = False
-                self._surface_move_succeeded = False
-                self._surface_move_target_m = None
-                self._surface_move_context_id = ""
+            ):
+                self._reset_sensor_tip_distance_tracking()
+            if (
+                self._surface_move_context_id
+                and self._surface_move_context_id != state.context_id
+            ):
+                self._reset_surface_move_tracking()
         super()._synchronize_refinement_presentation(presentation)
 
     def _refresh_refinement_dialog(self):
@@ -1369,8 +1380,7 @@ class FinalizingInspectionControls(InspectionControls):
 
     def handle_finalization_rejected(self, detail):
         """Release the saving guard only when the action was not accepted."""
-        self._probe_finalization_point_id = ""
-        self._probe_finalization_scope = None
+        self._clear_pending_probe_finalization()
         self._refresh_refinement_dialog()
         self.refinement_recovery_status_label.setText(detail)
 
