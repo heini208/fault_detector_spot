@@ -19,7 +19,7 @@ from fault_detector_spot.inspection.behaviours.execute_probe_point import Execut
 from fault_detector_spot.manipulation.arm_movement_result import ArmMovementOutcome as Outcome, ArmMovementUpdate
 from fault_detector_spot.application.api.probe_point_execution_api import ProbePointExecutionApi
 from fault_detector_spot.application.coordinators.sensor_acquisition_coordinator import SensorAcquisitionStatus as Acquisition
-from test_probe_execution_target import inspection_object, sensor
+from probe_execution_fixtures import inspection_object, sensor
 
 
 def command(**kwargs):
@@ -348,7 +348,7 @@ def test_software_stop_during_recording_completion_cannot_report_a_successful_me
 @pytest.mark.parametrize("bypass", [False, True])
 def test_custom_plan_preserves_forward_waypoint_limits_for_checkpoint_execution(bypass):
     from fault_detector_spot.inspection.model.models import PreApproachPathPoint
-    from test_probe_execution_target import pose
+    from probe_execution_fixtures import pose
     definition = inspection_object()
     point = definition.routines[0].probe_points[0]
     point.fully_custom = True
@@ -453,7 +453,7 @@ def test_surface_measurement_uses_surface_executor_and_records_only_after_succes
 
 def test_geometry_reference_uses_observation_time():
     from fault_detector_spot.inspection.setup.probe_setup_motion_state_source import ProbeSetupMotionStateSource
-    from test_probe_execution_target import pose
+    from probe_execution_fixtures import pose
     source = ProbeSetupMotionStateSource.__new__(ProbeSetupMotionStateSource)
     tag = TagElement()
     tag.pose.header.frame_id = "body"

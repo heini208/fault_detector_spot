@@ -141,7 +141,7 @@ def test_saved_custom_final_command_uses_final_path_without_surface_validation()
     from fault_detector_msgs.msg import OperationalIntent, TagElement
     from fault_detector_spot.inspection.execution.saved_probe_motion import saved_probe_command
     from fault_detector_spot.inspection.setup.probe_setup_motion import ProbeSetupMotionCommandFactory
-    from test_probe_execution_target import inspection_object, sensor
+    from probe_execution_fixtures import inspection_object, sensor
     from test_saved_probe_controls import saved_intent
     definition = inspection_object()
     point = definition.routines[0].probe_points[0]
@@ -179,7 +179,7 @@ def test_saved_approach_travel_follows_global_policy_even_with_parent_bypass(ope
         routine_safe_approach_command, saved_probe_command,
     )
     from fault_detector_spot.inspection.setup.probe_setup_motion import ProbeSetupMotionCommandFactory
-    from test_probe_execution_target import inspection_object, sensor
+    from probe_execution_fixtures import inspection_object, sensor
     from test_saved_probe_controls import saved_intent
 
     intent = saved_intent(getattr(OperationalIntent, operation))

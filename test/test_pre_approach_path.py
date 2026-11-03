@@ -168,19 +168,6 @@ def test_snapshot_and_motion_transport_carry_path_data(tmp_path):
     assert ProbeSetupMotionApi._motion_operation(request.kind) == intent.operation
 
 
-def test_execution_snapshot_freezes_path_and_resolves_hand_geometry(tmp_path):
-    from fault_detector_spot.inspection.execution.probe_execution_session import ProbeExecutionConfiguration
-    from test_probe_execution_target import sensor
-
-    probe, commands = coordinator(tmp_path)
-    state = add_points(probe, begin_setup(probe, commands, approved=True))
-    probe.save_probe_point(state.context, "front", "Front", .01, .1, 1.)
-    config = ProbeExecutionConfiguration.load("motor", "magnetic_scan", "front", probe.object_repository, sensor())
-    target = config.resolve_target(pose(1.))
-    assert [p.position.x for p in target.pre_approach_path_probe_poses_execution] == pytest.approx([1.9, 1.75])
-    assert [p.position.x for p in target.pre_approach_path_hand_poses_execution] == pytest.approx([1.7, 1.55])
-
-
 @pytest.mark.parametrize("name", ["Clear housing", " Clear housing ", "CLEAR HOUSING"])
 def test_duplicate_path_names_are_rejected_without_changing_draft(tmp_path, name):
     probe, commands = coordinator(tmp_path)

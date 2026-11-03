@@ -15,7 +15,7 @@ from fault_detector_spot.inspection.setup.probe_setup_motion import ProbeSetupMo
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.ros.operational_intent_adapter import operational_intent_to_command
 from test_probe_point_guided_workflow import FakeUI, make_state
-from test_probe_execution_target import inspection_object, sensor
+from probe_execution_fixtures import inspection_object, sensor
 
 
 @pytest.fixture(scope="module", autouse=True)

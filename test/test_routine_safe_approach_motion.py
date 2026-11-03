@@ -14,7 +14,7 @@ from fault_detector_spot.inspection.setup.probe_setup_motion import ProbeSetupMo
 from fault_detector_spot.shared.geometry.models import PoseData
 from fault_detector_spot.ui.inspection.finalizing_controls import FinalizingInspectionControls
 from test_application_controller import FakeCommandController
-from test_probe_execution_target import sensor
+from probe_execution_fixtures import sensor
 from test_probe_point_guided_workflow import FakeUI, make_state, application
 from test_routine_base_position_motion import _definition
 

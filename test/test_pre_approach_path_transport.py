@@ -20,7 +20,7 @@ from fault_detector_spot.inspection.execution.saved_probe_motion import saved_pr
 from fault_detector_spot.inspection.model.models import PreApproachPathPoint
 from fault_detector_spot.inspection.setup.probe_setup_motion import ProbeSetupMotionCommandFactory
 from fault_detector_spot.shared.geometry.models import PoseData, QuaternionData
-from test_probe_execution_target import inspection_object, sensor
+from probe_execution_fixtures import inspection_object, sensor
 from test_saved_probe_controls import saved_intent
 from test_command_request_correlation import FakeClock
 from test_command_manager_static_clock import FakeNode, FakeManagerBlackboard

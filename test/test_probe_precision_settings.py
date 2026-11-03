@@ -20,7 +20,7 @@ from fault_detector_spot.ui.inspection.finalizing_controls import FinalizingInsp
 from fault_detector_spot.inspection.setup.probe_refinement_session import RefinementStage
 from test_command_request_correlation import FakeClock
 from test_custom_probe_workflow import begin_custom, latest, move
-from test_probe_execution_target import inspection_object, sensor
+from probe_execution_fixtures import inspection_object, sensor
 from test_probe_point_guided_workflow import FakeUI, application
 from test_probe_safe_approach_navigation import safe_state
 from test_probe_setup_coordinator import pose

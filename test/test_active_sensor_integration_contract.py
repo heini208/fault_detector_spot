@@ -86,16 +86,6 @@ def test_tag_motion_converts_probe_target_to_hand_once():
     assert "tf_transformations" not in planner
 
 
-def test_future_probe_execution_configuration_accepts_active_sensor_snapshot():
-    target = source("inspection/execution/probe_execution_target.py")
-    session = source("inspection/execution/probe_execution_session.py")
-
-    assert "routine.sensor_id !=" not in target
-    assert "attachment: MotionAttachmentSnapshot" in session
-    assert "attachment_revision" in session
-    assert "sensor_repository.load(routine.sensor_id)" not in session
-
-
 def test_refinement_reserves_one_attachment_until_workflow_end():
     controller = source(
         "application/coordinators/probe_refinement_controller.py"

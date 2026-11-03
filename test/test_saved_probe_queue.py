@@ -28,7 +28,7 @@ from fault_detector_spot.inspection.repository.sensor_attachment_state_store imp
     SensorAttachmentStateStore,
 )
 from fault_detector_spot.inspection.repository.sensor_repository import SensorRepository
-from test_probe_execution_target import inspection_object, pose
+from probe_execution_fixtures import inspection_object, pose
 from test_sensor_attachment_controller import sensor_definition
 
 

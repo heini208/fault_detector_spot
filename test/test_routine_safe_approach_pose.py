@@ -1,28 +1,49 @@
 """Shared routine pose persistence, capture, and execution contracts."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
-from fault_detector_spot.inspection.execution.probe_execution_session import (
-    ProbeExecutionConfiguration,
-)
+from fault_detector_msgs.msg import OperationalIntent
+from fault_detector_spot.inspection.execution.saved_probe_motion import saved_probe_command
 from fault_detector_spot.inspection.model.models import InspectionObject
+from fault_detector_spot.inspection.repository.object_repository import ObjectRepository
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
     ProbeMotionKind,
     ProbeMotionRequest,
+    ProbeSetupMotionCommandFactory,
 )
 from fault_detector_spot.inspection.setup.probe_refinement_session import (
     RefinementStage,
 )
-from test_probe_execution_session import repository_and_sensor, pose
+from probe_execution_fixtures import inspection_object, pose, sensor
 from test_probe_setup_coordinator import (
     coordinator, create_selected_routine,
 )
 
 
-def test_every_point_loads_the_latest_shared_pose_without_rewriting_points(tmp_path):
-    repository, attachment = repository_and_sensor(tmp_path)
+@pytest.fixture
+def saved_points(tmp_path):
+    repository = ObjectRepository(tmp_path / "objects")
+    repository.create(inspection_object())
+    return repository, sensor()
+
+
+def saved_safe_command(repository, attachment, point_id="point_1"):
+    intent = OperationalIntent(
+        intent=OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH,
+        object_id="motor_a", routine_id="scan", probe_point_id=point_id,
+    )
+    return saved_probe_command(
+        intent, repository, None,
+        SimpleNamespace(require_motion_attachment=lambda: attachment),
+        ProbeSetupMotionCommandFactory(),
+    )
+
+
+def test_every_point_loads_the_latest_shared_pose_without_rewriting_points(saved_points):
+    repository, attachment = saved_points
     definition = repository.load("motor_a")
     first = definition.routines[0].probe_points[0]
     repository.add_probe_point("motor_a", "scan", replace(first, probe_point_id="second"))
@@ -34,21 +55,19 @@ def test_every_point_loads_the_latest_shared_pose_without_rewriting_points(tmp_p
     restored = InspectionObject.from_dict(after)
     assert restored.routines[0].require_safe_approach_pose() == pose(x=0.75)
     for point_id in ("point_1", "second"):
-        config = ProbeExecutionConfiguration.load(
-            "motor_a", "scan", point_id, repository, attachment,
-        )
-        assert config.safe_approach_pose_object.to_pose() == pose(x=0.75)
+        command = saved_safe_command(repository, attachment, point_id)
+        assert command.offset.position.x == 0.75
 
 
-def test_old_per_point_pose_is_not_silently_chosen_for_routine(tmp_path):
-    repository, attachment = repository_and_sensor(tmp_path)
+def test_old_per_point_pose_is_not_silently_chosen_for_routine(saved_points):
+    repository, attachment = saved_points
     data = repository.load("motor_a").to_dict()
     routine = data["routines"][0]
     del routine["safe_approach_pose_object"]
     routine["probe_points"][0]["safe_approach_pose_object"] = pose(x=0.9).to_dict()
     repository.save(InspectionObject.from_dict(data))
     with pytest.raises(ValueError, match="routine safe pre-approach"):
-        ProbeExecutionConfiguration.load("motor_a", "scan", "point_1", repository, attachment)
+        saved_safe_command(repository, attachment)
 
 
 def test_capture_is_routine_scoped_and_needs_no_reference_pixel(tmp_path):
