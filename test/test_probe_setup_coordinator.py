@@ -11,10 +11,14 @@ import pytest
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
+    CommandRequest,
     RecordingPolicy,
 )
 from fault_detector_spot.application.commanding.semantic_command import (
+    CommandQuaternion,
+    InspectionSelection,
     SemanticCommand,
+    StampedPose,
 )
 from fault_detector_spot.application.controllers.command_controller import (
     CommandControllerState,
@@ -450,6 +454,59 @@ def test_probe_motion_uses_single_non_recordable_command_lane(tmp_path):
         completed.refinement.motion_states[RefinementStage.SAFE_APPROACH]
         is RefinementMotionState.REACHED
     )
+
+
+@pytest.mark.parametrize("command", [
+    SemanticCommand(
+        command_id=CommandID.MOVE_ARM_TO_POSE,
+        offset=StampedPose(
+            frame_id="odom",
+            orientation=CommandQuaternion(w=1.0),
+        ),
+    ),
+    SemanticCommand(
+        command_id=CommandID.EXECUTE_PROBE_POINT,
+        inspection=InspectionSelection("motor", "magnetic_scan", "other_probe"),
+        wait_time=1.0,
+    ),
+    SemanticCommand(command_id=CommandID.MOVE_BASE_RELATIVE),
+], ids=["absolute_arm_motion", "saved_probe_execution", "base_motion"])
+def test_external_motion_invalidates_refinement_before_completion(tmp_path, command):
+    probe, command_controller = coordinator(tmp_path)
+    state = create_selected_routine(
+        probe, probe.open_context("probe-ui").context,
+    )
+    state = probe.select_reference_pixel(
+        state.context, "slot1_hand", ImagePoint(u=20, v=30),
+        "surface_fit", 0.10, 0.20,
+    )
+    state = approve_all(probe, command_controller, state)
+    assert all(
+        value is RefinementMotionState.REACHED
+        for value in state.refinement.motion_states.values()
+    )
+
+    status = CommandControllerStatus(
+        request=CommandRequest.create(
+            command, client_id="operator", origin=CommandOrigin.OPERATIONAL,
+            recording_policy=RecordingPolicy.EXCLUDE,
+        ),
+        state=CommandControllerState.DISPATCHED,
+    )
+    for listener in tuple(command_controller.listeners):
+        listener(status)
+
+    current = probe.snapshot(probe.context(state.context.context_id, "probe-ui"))
+    assert current.refinement.motion_states == {
+        RefinementStage.SAFE_APPROACH: RefinementMotionState.REACHED,
+        RefinementStage.ALIGNMENT: RefinementMotionState.NOT_TESTED,
+        RefinementStage.PROBE: RefinementMotionState.NOT_TESTED,
+    }
+    assert not current.refinement.alignment_candidate_reached
+    assert not current.refinement.alignment_orientation_established
+    assert current.refinement.candidate_poses == state.refinement.candidate_poses
+    with pytest.raises(RuntimeError, match="Reach the probe pose before approval"):
+        probe.approve_probe_pose(current.context)
 
 
 def test_probe_motion_uses_active_sensor_attachment(tmp_path):
