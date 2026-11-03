@@ -14,6 +14,9 @@ from fault_detector_spot.navigation.base_movement_executor import (
 from fault_detector_spot.navigation.posture_state_source import (
     PostureState,
 )
+from fault_detector_spot.shared.geometry.movement_geometry import (
+    MovementGeometryUnavailable,
+)
 
 
 class ReadyHeight:
@@ -310,6 +313,36 @@ def test_relative_reports_missing_posture_after_bounded_wait():
     assert client.send_calls == 0
     assert built == []
     assert not executor.active
+
+
+def test_relative_reports_missing_geometry_after_bounded_wait():
+    clock = ManualClock()
+    client = FakeActionClient(ManualFuture())
+    executor = BaseMovementExecutor(
+        height_readiness=ReadyHeight(),
+        tf_listener=object(),
+        action_client=client,
+        posture_state_source=FakePostureStateSource(PostureState.STANDING),
+        monotonic_clock=clock,
+        ready_state_timeout_sec=2.0,
+    )
+
+    def missing_geometry(_command):
+        raise MovementGeometryUnavailable("Waiting for TF: body -> odom")
+
+    executor.motion_planner.resolve_relative = missing_geometry
+
+    assert executor.relative(object()).outcome is BaseMovementOutcome.RUNNING
+    clock.now = 1.0
+    assert executor.poll().outcome is BaseMovementOutcome.RUNNING
+    clock.now = 2.0
+    failed = executor.poll()
+
+    assert failed.outcome is BaseMovementOutcome.EXECUTION_ERROR
+    assert "timed out after 2.0 s" in failed.detail
+    assert "body -> odom" in failed.detail
+    assert client.send_calls == 0
+    assert executor.execution_idle
 
 
 def test_stand_confirmation_requires_reported_standing():

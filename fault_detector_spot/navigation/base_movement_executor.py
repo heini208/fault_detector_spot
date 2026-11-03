@@ -637,7 +637,19 @@ class BaseMovementExecutor(MovementExecutor):
         else:
             # Stand/reset, sit, and ordinary walks use nominal standing offset.
             self._pending_commanded_height_m = 0.0
-        return super()._submit_goal(goal_builder)
+        update = super()._submit_goal(goal_builder)
+        # Geometry retries must share one deadline until a goal is sent.
+        if (update.outcome is BaseMovementOutcome.RUNNING
+                and self._send_goal_future is None
+                and self._deadline_expired(
+                    self._phase_started, self.ready_state_timeout_sec,
+                )):
+            return self._finish(
+                BaseMovementOutcome.EXECUTION_ERROR,
+                "Base goal preparation timed out after "
+                f"{self.ready_state_timeout_sec:.1f} s: {update.detail}",
+            )
+        return update
 
     def _handle_failed_result(self, result):
         return self._finish(
