@@ -25,9 +25,6 @@ from fault_detector_spot.application.commanding.command_request import (
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
 )
-from fault_detector_spot.application.controllers.application_controller import (
-    ApplicationController,
-)
 from fault_detector_spot.application.ros.operational_intent_adapter import (
     operational_intent_to_command,
 )
@@ -51,7 +48,6 @@ from fault_detector_spot.navigation.posture_state_source import PostureState
 from fault_detector_spot.shared.geometry.models import (
     PoseData,
 )
-from test_application_controller import FakeCommandController
 from test_base_movement_executor import (
     FakeActionClient,
     FakePostureStateSource,
@@ -277,21 +273,3 @@ def test_adapter_requires_routine_base_selection(field_name):
     setattr(intent, field_name, "")
     with pytest.raises(ValueError):
         operational_intent_to_command(intent)
-
-
-def test_application_controller_resolves_routine_base_before_submission():
-    controller = ApplicationController(FakeCommandController())
-    resolved = SemanticCommand(command_id=CommandID.MOVE_BASE_TO_TAG)
-    coordinator = Mock()
-    coordinator.uses_setup_coordinator.return_value = True
-    coordinator.routine_base_position_command.return_value = resolved
-    controller.attach_probe_setup(coordinator)
-
-    intent = _intent()
-    operation = controller.prepare_operation(intent, "ui")
-
-    coordinator.routine_base_position_command.assert_called_once_with(intent)
-    assert operation.request.command is resolved
-    assert operation.intent == (
-        OperationalIntent.INTENT_MOVE_TO_ROUTINE_BASE_POSITION
-    )

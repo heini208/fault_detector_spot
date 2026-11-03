@@ -10,50 +10,6 @@ def read(relative_path):
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_base_behaviour_hierarchy_matches_arm_structure():
-    common = read(
-        "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "movement_behaviour.py"
-    )
-    base = read(
-        "fault_detector_spot/navigation/behaviours/"
-        "base_movement_behaviour.py"
-    )
-    goal = read(
-        "fault_detector_spot/navigation/behaviours/"
-        "base_goal_behaviour.py"
-    )
-    stand = read(
-        "fault_detector_spot/navigation/behaviours/"
-        "stand_up_behaviour.py"
-    )
-    sit = read(
-        "fault_detector_spot/navigation/behaviours/"
-        "sit_down_behaviour.py"
-    )
-
-    assert "class MovementBehaviour(" in common
-    assert "class BaseMovementBehaviour(MovementBehaviour)" in base
-    assert "class BaseGoalBehaviour(BaseMovementBehaviour)" in goal
-    assert "class StandUpBehaviour(BaseMovementBehaviour)" in stand
-    assert "class SitDownBehaviour(BaseMovementBehaviour)" in sit
-
-
-def test_runner_uses_one_base_goal_behaviour_for_relative_and_tag():
-    runner = read(
-        "fault_detector_spot/application/behaviour_tree/runner.py"
-    )
-
-    assert runner.count("BaseGoalBehaviour(") == 3
-    assert "BaseMoveRelativeAction" not in runner
-    assert "BaseMoveToTagAction" not in runner
-    assert "BaseGetGoalTag" not in runner
-    assert "StandUpActionSimple" not in runner
-    assert "StandUpBehaviour(" in runner
-    assert "SitDownBehaviour(" in runner
-    assert "CommandID.SIT_DOWN" in runner
-
-
 def test_base_behaviours_only_delegate_to_shared_executor():
     base = read(
         "fault_detector_spot/navigation/behaviours/"
@@ -194,36 +150,6 @@ def test_correction_policy_owns_correction_decisions():
     assert "self.correction_policy.decide(" in executor
 
 
-def test_base_executor_uses_explicit_execution_phases():
-    executor = read(
-        "fault_detector_spot/navigation/base_movement_executor.py"
-    )
-
-    assert "class _BasePhase(Enum):" in executor
-    assert "WAITING_FOR_POSTURE" in executor
-    assert "EXECUTING_STAND" in executor
-    assert "CONFIRMING_STANDING" in executor
-    assert "EXECUTING_MOVEMENT" in executor
-    assert "VERIFYING_ENDPOINT" in executor
-    assert "WAITING_FOR_FRESH_TAG" in executor
-    assert "TAG_OBSERVATION_TIMEOUT" in executor
-    assert "CORRECTING" in executor
-    assert "CANCELLING" in executor
-    assert "FROZEN_TARGET" in executor
-    assert "FRESH_TAG_TARGET" in executor
-    assert "EXECUTING_SIT" in executor
-    assert "MOVEMENT_STAND" not in executor
-    assert "_verification_started" not in executor
-    assert "_state_wait_started" not in executor
-    assert "VERIFYING_STATIONARY_STAND" in executor
-    assert "tag_observation_timeout_sec" in executor
-    assert (
-        "if self._phase is _BasePhase.WAITING_FOR_FRESH_TAG:"
-        in executor
-    )
-    assert "if self._goal_verifier is not None:" not in executor
-
-
 def test_direct_planar_moves_share_one_submission_choke_point():
     executor = read(
         "fault_detector_spot/navigation/base_movement_executor.py"
@@ -268,21 +194,3 @@ def test_direct_planar_moves_share_one_submission_choke_point():
     assert "_build_absolute_base_goal" not in executor
     assert "self._submit_goal(" not in fresh_correction
     assert "self._submit_goal(" not in frozen_correction
-
-
-def test_legacy_base_movement_behaviours_are_removed():
-    legacy = (
-        "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "move_command_action.py",
-        "fault_detector_spot/navigation/behaviours/move_base/"
-        "base_get_goal_tag.py",
-        "fault_detector_spot/navigation/behaviours/move_base/"
-        "base_move_relative_action.py",
-        "fault_detector_spot/navigation/behaviours/move_base/"
-        "base_move_to_tag_action.py",
-        "fault_detector_spot/manipulation/behaviours/"
-        "stand_up_action.py",
-    )
-
-    for relative_path in legacy:
-        assert not (ROOT / relative_path).exists()

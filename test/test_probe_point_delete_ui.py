@@ -1,32 +1,48 @@
-import inspect
+"""Saved-point deletion requires confirmation and an authoritative response."""
 
-from fault_detector_spot.application.api.probe_setup_api import ProbeSetupApi
-from fault_detector_spot.application.coordinators.probe_setup_coordinator import (
-    ProbeSetupCoordinator,
-)
-from fault_detector_spot.inspection.repository.object_repository import (
-    ObjectRepository,
-)
-from fault_detector_spot.ui.inspection.finalizing_controls import (
-    FinalizingInspectionControls,
-)
+from unittest.mock import Mock
+
+from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState
+from fault_detector_spot.ui.inspection.finalizing_controls import FinalizingInspectionControls
+from test_probe_point_guided_workflow import FakeUI, application, make_state
 
 
-def test_saved_probe_delete_path_exists_end_to_end():
-    assert hasattr(ObjectRepository, "delete_probe_point")
-    assert hasattr(ProbeSetupCoordinator, "delete_probe_point")
-    assert hasattr(ProbeSetupApi, "_delete_probe_point")
-    assert hasattr(
-        FinalizingInspectionControls,
-        "handle_delete_saved_probe_point",
+def test_saved_probe_delete_waits_for_confirmation_and_authoritative_result(application):
+    ui = FakeUI()
+    controls = FinalizingInspectionControls(ui)
+    state = make_state(with_references=False)
+    state.probe_point_ids = ["one", "two"]
+    controls.apply_setup_state(state)
+    controls.saved_probe_points_list.setCurrentRow(1)
+    controls.ask_question = Mock(return_value=False)
+
+    controls.delete_saved_probe_point_button.click()
+
+    assert ui.requests == []
+    assert controls.saved_probe_points_list.count() == 2
+    controls.ask_question.return_value = True
+    controls.delete_saved_probe_point_button.click()
+
+    [request] = ui.requests
+    assert request.operation == ProbeSetupIntent.OPERATION_DELETE_PROBE_POINT
+    assert (request.object_id, request.routine_id, request.probe_point_id) == (
+        "motor", "scan", "two",
     )
+    assert controls.saved_probe_points_list.count() == 2
+    assert not controls.saved_probe_points_list.isEnabled()
+    assert not controls.delete_saved_probe_point_button.isEnabled()
+    assert not controls.handle_delete_saved_probe_point()
+    assert len(ui.requests) == 1
 
+    state.operation = ProbeSetupIntent.OPERATION_DELETE_PROBE_POINT
+    state.state = ProbeSetupState.STATE_SUCCEEDED
+    state.probe_point_ids = ["one"]
+    controls.apply_setup_state(state)
 
-def test_saved_probe_selection_is_explicitly_highlighted():
-    source = inspect.getsource(
-        FinalizingInspectionControls._configure_probe_point_entry_ui
-    )
-    assert "Delete Selected Probe Point" in source
-    assert "Selected probe point: none" in source
-    assert "QListWidget::item:selected" in source
-    assert "font-weight: bold" in source
+    assert controls.saved_probe_points_list.count() == 1
+    assert controls.saved_probe_points_list.item(0).text() == "one"
+    assert controls.saved_probe_points_list.currentItem() is None
+    assert controls.saved_probe_points_list.isEnabled()
+    assert not controls.delete_saved_probe_point_button.isEnabled()
+    assert controls.saved_probe_motion_status.text() == "two: deleted."
+    controls.refinement_dialog.close()

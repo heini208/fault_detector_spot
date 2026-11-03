@@ -88,15 +88,8 @@ def test_routine_row_move_works_without_point_selection_and_tracks_result(applic
     state = make_state(with_references=False)
     controls.apply_setup_state(state)
     button = controls.move_to_routine_arm_pose_button
-    group = controls.set_routine_arm_pose_button.parentWidget()
-    assert button.parentWidget() is group
-    row = group.layout().itemAt(2).layout()
-    assert row.itemAt(0).widget() is controls.set_routine_arm_pose_button
-    assert row.itemAt(1).widget() is button
     assert controls.saved_probe_points_list.count() == 0
     assert OperationalIntent.INTENT_MOVE_SAVED_PROBE_SAFE_APPROACH not in controls.saved_probe_action_buttons
-    assert button.styleSheet() == controls.move_to_base_position_button.styleSheet()
-    assert button.styleSheet() == ""
     assert button.isEnabled()
     assert controls.handle_move_to_routine_arm_pose()
     args, kwargs = ui.execute_operation.call_args

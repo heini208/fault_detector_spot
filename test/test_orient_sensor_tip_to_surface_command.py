@@ -49,12 +49,6 @@ def test_measured_orientation_always_checks_environment_collisions():
     assert execution.ignore_environment_collisions is False
 
 
-def test_orientation_needs_only_attachment_identity():
-    command = OrientSensorTipToSurfaceCommand("orient", Time(), "tip")
-    assert command.motion_sensor_id == "tip"
-    assert not hasattr(command, "expected_distance_m")
-
-
 def test_missing_attachment_is_rejected():
     with pytest.raises(ValueError, match="active sensor geometry"):
         OrientSensorTipToSurfaceCommand("orient", Time(), " ")

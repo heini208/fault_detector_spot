@@ -8,9 +8,6 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementOutcome,
     ArmMovementUpdate,
 )
-from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
-    ArmMovementBehaviour,
-)
 from fault_detector_spot.manipulation.behaviours.ready_arm_behaviour import (
     ReadyArmBehaviour,
 )
@@ -52,11 +49,6 @@ def blackboard(request_id):
         command_failure_request_id="",
         command_failure_detail="",
     )
-
-
-def test_ready_and_stow_share_arm_movement_behaviour():
-    assert issubclass(ReadyArmBehaviour, ArmMovementBehaviour)
-    assert issubclass(StowArmBehaviour, ArmMovementBehaviour)
 
 
 def test_arm_action_copies_request_correlation_without_relabeling_active_motion():

@@ -1,14 +1,15 @@
 """Regression tests for the executor-backed close-surface command."""
 
 import inspect
+from types import SimpleNamespace
+
+from py_trees.blackboard import Blackboard
+from py_trees.common import Status
 
 import pytest
 from fault_detector_msgs.msg import OperationalIntent
 
 from fault_detector_spot.application.behaviour_tree import runner
-from fault_detector_spot.application.behaviour_tree.behaviours.command_subscriber import (
-    CommandSubscriber,
-)
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.coordinators.probe_finalization_controller import (
     ProbeFinalizationController,
@@ -20,15 +21,13 @@ from fault_detector_spot.application.ros.semantic_command_adapter import (
     semantic_command_from_message,
     semantic_command_to_message,
 )
-from fault_detector_spot.manipulation.behaviours.arm_movement_behaviour import (
-    ArmMovementBehaviour,
-)
 from fault_detector_spot.manipulation.behaviours.move_close_to_surface_behaviour import (
     MoveCloseToSurfaceBehaviour,
 )
 from fault_detector_spot.manipulation.move_close_to_surface_execution import (
     MoveCloseToSurfaceConfig,
     MoveCloseToSurfaceExecution,
+    MoveCloseToSurfaceOutcome,
 )
 from fault_detector_spot.manipulation.commands.move_close_to_surface_command import (
     MoveCloseToSurfaceCommand,
@@ -99,18 +98,6 @@ def test_surface_distance_and_tolerance_survive_payload_round_trip():
     assert restored.surface_tolerance_m == pytest.approx(0.006)
 
 
-def test_bt_command_accepts_distance_and_tolerance():
-    command = MoveCloseToSurfaceCommand(
-        CommandID.MOVE_CLOSE_TO_SURFACE,
-        stamp=object(),
-        target_surface_distance_m=0.03,
-        surface_tolerance_m=0.004,
-    )
-
-    assert command.target_surface_distance_m == pytest.approx(0.03)
-    assert command.surface_tolerance_m == pytest.approx(0.004)
-
-
 def execution_for_tolerance(tolerance):
     execution = object.__new__(MoveCloseToSurfaceExecution)
     execution.config = MoveCloseToSurfaceConfig(tolerance_m=0.005)
@@ -140,15 +127,6 @@ def test_contact_target_preserves_requested_backoff(requested):
     assert execution._surface_tolerance() == pytest.approx(requested)
 
 
-def test_command_subscriber_builds_close_surface_command():
-    source = inspect.getsource(CommandSubscriber._move_close_to_surface)
-
-    assert "MoveCloseToSurfaceCommand" in source
-    assert "target_surface_distance_m" in source
-    assert "surface_tolerance_m" in source
-    assert "expected_distance_m=command.aligned_preapproach_distance_m" in source
-
-
 def test_behaviour_tree_registers_close_surface_behaviour():
     source = inspect.getsource(runner.build_command_tree)
 
@@ -158,19 +136,42 @@ def test_behaviour_tree_registers_close_surface_behaviour():
     assert "close_surface.action_name" not in source
 
 
-def test_close_surface_behaviour_is_thin_execution_adapter():
-    source = inspect.getsource(MoveCloseToSurfaceBehaviour)
+@pytest.mark.parametrize("cancel_running", [False, True])
+def test_close_surface_behaviour_is_thin_execution_adapter(monkeypatch, cancel_running):
+    command = MoveCloseToSurfaceCommand(
+        CommandID.MOVE_CLOSE_TO_SURFACE, object(), 0.03,
+    )
+    events = []
+    execution = SimpleNamespace(
+        active=True,
+        feedback_message="Approaching surface",
+        start=lambda actual: events.append(actual) or MoveCloseToSurfaceOutcome.RUNNING,
+        cancel=lambda: events.append("cancel"),
+    )
+    def complete():
+        execution.active = False
+        return MoveCloseToSurfaceOutcome.SUCCESS
 
-    assert issubclass(MoveCloseToSurfaceBehaviour, ArmMovementBehaviour)
-    assert "get_probe_surface_source(" in source
-    assert "MoveCloseToSurfaceExecution" in source
-    assert "._execution.start(" in source
-    assert "._execution.poll(" in source
-    assert "guarded_probe(" not in source
-    assert ".probe(" not in source
-    assert "ArmMovementOutcome.CONTACT" not in source
-    assert "MoveCloseToSurface.Goal" not in source
-    assert "WorkflowActionBehaviour" not in source
+    execution.poll = complete
+    behaviour = MoveCloseToSurfaceBehaviour(
+        surface_source=object(), config=MoveCloseToSurfaceConfig(),
+    )
+    behaviour.executor = object()
+    behaviour._execution = execution
+    monkeypatch.setattr(Blackboard, "storage", {"/last_command": command})
+    behaviour.initialise()
+    assert behaviour.update() is Status.RUNNING
+    assert events == [command]
+    assert behaviour.feedback_message == "Approaching surface"
+    if cancel_running:
+        behaviour.terminate(Status.INVALID)
+        assert events == [command, "cancel"]
+    else:
+        execution.feedback_message = "Target gap reached"
+        assert behaviour.update() is Status.SUCCESS
+        assert behaviour.feedback_message == "Target gap reached"
+        behaviour.terminate(Status.INVALID)
+        assert events == [command]
 
 
 def test_finalization_keeps_aligned_pose_as_execution_authority():

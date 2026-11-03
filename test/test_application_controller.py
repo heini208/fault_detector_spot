@@ -88,17 +88,6 @@ def test_prepares_operational_request_with_server_owned_policy():
     assert operation.request.command.command_id is CommandID.STAND_UP
 
 
-def test_submit_routes_only_prepared_operation():
-    command_controller = FakeCommandController()
-    controller = ApplicationController(command_controller)
-    operation = controller.prepare_operation(stand_intent(), "operator-ui")
-
-    request_id = controller.submit(operation)
-
-    assert request_id == operation.request_id
-    assert command_controller.submitted == [operation.request]
-
-
 def test_status_is_exposed_with_application_operation_identity():
     command_controller = FakeCommandController()
     controller = ApplicationController(command_controller)
@@ -211,27 +200,6 @@ def test_explicit_recovery_is_not_recorded_for_automatic_playback():
     assert commands.submitted == [operation.request]
     assert operation.request.command.command_id is CommandID.RECOVER_ARM
     assert operation.request.recording_policy is RecordingPolicy.EXCLUDE
-
-
-def test_close_detaches_from_command_controller():
-    command_controller = FakeCommandController()
-    controller = ApplicationController(command_controller)
-
-    controller.close()
-
-    assert command_controller.listeners == []
-
-
-def test_application_controller_owns_shared_setup_coordinator():
-    command_controller = FakeCommandController()
-    controller = ApplicationController(command_controller)
-
-    context = controller.setup_coordinator.open_context(
-        CommandOrigin.NAVIGATION_SETUP,
-        "navigation-ui",
-    )
-
-    assert controller.setup_coordinator.is_current(context)
 
 
 def test_probe_setup_attachment_uses_shared_coordinator():

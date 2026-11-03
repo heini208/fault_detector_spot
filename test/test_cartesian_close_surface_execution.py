@@ -18,8 +18,6 @@ from fault_detector_spot.manipulation.arm_movement_result import (
     ArmMovementUpdate,
 )
 from fault_detector_spot.manipulation.move_close_to_surface_execution import (
-    MAX_CARTESIAN_CONTACT_MOVES,
-    MAX_CARTESIAN_STANDOFF_MOVES,
     MoveCloseToSurfaceConfig,
     MoveCloseToSurfaceExecution,
 )
@@ -178,8 +176,8 @@ def test_cartesian_move_limits_allow_one_standoff_correction_only():
     standoff = action(contact=False)
     contact = action(contact=True)
 
-    assert standoff._cartesian_movement_limit() == MAX_CARTESIAN_STANDOFF_MOVES
-    assert contact._cartesian_movement_limit() == MAX_CARTESIAN_CONTACT_MOVES
+    assert standoff._cartesian_movement_limit() == 2
+    assert contact._cartesian_movement_limit() == 1
 
 
 @pytest.mark.parametrize("bypass", [False, True])

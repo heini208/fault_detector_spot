@@ -36,15 +36,6 @@ def _attributes(method):
     }
 
 
-def test_obsolete_surface_verification_action_is_not_owned_by_setup_client():
-    source = _source()
-
-    assert "ExecuteProbeSurfaceVerification" not in source
-    assert "execute_surface_verification" not in source
-    assert "_surface_client" not in source
-    assert "_surface_goal_handles" not in source
-
-
 def test_setup_transactions_are_not_locked_by_async_action_bookkeeping():
     attributes = _attributes(_method("_send"))
 

@@ -9,7 +9,6 @@ from fault_detector_spot.application.behaviour_tree.behaviours.helper_initialize
 from fault_detector_spot.application.recording.record_manager_node import (
     RecordManager,
 )
-from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 from fault_detector_spot.shared.persistence import runtime_paths
 
 
@@ -29,15 +28,6 @@ def test_runtime_paths_default_to_dot_ros(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     assert runtime_paths.ros_home() == tmp_path / ".ros"
-
-
-def test_rtabmap_runtime_manager_accepts_explicit_map_root():
-    signature = inspect.signature(RtabmapRuntimeManager.__init__)
-
-    assert "maps_dir" in signature.parameters
-    source = inspect.getsource(RtabmapRuntimeManager.__init__)
-    assert "default_map_root()" in source
-    assert "get_package_share_directory" not in source
 
 
 def test_helper_initializer_forwards_navigation_map_root():

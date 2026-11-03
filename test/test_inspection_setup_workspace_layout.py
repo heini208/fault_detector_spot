@@ -6,7 +6,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QLabel, QTabWidget
+from PyQt5.QtWidgets import QApplication, QLabel
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupState, TagElement
 
 from fault_detector_spot.ui.inspection.finalizing_controls import (
@@ -58,60 +58,6 @@ class FakeUI:
 @pytest.fixture(scope="module", autouse=True)
 def application():
     return QApplication.instance() or QApplication([])
-
-
-def test_workspace_uses_entry_panel_and_single_dialog_preview(
-    application,
-    tmp_path,
-):
-    controls = FinalizingInspectionControls(FakeUI(tmp_path))
-
-    tabs = controls.inspection_workspace_tabs
-    assert isinstance(tabs, QTabWidget)
-    assert [tabs.tabText(index) for index in range(tabs.count())] == [
-        "Pre Probe Point", "Probe Point Execution",
-    ]
-    preparation = tabs.widget(0)
-    assert preparation.layout().itemAt(0).widget() is controls.routine_navigation_controls
-    base_group = preparation.layout().itemAt(1).widget()
-    assert base_group.title() == "Routine Base and Safe Pre-approach Poses"
-    assert controls.set_base_position_button.parent() is base_group
-    assert controls.move_to_base_position_button.parent() is base_group
-    assert controls.base_position_status_label.parent() is base_group
-    assert controls.base_position_status_label.text() == "Base position: not configured"
-    assert not controls.set_base_position_button.isEnabled()
-    assert not controls.move_to_base_position_button.isEnabled()
-    assert controls.move_to_base_position_button.styleSheet() == ""
-    assert controls.inspection_workspace_tabs.widget(1) is (
-        controls._probe_point_entry_panel
-    )
-    assert controls.reference_view_widget.window() is controls.refinement_dialog
-    assert all(widget.isHidden() for widget in controls.reference_view_widgets[1:])
-    assert len(controls.reference_view_widgets) == 3
-    assert len(controls.reference_camera_dropdowns) == 3
-    assert controls.reference_view_widget is (
-        controls.reference_view_widgets[0]
-    )
-    assert [
-        dropdown.currentData()
-        for dropdown in controls.reference_camera_dropdowns
-    ] == ["hand", "", ""]
-    expected_ids = {
-        "",
-        "frontleft",
-        "frontright",
-        "left",
-        "right",
-        "back",
-        "hand",
-    }
-    for dropdown in controls.reference_camera_dropdowns:
-        assert {
-            dropdown.itemData(index)
-            for index in range(dropdown.count())
-        } == expected_ids
-    assert not hasattr(controls, "workflow_tabs")
-    assert not hasattr(controls, "save_probe_point_button")
 
 
 def test_base_position_dialog_uses_routine_setup_defaults(
@@ -357,33 +303,31 @@ def test_base_position_dialog_follows_live_tag_and_frame_updates(
     } == {"body", "odom"}
 
 
-def test_root_ui_forwards_live_lists_to_base_position_dialog():
-    from pathlib import Path
+def test_root_ui_forwards_live_lists_to_base_position_dialog(base_position_session):
+    from fault_detector_spot.ui.fault_detector_ui import Fault_Detector_UI
 
-    source = (
-        Path(__file__).parents[1]
-        / "fault_detector_spot/ui/fault_detector_ui.py"
-    ).read_text(encoding="utf-8")
-
-    assert "update_base_position_tags_dropdown()" in source
-    assert "update_base_position_frames_dropdown()" in source
-
-
-def test_management_controls_live_in_non_modal_dialog(
-    application,
-    tmp_path,
-):
-    controls = FinalizingInspectionControls(FakeUI(tmp_path))
-
-    assert not controls.management_dialog.isModal()
-    assert controls.object_id_field.window() is controls.management_dialog
-    assert controls.reference_tag_id_field.window() is (
-        controls.management_dialog
+    session = base_position_session
+    ui = session.ui
+    ui.inspection_controls = session.controls
+    ui.manipulation_controls = SimpleNamespace(
+        update_tags_dropdown=lambda: None,
+        update_frames_dropdown=lambda: None,
     )
-    assert controls.routine_id_field.window() is controls.management_dialog
-    assert not hasattr(controls, "sensor_id_field")
-    assert not hasattr(controls, "probe_frame_value_label")
-    assert not hasattr(controls, "new_sensor_id_field")
+    ui.base_movement_controls = ui.manipulation_controls
+    ui.navigation_controls = SimpleNamespace(update_tags_dropdown=lambda: None)
+
+    Fault_Detector_UI._process_visible_tags(
+        ui, SimpleNamespace(elements=[SimpleNamespace(id=7), SimpleNamespace(id=9)])
+    )
+    Fault_Detector_UI._process_available_frames(
+        ui, SimpleNamespace(names=["odom", "map"])
+    )
+
+    assert session.popup.tag_dropdown.currentText() == "7"
+    assert [session.popup.tag_dropdown.itemText(index)
+            for index in range(session.popup.tag_dropdown.count())] == ["7", "9"]
+    assert [session.popup.frames_dropdown.itemText(index)
+            for index in range(session.popup.frames_dropdown.count())] == ["odom", "map"]
 
 
 def test_transient_approval_statuses_update_workflow_controls(

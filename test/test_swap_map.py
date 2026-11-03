@@ -75,13 +75,6 @@ def _behavior(helper, requested="map_b", active="map_a"):
     return behavior
 
 
-def test_swap_map_registers_active_map_blackboard_access():
-    behavior = SwapMap(_Helper())
-
-    assert "/active_map_name" in behavior.blackboard.read
-    assert "/last_command" in behavior.blackboard.read
-
-
 def test_swap_map_returns_failure_when_helper_raises():
     helper = _Helper()
     helper.failure = RuntimeError("map switch failed")

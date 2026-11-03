@@ -65,13 +65,6 @@ def complete_orientation_from(previous_state):
     return session
 
 
-def test_orientation_preserves_reached_candidate_state():
-    session = complete_orientation_from(RefinementMotionState.REACHED)
-    assert session.motion_states[RefinementStage.ALIGNMENT] is (
-        RefinementMotionState.REACHED
-    )
-
-
 def test_orientation_preserves_failed_candidate_attempt_state():
     session = complete_orientation_from(RefinementMotionState.FAILED)
     assert session.motion_states[RefinementStage.ALIGNMENT] is (

@@ -137,14 +137,6 @@ def test_diagonal_translation_has_normalized_3d_direction():
     assert plan.direction_z > 0.0
 
 
-def test_default_speed_is_owned_by_motion_planner():
-    value = planner()
-
-    speed = value.effective_speed(None)
-
-    assert speed is value.speed_policy.default_speed
-
-
 def test_sensor_probe_plan_reuses_attachment_geometry_without_extra_hand_tf():
     probe_frame = "hall_probe_probe"
     tf = FakeTF({

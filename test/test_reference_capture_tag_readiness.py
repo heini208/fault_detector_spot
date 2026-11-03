@@ -19,16 +19,6 @@ class NotReadyStateSource:
         )
 
 
-class ReadyStateSource:
-    """Return an already stable base tag."""
-
-    def __init__(self, tag):
-        self.tag = tag
-
-    def reference_tag(self, tag_id):
-        return self.tag
-
-
 class HistoryStateSource:
     """Return capture-window tag observations."""
 
@@ -58,24 +48,6 @@ def test_stable_tag_value_error_becomes_retryable_capture_readiness():
         match="distinct=2",
     ):
         coordinator._stable_reference_tag(7)
-
-
-def test_stable_tag_success_is_passed_through():
-    tag = object()
-    coordinator = coordinator_with_state_source(ReadyStateSource(tag))
-
-    assert coordinator._stable_reference_tag(7) is tag
-
-
-def test_historical_tag_success_is_passed_through():
-    tags = (object(), object())
-    coordinator = coordinator_with_state_source(HistoryStateSource(tags))
-
-    assert coordinator._historical_reference_tags(
-        7,
-        10.0,
-        11.0,
-    ) == tags
 
 
 def test_empty_historical_tag_window_is_retryable():

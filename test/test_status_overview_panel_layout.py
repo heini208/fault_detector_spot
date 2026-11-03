@@ -42,16 +42,6 @@ def make_panel():
     return panel, recording_indicator, recording_button
 
 
-def test_sensor_system_is_grouped_into_one_lower_strip(application):
-    panel, recording_indicator, _recording_button = make_panel()
-
-    assert panel.sensor_strip is panel.sensor_widget
-    assert panel.sensor_strip is panel.hardware_widget
-    assert recording_indicator.isHidden()
-
-    panel.close()
-
-
 def test_record_button_itself_shows_active_recording_state(application):
     panel, _recording_indicator, recording_button = make_panel()
 

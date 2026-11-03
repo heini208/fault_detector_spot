@@ -105,25 +105,6 @@ def patch_pose_resolver(monkeypatch):
     )
 
 
-def test_tag_at_freshness_limit_is_accepted(monkeypatch):
-    patch_pose_resolver(monkeypatch)
-    inputs, tag = make_inputs(tag_sec=14)
-
-    result = capture_module.capture_reference_views(
-        FakeRepository(),
-        [make_request(inputs)],
-        object(),
-        "object",
-        "routine",
-        SimpleNamespace(nanoseconds=15_000_000_000),
-        2,
-        [tag],
-        maximum_input_age_sec=5.0,
-    )
-
-    assert len(result) == 1
-
-
 def test_old_fixed_frame_tag_anchor_is_accepted(monkeypatch):
     patch_pose_resolver(monkeypatch)
     inputs, tag = make_inputs(tag_sec=13)

@@ -180,7 +180,10 @@ def test_first_goal_failure_uses_initial_pose_as_checkpoint():
                                 ("restore", "initial"), ("move", "safe")]
 
 
-@pytest.mark.parametrize("outcome", list(ExecuteProbePoint.UNSAFE_TO_RECOVER))
+@pytest.mark.parametrize("outcome", [
+    Outcome.STOP_UNCONFIRMED, Outcome.RETREAT_FAILED, Outcome.RECOVERY_FAILED,
+    Outcome.UNSTABLE_ARM, Outcome.BUSY, Outcome.TRAJECTORY_CANCELLED,
+])
 def test_unsafe_outcomes_never_recover_or_retry(outcome):
     value = action(retries=3)
     value.failures[("move", "safe")] = [outcome]

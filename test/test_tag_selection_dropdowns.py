@@ -87,25 +87,27 @@ def test_tag_dropdown_disables_itself_when_no_tags_are_visible():
 
 
 def test_visible_tag_message_refreshes_movement_and_landmark_dropdowns():
-    calls = []
-    ui = Fault_Detector_UI.__new__(Fault_Detector_UI)
-    ui.manipulation_controls = SimpleNamespace(
-        update_tags_dropdown=lambda: calls.append("manipulation")
-    )
-    ui.base_movement_controls = SimpleNamespace(
-        update_tags_dropdown=lambda: calls.append("base")
-    )
-    ui.navigation_controls = SimpleNamespace(
-        update_tags_dropdown=lambda: calls.append("navigation")
-    )
-    message = SimpleNamespace(
-        elements=[SimpleNamespace(id=9), SimpleNamespace(id=2)]
-    )
+    ui = _Parent([7])
+    ui.manipulation_controls = object.__new__(ManipulationControls)
+    ui.manipulation_controls.ui = ui
+    ui.manipulation_controls._make_tag_input_row()
+    ui.base_movement_controls = object.__new__(BaseMovementControls)
+    ui.base_movement_controls.ui = ui
+    ui.base_movement_controls._make_tag_input_row()
+    ui.navigation_controls = NavigationControls(ui)
+    message = SimpleNamespace(elements=[SimpleNamespace(id=9), SimpleNamespace(id=2)])
 
-    ui._process_visible_tags(message)
+    Fault_Detector_UI._process_visible_tags(ui, message)
 
     assert sorted(ui.visible_tags) == [2, 9]
-    assert calls == ["manipulation", "base", "navigation"]
+    dropdowns = (
+        ui.manipulation_controls.tag_dropdown,
+        ui.base_movement_controls.tag_dropdown,
+        ui.navigation_controls.landmark_tag_dropdown,
+    )
+    for dropdown in dropdowns:
+        assert [dropdown.itemText(index) for index in range(dropdown.count())] == ["2", "9"]
+        assert dropdown.isEnabled()
 
 
 @pytest.mark.parametrize("waypoint_name,selected_tag", [("", 9), ("Loading bay", 9), ("2", 9), ("17", 0)])

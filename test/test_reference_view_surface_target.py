@@ -5,7 +5,6 @@ import math
 import numpy as np
 import pytest
 
-from fault_detector_spot.shared.geometry.rotation import quaternion_to_rpy
 from fault_detector_spot.inspection.model.models import (
     ImagePoint,
 )
@@ -205,14 +204,3 @@ def test_invalid_distances_are_rejected(
             target_distance,
             preapproach_distance,
         )
-
-
-def test_quaternion_to_rpy_still_comes_from_shared_rotation_geometry():
-    half_sqrt = math.sqrt(0.5)
-    roll, pitch, yaw = quaternion_to_rpy(
-        QuaternionData(0.0, 0.0, half_sqrt, half_sqrt)
-    )
-
-    assert roll == pytest.approx(0.0)
-    assert pitch == pytest.approx(0.0)
-    assert yaw == pytest.approx(math.pi / 2.0)

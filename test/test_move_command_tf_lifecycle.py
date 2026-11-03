@@ -87,11 +87,3 @@ def test_move_goal_tf_lookups_are_nonblocking():
         source = _read(path)
         assert "timeout_sec=2" not in source
         assert "timeout_sec=0.0" in source
-
-
-def test_legacy_move_command_action_is_removed():
-    assert not (
-        ROOT
-        / "fault_detector_spot/application/behaviour_tree/behaviours/"
-        "move_command_action.py"
-    ).exists()

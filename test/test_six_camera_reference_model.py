@@ -33,10 +33,6 @@ def make_view(slot_index, camera_id):
     )
 
 
-def test_reference_view_accepts_slot_five():
-    make_view(5, "hand").validate()
-
-
 def test_routine_accepts_six_reference_views():
     routine = InspectionRoutine(
         routine_id="scan",

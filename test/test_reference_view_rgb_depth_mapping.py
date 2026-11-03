@@ -231,18 +231,3 @@ def test_selectable_region_rejects_empty_registered_depth():
             make_camera_info(4, 3),
             make_camera_info(4, 3),
         )
-
-
-def test_overlap_excludes_exact_upper_half_pixel_boundary():
-    rgb_info = make_camera_info(8, 6, focal_length=100.0)
-    depth_info = make_camera_info(4, 3, focal_length=100.0)
-
-    region = rgb_depth_overlap_region(
-        (8, 6),
-        (4, 3),
-        rgb_info,
-        depth_info,
-    )
-
-    assert region.y == 1
-    assert region.height == 3

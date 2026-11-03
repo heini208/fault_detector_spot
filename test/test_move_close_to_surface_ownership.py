@@ -3,10 +3,6 @@
 import ast
 from pathlib import Path
 
-from fault_detector_spot.inspection.setup.probe_refinement_session import (
-    PendingRefinementMotion,
-    ProbeRefinementSession,
-)
 from fault_detector_spot.inspection.setup.probe_setup_motion import (
     ProbeMotionKind,
 )
@@ -34,37 +30,6 @@ def test_probe_setup_motion_excludes_close_surface_execution():
     }
 
 
-def test_refinement_session_contains_no_close_surface_execution_state():
-    pending_fields = PendingRefinementMotion.__dataclass_fields__
-    session_fields = ProbeRefinementSession.__dataclass_fields__
-
-    assert "axial_correction_m" not in pending_fields
-    assert "surface_distance_verified" not in session_fields
-    assert "cumulative_inward_travel_m" not in session_fields
-    assert not hasattr(ProbeRefinementSession, "mark_surface_verified")
-    assert not hasattr(ProbeRefinementSession, "approve_verified_probe")
-
-
-def test_finalization_names_derived_geometry_without_verification_claims():
-    controller = source(
-        "application/coordinators/probe_finalization_controller.py"
-    )
-    coordinator = source(
-        "application/coordinators/probe_setup_coordinator.py"
-    )
-    runner = source(
-        "application/coordinators/"
-        "probe_refinement_finalization_coordinator.py"
-    )
-
-    assert "def approve_probe_geometry(" in controller
-    assert "def approve_probe_geometry_for_finalization(" in coordinator
-    assert "approve_probe_geometry_for_finalization" in runner
-    assert "approve_verified_probe" not in controller
-    assert "approve_verified_probe" not in coordinator
-    assert "approve_verified_probe" not in runner
-
-
 def test_close_surface_operation_stays_outside_probe_setup_transport():
     ui = source("ui/fault_detector_ui.py")
     controls = source("ui/inspection/controls.py")
@@ -85,18 +50,6 @@ def test_close_surface_operation_stays_outside_probe_setup_transport():
     assert "ProbeSurfaceVerificationApi" not in application_api
     assert "ExecuteOperation" in application_api
     assert "ADJUST_PROBE_DISTANCE" not in motion_api
-
-
-def test_obsolete_setup_verification_modules_are_absent():
-    obsolete = (
-        ROOT
-        / "application/coordinators/probe_surface_verification_controller.py",
-        ROOT
-        / "application/coordinators/probe_surface_verification_runner.py",
-        ROOT / "inspection/setup/probe_surface_verification.py",
-    )
-
-    assert all(not path.exists() for path in obsolete)
 
 
 def test_close_surface_source_remains_independent_of_probe_setup():

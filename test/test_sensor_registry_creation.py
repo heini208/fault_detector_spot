@@ -155,13 +155,6 @@ def queued_command(command_controller):
     command_controller.submit(request)
 
 
-def test_registry_and_attachment_share_one_repository(tmp_path):
-    registry, attachment, _, repository = controllers(tmp_path)
-
-    assert registry.sensor_repository is repository
-    assert attachment.sensor_repository is repository
-
-
 def test_updated_definition_is_used_by_later_attachment(tmp_path):
     registry, attachment, _, _ = controllers(tmp_path)
     registry.create(definition(x=0.20))

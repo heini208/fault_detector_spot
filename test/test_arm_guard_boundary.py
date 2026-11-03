@@ -46,35 +46,6 @@ def _method_source(source, method_name):
     return body
 
 
-def test_guarded_probe_reuses_ready_probe_readiness():
-    source = _source(EXECUTOR)
-    guarded = _method_source(source, "guarded_probe")
-    ready = _method_source(source, "ready_probe")
-
-    assert "self.ready_probe(self._begin_guarded_probe)" in guarded
-    assert "_advance_ready_probe()" in ready
-    assert "_start_guarded_probe(" not in source
-    assert "_advance_guarded_readiness(" not in source
-
-
-def test_low_level_probe_is_explicitly_unguarded():
-    source = _source(EXECUTOR)
-    method = _method_source(source, "probe")
-
-    assert "_stage_probe_goal(" in method
-    assert "_submit_goal(" in _method_source(source, "_stage_probe_goal")
-    assert "guarded_probe_execution" not in method
-    assert "ready_probe(" not in method
-
-
-def test_ready_arm_uses_low_level_probe_submission_not_force_guard():
-    source = _source(EXECUTOR)
-    method = _method_source(source, "_advance_prepare_start")
-
-    assert "_continue_probe(" in method
-    assert "guarded_probe_execution" not in method
-
-
 def test_executor_delegates_probe_geometry_to_planner():
     executor = _source(EXECUTOR)
     planner = _source(PLANNER)
@@ -136,21 +107,6 @@ def test_command_builder_owns_robot_command_translation():
     assert "RobotCommandBuilder" not in executor
     assert "tf2_geometry_msgs" not in executor
     assert "MovementGeometryResolver" not in executor
-
-
-def test_robot_command_resource_parameter_calls_have_three_arguments():
-    tree = ast.parse(_source(RESOURCES))
-
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "_positive_parameter"
-    ]
-
-    assert calls
-    assert all(len(call.args) == 3 for call in calls)
 
 
 def test_guard_does_not_define_a_separate_movement_speed():

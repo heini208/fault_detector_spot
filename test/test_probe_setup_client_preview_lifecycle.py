@@ -19,12 +19,6 @@ def test_pending_previews_have_a_retry_path():
     assert "_send_preview_request" in source
 
 
-def test_capture_completion_forces_fresh_preview_bytes():
-    source = inspect.getsource(ProbeSetupClient._receive_capture_result)
-
-    assert "_refresh_reference_previews(result.state)" in source
-
-
 def test_old_preview_response_cannot_overwrite_newer_generation():
     source = inspect.getsource(ProbeSetupClient._receive_preview)
 

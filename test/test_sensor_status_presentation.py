@@ -1,62 +1,86 @@
-"""Tests for the global sensor status presentation."""
+"""Sensor status reflects attachment evidence and requires explicit confirmation."""
 
-from pathlib import Path
+import os
+from types import SimpleNamespace
+from unittest.mock import Mock
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-UI_PATH = (
-    Path(__file__).parents[1]
-    / "fault_detector_spot"
-    / "ui"
-    / "fault_detector_ui.py"
-)
+import pytest
+from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QWidget
 
-
-def test_main_ui_defines_global_sensor_status_and_confirmation_control():
-    source = UI_PATH.read_text(encoding="utf-8")
-
-    assert 'self.sensor_indicator_label = QLabel("●")' in source
-    assert 'self.sensor_status_label = QLabel("Unknown")' in source
-    assert 'self.sensor_confirm_button = QPushButton("✓")' in source
-    assert "self.sensor_confirm_button.setFixedSize(24, 24)" in source
-    assert "self._request_sensor_state_confirmation" in source
+from fault_detector_spot.ui.fault_detector_ui import Fault_Detector_UI
+from fault_detector_spot.ui.sensor.models import SensorAttachmentViewStatus
 
 
-def test_sensor_state_text_is_exposed_as_ball_tooltip():
-    source = UI_PATH.read_text(encoding="utf-8")
+class StatusUI(QWidget):
+    set_sensor_status = Fault_Detector_UI.set_sensor_status
+    _sensor_display_name = Fault_Detector_UI._sensor_display_name
+    _refresh_sensor_status = Fault_Detector_UI._refresh_sensor_status
+    _request_sensor_state_confirmation = Fault_Detector_UI._request_sensor_state_confirmation
+    _confirm_sensor_attachment = Fault_Detector_UI._confirm_sensor_attachment
 
-    assert '"confirmed": ("#2E7D32", "Confirmed")' in source
-    assert '"pending": ("#EF6C00", "Confirmation pending")' in source
-    assert (
-        '"unknown": ("#757575", "Sensor state unavailable")'
-        in source
+    def __init__(self):
+        super().__init__()
+        self.sensor_indicator_label = QLabel()
+        self.sensor_status_label = QLabel()
+        self.sensor_confirm_button = QPushButton()
+        self.status_label = QLabel()
+        self.sensor_attachment_client = Mock()
+        self._sensor_definitions = {"probe": SimpleNamespace(display_name="Hall probe")}
+        self._sensor_attachment_state = None
+
+
+@pytest.fixture
+def ui():
+    application = QApplication.instance() or QApplication([])
+    widget = StatusUI()
+    yield widget
+    widget.close()
+    # Keep the application alive for the lifetime of its widgets.
+    del application
+
+
+def attachment(status):
+    return SimpleNamespace(
+        status=status, pending_sensor_id="probe", active_sensor_id="probe",
+        attachment_revision=7,
     )
-    assert "self.sensor_indicator_label.setToolTip(tooltip)" in source
-    assert "self.sensor_status_label.setText(" in source
 
 
-def test_visible_sensor_text_contains_only_sensor_name():
-    source = UI_PATH.read_text(encoding="utf-8")
+@pytest.mark.parametrize("status,name,tooltip,can_confirm", [
+    (None, "Unknown", "Sensor state unavailable", False),
+    (SensorAttachmentViewStatus.PENDING, "Hall probe", "Confirmation pending", True),
+    (SensorAttachmentViewStatus.NONE, "No sensor", "Confirmation pending", True),
+    (SensorAttachmentViewStatus.ACTIVE, "Hall probe", "Confirmed", False),
+])
+def test_status_and_confirmation_follow_attachment_evidence(ui, status, name, tooltip, can_confirm):
+    ui._sensor_attachment_state = attachment(status) if status is not None else None
 
-    assert 'self.set_sensor_status("pending", "No sensor")' in source
-    assert 'self.set_sensor_status("confirmed", sensor_name)' in source
-    assert 'self.sensor_status_label.setText(sensor_name.strip() or "Unknown")' in (
-        source
-    )
-    assert "Confirmation pending —" not in source
+    ui._refresh_sensor_status()
 
-
-def test_confirmation_button_uses_explicit_popup():
-    source = UI_PATH.read_text(encoding="utf-8")
-
-    assert "QMessageBox.question(" in source
-    assert '"Confirm sensor state"' in source
-    assert "QMessageBox.Yes | QMessageBox.No" in source
-    assert "QMessageBox.No," in source
+    assert ui.sensor_status_label.text() == name
+    assert ui.sensor_indicator_label.toolTip() == tooltip
+    assert ui.sensor_confirm_button.isEnabled() is can_confirm
+    ui.sensor_attachment_client.confirm.assert_not_called()
 
 
-def test_sensor_status_widgets_are_global():
-    source = UI_PATH.read_text(encoding="utf-8")
+@pytest.mark.parametrize("status,sensor_id", [
+    (SensorAttachmentViewStatus.PENDING, "probe"),
+    (SensorAttachmentViewStatus.NONE, ""),
+])
+@pytest.mark.parametrize("answer", [QMessageBox.No, QMessageBox.Yes])
+def test_confirmation_requires_explicit_yes_and_preserves_attachment_revision(
+    ui, monkeypatch, status, sensor_id, answer,
+):
+    ui._sensor_attachment_state = attachment(status)
+    question = Mock(return_value=answer)
+    monkeypatch.setattr(QMessageBox, "question", question)
 
-    assert "self.sensor_indicator_label," in source
-    assert "self.sensor_status_label," in source
-    assert "self.sensor_confirm_button," in source
+    ui._request_sensor_state_confirmation()
+
+    assert question.call_args.args[-1] == QMessageBox.No
+    if answer == QMessageBox.Yes:
+        ui.sensor_attachment_client.confirm.assert_called_once_with(sensor_id, 7)
+    else:
+        ui.sensor_attachment_client.confirm.assert_not_called()

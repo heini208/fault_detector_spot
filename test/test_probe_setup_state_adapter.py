@@ -112,6 +112,7 @@ def test_refinement_state_becomes_immutable_server_snapshot():
     )
     assert refinement.pending_motion.request_id == "1" * 32
     assert refinement.recovery_required
+    assert refinement.recovery_message == "Retract"
 
 
 def test_wizard_navigation_cannot_change_server_refinement_snapshot():

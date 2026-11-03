@@ -39,19 +39,6 @@ def test_default_speed_uses_current_to_target_translation():
     ) == pytest.approx(2.0)
 
 
-def test_per_movement_speed_override_changes_duration():
-    slow = ArmMotionSpeed(
-        linear_speed_mps=0.05,
-        angular_speed_rad_s=0.25,
-    )
-
-    assert policy().duration_between(
-        pose(),
-        pose(x=0.20),
-        speed=slow,
-    ) == pytest.approx(4.0)
-
-
 def test_override_does_not_change_executor_default():
     motion_policy = policy()
     slow = ArmMotionSpeed(

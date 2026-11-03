@@ -6,13 +6,6 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
-def test_tag_sensing_configuration_has_no_leading_overlay_artifact():
-    config = (ROOT / "config/tag_sensing.yaml").read_text(encoding="utf-8")
-
-    assert config.startswith("/**:")
-    assert not config.startswith("\\")
-
-
 def test_tag_sensing_uses_raw_fiducial_frame_for_freshness():
     config = (ROOT / "config/tag_sensing.yaml").read_text(encoding="utf-8")
 

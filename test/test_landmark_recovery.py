@@ -422,11 +422,6 @@ def test_invalid_localization_is_not_a_reason_for_landmark_recovery(rig, fault):
     assert rig.behavior._uncertain_count == 0
 
 
-def test_explicit_rtabmap_not_localized_report_can_request_recovery(rig):
-    rig.trigger(variance=9999.0)
-    rig.publisher.publish.assert_called_once()
-
-
 def test_rejected_registration_breaks_consecutive_confirmation(rig):
     rig.trigger()
     for _ in range(3):

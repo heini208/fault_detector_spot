@@ -124,11 +124,11 @@ def test_capture_signal_preserves_resources_until_callback_drain(monkeypatch):
     assert node.destroy_subscription.call_count == 4
 
 
-def test_main_uses_ordered_shutdown_before_ros_teardown(monkeypatch):
+def test_main_delegates_shutdown_without_tearing_down_ros(monkeypatch):
     events = []
     node = Mock()
     def shutdown(executor):
-        events.extend(["ordered_shutdown", "ros"])
+        events.append("ordered_shutdown")
         return SimpleNamespace(cleanup_errors={})
     node.shutdown.side_effect = shutdown
     executor = Mock()
@@ -139,7 +139,7 @@ def test_main_uses_ordered_shutdown_before_ros_teardown(monkeypatch):
     monkeypatch.setattr(application_api_node.rclpy, "ok", lambda: True)
     monkeypatch.setattr(application_api_node.rclpy, "try_shutdown", lambda: events.append("ros"))
     application_api_node.main()
-    assert events == ["ordered_shutdown", "ros"]
+    assert events == ["ordered_shutdown"]
     node.shutdown.assert_called_once_with(executor)
     assert application_api_node.rclpy.init.call_args.kwargs["signal_handler_options"] == (
         application_api_node.SignalHandlerOptions.NO

@@ -58,13 +58,13 @@ def test_registry_client_owns_only_definition_resources():
     client = SensorRegistryClient(node)
 
     assert [item.topic for item in node.subscriptions] == [
-        SensorRegistryClient.SENSOR_TOPIC
+        "fault_detector/sensors"
     ]
     assert [item.service_name for item in node.clients] == [
-        SensorRegistryClient.ADD_SENSOR_SERVICE,
-        SensorRegistryClient.UPDATE_SENSOR_SERVICE,
-        SensorRegistryClient.DELETE_SENSOR_SERVICE,
-        SensorRegistryClient.UPLOAD_MESH_SERVICE,
+        "fault_detector/add_sensor",
+        "fault_detector/update_sensor",
+        "fault_detector/delete_sensor",
+        "fault_detector/upload_sensor_mesh",
     ]
 
     client.destroy()
@@ -78,11 +78,11 @@ def test_attachment_client_owns_only_attachment_resources():
     client = SensorAttachmentClient(node)
 
     assert [item.topic for item in node.subscriptions] == [
-        SensorAttachmentClient.STATE_TOPIC
+        "fault_detector/application/sensor_attachment_state"
     ]
     assert [item.service_name for item in node.clients] == [
-        SensorAttachmentClient.SELECT_SERVICE,
-        SensorAttachmentClient.CONFIRM_SERVICE,
+        "fault_detector/application/select_sensor_attachment",
+        "fault_detector/application/confirm_sensor_attachment",
     ]
 
     client.destroy()

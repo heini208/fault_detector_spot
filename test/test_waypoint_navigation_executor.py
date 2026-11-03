@@ -317,15 +317,6 @@ def test_behaviour_direct_invocation_uses_prepared_executor():
     assert arm.cancel_calls == 1
 
 
-def test_waypoint_tree_only_resolves_then_calls_prepared_navigation(monkeypatch):
-    from fault_detector_spot.application.behaviour_tree import runner
-    resources = object()
-    monkeypatch.setattr(runner, "get_helper_container", lambda _: SimpleNamespace(robot_command_resources=resources))
-    tree = runner.build_navigate_to_goal_pose_tree(object())
-    assert [child.name for child in tree.children] == ["SetWaypointAsGoal", "NavigateToGoalPose"]
-    assert tree.children[1].robot_command_resources is resources
-
-
 def settle_cancel(executor, clock):
     assert executor.poll().outcome is Outcome.RUNNING
     for delta in (0.31, 0.1, 0.6):

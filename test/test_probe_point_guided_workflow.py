@@ -86,18 +86,6 @@ def make_state(with_references=True):
     return state
 
 
-def test_main_workspace_is_reduced_to_add_probe_point(application):
-    ui = FakeUI()
-    controls = FinalizingInspectionControls(ui)
-
-    assert controls.start_probe_refinement_button.text() == (
-        "Add New Probe Point"
-    )
-    assert controls._probe_point_entry_panel is not None
-    assert controls.inspection_workspace_tabs.count() == 2
-    assert controls.inspection_workspace_tabs.widget(1) is controls._probe_point_entry_panel
-
-
 def test_add_probe_point_offers_mode_before_reference_refinement(application):
     ui = FakeUI()
     controls = FinalizingInspectionControls(ui)
@@ -115,23 +103,6 @@ def test_add_probe_point_offers_mode_before_reference_refinement(application):
     assert ui.requests == []
     assert controls.refinement_dialog.use_existing_reference_button.isVisible()
     assert controls.refinement_dialog.retake_reference_button.isVisible()
-
-
-def test_workflow_contains_reference_three_motion_stages_and_summary(
-    application,
-):
-    ui = FakeUI()
-    controls = FinalizingInspectionControls(ui)
-
-    assert controls.refinement_dialog.workflow_stack.count() == 6
-    assert controls.refinement_dialog.SAFE_APPROACH_PAGE == 1
-    assert controls.refinement_dialog.ALIGNMENT_PAGE == 2
-    assert controls.refinement_dialog.PROBE_PAGE == 3
-    assert controls.refinement_dialog.SUMMARY_PAGE == 4
-    assert controls.refinement_dialog.summary_safe_pose_label is not None
-    assert controls.refinement_dialog.summary_aligned_pose_label is not None
-    assert controls.probe_point_id_field.parent() is not None
-    assert controls.probe_point_display_name_field.parent() is not None
 
 
 def test_reference_page_offers_capture_when_no_saved_views(application):

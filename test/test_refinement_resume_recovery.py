@@ -7,13 +7,6 @@ def _source():
     ).read_text()
 
 
-def test_normal_close_ends_server_owned_refinement():
-    source = _source()
-
-    assert "ProbeSetupIntent.OPERATION_END_REFINEMENT" in source
-    assert "self._submit_probe_setup(intent)" in source
-
-
 def test_emergency_recovery_keeps_retract_available():
     source = _source()
 

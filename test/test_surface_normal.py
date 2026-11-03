@@ -1,6 +1,5 @@
 """Tests for local surface-normal estimation from registered depth."""
 
-import inspect
 import math
 import struct
 
@@ -11,7 +10,6 @@ from fault_detector_spot.inspection.model.models import ImagePoint
 from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
     project_reference_pixel,
 )
-from fault_detector_spot.inspection.geometry import surface_normal
 from fault_detector_spot.inspection.geometry.surface_normal import (
     estimate_surface_normal,
 )
@@ -206,12 +204,6 @@ def test_invalid_configuration_is_rejected():
             camera_info,
             minimum_plane_inlier_ratio=0.0,
         )
-
-
-def test_surface_samples_remain_centered_on_requested_image_location():
-    source = inspect.getsource(surface_normal._collect_surface_samples)
-
-    assert "center = projected_point.mapped_pixel" in source
 
 
 def test_explicit_neighborhood_center_uses_actual_depth_sample():

@@ -12,8 +12,6 @@ from fault_detector_spot.manipulation.arm_movement_executor import (
     ArmMovementUpdate,
 )
 from fault_detector_spot.manipulation.moveit_arm_planner import (
-    DEFAULT_ACCELERATION_SCALING,
-    DEFAULT_VELOCITY_SCALING,
     MoveItPlanOutcome,
     MoveItPlanUpdate,
 )
@@ -190,11 +188,6 @@ def test_joint_goal_rejects_invalid_times(monkeypatch, seconds):
     executor.moveit_result_timeout_margin_sec = 15.0
     with pytest.raises(ValueError, match="finite and nonnegative"):
         executor._build_moveit_joint_goal(planned)
-
-
-def test_moveit_uses_conservative_model_scaling_before_execution_retiming():
-    assert DEFAULT_VELOCITY_SCALING == pytest.approx(0.5)
-    assert DEFAULT_ACCELERATION_SCALING == pytest.approx(0.4)
 
 
 def test_requested_duration_stretches_moveit_times_and_velocities(monkeypatch):

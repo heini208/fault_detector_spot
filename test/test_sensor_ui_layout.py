@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -91,12 +92,6 @@ def test_acquisition_channels_are_collapsed_by_default(application):
     assert controls.channel_content.isHidden()
     controls.channel_toggle_button.click()
     assert not controls.channel_content.isHidden()
-
-
-def test_current_attachment_does_not_expose_internal_revision(application):
-    controls = SensorControls()
-
-    assert not hasattr(controls, "attachment_revision_value")
 
 
 def test_registry_labels_manual_transform_without_claiming_calibration(
@@ -475,12 +470,6 @@ def test_no_sensor_state_uses_real_hand_frame(application):
     assert controls.attachment_probe_frame_value.text() == "hand"
 
 
-def test_sensor_workspace_has_no_sensing_elements_placeholder(application):
-    controls = SensorControls()
-
-    assert not hasattr(controls, "manage_sensing_elements_button")
-
-
 def test_sensor_workspace_has_no_ros_or_backend_ownership():
     path = (
         Path(__file__).parents[1]
@@ -506,27 +495,43 @@ def test_sensor_workspace_has_no_ros_or_backend_ownership():
         assert value not in source
 
 
-def test_main_ui_wires_create_update_and_delete_sensor_intents():
-    path = (
-        Path(__file__).parents[1]
-        / "fault_detector_spot"
-        / "ui"
-        / "fault_detector_ui.py"
-    )
-    source = path.read_text(encoding="utf-8")
+def test_main_ui_wires_create_update_and_delete_sensor_intents(application, monkeypatch):
+    from PyQt5.QtCore import QTimer
+    import fault_detector_spot.ui.fault_detector_ui as ui_module
 
-    assert "self.sensor_controls.create_requested.connect(" in source
-    assert "self.sensor_controls.update_requested.connect(" in source
-    assert "self.sensor_controls.delete_requested.connect(" in source
-    assert "self.sensor_registry_client.create_sensor" in source
-    assert "self.sensor_registry_client.update_sensor" in source
-    assert "self.sensor_registry_client.delete_sensor(" in source
-    assert "self.sensor_attachment_client.create_sensor" not in source
-    assert "self.sensor_attachment_client.update_sensor" not in source
-    assert "self.sensor_attachment_client.delete_sensor(" not in source
-    assert '"Delete sensor mount"' in source
-    assert (
-        "self.sensor_registry_client.upload_progress.connect(\n"
-        "            self._process_sensor_mesh_upload_progress\n"
-        "        )"
-    ) in source
+    # Keep the real sensor widgets/wiring; unrelated ROS inputs stay offline.
+    monkeypatch.setattr(ui_module, "PostureStateSource", lambda _node: SimpleNamespace(
+        posture=lambda: None, destroy=lambda: None,
+    ))
+    monkeypatch.setattr(ui_module.RecordingControls, "init_ros_communication", lambda _self: None)
+    ui = ui_module.Fault_Detector_UI()
+    for timer in ui.findChildren(QTimer):
+        timer.stop()
+    registry = Mock()
+    ui.sensor_registry_client = registry
+    ui.sensor_attachment_client = Mock()
+    monkeypatch.setattr(
+        ui_module.QMessageBox, "question", lambda *_args: ui_module.QMessageBox.Yes,
+    )
+    try:
+        controls = ui.sensor_controls
+        controls.mount_id_field.setText("probe")
+        controls.display_name_field.setText("Probe")
+        intent = controls._definition_intent()
+        controls.create_requested.emit(intent)
+        controls.update_requested.emit(intent)
+        controls.delete_requested.emit("probe")
+
+        expected = (
+            "probe", "Probe", intent.translation_m, intent.rotation_degrees, intent.channels,
+        )
+        extras = dict(head_geometry=intent.head_geometry, collision_mesh=intent.collision_mesh,
+                      orientation=intent.orientation)
+        registry.create_sensor.assert_called_once_with(*expected, **extras)
+        registry.update_sensor.assert_called_once_with(*expected, **extras)
+        registry.delete_sensor.assert_called_once_with("probe")
+        assert not ui.sensor_attachment_client.mock_calls
+    finally:
+        ui.sensor_registry_client = None
+        ui.sensor_attachment_client = None
+        ui.close()

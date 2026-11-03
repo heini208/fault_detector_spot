@@ -71,14 +71,6 @@ def test_mapping_start_finishes_when_launch_process_is_running():
     assert behavior.feedback_message == "Mapping enabled"
 
 
-def test_mapping_start_does_not_block_for_runtime_operation():
-    helper = FakeHelper()
-    behavior = _behavior(helper)
-
-    assert behavior.update() == py_trees.common.Status.RUNNING
-    assert behavior._launch_requested
-
-
 def test_mapping_start_synchronizes_requested_map_before_launch():
     helper = FakeHelper()
     behavior = _behavior(

@@ -12,7 +12,6 @@ from fault_detector_spot.manipulation.moveit_arm_planner import (
     DEFAULT_CARTESIAN_JUMP_THRESHOLD,
     DEFAULT_CARTESIAN_MAX_STEP_M,
     DEFAULT_CARTESIAN_MIN_FRACTION,
-    DEFAULT_POSITION_TOLERANCE_M,
     MIN_ARM_SH1_RAD,
     MoveItArmPlanner,
     MoveItPlanOutcome,
@@ -52,7 +51,19 @@ def valid_trajectory():
 
 
 def test_default_position_tolerance_is_five_millimeters():
-    assert DEFAULT_POSITION_TOLERANCE_M == pytest.approx(0.005)
+    node = SimpleNamespace(
+        get_logger=lambda: SimpleNamespace(info=lambda *_args: None),
+        create_client=lambda *_args: object(),
+    )
+    planner = MoveItArmPlanner(node)
+    target = PoseStamped()
+    target.header.frame_id = "body"
+    target.pose.orientation.w = 1.0
+    request = planner._build_request(target).motion_plan_request
+    position = request.goal_constraints[0].position_constraints[0]
+    assert list(position.constraint_region.primitives[0].dimensions) == pytest.approx([0.01] * 3)
+    assert request.max_velocity_scaling_factor == pytest.approx(0.5)
+    assert request.max_acceleration_scaling_factor == pytest.approx(0.4)
 
 
 def test_cartesian_defaults_require_dense_nearly_complete_path():

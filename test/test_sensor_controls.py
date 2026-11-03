@@ -44,25 +44,3 @@ def test_routine_creation_readiness_depends_only_on_parent(
     controls.routine_parent_object_dropdown.setCurrentIndex(1)
 
     assert controls.create_routine_button.isEnabled() is True
-
-
-def test_inspection_controls_do_not_own_sensor_registry_mutations(
-    application,
-    tmp_path,
-):
-    controls = FinalizingInspectionControls(FakeUI(tmp_path))
-
-    forbidden = (
-        "sensor_add_client",
-        "sensor_list_subscription",
-        "sensor_id_field",
-        "probe_frame_value_label",
-        "set_sensor_definitions",
-        "_populate_sensor_dropdown",
-        "_active_probe_frame",
-        "_configured_hand_to_probe_pose",
-        "new_sensor_id_field",
-        "handle_add_sensor",
-    )
-    for name in forbidden:
-        assert not hasattr(controls, name)

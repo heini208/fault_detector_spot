@@ -6,18 +6,6 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
-def test_application_owns_registry_and_attachment_with_one_repository():
-    source = (
-        ROOT
-        / "fault_detector_spot/application/api/application_api_node.py"
-    ).read_text(encoding="utf-8")
-
-    assert "sensor_repository = SensorRepository" in source
-    assert "SensorAttachmentController(" in source
-    assert "SensorRegistryController(" in source
-    assert "SensorRegistryApi(" in source
-
-
 def test_registry_transport_has_no_attachment_state_subscription():
     source = (
         ROOT / "fault_detector_spot/application/api/sensor_registry_api.py"

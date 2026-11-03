@@ -1,7 +1,6 @@
 """Regression tests for mapping runtime lifecycle safety."""
 
 from types import SimpleNamespace
-import inspect
 
 import py_trees
 import pytest
@@ -10,7 +9,6 @@ from fault_detector_spot.mapping.behaviours.enable_localization import (
     EnableLocalization,
 )
 from fault_detector_spot.mapping.behaviours.stop_mapping import StopMapping
-from fault_detector_spot.mapping.runtime.rtabmap_runtime_manager import RtabmapRuntimeManager
 from fault_detector_spot.shared.ros import runtime_manager as runtime_module
 from threading import RLock
 from fault_detector_spot.navigation.runtime.nav2_runtime_manager import Nav2RuntimeManager
@@ -132,13 +130,6 @@ def test_localization_requires_the_requested_map_before_reporting_success():
     assert behavior.update() == py_trees.common.Status.RUNNING
     assert behavior.update() == py_trees.common.Status.FAILURE
     assert "without selecting 'routine_map'" in behavior.feedback_message
-
-
-def test_running_mode_no_longer_shells_out_to_ros2_param_get():
-    source = inspect.getsource(RtabmapRuntimeManager.get_running_mode)
-
-    assert "subprocess.run" not in source
-    assert "slam_runtime_mode" in source
 
 
 def test_nav2_stop_keeps_process_reference_when_termination_fails(

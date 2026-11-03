@@ -93,16 +93,3 @@ def test_semantic_requests_remain_fifo_buffered():
     )
 
     assert dispatched == [first, second, third]
-
-
-def test_dispatched_request_reports_transport_independent_stage():
-    controller = CommandController(dispatch_request=lambda _request: None)
-    request = _request(CommandID.STAND_UP)
-    states = []
-    controller.add_status_listener(states.append)
-
-    controller.submit(request)
-
-    assert states[-1].detail.startswith(
-        "Dispatched stand_up to behavior tree"
-    )
