@@ -1,8 +1,7 @@
 name: Automated baseline
 
+# Run this environment-heavy baseline explicitly from GitHub Actions.
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
 permissions:
