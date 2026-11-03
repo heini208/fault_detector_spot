@@ -1121,7 +1121,7 @@ class FinalizingInspectionControls(InspectionControls):
         can_abort = self._can_abort_probe_refinement()
         self.abort_probe_refinement_button.setVisible(refinement_active)
         self.abort_probe_refinement_button.setEnabled(refinement_active and can_abort)
-        self.refinement_dialog.abort_button.setEnabled(can_abort)
+        self.refinement_dialog.set_abort_enabled(can_abort)
 
     def _can_retract_without_saving(self, presentation):
         """Allow retraction from recovery or the reached probe stage."""
@@ -1208,7 +1208,7 @@ class FinalizingInspectionControls(InspectionControls):
             return False
 
         self.abort_probe_refinement_button.setEnabled(False)
-        self.refinement_dialog.abort_button.setEnabled(False)
+        self.refinement_dialog.set_abort_enabled(False)
         self.refinement_recovery_status_label.setText(
             "Aborting probe-point setup."
         )
@@ -1726,10 +1726,9 @@ class FinalizingInspectionControls(InspectionControls):
             self._can_open_probe_summary()
         )
         if presentation.active_stage is RefinementStage.PROBE:
-            self.refinement_dialog.next_button.setVisible(
-                not self.refinement_dialog.is_summary_page()
+            self.refinement_dialog.set_next_action(
+                text="Next", visible=not self.refinement_dialog.is_summary_page(),
             )
-            self.refinement_dialog.next_button.setText("Next")
         if self.refinement_dialog.is_summary_page():
             self.refinement_dialog.refresh_summary()
 

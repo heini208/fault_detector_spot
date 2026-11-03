@@ -1819,6 +1819,11 @@ class InspectionControls(UIControlHelper):
         presentation = self._refinement_presentation
         if presentation is None or not hasattr(self, "refinement_dialog"):
             return
+        self.refinement_dialog.set_navigation_enabled(
+            back_enabled=self._can_go_back_in_refinement(presentation),
+            next_enabled=self._can_continue_refinement(presentation),
+            close_enabled=self._can_close_refinement_workflow(presentation),
+        )
         if self._custom_probe_mode():
             self._refresh_custom_refinement()
             return
@@ -1974,27 +1979,20 @@ class InspectionControls(UIControlHelper):
         self.refinement_dialog.fine_adjustment_dialog.refresh(
             alignment_enabled and alignment_adjustable, alignment_enabled
         )
-        self.refinement_dialog.back_button.setEnabled(
-            self._can_go_back_in_refinement(presentation)
-        )
-        self.refinement_dialog.next_button.setVisible(not probe_page)
         approved = presentation.approved_pose(current)
-        self.refinement_dialog.next_button.setEnabled(
-            self._can_continue_refinement(presentation)
-        )
-        self.refinement_dialog.next_button.setText(
-            "Keep Existing and Continue"
-            if (
-                approved is not None
-                and self._poses_equivalent(
-                    approved,
-                    presentation.candidate_pose(current),
+        self.refinement_dialog.set_next_action(
+            text=(
+                "Keep Existing and Continue"
+                if (
+                    approved is not None
+                    and self._poses_equivalent(
+                        approved,
+                        presentation.candidate_pose(current),
+                    )
                 )
-            )
-            else "Next"
-        )
-        self.refinement_dialog.close_button.setEnabled(
-            self._can_close_refinement_workflow(presentation)
+                else "Next"
+            ),
+            visible=not probe_page,
         )
         if presentation.recovery_required:
             self.refinement_recovery_status_label.setText(
@@ -2175,16 +2173,8 @@ class InspectionControls(UIControlHelper):
             )
         dialog.move_path_button.setEnabled(editable and candidate is not None)
         dialog.fine_adjustment_dialog.refresh(editable, editable)
-        dialog.next_button.setVisible(not dialog.is_summary_page())
-        dialog.next_button.setText("Next")
-        dialog.next_button.setEnabled(
-            self._can_continue_refinement(presentation)
-        )
-        dialog.back_button.setEnabled(
-            self._can_go_back_in_refinement(presentation)
-        )
-        dialog.close_button.setEnabled(
-            self._can_close_refinement_workflow(presentation)
+        dialog.set_next_action(
+            text="Next", visible=not dialog.is_summary_page(),
         )
         if presentation.recovery_required:
             self.refinement_recovery_status_label.setText(presentation.recovery_message)

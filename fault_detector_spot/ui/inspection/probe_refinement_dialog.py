@@ -1126,6 +1126,21 @@ class ProbeRefinementDialog(QDialog):
     def refresh(self):
         self.controls._refresh_refinement_dialog()
 
+    def set_navigation_enabled(
+        self, *, back_enabled: bool, next_enabled: bool, close_enabled: bool,
+    ):
+        """Apply navigation eligibility supplied by the controls."""
+        self.back_button.setEnabled(back_enabled)
+        self.next_button.setEnabled(next_enabled)
+        self.close_button.setEnabled(close_enabled)
+
+    def set_next_action(self, *, text: str, visible: bool):
+        self.next_button.setText(text)
+        self.next_button.setVisible(visible)
+
+    def set_abort_enabled(self, enabled: bool):
+        self.abort_button.setEnabled(enabled)
+
     def open_for_stage(self, stage):
         self._force_close = False
         self.show_stage(stage)
