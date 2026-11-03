@@ -1,12 +1,14 @@
 """Guided probe-point setup dialog."""
 
+from typing import Callable
+
 from fault_detector_msgs.msg import ProbeSetupMotionIntent
 from .pre_approach_path_dialog import PreApproachPathDialog
 from .fine_adjustment_dialog import FineAdjustmentDialog
 from .speed_slider import SpeedSlider
 from ..manipulation.controls import ManipulationControls
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QDialog,
@@ -32,6 +34,11 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
 class ProbeRefinementDialog(QDialog):
     """Guide reference selection, refinement, and final probe-point saving."""
 
+    back_requested = pyqtSignal()
+    next_requested = pyqtSignal()
+    abort_requested = pyqtSignal()
+    emergency_stop_requested = pyqtSignal()
+
     STAGES = (
         RefinementStage.SAFE_APPROACH,
         RefinementStage.ALIGNMENT,
@@ -45,10 +52,11 @@ class ProbeRefinementDialog(QDialog):
     SUMMARY_PAGE = 4
     MODE_PAGE = 5
 
-    def __init__(self, controls):
+    def __init__(self, controls, *, request_close: Callable[[], bool]):
         parent = controls.ui if isinstance(controls.ui, QWidget) else None
         super().__init__(parent)
         self.controls = controls
+        self._request_close = request_close
         self.fully_custom = False
         self.full_control_dialog = None
         self._force_close = False
@@ -120,20 +128,20 @@ class ProbeRefinementDialog(QDialog):
             "font-weight: bold; padding: 8px; }"
         )
         self.emergency_stop_button.clicked.connect(
-            self.controls.handle_refinement_emergency_stop
+            self.emergency_stop_requested
         )
         footer.addWidget(self.emergency_stop_button)
         footer.addStretch()
 
         self.back_button = QPushButton("Back")
         self.back_button.clicked.connect(
-            self.controls.handle_refinement_back
+            self.back_requested
         )
         footer.addWidget(self.back_button)
 
         self.next_button = QPushButton("Next")
         self.next_button.clicked.connect(
-            self.controls.handle_refinement_next
+            self.next_requested
         )
         footer.addWidget(self.next_button)
 
@@ -143,7 +151,7 @@ class ProbeRefinementDialog(QDialog):
             "movement is cancelled."
         )
         self.abort_button.clicked.connect(
-            self.controls.handle_abort_probe_refinement
+            self.abort_requested
         )
         footer.addWidget(self.abort_button)
 
@@ -1133,7 +1141,7 @@ class ProbeRefinementDialog(QDialog):
         if self._force_close:
             event.accept()
             return
-        if self.controls.request_close_refinement_workflow():
+        if self._request_close():
             event.accept()
             return
         event.ignore()

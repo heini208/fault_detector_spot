@@ -698,7 +698,15 @@ class InspectionControls(UIControlHelper):
                 self._update_save_probe_point_state
             )
         self._create_reference_camera_dropdowns()
-        self.refinement_dialog = ProbeRefinementDialog(self)
+        self.refinement_dialog = ProbeRefinementDialog(
+            self, request_close=self.request_close_refinement_workflow,
+        )
+        self.refinement_dialog.back_requested.connect(self.handle_refinement_back)
+        self.refinement_dialog.next_requested.connect(self.handle_refinement_next)
+        self.refinement_dialog.abort_requested.connect(self.handle_abort_probe_refinement)
+        self.refinement_dialog.emergency_stop_requested.connect(
+            self.handle_refinement_emergency_stop
+        )
 
     def _make_workspace_tabs(self):
         self.inspection_workspace_tabs = QTabWidget()
