@@ -53,7 +53,6 @@ class FinalizingInspectionControls(InspectionControls):
         self._refinement_emergency_stop_requested = False
         self._reference_preview_cache = {}
         self._reference_view_id_by_camera = {}
-        self._begin_refinement_after_reference_commit = False
         self._reference_capture_in_progress = False
         self._abort_refinement_after_start = False
         self._base_position_operation_context = ""
@@ -251,7 +250,6 @@ class FinalizingInspectionControls(InspectionControls):
         self.refinement_dialog.fully_custom = fully_custom
         self._reference_start_pending = False
         self._reference_start_error = ""
-        self._begin_refinement_after_reference_commit = False
         self.inspection_workspace_tabs.setEnabled(False)
         if self.refinement_dialog.fully_custom:
             self.refinement_dialog.show()
@@ -351,7 +349,6 @@ class FinalizingInspectionControls(InspectionControls):
                 "service is available and no other request is pending."
             )
             return False
-        self._begin_refinement_after_reference_commit = False
         return True
 
     def handle_reference_start_rejected(self, detail):
@@ -470,7 +467,6 @@ class FinalizingInspectionControls(InspectionControls):
             )
             return False
         self._clear_reference_preview_cache()
-        self._begin_refinement_after_reference_commit = False
         self._reference_capture_in_progress = True
         legacy_camera_ids = tuple(
             camera.camera_id for camera in REFERENCE_CAMERAS[:3]
@@ -678,7 +674,6 @@ class FinalizingInspectionControls(InspectionControls):
             and not self._refinement_has_pending_work(presentation)
             and not presentation.recovery_required
             and not self._distance_failure_requires_retraction
-            and not self._retraction_failed
             and not self._surface_test_active
             and self._surface_result_current()
             and (
@@ -772,7 +767,6 @@ class FinalizingInspectionControls(InspectionControls):
             return True
 
         if self._refinement_presentation is None:
-            self._begin_refinement_after_reference_commit = False
             self._abort_refinement_after_start = False
             if hasattr(self, "inspection_workspace_tabs"):
                 self.inspection_workspace_tabs.setEnabled(True)
@@ -813,7 +807,6 @@ class FinalizingInspectionControls(InspectionControls):
         """Pause the UI without discarding server-owned refinement state."""
         presentation = self._refinement_presentation
         if presentation is None:
-            self._begin_refinement_after_reference_commit = False
             if hasattr(self, "inspection_workspace_tabs"):
                 self.inspection_workspace_tabs.setEnabled(True)
             self.start_probe_refinement_button.setText(
@@ -892,7 +885,6 @@ class FinalizingInspectionControls(InspectionControls):
         self._probe_finalization_point_id = ""
         self._probe_finalization_scope = None
         self._refinement_emergency_stop_requested = False
-        self._begin_refinement_after_reference_commit = False
         result = super()._finish_refinement_workflow_close()
         self.start_probe_refinement_button.setText(
             "Add New Probe Point"
@@ -1303,7 +1295,6 @@ class FinalizingInspectionControls(InspectionControls):
             and not self._refinement_has_pending_work(presentation)
             and not presentation.recovery_required
             and not self._distance_failure_requires_retraction
-            and not self._retraction_failed
         )
         self.refinement_dialog.test_distance_measure_button.setEnabled(
             alignment_available

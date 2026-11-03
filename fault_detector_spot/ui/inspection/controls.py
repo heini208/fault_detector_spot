@@ -100,7 +100,6 @@ class InspectionControls(UIControlHelper):
         self._probe_setup = None
         self._refinement_presentation = None
         self._distance_failure_requires_retraction = False
-        self._retraction_failed = False
         self._editing_probe_point_id = None
         self.management_dialog = None
         self._routine_arm_pose_scope = None
@@ -1703,7 +1702,6 @@ class InspectionControls(UIControlHelper):
 
     def _finish_refinement_workflow_close(self):
         self._distance_failure_requires_retraction = False
-        self._retraction_failed = False
         if hasattr(self, "inspection_workspace_tabs"):
             self.inspection_workspace_tabs.setEnabled(True)
         self._refinement_presentation = None
@@ -1772,7 +1770,6 @@ class InspectionControls(UIControlHelper):
             return bool(
                 not self._refinement_has_pending_work(presentation)
                 and not presentation.recovery_required
-                and not self._retraction_failed
                 and presentation.stage_is_approved(stage)
                 and presentation.motion_states[stage]
                 is RefinementMotionState.REACHED
@@ -1803,10 +1800,6 @@ class InspectionControls(UIControlHelper):
             presentation.active_stage is not RefinementStage.SAFE_APPROACH
             and not self._refinement_has_pending_work(presentation)
             and not presentation.recovery_required
-            and (
-                not self._custom_probe_mode()
-                or not self._retraction_failed
-            )
         )
 
     def _can_retract_without_saving(self, presentation):
@@ -1883,7 +1876,6 @@ class InspectionControls(UIControlHelper):
 
         pending = self._refinement_has_pending_work(presentation)
         current = presentation.active_stage
-        recovery_only = self._retraction_failed
         safe_page = current == RefinementStage.SAFE_APPROACH
         alignment_page = current == RefinementStage.ALIGNMENT
         probe_page = current == RefinementStage.PROBE
@@ -1891,7 +1883,7 @@ class InspectionControls(UIControlHelper):
             presentation.motion_states[RefinementStage.SAFE_APPROACH]
             == RefinementMotionState.REACHED
         )
-        safe_enabled = safe_page and not pending and not recovery_only
+        safe_enabled = safe_page and not pending
         safe_adjustable = presentation.motion_states[
             RefinementStage.SAFE_APPROACH
         ] in (
@@ -1902,7 +1894,6 @@ class InspectionControls(UIControlHelper):
             alignment_page
             and safe_reached
             and not pending
-            and not recovery_only
         )
         alignment_adjustable = presentation.motion_states[
             RefinementStage.ALIGNMENT
@@ -1943,7 +1934,6 @@ class InspectionControls(UIControlHelper):
             and alignment_reached
             and not pending
             and not self._distance_failure_requires_retraction
-            and not recovery_only
         )
         self.retract_without_saving_button.setEnabled(
             self._can_retract_without_saving(presentation)
@@ -2147,7 +2137,7 @@ class InspectionControls(UIControlHelper):
         stage = presentation.active_stage
         safe_page = stage is RefinementStage.SAFE_APPROACH
         pending = self._refinement_has_pending_work(presentation)
-        enabled = not pending and not presentation.recovery_required and not self._retraction_failed
+        enabled = not pending and not presentation.recovery_required
         predecessor = RefinementStage.SAFE_APPROACH if stage is RefinementStage.ALIGNMENT else RefinementStage.ALIGNMENT
         editable = enabled and not safe_page and presentation.motion_states[predecessor] is RefinementMotionState.REACHED
         candidate = presentation.candidate_pose(stage)
@@ -2766,7 +2756,6 @@ class InspectionControls(UIControlHelper):
         self._distance_failure_requires_retraction = (
             presentation.recovery_required
         )
-        self._retraction_failed = False
         if previous is None:
                 self.resume_refinement_dialog()
         elif self.refinement_dialog.isVisible():
