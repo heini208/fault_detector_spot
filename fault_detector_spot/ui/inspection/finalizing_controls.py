@@ -1104,6 +1104,11 @@ class FinalizingInspectionControls(InspectionControls):
             )
         )
 
+    def _handle_refinement_stage_changed(self, stage):
+        super()._handle_refinement_stage_changed(stage)
+        if not self._custom_probe_mode() and stage is not RefinementStage.PROBE:
+            self._surface_move_succeeded = False
+
     def handle_refinement_back(self):
         if self.refinement_dialog.is_summary_page():
             self.refinement_dialog.show_stage(RefinementStage.PROBE)
@@ -1451,7 +1456,11 @@ class FinalizingInspectionControls(InspectionControls):
         )
         if status.state == ApplicationCommandState.STATE_SUCCEEDED:
             self._surface_test_active = False
-            self._surface_move_succeeded = True
+            presentation = self._refinement_presentation
+            self._surface_move_succeeded = bool(
+                presentation is not None
+                and presentation.active_stage is RefinementStage.PROBE
+            )
             self._distance_failure_requires_retraction = False
         elif status.state in {
             ApplicationCommandState.STATE_FAILED,
@@ -1638,6 +1647,26 @@ class FinalizingInspectionControls(InspectionControls):
                 label.setText(text)
                 label.setToolTip(text)
 
+    def _synchronize_refinement_presentation(self, presentation):
+        """Discard measurement state that no longer belongs to refinement."""
+        if not self._custom_probe_mode():
+            state = self._probe_setup_state
+            if (presentation is None or (
+                self._sensor_tip_distance_context_id and state is not None
+                and not self._sensor_tip_distance_context_id.startswith(
+                    state.context_id + "/measure-sensor-tip-distance/"
+                )
+            )):
+                self._sensor_tip_distance_test_active = False
+                self._sensor_tip_distance_context_id = ""
+                self._sensor_tip_distance_request_id = ""
+            if presentation is None:
+                self._surface_test_active = False
+                self._surface_move_succeeded = False
+                self._surface_move_target_m = None
+                self._surface_move_context_id = ""
+        super()._synchronize_refinement_presentation(presentation)
+
     def _refresh_refinement_dialog(self):
         super()._refresh_refinement_dialog()
         if self._custom_probe_mode():
@@ -1645,27 +1674,12 @@ class FinalizingInspectionControls(InspectionControls):
             return
         self._refresh_alignment_depth_status()
         presentation = self._refinement_presentation
-        state = self._probe_setup_state
-        if (presentation is None or (
-            self._sensor_tip_distance_context_id and state is not None
-            and not self._sensor_tip_distance_context_id.startswith(
-                state.context_id + "/measure-sensor-tip-distance/"
-            )
-        )):
-            self._sensor_tip_distance_test_active = False
-            self._sensor_tip_distance_context_id = ""
-            self._sensor_tip_distance_request_id = ""
+        if not self._sensor_tip_distance_context_id:
             self.refinement_dialog.sensor_tip_distance_status_label.setText(
                 "Test may move the arm to see the target, measure, and return."
             )
         if presentation is None:
-            self._surface_test_active = False
-            self._surface_move_succeeded = False
-            self._surface_move_target_m = None
-            self._surface_move_context_id = ""
             return
-        if presentation.active_stage is not RefinementStage.PROBE:
-            self._surface_move_succeeded = False
         pending = (presentation.pending_motion is not None
                    or self._sensor_tip_distance_test_active)
         self.refinement_dialog.test_distance_measure_button.setEnabled(

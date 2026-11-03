@@ -191,3 +191,57 @@ def test_rejected_new_surface_attempt_keeps_next_disabled(wizard):
     assert not controls.handle_test_surface_distance()
     assert not controls.refinement_dialog.next_button.isEnabled()
     assert not controls.handle_refinement_next()
+
+
+@pytest.mark.parametrize("completed_before_back", [True, False])
+def test_leaving_probe_stage_invalidates_surface_success(wizard, completed_before_back):
+    controls, *_ = wizard
+    assert controls.handle_test_surface_distance()
+    if completed_before_back:
+        controls.handle_application_state(status())
+
+    assert controls.handle_refinement_back()
+    if not completed_before_back:
+        controls.handle_application_state(status())
+
+    controls.refinement_dialog.show_stage(RefinementStage.PROBE)
+    assert not controls.refinement_dialog.next_button.isEnabled()
+    assert not controls.handle_refinement_next()
+    assert not controls.approve_and_retract_button.isEnabled()
+
+
+@pytest.mark.parametrize("context_change", ["replaced", "closed"])
+def test_setup_change_clears_measurement_without_refresh(wizard, monkeypatch, context_change):
+    controls, state, *_ = wizard
+    assert controls.handle_test_surface_distance()
+    controls.handle_application_state(status())
+    assert controls.handle_refinement_back()
+    assert controls.handle_test_sensor_tip_distance()
+    feedback = status(
+        ApplicationCommandState.STATE_RUNNING,
+        intent=OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE,
+        context_id=controls._sensor_tip_distance_context_id,
+    )
+    controls.handle_application_state(feedback)
+    assert controls._sensor_tip_distance_request_id
+
+    # Snapshot handling must discard stale correlation before rendering runs.
+    monkeypatch.setattr(controls, "_refresh_refinement_dialog", lambda: None)
+    if context_change == "replaced":
+        state.context_id = "another-setup"
+    else:
+        state.refinement_active = False
+    controls.apply_setup_state(state)
+
+    assert not controls._sensor_tip_distance_test_active
+    assert controls._sensor_tip_distance_context_id == ""
+    assert controls._sensor_tip_distance_request_id == ""
+    if context_change == "closed":
+        assert not controls._surface_test_active
+        assert not controls._surface_move_succeeded
+        assert controls._surface_move_target_m is None
+        assert controls._surface_move_context_id == ""
+
+    feedback.state = ApplicationCommandState.STATE_FAILED
+    controls.handle_application_state(feedback)
+    assert not controls._distance_failure_requires_retraction
