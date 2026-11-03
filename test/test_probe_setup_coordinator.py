@@ -1190,15 +1190,18 @@ def test_closing_context_releases_refinement_attachment(tmp_path):
     assert attachment_controller.active_reservations == 0
 
 
-@pytest.mark.parametrize("prepared_motion", [False, True])
+@pytest.mark.parametrize("workflow", ["idle", "prepared_motion", "reached_alignment"])
 def test_shutdown_does_not_deadlock_with_external_status(
-    tmp_path, monkeypatch, prepared_motion,
+    tmp_path, monkeypatch, workflow,
 ):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event, current_thread
 
     listener_errors = []
-    commands = CommandController(listener_error_handler=listener_errors.append)
+    commands = CommandController(
+        dispatch_request=lambda _request: None,
+        listener_error_handler=listener_errors.append,
+    )
     setup = SetupCoordinator(commands)
     probe = ProbeSetupCoordinator(
         setup,
@@ -1209,12 +1212,19 @@ def test_shutdown_does_not_deadlock_with_external_status(
         motion_command_factory=FakeMotionCommandFactory(),
     )
     state = probe.open_context("probe-ui")
-    if prepared_motion:
+    if workflow != "idle":
         state = create_selected_routine(probe, state.context)
         state = probe.begin_refinement(state.context, fully_custom=True)
+    if workflow == "prepared_motion":
         probe.prepare_motion(
             state.context, ProbeMotionRequest(kind=ProbeMotionKind.MOVE_SAFE_APPROACH),
         )
+    elif workflow == "reached_alignment":
+        probe._draft(state.context).refinement.motion_states[
+            RefinementStage.ALIGNMENT
+        ] = RefinementMotionState.REACHED
+    observed_revisions = []
+    probe.add_state_listener(lambda snapshot: observed_revisions.append(snapshot.context.revision))
 
     status_started, removal_started = Event(), Event()
     original_context_lock = probe._context_lock
@@ -1259,13 +1269,17 @@ def test_shutdown_does_not_deadlock_with_external_status(
             removal_started.set()
         assert delivery.result(timeout=5) == request.request_id
 
-    probe.close()
     assert listener_errors == []
-    assert removed == [probe._handle_external_command_status]
-    assert commands._listeners == [setup._handle_command_status]
+    if workflow == "reached_alignment":
+        assert observed_revisions == [state.context.revision + 1]
+    # The first close must finish cleanup even if in-flight feedback revised the draft.
     assert setup.contexts == ()
+    assert not probe._drafts
     assert not probe.refinement_controller.has_context(state.context)
     assert probe.refinement_controller.sensor_attachment_controller.active_reservations == 0
+    probe.close()
+    assert removed == [probe._handle_external_command_status]
+    assert commands._listeners == [setup._handle_command_status]
 
 
 @pytest.mark.parametrize("close_kind", ["context", "coordinator", "abort"])

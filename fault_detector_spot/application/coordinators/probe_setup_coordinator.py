@@ -1154,10 +1154,7 @@ class ProbeSetupCoordinator:
             self._closed = True
             detach_listener = self._command_listener_attached
             self._command_listener_attached = False
-            contexts = tuple(
-                draft.context
-                for draft in self._drafts.values()
-            )
+            contexts = tuple(self._context_locks.items())
         first_error = None
         # Stop observing external movement before taking any context lock.
         # Own operation listeners remain attached until terminal completion.
@@ -1170,12 +1167,16 @@ class ProbeSetupCoordinator:
                 with self._lock:
                     self._command_listener_attached = True
                 first_error = exception
-        for context in contexts:
-            if self.setup_coordinator.is_current(context):
-                try:
-                    self.close_context(context)
-                except Exception as exception:
-                    first_error = first_error or exception
+        for context_id, context_lock in contexts:
+            try:
+                with context_lock:
+                    # In-flight feedback may have advanced the draft's revision.
+                    with self._lock:
+                        draft = self._drafts.get(context_id)
+                    if draft is not None:
+                        self.close_context(draft.context)
+            except Exception as exception:
+                first_error = first_error or exception
         self._finish_close()
         if first_error is not None:
             raise first_error
