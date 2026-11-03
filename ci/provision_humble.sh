@@ -228,7 +228,7 @@ rosdep update --rosdistro humble
 rosdep keys --from-paths "${rosdep_paths[@]}" --ignore-src --rosdistro humble \
     > "$dependency_workspace/evidence/rosdep-keys.txt"
 rosdep install --from-paths "${rosdep_paths[@]}" --ignore-src \
-    --rosdistro humble --yes "${rosdep_options[@]}" 2>&1 \
+    --rosdistro humble -y "${rosdep_options[@]}" 2>&1 \
     | tee "$dependency_workspace/evidence/rosdep-install.log"
 rosdep check --from-paths "${rosdep_paths[@]}" --ignore-src --rosdistro humble \
     "${rosdep_options[@]}" 2>&1 | tee "$dependency_workspace/evidence/rosdep-check.log"
