@@ -760,18 +760,7 @@ class FinalizingInspectionControls(InspectionControls):
                 if self._submit_probe_setup(intent) is not None:
                     self._abort_refinement_after_start = False
 
-        refinement_active = self._refinement_presentation is not None
-        self.abort_probe_refinement_button.setVisible(
-            refinement_active
-        )
-        self.abort_probe_refinement_button.setEnabled(
-            refinement_active
-            and not bool(self._probe_finalization_point_id)
-        )
-        if hasattr(self.refinement_dialog, "abort_button"):
-            self.refinement_dialog.abort_button.setEnabled(
-                not bool(self._probe_finalization_point_id)
-            )
+        self._update_abort_probe_refinement_state()
 
         deletion_point_id = self._delete_probe_point_pending
         self._update_saved_probe_points(state)
@@ -1091,7 +1080,7 @@ class FinalizingInspectionControls(InspectionControls):
         return bool(
             presentation is not None
             and presentation.active_stage is RefinementStage.PROBE
-            and presentation.pending_motion is None
+            and not self._refinement_has_pending_work(presentation)
             and not presentation.recovery_required
             and not self._distance_failure_requires_retraction
             and not self._retraction_failed
@@ -1101,6 +1090,51 @@ class FinalizingInspectionControls(InspectionControls):
                 self._custom_probe_mode()
                 or presentation.motion_states[RefinementStage.ALIGNMENT]
                 is RefinementMotionState.REACHED
+            )
+        )
+
+    def _can_continue_refinement(self, presentation):
+        """Use the verified surface result when leaving the probe stage."""
+        if presentation.active_stage is RefinementStage.PROBE:
+            return self._can_open_probe_summary()
+        return super()._can_continue_refinement(presentation)
+
+    def _can_close_refinement_workflow(self, presentation):
+        """Keep the dialog open while an accepted save is retracting."""
+        return bool(
+            not self._refinement_has_pending_work(presentation)
+            and (
+                not self._probe_finalization_point_id
+                or presentation.recovery_required
+            )
+        )
+
+    def _can_abort_probe_refinement(self):
+        """Abort is unavailable during distance testing or finalization."""
+        return bool(
+            not self._sensor_tip_distance_test_active
+            and not self._probe_finalization_point_id
+        )
+
+    def _update_abort_probe_refinement_state(self):
+        refinement_active = self._refinement_presentation is not None
+        can_abort = self._can_abort_probe_refinement()
+        self.abort_probe_refinement_button.setVisible(refinement_active)
+        self.abort_probe_refinement_button.setEnabled(refinement_active and can_abort)
+        self.refinement_dialog.abort_button.setEnabled(can_abort)
+
+    def _can_retract_without_saving(self, presentation):
+        """Allow retraction from recovery or the reached probe stage."""
+        return bool(
+            not self._refinement_has_pending_work(presentation)
+            and (
+                presentation.recovery_required
+                or self._distance_failure_requires_retraction
+                or (
+                    presentation.active_stage is RefinementStage.PROBE
+                    and presentation.motion_states[RefinementStage.ALIGNMENT]
+                    is RefinementMotionState.REACHED
+                )
             )
         )
 
@@ -1121,16 +1155,13 @@ class FinalizingInspectionControls(InspectionControls):
 
     def handle_abort_probe_refinement(self):
         """Abort the current unsaved probe-point setup."""
-        if self._sensor_tip_distance_test_active:
+        if not self._can_abort_probe_refinement():
             self.refinement_recovery_status_label.setText(
                 "Wait for the distance test to finish or use Emergency Stop "
                 "before aborting setup."
-            )
-            return False
-        if self._probe_finalization_point_id:
-            self.refinement_recovery_status_label.setText(
-                "Probe-point saving is already in progress and cannot be "
-                "aborted here."
+                if self._sensor_tip_distance_test_active
+                else "Probe-point saving is already in progress and cannot "
+                "be aborted here."
             )
             return False
 
@@ -1195,22 +1226,17 @@ class FinalizingInspectionControls(InspectionControls):
             )
             return True
 
-        if (presentation.pending_motion is not None
-                or self._sensor_tip_distance_test_active):
-            self.refinement_recovery_status_label.setText(
-                "Wait for the active movement and settle check before "
-                "closing the setup window."
-            )
-            return False
-
-        if (
-            self._probe_finalization_point_id
-            and not presentation.recovery_required
-        ):
-            self.refinement_recovery_status_label.setText(
-                "Wait for probe-point saving and mandatory retraction to "
-                "finish."
-            )
+        if not self._can_close_refinement_workflow(presentation):
+            if self._refinement_has_pending_work(presentation):
+                self.refinement_recovery_status_label.setText(
+                    "Wait for the active movement and settle check before "
+                    "closing the setup window."
+                )
+            else:
+                self.refinement_recovery_status_label.setText(
+                    "Wait for probe-point saving and mandatory retraction "
+                    "to finish."
+                )
             return False
 
         if hasattr(self, "inspection_workspace_tabs"):
@@ -1290,9 +1316,8 @@ class FinalizingInspectionControls(InspectionControls):
         presentation = self._require_refinement_presentation()
         state = self._probe_setup_state
         if (state is None or not state.context_id
-                or self._sensor_tip_distance_test_active
                 or presentation.active_stage is not RefinementStage.ALIGNMENT
-                or presentation.pending_motion is not None
+                or self._refinement_has_pending_work(presentation)
                 or presentation.recovery_required
                 or presentation.motion_states[RefinementStage.ALIGNMENT]
                 is not RefinementMotionState.REACHED):
@@ -1669,8 +1694,8 @@ class FinalizingInspectionControls(InspectionControls):
 
     def _refresh_refinement_dialog(self):
         super()._refresh_refinement_dialog()
+        self._update_abort_probe_refinement_state()
         if self._custom_probe_mode():
-            self._update_save_probe_point_state()
             return
         self._refresh_alignment_depth_status()
         presentation = self._refinement_presentation
@@ -1680,62 +1705,31 @@ class FinalizingInspectionControls(InspectionControls):
             )
         if presentation is None:
             return
-        pending = (presentation.pending_motion is not None
-                   or self._sensor_tip_distance_test_active)
-        self.refinement_dialog.test_distance_measure_button.setEnabled(
+        alignment_available = (
             presentation.active_stage is RefinementStage.ALIGNMENT
+            and not self._refinement_has_pending_work(presentation)
+            and not presentation.recovery_required
+            and not self._distance_failure_requires_retraction
+            and not self._retraction_failed
+        )
+        self.refinement_dialog.test_distance_measure_button.setEnabled(
+            alignment_available
             and presentation.motion_states[RefinementStage.ALIGNMENT]
             is RefinementMotionState.REACHED
-            and not pending
-            and not presentation.recovery_required
-            and not self._distance_failure_requires_retraction
-            and not self._retraction_failed
         )
         self.refinement_dialog.orient_sensor_tip_to_surface_button.setEnabled(
-            presentation.active_stage is RefinementStage.ALIGNMENT
+            alignment_available
             and presentation.motion_states[RefinementStage.SAFE_APPROACH]
             is RefinementMotionState.REACHED
-            and not pending
-            and not presentation.recovery_required
-            and not self._distance_failure_requires_retraction
-            and not self._retraction_failed
         )
-        self.refinement_dialog.abort_button.setEnabled(
-            not self._sensor_tip_distance_test_active
+        self.refinement_dialog.continue_to_summary_button.setEnabled(
+            self._can_open_probe_summary()
         )
-        self.abort_probe_refinement_button.setEnabled(
-            not self._sensor_tip_distance_test_active
-        )
-        probe_page = presentation.active_stage is RefinementStage.PROBE
-        alignment_reached = (
-            presentation.motion_states[RefinementStage.ALIGNMENT]
-            is RefinementMotionState.REACHED
-        )
-        retraction_required = (
-            presentation.recovery_required
-            or self._distance_failure_requires_retraction
-        )
-        self.retract_without_saving_button.setEnabled(
-            not pending
-            and (
-                retraction_required
-                or (probe_page and alignment_reached)
-            )
-        )
-        can_continue = self._can_open_probe_summary()
-        self.refinement_dialog.continue_to_summary_button.setEnabled(can_continue)
-        if probe_page:
+        if presentation.active_stage is RefinementStage.PROBE:
             self.refinement_dialog.next_button.setVisible(
                 not self.refinement_dialog.is_summary_page()
             )
             self.refinement_dialog.next_button.setText("Next")
-            self.refinement_dialog.next_button.setEnabled(can_continue)
-        self._update_save_probe_point_state()
-        if (
-            self._probe_finalization_point_id
-            and not presentation.recovery_required
-        ):
-            self.refinement_dialog.close_button.setEnabled(False)
         if self.refinement_dialog.is_summary_page():
             self.refinement_dialog.refresh_summary()
 
@@ -1799,6 +1793,12 @@ class FinalizingInspectionControls(InspectionControls):
 
     def handle_retract_without_saving(self):
         """Request server-owned retraction without persistence."""
+        presentation = self._refinement_presentation
+        if (
+            presentation is None
+            or not self._can_retract_without_saving(presentation)
+        ):
+            return False
         request_id = self.ui.execute_probe_refinement_finalization(
             save_requested=False,
         )

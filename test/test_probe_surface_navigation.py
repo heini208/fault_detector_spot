@@ -140,6 +140,35 @@ def test_only_confirmed_finalization_rejection_unlocks_saving(wizard, monkeypatc
     assert controls.request_close_refinement_workflow() is rejected
 
 
+@pytest.mark.parametrize("fully_custom", [False, True])
+def test_finalization_keeps_close_and_abort_disabled_after_refresh(wizard, fully_custom):
+    controls, state, *_ = wizard
+    controls.handle_test_surface_distance()
+    controls.handle_application_state(status())
+    state.fully_custom = fully_custom
+    state.has_final_probe_candidate = True
+    state.probe_pose_approved = True
+    state.probe_motion_state = state.MOTION_REACHED
+    controls.apply_setup_state(state)
+    assert controls.handle_refinement_next()
+    assert controls.handle_approve_and_retract()
+
+    # Repeated rendering and authoritative updates must agree with the handlers.
+    for update in (controls._refresh_refinement_dialog, lambda: controls.apply_setup_state(state)):
+        update()
+        assert not controls.refinement_dialog.close_button.isEnabled()
+        assert not controls.refinement_dialog.abort_button.isEnabled()
+        assert not controls.abort_probe_refinement_button.isEnabled()
+    assert not controls.request_close_refinement_workflow()
+    assert not controls.handle_abort_probe_refinement()
+
+    state.refinement_active = False
+    controls.apply_setup_state(state)
+    controls.refinement_dialog.open_mode_selection()
+    assert controls.refinement_dialog.abort_button.isEnabled()
+    assert controls.request_close_refinement_workflow()
+
+
 @pytest.mark.parametrize("changes", [
     {"context_id": ""}, {"context_id": "another-setup"},
     {"client_id": "another-ui"},

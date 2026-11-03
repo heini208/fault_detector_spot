@@ -1658,12 +1658,12 @@ class InspectionControls(UIControlHelper):
         presentation = self._refinement_presentation
         if presentation is None:
             return True
-        if presentation.pending_motion is not None:
-            self.refinement_recovery_status_label.setText(
-                "Wait for the active movement and settle check."
-            )
-            return False
-        if presentation.recovery_required:
+        if not self._can_close_refinement_workflow(presentation):
+            if self._refinement_has_pending_work(presentation):
+                self.refinement_recovery_status_label.setText(
+                    "Wait for the active movement and settle check."
+                )
+                return False
             self.refinement_recovery_status_label.setText(
                 "Retract Without Saving is required before hiding this "
                 "workflow."
@@ -1709,10 +1709,11 @@ class InspectionControls(UIControlHelper):
 
     def handle_refinement_back(self):
         presentation = self._require_refinement_presentation()
-        if presentation.recovery_required:
-            self.refinement_recovery_status_label.setText(
-                "Retract Without Saving before navigating backward."
-            )
+        if not self._can_go_back_in_refinement(presentation):
+            if presentation.recovery_required:
+                self.refinement_recovery_status_label.setText(
+                    "Retract Without Saving before navigating backward."
+                )
             return False
         index = ProbeRefinementDialog.STAGES.index(
             presentation.active_stage
@@ -1729,12 +1730,7 @@ class InspectionControls(UIControlHelper):
         stage = presentation.active_stage
         if stage is RefinementStage.PROBE:
             return self.handle_open_probe_summary()
-        if (
-            not presentation.stage_is_approved(stage)
-            or (stage in (RefinementStage.SAFE_APPROACH, RefinementStage.ALIGNMENT)
-                and presentation.motion_states[stage]
-                is not RefinementMotionState.REACHED)
-        ):
+        if not self._can_continue_refinement(presentation):
             self.refinement_recovery_status_label.setText(
                 "Approve the current stage before continuing."
             )
@@ -1753,6 +1749,63 @@ class InspectionControls(UIControlHelper):
             return
         presentation.active_stage = stage
         self.refinement_recovery_status_label.setText("")
+
+    def _refinement_has_pending_work(self, presentation):
+        """Return whether an active refinement action still needs to settle."""
+        return (
+            presentation.pending_motion is not None
+            or getattr(self, "_sensor_tip_distance_test_active", False)
+        )
+
+    def _can_continue_refinement(self, presentation):
+        """Return whether the current refinement stage may advance."""
+        stage = presentation.active_stage
+        if self._custom_probe_mode():
+            return bool(
+                not self._refinement_has_pending_work(presentation)
+                and not presentation.recovery_required
+                and not self._retraction_failed
+                and presentation.stage_is_approved(stage)
+                and presentation.motion_states[stage]
+                is RefinementMotionState.REACHED
+            )
+        return bool(
+            presentation.stage_is_approved(stage)
+            and not self._refinement_has_pending_work(presentation)
+            and (
+                stage not in (
+                    RefinementStage.SAFE_APPROACH,
+                    RefinementStage.ALIGNMENT,
+                )
+                or presentation.motion_states[stage]
+                is RefinementMotionState.REACHED
+            )
+        )
+
+    def _can_close_refinement_workflow(self, presentation):
+        """Return whether the dialog may be hidden without interrupting work."""
+        return bool(
+            not self._refinement_has_pending_work(presentation)
+            and not presentation.recovery_required
+        )
+
+    def _can_go_back_in_refinement(self, presentation):
+        """Return whether the active stage may return to its predecessor."""
+        return bool(
+            presentation.active_stage is not RefinementStage.SAFE_APPROACH
+            and not self._refinement_has_pending_work(presentation)
+            and not presentation.recovery_required
+            and (
+                not self._custom_probe_mode()
+                or not self._retraction_failed
+            )
+        )
+
+    def _can_retract_without_saving(self, presentation):
+        return bool(
+            presentation.recovery_required
+            and not self._refinement_has_pending_work(presentation)
+        )
 
     def _refresh_refinement_dialog(self):
         presentation = self._refinement_presentation
@@ -1815,8 +1868,7 @@ class InspectionControls(UIControlHelper):
             presentation.motion_states[RefinementStage.PROBE].value
         )
 
-        pending = (presentation.pending_motion is not None
-                   or getattr(self, "_sensor_tip_distance_test_active", False))
+        pending = self._refinement_has_pending_work(presentation)
         current = presentation.active_stage
         recovery_only = self._retraction_failed
         safe_page = current == RefinementStage.SAFE_APPROACH
@@ -1826,8 +1878,21 @@ class InspectionControls(UIControlHelper):
             presentation.motion_states[RefinementStage.SAFE_APPROACH]
             == RefinementMotionState.REACHED
         )
+        safe_enabled = safe_page and not pending and not recovery_only
         safe_adjustable = presentation.motion_states[
             RefinementStage.SAFE_APPROACH
+        ] in (
+            RefinementMotionState.REACHED,
+            RefinementMotionState.FAILED,
+        )
+        alignment_enabled = (
+            alignment_page
+            and safe_reached
+            and not pending
+            and not recovery_only
+        )
+        alignment_adjustable = presentation.motion_states[
+            RefinementStage.ALIGNMENT
         ] in (
             RefinementMotionState.REACHED,
             RefinementMotionState.FAILED,
@@ -1836,14 +1901,6 @@ class InspectionControls(UIControlHelper):
             presentation.motion_states[RefinementStage.ALIGNMENT]
             == RefinementMotionState.REACHED
         )
-        alignment_adjustable = presentation.motion_states[
-            RefinementStage.ALIGNMENT
-        ] in (
-            RefinementMotionState.REACHED,
-            RefinementMotionState.FAILED,
-        )
-
-        safe_enabled = safe_page and not pending and not recovery_only
         self.move_calculated_approach_button.setEnabled(safe_enabled)
         self.use_current_approach_button.setEnabled(
             safe_enabled and safe_reached
@@ -1854,12 +1911,6 @@ class InspectionControls(UIControlHelper):
         for button in self.refinement_buttons["approach"].values():
             button.setEnabled(safe_enabled and safe_adjustable)
 
-        alignment_enabled = (
-            alignment_page
-            and safe_reached
-            and not pending
-            and not recovery_only
-        )
         self.refinement_dialog.refresh_path_controls(alignment_enabled)
         self.move_aligned_pose_button.setEnabled(
             alignment_enabled
@@ -1874,16 +1925,15 @@ class InspectionControls(UIControlHelper):
                 alignment_enabled and alignment_adjustable
             )
 
-        test_enabled = (
+        self.test_surface_distance_button.setEnabled(
             probe_page
             and alignment_reached
             and not pending
             and not self._distance_failure_requires_retraction
             and not recovery_only
         )
-        self.test_surface_distance_button.setEnabled(test_enabled)
         self.retract_without_saving_button.setEnabled(
-            presentation.recovery_required and not pending
+            self._can_retract_without_saving(presentation)
         )
         distances_editable = (
             not pending and not presentation.recovery_required
@@ -1917,16 +1967,12 @@ class InspectionControls(UIControlHelper):
             alignment_enabled and alignment_adjustable, alignment_enabled
         )
         self.refinement_dialog.back_button.setEnabled(
-            current != RefinementStage.SAFE_APPROACH
-            and not pending
-            and not presentation.recovery_required
+            self._can_go_back_in_refinement(presentation)
         )
         self.refinement_dialog.next_button.setVisible(not probe_page)
         approved = presentation.approved_pose(current)
         self.refinement_dialog.next_button.setEnabled(
-            presentation.stage_is_approved(current) and not pending
-            and (not safe_page or safe_reached)
-            and (not alignment_page or alignment_reached)
+            self._can_continue_refinement(presentation)
         )
         self.refinement_dialog.next_button.setText(
             "Keep Existing and Continue"
@@ -1939,7 +1985,9 @@ class InspectionControls(UIControlHelper):
             )
             else "Next"
         )
-        self.refinement_dialog.close_button.setEnabled(not pending)
+        self.refinement_dialog.close_button.setEnabled(
+            self._can_close_refinement_workflow(presentation)
+        )
         if presentation.recovery_required:
             self.refinement_recovery_status_label.setText(
                 presentation.recovery_message
@@ -2092,8 +2140,7 @@ class InspectionControls(UIControlHelper):
         dialog.fully_custom = True
         stage = presentation.active_stage
         safe_page = stage is RefinementStage.SAFE_APPROACH
-        pending = (presentation.pending_motion is not None
-                   or getattr(self, "_sensor_tip_distance_test_active", False))
+        pending = self._refinement_has_pending_work(presentation)
         enabled = not pending and not presentation.recovery_required and not self._retraction_failed
         predecessor = RefinementStage.SAFE_APPROACH if stage is RefinementStage.ALIGNMENT else RefinementStage.ALIGNMENT
         editable = enabled and not safe_page and presentation.motion_states[predecessor] is RefinementMotionState.REACHED
@@ -2122,10 +2169,15 @@ class InspectionControls(UIControlHelper):
         dialog.fine_adjustment_dialog.refresh(editable, editable)
         dialog.next_button.setVisible(not dialog.is_summary_page())
         dialog.next_button.setText("Next")
-        dialog.next_button.setEnabled(enabled and presentation.stage_is_approved(stage)
-                                      and presentation.motion_states[stage] is RefinementMotionState.REACHED)
-        dialog.back_button.setEnabled(enabled and not safe_page)
-        dialog.close_button.setEnabled(not pending)
+        dialog.next_button.setEnabled(
+            self._can_continue_refinement(presentation)
+        )
+        dialog.back_button.setEnabled(
+            self._can_go_back_in_refinement(presentation)
+        )
+        dialog.close_button.setEnabled(
+            self._can_close_refinement_workflow(presentation)
+        )
         if presentation.recovery_required:
             self.refinement_recovery_status_label.setText(presentation.recovery_message)
         self._update_save_probe_point_state()

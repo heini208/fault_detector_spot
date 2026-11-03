@@ -1,16 +1,23 @@
-from pathlib import Path
+"""Recovery keeps retraction available once pending movement has settled."""
+
+import pytest
+
+from test_probe_surface_navigation import application, wizard
 
 
-def _source():
-    return Path(
-        "fault_detector_spot/ui/inspection/finalizing_controls.py"
-    ).read_text()
+@pytest.mark.parametrize("recovery_source", ["setup", "distance"])
+def test_emergency_recovery_keeps_retract_available(wizard, recovery_source):
+    controls, state, *_ = wizard
+    # Recovery must allow retreat even when alignment is no longer reached.
+    state.alignment_motion_state = state.MOTION_NOT_TESTED
+    state.refinement_recovery_required = recovery_source == "setup"
+    controls.apply_setup_state(state)
+    controls._distance_failure_requires_retraction = recovery_source == "distance"
+    controls._refresh_refinement_dialog()
+    assert controls.retract_without_saving_button.isEnabled()
 
-
-def test_emergency_recovery_keeps_retract_available():
-    source = _source()
-
-    assert "presentation.recovery_required" in source
-    assert "self._distance_failure_requires_retraction" in source
-    assert "retraction_required" in source
-    assert "self.retract_without_saving_button.setEnabled(" in source
+    state.motion_pending = True
+    controls.apply_setup_state(state)
+    controls._distance_failure_requires_retraction = recovery_source == "distance"
+    controls._refresh_refinement_dialog()
+    assert not controls.retract_without_saving_button.isEnabled()

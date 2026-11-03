@@ -1,4 +1,6 @@
 """Shared custom path editor emits explicit stage and bounded speed intent."""
+import pytest
+
 from fault_detector_msgs.msg import ProbeSetupIntent, ProbeSetupMotionIntent, ProbeSetupState
 from fault_detector_spot.inspection.setup.probe_refinement_session import RefinementStage
 from fault_detector_spot.ui.inspection.finalizing_controls import FinalizingInspectionControls
@@ -120,6 +122,11 @@ def test_final_step_returns_to_previous_aligned_candidate(application):
     assert motions[-1].operation == ProbeSetupMotionIntent.OPERATION_MOVE_ALIGNED_PREAPPROACH
     assert motions[-1].path_stage == "alignment"
     assert controls._refinement_presentation.active_stage is RefinementStage.PROBE
+    state.has_final_probe_candidate = True
+    controls.apply_setup_state(state)
+    assert controls.move_aligned_pose_button.isEnabled()
+    controls.move_aligned_pose_button.click()
+    assert motions[-1].path_stage == "probe"
     # Failed returns can be retried without navigating back to the previous step.
     state.alignment_motion_state = state.MOTION_FAILED
     controls.apply_setup_state(state)
@@ -133,6 +140,27 @@ def test_final_step_returns_to_previous_aligned_candidate(application):
     assert dialog.move_safe_pose_button.text() == "Move to Safe Pre-approach Pose"
     dialog.move_safe_pose_button.click()
     assert motions[-1].operation == ProbeSetupMotionIntent.OPERATION_MOVE_SAFE_APPROACH
+    dialog.hide()
+
+
+@pytest.mark.parametrize("approved, reached", [(False, True), (True, False), (True, True)])
+def test_custom_probe_next_requires_approved_and_reached_final_candidate(application, approved, reached):
+    controls = FinalizingInspectionControls(FakeUI())
+    state = safe_state()
+    state.fully_custom = True
+    state.safe_approach_motion_state = state.MOTION_REACHED
+    state.alignment_motion_state = state.MOTION_REACHED
+    state.surface_alignment_approved = True
+    state.has_alignment_candidate = True
+    state.has_final_probe_candidate = True
+    state.probe_pose_approved = approved
+    state.probe_motion_state = state.MOTION_REACHED if reached else state.MOTION_NOT_TESTED
+    controls.apply_setup_state(state)
+    dialog = controls.refinement_dialog
+    dialog.show_stage(RefinementStage.PROBE)
+    assert dialog.next_button.isEnabled() is (approved and reached)
+    assert controls.handle_refinement_next() is (approved and reached)
+    assert dialog.is_summary_page() is (approved and reached)
     dialog.hide()
 
 
