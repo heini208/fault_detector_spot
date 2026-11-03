@@ -23,7 +23,7 @@ def controls_with_points():
     state.probe_point_fully_custom = [False, True]
     state.probe_point_target_surface_distances_m = [.03, 0.0]
     controls.apply_setup_state(state)
-    controls.saved_probe_points_list.setCurrentRow(0)
+    controls.saved_probe_controls.points_list.setCurrentRow(0)
     return controls, state
 
 
@@ -31,20 +31,20 @@ def test_all_saved_actions_can_queue_and_keep_their_selection(application):
     controls, state = controls_with_points()
     assert controls.handle_move_to_base_position()
     assert controls.handle_move_to_routine_arm_pose()
-    assert controls.handle_saved_probe_motion(
+    assert controls.saved_probe_controls.handle_motion(
         OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH
     )
-    controls.saved_probe_distance.setValue(.02)
-    assert controls.handle_saved_probe_motion(
+    controls.saved_probe_controls.target_distance.setValue(.02)
+    assert controls.saved_probe_controls.handle_motion(
         OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
     )
-    controls.probe_record_duration.setValue(3.5)
-    controls.probe_record_retries.setValue(2)
-    assert controls.handle_saved_probe_motion(
+    controls.saved_probe_controls.record_duration.setValue(3.5)
+    controls.saved_probe_controls.record_retries.setValue(2)
+    assert controls.saved_probe_controls.handle_motion(
         OperationalIntent.INTENT_EXECUTE_PROBE_POINT
     )
-    controls.saved_probe_points_list.setCurrentRow(1)
-    assert controls.handle_saved_probe_motion(
+    controls.saved_probe_controls.points_list.setCurrentRow(1)
+    assert controls.saved_probe_controls.handle_motion(
         OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH
     )
     assert controls.handle_move_to_routine_arm_pose()
@@ -66,15 +66,15 @@ def test_all_saved_actions_can_queue_and_keep_their_selection(application):
     assert calls[3].args[0].target_surface_distance_m == .02
     assert calls[4].args[0].duration_sec == 3.5
     assert calls[4].args[0].retries == 2
-    assert not controls.delete_saved_probe_point_button.isEnabled()
+    assert not controls.saved_probe_controls.delete_button.isEnabled()
 
     for call in reversed(calls):
         status = ApplicationCommandState()
         status.context_id = call.kwargs["context_id"]
         status.state = status.STATE_CANCELLED
         controls.handle_application_state(status)
-    assert controls.delete_saved_probe_point_button.isEnabled()
-    assert not controls._saved_probe_operation_contexts
+    assert controls.saved_probe_controls.delete_button.isEnabled()
+    assert not controls.saved_probe_controls._operation_contexts
     assert not controls._routine_arm_pose_operation_contexts
 
 
@@ -84,8 +84,8 @@ def test_saved_queue_actions_remain_blocked_during_setup_motion(application, fie
     setattr(state, field, True)
     controls.apply_setup_state(state)
     assert not controls.move_to_routine_arm_pose_button.isEnabled()
-    assert not any(button.isEnabled() for button in controls.saved_probe_action_buttons.values())
-    assert not controls.saved_custom_probe_button.isEnabled()
+    assert not any(button.isEnabled() for button in controls.saved_probe_controls.action_buttons.values())
+    assert not controls.saved_probe_controls.custom_probe_button.isEnabled()
 
 
 @pytest.mark.parametrize("failure", ["rejected", "goal_exception", "result_exception", "result_request_exception"])
@@ -95,9 +95,9 @@ def test_only_explicit_rejection_releases_request_after_transport_error(
     controls, _state = controls_with_points()
     controls.handle_move_to_base_position()
     controls.handle_move_to_routine_arm_pose()
-    controls.handle_saved_probe_motion(OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH)
+    controls.saved_probe_controls.handle_motion(OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH)
     first_context = controls.ui.execute_operation.call_args.kwargs["context_id"]
-    controls.handle_saved_probe_motion(OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE)
+    controls.saved_probe_controls.handle_motion(OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE)
     second_context = controls.ui.execute_operation.call_args.kwargs["context_id"]
     goal_response = Future()
     result_response = Future()
@@ -137,22 +137,22 @@ def test_only_explicit_rejection_releases_request_after_transport_error(
     if failure == "rejected":
         assert len(errors) == 1
         assert uncertainties == []
-        assert list(controls._saved_probe_operation_contexts) == [first_context]
+        assert list(controls.saved_probe_controls._operation_contexts) == [first_context]
     else:
         assert errors == []
         assert uncertainties == [(second_context, "Disconnected")]
-        assert list(controls._saved_probe_operation_contexts) == [first_context, second_context]
+        assert list(controls.saved_probe_controls._operation_contexts) == [first_context, second_context]
         assert "outcome unknown" in harness.status_label.text()
-        assert "Outcome unknown" in controls.saved_probe_motion_status.text()
+        assert "Outcome unknown" in controls.saved_probe_controls.status_label.text()
         client._receive_state(ApplicationCommandState(
             context_id=second_context, state=ApplicationCommandState.STATE_STOP_CONFIRMED,
         ))
-        assert list(controls._saved_probe_operation_contexts) == [first_context]
-        assert "stop confirmed" in controls.saved_probe_motion_status.text()
+        assert list(controls.saved_probe_controls._operation_contexts) == [first_context]
+        assert "stop confirmed" in controls.saved_probe_controls.status_label.text()
     assert controls._routine_arm_pose_operation_contexts
     assert controls._base_position_operation_context
-    assert not controls.delete_saved_probe_point_button.isEnabled()
-    assert controls.saved_probe_action_buttons[
+    assert not controls.saved_probe_controls.delete_button.isEnabled()
+    assert controls.saved_probe_controls.action_buttons[
         OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
     ].isEnabled()
 
@@ -164,17 +164,17 @@ def test_only_explicit_rejection_releases_request_after_transport_error(
 ])
 def test_saved_point_stays_locked_until_stop_is_confirmed(application, state_code):
     controls, _state = controls_with_points()
-    controls.handle_saved_probe_motion(OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH)
+    controls.saved_probe_controls.handle_motion(OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH)
     context = controls.ui.execute_operation.call_args.kwargs["context_id"]
 
     controls.handle_application_state(ApplicationCommandState(context_id=context, state=state_code))
 
-    assert context in controls._saved_probe_operation_contexts
-    assert not controls.delete_saved_probe_point_button.isEnabled()
-    assert "Movement completed" not in controls.saved_probe_motion_status.text()
+    assert context in controls.saved_probe_controls._operation_contexts
+    assert not controls.saved_probe_controls.delete_button.isEnabled()
+    assert "Movement completed" not in controls.saved_probe_controls.status_label.text()
     controls.handle_application_state(ApplicationCommandState(
         context_id=context, state=ApplicationCommandState.STATE_STOP_CONFIRMED,
     ))
-    assert not controls._saved_probe_operation_contexts
-    assert controls.delete_saved_probe_point_button.isEnabled()
-    assert "stop confirmed" in controls.saved_probe_motion_status.text()
+    assert not controls.saved_probe_controls._operation_contexts
+    assert controls.saved_probe_controls.delete_button.isEnabled()
+    assert "stop confirmed" in controls.saved_probe_controls.status_label.text()

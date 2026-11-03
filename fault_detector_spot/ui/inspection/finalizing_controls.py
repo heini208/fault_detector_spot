@@ -5,17 +5,7 @@ import math
 from fault_detector_spot.ui.sensor.models import SensorAttachmentViewStatus
 from uuid import uuid4
 
-from PyQt5.QtGui import QPalette
-from PyQt5.QtWidgets import (
-    QDoubleSpinBox,
-    QSpinBox,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QListWidget,
-    QPushButton,
-    QVBoxLayout,
-)
+from PyQt5.QtWidgets import QPushButton
 
 from fault_detector_msgs.msg import (
     ApplicationCommandState,
@@ -41,6 +31,7 @@ from fault_detector_spot.inspection.setup.reference_view_depth_projection import
 
 
 from .controls import InspectionControls
+from .saved_probe_controls import SavedProbeControls
 from fault_detector_spot.ui.ros.probe_setup_client import (
     preloaded_reference_view_ids,
 )
@@ -65,16 +56,10 @@ class FinalizingInspectionControls(InspectionControls):
         self._begin_refinement_after_reference_commit = False
         self._reference_capture_in_progress = False
         self._abort_refinement_after_start = False
-        self._saved_probe_scope = None
-        self._saved_probe_operation_contexts = {}
         self._base_position_operation_context = ""
         self._routine_arm_pose_operation_contexts = set()
-        self._delete_probe_point_pending = ""
         self._probe_finalization_point_id = ""
         self._probe_finalization_scope = None
-        self._saved_probe_selection_after_finalization = None
-        self._probe_point_entry_panel = None
-        self._probe_point_overview_label = None
         super().__init__(ui)
         self.move_to_base_position_button.clicked.connect(
             self.handle_move_to_base_position
@@ -89,132 +74,15 @@ class FinalizingInspectionControls(InspectionControls):
     def _configure_probe_point_entry_ui(self):
         """Build the probe-point controls in their execution tab."""
 
-        panel = QFrame()
-        panel.setFrameShape(QFrame.StyledPanel)
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-
-        title = QLabel("Probe Points")
-        title_font = title.font()
-        title_font.setBold(True)
-        title.setFont(title_font)
-        layout.addWidget(title)
-
-        self._probe_point_overview_label = QLabel(
-            "Select an inspection routine to add a probe point."
+        self.saved_probe_controls = SavedProbeControls(
+            submit_setup=self._submit_probe_setup,
+            execute_operation=lambda intent, **kwargs: self.ui.execute_operation(intent, **kwargs),
+            ask_question=self.ask_question,
+            is_refinement_start_pending=lambda: self._reference_start_pending,
         )
-        self._probe_point_overview_label.setWordWrap(True)
-        layout.addWidget(self._probe_point_overview_label)
-
-        self.saved_probe_selection_label = QLabel(
-            "Selected probe point: none"
-        )
-        selection_font = self.saved_probe_selection_label.font()
-        selection_font.setBold(True)
-        self.saved_probe_selection_label.setFont(selection_font)
-        layout.addWidget(self.saved_probe_selection_label)
-
-        self.saved_probe_points_list = QListWidget()
-        palette = self.saved_probe_points_list.palette()
-        highlight = palette.color(QPalette.Highlight).name()
-        highlighted_text = palette.color(
-            QPalette.HighlightedText
-        ).name()
-        self.saved_probe_points_list.setStyleSheet(
-            "QListWidget::item {"
-            " padding: 8px;"
-            " border: 1px solid transparent;"
-            "}"
-            "QListWidget::item:selected {"
-            f" background: {highlight};"
-            f" color: {highlighted_text};"
-            f" border: 2px solid {highlighted_text};"
-            " font-weight: bold;"
-            "}"
-        )
-        self.saved_probe_points_list.currentRowChanged.connect(
-            self._saved_probe_selection_changed
-        )
-        layout.addWidget(self.saved_probe_points_list)
-
-        self.delete_saved_probe_point_button = QPushButton(
-            "Delete Selected Probe Point"
-        )
-        self.delete_saved_probe_point_button.setEnabled(False)
-        self.delete_saved_probe_point_button.setToolTip(
-            "Delete the selected probe point including its stored safe "
-            "approach, aligned pre-approach, and probe target data."
-        )
-        self.delete_saved_probe_point_button.clicked.connect(
-            self.handle_delete_saved_probe_point
-        )
-        layout.addWidget(self.delete_saved_probe_point_button)
-
-        self.saved_probe_distance = QDoubleSpinBox()
-        self.saved_probe_distance.setDecimals(3)
-        self.saved_probe_distance.setRange(0.0, 10.0)
-        self.saved_probe_distance.setSingleStep(0.005)
-        self.saved_probe_distance.setEnabled(False)
-        self.saved_probe_distance.setToolTip(
-            "Defaults to the selected point’s saved value. Changes apply only to this movement."
-        )
-        self.saved_probe_action_buttons = {}
-        for label, operation in (
-            ("Move Along Saved Pre-approach Path", OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH),
-            ("Move Close to Wall", OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE),
-        ):
-            button = QPushButton(label)
-            button.setEnabled(False)
-            button.clicked.connect(
-                lambda _checked=False, operation=operation: self.handle_saved_probe_motion(operation)
-            )
-            self.saved_probe_action_buttons[operation] = button
-            if operation == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE:
-                wall_row = QHBoxLayout()
-                wall_row.addWidget(button, 1)
-                wall_row.addWidget(QLabel("Target distance from wall [m]:"))
-                wall_row.addWidget(self.saved_probe_distance)
-                layout.addLayout(wall_row)
-            else:
-                layout.addWidget(button)
-        self.saved_custom_probe_button = QPushButton("Move to Custom Probe Point")
-        self.saved_custom_probe_button.setEnabled(False)
-        self.saved_custom_probe_button.clicked.connect(
-            lambda: self.handle_saved_probe_motion(
-                OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH,
-            )
-        )
-        layout.addWidget(self.saved_custom_probe_button)
-        recording_row = QHBoxLayout()
-        self.probe_record_duration = QDoubleSpinBox()
-        self.probe_record_duration.setRange(0.1, 3600.0)
-        self.probe_record_duration.setValue(5.0)
-        self.probe_record_duration.setSuffix(" s")
-        self.probe_record_retries = QSpinBox()
-        self.probe_record_retries.setRange(0, 100)
-        self.probe_record_retries.setToolTip("Shared retry budget: return to the last successful goal and retry the failed step.")
-        recording_row.addWidget(QLabel("Recording duration:"))
-        recording_row.addWidget(self.probe_record_duration)
-        recording_row.addWidget(QLabel("Retries:"))
-        recording_row.addWidget(self.probe_record_retries)
-        layout.addLayout(recording_row)
-        execute_button = QPushButton("Execute Probe Point and Record")
-        execute_button.setEnabled(False)
-        execute_button.clicked.connect(lambda: self.handle_saved_probe_motion(
-            OperationalIntent.INTENT_EXECUTE_PROBE_POINT,
-        ))
-        self.saved_probe_action_buttons[OperationalIntent.INTENT_EXECUTE_PROBE_POINT] = execute_button
-        layout.addWidget(execute_button)
-        self.saved_probe_motion_status = QLabel("Select a saved probe point.")
-        self.saved_probe_motion_status.setWordWrap(True)
-        layout.addWidget(self.saved_probe_motion_status)
-
-
         self.start_probe_refinement_button.setText(
             "Add New Probe Point"
         )
-        layout.addWidget(self.start_probe_refinement_button)
 
         self.abort_probe_refinement_button = QPushButton(
             "Abort Probe Point Setup"
@@ -227,171 +95,12 @@ class FinalizingInspectionControls(InspectionControls):
             self.handle_abort_probe_refinement
         )
         self.abort_probe_refinement_button.hide()
-        layout.addWidget(self.abort_probe_refinement_button)
-        layout.addStretch()
-
-        self.inspection_workspace_tabs.addTab(panel, "Probe Point Execution")
-        self._probe_point_entry_panel = panel
-
-    def _saved_probe_selection_changed(self, _row=None):
-        state = self._probe_setup_state
-        current = self.saved_probe_points_list.currentItem()
-        self.saved_probe_selection_label.setText(
-            (
-                f"Selected probe point: {current.text()}"
-                if current is not None
-                else "Selected probe point: none"
-            )
+        self.saved_probe_controls.attach_refinement_controls(
+            self.start_probe_refinement_button, self.abort_probe_refinement_button,
         )
-        row = self.saved_probe_points_list.currentRow()
-        if state is not None and 0 <= row < len(state.probe_point_target_surface_distances_m):
-            self.saved_probe_distance.setValue(state.probe_point_target_surface_distances_m[row])
-        else:
-            self.saved_probe_distance.setValue(0.0)
-        self._refresh_saved_probe_actions()
-
-    def _refresh_saved_probe_actions(self, _row=None):
-        state = self._probe_setup_state
-        enabled = bool(
-            state is not None
-            and state.selected_object_id and state.selected_routine_id
-            and self.saved_probe_points_list.currentItem() is not None
-            and not state.refinement_active and not state.motion_pending
-            and not self._reference_start_pending
-            and not self._delete_probe_point_pending
+        self.inspection_workspace_tabs.addTab(
+            self.saved_probe_controls, "Probe Point Execution",
         )
-        row = self.saved_probe_points_list.currentRow()
-        custom = bool(state and 0 <= row < len(state.probe_point_fully_custom) and state.probe_point_fully_custom[row])
-        self.saved_probe_distance.setEnabled(
-            enabled and not custom and 0 <= row < len(state.probe_point_target_surface_distances_m)
-        )
-        self.probe_record_duration.setEnabled(enabled)
-        self.probe_record_retries.setEnabled(enabled)
-        for button in self.saved_probe_action_buttons.values():
-            button.setEnabled(enabled)
-        surface_button = self.saved_probe_action_buttons[
-            OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
-        ]
-        surface_button.setEnabled(enabled and not custom)
-        self.saved_custom_probe_button.setEnabled(enabled and custom)
-        surface_button.setToolTip("Available for surface-relative probe points.")
-        self.saved_custom_probe_button.setToolTip("Available for fully custom probe points; follows the saved final path.")
-        self.delete_saved_probe_point_button.setEnabled(
-            enabled and not self._saved_probe_operation_contexts
-        )
-        self.saved_probe_points_list.setEnabled(
-            not bool(self._delete_probe_point_pending)
-        )
-
-    def _update_saved_probe_points(self, state):
-        scope = (state.selected_object_id, state.selected_routine_id)
-        ids = list(state.probe_point_ids) if all(scope) else []
-        current = self.saved_probe_points_list.currentItem()
-        selected = (
-            current.text()
-            if current and scope == self._saved_probe_scope
-            else None
-        )
-        completed = self._saved_probe_selection_after_finalization
-        select_completed = bool(
-            completed is not None
-            and completed[:2] == scope
-            and completed[2] in ids
-        )
-        if select_completed:
-            selected = completed[2]
-        previous = [
-            self.saved_probe_points_list.item(i).text()
-            for i in range(self.saved_probe_points_list.count())
-        ]
-        changed = scope != self._saved_probe_scope or ids != previous
-        if changed:
-            self.saved_probe_points_list.blockSignals(True)
-            self.saved_probe_points_list.clear()
-            self.saved_probe_points_list.addItems(ids)
-            if selected in ids:
-                self.saved_probe_points_list.setCurrentRow(
-                    ids.index(selected)
-                )
-            self.saved_probe_points_list.blockSignals(False)
-            self._saved_probe_scope = scope
-
-        if select_completed:
-            if not changed:
-                self.saved_probe_points_list.blockSignals(True)
-                self.saved_probe_points_list.setCurrentRow(
-                    ids.index(selected)
-                )
-                self.saved_probe_points_list.blockSignals(False)
-            self._saved_probe_selection_after_finalization = None
-            self._saved_probe_selection_changed()
-            if not self._saved_probe_operation_contexts:
-                self.saved_probe_motion_status.setText(
-                    f"{selected}: ready."
-                )
-        elif changed:
-            if selected not in ids:
-                self._saved_probe_selection_changed()
-            if not self._saved_probe_operation_contexts:
-                self.saved_probe_motion_status.setText(
-                    "Select a saved probe point."
-                )
-        self._refresh_saved_probe_actions()
-
-    def handle_delete_saved_probe_point(self):
-        self._refresh_saved_probe_actions()
-        if not self.delete_saved_probe_point_button.isEnabled():
-            return False
-
-        state = self._probe_setup_state
-        current = self.saved_probe_points_list.currentItem()
-        if state is None or current is None:
-            return False
-
-        point_id = current.text()
-        scope = (
-            state.selected_object_id,
-            state.selected_routine_id,
-        )
-        if (
-            self._saved_probe_scope != scope
-            or point_id not in state.probe_point_ids
-        ):
-            return False
-
-        if not self.ask_question(
-            "Delete Probe Point",
-            (
-                f"Delete probe point '{point_id}' from "
-                f"'{scope[0]}/{scope[1]}'?\n\n"
-                "Its saved approach and aligned positions are deleted "
-                "with the probe point."
-            ),
-        ):
-            return False
-
-        intent = ProbeSetupIntent()
-        intent.operation = (
-            ProbeSetupIntent.OPERATION_DELETE_PROBE_POINT
-        )
-        intent.object_id = scope[0]
-        intent.routine_id = scope[1]
-        intent.probe_point_id = point_id
-
-        self._delete_probe_point_pending = point_id
-        self.saved_probe_motion_status.setText(
-            f"{point_id}: deleting..."
-        )
-        self._refresh_saved_probe_actions()
-        request_id = self._submit_probe_setup(intent)
-        if request_id is None:
-            self._delete_probe_point_pending = ""
-            self.saved_probe_motion_status.setText(
-                f"{point_id}: delete request could not be submitted."
-            )
-            self._refresh_saved_probe_actions()
-            return False
-        return True
 
     def handle_move_to_base_position(self):
         state = self._probe_setup_state
@@ -496,92 +205,16 @@ class FinalizingInspectionControls(InspectionControls):
             if self._probe_setup_state is not None:
                 self._apply_base_position_state(self._probe_setup_state)
 
-    def handle_saved_probe_motion(self, operation):
-        self._refresh_saved_probe_actions()
-        button = (self.saved_custom_probe_button if operation == OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH
-                  else self.saved_probe_action_buttons.get(operation))
-        if button is None or not button.isEnabled():
-            return False
-        state = self._probe_setup_state
-        point_id = self.saved_probe_points_list.currentItem().text()
-        if (self._saved_probe_scope != (state.selected_object_id, state.selected_routine_id)
-                or point_id not in state.probe_point_ids):
-            return False
-        intent = OperationalIntent()
-        intent.intent = operation
-        intent.object_id = state.selected_object_id
-        intent.routine_id = state.selected_routine_id
-        intent.probe_point_id = point_id
-        if operation == OperationalIntent.INTENT_EXECUTE_PROBE_POINT:
-            intent.duration_sec = self.probe_record_duration.value()
-            intent.retries = self.probe_record_retries.value()
-        if (operation == OperationalIntent.INTENT_MOVE_SAVED_PROBE_CLOSE_TO_SURFACE
-                and self.saved_probe_distance.isEnabled()):
-            intent.override_target_surface_distance = True
-            intent.target_surface_distance_m = self.saved_probe_distance.value()
-        context_id = "saved-probe-" + uuid4().hex
-        self._saved_probe_operation_contexts[context_id] = point_id
-        self.saved_probe_motion_status.setText(f"{point_id}: submitting movement...")
-        self._refresh_saved_probe_actions()
-        request_id = self.ui.execute_operation(
-            intent, context_id=context_id,
-        )
-        if request_id is None:
-            self.handle_saved_probe_rejected(
-                "Movement could not be submitted.", context_id
-            )
-            return False
-        return True
-
-    def handle_saved_probe_rejected(self, detail, context_id):
-        if context_id not in self._saved_probe_operation_contexts:
-            return
-        point_id = self._saved_probe_operation_contexts.pop(context_id)
-        self.saved_probe_motion_status.setText(f"{point_id}: {detail}")
-        self._refresh_saved_probe_actions()
-
     def handle_operation_uncertain(self, detail, context_id):
         """Report lost transport feedback without releasing motion ownership."""
         text = f"Outcome unknown; awaiting confirmation: {detail}"
-        point_id = self._saved_probe_operation_contexts.get(context_id)
-        if point_id is not None:
-            self.saved_probe_motion_status.setText(f"{point_id}: {text}")
+        self.saved_probe_controls.handle_operation_uncertain(detail, context_id)
         if (self._sensor_tip_distance_test_active
                 and context_id == self._sensor_tip_distance_context_id):
             self.refinement_dialog.sensor_tip_distance_status_label.setText(text)
         if self._surface_test_active and context_id == self._surface_move_context_id:
             self.surface_distance_test_status_label.setText(text)
         self.routine_navigation_controls.handle_operation_uncertain(detail, context_id)
-
-    def _handle_saved_probe_status(self, status):
-        if status.context_id not in self._saved_probe_operation_contexts:
-            return
-        point_id = self._saved_probe_operation_contexts[status.context_id]
-        detail = status.detail or {
-            ApplicationCommandState.STATE_QUEUED: "Movement queued",
-            ApplicationCommandState.STATE_UNKNOWN: "Movement outcome unknown; reconciling",
-            ApplicationCommandState.STATE_STOP_REQUESTED: "Stop requested; awaiting confirmation",
-            ApplicationCommandState.STATE_STOP_UNCONFIRMED: "Stop unconfirmed",
-        }.get(status.state, "Movement in progress")
-        self.saved_probe_motion_status.setText(f"{point_id}: {detail}")
-        if status.state in {
-            ApplicationCommandState.STATE_SUCCEEDED,
-            ApplicationCommandState.STATE_FAILED,
-            ApplicationCommandState.STATE_CANCELLED,
-            ApplicationCommandState.STATE_STOP_CONFIRMED,
-        }:
-            self._saved_probe_operation_contexts.pop(status.context_id)
-            labels = {
-                ApplicationCommandState.STATE_SUCCEEDED: "Movement completed",
-                ApplicationCommandState.STATE_FAILED: "Movement failed",
-                ApplicationCommandState.STATE_CANCELLED: "Movement cancelled",
-                ApplicationCommandState.STATE_STOP_CONFIRMED: "Movement stop confirmed",
-            }
-            self.saved_probe_motion_status.setText(
-                f"{point_id}: " + labels[status.state]
-                + (": " + status.detail if status.detail else "")
-            )
-        self._refresh_saved_probe_actions()
 
     def handle_start_probe_refinement(self):
         """Open reference selection before beginning physical refinement."""
@@ -762,45 +395,7 @@ class FinalizingInspectionControls(InspectionControls):
 
         self._update_abort_probe_refinement_state()
 
-        deletion_point_id = self._delete_probe_point_pending
-        self._update_saved_probe_points(state)
-
-        if (
-            deletion_point_id
-            and state.operation
-            == ProbeSetupIntent.OPERATION_DELETE_PROBE_POINT
-            and state.state in (
-                ProbeSetupState.STATE_SUCCEEDED,
-                ProbeSetupState.STATE_FAILED,
-            )
-        ):
-            self._delete_probe_point_pending = ""
-            if state.state == ProbeSetupState.STATE_SUCCEEDED:
-                self.saved_probe_motion_status.setText(
-                    f"{deletion_point_id}: deleted."
-                )
-            else:
-                detail = (
-                    state.detail.strip()
-                    or state.validation_error.strip()
-                    or "Delete failed."
-                )
-                self.saved_probe_motion_status.setText(
-                    f"{deletion_point_id}: delete failed: {detail}"
-                )
-            self._refresh_saved_probe_actions()
-
-        if self._probe_point_overview_label is not None:
-            if not state.selected_routine_id:
-                overview = "Select an inspection routine to add a probe point."
-            elif state.probe_point_ids:
-                overview = (
-                    "Existing probe points: "
-                    + ", ".join(state.probe_point_ids)
-                )
-            else:
-                overview = "No probe points are saved for this routine."
-            self._probe_point_overview_label.setText(overview)
+        self.saved_probe_controls.apply_setup_state(state)
 
         if self._refinement_presentation is None:
             self.start_probe_refinement_button.setText(
@@ -1291,10 +886,8 @@ class FinalizingInspectionControls(InspectionControls):
             )
             and point_id in state.probe_point_ids
         ):
-            self._saved_probe_selection_after_finalization = (
-                scope[0],
-                scope[1],
-                point_id,
+            self.saved_probe_controls.select_after_finalization(
+                scope[0], scope[1], point_id,
             )
         self._probe_finalization_point_id = ""
         self._probe_finalization_scope = None
@@ -1449,7 +1042,7 @@ class FinalizingInspectionControls(InspectionControls):
         super().handle_application_state(status)
         self._handle_base_position_status(status)
         self._handle_routine_arm_pose_status(status)
-        self._handle_saved_probe_status(status)
+        self.saved_probe_controls.handle_application_state(status)
         self._handle_sensor_tip_distance_status(status)
         if (
             not self._surface_test_active
@@ -1777,7 +1370,7 @@ class FinalizingInspectionControls(InspectionControls):
             if state is not None
             else None
         )
-        self._saved_probe_selection_after_finalization = None
+        self.saved_probe_controls.clear_pending_selection()
         self.approve_and_retract_button.setEnabled(False)
         self.retract_without_saving_button.setEnabled(False)
         self._refresh_refinement_dialog()

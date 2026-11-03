@@ -35,7 +35,7 @@ def controls():
 
 
 def test_list_updates_and_selection_does_not_cross_routines(controls):
-    listing = controls.saved_probe_points_list
+    listing = controls.saved_probe_controls.points_list
     assert [listing.item(i).text() for i in range(listing.count())] == ["one", "two"]
     listing.setCurrentRow(1)
     state = make_state(with_references=False)
@@ -45,47 +45,60 @@ def test_list_updates_and_selection_does_not_cross_routines(controls):
     state.selected_routine_id = "other"
     controls.apply_setup_state(state)
     assert listing.currentItem() is None
-    assert not any(b.isEnabled() for b in controls.saved_probe_action_buttons.values())
+    assert not any(b.isEnabled() for b in controls.saved_probe_controls.action_buttons.values())
 
 
 @pytest.mark.parametrize("operation", [25, 26])
 def test_click_sends_selected_ids_and_allows_more_buffered_moves(controls, operation):
-    controls.saved_probe_points_list.setCurrentRow(1)
-    assert controls.handle_saved_probe_motion(operation)
+    controls.saved_probe_controls.points_list.setCurrentRow(1)
+    assert controls.saved_probe_controls.handle_motion(operation)
     args, kwargs = controls.ui.execute_operation.call_args
     intent = args[0]
     assert (intent.object_id, intent.routine_id, intent.probe_point_id) == ("motor", "scan", "two")
     assert intent.intent == operation
-    assert controls.handle_saved_probe_motion(operation)
+    assert controls.saved_probe_controls.handle_motion(operation)
     second_context = controls.ui.execute_operation.call_args.kwargs["context_id"]
     assert second_context != kwargs["context_id"]
-    assert controls.saved_probe_points_list.isEnabled()
-    assert not controls.delete_saved_probe_point_button.isEnabled()
+    assert controls.saved_probe_controls.points_list.isEnabled()
+    assert not controls.saved_probe_controls.delete_button.isEnabled()
     state = ApplicationCommandState()
     state.context_id = "unrelated"
     state.state = state.STATE_SUCCEEDED
     controls.handle_application_state(state)
-    assert len(controls._saved_probe_operation_contexts) == 2
+    assert len(controls.saved_probe_controls._operation_contexts) == 2
     state.context_id = kwargs["context_id"]
     state.state = state.STATE_FAILED
     state.detail = "No live tag"
     controls.handle_application_state(state)
-    assert "No live tag" in controls.saved_probe_motion_status.text()
-    assert controls.saved_probe_action_buttons[operation].isEnabled()
-    assert list(controls._saved_probe_operation_contexts) == [second_context]
-    assert not controls.delete_saved_probe_point_button.isEnabled()
+    assert "No live tag" in controls.saved_probe_controls.status_label.text()
+    assert controls.saved_probe_controls.action_buttons[operation].isEnabled()
+    assert list(controls.saved_probe_controls._operation_contexts) == [second_context]
+    assert not controls.saved_probe_controls.delete_button.isEnabled()
     state.context_id = second_context
     state.state = state.STATE_CANCELLED
     controls.handle_application_state(state)
-    assert controls.delete_saved_probe_point_button.isEnabled()
+    assert controls.saved_probe_controls.delete_button.isEnabled()
 
 
 def test_transport_rejection_allows_retry(controls):
-    controls.saved_probe_points_list.setCurrentRow(0)
-    controls.handle_saved_probe_motion(25)
+    controls.saved_probe_controls.points_list.setCurrentRow(0)
+    controls.saved_probe_controls.handle_motion(25)
     context_id = controls.ui.execute_operation.call_args.kwargs["context_id"]
-    controls.handle_saved_probe_rejected("Disconnected", context_id)
-    assert controls.handle_saved_probe_motion(25)
+    controls.saved_probe_controls.handle_operation_rejected("Disconnected", context_id)
+    assert controls.saved_probe_controls.handle_motion(25)
+
+
+def test_saved_motion_checks_reference_start_without_a_new_snapshot(controls):
+    saved = controls.saved_probe_controls
+    saved.points_list.setCurrentRow(0)
+    operation = OperationalIntent.INTENT_MOVE_SAVED_PROBE_ALIGNED_PREAPPROACH
+    controls._reference_start_pending = True
+
+    assert not saved.handle_motion(operation)
+    controls.ui.execute_operation.assert_not_called()
+
+    controls._reference_start_pending = False
+    assert saved.handle_motion(operation)
 
 
 @pytest.mark.parametrize("operation, field", [
@@ -158,15 +171,15 @@ def test_distance_defaults_per_point_and_override_survives_refresh(controls):
     state.probe_point_ids = ["one", "two"]
     state.probe_point_target_surface_distances_m = [0.03, 0.045]
     controls.apply_setup_state(state)
-    controls.saved_probe_points_list.setCurrentRow(0)
-    assert controls.saved_probe_distance.value() == 0.03
-    controls.saved_probe_distance.setValue(0.02)
+    controls.saved_probe_controls.points_list.setCurrentRow(0)
+    assert controls.saved_probe_controls.target_distance.value() == 0.03
+    controls.saved_probe_controls.target_distance.setValue(0.02)
     controls.apply_setup_state(state)
-    assert controls.saved_probe_distance.value() == 0.02
-    controls.saved_probe_points_list.setCurrentRow(1)
-    assert controls.saved_probe_distance.value() == 0.045
-    controls.saved_probe_distance.setValue(0.025)
-    assert controls.handle_saved_probe_motion(26)
+    assert controls.saved_probe_controls.target_distance.value() == 0.02
+    controls.saved_probe_controls.points_list.setCurrentRow(1)
+    assert controls.saved_probe_controls.target_distance.value() == 0.045
+    controls.saved_probe_controls.target_distance.setValue(0.025)
+    assert controls.saved_probe_controls.handle_motion(26)
     intent = controls.ui.execute_operation.call_args.args[0]
     assert intent.override_target_surface_distance
     assert intent.target_surface_distance_m == 0.025
@@ -236,20 +249,20 @@ def test_completed_finalization_selects_new_point_and_enables_motion(controls):
     state.probe_point_ids = ["one", "two", "three"]
     state.probe_point_target_surface_distances_m = [0.03, 0.04, 0.05]
     controls._probe_setup_state = state
-    controls._update_saved_probe_points(state)
+    controls.saved_probe_controls.apply_setup_state(state)
     controls._probe_finalization_point_id = "three"
     controls._probe_finalization_scope = ("motor", "scan")
 
     controls._finish_refinement_workflow_close()
-    controls._update_saved_probe_points(state)
+    controls.saved_probe_controls.apply_setup_state(state)
 
-    assert controls.saved_probe_points_list.currentItem().text() == "three"
-    assert controls.saved_probe_distance.value() == 0.05
+    assert controls.saved_probe_controls.points_list.currentItem().text() == "three"
+    assert controls.saved_probe_controls.target_distance.value() == 0.05
     assert all(
         button.isEnabled()
-        for button in controls.saved_probe_action_buttons.values()
+        for button in controls.saved_probe_controls.action_buttons.values()
     )
-    assert controls.saved_probe_motion_status.text() == "three: ready."
+    assert controls.saved_probe_controls.status_label.text() == "three: ready."
 
 
 def test_close_is_blocked_while_save_finalization_is_running(controls):
@@ -271,17 +284,17 @@ def test_selected_point_enables_only_matching_final_move(controls):
     state.probe_point_fully_custom = [False, True]
     state.probe_point_target_surface_distances_m = [.03, 0.0]
     controls.apply_setup_state(state)
-    surface = controls.saved_probe_action_buttons[26]
-    custom = controls.saved_custom_probe_button
+    surface = controls.saved_probe_controls.action_buttons[26]
+    custom = controls.saved_probe_controls.custom_probe_button
     assert not surface.isEnabled() and not custom.isEnabled()
-    controls.saved_probe_points_list.setCurrentRow(0)
+    controls.saved_probe_controls.points_list.setCurrentRow(0)
     assert surface.isEnabled() and not custom.isEnabled()
-    assert controls.saved_probe_distance.isEnabled()
-    assert not controls.handle_saved_probe_motion(OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH)
-    controls.saved_probe_points_list.setCurrentRow(1)
+    assert controls.saved_probe_controls.target_distance.isEnabled()
+    assert not controls.saved_probe_controls.handle_motion(OperationalIntent.INTENT_MOVE_SAVED_CUSTOM_PROBE_PATH)
+    controls.saved_probe_controls.points_list.setCurrentRow(1)
     assert custom.isEnabled() and not surface.isEnabled()
-    assert not controls.saved_probe_distance.isEnabled()
-    assert not controls.handle_saved_probe_motion(26)
+    assert not controls.saved_probe_controls.target_distance.isEnabled()
+    assert not controls.saved_probe_controls.handle_motion(26)
     custom.click()
     intent = controls.ui.execute_operation.call_args.args[0]
     assert intent.probe_point_id == "custom"
@@ -289,9 +302,9 @@ def test_selected_point_enables_only_matching_final_move(controls):
     assert not intent.override_target_surface_distance
     assert not surface.isEnabled() and custom.isEnabled()
     context_id = controls.ui.execute_operation.call_args.kwargs["context_id"]
-    controls.handle_saved_probe_rejected("Offline test", context_id)
+    controls.saved_probe_controls.handle_operation_rejected("Offline test", context_id)
     assert custom.isEnabled() and not surface.isEnabled()
-    controls.saved_probe_points_list.setCurrentRow(-1)
+    controls.saved_probe_controls.points_list.setCurrentRow(-1)
     assert not surface.isEnabled() and not custom.isEnabled()
 
 

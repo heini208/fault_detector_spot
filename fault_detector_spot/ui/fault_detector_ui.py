@@ -1075,7 +1075,7 @@ class Fault_Detector_UI(QWidget):
         if controls is not None:
             controls.handle_base_position_rejected(detail, context_id)
             controls.handle_routine_arm_pose_rejected(detail, context_id)
-            controls.handle_saved_probe_rejected(detail, context_id)
+            controls.saved_probe_controls.handle_operation_rejected(detail, context_id)
             controls.handle_sensor_tip_distance_rejected(detail, context_id)
             controls.routine_navigation_controls.handle_operation_rejected(detail, context_id)
 
