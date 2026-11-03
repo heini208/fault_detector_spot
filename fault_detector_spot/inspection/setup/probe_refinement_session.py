@@ -401,7 +401,7 @@ class ProbeRefinementSession:
         self.motion_states[motion.stage] = RefinementMotionState.REACHED
         self.pending_motion = None
 
-    def fail_motion(self, request_id: str, message: str) -> None:
+    def fail_motion(self, request_id: str) -> None:
         """Fail the current movement without changing its candidate."""
         motion = self._matching_motion(request_id)
         self.motion_states[motion.stage] = RefinementMotionState.FAILED

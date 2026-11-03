@@ -47,7 +47,6 @@ class FinalizingInspectionControls(InspectionControls):
         self._reset_surface_move_tracking()
         self._refinement_emergency_stop_requested = False
         self._reference_preview_cache = {}
-        self._reference_view_id_by_camera = {}
         self._reference_capture_in_progress = False
         self._abort_refinement_after_start = False
         self._base_position_operation_context = ""
@@ -448,7 +447,6 @@ class FinalizingInspectionControls(InspectionControls):
 
     def _clear_reference_preview_cache(self):
         self._reference_preview_cache = {}
-        self._reference_view_id_by_camera = {}
 
     def _selected_reference_camera_id(self):
         if not self.reference_camera_dropdowns:
@@ -550,11 +548,6 @@ class FinalizingInspectionControls(InspectionControls):
         widget.blockSignals(False)
 
         self._active_reference_slot = None
-        self._reference_rgb_size = None
-        self._reference_depth_image = None
-        self._reference_rgb_camera_info = None
-        self._reference_camera_info = None
-        self._reference_view = None
         self._handle_reference_image_point_cleared()
 
         if had_reference_pixel:
@@ -630,13 +623,6 @@ class FinalizingInspectionControls(InspectionControls):
             return
 
         self._set_reference_camera_defaults()
-        for camera_id, view_id in zip(
-            state.reference_camera_ids,
-            state.reference_view_ids,
-        ):
-            if not camera_id or not view_id:
-                continue
-            self._reference_view_id_by_camera[camera_id] = view_id
         for view_id in preloaded_reference_view_ids(state):
             client.request_preview(view_id)
 
@@ -654,10 +640,6 @@ class FinalizingInspectionControls(InspectionControls):
         self._reference_preview_cache[
             response.reference_view_id
         ] = response
-        self._reference_view_id_by_camera[
-            response.camera_id
-        ] = response.reference_view_id
-
         current_camera_id = self._selected_reference_camera_id()
         if current_camera_id == response.camera_id:
             self._render_reference_preview(response)

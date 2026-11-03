@@ -343,34 +343,9 @@ class ProbeRefinementController:
             purpose = stage.value
             # The routine safe pose only requires successful command completion.
             verify_achieved_pose = motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH
-        if not motion.relative and motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH:
-            command = replace(command, arm_speed_scale=(
-                draft.final_probe_speed_scale if stage is RefinementStage.PROBE
-                else draft.pre_approach_speed_scale))
-        if custom and motion.retract_path:
-            command = replace(command, arm_speed_scale=(
-                draft.final_probe_speed_scale if stage is RefinementStage.ALIGNMENT
-                else draft.pre_approach_speed_scale))
-            points = (draft.final_probe_path if stage is RefinementStage.ALIGNMENT else draft.pre_approach_path)
-            if points:
-                command = self._absolute_motion_command(draft, target, attachment, ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH)
-                command = replace(command,
-                    command_id=CommandID.FOLLOW_MOVE_TO_TAG_PATH,
-                    pre_approach_offsets=tuple(self._absolute_motion_command(
-                        draft, point.pose_object, attachment, ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH
-                    ).offset for point in reversed(points)),
-                    pre_approach_tolerances_m=tuple(p.position_tolerance_m for p in reversed(points)),
-                    pre_approach_precision_modes=tuple(p.precision_mode for p in reversed(points)),
-                    pre_approach_speed_scales=tuple(p.arm_speed_scale for p in reversed(points)),
-                    arm_speed_scale=draft.final_probe_speed_scale if stage is RefinementStage.ALIGNMENT else draft.pre_approach_speed_scale,
-                )
-        command = replace(command, precision_mode=motion.precision_mode, ignore_environment_collisions=(
-            custom and (stage is RefinementStage.PROBE
-                        or (motion.retract_path and stage is RefinementStage.ALIGNMENT))
-        ), tag_position_tolerance_m=(
-            self._selected_routine(draft).safe_approach_position_tolerance_m
-            if motion.kind is ProbeMotionKind.MOVE_SAFE_APPROACH else motion.position_tolerance_m
-        ))
+        command = self._configure_motion_command(
+            command, draft, motion, stage, target, attachment, custom,
+        )
         operation = self.setup_coordinator.prepare_command(
             context,
             command,
@@ -395,6 +370,69 @@ class ProbeRefinementController:
             (motion, stage),
         )
         return operation
+
+    def _configure_motion_command(
+        self, command, draft, motion, stage, target, attachment, custom,
+    ):
+        """Apply travel settings and the selected reverse path to one command."""
+        if not motion.relative and motion.kind is not ProbeMotionKind.MOVE_SAFE_APPROACH:
+            speed_scale = (
+                draft.final_probe_speed_scale if stage is RefinementStage.PROBE
+                else draft.pre_approach_speed_scale
+            )
+            command = replace(command, arm_speed_scale=speed_scale)
+        custom_retraction = custom and motion.retract_path
+        if custom_retraction:
+            retraction_speed_scale = (
+                draft.final_probe_speed_scale if stage is RefinementStage.ALIGNMENT
+                else draft.pre_approach_speed_scale
+            )
+            command = replace(command, arm_speed_scale=retraction_speed_scale)
+            points = (
+                draft.final_probe_path if stage is RefinementStage.ALIGNMENT
+                else draft.pre_approach_path
+            )
+            if points:
+                command = self._absolute_motion_command(
+                    draft, target, attachment, ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+                )
+                reverse_points = tuple(reversed(points))
+                command = replace(
+                    command,
+                    command_id=CommandID.FOLLOW_MOVE_TO_TAG_PATH,
+                    pre_approach_offsets=tuple(
+                        self._absolute_motion_command(
+                            draft, point.pose_object, attachment,
+                            ProbeMotionKind.MOVE_ALIGNED_PREAPPROACH,
+                        ).offset
+                        for point in reverse_points
+                    ),
+                    pre_approach_tolerances_m=tuple(
+                        p.position_tolerance_m for p in reverse_points
+                    ),
+                    pre_approach_precision_modes=tuple(
+                        p.precision_mode for p in reverse_points
+                    ),
+                    pre_approach_speed_scales=tuple(
+                        p.arm_speed_scale for p in reverse_points
+                    ),
+                    arm_speed_scale=retraction_speed_scale,
+                )
+        return replace(
+            command,
+            precision_mode=motion.precision_mode,
+            ignore_environment_collisions=(
+                custom and (
+                    stage is RefinementStage.PROBE
+                    or (custom_retraction and stage is RefinementStage.ALIGNMENT)
+                )
+            ),
+            tag_position_tolerance_m=(
+                self._selected_routine(draft).safe_approach_position_tolerance_m
+                if motion.kind is ProbeMotionKind.MOVE_SAFE_APPROACH
+                else motion.position_tolerance_m
+            ),
+        )
 
     def _prepare_path_motion(self, context, draft, motion, attachment):
         stage = RefinementStage(motion.path_stage)
@@ -479,10 +517,7 @@ class ProbeRefinementController:
 
     def fail_submission(self, request_id: str, draft) -> None:
         refinement = self.require_refinement(draft)
-        refinement.fail_motion(
-            request_id,
-            "Motion submission failed",
-        )
+        refinement.fail_motion(request_id)
         self._operations.pop(request_id)
 
     def cancel_motion(self, context, request_id: str) -> str:
@@ -548,10 +583,7 @@ class ProbeRefinementController:
                         achieved,
                     )
             except Exception as exception:
-                refinement.fail_motion(
-                    status.operation.request_id,
-                    str(exception),
-                )
+                refinement.fail_motion(status.operation.request_id)
                 status = SetupOperationStatus(
                     operation=status.operation,
                     state=CommandControllerState.FAILED,
@@ -561,10 +593,7 @@ class ProbeRefinementController:
                     ),
                 )
         else:
-            refinement.fail_motion(
-                status.operation.request_id,
-                status.detail,
-            )
+            refinement.fail_motion(status.operation.request_id)
         self._operations.pop(status.operation.request_id)
         return motion, status
 

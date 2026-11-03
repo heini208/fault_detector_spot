@@ -42,7 +42,6 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import (
 )
 from fault_detector_spot.inspection.setup.reference_camera_registry import (
     REFERENCE_CAMERAS,
-    REFERENCE_CAMERA_BY_ID,
 )
 from fault_detector_spot.inspection.setup.reference_view_approach_direction import (
     APPROACH_MODE_AUTOMATIC,
@@ -50,9 +49,6 @@ from fault_detector_spot.inspection.setup.reference_view_approach_direction impo
     APPROACH_MODE_TAG_X,
     APPROACH_SOURCE_SURFACE_FIT,
     APPROACH_SOURCE_TAG_X_SELECTED,
-)
-from fault_detector_spot.inspection.setup.reference_view_depth_projection import (
-    ImageRegion,
 )
 from fault_detector_spot.inspection.setup.reference_view_surface_target import (
     quaternion_to_rpy,
@@ -83,11 +79,6 @@ class InspectionControls(UIControlHelper):
 
     def __init__(self, parent_ui):
         self._probe_setup_state = None
-        self._reference_rgb_size = None
-        self._reference_depth_image = None
-        self._reference_rgb_camera_info = None
-        self._reference_camera_info = None
-        self._reference_view = None
         self._reference_slot_view_ids = ["", "", ""]
         self._preview_signature = None
         self._active_reference_slot = None
@@ -1282,49 +1273,6 @@ class InspectionControls(UIControlHelper):
         intent.operation = ProbeSetupIntent.OPERATION_CLEAR_REFERENCE_PIXEL
         return self._submit_probe_setup(intent)
 
-    def _handle_reference_camera_selection_changed(self, slot_index):
-        if slot_index >= len(self.reference_camera_dropdowns):
-            return
-        camera_id = (
-            self.reference_camera_dropdowns[slot_index].currentData() or ""
-        )
-        self._reference_slot_view_ids[slot_index] = ""
-        widget = self.reference_view_widgets[slot_index]
-        widget.clear_preview(
-            f"Capture {REFERENCE_CAMERA_BY_ID[camera_id].display_name}"
-            if camera_id
-            else "No camera selected"
-        )
-        if self._active_reference_slot == slot_index:
-            self._active_reference_slot = None
-            self._reference_rgb_size = None
-            self._reference_depth_image = None
-            self._reference_rgb_camera_info = None
-            self._reference_camera_info = None
-            self._reference_view = None
-            self._handle_reference_image_point_cleared()
-
-    def _set_reference_camera_defaults(self):
-        for slot_index, dropdown in enumerate(
-            self.reference_camera_dropdowns
-        ):
-            dropdown.blockSignals(True)
-            default_id = "hand" if slot_index == 0 else ""
-            dropdown.setCurrentIndex(dropdown.findData(default_id))
-            dropdown.blockSignals(False)
-
-    def _clear_reference_camera_selections(self):
-        for dropdown in self.reference_camera_dropdowns:
-            dropdown.blockSignals(True)
-            dropdown.setCurrentIndex(dropdown.findData(""))
-            dropdown.blockSignals(False)
-
-    def _selected_reference_camera_ids(self):
-        return [
-            str(dropdown.currentData() or "")
-            for dropdown in self.reference_camera_dropdowns
-        ]
-
     def _submit_probe_setup(self, intent):
         if not hasattr(self.ui, "execute_probe_setup"):
             return self.show_setup_unavailable("Probe authoring")
@@ -1368,11 +1316,6 @@ class InspectionControls(UIControlHelper):
             widget.clear_preview(
                 message if camera_id else "No camera selected"
             )
-        self._reference_rgb_size = None
-        self._reference_depth_image = None
-        self._reference_rgb_camera_info = None
-        self._reference_camera_info = None
-        self._reference_view = None
         self._handle_reference_image_point_cleared()
 
     def _handle_reference_image_point_changed(self, u, v):
@@ -2057,13 +2000,10 @@ class InspectionControls(UIControlHelper):
         return presentation
 
     def handle_move_to_approach_pose(self):
-        presentation = self._require_refinement_presentation()
+        self._require_refinement_presentation()
         return self._send_refinement_motion(
             RefinementStage.SAFE_APPROACH,
             "safe approach candidate",
-            presentation.candidate_pose(
-                RefinementStage.SAFE_APPROACH
-            ),
         )
 
     def handle_return_to_pre_approach(self):
@@ -2343,9 +2283,6 @@ class InspectionControls(UIControlHelper):
         self,
         stage,
         label,
-        probe_pose_object,
-        updates_candidate=False,
-        axial_correction_m=0.0,
     ):
         if stage == RefinementStage.SAFE_APPROACH:
             operation = (
@@ -2763,79 +2700,6 @@ class InspectionControls(UIControlHelper):
             self.inspection_workspace_tabs.setEnabled(False)
         self._refresh_refinement_dialog()
 
-    def _request_reference_previews(self, state):
-        self._clear_reference_previews(
-            "Loading reference preview"
-        )
-        self._reference_slot_view_ids = ["", "", ""]
-        if not state.selected_routine_id:
-            self.reference_view_status_label.setText(
-                "Reference view: no routine selected"
-            )
-            self._set_reference_camera_defaults()
-            return
-        if not state.reference_view_ids:
-            self.reference_view_status_label.setText(
-                "Reference view: not captured"
-            )
-            self._set_reference_camera_defaults()
-            return
-        client = getattr(self.ui, "probe_setup_client", None)
-        if client is None:
-            self.reference_view_status_label.setText(
-                "Reference view: remote preview unavailable"
-            )
-            return
-        for view_id in state.reference_view_ids:
-            client.request_preview(view_id)
-
-    def apply_reference_preview(self, response):
-        state = self._probe_setup_state
-        if (
-            state is None
-            or response.reference_view_id
-            not in state.reference_view_ids
-        ):
-            return False
-        slot_index = int(response.slot_index)
-        if (
-            slot_index < 0
-            or slot_index >= len(self.reference_view_widgets)
-        ):
-            self.apply_reference_preview_error(
-                response.reference_view_id,
-                f"Invalid reference preview slot: {slot_index}",
-            )
-            return False
-        region = ImageRegion(
-            x=int(response.selectable_x),
-            y=int(response.selectable_y),
-            width=int(response.selectable_width),
-            height=int(response.selectable_height),
-        )
-        widget = self.reference_view_widgets[slot_index]
-        widget.blockSignals(True)
-        widget.set_ros_image(
-            response.image,
-            source_region=region,
-        )
-        widget.blockSignals(False)
-        self._reference_slot_view_ids[slot_index] = (
-            response.reference_view_id
-        )
-        dropdown = self.reference_camera_dropdowns[slot_index]
-        dropdown.blockSignals(True)
-        camera_index = dropdown.findData(response.camera_id)
-        dropdown.setCurrentIndex(
-            camera_index if camera_index >= 0 else 0
-        )
-        dropdown.blockSignals(False)
-        self.reference_view_status_label.setText(
-            "Reference view: remote preview ready"
-        )
-        self._restore_authoritative_selection()
-        return True
-
     def apply_reference_preview_error(self, view_id, detail):
         state = self._probe_setup_state
         if (
@@ -3055,11 +2919,6 @@ class InspectionControls(UIControlHelper):
             self.reference_tag_id_field.clear()
             self.reference_tag_family_field.setText("36h11")
         return submitted
-
-    def handle_capture_reference_view(self):
-        return self.show_setup_unavailable(
-            "Reference capture"
-        )
 
     def handle_delete_object(self):
         object_id = self.saved_object_dropdown.currentData()
