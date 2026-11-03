@@ -509,11 +509,15 @@ class SetupCoordinator:
         with self._lock:
             if not self._closed or self._contexts:
                 return
-            if self._listener_attached:
-                self._command_controller.remove_status_listener(self._handle_command_status)
-                self._listener_attached = False
+            detach_listener = self._listener_attached
+            self._listener_attached = False
             self._context_listeners.clear()
             self._operation_listeners.clear()
+        # Command status delivery holds the command lock before taking ours.
+        if detach_listener:
+            self._command_controller.remove_status_listener(
+                self._handle_command_status,
+            )
 
     def _emit_context(
         self,

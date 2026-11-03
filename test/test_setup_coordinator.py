@@ -7,12 +7,14 @@ import pytest
 from fault_detector_spot.application.commanding.command_ids import CommandID
 from fault_detector_spot.application.commanding.command_request import (
     CommandOrigin,
+    CommandRequest,
     RecordingPolicy,
 )
 from fault_detector_spot.application.commanding.semantic_command import (
     SemanticCommand,
 )
 from fault_detector_spot.application.controllers.command_controller import (
+    CommandController,
     CommandControllerState,
     CommandControllerStatus,
 )
@@ -310,6 +312,90 @@ def test_close_invalidates_contexts_and_detaches_status_listener():
     assert controller.listeners == []
     assert coordinator.contexts == ()
     assert not coordinator.is_current(context)
+
+
+def test_close_does_not_deadlock_with_command_status_delivery(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    status_started, removal_started = Event(), Event()
+    listener_errors = []
+    controller = CommandController(listener_error_handler=listener_errors.append)
+
+    def pause_status_delivery(_status):
+        status_started.set()
+        assert removal_started.wait(5)
+
+    controller.add_status_listener(pause_status_delivery)
+    coordinator = SetupCoordinator(controller)
+    coordinator.open_context(CommandOrigin.PROBE_SETUP, "probe-ui")
+    request = CommandRequest.create(
+        command=command(), client_id="operator-ui",
+        origin=CommandOrigin.OPERATIONAL,
+        recording_policy=RecordingPolicy.EXCLUDE,
+    )
+    removed = []
+    original_remove = controller.remove_status_listener
+
+    def remove_listener(listener):
+        removal_started.set()
+        # Bound the real command-lock wait so a regression cannot hang pytest.
+        if not controller._lock.acquire(timeout=2):
+            raise TimeoutError("Listener removal deadlocked with status delivery")
+        try:
+            original_remove(listener)
+            removed.append(listener)
+        finally:
+            controller._lock.release()
+
+    monkeypatch.setattr(controller, "remove_status_listener", remove_listener)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        status_delivery = workers.submit(controller.submit, request)
+        try:
+            assert status_started.wait(5)
+            shutdown = workers.submit(coordinator.close)
+            shutdown.result(timeout=5)
+        finally:
+            removal_started.set()
+        assert status_delivery.result(timeout=5) == request.request_id
+
+    assert listener_errors == []
+    assert coordinator.contexts == ()
+    assert removed == [coordinator._handle_command_status]
+    assert coordinator._handle_command_status not in controller._listeners
+
+
+def test_concurrent_and_repeated_close_detach_listener_once(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    controller = FakeCommandController()
+    coordinator = SetupCoordinator(controller)
+    removal_started, release_removal = Event(), Event()
+    removed = []
+    original_remove = controller.remove_status_listener
+
+    def delayed_remove(listener):
+        removed.append(listener)
+        removal_started.set()
+        assert release_removal.wait(5)
+        original_remove(listener)
+
+    monkeypatch.setattr(controller, "remove_status_listener", delayed_remove)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first_close = workers.submit(coordinator.close)
+        try:
+            assert removal_started.wait(5)
+            second_close = workers.submit(coordinator.close)
+            second_close.result(timeout=2)
+        finally:
+            release_removal.set()
+        first_close.result(timeout=5)
+
+    coordinator.close()
+
+    assert removed == [coordinator._handle_command_status]
+    assert controller.listeners == []
 
 
 def test_setup_admission_bounds_prepared_and_submitted_physical_lane():
