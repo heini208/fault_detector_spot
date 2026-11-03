@@ -1,0 +1,19 @@
+diff --git a/spot_driver/spot_driver/spot_ros2.py b/spot_driver/spot_driver/spot_ros2.py
+index 1230127..06d6a50 100644
+--- a/spot_driver/spot_driver/spot_ros2.py
++++ b/spot_driver/spot_driver/spot_ros2.py
+@@ -1225,12 +1225,12 @@ class SpotROS(Node):
+         """Callback for when Spot Wrapper gets new velodyne point cloud data
+ 
+         Args:
+-            results (Any): FutureWrapper object of AsyncPeriodicQuery callback
++            results (Any): Point cloud responses from the completed query
+         """
+         if self.spot_wrapper is None:
+             return
+ 
+-        data = self.spot_wrapper.point_clouds
++        data = results
+         if data:
+             point_cloud_proto = data[0]
+             local_time = self.spot_wrapper.robotToLocalTime(point_cloud_proto.point_cloud.source.acquisition_time)

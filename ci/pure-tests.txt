@@ -29,3 +29,6 @@ test/test_sensor_attachment_state_store.py
 test/test_shared_layer_dependencies.py
 test/test_arm_guard_boundary.py
 test/test_inspection_ui_command_state_cleanup.py
+
+# Installer orchestration uses fake external commands and temporary files.
+test/test_workspace_install.py

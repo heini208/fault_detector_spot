@@ -107,6 +107,8 @@ def main():
     parser.add_argument("--prefix", required=True, type=Path)
     parser.add_argument("--source-tree", type=Path)
     parser.add_argument("--messages-prefix", type=Path)
+    parser.add_argument("--runtime-workspace", type=Path,
+                        help="Also verify the full driver and hotfix overlay without starting nodes")
     args = parser.parse_args()
     prefix = args.prefix.resolve()
     messages_prefix = str(args.messages_prefix.resolve()) if args.messages_prefix else ""
@@ -139,7 +141,34 @@ def main():
         subprocess.run([sys.executable, "-c", IMPORT_CHECK, str(prefix),
                         messages_prefix, ""], cwd=directory, env=environment,
                        check=True, timeout=60)
+        if args.runtime_workspace:
+            subprocess.run([sys.executable, "-c", RUNTIME_CHECK,
+                            str(args.runtime_workspace.resolve())], cwd=directory,
+                           env=environment, check=True, timeout=60)
     print(f"Verified {len(entries)} console scripts and message/service/action type support")
+
+
+RUNTIME_CHECK = """
+import importlib
+from pathlib import Path
+import sys
+from ament_index_python.packages import get_package_prefix
+
+workspace = Path(sys.argv[1])
+for package in ('spot_driver', 'spot_common', 'spot_msgs', 'spot_description',
+                'spot_moveit_config', 'spot_ros2_control', 'spot_hardware_interface',
+                'spot_controllers', 'spot_rviz_plugins', 'synchros2', 'micro_ros_agent'):
+    assert Path(get_package_prefix(package)).resolve() == workspace / 'install' / package, package
+assert Path(get_package_prefix('moveit_ros_visualization')).resolve() == (
+    workspace / 'hotfixes/install/moveit_ros_visualization')
+for package in ('nav2_bringup', 'rtabmap_slam', 'apriltag_ros', 'moveit_ros_perception'):
+    get_package_prefix(package)
+for name in ('spot_driver.spot_ros2',
+             'spot_driver.calibrated_reregistered_hand_camera_depth_publisher'):
+    module = importlib.import_module(name)
+    assert Path(module.__file__).resolve().is_relative_to(workspace / 'install/spot_driver'), name
+print('Verified full runtime imports, package prefixes and RViz hotfix overlay')
+"""
 
 
 if __name__ == "__main__":

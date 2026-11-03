@@ -59,7 +59,7 @@ You must have the following ROS 2 packages installed and sourced:
   - [`spot_ros2`](https://github.com/bdaiinstitute/spot_ros2) – official Spot ROS 2 driver
   - `spot_msgs`, `synchros2`, `bosdyn_api_msgs`, `bosdyn_spot_api_msgs`
   - `spot_ros2` is the driver repository; its driver package is `spot_driver`.
-    The driver is provisioned separately and must be available for robot operation.
+    The workspace installer below builds the driver and its control packages.
   - [`fault_detector_msgs`](https://github.com/heini208/fault_detector_msgs) – custom message definitions for this system
 
 - **Behaviour Trees**
@@ -80,12 +80,14 @@ You must have the following ROS 2 packages installed and sourced:
   - `rviz2` – visualization
 
 The retained launches also require `spot_moveit_config`, `spot_description`,
-`moveit_ros_perception`, and `micro_ros_agent`. Provision the project's matching
-`spot_moveit_config` alongside the driver, and build the Humble micro-ROS Agent
-using the [micro-ROS setup instructions](https://github.com/micro-ROS/micro_ros_setup).
-These source packages are not supplied by cloning this repository.
+`moveit_ros_perception`, and `micro_ros_agent`. The workspace installer fetches
+the project's matching `spot_moveit_config` and Humble micro-ROS Agent; cloning
+only this repository does not install those dependencies.
 
 ### 2.3 Vendor dependencies and rosdep
+
+The workspace installer performs these steps automatically. This subsection is
+for manual builds or troubleshooting the vendor dependencies.
 
 Use the [Spot driver installation instructions](https://github.com/rai-opensource/spot_ros2#installation)
 for the SDK 5.0.1 driver revision, initialized submodules, and matching
@@ -128,23 +130,50 @@ driver instructions when running the full offline test suite.
 
 ## 3. Building the Package
 
-Use a new workspace and a shell that has sourced Humble and the dependency
-workspace described above, but no previous `fault_detector_spot` or
-`fault_detector_msgs` installation:
+On **Ubuntu 22.04 amd64**, create a workspace, download the installer into it,
+and run it as your normal user (it uses `sudo` for system packages):
 
 ```bash
-mkdir -p ~/ros2_ws/src
-cd ~/ros2_ws/src
-git clone https://github.com/heini208/fault_detector_spot.git
-git clone https://github.com/heini208/fault_detector_msgs.git
-
+mkdir -p ~/ros2_ws
 cd ~/ros2_ws
-sudo -H /usr/bin/python3 -m pip install -r src/fault_detector_spot/requirements-humble-sdk.txt
-rosdep install --from-paths src --ignore-src --rosdistro humble -y
-rosdep check --from-paths src --ignore-src --rosdistro humble
-colcon build --packages-select fault_detector_msgs fault_detector_spot
-source install/setup.bash
+curl -fL https://raw.githubusercontent.com/heini208/fault_detector_spot/main/install.sh -o install.sh
+bash install.sh
+source ~/ros2_ws/setup.bash
 ```
+
+If `curl` is unavailable, download `install.sh` through a browser into the workspace.
+The script checks that Humble can be sourced and `rclpy` imported. If that fails,
+it installs/repairs Humble using the [official ROS apt setup](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html).
+It fetches the application and [pinned source dependencies](ci/humble.repos),
+installs the SDK 5.0.1 bundles and ROS/Python dependencies, then builds the
+messages, application, full Spot driver, MoveIt configuration and micro-ROS Agent.
+Nav2, RTAB-Map and AprilTag packages are installed through rosdep.
+
+Three hotfixes are applied before their affected packages are installed/built:
+Spot wrapper posture feedback, the driver's completed point-cloud callback,
+and the MoveIt RViz scene-monitor lifetime fix. The RViz fix requires MoveIt
+**2.5.10** and builds a persistent overlay under `hotfixes/`; another installed
+MoveIt version produces an explicit error instead of applying an unreviewed patch.
+`setup.bash` sources this overlay last. SDK/source checksums, source pins and
+build logs are retained under `evidence/` and `downloads/`.
+
+The installer can resume after a failure. Existing source checkouts and the
+driver configuration are preserved; conflicting patches or unexpected source
+revisions stop the installation. It does not pull/reset existing checkouts,
+modify shell startup files, start ROS nodes, or connect to Spot. Its final checks
+import the installed application and driver and verify package/overlay locations.
+Offline installer tests use simulated package/build commands; a complete fresh
+machine installation remains an integration check.
+
+After success, the script prints the required manual steps and creates
+`~/ros2_ws/config/spot_ros.yaml` from the driver's example if it does not exist.
+Edit `ros__parameters.username`, `password`, and `hostname` (Spot's IP address).
+Enable `use_velodyne` if using the EAP lidar and check network access to Spot.
+In each terminal, source `~/ros2_ws/setup.bash`. Start the driver with
+`ros2 launch spot_driver spot_driver.launch.py config_file:=$HOME/ros2_ws/config/spot_ros.yaml`,
+then start `ros2 launch fault_detector_spot fault_detector_launch.py` in another
+sourced terminal when ready. Sensor calibration and robot-specific configuration
+remain manual; installation does not validate them.
 
 Both packages use version `0.0.0` while unreleased. Keep this package's version
 and description synchronized in `package.xml` and `setup.py`; bump versions
