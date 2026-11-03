@@ -299,6 +299,15 @@ class SetupCoordinator:
     def remove_command_status_listener(self, listener) -> None:
         self._command_controller.remove_status_listener(listener)
 
+    def run_if_command_lane_idle(self, action, detail: str):
+        """Admit a transaction before it acquires any setup context locks.
+
+        The action still validates its setup ownership. Holding command admission
+        across it prevents physical commands from interleaving with pose capture
+        or preparation, and follows the same lock order as command feedback.
+        """
+        return self._command_controller.run_if_idle(action, detail)
+
     def require_command_lane_idle(
         self,
         detail: str,

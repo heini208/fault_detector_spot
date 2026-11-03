@@ -81,6 +81,11 @@ class FakeCommandController:
     def queued_request_ids(self):
         return self.queued
 
+    def run_if_idle(self, action, busy_message):
+        if self.active or self.queued:
+            raise RuntimeError(busy_message)
+        return action()
+
     def add_status_listener(self, listener):
         self.listeners.append(listener)
 

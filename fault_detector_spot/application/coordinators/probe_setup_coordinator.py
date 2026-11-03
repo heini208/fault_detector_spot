@@ -55,18 +55,11 @@ from fault_detector_spot.inspection.setup.probe_setup_motion import (
 from fault_detector_spot.navigation.body_height import validate_body_height
 
 
-def _serialized_transaction(*, require_idle=True, allow_closed_context=False):
-    """Serialize context access, requiring idle setup unless explicitly disabled.
-
-    Allowing a closed context makes a repeated close a no-op.
-    """
+def _serialized_transaction(*, require_idle=True):
+    """Serialize context access, requiring idle setup unless explicitly disabled."""
     def decorate(method):
         @wraps(method)
         def wrapped(self, context, *args, **kwargs):
-            if allow_closed_context:
-                with self._lock:
-                    if context.context_id not in self._drafts:
-                        return None
             with self._context_lock(context):
                 if require_idle:
                     self._require_idle(context)
@@ -75,6 +68,18 @@ def _serialized_transaction(*, require_idle=True, allow_closed_context=False):
         return wrapped
 
     return decorate
+
+
+def _idle_command_transaction(method):
+    """Take command admission before the method takes a context lock."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        return self.setup_coordinator.run_if_command_lane_idle(
+            lambda: method(self, *args, **kwargs),
+            "Robot command lane must be idle for probe setup",
+        )
+
+    return wrapped
 
 
 @dataclass(frozen=True)
@@ -284,12 +289,28 @@ class ProbeSetupCoordinator:
             raise LookupError(f"Unknown probe context: {context_id}")
         return context
 
-    @_serialized_transaction(require_idle=False, allow_closed_context=True)
     def close_context(self, context: SetupContextSnapshot) -> None:
         """Cancel one draft, retaining motion ownership through its result."""
-        draft = self._draft(context)
-        self._closing_contexts.add(context.context_id)
-        request_ids = self.refinement_controller.request_ids_for(context)
+        self._close_context(context.context_id, expected_context=context)
+
+    def _close_context(self, context_id, expected_context=None):
+        with self._lock:
+            lock = self._context_locks.get(context_id)
+        if lock is None:
+            return
+        with lock:
+            with self._lock:
+                draft = self._drafts.get(context_id)
+            if draft is None:
+                return
+            if expected_context is not None:
+                self.setup_coordinator.require_current(expected_context)
+            # Feedback can advance the revision while shutdown waits for this lock.
+            context = draft.context
+            self._closing_contexts.add(context_id)
+            request_ids = self.refinement_controller.request_ids_for(context)
+        # Command feedback takes the context lock. Never wait for command
+        # cancellation while holding it, including when cancellation is retried.
         first_error = None
         for request_id in request_ids:
             try:
@@ -307,17 +328,26 @@ class ProbeSetupCoordinator:
 
     def _finish_context_close(self, draft):
         context_id = draft.context.context_id
-        if (context_id not in self._closing_contexts
-                or self.refinement_controller.has_context(draft.context)
-                or self.finalization_controller.active_request_id(draft.context)):
-            return
-        self.refinement_controller.abort(draft)
         with self._lock:
-            self._drafts.pop(context_id, None)
-            self._context_locks.pop(context_id, None)
-            self._closing_contexts.discard(context_id)
-            self._ending_refinements.discard(context_id)
-        self.finalization_controller.discard_context(draft.context)
+            lock = self._context_locks.get(context_id)
+        if lock is None:
+            return
+        with lock:
+            with self._lock:
+                if self._drafts.get(context_id) is not draft:
+                    return
+            if (context_id not in self._closing_contexts
+                    or self.refinement_controller.has_context(draft.context)
+                    or self.finalization_controller.active_request_id(draft.context)):
+                return
+            self.refinement_controller.abort(draft)
+            with self._lock:
+                self._drafts.pop(context_id, None)
+                self._context_locks.pop(context_id, None)
+                self._closing_contexts.discard(context_id)
+                self._ending_refinements.discard(context_id)
+            self.finalization_controller.discard_context(draft.context)
+        # Shared-context cleanup can detach a command listener during shutdown.
         if self.setup_coordinator.is_current(draft.context):
             self.setup_coordinator.close_context(draft.context)
         self._finish_close()
@@ -556,6 +586,7 @@ class ProbeSetupCoordinator:
             self.definition_service.set_routine_waypoint(object_id, routine_id, normalized)
         return self._advance(draft)
 
+    @_idle_command_transaction
     @_serialized_transaction()
     def save_base_position(
         self,
@@ -590,6 +621,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
+    @_idle_command_transaction
     @_serialized_transaction()
     def save_routine_safe_approach_pose(self, context, position_tolerance_m=.1):
         """Capture the routine's shared, object-referenced probe-tip pose."""
@@ -702,6 +734,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
+    @_idle_command_transaction
     @_serialized_transaction()
     def approve_safe_pose(
         self,
@@ -715,6 +748,7 @@ class ProbeSetupCoordinator:
         )
         return self._advance(draft)
 
+    @_idle_command_transaction
     @_serialized_transaction()
     def approve_aligned_pose(
         self,
@@ -740,6 +774,7 @@ class ProbeSetupCoordinator:
         draft.aligned_precision_mode = precision_mode
         return self._advance(draft)
 
+    @_idle_command_transaction
     @_serialized_transaction()
     def approve_probe_pose(
         self,
@@ -764,6 +799,7 @@ class ProbeSetupCoordinator:
         draft.final_precision_mode = precision_mode
         return self._advance(draft)
 
+    @_idle_command_transaction
     @_serialized_transaction()
     def begin_refinement(
         self,
@@ -787,23 +823,23 @@ class ProbeSetupCoordinator:
         self.refinement_controller.begin(draft)
         return self._advance(draft)
 
-    @_serialized_transaction(require_idle=False)
     def end_refinement(
         self,
         context: SetupContextSnapshot,
     ) -> ProbeSetupSnapshot:
         """Abort unsaved probe-point creation, including during motion or recovery."""
-        draft = self._selected_draft(context)
-        if draft.refinement is None:
-            return self.snapshot(context)
-        if self.finalization_controller.active_request_id(context):
-            raise RuntimeError(
-                "Probe point finalization is already in progress"
-            )
-        self._ending_refinements.add(context.context_id)
-        for request_id in self.refinement_controller.request_ids_for(
-            context
-        ):
+        lock = self._context_lock(context)
+        with lock:
+            draft = self._selected_draft(context)
+            if draft.refinement is None:
+                return self.snapshot(context)
+            if self.finalization_controller.active_request_id(context):
+                raise RuntimeError(
+                    "Probe point finalization is already in progress"
+                )
+            self._ending_refinements.add(context.context_id)
+            request_ids = self.refinement_controller.request_ids_for(context)
+        for request_id in request_ids:
             try:
                 self.setup_coordinator.cancel_operation(
                     context,
@@ -811,13 +847,16 @@ class ProbeSetupCoordinator:
                 )
             except LookupError:
                 pass
-        if self.refinement_controller.has_context(draft.context):
-            return self.snapshot(draft.context)
-        # A synchronous terminal callback may already have completed the abort.
-        if context.context_id not in self._ending_refinements:
-            return self.snapshot(draft.context)
-        self._finish_refinement_abort(draft)
-        return self._advance(draft)
+        with lock:
+            self._draft(draft.context)
+            if self.refinement_controller.has_context(draft.context):
+                return self.snapshot(draft.context)
+            # Terminal feedback may already have completed the abort and revised
+            # the draft while cancellation waited for command admission.
+            if context.context_id not in self._ending_refinements:
+                return self.snapshot(draft.context)
+            self._finish_refinement_abort(draft)
+            return self._advance(draft)
 
     def _finish_refinement_abort(self, draft):
         self._ending_refinements.discard(draft.context.context_id)
@@ -866,6 +905,7 @@ class ProbeSetupCoordinator:
         """Return whether this facade uses the supplied shared coordinator."""
         return self.setup_coordinator is coordinator
 
+    @_idle_command_transaction
     def begin_finalization(
         self,
         context: SetupContextSnapshot,
@@ -945,8 +985,8 @@ class ProbeSetupCoordinator:
                 request_id,
             )
             snapshot = self._advance(draft)
-            self._finish_context_close(draft)
-            return snapshot
+        self._finish_context_close(draft)
+        return snapshot
 
     def fail_finalization(
         self,
@@ -969,9 +1009,10 @@ class ProbeSetupCoordinator:
             snapshot = (self.snapshot(draft.context)
                         if self.refinement_controller.has_context(draft.context)
                         else self._advance(draft))
-            self._finish_context_close(draft)
-            return snapshot
+        self._finish_context_close(draft)
+        return snapshot
 
+    @_idle_command_transaction
     @_serialized_transaction()
     def add_pathing_point(self, context, name, position_tolerance_m=.01,
                           arm_speed_scale=1.0, path_stage="alignment", precision_mode=False):
@@ -1068,6 +1109,7 @@ class ProbeSetupCoordinator:
             return draft.final_probe_path
         raise ValueError("Final paths require fully custom mode")
 
+    @_idle_command_transaction
     def prepare_motion(
         self,
         context: SetupContextSnapshot,
@@ -1154,7 +1196,7 @@ class ProbeSetupCoordinator:
             self._closed = True
             detach_listener = self._command_listener_attached
             self._command_listener_attached = False
-            contexts = tuple(self._context_locks.items())
+            context_ids = tuple(self._context_locks)
         first_error = None
         # Stop observing external movement before taking any context lock.
         # Own operation listeners remain attached until terminal completion.
@@ -1167,14 +1209,9 @@ class ProbeSetupCoordinator:
                 with self._lock:
                     self._command_listener_attached = True
                 first_error = exception
-        for context_id, context_lock in contexts:
+        for context_id in context_ids:
             try:
-                with context_lock:
-                    # In-flight feedback may have advanced the draft's revision.
-                    with self._lock:
-                        draft = self._drafts.get(context_id)
-                    if draft is not None:
-                        self.close_context(draft.context)
+                self._close_context(context_id)
             except Exception as exception:
                 first_error = first_error or exception
         self._finish_close()
