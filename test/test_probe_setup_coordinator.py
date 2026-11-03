@@ -1095,7 +1095,7 @@ def test_pure_authoring_core_has_no_execution_command_dependency():
         # The coordinator may correlate an observation's return to the saved
         # pose, but command construction stays with the motion components.
         if method.name == "_handle_external_command_status":
-            assert command_ids == {"MEASURE_SENSOR_TIP_DISTANCE"}
+            assert command_ids == {"MEASURE_SENSOR_TIP_DISTANCE", "MOVE_CLOSE_TO_SURFACE"}
         else:
             assert not command_ids
 

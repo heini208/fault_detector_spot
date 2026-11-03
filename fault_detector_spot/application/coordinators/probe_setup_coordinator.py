@@ -172,7 +172,14 @@ class ProbeSetupCoordinator:
                     context.context_id + "/measure-sensor-tip-distance/"
                 )
             )
-            if status.request.context_id == context.context_id:
+            scoped_surface_move = (
+                status.request.command.command_id is CommandID.MOVE_CLOSE_TO_SURFACE
+                and status.request.client_id == context.client_id
+                and status.request.context_id.startswith(
+                    context.context_id + "/move-close-to-surface/"
+                )
+            )
+            if status.request.context_id == context.context_id or scoped_surface_move:
                 continue
             # A completed observation excursion verifies its own return pose.
             # Failed, stopped, or uncertain excursions cannot preserve that evidence.

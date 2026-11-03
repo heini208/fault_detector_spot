@@ -20,7 +20,9 @@ from test_pre_approach_path import begin_setup, snapshot
 from test_probe_setup_coordinator import coordinator
 
 
-@pytest.mark.parametrize("scope", ["current", "unscoped", "other"])
+@pytest.mark.parametrize("scope", [
+    "current", "attempt", "unscoped", "other", "wrong_command", "wrong_client",
+])
 def test_surface_command_context_controls_alignment_invalidation(tmp_path, scope):
     probe, commands = coordinator(tmp_path)
     state = begin_setup(probe, commands, approved=True)
@@ -30,20 +32,27 @@ def test_surface_command_context_controls_alignment_invalidation(tmp_path, scope
     )
     contexts = {
         "current": state.context.context_id,
+        "attempt": state.context.context_id + "/move-close-to-surface/attempt",
         "unscoped": "",
-        "other": "different-workflow",
+        "other": "different-workflow/move-close-to-surface/attempt",
+        "wrong_command": state.context.context_id + "/move-close-to-surface/attempt",
+        "wrong_client": state.context.context_id + "/move-close-to-surface/attempt",
     }
     app = ApplicationController(commands)
     intent = OperationalIntent()
     intent.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
+    if scope == "wrong_command":
+        intent.intent = OperationalIntent.INTENT_READY_ARM
     intent.target_surface_distance_m = 0.1
     intent.surface_tolerance_m = 0.005
-    operation = app.prepare_operation(intent, "probe-ui", contexts[scope])
+    operation = app.prepare_operation(
+        intent, "another-ui" if scope == "wrong_client" else "probe-ui", contexts[scope],
+    )
     app.submit(operation)
 
     expected = (
         RefinementMotionState.REACHED
-        if scope == "current"
+        if scope in {"current", "attempt"}
         else RefinementMotionState.NOT_TESTED
     )
     for transition in (
@@ -58,4 +67,3 @@ def test_surface_command_context_controls_alignment_invalidation(tmp_path, scope
         assert current.refinement.motion_states[RefinementStage.ALIGNMENT] is expected
         assert current.refinement.stage_is_approved(RefinementStage.ALIGNMENT)
         assert current.setup == approved_setup
-

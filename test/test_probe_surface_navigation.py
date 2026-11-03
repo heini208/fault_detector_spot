@@ -11,6 +11,7 @@ from fault_detector_spot.inspection.setup.probe_refinement_session import Refine
 from fault_detector_spot.ui.inspection.finalizing_controls import FinalizingInspectionControls
 from fault_detector_spot.ui.fault_detector_ui import Fault_Detector_UI
 import fault_detector_spot.ui.ros.probe_setup_client as client_module
+import fault_detector_spot.ui.ros.application_client as application_client_module
 from test_probe_point_guided_workflow import FakeUI, application
 from test_probe_safe_approach_navigation import safe_state
 
@@ -44,10 +45,10 @@ def wizard(application):
     controls.refinement_dialog.hide()
 
 
-def status(state=ApplicationCommandState.STATE_SUCCEEDED, **changes):
+def status(controls, state=ApplicationCommandState.STATE_SUCCEEDED, **changes):
     result = ApplicationCommandState()
     result.intent = OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
-    result.context_id = "probe-context"
+    result.context_id = controls._surface_move_context_id
     result.client_id = "probe-ui"
     result.request_id = "server-operation"
     result.state = state
@@ -63,11 +64,11 @@ def test_success_enables_footer_next_and_save_on_summary(wizard):
     assert not dialog.next_button.isEnabled()
     assert controls.handle_test_surface_distance()
     intent, context_id = operations[-1]
-    assert context_id == state.context_id
+    assert context_id.startswith(state.context_id + "/move-close-to-surface/")
     assert intent.intent == OperationalIntent.INTENT_MOVE_CLOSE_TO_SURFACE
     assert intent.target_surface_distance_m == pytest.approx(0.1)
 
-    controls.handle_application_state(status())
+    controls.handle_application_state(status(controls))
     # Subsequent authoritative snapshots must not hide/reset successful navigation.
     controls.apply_setup_state(state)
     assert dialog.next_button.isEnabled()
@@ -97,7 +98,7 @@ def test_success_enables_footer_next_and_save_on_summary(wizard):
 def test_unfinished_or_failed_surface_move_cannot_advance(wizard, result):
     controls, *_ = wizard
     assert controls.handle_test_surface_distance()
-    controls.handle_application_state(status(result))
+    controls.handle_application_state(status(controls, result))
     assert not controls.refinement_dialog.next_button.isEnabled()
     assert not controls.handle_refinement_next()
     assert not controls.approve_and_retract_button.isEnabled()
@@ -121,7 +122,7 @@ def test_only_confirmed_finalization_rejection_unlocks_saving(wizard, monkeypatc
         lambda detail: Fault_Detector_UI._process_probe_setup_rejected(harness, detail)
     )
     controls.handle_test_surface_distance()
-    controls.handle_application_state(status())
+    controls.handle_application_state(status(controls))
     assert controls.handle_refinement_next()
     assert controls.handle_approve_and_retract()
     client.request_rejected.emit("Unrelated setup request rejected")
@@ -144,7 +145,7 @@ def test_only_confirmed_finalization_rejection_unlocks_saving(wizard, monkeypatc
 def test_finalization_keeps_close_and_abort_disabled_after_refresh(wizard, fully_custom):
     controls, state, *_ = wizard
     controls.handle_test_surface_distance()
-    controls.handle_application_state(status())
+    controls.handle_application_state(status(controls))
     state.fully_custom = fully_custom
     state.has_final_probe_candidate = True
     state.probe_pose_approved = True
@@ -176,7 +177,7 @@ def test_finalization_keeps_close_and_abort_disabled_after_refresh(wizard, fully
 def test_other_operation_success_does_not_complete_this_wizard(wizard, changes):
     controls, *_ = wizard
     controls.handle_test_surface_distance()
-    controls.handle_application_state(status(**changes))
+    controls.handle_application_state(status(controls, **changes))
     assert controls._surface_test_active
     assert not controls.refinement_dialog.next_button.isEnabled()
     assert not controls.handle_refinement_next()
@@ -186,7 +187,7 @@ def test_other_operation_success_does_not_complete_this_wizard(wizard, changes):
 def test_changed_setup_or_recovery_invalidates_summary_admission(wizard, change):
     controls, state, *_ = wizard
     controls.handle_test_surface_distance()
-    controls.handle_application_state(status())
+    controls.handle_application_state(status(controls))
     if change == "target":
         state.target_surface_distance_m = 0.12
     elif change == "context":
@@ -201,20 +202,42 @@ def test_changed_setup_or_recovery_invalidates_summary_admission(wizard, change)
     assert not controls.approve_and_retract_button.isEnabled()
 
 
-def test_new_surface_attempt_disables_previously_enabled_next(wizard):
-    controls, _, operations, _ = wizard
-    controls.handle_test_surface_distance()
-    controls.handle_application_state(status())
-    assert controls.refinement_dialog.next_button.isEnabled()
+def test_surface_attempts_block_overlap_and_ignore_old_results(wizard):
+    controls, state, operations, _ = wizard
     assert controls.handle_test_surface_distance()
+    first_result = status(controls)
+    assert not controls.handle_test_surface_distance()
+    assert len(operations) == 1
+    assert not controls.test_surface_distance_button.isEnabled()
+    assert not controls.reference_target_distance_field.isEnabled()
+    assert not controls.handle_refinement_back()
+    assert not controls.handle_abort_probe_refinement()
+    assert not controls.request_close_refinement_workflow()
+    controls.handle_application_state(first_result)
+    assert controls.refinement_dialog.next_button.isEnabled()
+
+    state.target_surface_distance_m = 0.12
+    controls.apply_setup_state(state)
+    assert controls.handle_test_surface_distance()
+    assert operations[0][1] != operations[1][1]
+    controls.handle_application_state(first_result)
+    Fault_Detector_UI._process_operation_rejected(
+        SimpleNamespace(inspection_controls=controls), operations[0][1], "Old rejection",
+    )
+    assert controls._surface_test_active
+    assert not controls._surface_result_current()
     assert not controls.refinement_dialog.next_button.isEnabled()
+    assert not controls.approve_and_retract_button.isEnabled()
     assert len(operations) == 2
+    controls.handle_application_state(status(controls))
+    assert controls._surface_result_current()
+    assert controls.refinement_dialog.next_button.isEnabled()
 
 
 def test_rejected_new_surface_attempt_keeps_next_disabled(wizard):
     controls, *_ = wizard
     controls.handle_test_surface_distance()
-    controls.handle_application_state(status())
+    controls.handle_application_state(status(controls))
     assert controls.refinement_dialog.next_button.isEnabled()
     controls.ui.execute_operation = lambda *args, **kwargs: None
     assert not controls.handle_test_surface_distance()
@@ -222,16 +245,64 @@ def test_rejected_new_surface_attempt_keeps_next_disabled(wizard):
     assert not controls.handle_refinement_next()
 
 
-@pytest.mark.parametrize("completed_before_back", [True, False])
-def test_leaving_probe_stage_invalidates_surface_success(wizard, completed_before_back):
+@pytest.mark.parametrize("outcome", ["rejected", "synchronous_rejection", "uncertain"])
+def test_surface_submission_releases_only_on_confirmed_rejection(wizard, monkeypatch, outcome):
+    controls, *_ = wizard
+    response = Future()
+    transport = Mock()
+    transport.send_goal_async.return_value = response
+    monkeypatch.setattr(application_client_module, "ActionClient", Mock(return_value=transport))
+    client = application_client_module.ApplicationClient(Mock(), "probe-ui")
+    controls.ui.application_client = client
+    controls.ui.execute_operation = client.execute
+    harness = SimpleNamespace(inspection_controls=controls, status_label=Mock())
+    client.operation_rejected.connect(
+        lambda context, detail: Fault_Detector_UI._process_operation_rejected(harness, context, detail)
+    )
+    client.operation_uncertain.connect(
+        lambda context, detail: Fault_Detector_UI._process_operation_uncertain(harness, context, detail)
+    )
+    client.state_changed.connect(controls.handle_application_state)
+    try:
+        if outcome == "synchronous_rejection":
+            response.set_result(SimpleNamespace(accepted=False))
+        submitted = controls.handle_test_surface_distance()
+        if outcome == "uncertain":
+            response.set_exception(RuntimeError("Response lost"))
+            assert submitted
+            assert controls._surface_test_active
+            assert "unknown" in controls.surface_distance_test_status_label.text()
+            assert not controls.handle_test_surface_distance()
+            assert transport.send_goal_async.call_count == 1
+            assert not controls.test_surface_distance_button.isEnabled()
+            client._receive_state(status(
+                controls, ApplicationCommandState.STATE_STOP_CONFIRMED,
+                execution_instance_id="owner", status_sequence=1,
+            ))
+            assert not controls._surface_test_active
+        else:
+            if outcome == "rejected":
+                assert submitted
+                response.set_result(SimpleNamespace(accepted=False))
+            else:
+                assert not submitted
+            assert not controls._surface_test_active
+            assert controls._surface_move_context_id == ""
+            assert controls._surface_move_target_m is None
+            assert "rejected" in controls.surface_distance_test_status_label.text()
+            assert controls.test_surface_distance_button.isEnabled()
+        assert not controls.refinement_dialog.next_button.isEnabled()
+        assert not controls.approve_and_retract_button.isEnabled()
+    finally:
+        client.destroy()
+
+
+def test_leaving_probe_stage_invalidates_surface_success(wizard):
     controls, *_ = wizard
     assert controls.handle_test_surface_distance()
-    if completed_before_back:
-        controls.handle_application_state(status())
+    controls.handle_application_state(status(controls))
 
     assert controls.handle_refinement_back()
-    if not completed_before_back:
-        controls.handle_application_state(status())
 
     controls.refinement_dialog.show_stage(RefinementStage.PROBE)
     assert not controls.refinement_dialog.next_button.isEnabled()
@@ -245,10 +316,10 @@ def test_leaving_probe_stage_invalidates_surface_success(wizard, completed_befor
 def test_setup_change_clears_measurement_without_refresh(wizard, monkeypatch, context_change):
     controls, state, *_ = wizard
     assert controls.handle_test_surface_distance()
-    controls.handle_application_state(status())
+    controls.handle_application_state(status(controls))
     assert controls.handle_refinement_back()
     assert controls.handle_test_sensor_tip_distance()
-    feedback = status(
+    feedback = status(controls,
         ApplicationCommandState.STATE_RUNNING,
         intent=OperationalIntent.INTENT_MEASURE_SENSOR_TIP_DISTANCE,
         context_id=controls._sensor_tip_distance_context_id,
@@ -281,10 +352,11 @@ def test_setup_change_clears_measurement_without_refresh(wizard, monkeypatch, co
 def test_replaced_setup_ignores_late_surface_cancellation(wizard):
     controls, state, *_ = wizard
     assert controls.handle_test_surface_distance()
+    late_feedback = status(controls, ApplicationCommandState.STATE_CANCELLED)
     state.context_id = "another-setup"
     controls.apply_setup_state(state)
 
-    controls.handle_application_state(status(ApplicationCommandState.STATE_CANCELLED))
+    controls.handle_application_state(late_feedback)
 
     assert not controls._distance_failure_requires_retraction
     assert not controls._surface_test_active
@@ -294,7 +366,7 @@ def test_replaced_setup_ignores_late_surface_cancellation(wizard):
 def test_pause_and_resume_preserve_successful_surface_move(wizard):
     controls, *_ = wizard
     assert controls.handle_test_surface_distance()
-    controls.handle_application_state(status())
+    controls.handle_application_state(status(controls))
     presentation = controls._refinement_presentation
     dialog = controls.refinement_dialog
     assert dialog.next_button.isEnabled()

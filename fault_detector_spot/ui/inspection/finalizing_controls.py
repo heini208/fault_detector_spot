@@ -76,6 +76,7 @@ class FinalizingInspectionControls(InspectionControls):
         self._surface_move_succeeded = False
         self._surface_move_target_m = None
         self._surface_move_context_id = ""
+        self._surface_move_setup_context_id = ""
 
     def _clear_pending_probe_finalization(self):
         self._probe_finalization_point_id = ""
@@ -711,9 +712,10 @@ class FinalizingInspectionControls(InspectionControls):
         )
 
     def _can_abort_probe_refinement(self):
-        """Abort is unavailable during distance testing or finalization."""
+        """Keep movement, measurement, and finalization owned until they finish."""
         return bool(
             not self._sensor_tip_distance_test_active
+            and not self._surface_test_active
             and not self._probe_finalization_point_id
         )
 
@@ -758,11 +760,10 @@ class FinalizingInspectionControls(InspectionControls):
         """Abort the current unsaved probe-point setup."""
         if not self._can_abort_probe_refinement():
             self.refinement_recovery_status_label.setText(
-                "Wait for the distance test to finish or use Emergency Stop "
+                "Wait for the movement or distance test to finish or use Emergency Stop "
                 "before aborting setup."
-                if self._sensor_tip_distance_test_active
-                else "Probe-point saving is already in progress and cannot "
-                "be aborted here."
+                if self._sensor_tip_distance_test_active or self._surface_test_active
+                else "Probe-point saving is already in progress and cannot be aborted here."
             )
             return False
 
@@ -989,17 +990,24 @@ class FinalizingInspectionControls(InspectionControls):
 
     def handle_test_surface_distance(self):
         presentation = self._require_refinement_presentation()
+        if self._refinement_has_pending_work(presentation):
+            return False
         state = self._probe_setup_state
         if state is None or not state.context_id:
             self.surface_distance_test_status_label.setText(
                 "Probe setup context is unavailable"
             )
             return False
-        self._surface_test_active = False
+        self._surface_test_active = True
         self._surface_move_succeeded = False
-        self._surface_move_context_id = state.context_id
+        self._surface_move_setup_context_id = state.context_id
+        context_id = state.context_id + "/move-close-to-surface/" + uuid4().hex
+        self._surface_move_context_id = context_id
         self._surface_move_target_m = float(
             presentation.target_surface_distance_m
+        )
+        self.surface_distance_test_status_label.setText(
+            "Move close to surface running"
         )
         self._refresh_refinement_dialog()
 
@@ -1022,22 +1030,27 @@ class FinalizingInspectionControls(InspectionControls):
             intent.orientation_mode = OrientationModes.CUSTOM_ORIENTATION.value
             intent.tag_position_tolerance_m = state.aligned_position_tolerance_m
             intent.precision_mode = state.aligned_precision_mode
-        # Keep this generic arm command associated with the wizard. Otherwise
-        # its motion invalidates the wizard's reached-alignment checkpoint.
-        request_id = self.ui.execute_operation(
-            intent, context_id=self._surface_move_context_id,
+        # The scoped context identifies this attempt before feedback or rejection
+        # can arrive, while preserving its association with the wizard.
+        submitted = self.ui.execute_operation(
+            intent, context_id=context_id,
         )
-        if request_id is None:
-            self.surface_distance_test_status_label.setText(
-                "Move close to surface is unavailable"
+        if submitted is None:
+            self.handle_surface_move_rejected(
+                "Movement could not be submitted.", context_id,
             )
             return False
-        self._surface_test_active = True
+        return self._surface_move_context_id == context_id
+
+    def handle_surface_move_rejected(self, detail, context_id):
+        """Release only the surface attempt confirmed not to have been accepted."""
+        if not self._surface_test_active or context_id != self._surface_move_context_id:
+            return
+        self._reset_surface_move_tracking()
         self.surface_distance_test_status_label.setText(
-            "Move close to surface running"
+            f"Move close to surface unavailable: {detail}"
         )
         self._refresh_refinement_dialog()
-        return True
 
     def handle_application_state(self, status):
         """Track inspection movements and standalone close-surface tests."""
@@ -1111,7 +1124,7 @@ class FinalizingInspectionControls(InspectionControls):
             or presentation is None
             or self._surface_move_target_m is None
             or self._probe_setup_state is None
-            or self._probe_setup_state.context_id != self._surface_move_context_id
+            or self._probe_setup_state.context_id != self._surface_move_setup_context_id
         ):
             return False
         return math.isclose(
@@ -1282,8 +1295,8 @@ class FinalizingInspectionControls(InspectionControls):
             ):
                 self._reset_sensor_tip_distance_tracking()
             if (
-                self._surface_move_context_id
-                and self._surface_move_context_id != state.context_id
+                self._surface_move_setup_context_id
+                and self._surface_move_setup_context_id != state.context_id
             ):
                 self._reset_surface_move_tracking()
         super()._synchronize_refinement_presentation(presentation)

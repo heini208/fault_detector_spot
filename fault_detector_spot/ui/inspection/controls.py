@@ -1761,6 +1761,7 @@ class InspectionControls(UIControlHelper):
         return (
             presentation.pending_motion is not None
             or getattr(self, "_sensor_tip_distance_test_active", False)
+            or getattr(self, "_surface_test_active", False)
         )
 
     def _can_continue_refinement(self, presentation):
