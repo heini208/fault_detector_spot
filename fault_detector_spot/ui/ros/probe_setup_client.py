@@ -393,8 +393,10 @@ class ProbeSetupClient(QObject):
             return
         if self.context_id and state.context_id != self.context_id:
             return
-        if not self._command_state_order.accept(state):
+        accepted = self._command_state_order.accept(state)
+        if not accepted and not self._command_state_order.is_duplicate(state):
             return False
+        # An action result may establish correlation after its terminal topic update.
         if state.state in {
             state.STATE_SUCCEEDED, state.STATE_FAILED, state.STATE_CANCELLED,
             state.STATE_STOP_CONFIRMED,
@@ -405,7 +407,7 @@ class ProbeSetupClient(QObject):
                     self._finalization_goal_handles.pop(local_id, None)
                     self._capture_goal_handles.pop(local_id, None)
                     self._action_request_ids.pop(local_id, None)
-        if not self._state_order.accept(state):
+        if not accepted or not self._state_order.accept(state):
             return False
         if state.context_id:
             self.context_id = state.context_id

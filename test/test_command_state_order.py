@@ -30,6 +30,10 @@ def test_duplicate_and_late_feedback_cannot_refresh_or_complete_a_request():
     assert not order.accept(state(5))
     assert not order.accept(state(4, code=9))
     assert order.accept(state(6, code=9))
+    assert order.is_duplicate(state(6, code=9))
+    assert not order.is_duplicate(state(6, code=4))
+    assert not order.is_duplicate(state(6, owner="owner-b", code=9))
+    assert not order.is_duplicate(state(5, code=9))
     assert not order.accept(state(7, code=3))
     assert order.accept(state(1, owner="owner-b", request="next"))
 

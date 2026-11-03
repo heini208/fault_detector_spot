@@ -211,6 +211,32 @@ def test_context_close_keeps_delayed_acceptance_callbacks_until_result(pending_a
     assert not adapter.close_pending
 
 
+def test_terminal_topic_before_action_result_releases_pending_action(pending_action):
+    adapter, local_id, handles, methods, message_type = pending_action
+    received = []
+    adapter.state_changed.connect(received.append)
+    done = state(message_type, 3, message_type.STATE_SUCCEEDED,
+                 owner="owner-a", sequence=11)
+
+    # The topic arrives before action feedback has established correlation.
+    adapter._receive_state(done)
+    assert local_id in handles
+    adapter.close()
+    closed = Mock()
+    closed.result.return_value = SimpleNamespace(closed=True, detail="Closed")
+    adapter._receive_close(closed)
+    assert adapter.close_pending
+
+    result = Mock()
+    result.result.return_value = SimpleNamespace(result=SimpleNamespace(state=done))
+    getattr(adapter, methods[1])(local_id, result)
+
+    assert local_id not in handles
+    assert local_id not in adapter._action_request_ids
+    assert not adapter.close_pending
+    assert received == [done]
+
+
 def test_close_retires_a_context_received_after_the_close_request(client):
     adapter, _, message_type = client
     adapter.context_id = ""
@@ -274,7 +300,7 @@ def test_stale_owner_or_sequence_cannot_release_pending_setup_guard(pending_acti
     adapter, local_id, handles, methods, message_type = pending_action
     running = state(message_type, 3, message_type.STATE_RUNNING, owner="owner-a", sequence=10)
     getattr(adapter, methods[2])(local_id, SimpleNamespace(feedback=SimpleNamespace(state=running)))
-    for owner, sequence in (("owner-b", 11), ("owner-a", 9), ("", 12)):
+    for owner, sequence in (("owner-b", 11), ("owner-a", 9), ("owner-a", 10), ("", 12)):
         stopped = state(message_type, 4, message_type.STATE_STOP_CONFIRMED, owner=owner, sequence=sequence)
         assert adapter._emit_state(stopped) is False
         assert local_id in handles
