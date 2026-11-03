@@ -1776,6 +1776,13 @@ class FinalizingInspectionControls(InspectionControls):
         self._refresh_refinement_dialog()
         return True
 
+    def handle_finalization_rejected(self, detail):
+        """Release the saving guard only when the action was not accepted."""
+        self._probe_finalization_point_id = ""
+        self._probe_finalization_scope = None
+        self._refresh_refinement_dialog()
+        self.refinement_recovery_status_label.setText(detail)
+
     def handle_retract_without_saving(self):
         """Request server-owned retraction without persistence."""
         request_id = self.ui.execute_probe_refinement_finalization(

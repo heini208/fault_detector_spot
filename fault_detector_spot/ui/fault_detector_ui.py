@@ -916,6 +916,9 @@ class Fault_Detector_UI(QWidget):
         self.probe_setup_client.transaction_failed.connect(
             self._process_probe_setup_transaction_failed
         )
+        self.probe_setup_client.finalization_rejected.connect(
+            self._process_probe_finalization_rejected
+        )
         self.probe_setup_client.preview_received.connect(
             self._process_probe_reference_preview
         )
@@ -1139,6 +1142,11 @@ class Fault_Detector_UI(QWidget):
         controls = getattr(self, "inspection_controls", None)
         if controls is not None:
             controls.routine_navigation_controls.handle_setup_rejected(detail, operation)
+
+    def _process_probe_finalization_rejected(self, detail):
+        controls = getattr(self, "inspection_controls", None)
+        if controls is not None:
+            controls.handle_finalization_rejected(detail)
 
     def _process_probe_setup_state(self, state):
         if hasattr(self, "inspection_controls"):

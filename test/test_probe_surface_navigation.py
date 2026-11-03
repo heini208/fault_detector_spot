@@ -1,12 +1,16 @@
 """A successful wizard surface move unlocks summary and finalization."""
 
 from types import SimpleNamespace
+from concurrent.futures import Future
+from unittest.mock import Mock
 
 import pytest
 from fault_detector_msgs.msg import ApplicationCommandState, OperationalIntent
 
 from fault_detector_spot.inspection.setup.probe_refinement_session import RefinementStage
 from fault_detector_spot.ui.inspection.finalizing_controls import FinalizingInspectionControls
+from fault_detector_spot.ui.fault_detector_ui import Fault_Detector_UI
+import fault_detector_spot.ui.ros.probe_setup_client as client_module
 from test_probe_point_guided_workflow import FakeUI, application
 from test_probe_safe_approach_navigation import safe_state
 
@@ -97,6 +101,43 @@ def test_unfinished_or_failed_surface_move_cannot_advance(wizard, result):
     assert not controls.refinement_dialog.next_button.isEnabled()
     assert not controls.handle_refinement_next()
     assert not controls.approve_and_retract_button.isEnabled()
+
+
+@pytest.mark.parametrize("rejected", [True, False], ids=["rejected", "uncertain"])
+def test_only_confirmed_finalization_rejection_unlocks_saving(wizard, monkeypatch, rejected):
+    controls, state, *_ = wizard
+    goal_response = Future()
+    transport = Mock()
+    transport.send_goal_async.return_value = goal_response
+    monkeypatch.setattr(client_module, "ActionClient", Mock(return_value=transport))
+    client = client_module.ProbeSetupClient(Mock(), "probe-ui")
+    client.context_id = state.context_id
+    controls.ui.execute_probe_refinement_finalization = client.finalize_refinement
+    harness = SimpleNamespace(inspection_controls=controls)
+    client.finalization_rejected.connect(
+        lambda detail: Fault_Detector_UI._process_probe_finalization_rejected(harness, detail)
+    )
+    client.request_rejected.connect(
+        lambda detail: Fault_Detector_UI._process_probe_setup_rejected(harness, detail)
+    )
+    controls.handle_test_surface_distance()
+    controls.handle_application_state(status())
+    assert controls.handle_refinement_next()
+    assert controls.handle_approve_and_retract()
+    client.request_rejected.emit("Unrelated setup request rejected")
+    assert controls._probe_finalization_point_id == "surface-point"
+
+    if rejected:
+        goal_response.set_result(SimpleNamespace(accepted=False))
+        assert controls._probe_finalization_point_id == ""
+        assert controls._probe_finalization_scope is None
+        assert "rejected" in controls.refinement_recovery_status_label.text()
+    else:
+        goal_response.set_exception(RuntimeError("Response lost"))
+        assert controls._probe_finalization_point_id == "surface-point"
+    assert controls.approve_and_retract_button.isEnabled() is rejected
+    assert controls.refinement_dialog.close_button.isEnabled() is rejected
+    assert controls.request_close_refinement_workflow() is rejected
 
 
 @pytest.mark.parametrize("changes", [

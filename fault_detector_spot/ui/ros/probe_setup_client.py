@@ -44,6 +44,7 @@ class ProbeSetupClient(QObject):
     request_rejected = pyqtSignal(str)
     request_uncertain = pyqtSignal(str)
     transaction_failed = pyqtSignal(int, str)
+    finalization_rejected = pyqtSignal(str)
     close_finished = pyqtSignal(bool, str)
     preview_received = pyqtSignal(object)
     preview_rejected = pyqtSignal(str, str)
@@ -503,9 +504,9 @@ class ProbeSetupClient(QObject):
             return
         if not goal_handle.accepted:
             self._finalization_goal_handles.pop(local_id, None)
-            self.request_rejected.emit(
-                "Probe refinement finalization was rejected"
-            )
+            detail = "Probe refinement finalization was rejected"
+            self.finalization_rejected.emit(detail)
+            self.request_rejected.emit(detail)
             return
         self._finalization_goal_handles[local_id] = goal_handle
         try:
